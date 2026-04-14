@@ -173,13 +173,35 @@ pub fn task_blocked_by(
 }
 
 /// Get task IDs that depend on this task.
+///
+/// Thin wrapper around [`find_dependent_task_ids`] that accepts an [`Entity`]
+/// for the common case where the caller already holds one. For cases where
+/// only a bare task id is available (e.g. fan-out after a delete when the
+/// entity is no longer in `all_tasks`), call [`find_dependent_task_ids`]
+/// directly.
 pub fn task_blocks(entity: &Entity, all_tasks: &[Entity]) -> Vec<String> {
+    find_dependent_task_ids(entity.id.as_ref(), all_tasks)
+}
+
+/// Find the task IDs whose `depends_on` list currently contains `task_id`.
+///
+/// This is the reverse-dependency lookup: given a task ID, return every task
+/// that names it in its `depends_on` list. Used by the post-mutation
+/// enrichment fan-out pass to find tasks whose computed BLOCKED/READY state
+/// may need re-derivation after `task_id` changed column or had its
+/// dependencies edited.
+///
+/// Unlike [`task_blocks`], the input here is a bare `&str` — the target
+/// entity may not be present in `all_tasks` (e.g. when the trigger was just
+/// deleted), so the function must not require a full `Entity` to look up.
+///
+/// Returns owned `String`s rather than borrowed references because callers
+/// typically store the result across scopes (cache updates, fan-out target
+/// sets) where borrowing the slice would fight the borrow checker.
+pub fn find_dependent_task_ids(task_id: &str, all_tasks: &[Entity]) -> Vec<String> {
     all_tasks
         .iter()
-        .filter(|t| {
-            t.get_string_list("depends_on")
-                .contains(&entity.id.to_string())
-        })
+        .filter(|t| t.get_string_list("depends_on").iter().any(|d| d == task_id))
         .map(|t| t.id.to_string())
         .collect()
 }
@@ -682,6 +704,40 @@ mod tests {
         dependent.set("depends_on", json!(["t1"]));
         let blocks = task_blocks(&blocker, &[blocker.clone(), dependent]);
         assert_eq!(blocks, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_find_dependent_task_ids_returns_reverse_dependents() {
+        // Two tasks depend on t1; one does not.
+        let t1 = make_task("t1", "Target", "", "todo");
+        let mut t2 = make_task("t2", "Depends on t1", "", "todo");
+        t2.set("depends_on", json!(["t1"]));
+        let mut t3 = make_task("t3", "Also depends on t1", "", "todo");
+        t3.set("depends_on", json!(["t1", "other"]));
+        let t4 = make_task("t4", "Unrelated", "", "todo");
+
+        let mut deps = find_dependent_task_ids("t1", &[t1, t2, t3, t4]);
+        deps.sort();
+        assert_eq!(deps, vec!["t2".to_string(), "t3".to_string()]);
+    }
+
+    #[test]
+    fn test_find_dependent_task_ids_returns_empty_when_no_reverse_deps() {
+        let t1 = make_task("t1", "Target", "", "todo");
+        let t2 = make_task("t2", "Unrelated", "", "todo");
+        let deps = find_dependent_task_ids("t1", &[t1, t2]);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_find_dependent_task_ids_works_when_target_entity_is_absent() {
+        // Target task ID is not in all_tasks — should still find reverse
+        // dependents (callers use this when the trigger may have been
+        // deleted concurrently).
+        let mut dependent = make_task("b", "Dependent", "", "todo");
+        dependent.set("depends_on", json!(["ghost"]));
+        let deps = find_dependent_task_ids("ghost", &[dependent]);
+        assert_eq!(deps, vec!["b".to_string()]);
     }
 
     #[test]

@@ -672,10 +672,7 @@ describe("CommandPalette search mode", () => {
     const onInspect = vi.fn();
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(
-      true,
-      onClose,
-    );
+    const { container, unmount } = renderSearchPalette(true, onClose);
 
     const view = getCMView(container);
     if (view?.dispatch) {

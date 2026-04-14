@@ -9,7 +9,7 @@ type:
   depends_on:
     - _changelog
     - _file_created
-icon: plus-circle
+icon: calendar-plus
 editor: none
 display: date
 sort: datetime

@@ -1,13 +1,23 @@
-import type { FieldDef } from "@/types/kanban";
+import type { Entity, FieldDef } from "@/types/kanban";
 
 /**
  * Shared props for all field editors.
  *
  * Editors are pure UI: they manage draft state and call onCommit(value) when
  * done. Field handles persistence via updateField — editors never call it.
+ *
+ * `field` and `entity` are always supplied by {@link Field} (see
+ * `field.tsx#FieldEditor`), so editors can read schema-level metadata like
+ * `field.description` for placeholders / help text without threading a
+ * separate prop through their own wrapper interface.
  */
 export interface EditorProps {
   value: unknown;
+
+  /** YAML schema metadata for this field — type, editor, description, etc. */
+  field: FieldDef;
+  /** The owning entity. Present when the editor is mounted from a live Field. */
+  entity?: Entity;
 
   // --- Lifecycle callbacks ---
   /** Called with the final value when the editor commits. */

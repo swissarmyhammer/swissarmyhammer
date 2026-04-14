@@ -467,6 +467,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         }
@@ -936,6 +937,7 @@ type:
                 width: None,
                 icon: None,
                 section: None,
+                placeholder: None,
                 validate: None,
                 groupable: None,
             })

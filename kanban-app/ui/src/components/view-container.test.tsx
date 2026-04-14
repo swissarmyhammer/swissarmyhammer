@@ -48,7 +48,9 @@ vi.mock("@/lib/views-context", () => ({
 // Mock window-container hooks — ViewContainer reads board data from these.
 // ---------------------------------------------------------------------------
 
-const mockBoardData = vi.hoisted(() => vi.fn<() => BoardData | null>(() => null));
+const mockBoardData = vi.hoisted(() =>
+  vi.fn<() => BoardData | null>(() => null),
+);
 const mockActiveBoardPath = vi.hoisted(() =>
   vi.fn<() => string | undefined>(() => undefined),
 );

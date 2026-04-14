@@ -217,6 +217,46 @@ describe("BadgeListDisplay", () => {
     expect(none?.textContent).toBe("None");
   });
 
+  it("renders the configured placeholder in full mode when values array is empty", async () => {
+    const tagFieldWithPlaceholder: FieldDef = {
+      ...tagField,
+      placeholder: "Add tags",
+    } as unknown as FieldDef;
+    const { container } = renderDisplay({
+      field: tagFieldWithPlaceholder,
+      value: [],
+      mode: "full",
+    });
+    await flush();
+
+    expect(getScopes(container).length).toBe(0);
+    const hint = container.querySelector("span.italic");
+    expect(hint).toBeTruthy();
+    // Keeps the muted/italic wrapper, swaps the hardcoded "None" text
+    // for the YAML-configured placeholder string.
+    expect(hint?.textContent).toBe("Add tags");
+  });
+
+  it("renders the configured placeholder in compact mode when values array is empty", async () => {
+    const tagFieldWithPlaceholder: FieldDef = {
+      ...tagField,
+      placeholder: "Add tags",
+    } as unknown as FieldDef;
+    const { container } = renderDisplay({
+      field: tagFieldWithPlaceholder,
+      value: [],
+      mode: "compact",
+    });
+    await flush();
+
+    expect(getScopes(container).length).toBe(0);
+    const hint = container.querySelector("span.text-muted-foreground\\/50");
+    expect(hint).toBeTruthy();
+    // Compact mode still uses the muted class, but the "-" fallback is
+    // replaced by the YAML placeholder.
+    expect(hint?.textContent).toBe("Add tags");
+  });
+
   it("renders depends_on task IDs as CM6 pills with clipped display names", async () => {
     const dependsEntity: Entity = {
       id: "task-parent",

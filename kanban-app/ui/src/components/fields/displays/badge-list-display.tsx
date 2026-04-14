@@ -76,12 +76,31 @@ function useTagUntagCommands(
   }, [targetEntityType, isComputedSlug, entityId]);
 }
 
-/** Empty-state rendering — compact grid cells vs. full inspector rows. */
-function EmptyBadgeList({ mode }: { mode: "compact" | "full" }) {
-  return mode === "compact" ? (
-    <span className="text-muted-foreground/50">-</span>
-  ) : (
-    <span className="text-sm text-muted-foreground italic">None</span>
+/**
+ * Empty-state rendering — compact grid cells vs. full inspector rows.
+ *
+ * When the field declares a YAML `placeholder`, use it for both modes
+ * (the configured hint wins over the mode-specific default), relying on
+ * the existing muted styling to keep it visually recessed. Without a
+ * placeholder, preserve the original `-` / `None` fallback so fields
+ * that haven't opted in render identically to before.
+ */
+function EmptyBadgeList({
+  mode,
+  placeholder,
+}: {
+  mode: "compact" | "full";
+  placeholder?: string;
+}) {
+  if (mode === "compact") {
+    return (
+      <span className="text-muted-foreground/50">{placeholder ?? "-"}</span>
+    );
+  }
+  return (
+    <span className="text-sm text-muted-foreground italic">
+      {placeholder ?? "None"}
+    </span>
   );
 }
 
@@ -107,7 +126,8 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
     entity.id,
   );
 
-  if (values.length === 0) return <EmptyBadgeList mode={mode} />;
+  if (values.length === 0)
+    return <EmptyBadgeList mode={mode} placeholder={field.placeholder} />;
 
   return (
     <MentionView items={items} mode={mode} extraCommands={extraCommands} />

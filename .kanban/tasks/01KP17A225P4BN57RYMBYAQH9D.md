@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c280
+position_column: done
+position_ordinal: ffffffffffffffffffffffc580
 project: task-card-fields
 title: Enrich EntityCreated events with computed fields (progress, tags, virtual_tags, filter_tags)
 ---
@@ -29,22 +29,21 @@ The pattern mirrors what already exists for `EntityFieldChanged` — read the en
 
 ### Subtasks
 
-- [ ] Extend the match arm in `enrich_one_watch_event` (`kanban-app/src/commands.rs:2166`) to also handle `EntityCreated` — read entity via `ectx.read()`, run `enrich_task_from_context` for tasks, merge computed fields into `fields` HashMap
-- [ ] Add Rust test: create a task with checkboxes in body, flush events, verify the `EntityCreated` event's `fields` includes `progress` with correct `{total, completed, percent}` values
-- [ ] Add frontend test in `rust-engine-container.test.tsx`: `handleEntityCreated` with computed fields in payload correctly populates the entity store
+- [x] Extend the match arm in `enrich_one_watch_event` (`kanban-app/src/commands.rs:2166`) to also handle `EntityCreated` — read entity via `ectx.read()`, run `enrich_task_from_context` for tasks, merge computed fields into `fields` HashMap
+- [x] Add Rust test: create a task with checkboxes in body, flush events, verify the `EntityCreated` event's `fields` includes `progress` with correct `{total, completed, percent}` values
+- [x] Add frontend test in `rust-engine-container.test.tsx`: `handleEntityCreated` with computed fields in payload correctly populates the entity store
 
 ## Acceptance Criteria
 
-- [ ] `EntityCreated` events include computed fields (progress, tags, virtual_tags, filter_tags) when emitted to the frontend
-- [ ] Existing `EntityFieldChanged` enrichment behavior unchanged
-- [ ] No regressions in `cargo nextest run -p kanban-app` or `npx vitest run`
+- [x] `EntityCreated` events include computed fields (progress, tags, virtual_tags, filter_tags) when emitted to the frontend
+- [x] Existing `EntityFieldChanged` enrichment behavior unchanged
+- [x] No regressions in `cargo nextest run -p kanban-app` or `npx vitest run`
 
 ## Tests
 
-- [ ] `kanban-app/src/commands.rs` — test that flushed `EntityCreated` event for a task with GFM checkboxes includes `progress: {total: N, completed: M, percent: P}` in fields
-- [ ] `kanban-app/ui/src/components/rust-engine-container.test.tsx` — test that `handleEntityCreated` with progress/tags in fields populates entity store correctly
-- [ ] Full test suites pass: `cargo nextest run -p kanban-app`, `npx vitest run`
+- [x] `kanban-app/src/commands.rs` — test that flushed `EntityCreated` event for a task with GFM checkboxes includes `progress: {total: N, completed: M, percent: P}` in fields
+- [x] `kanban-app/ui/src/components/rust-engine-container.test.tsx` — test that `handleEntityCreated` with progress/tags in fields populates entity store correctly
+- [x] Full test suites pass: `cargo nextest run -p kanban-app`, `npx vitest run`
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.</description>
-</invoke>
+- Use `/tdd` — write failing tests first, then implement to make them pass.

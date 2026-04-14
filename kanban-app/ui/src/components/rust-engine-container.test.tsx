@@ -230,6 +230,97 @@ describe("RustEngineContainer", () => {
     expect(getEntityCalled).toBe(false);
   });
 
+  it("entity-created with computed fields populates entity store with progress/tags/virtual_tags/filter_tags", async () => {
+    // Regression guard for the parent-side enrichment fix: after Rust-side
+    // enrichment extends to EntityCreated events, the Tauri payload arrives
+    // with computed fields (progress, tags, virtual_tags, filter_tags)
+    // already merged in. The fast-path handler in handleEntityCreated must
+    // store these fields verbatim so the frontend's progress rings, virtual
+    // tag badges, and filter DSL evaluation all work on fresh entities
+    // without waiting for a follow-up entity-field-changed event.
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "cua",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_schemas") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    /** Probe surfacing the task's computed fields so we can assert on them. */
+    function ComputedProbe() {
+      const entitiesByType = useEntitiesByType();
+      const tasks = entitiesByType.task ?? [];
+      const first = tasks[0];
+      const progress = first
+        ? JSON.stringify(first.fields.progress ?? null)
+        : "none";
+      const virtualTags = first
+        ? JSON.stringify(first.fields.virtual_tags ?? null)
+        : "none";
+      const filterTags = first
+        ? JSON.stringify(first.fields.filter_tags ?? null)
+        : "none";
+      const tags = first ? JSON.stringify(first.fields.tags ?? null) : "none";
+      return (
+        <>
+          <span data-testid="probe-progress">{progress}</span>
+          <span data-testid="probe-virtual-tags">{virtualTags}</span>
+          <span data-testid="probe-filter-tags">{filterTags}</span>
+          <span data-testid="probe-tags">{tags}</span>
+        </>
+      );
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <ComputedProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    // Emit entity-created with raw + computed fields — the shape Rust emits
+    // after `enrich_computed_fields` runs on an EntityCreated event for a
+    // task with GFM checkboxes in its body.
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "task",
+        id: "t1",
+        fields: {
+          title: "Task with checklist",
+          body: "- [x] one\n- [ ] two\n",
+          progress: { total: 2, completed: 1, percent: 50 },
+          tags: ["feature"],
+          virtual_tags: ["READY"],
+          filter_tags: ["feature", "READY"],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("probe-progress").textContent).toBe(
+        JSON.stringify({ total: 2, completed: 1, percent: 50 }),
+      );
+    });
+    expect(screen.getByTestId("probe-virtual-tags").textContent).toBe(
+      JSON.stringify(["READY"]),
+    );
+    expect(screen.getByTestId("probe-filter-tags").textContent).toBe(
+      JSON.stringify(["feature", "READY"]),
+    );
+    expect(screen.getByTestId("probe-tags").textContent).toBe(
+      JSON.stringify(["feature"]),
+    );
+  });
+
   it("entity-created with empty fields falls back to get_entity", async () => {
     // When fields are empty (store event before watcher cached), fall back
     // to get_entity to fetch the full entity.

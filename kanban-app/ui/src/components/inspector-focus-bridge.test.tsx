@@ -51,10 +51,9 @@ const mockInvoke = vi.fn((...args: any[]) => {
 // …) so transitively-imported submodules like `window.js` / `dpi.js` can
 // still resolve their re-exports. Only override `invoke` / `listen`.
 vi.mock("@tauri-apps/api/core", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/core")>(
-      "@tauri-apps/api/core",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/core")>(
+    "@tauri-apps/api/core",
+  );
   return {
     ...actual,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,10 +61,9 @@ vi.mock("@tauri-apps/api/core", async () => {
   };
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/event")>(
-      "@tauri-apps/api/event",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/event")>(
+    "@tauri-apps/api/event",
+  );
   return {
     ...actual,
     listen: vi.fn(() => Promise.resolve(() => {})),

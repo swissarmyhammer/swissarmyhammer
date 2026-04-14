@@ -25,12 +25,18 @@ function getHighlightClasses(input: string): string[] {
 describe("filter grammar highlighting", () => {
   it("does NOT highlight tags (decoration system handles them)", () => {
     const classes = getHighlightClasses("#bug");
-    expect(classes.some((c) => c.includes("tok-typeName") && c.includes("#bug"))).toBe(false);
+    expect(
+      classes.some((c) => c.includes("tok-typeName") && c.includes("#bug")),
+    ).toBe(false);
   });
 
   it("does NOT highlight mentions (decoration system handles them)", () => {
     const classes = getHighlightClasses("@alice");
-    expect(classes.some((c) => c.includes("tok-variableName") && c.includes("@alice"))).toBe(false);
+    expect(
+      classes.some(
+        (c) => c.includes("tok-variableName") && c.includes("@alice"),
+      ),
+    ).toBe(false);
   });
 
   it("does NOT highlight projects (decoration system handles them)", () => {
@@ -44,29 +50,43 @@ describe("filter grammar highlighting", () => {
 
   it("highlights refs with tok-link class", () => {
     const classes = getHighlightClasses("^01ABC");
-    expect(classes.some((c) => c.includes("tok-link") && c.includes("^01ABC"))).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-link") && c.includes("^01ABC")),
+    ).toBe(true);
   });
 
   it("highlights && with tok-operator class", () => {
     const classes = getHighlightClasses("#a && #b");
-    expect(classes.some((c) => c.includes("tok-operator") && c.includes("&&"))).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-operator") && c.includes("&&")),
+    ).toBe(true);
   });
 
   it("highlights || with tok-operator class", () => {
     const classes = getHighlightClasses("#a || #b");
-    expect(classes.some((c) => c.includes("tok-operator") && c.includes("||"))).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-operator") && c.includes("||")),
+    ).toBe(true);
   });
 
   it("highlights ! with tok-operator class", () => {
     const classes = getHighlightClasses("!#a");
-    expect(classes.some((c) => c.includes("tok-operator") && c.includes("!"))).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-operator") && c.includes("!")),
+    ).toBe(true);
   });
 
   it("highlights keyword operators with tok-keyword class", () => {
     const classes = getHighlightClasses("not #a and #b or #c");
-    expect(classes.some((c) => c.includes("tok-keyword") && c.includes("not"))).toBe(true);
-    expect(classes.some((c) => c.includes("tok-keyword") && c.includes("and"))).toBe(true);
-    expect(classes.some((c) => c.includes("tok-keyword") && c.includes("or"))).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-keyword") && c.includes("not")),
+    ).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-keyword") && c.includes("and")),
+    ).toBe(true);
+    expect(
+      classes.some((c) => c.includes("tok-keyword") && c.includes("or")),
+    ).toBe(true);
   });
 
   it("complex expression: operators highlighted, tags/mentions not", () => {

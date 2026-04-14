@@ -136,7 +136,12 @@ function useDateEditorState(params: {
 }) {
   const { value, onCommit, onCancel, onChange, mode } = params;
   const parsing = useDateParsing(value, onChange);
-  const handlers = useDateCommitHandlers(mode, parsing.resolved, onCommit, onCancel);
+  const handlers = useDateCommitHandlers(
+    mode,
+    parsing.resolved,
+    onCommit,
+    onCancel,
+  );
 
   const handleCalendarSelect = useCallback(
     (day: Date | undefined) => {
@@ -182,6 +187,9 @@ function useDateEditorState(params: {
   };
 }
 
+/** Fallback CM6 placeholder when a field doesn't declare a description. */
+const DEFAULT_CM_PLACEHOLDER = "Type a date... (e.g. tomorrow, next friday)";
+
 /**
  * PopoverContent body: CM6 natural-language input, parse feedback, calendar.
  * Escape must run through the keymap-aware cancel path (CUA/emacs cancel,
@@ -189,6 +197,54 @@ function useDateEditorState(params: {
  * popover — otherwise `onOpenChange(false)` fires `commitResolved()` first
  * and saves unconditionally.
  */
+/**
+ * CM6 input + resolved/error hint row. Split from `DateEditorContent` so
+ * each piece stays short and testable in isolation.
+ */
+function DateEditorInput(props: {
+  editorRef: React.Ref<ReactCodeMirrorRef>;
+  draft: string;
+  setDraft: (v: string) => void;
+  extensions: ReturnType<typeof useDateEditorState>["extensions"];
+  resolved: string | null;
+  placeholder: string;
+}) {
+  return (
+    <div className="p-3 pb-0 space-y-1">
+      <CodeMirror
+        ref={props.editorRef}
+        autoFocus
+        value={props.draft}
+        onChange={props.setDraft}
+        extensions={props.extensions}
+        theme={shadcnTheme}
+        basicSetup={{
+          lineNumbers: false,
+          foldGutter: false,
+          highlightActiveLine: false,
+          highlightActiveLineGutter: false,
+          indentOnInput: false,
+          bracketMatching: false,
+          autocompletion: false,
+        }}
+        className="text-sm border border-input rounded-md px-2 py-1"
+        placeholder={props.placeholder}
+      />
+      {props.draft && (
+        <div className="text-xs px-1">
+          {props.resolved ? (
+            <span className="text-muted-foreground">
+              &rarr; {props.resolved}
+            </span>
+          ) : (
+            <span className="text-destructive">Could not parse date</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DateEditorContent(props: {
   editorRef: React.Ref<ReactCodeMirrorRef>;
   draft: string;
@@ -196,6 +252,7 @@ function DateEditorContent(props: {
   extensions: ReturnType<typeof useDateEditorState>["extensions"];
   resolved: string | null;
   selectedDate: Date | undefined;
+  placeholder: string;
   onCalendarSelect: (d: Date | undefined) => void;
   onEscape: () => void;
   onAfterEscape: () => void;
@@ -210,36 +267,14 @@ function DateEditorContent(props: {
         props.onAfterEscape();
       }}
     >
-      <div className="p-3 pb-0 space-y-1">
-        <CodeMirror
-          ref={props.editorRef}
-          autoFocus
-          value={props.draft}
-          onChange={props.setDraft}
-          extensions={props.extensions}
-          theme={shadcnTheme}
-          basicSetup={{
-            lineNumbers: false,
-            foldGutter: false,
-            highlightActiveLine: false,
-            highlightActiveLineGutter: false,
-            indentOnInput: false,
-            bracketMatching: false,
-            autocompletion: false,
-          }}
-          className="text-sm border border-input rounded-md px-2 py-1"
-          placeholder="Type a date... (e.g. tomorrow, next friday)"
-        />
-        {props.draft && (
-          <div className="text-xs px-1">
-            {props.resolved ? (
-              <span className="text-muted-foreground">&rarr; {props.resolved}</span>
-            ) : (
-              <span className="text-destructive">Could not parse date</span>
-            )}
-          </div>
-        )}
-      </div>
+      <DateEditorInput
+        editorRef={props.editorRef}
+        draft={props.draft}
+        setDraft={props.setDraft}
+        extensions={props.extensions}
+        resolved={props.resolved}
+        placeholder={props.placeholder}
+      />
       <Calendar
         mode="single"
         selected={props.selectedDate}
@@ -250,13 +285,33 @@ function DateEditorContent(props: {
   );
 }
 
-/** Date editor — CM6 natural language input + calendar picker in a popover. */
-export function DateEditor({ value, onCommit, onCancel, onChange }: EditorProps) {
+/**
+ * Date editor — CM6 natural language input + calendar picker in a popover.
+ *
+ * Uses `field.description` as the trigger's empty-state label and the CM6
+ * placeholder, falling back to `-` / {@link DEFAULT_CM_PLACEHOLDER} when the
+ * schema doesn't declare a description.
+ */
+export function DateEditor({
+  field,
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: EditorProps) {
   const [open, setOpen] = useState(true);
   const { keymap_mode: mode } = useUIState();
   const editorRef = useRef<ReactCodeMirrorRef>(null);
-  const state = useDateEditorState({ value, onCommit, onCancel, onChange, mode });
+  const state = useDateEditorState({
+    value,
+    onCommit,
+    onCancel,
+    onChange,
+    mode,
+  });
   const display = state.resolved ?? state.initial;
+  const emptyLabel = field.description ?? "-";
+  const placeholder = field.description ?? DEFAULT_CM_PLACEHOLDER;
 
   return (
     <Popover
@@ -274,7 +329,7 @@ export function DateEditor({ value, onCommit, onCancel, onChange }: EditorProps)
           {display ? (
             <span className="text-sm tabular-nums">{display}</span>
           ) : (
-            <span className="text-muted-foreground/50">-</span>
+            <span className="text-muted-foreground/50">{emptyLabel}</span>
           )}
         </div>
       </PopoverTrigger>
@@ -285,6 +340,7 @@ export function DateEditor({ value, onCommit, onCancel, onChange }: EditorProps)
         extensions={state.extensions}
         resolved={state.resolved}
         selectedDate={state.selectedDate}
+        placeholder={placeholder}
         onCalendarSelect={state.handleCalendarSelect}
         onEscape={state.handleEscape}
         onAfterEscape={() => setOpen(false)}

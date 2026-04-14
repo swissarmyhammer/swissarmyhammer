@@ -37,11 +37,13 @@ function useReferenceSearch(targetEntityType: string | undefined) {
     async (q: string) => {
       if (!targetEntityType) return;
       try {
-        const res = await invoke<MentionResult[]>("search_mentions", {
+        const res = await invoke<MentionResult[] | null>("search_mentions", {
           entityType: targetEntityType,
           query: q,
         });
-        setResults(res);
+        // Defensive: search_mentions should always return an array, but guard
+        // against null/undefined so the ResultsList render doesn't crash.
+        setResults(Array.isArray(res) ? res : []);
         setHighlightIndex(0);
       } catch {
         setResults([]);
@@ -352,8 +354,14 @@ function ReferenceResultsList({
  * Escape follows vim/CUA convention (vim: commit, CUA: cancel).
  */
 export function ReferenceSelectEditor(props: ReferenceSelectEditorProps) {
-  const { inputRef, currentValue, search, commits, entityDisplay, handleKeyDown } =
-    useReferenceEditorState(props);
+  const {
+    inputRef,
+    currentValue,
+    search,
+    commits,
+    entityDisplay,
+    handleKeyDown,
+  } = useReferenceEditorState(props);
 
   const handleQueryChange = (q: string) => {
     search.setQuery(q);
@@ -361,9 +369,11 @@ export function ReferenceSelectEditor(props: ReferenceSelectEditorProps) {
   };
 
   const handleBlur = () => {
+    // Delay before commit so a dropdown item's onClick (fired after blur) has
+    // time to call handleSelect first; matches MultiSelectEditor's debounce.
     setTimeout(() => {
       if (!commits.committedRef.current) commits.commit(currentValue);
-    }, 150);
+    }, 100);
   };
 
   return (

@@ -227,15 +227,29 @@ function buildMentionPlugin(
       constructor(view: EditorView) {
         const meta = view.state.facet(metaFacet);
         this.decorations = buildDecorations(
-          view, meta, prefix, cssClass, colorVar, defaultMark,
+          view,
+          meta,
+          prefix,
+          cssClass,
+          colorVar,
+          defaultMark,
         );
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.selectionSet
+        ) {
           const meta = update.state.facet(metaFacet);
           this.decorations = buildDecorations(
-            update.view, meta, prefix, cssClass, colorVar, defaultMark,
+            update.view,
+            meta,
+            prefix,
+            cssClass,
+            colorVar,
+            defaultMark,
           );
         }
       }
@@ -266,7 +280,13 @@ export function createMentionDecorations(
   });
 
   const defaultMark = Decoration.mark({ class: cssClass });
-  const plugin = buildMentionPlugin(metaFacet, prefix, cssClass, colorVar, defaultMark);
+  const plugin = buildMentionPlugin(
+    metaFacet,
+    prefix,
+    cssClass,
+    colorVar,
+    defaultMark,
+  );
   const theme = buildMentionTheme(cssClass, colorVar);
 
   /**

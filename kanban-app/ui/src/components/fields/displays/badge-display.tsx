@@ -11,7 +11,9 @@ import type { DisplayProps } from "./text-display";
  * Behavior:
  * - When `value` is a non-empty string and `field.type.entity` names a
  *   target entity type, renders `<MentionView entityType={...} id={...} />`.
- * - When `value` is empty or not a string, shows a muted `-` dash.
+ * - When `value` is empty or not a string, shows a muted hint. If the
+ *   field declares a YAML `placeholder`, that string is rendered;
+ *   otherwise the legacy `-` dash fallback stays intact.
  * - When `field.type.entity` is unset (defensive guard — no shipping
  *   field has this shape), renders the raw value as a plain text span.
  *
@@ -20,7 +22,12 @@ import type { DisplayProps } from "./text-display";
  */
 export function BadgeDisplay({ value, field }: DisplayProps) {
   const text = typeof value === "string" ? value : "";
-  if (!text) return <span className="text-muted-foreground/50">-</span>;
+  if (!text)
+    return (
+      <span className="text-muted-foreground/50">
+        {field.placeholder ?? "-"}
+      </span>
+    );
 
   const targetEntityType = field.type.entity as string | undefined;
   if (!targetEntityType) return <span>{text}</span>;

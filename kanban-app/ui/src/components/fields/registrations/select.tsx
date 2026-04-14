@@ -19,6 +19,7 @@ import { BadgeDisplay } from "@/components/fields/displays/badge-display";
 function SelectEditorAdapter({
   field,
   value,
+  entity,
   onCommit,
   onCancel,
   onChange,
@@ -29,6 +30,7 @@ function SelectEditorAdapter({
       <ReferenceSelectEditor
         field={field}
         value={value}
+        entity={entity}
         onCommit={onCommit}
         onCancel={onCancel}
         onChange={onChange}
@@ -42,6 +44,7 @@ function SelectEditorAdapter({
     <SelectEditor
       field={field}
       value={value}
+      entity={entity}
       onCommit={onCommit}
       onCancel={onCancel}
       onChange={onChange}

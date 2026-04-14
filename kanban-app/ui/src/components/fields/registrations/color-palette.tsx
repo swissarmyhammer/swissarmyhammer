@@ -12,14 +12,18 @@ import { ColorPaletteEditor } from "@/components/fields/editors/color-palette-ed
 import { ColorSwatchDisplay } from "@/components/fields/displays/color-swatch-display";
 
 function ColorPaletteEditorAdapter({
+  field,
   value,
+  entity,
   onCommit,
   onCancel,
   onChange,
 }: FieldEditorProps) {
   return (
     <ColorPaletteEditor
+      field={field}
       value={value}
+      entity={entity}
       onCommit={onCommit}
       onCancel={onCancel}
       onChange={onChange}

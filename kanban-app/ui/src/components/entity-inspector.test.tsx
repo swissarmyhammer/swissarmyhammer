@@ -181,10 +181,9 @@ vi.mock("@tauri-apps/api/core", async () => {
   // Preserve the real exports (SERIALIZE_TO_IPC_FN, Resource, Channel, …)
   // so that transitively-imported submodules like `window.js` / `dpi.js`
   // can resolve their re-exports. Only override `invoke` with the test mock.
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/core")>(
-      "@tauri-apps/api/core",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/core")>(
+    "@tauri-apps/api/core",
+  );
   return {
     ...actual,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -192,10 +191,9 @@ vi.mock("@tauri-apps/api/core", async () => {
   };
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/event")>(
-      "@tauri-apps/api/event",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/event")>(
+    "@tauri-apps/api/event",
+  );
   return {
     ...actual,
     listen: vi.fn(() => Promise.resolve(() => {})),
@@ -513,9 +511,7 @@ describe("EntityInspector", () => {
           progress: { total: 4, completed: 2, percent: 50 },
         }),
       );
-      const row = container.querySelector(
-        '[data-testid="field-row-progress"]',
-      );
+      const row = container.querySelector('[data-testid="field-row-progress"]');
       expect(row).toBeTruthy();
       expect(row!.querySelector('[role="progressbar"]')).toBeTruthy();
     });
@@ -801,9 +797,7 @@ describe("EntityInspector", () => {
       const inspector = container.querySelector(
         '[data-testid="entity-inspector"]',
       );
-      const dividers = inspector!.querySelectorAll(
-        "div.my-3.h-px.bg-border",
-      );
+      const dividers = inspector!.querySelectorAll("div.my-3.h-px.bg-border");
       expect(dividers.length).toBe(2);
     });
 

@@ -135,7 +135,12 @@ function useBoardLayout(
     }
     for (const ids of map.values()) {
       ids.sort((a, b) =>
-        compareTaskOrder(taskMap.get(a)!, taskMap.get(b)!, groupField, groupValue),
+        compareTaskOrder(
+          taskMap.get(a)!,
+          taskMap.get(b)!,
+          groupField,
+          groupValue,
+        ),
       );
     }
     return map;
@@ -478,20 +483,47 @@ function useBoardActionCommands(
       if (fm.startsWith("column:")) return fm.slice("column:".length);
       if (fm.startsWith("task:")) {
         const entity = taskMap.get(fm.slice("task:".length));
-        if (entity) return getStr(entity, "position_column") || (columns[0]?.id ?? null);
+        if (entity)
+          return getStr(entity, "position_column") || (columns[0]?.id ?? null);
       }
       return columns[0]?.id ?? null;
     };
 
     return [
-      { id: "board.inspect", name: "Inspect", keys: { vim: "Enter", cua: "Enter" },
-        execute: () => { const fm = focusedMonikerRef.current; if (fm) dispatchInspect({ target: fm }).catch(console.error); } },
-      { id: "board.newTask", name: "New Task", keys: { vim: "o", cua: "Mod+Enter" },
-        execute: () => { const colId = findFocusedColumnId(); if (colId) handleAddTaskRef.current(colId); } },
-      { id: "board.firstColumn", name: "First Column", keys: { vim: "0", cua: "Mod+Home" },
-        execute: () => { if (columns.length > 0) broadcastRef.current("nav.first"); } },
-      { id: "board.lastColumn", name: "Last Column", keys: { vim: "$", cua: "Mod+End" },
-        execute: () => { if (columns.length > 0) broadcastRef.current("nav.last"); } },
+      {
+        id: "board.inspect",
+        name: "Inspect",
+        keys: { vim: "Enter", cua: "Enter" },
+        execute: () => {
+          const fm = focusedMonikerRef.current;
+          if (fm) dispatchInspect({ target: fm }).catch(console.error);
+        },
+      },
+      {
+        id: "board.newTask",
+        name: "New Task",
+        keys: { vim: "o", cua: "Mod+Enter" },
+        execute: () => {
+          const colId = findFocusedColumnId();
+          if (colId) handleAddTaskRef.current(colId);
+        },
+      },
+      {
+        id: "board.firstColumn",
+        name: "First Column",
+        keys: { vim: "0", cua: "Mod+Home" },
+        execute: () => {
+          if (columns.length > 0) broadcastRef.current("nav.first");
+        },
+      },
+      {
+        id: "board.lastColumn",
+        name: "Last Column",
+        keys: { vim: "$", cua: "Mod+End" },
+        execute: () => {
+          if (columns.length > 0) broadcastRef.current("nav.last");
+        },
+      },
     ];
   }, [columns, taskMap, dispatchInspect]);
 }
@@ -518,21 +550,48 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const layout = useBoardLayout(board, tasks, groupValue);
-  const { columns, columnIdList, taskMap, columnMap, columnTasks,
-    firstTodoTaskId, columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers } = layout;
+  const {
+    columns,
+    columnIdList,
+    taskMap,
+    columnMap,
+    columnTasks,
+    firstTodoTaskId,
+    columnTaskMonikers,
+    allBoardTaskMonikers,
+    allBoardHeaderMonikers,
+  } = layout;
   const dragDrop = useBoardDragDrop(columnIdList, columnMap, taskMap);
-  const { activeColumn, currentColumnOrder, taskDrag, sensors,
-    handleColumnDragStart, handleColumnDragOver, handleColumnDragEnd,
-    handleTaskDragStart, handleTaskDragEnd, handleZoneDrop } = dragDrop;
+  const {
+    activeColumn,
+    currentColumnOrder,
+    taskDrag,
+    sensors,
+    handleColumnDragStart,
+    handleColumnDragOver,
+    handleColumnDragEnd,
+    handleTaskDragStart,
+    handleTaskDragEnd,
+    handleZoneDrop,
+  } = dragDrop;
 
   const boardActionCommands = useBoardActionCommands(
-    columns, taskMap, focusedMonikerRef, broadcastRef, handleAddTaskRef, dispatchInspect);
+    columns,
+    taskMap,
+    focusedMonikerRef,
+    broadcastRef,
+    handleAddTaskRef,
+    dispatchInspect,
+  );
 
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || !focusedMoniker) return;
-    const el = container.querySelector<HTMLElement>(`[data-moniker="${focusedMoniker}"]`);
-    if (el?.scrollIntoView) el.scrollIntoView({ inline: "nearest", block: "nearest" });
+    const el = container.querySelector<HTMLElement>(
+      `[data-moniker="${focusedMoniker}"]`,
+    );
+    if (el?.scrollIntoView)
+      el.scrollIntoView({ inline: "nearest", block: "nearest" });
   }, [focusedMoniker]);
 
   const initialFocusDone = useRef(false);
@@ -541,46 +600,102 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
     initialFocusDone.current = true;
     for (const col of columns) {
       const monikers = columnTaskMonikers.get(col.id) ?? [];
-      if (monikers.length > 0) { setFocus(monikers[0]); return; }
+      if (monikers.length > 0) {
+        setFocus(monikers[0]);
+        return;
+      }
     }
     if (columns.length > 0) setFocus(columns[0].moniker);
   }, [columns, columnTaskMonikers, setFocus]);
 
-  const handleAddTask = useCallback(async (columnId: string) => {
-    const col = columnMap.get(columnId);
-    const title = defaultTaskTitle(col ? getStr(col, "name") : "");
-    try {
-      const result = (await dispatch("task.add", { args: { title, column: columnId } })) as { id?: string } | undefined;
-      if (result?.id) setFocus(`task:${result.id}`);
-    } catch (e) {
-      toast.error(`Failed to add task: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }, [columnMap, setFocus]);
+  const handleAddTask = useCallback(
+    async (columnId: string) => {
+      const col = columnMap.get(columnId);
+      const title = defaultTaskTitle(col ? getStr(col, "name") : "");
+      try {
+        const result = (await dispatch("task.add", {
+          args: { title, column: columnId },
+        })) as { id?: string } | undefined;
+        if (result?.id) setFocus(`task:${result.id}`);
+      } catch (e) {
+        toast.error(
+          `Failed to add task: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    },
+    [columnMap, setFocus],
+  );
   handleAddTaskRef.current = handleAddTask;
 
   return (
-    <FocusScope moniker={boardMoniker} commands={boardCommands} className="flex flex-col flex-1 min-h-0 relative">
+    <FocusScope
+      moniker={boardMoniker}
+      commands={boardCommands}
+      className="flex flex-col flex-1 min-h-0 relative"
+    >
       <CommandScopeProvider commands={boardActionCommands}>
-        <DndContext sensors={sensors} onDragStart={handleColumnDragStart} onDragOver={handleColumnDragOver} onDragEnd={handleColumnDragEnd}>
-          <div ref={scrollContainerRef} className="flex flex-1 min-h-0 overflow-x-auto pl-2">
-            <SortableContext items={currentColumnOrder} strategy={horizontalListSortingStrategy}>
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleColumnDragStart}
+          onDragOver={handleColumnDragOver}
+          onDragEnd={handleColumnDragEnd}
+        >
+          <div
+            ref={scrollContainerRef}
+            className="flex flex-1 min-h-0 overflow-x-auto pl-2"
+          >
+            <SortableContext
+              items={currentColumnOrder}
+              strategy={horizontalListSortingStrategy}
+            >
               {currentColumnOrder.map((colId, i) => {
                 const col = columnMap.get(colId);
                 if (!col) return null;
                 const prevColId = i > 0 ? currentColumnOrder[i - 1] : null;
-                const nextColId = i < currentColumnOrder.length - 1 ? currentColumnOrder[i + 1] : null;
+                const nextColId =
+                  i < currentColumnOrder.length - 1
+                    ? currentColumnOrder[i + 1]
+                    : null;
                 return (
-                  <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
-                    <ColumnView column={col} tasks={columnTasks.get(col.id) ?? []}
+                  <SortableColumn
+                    key={col.id}
+                    id={col.id}
+                    showSeparator={i > 0}
+                  >
+                    <ColumnView
+                      column={col}
+                      tasks={columnTasks.get(col.id) ?? []}
                       onAddTask={i === 0 ? handleAddTask : undefined}
-                      onTaskDragStart={handleTaskDragStart} onTaskDragEnd={handleTaskDragEnd} onDrop={handleZoneDrop}
-                      dragTaskId={taskDrag?.sourceTaskId ?? null} firstTodoTaskId={firstTodoTaskId}
-                      leftColumnTaskMonikers={prevColId ? (columnTaskMonikers.get(prevColId) ?? []) : []}
-                      leftColumnHeaderMoniker={prevColId ? `${columnMap.get(prevColId)?.moniker ?? `column:${prevColId}`}.name` : null}
-                      rightColumnTaskMonikers={nextColId ? (columnTaskMonikers.get(nextColId) ?? []) : []}
-                      rightColumnHeaderMoniker={nextColId ? `${columnMap.get(nextColId)?.moniker ?? `column:${nextColId}`}.name` : null}
-                      allBoardTaskMonikers={allBoardTaskMonikers} allBoardHeaderMonikers={allBoardHeaderMonikers}
-                      isFirstColumn={i === 0} isLastColumn={i === currentColumnOrder.length - 1} />
+                      onTaskDragStart={handleTaskDragStart}
+                      onTaskDragEnd={handleTaskDragEnd}
+                      onDrop={handleZoneDrop}
+                      dragTaskId={taskDrag?.sourceTaskId ?? null}
+                      firstTodoTaskId={firstTodoTaskId}
+                      leftColumnTaskMonikers={
+                        prevColId
+                          ? (columnTaskMonikers.get(prevColId) ?? [])
+                          : []
+                      }
+                      leftColumnHeaderMoniker={
+                        prevColId
+                          ? `${columnMap.get(prevColId)?.moniker ?? `column:${prevColId}`}.name`
+                          : null
+                      }
+                      rightColumnTaskMonikers={
+                        nextColId
+                          ? (columnTaskMonikers.get(nextColId) ?? [])
+                          : []
+                      }
+                      rightColumnHeaderMoniker={
+                        nextColId
+                          ? `${columnMap.get(nextColId)?.moniker ?? `column:${nextColId}`}.name`
+                          : null
+                      }
+                      allBoardTaskMonikers={allBoardTaskMonikers}
+                      allBoardHeaderMonikers={allBoardHeaderMonikers}
+                      isFirstColumn={i === 0}
+                      isLastColumn={i === currentColumnOrder.length - 1}
+                    />
                   </SortableColumn>
                 );
               })}

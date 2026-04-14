@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c880
+position_column: done
+position_ordinal: ffffffffffffffffffffffcc80
 project: task-card-fields
 title: Add YAML-configurable `placeholder` hint for empty field displays
 ---
@@ -52,31 +52,40 @@ Per the user's follow-up: "this should show the hint text in display since the e
 
 ## Acceptance Criteria
 
-- [ ] `FieldDef` serde round-trips `placeholder: Option<String>` — present, empty string, and absent all deserialize and re-serialize losslessly.
-- [ ] With `placeholder: "Add tags"` in `tags.yaml`, a task whose tags list is empty renders "Add tags" in both the card (compact) and the inspector (full), styled muted.
-- [ ] With `placeholder: "Assign a project"` in `project.yaml`, a task whose project is null renders "Assign a project".
-- [ ] With `placeholder: "Add dependencies"` in `depends_on.yaml`, a task whose depends_on is empty renders "Add dependencies".
-- [ ] Clicking on the rendered hint enters edit mode — the click-to-edit surface wrapping the display is unchanged.
-- [ ] Any `badge`/`badge-list` field that does NOT declare `placeholder` still renders `-` (compact) or `None` (full) exactly as before.
-- [ ] No change to tag pills, reference badges, or the populated (non-empty) branch — only the empty branch text is affected.
+- [x] `FieldDef` serde round-trips `placeholder: Option<String>` — present, empty string, and absent all deserialize and re-serialize losslessly.
+- [x] With `placeholder: "Add tags"` in `tags.yaml`, a task whose tags list is empty renders "Add tags" in both the card (compact) and the inspector (full), styled muted.
+- [x] With `placeholder: "Assign a project"` in `project.yaml`, a task whose project is null renders "Assign a project".
+- [x] With `placeholder: "Add dependencies"` in `depends_on.yaml`, a task whose depends_on is empty renders "Add dependencies".
+- [x] Clicking on the rendered hint enters edit mode — the click-to-edit surface wrapping the display is unchanged.
+- [x] Any `badge`/`badge-list` field that does NOT declare `placeholder` still renders `-` (compact) or `None` (full) exactly as before.
+- [x] No change to tag pills, reference badges, or the populated (non-empty) branch — only the empty branch text is affected.
 
 ## Tests
 
-- [ ] `swissarmyhammer-fields/src/types.rs` — add `field_def_placeholder_yaml_round_trip`:
+- [x] `swissarmyhammer-fields/src/types.rs` — add `field_def_placeholder_yaml_round_trip`:
   - Build a `FieldDef` with `placeholder: Some("Add tags".into())`, YAML-round-trip, assert the string survives.
   - Build a `FieldDef` with `placeholder: None`, YAML-round-trip, assert the key does not appear in the serialized output.
-- [ ] `kanban-app/ui/src/components/fields/displays/badge-list-display.test.tsx`:
+- [x] `kanban-app/ui/src/components/fields/displays/badge-list-display.test.tsx`:
   - "renders the configured placeholder in full mode when values array is empty".
   - "renders the configured placeholder in compact mode when values array is empty".
   - "falls back to 'None' / '-' when placeholder is absent" (regression guard).
-- [ ] `kanban-app/ui/src/components/fields/displays/badge-display.test.tsx`:
+- [x] `kanban-app/ui/src/components/fields/displays/badge-display.test.tsx`:
   - "renders the configured placeholder when value is missing or empty string".
   - "falls back to '-' when placeholder is absent" (regression guard).
-- [ ] Run: `cargo nextest run -p swissarmyhammer-fields field_def_placeholder_yaml_round_trip` → green.
-- [ ] Run: `cargo nextest run -p swissarmyhammer-fields -p swissarmyhammer-kanban` → full suites green.
-- [ ] Run: `cd kanban-app/ui && pnpm test -- badge-list-display badge-display` → green.
+- [x] Run: `cargo nextest run -p swissarmyhammer-fields field_def_placeholder_yaml_round_trip` → green.
+- [x] Run: `cargo nextest run -p swissarmyhammer-fields -p swissarmyhammer-kanban` → full suites green.
+- [x] Run: `cd kanban-app/ui && pnpm test -- badge-list-display badge-display` → green.
 - [ ] Manual verification: launch the kanban app. Create a task with no tags, no project, no dependencies. Confirm the inspector shows "Add tags", "Assign a project", "Add dependencies" under their respective field icons. Click each — the editor opens.
 
 ## Workflow
 
 - Use `/tdd` — RED: write `field_def_placeholder_yaml_round_trip` + the badge-list and badge display placeholder tests first (all fail: field doesn't exist, displays still hardcode `-`/`None`). GREEN: add the `placeholder` field to `FieldDef` (Rust + TS), wire it through the two displays with `??` fallback, add the three YAML `placeholder:` entries. Verify green and do the manual UI check.
+
+## Implementation Notes
+
+- Rust `FieldDef` gained `placeholder: Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]`, positioned right after `section`. Updated every `FieldDef` literal constructor across `swissarmyhammer-fields`, `swissarmyhammer-entity`, and `swissarmyhammer-kanban` to include the new field.
+- TS `FieldDef` mirrors with `placeholder?: string` including a doc comment.
+- `BadgeDisplay` and `BadgeListDisplay` prefer `field.placeholder` via `??` over their hardcoded `-` / `None` fallbacks, keeping the muted/italic styling untouched.
+- Added `field_def_placeholder_yaml_round_trip` covering `Some`, `None`, and absent-key deserialization. Added four UI tests (two per display) covering both the placeholder-set and placeholder-absent branches.
+- YAML updates added `placeholder:` to `tags.yaml`, `project.yaml`, and `depends_on.yaml` — picked up at compile time by `include_dir!`.
+- Manual verification remains for the reviewer (launch the app, eyeball the inspector).

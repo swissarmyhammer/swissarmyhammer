@@ -36,6 +36,7 @@ function AttachmentListDisplayAdapter({
 function AttachmentEditorAdapter({
   field,
   value,
+  entity,
   onCommit,
   onCancel,
   onChange,
@@ -44,6 +45,7 @@ function AttachmentEditorAdapter({
     <AttachmentEditor
       field={field}
       value={value}
+      entity={entity}
       onCommit={onCommit}
       onCancel={onCancel}
       onChange={onChange}

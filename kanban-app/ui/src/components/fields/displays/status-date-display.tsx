@@ -6,6 +6,8 @@ import {
   PlusCircle,
   type LucideIcon,
 } from "lucide-react";
+import { DateTime } from "luxon";
+import { formatRelativeMagnitude } from "@/lib/format-date";
 import type { DisplayProps } from "./text-display";
 
 /**
@@ -49,8 +51,16 @@ interface KindDescriptor {
 }
 
 const KIND_DESCRIPTORS: Record<StatusKind, KindDescriptor> = {
-  completed: { Icon: CheckCircle, label: "Completed", phrasePrefix: "Completed" },
-  overdue: { Icon: AlertTriangle, label: "Overdue", phrasePrefix: "Overdue by" },
+  completed: {
+    Icon: CheckCircle,
+    label: "Completed",
+    phrasePrefix: "Completed",
+  },
+  overdue: {
+    Icon: AlertTriangle,
+    label: "Overdue",
+    phrasePrefix: "Overdue by",
+  },
   started: { Icon: Play, label: "Started", phrasePrefix: "Started" },
   scheduled: { Icon: Clock, label: "Scheduled", phrasePrefix: "Scheduled" },
   created: { Icon: PlusCircle, label: "Created", phrasePrefix: "Created" },
@@ -104,49 +114,6 @@ export function parseDateOrDatetime(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-const SECOND = 1000;
-const MINUTE = 60 * SECOND;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
-const WEEK = 7 * DAY;
-const MONTH = 30 * DAY;
-const YEAR = 365 * DAY;
-
-/**
- * Format the absolute millisecond delta between two instants as an
- * English phrase like `"3 days"` or `"2 weeks"`.
- *
- * Caller decides whether to prepend "in", append "ago", etc. — this helper
- * only produces the magnitude phrase so both "Scheduled in 3 days" and
- * "Created 3 days ago" compose cleanly.
- */
-function formatDurationMagnitude(deltaMs: number): string {
-  const abs = Math.abs(deltaMs);
-  if (abs < MINUTE) return "just now";
-  if (abs < HOUR) {
-    const n = Math.round(abs / MINUTE);
-    return `${n} minute${n === 1 ? "" : "s"}`;
-  }
-  if (abs < DAY) {
-    const n = Math.round(abs / HOUR);
-    return `${n} hour${n === 1 ? "" : "s"}`;
-  }
-  if (abs < WEEK) {
-    const n = Math.round(abs / DAY);
-    return `${n} day${n === 1 ? "" : "s"}`;
-  }
-  if (abs < MONTH) {
-    const n = Math.round(abs / WEEK);
-    return `${n} week${n === 1 ? "" : "s"}`;
-  }
-  if (abs < YEAR) {
-    const n = Math.round(abs / MONTH);
-    return `${n} month${n === 1 ? "" : "s"}`;
-  }
-  const n = Math.round(abs / YEAR);
-  return `${n} year${n === 1 ? "" : "s"}`;
-}
-
 /**
  * Compose the full sentence shown to the user, e.g. `"Completed 2 days ago"`
  * or `"Scheduled in 3 weeks"`. For past magnitudes the `ago` suffix is
@@ -154,15 +121,26 @@ function formatDurationMagnitude(deltaMs: number): string {
  *
  * The `overdue` kind uses `phrasePrefix: "Overdue by"` so the resulting
  * sentence reads `"Overdue by 5 days"` without any directional word.
+ *
+ * Magnitude phrasing (`"2 days"`, `"3 weeks"`, `"just now"`, ...) is produced
+ * by the shared {@link formatRelativeMagnitude} helper so the status-date
+ * display and {@link ./date-display.tsx DateDisplay} agree on how durations
+ * are worded. Direction (past vs future) is determined here from the raw
+ * millisecond delta because the magnitude helper is intentionally
+ * direction-agnostic.
  */
 function composeStatusPhrase(
   kind: StatusKind,
+  timestamp: string,
   timestampDate: Date,
   now: Date,
 ): string {
   const { phrasePrefix } = KIND_DESCRIPTORS[kind];
   const deltaMs = timestampDate.getTime() - now.getTime();
-  const magnitude = formatDurationMagnitude(deltaMs);
+  const magnitude = formatRelativeMagnitude(
+    timestamp,
+    DateTime.fromJSDate(now),
+  );
 
   if (magnitude === "just now") {
     return `${phrasePrefix} just now`;
@@ -196,7 +174,12 @@ export function StatusDateDisplay({ value, mode }: DisplayProps) {
   const phrase =
     timestampDate == null
       ? descriptor.label
-      : composeStatusPhrase(parsed.kind, timestampDate, new Date());
+      : composeStatusPhrase(
+          parsed.kind,
+          parsed.timestamp,
+          timestampDate,
+          new Date(),
+        );
 
   const { Icon } = descriptor;
 

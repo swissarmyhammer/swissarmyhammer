@@ -2,7 +2,7 @@
 # real ULIDs. The last two characters are the builtin field code.
 id: "00000000000000000000000015"
 name: started
-description: Timestamp when the task was first moved to an active column
+description: When work began
 type:
   kind: computed
   derive: derive-started

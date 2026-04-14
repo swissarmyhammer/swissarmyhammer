@@ -132,7 +132,9 @@ function buildVirtualTagSearch(
 ): (query: string) => Promise<MentionSearchResult[]> {
   return async (query: string) => {
     const virtualResults: MentionSearchResult[] = vtMeta
-      .filter((m) => !query || m.slug.toLowerCase().includes(query.toLowerCase()))
+      .filter(
+        (m) => !query || m.slug.toLowerCase().includes(query.toLowerCase()),
+      )
       .map((m) => ({
         slug: m.slug,
         displayName: `${m.slug} (virtual)`,
@@ -144,9 +146,17 @@ function buildVirtualTagSearch(
 }
 
 /** Merge virtual tag entries into a meta map so they receive decoration and tooltip support. */
-function mergeVirtualTagMeta(base: Map<string, MentionMeta>, vtMeta: VirtualTagMeta[]): Map<string, MentionMeta> {
+function mergeVirtualTagMeta(
+  base: Map<string, MentionMeta>,
+  vtMeta: VirtualTagMeta[],
+): Map<string, MentionMeta> {
   const merged = new Map(base);
-  for (const m of vtMeta) merged.set(m.slug, { color: m.color, displayName: m.slug, description: m.description });
+  for (const m of vtMeta)
+    merged.set(m.slug, {
+      color: m.color,
+      displayName: m.slug,
+      description: m.description,
+    });
   return merged;
 }
 
@@ -177,14 +187,19 @@ function buildMentionExtensions(
   > = [];
 
   for (const md of mentionData) {
-    const addVirtual = includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
-    const metaMap = addVirtual ? mergeVirtualTagMeta(md.metaMap, vtMeta) : md.metaMap;
+    const addVirtual =
+      includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
+    const metaMap = addVirtual
+      ? mergeVirtualTagMeta(md.metaMap, vtMeta)
+      : md.metaMap;
 
     if (metaMap.size === 0) continue;
     exts.push(getDecoInfra(md.prefix, md.entityType).extension(metaMap));
 
     const baseSearch = buildAsyncSearch(md.entityType);
-    const search = addVirtual ? buildVirtualTagSearch(baseSearch, vtMeta) : baseSearch;
+    const search = addVirtual
+      ? buildVirtualTagSearch(baseSearch, vtMeta)
+      : baseSearch;
     completionSources.push(createMentionCompletionSource(md.prefix, search));
 
     exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));

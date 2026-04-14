@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { commands } from "vitest/browser";
+import { EditorView } from "@codemirror/view";
 import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,14 @@ let KEYMAP_MODE = "cua";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "list_entity_types")
-    return Promise.resolve(["task", "tag", "actor", "column", "board"]);
+    return Promise.resolve([
+      "task",
+      "tag",
+      "actor",
+      "column",
+      "project",
+      "board",
+    ]);
   if (args[0] === "get_entity_schema") {
     // Return real schema data for the requested entity type
     const entityType = args[1]?.entityType as string;
@@ -96,6 +104,12 @@ const mockInvoke = vi.fn((...args: any[]) => {
       windows: {},
       recent_boards: [],
     });
+  if (args[0] === "search_mentions") {
+    // The real search_mentions always returns an array. Tests only need a
+    // stable empty array shape — individual editors test their own search
+    // behavior against their own mocks.
+    return Promise.resolve([]);
+  }
   if (args[0] === "dispatch_command")
     return Promise.resolve({ result: "ok", undoable: true });
   return Promise.resolve(null);
@@ -105,10 +119,9 @@ const mockInvoke = vi.fn((...args: any[]) => {
 // …) so transitively-imported submodules like `window.js` / `dpi.js` can
 // still resolve their re-exports. Only override `invoke` / `listen`.
 vi.mock("@tauri-apps/api/core", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/core")>(
-      "@tauri-apps/api/core",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/core")>(
+    "@tauri-apps/api/core",
+  );
   return {
     ...actual,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -116,10 +129,9 @@ vi.mock("@tauri-apps/api/core", async () => {
   };
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/event")>(
-      "@tauri-apps/api/event",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/event")>(
+    "@tauri-apps/api/event",
+  );
   return {
     ...actual,
     listen: vi.fn(() => Promise.resolve(() => {})),
@@ -178,7 +190,13 @@ const TEST_ENTITY: Entity = {
     body: "Test body with #tag",
     tags: ["bug"],
     assignees: ["actor-1"],
-    depends_on: [],
+    // A non-empty initial `depends_on` mirrors `tags`/`assignees` so every
+    // multi-select renders a non-empty doc. The multi-select editor's vim
+    // Enter handler guards on `text.length > 0` (see buildVimEnterExtension
+    // in cm-submit-cancel.ts), so an empty doc would correctly refuse to
+    // commit in vim mode but save in CUA mode — an unrelated behavior
+    // asymmetry the save-matrix is not trying to exercise here.
+    depends_on: ["test-task-2"],
     progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
     position_ordinal: "ffff8000",
@@ -189,8 +207,16 @@ const TEST_ENTITY: Entity = {
   },
 };
 
+/** Second task referenced by `depends_on` so the multi-select renders tokens. */
+const TEST_DEPENDS_TARGET: Entity = {
+  entity_type: "task",
+  id: "test-task-2",
+  moniker: "task:test-task-2",
+  fields: { title: "Dependency Target" },
+};
+
 const TEST_ENTITIES: Record<string, Entity[]> = {
-  task: [TEST_ENTITY],
+  task: [TEST_ENTITY, TEST_DEPENDS_TARGET],
   tag: [
     {
       entity_type: "tag",
@@ -294,9 +320,10 @@ function expectsSave(keymap: string, exit: string): boolean {
 // ---------------------------------------------------------------------------
 
 beforeAll(async () => {
-  allFieldDefs = (await commands.loadFieldDefinitions()) as unknown as FieldDef[];
+  allFieldDefs =
+    (await commands.loadFieldDefinitions()) as unknown as FieldDef[];
 
-  const entityTypes = ["task", "tag", "actor", "column", "board"];
+  const entityTypes = ["task", "tag", "actor", "column", "project", "board"];
   for (const et of entityTypes) {
     const def = (await commands.loadEntityDefinition({ entityType: et })) as {
       name: string;
@@ -331,18 +358,8 @@ describe("Field save behavior", () => {
         KEYMAP_MODE = keymap;
       });
 
-      // One matrix cell is a known gap: multi-select + vim + Enter. The CM6
-      // vim keymap handles Enter in the capture phase before our submit
-      // extension fires, so the harness's native KeyboardEvent dispatch
-      // misses the commit path. Advertised below via `it.skip` so the test
-      // runner reports it as skipped rather than silently dropped.
-      const skipMultiSelect = keymap === "vim";
-
       it.each(exitPaths)("exit: %s", async (exit) => {
-        const editableFields = editableFieldsFor("task").filter(
-          (f) =>
-            !(skipMultiSelect && exit === "Enter" && f.editor === "multi-select"),
-        );
+        const editableFields = editableFieldsFor("task");
         const failures: string[] = [];
 
         for (const fieldDef of editableFields) {
@@ -421,7 +438,33 @@ describe("Field save behavior", () => {
                 unmount();
                 await settle(50);
               } else {
-                await act(async () => fireEvent.keyDown(target, { key: exit }));
+                // For CM6-backed editors, dispatch a native KeyboardEvent on
+                // the EditorView's contentDOM rather than via fireEvent. The
+                // CM6 vim plugin's capture-phase listener only observes real
+                // KeyboardEvent instances on the view's contentDOM, so a
+                // fireEvent.keyDown on a container-queried .cm-content node
+                // misses the vim keymap path (notably vim + Enter for
+                // multi-select with alwaysSubmitOnEnter). Using
+                // EditorView.findFromDOM + view.contentDOM.dispatchEvent
+                // mirrors the pattern proven in multi-select-editor.test.tsx
+                // and keeps the path keymap-agnostic (cua/emacs/vim all ok).
+                const cmEditor = target.closest<HTMLElement>(".cm-editor");
+                const view = cmEditor ? EditorView.findFromDOM(cmEditor) : null;
+                if (view) {
+                  await act(async () => {
+                    view.contentDOM.dispatchEvent(
+                      new KeyboardEvent("keydown", {
+                        key: exit,
+                        bubbles: true,
+                        cancelable: true,
+                      }),
+                    );
+                  });
+                } else {
+                  await act(async () =>
+                    fireEvent.keyDown(target, { key: exit }),
+                  );
+                }
                 await settle();
                 unmount();
               }
@@ -460,15 +503,6 @@ describe("Field save behavior", () => {
           `${mode} / ${keymap} / ${exit} failures:\n${failures.join("\n")}`,
         ).toHaveLength(0);
       });
-
-      // Advertised skip — pairs with the `skipMultiSelect` filter above.
-      // When the kanban card lands, delete this and the filter.
-      if (skipMultiSelect) {
-        it.skip(
-          "exit: Enter × editor: multi-select — TODO(kanban:01KP2DQW57CAXBGC5GT68PFYPB) harness cannot drive CM6 vim capture-phase Enter",
-          () => {},
-        );
-      }
     });
   });
 });

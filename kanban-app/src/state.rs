@@ -17,17 +17,28 @@ use tokio::sync::RwLock;
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
 
+use crate::enrichment::{new_enrichment_cache, EnrichmentCache};
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
-/// System clipboard provider using the Tauri clipboard plugin.
+/// System clipboard provider backed by the Tauri clipboard plugin.
+///
+/// Implements the [`ClipboardProvider`] trait so commands in
+/// `swissarmyhammer-kanban` (e.g. `entity.copy`, `entity.paste`) can read and
+/// write the OS clipboard without linking against Tauri directly. Constructed
+/// once at app start with the active [`tauri::AppHandle`] and registered on
+/// [`KanbanContext`].
 pub struct TauriClipboardProvider {
     app: tauri::AppHandle,
 }
 
 impl TauriClipboardProvider {
+    /// Build a new provider bound to the given Tauri app handle.
+    ///
+    /// The handle is cloned internally for each clipboard call, so the same
+    /// provider can be shared across threads / async tasks.
     pub fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }
@@ -78,8 +89,131 @@ pub(crate) struct BoardHandle {
     pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
     pub(crate) search_index: Arc<RwLock<EntitySearchIndex>>,
+    /// Last-emitted computed-field snapshot per task, used by the post-mutation
+    /// fan-out pass in `enrich_computed_fields` to diff synthetic enrichment
+    /// events and suppress no-ops. Shared with `Arc<Mutex<…>>` so the cache
+    /// survives across every `flush_and_emit` call on this handle.
+    pub(crate) enrichment_cache: EnrichmentCache,
     /// File watcher — dropped when the handle is dropped.
     _watcher: Option<BoardWatcher>,
+}
+
+/// Build one `EntityTypeStore` per registered entity type and wire it into
+/// both `EntityContext` (so writes/deletes delegate to the store) and
+/// `StoreContext` (so undo/redo dispatches correctly).
+async fn register_entity_stores(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+) {
+    let Ok(ectx) = ctx.entity_context().await else {
+        return;
+    };
+    ectx.set_store_context(Arc::clone(store_context));
+
+    let fields_ctx = ectx.fields();
+    for entity_def in fields_ctx.all_entities() {
+        let entity_type = entity_def.name.as_str();
+        let owned_defs: Vec<_> = fields_ctx
+            .fields_for_entity(entity_type)
+            .into_iter()
+            .cloned()
+            .collect();
+        let store = swissarmyhammer_entity::EntityTypeStore::new(
+            ectx.entity_dir(entity_type),
+            entity_type,
+            Arc::new(entity_def.clone()),
+            Arc::new(owned_defs),
+        );
+        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+        ectx.register_store(entity_type, handle.clone()).await;
+        store_context.register(handle).await;
+    }
+}
+
+/// Register the perspectives store with `StoreContext` and wire the handle
+/// into `PerspectiveContext` so writes produce change events and push onto
+/// the shared undo stack.
+async fn register_perspective_store(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+    kanban_path: &Path,
+) {
+    let perspectives_dir = kanban_path.join("perspectives");
+    let store = swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
+    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+    store_context.register(handle.clone()).await;
+
+    if let Ok(pctx) = ctx.perspective_context().await {
+        let mut pctx = pctx.write().await;
+        pctx.set_store_handle(handle);
+        pctx.set_store_context(Arc::clone(store_context));
+    }
+}
+
+/// Migrate legacy ordinals to `FractionalIndex` format.
+///
+/// Reads all tasks, groups by column, sorts by the existing ordinal string,
+/// then assigns fresh `FractionalIndex` ordinals preserving that order.
+/// Silently no-ops when every ordinal already validates as a `FractionalIndex`.
+async fn migrate_legacy_ordinals(ctx: &KanbanContext) {
+    use std::collections::HashMap;
+    use swissarmyhammer_kanban::types::Ordinal;
+
+    let Ok(ectx) = ctx.entity_context().await else {
+        return;
+    };
+    let Ok(tasks) = ectx.list("task").await else {
+        return;
+    };
+
+    let needs_migration = tasks.iter().any(|t| {
+        let ord = t.get_str("position_ordinal").unwrap_or("");
+        !ord.is_empty() && !Ordinal::is_valid(ord)
+    });
+    if !needs_migration {
+        return;
+    }
+
+    tracing::info!("migrating legacy ordinals to fractional index format");
+    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
+    for t in tasks {
+        let col = t.get_str("position_column").unwrap_or("todo").to_string();
+        by_column.entry(col).or_default().push(t);
+    }
+
+    for tasks in by_column.values_mut() {
+        tasks.sort_by(|a, b| {
+            let oa = a.get_str("position_ordinal").unwrap_or("");
+            let ob = b.get_str("position_ordinal").unwrap_or("");
+            oa.cmp(ob)
+        });
+
+        let mut ord = Ordinal::first();
+        for task in tasks.iter_mut() {
+            task.set("position_ordinal", serde_json::json!(ord.as_str()));
+            if let Err(e) = ectx.write(task).await {
+                tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
+            }
+            ord = Ordinal::after(&ord);
+        }
+    }
+    tracing::info!("ordinal migration complete");
+}
+
+/// Entity types loaded into the in-memory search index at board open.
+const SEARCH_INDEX_ENTITY_TYPES: &[&str] = &["task", "tag", "column", "actor", "board"];
+
+/// Load every searchable entity type into a fresh `EntitySearchIndex`.
+async fn build_initial_search_index(ctx: &KanbanContext) -> EntitySearchIndex {
+    let mut all_entities: Vec<Entity> = Vec::new();
+    if let Ok(ectx) = ctx.entity_context().await {
+        for entity_type in SEARCH_INDEX_ENTITY_TYPES {
+            if let Ok(entities) = ectx.list(entity_type).await {
+                all_entities.extend(entities);
+            }
+        }
+    }
+    EntitySearchIndex::from_entities(all_entities)
 }
 
 impl BoardHandle {
@@ -92,118 +226,18 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
 
-        // Create StoreContext for undo/redo and register entity type stores.
         let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
             kanban_path.to_path_buf(),
         ));
-        if let Ok(ectx) = ctx.entity_context().await {
-            // Wire the StoreContext into EntityContext so write/delete
-            // automatically push onto the shared undo stack.
-            ectx.set_store_context(Arc::clone(&store_context));
 
-            let fields_ctx = ectx.fields();
-            for entity_def in fields_ctx.all_entities() {
-                let entity_type = entity_def.name.as_str();
-                let field_defs = fields_ctx.fields_for_entity(entity_type);
-                let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
-                let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
-                    ectx.entity_dir(entity_type),
-                    entity_type,
-                    std::sync::Arc::new(entity_def.clone()),
-                    std::sync::Arc::new(owned_defs),
-                );
-                let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
-                    std::sync::Arc::new(entity_type_store),
-                ));
-                // Register with EntityContext so write/delete delegates to the store
-                ectx.register_store(entity_type, handle.clone()).await;
-                // Register with StoreContext so undo/redo dispatches correctly
-                store_context.register(handle).await;
-            }
-        }
+        register_entity_stores(&ctx, &store_context).await;
+        register_perspective_store(&ctx, &store_context, &kanban_path).await;
 
-        // Register perspective store for undo/redo changelog support and
-        // wire the handle into PerspectiveContext so writes delegate to it.
-        {
-            let perspectives_dir = kanban_path.join("perspectives");
-            let perspective_store =
-                swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
-            let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
-                std::sync::Arc::new(perspective_store),
-            ));
-            store_context.register(handle.clone()).await;
-
-            // Wire into PerspectiveContext so write/delete produce change
-            // events and push onto the shared undo stack.
-            if let Ok(pctx) = ctx.perspective_context().await {
-                let mut pctx = pctx.write().await;
-                pctx.set_store_handle(handle);
-                pctx.set_store_context(Arc::clone(&store_context));
-            }
-        }
-
-        // Collect store roots now that all stores are registered.
-        // This drives the file watcher — every registered store's directory
-        // will be watched automatically (no hardcoded list needed).
         let store_roots = store_context.watched_roots().await;
         let entity_cache = watcher::new_entity_cache(&kanban_path, &store_roots);
 
-        // Migrate legacy ordinals to FractionalIndex format.
-        // Reads all tasks, groups by column, sorts by existing ordinal string,
-        // then assigns new FractionalIndex ordinals preserving that order.
-        if let Ok(ectx) = ctx.entity_context().await {
-            use std::collections::HashMap;
-            use swissarmyhammer_kanban::types::Ordinal;
-
-            if let Ok(tasks) = ectx.list("task").await {
-                // Check if any task has a legacy (non-FractionalIndex) ordinal
-                let needs_migration = tasks.iter().any(|t| {
-                    let ord = t.get_str("position_ordinal").unwrap_or("");
-                    !ord.is_empty() && !Ordinal::is_valid(ord)
-                });
-
-                if needs_migration {
-                    tracing::info!("migrating legacy ordinals to fractional index format");
-
-                    // Group by column, sort by existing ordinal string
-                    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
-                    for t in tasks {
-                        let col = t.get_str("position_column").unwrap_or("todo").to_string();
-                        by_column.entry(col).or_default().push(t);
-                    }
-
-                    for tasks in by_column.values_mut() {
-                        tasks.sort_by(|a, b| {
-                            let oa = a.get_str("position_ordinal").unwrap_or("");
-                            let ob = b.get_str("position_ordinal").unwrap_or("");
-                            oa.cmp(ob)
-                        });
-
-                        // Assign new ordinals: first(), after(first), after(after(first)), ...
-                        let mut ord = Ordinal::first();
-                        for task in tasks.iter_mut() {
-                            task.set("position_ordinal", serde_json::json!(ord.as_str()));
-                            if let Err(e) = ectx.write(task).await {
-                                tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
-                            }
-                            ord = Ordinal::after(&ord);
-                        }
-                    }
-                    tracing::info!("ordinal migration complete");
-                }
-            }
-        }
-
-        // Load all entities into search index
-        let mut all_entities: Vec<Entity> = Vec::new();
-        if let Ok(ectx) = ctx.entity_context().await {
-            for entity_type in &["task", "tag", "column", "actor", "board"] {
-                if let Ok(entities) = ectx.list(entity_type).await {
-                    all_entities.extend(entities);
-                }
-            }
-        }
-        let search_index = Arc::new(RwLock::new(EntitySearchIndex::from_entities(all_entities)));
+        migrate_legacy_ordinals(&ctx).await;
+        let search_index = Arc::new(RwLock::new(build_initial_search_index(&ctx).await));
 
         Ok(Self {
             ctx: Arc::new(ctx),
@@ -211,6 +245,7 @@ impl BoardHandle {
             store_roots,
             entity_cache,
             search_index,
+            enrichment_cache: new_enrichment_cache(),
             _watcher: None,
         })
     }

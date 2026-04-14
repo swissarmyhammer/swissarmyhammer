@@ -222,5 +222,4 @@ describe("TextEditor singleLine mode", () => {
     });
     expect(onCancel).toHaveBeenCalled();
   });
-
 });

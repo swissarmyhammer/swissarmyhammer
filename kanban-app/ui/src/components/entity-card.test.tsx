@@ -496,7 +496,8 @@ describe("EntityCard", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockInvoke.mockImplementation(((...args: any[]) => {
         if (args[0] === "list_entity_types") return Promise.resolve(["task"]);
-        if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
+        if (args[0] === "get_entity_schema")
+          return Promise.resolve(TASK_SCHEMA);
         if (args[0] === "get_ui_state")
           return Promise.resolve({
             palette_open: false,
@@ -525,8 +526,7 @@ describe("EntityCard", () => {
       const otherSections = Array.from(
         container.querySelectorAll("[data-testid^='card-section-']"),
       ).filter(
-        (el) =>
-          el.getAttribute("data-testid") !== "card-section-header",
+        (el) => el.getAttribute("data-testid") !== "card-section-header",
       );
       expect(otherSections.length).toBe(0);
     });

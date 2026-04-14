@@ -23,6 +23,11 @@
 
 //! Tauri commands for board operations.
 
+use crate::enrichment::{
+    collect_removed_task_ids, collect_trigger_task_ids, compute_fanout_targets,
+    fan_out_synthetic_events, prune_cache_for_removed, record_primary_enrichment,
+    snapshot_previous_depends_on, EnrichmentCache,
+};
 use crate::menu;
 use crate::state::{AppState, BoardHandle};
 use serde_json::{json, Value};
@@ -39,6 +44,46 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 /// The base application title shown in all window title bars.
 pub const APP_TITLE: &str = "SwissArmyHammer";
+
+/// Maximum number of mention-autocomplete suggestions returned per request.
+///
+/// Sized for the CM6 autocomplete popup: 20 rows is the comfortable visual
+/// upper bound before the list needs scrolling, and it keeps the per-keystroke
+/// payload small. Raising it would bloat the dropdown without helping the
+/// user — they'll keep typing to narrow instead of scrolling.
+const MENTION_AUTOCOMPLETE_LIMIT: usize = 20;
+
+/// Default cap on `search_entities` results when the caller omits `limit`.
+///
+/// Fuzzy-matcher work is bounded by this limit, so a cautious default keeps
+/// the global-search popover snappy under large boards. Callers wiring a UI
+/// that wants more can pass an explicit `limit`.
+const DEFAULT_SEARCH_RESULT_LIMIT: usize = 50;
+
+/// Maximum accepted length for a `search_entities` query string.
+///
+/// Caps fuzzy-matcher work per call. 500 characters comfortably exceeds any
+/// realistic user-typed query while keeping the worst-case per-request cost
+/// bounded — longer strings almost always indicate paste bombs or a stuck
+/// input loop, not a real search.
+const MAX_SEARCH_QUERY_LENGTH: usize = 500;
+
+/// Maximum length in bytes of a command identifier passed to `dispatch_command`.
+///
+/// Command names are ASCII-only dotted identifiers. 128 bytes is plenty for
+/// the longest registered command (well under 50 chars today) while giving a
+/// hard ceiling on the allocation work the dispatcher will spend validating
+/// a garbage request. Pairs with the ASCII check below.
+const MAX_COMMAND_LENGTH: usize = 128;
+
+/// Default logical pixel dimensions for a newly created board window.
+///
+/// Sized to fit comfortably on a 1280×800 MacBook Air display while being
+/// generous enough that `kanban-app`'s multi-column board shows at least
+/// three swimlanes without horizontal scrolling. Persisted window geometry
+/// overrides this on restore.
+const INITIAL_WINDOW_WIDTH: f64 = 1200.0;
+const INITIAL_WINDOW_HEIGHT: f64 = 800.0;
 
 /// Generate a unique window label using ULID.
 fn new_window_label() -> String {
@@ -533,10 +578,11 @@ fn mention_display_field_for<'a>(
         .unwrap_or("name"))
 }
 
-/// Filter `entities` down to the first 20 whose display field or ID
-/// case-insensitively contains `query`, projecting each surviving entity
-/// into the `{id, display_name, color, avatar}` shape the CM6 autocomplete
-/// popup renders. An empty `query` returns the first 20 entities as-is.
+/// Filter `entities` down to the first `MENTION_AUTOCOMPLETE_LIMIT` whose
+/// display field or ID case-insensitively contains `query`, projecting each
+/// surviving entity into the `{id, display_name, color, avatar}` shape the
+/// CM6 autocomplete popup renders. An empty `query` returns the first
+/// `MENTION_AUTOCOMPLETE_LIMIT` entities as-is.
 fn filter_mention_candidates(entities: &[Entity], query: &str, display_field: &str) -> Vec<Value> {
     let query_lower = query.to_lowercase();
     entities
@@ -550,7 +596,7 @@ fn filter_mention_candidates(entities: &[Entity], query: &str, display_field: &s
             display.to_lowercase().contains(&query_lower)
                 || id.to_lowercase().contains(&query_lower)
         })
-        .take(20)
+        .take(MENTION_AUTOCOMPLETE_LIMIT)
         .map(|e| {
             json!({
                 "id": e.id,
@@ -621,11 +667,13 @@ pub async fn search_entities(
     board_path: Option<String>,
 ) -> Result<Value, String> {
     let handle = resolve_handle(&state, board_path).await?;
-    let limit = limit.unwrap_or(50);
+    let limit = limit.unwrap_or(DEFAULT_SEARCH_RESULT_LIMIT);
 
     // Cap query length to prevent excessive fuzzy matcher work
-    if query.len() > 500 {
-        return Err("Search query too long (max 500 characters)".into());
+    if query.len() > MAX_SEARCH_QUERY_LENGTH {
+        return Err(format!(
+            "Search query too long (max {MAX_SEARCH_QUERY_LENGTH} characters)"
+        ));
     }
 
     // Empty query returns empty results
@@ -867,12 +915,22 @@ pub async fn create_window(
     create_window_impl(&app, &state, board_path, None, None).await
 }
 
-/// Options for restoring a window at a specific position and size.
+/// Window position and size used when creating or restoring a board window.
+///
+/// Populated from persisted `UIState` on app start, then passed to
+/// [`create_window_impl`]. All fields are in logical pixels relative to the
+/// primary display's top-left origin, matching what Tauri's window APIs
+/// return from `outer_position()` / `outer_size()`.
 pub struct WindowGeometry {
+    /// Logical-pixel x coordinate of the window's top-left corner.
     pub x: i32,
+    /// Logical-pixel y coordinate of the window's top-left corner.
     pub y: i32,
+    /// Window width in logical pixels.
     pub width: u32,
+    /// Window height in logical pixels.
     pub height: u32,
+    /// Whether the window was maximized when the geometry was captured.
     pub maximized: bool,
 }
 
@@ -965,7 +1023,7 @@ fn build_window_for_board(
     let window = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
         .title(APP_TITLE)
         .visible(false)
-        .inner_size(1200.0, 800.0)
+        .inner_size(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
         .resizable(true)
         .disable_drag_drop_handler()
         .build()
@@ -1200,7 +1258,7 @@ fn match_dynamic_prefix(
 /// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
 /// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
 /// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
-/// 128-char limit, bounded rewrite depth).
+/// `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
 fn rewrite_dynamic_prefix(
     app: &AppHandle,
     cmd: &str,
@@ -1209,7 +1267,7 @@ fn rewrite_dynamic_prefix(
     target: &Option<String>,
     scope_chain: &Option<Vec<String>>,
 ) -> Result<RewriteResult, String> {
-    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
+    if cmd.is_empty() || cmd.len() > MAX_COMMAND_LENGTH || !cmd.is_ascii() {
         return Err(format!("Invalid command ID: {:?}", cmd));
     }
     let mut effective_cmd = cmd.to_owned();
@@ -1954,7 +2012,13 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     // diff_fields never sees them. For each EntityFieldChanged, read the
     // entity through EntityContext (which runs derive_all) and append any
     // computed fields whose values differ from the raw diff.
-    let events = enrich_computed_fields(&handle.ctx, events).await;
+    //
+    // Additionally runs the dependency fan-out pass: when a task's
+    // `position_column` or `depends_on` field changed, re-enrich every task
+    // whose computed BLOCKED/READY/BLOCKING state may depend on it and emit
+    // synthetic events for those whose values actually changed.
+    let events =
+        enrich_computed_fields_with_fanout(&handle.ctx, events, &handle.enrichment_cache).await;
 
     sync_and_emit_events(app, handle, &kanban_root, events).await;
 }
@@ -2124,19 +2188,49 @@ async fn sync_and_emit_events(
     }
 }
 
-/// Enrich `EntityFieldChanged` events with re-derived computed field values.
+/// Enrich `EntityCreated` and `EntityFieldChanged` events with re-derived
+/// computed field values.
 ///
 /// Computed fields (e.g. `tags` from `parse-body-tags`, `progress` from
 /// `parse-body-progress`) don't exist on disk — the watcher's `diff_fields`
-/// never sees them. This function reads each changed entity through
-/// `EntityContext` (which runs `ComputeEngine.derive_all()`) and appends
-/// any computed fields to the event's changes array.
+/// never sees them, and the `EntityCreated` payload the watcher emits during
+/// cache population is only a raw on-disk snapshot. This function reads each
+/// affected entity through `EntityContext` (which runs
+/// `ComputeEngine.derive_all()`) and merges any computed fields into the
+/// event's payload: appended to the `changes` array for `EntityFieldChanged`,
+/// inserted into the `fields` map for `EntityCreated`.
 ///
 /// This is generic: any field with `FieldType::Computed` in the schema gets
 /// picked up automatically. No hardcoded field names.
+///
+/// Retained as a thin wrapper so unit tests can exercise enrichment in
+/// isolation without threading an [`EnrichmentCache`] through the call site.
+/// Production callers use [`enrich_computed_fields_with_fanout`], which
+/// owns the cache and runs the dependency fan-out pass.
+#[cfg(test)]
 async fn enrich_computed_fields(
     ctx: &swissarmyhammer_kanban::KanbanContext,
+    events: Vec<crate::watcher::WatchEvent>,
+) -> Vec<crate::watcher::WatchEvent> {
+    enrich_computed_fields_inner(ctx, events, None).await
+}
+
+/// Shared implementation behind [`enrich_computed_fields`] and
+/// [`enrich_computed_fields_with_fanout`].
+///
+/// When `cache` is `Some`, each task entity whose event is enriched has its
+/// post-enrichment snapshot recorded into the cache. This lets the fan-out
+/// wrapper skip a second enrichment pass for every trigger — the primary
+/// loop already holds the enriched entity, so it records the snapshot as a
+/// side effect.
+///
+/// When `cache` is `None` (the plain [`enrich_computed_fields`] path used
+/// by unit tests and code paths that don't run fan-out), no cache updates
+/// happen.
+async fn enrich_computed_fields_inner(
+    ctx: &swissarmyhammer_kanban::KanbanContext,
     mut events: Vec<crate::watcher::WatchEvent>,
+    cache: Option<&EnrichmentCache>,
 ) -> Vec<crate::watcher::WatchEvent> {
     // Get the entity context (has ComputeEngine) and field definitions.
     let ectx = match ctx.entity_context().await {
@@ -2152,32 +2246,193 @@ async fn enrich_computed_fields(
     };
 
     for evt in &mut events {
-        enrich_one_watch_event(evt, ectx.as_ref(), fields_ctx).await;
+        enrich_one_watch_event(evt, ectx.as_ref(), fields_ctx, cache).await;
     }
 
     events
 }
 
-/// Enrich a single `EntityFieldChanged` event with computed-field values.
+/// Enrich events exactly like [`enrich_computed_fields`] and then run the
+/// post-mutation dependency fan-out pass.
 ///
-/// No-op for non-EntityFieldChanged events or entity types that have no
-/// computed fields. For `task` entities, runs the full enrichment pipeline
-/// (virtual tags, ready/blocked, etc.) before appending computed values.
+/// The fan-out step addresses a class of stale computed state: virtual tags
+/// like BLOCKED and READY depend on cross-entity state (e.g. whether a task's
+/// dependencies are in the terminal column). When task A moves into "done",
+/// task B — which depends on A — has no file change of its own, so the
+/// watcher emits no event for B, and B's BLOCKED/READY tags stay stale on
+/// the frontend. The fan-out pass closes that gap:
+///
+/// 1. Collect "trigger" tasks from the input events
+///    ([`collect_trigger_task_ids`]): field-level changes touching
+///    `position_column` or `depends_on`, plus every task `EntityCreated`
+///    and `EntityRemoved` (create/delete both mutate the dependency graph).
+///    Also collect the set of removed task IDs so the cache can be pruned.
+/// 2. Snapshot each trigger's previously-emitted `depends_on` list from the
+///    cache, so removed forward dependencies can still be re-enriched. This
+///    captures state for removed triggers BEFORE their cache entries are
+///    pruned.
+/// 3. Run the primary enrichment loop (delegated to
+///    [`enrich_computed_fields_inner`] with the cache passed in) — this
+///    emits events for the triggers themselves AND primes the cache with
+///    their post-mutation snapshots as a side effect.
+/// 4. Compute fan-out targets: the union of reverse dependents, current
+///    forward dependents, and removed forward dependents.
+/// 5. For each target, re-run [`enrich_task_entity`] and diff against the
+///    cached snapshot. If any of the five computed task fields changed,
+///    append a synthetic `EntityFieldChanged` event carrying ONLY those
+///    fields. Silently update the cache even when no event fires.
+/// 6. Prune the cache for every removed task ID. This happens AFTER the
+///    fan-out pass so the forward-dependency lookup for deleted triggers
+///    still had access to their pre-deletion `depends_on` snapshot.
+///
+/// The fan-out is bounded: only tasks directly linked via `depends_on` to
+/// or from a trigger are re-enriched (no transitive closure needed since
+/// BLOCKED/READY depend only on direct dependencies).
+async fn enrich_computed_fields_with_fanout(
+    ctx: &swissarmyhammer_kanban::KanbanContext,
+    events: Vec<crate::watcher::WatchEvent>,
+    cache: &EnrichmentCache,
+) -> Vec<crate::watcher::WatchEvent> {
+    // Capture triggers + their previous depends_on BEFORE the primary loop
+    // or any cache update. The fan-out pass needs the pre-mutation cache
+    // state to detect removed forward dependencies.
+    //
+    // `removed` is tracked separately so the cache entry for each deleted
+    // task can be pruned AFTER the snapshot captures its previous
+    // depends_on (needed for forward fan-out of reverse dependents).
+    let triggers = collect_trigger_task_ids(&events);
+    let removed = collect_removed_task_ids(&events);
+    let previous_depends_on = snapshot_previous_depends_on(&triggers, cache);
+
+    // Primary enrichment: merges computed fields into each event's payload.
+    // Passing `Some(cache)` primes the cache as a side effect for every task
+    // entity — including all triggers — so the fan-out diff below runs
+    // against the freshest possible baseline without a second enrichment
+    // pass.
+    let mut events = enrich_computed_fields_inner(ctx, events, Some(cache)).await;
+
+    if triggers.is_empty() {
+        prune_cache_for_removed(cache, &removed);
+        return events;
+    }
+
+    let Some(state) = load_fanout_state(ctx).await else {
+        return events;
+    };
+
+    let targets = compute_fanout_targets(&triggers, &state.all_tasks, &previous_depends_on);
+    if targets.is_empty() {
+        prune_cache_for_removed(cache, &removed);
+        return events;
+    }
+
+    let synthetic = fan_out_synthetic_events(
+        &targets,
+        &state.all_tasks,
+        &state.terminal_id,
+        state.registry,
+        cache,
+    );
+    tracing::info!(
+        trigger_count = triggers.len(),
+        target_count = targets.len(),
+        removed_count = removed.len(),
+        synthetic_event_count = synthetic.len(),
+        "enrich_computed_fields_with_fanout: fan-out pass emitted synthetic events"
+    );
+    events.extend(synthetic);
+
+    // Prune cache entries for deleted tasks AFTER the fan-out pass. Until
+    // this point the deleted entries serviced `snapshot_previous_depends_on`
+    // lookups for forward-dependency targets.
+    prune_cache_for_removed(cache, &removed);
+
+    events
+}
+
+/// Post-mutation snapshot needed by the fan-out pass:
+/// - `all_tasks`: every task after the primary enrichment loop applied.
+/// - `terminal_id`: the board's terminal column id (last by `order`).
+/// - `registry`: virtual-tag registry used to recompute BLOCKED/READY/BLOCKING.
+struct FanoutState<'a> {
+    all_tasks: Vec<Entity>,
+    terminal_id: String,
+    registry: &'a swissarmyhammer_kanban::virtual_tags::VirtualTagRegistry,
+}
+
+/// Fetch everything the fan-out pass needs in one shot.
+///
+/// Returns `None` when the entity context or task listing fails — the caller
+/// falls back to returning the primary-enrichment events unchanged. A missing
+/// `column` list is recoverable (defaults to `"done"`), so it doesn't abort
+/// the pass.
+async fn load_fanout_state(
+    ctx: &swissarmyhammer_kanban::KanbanContext,
+) -> Option<FanoutState<'static>> {
+    let ectx = match ctx.entity_context().await {
+        Ok(ectx) => ectx,
+        Err(e) => {
+            tracing::warn!("enrich_computed_fields_with_fanout: failed to get entity context: {e}");
+            return None;
+        }
+    };
+    let all_tasks = match ectx.list("task").await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                "enrich_computed_fields_with_fanout: failed to list tasks for fan-out: {e}"
+            );
+            return None;
+        }
+    };
+    let mut columns = ectx.list("column").await.unwrap_or_default();
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+    let terminal_id = columns
+        .last()
+        .map(|c| c.id.to_string())
+        .unwrap_or_else(|| "done".to_string());
+    let registry = default_virtual_tag_registry();
+    Some(FanoutState {
+        all_tasks,
+        terminal_id,
+        registry,
+    })
+}
+
+/// Enrich a single `EntityCreated` or `EntityFieldChanged` event with
+/// computed-field values.
+///
+/// No-op for event kinds that carry no entity payload (`EntityRemoved`,
+/// `AttachmentChanged`) or for entity types that have no computed fields. For
+/// `task` entities, runs the full enrichment pipeline (virtual tags,
+/// ready/blocked, etc.) before merging computed values.
+///
+/// The merge target differs by variant:
+/// - `EntityFieldChanged` carries a `Vec<FieldChange>`; computed values are
+///   appended as new `FieldChange` entries, skipping any field name already
+///   present from the raw diff.
+/// - `EntityCreated` carries a `HashMap<String, Value>`; computed values are
+///   inserted into the map, skipping any key already present from the
+///   watcher's initial on-disk snapshot.
 async fn enrich_one_watch_event(
     evt: &mut crate::watcher::WatchEvent,
     ectx: &swissarmyhammer_entity::EntityContext,
     fields_ctx: &swissarmyhammer_fields::FieldsContext,
+    cache: Option<&EnrichmentCache>,
 ) {
-    let (entity_type, id, changes) = match evt {
-        crate::watcher::WatchEvent::EntityFieldChanged {
-            entity_type,
-            id,
-            changes,
-        } => (entity_type.as_str(), id.as_str(), changes),
+    // Pull identity out of the variant. Clone because we need to release the
+    // borrow on `evt` before the second match below re-borrows it mutably.
+    let (entity_type, id) = match evt {
+        crate::watcher::WatchEvent::EntityCreated {
+            entity_type, id, ..
+        }
+        | crate::watcher::WatchEvent::EntityFieldChanged {
+            entity_type, id, ..
+        } => (entity_type.clone(), id.clone()),
         _ => return,
     };
 
-    let computed_names = computed_field_names(fields_ctx, entity_type);
+    let computed_names = computed_field_names(fields_ctx, &entity_type);
     if computed_names.is_empty() {
         return;
     }
@@ -2185,12 +2440,12 @@ async fn enrich_one_watch_event(
     // Read the entity through EntityContext so ComputeEngine-derived values
     // (tags from parse-body-tags, progress from parse-body-progress, …) are
     // already materialized on the entity we'll read fields from.
-    let mut entity = match ectx.read(entity_type, id).await {
+    let mut entity = match ectx.read(&entity_type, &id).await {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!(
-                entity_type = entity_type,
-                id = id,
+                entity_type = %entity_type,
+                id = %id,
                 "enrich_computed_fields: failed to read entity: {e}"
             );
             return;
@@ -2198,18 +2453,42 @@ async fn enrich_one_watch_event(
     };
     if entity_type == "task" {
         enrich_task_from_context(&mut entity, ectx).await;
+        // Prime the enrichment cache so the fan-out pass has a fresh
+        // baseline for diffing. Only the five computed task fields plus
+        // `depends_on` are captured; the cache snapshot is cheap and
+        // obviates a second enrichment pass in the fan-out wrapper.
+        if let Some(cache) = cache {
+            record_primary_enrichment(cache, &id, &entity);
+        }
     }
 
-    let raw_change_count = changes.len();
-    append_computed_changes(entity_type, id, &entity, &computed_names, changes);
-    tracing::debug!(
-        entity_type = entity_type,
-        id = id,
-        raw_changes = raw_change_count,
-        enriched_changes = changes.len(),
-        computed_fields = ?computed_names,
-        "enrich_computed_fields: done"
-    );
+    match evt {
+        crate::watcher::WatchEvent::EntityFieldChanged { changes, .. } => {
+            let raw_change_count = changes.len();
+            append_computed_changes(&entity_type, &id, &entity, &computed_names, changes);
+            tracing::debug!(
+                entity_type = %entity_type,
+                id = %id,
+                raw_changes = raw_change_count,
+                enriched_changes = changes.len(),
+                computed_fields = ?computed_names,
+                "enrich_computed_fields: done (field-changed)"
+            );
+        }
+        crate::watcher::WatchEvent::EntityCreated { fields, .. } => {
+            let raw_field_count = fields.len();
+            merge_computed_fields(&entity_type, &id, &entity, &computed_names, fields);
+            tracing::debug!(
+                entity_type = %entity_type,
+                id = %id,
+                raw_fields = raw_field_count,
+                enriched_fields = fields.len(),
+                computed_fields = ?computed_names,
+                "enrich_computed_fields: done (created)"
+            );
+        }
+        _ => {}
+    }
 }
 
 /// Return the names of every `Computed` field defined for `entity_type`.
@@ -2309,6 +2588,64 @@ fn append_one_computed_change(
         field: name.to_string(),
         value: value.clone(),
     });
+}
+
+/// Merge computed field values from `entity` into `fields`, skipping any
+/// key already present. Mirror of [`append_computed_changes`] for the
+/// `HashMap` payload carried by `EntityCreated` events.
+///
+/// The watcher populates `fields` with the raw on-disk snapshot it read during
+/// cache population; computed fields (not on disk) are absent until this runs.
+/// Without this merge, newly created entities arrive at the frontend without
+/// `progress`, `tags`, `virtual_tags`, or `filter_tags`.
+fn merge_computed_fields(
+    entity_type: &str,
+    id: &str,
+    entity: &swissarmyhammer_entity::Entity,
+    computed_names: &[&str],
+    fields: &mut std::collections::HashMap<String, serde_json::Value>,
+) {
+    for name in computed_names {
+        merge_one_computed_field(entity_type, id, entity, name, fields);
+    }
+}
+
+/// Insert one computed field's value into `fields`, unless it's already
+/// present or the entity hasn't materialized it. Emits the same debug/warn
+/// traces as the [`append_one_computed_change`] path for parity.
+fn merge_one_computed_field(
+    entity_type: &str,
+    id: &str,
+    entity: &swissarmyhammer_entity::Entity,
+    name: &str,
+    fields: &mut std::collections::HashMap<String, serde_json::Value>,
+) {
+    if fields.contains_key(name) {
+        tracing::debug!(
+            entity_type = entity_type,
+            id = id,
+            field = name,
+            "enrich_computed_fields: computed field already in fields, skipping"
+        );
+        return;
+    }
+    let Some(value) = entity.fields.get(name) else {
+        tracing::warn!(
+            entity_type = entity_type,
+            id = id,
+            field = name,
+            "enrich_computed_fields: computed field not present in entity"
+        );
+        return;
+    };
+    tracing::debug!(
+        entity_type = entity_type,
+        id = id,
+        field = name,
+        value = %value,
+        "enrich_computed_fields: merging computed field"
+    );
+    fields.insert(name.to_string(), value.clone());
 }
 
 /// A single item in a generic context menu.
@@ -2639,5 +2976,171 @@ mod tests {
             row.get("display_name").and_then(|v| v.as_str()),
             Some("bug")
         );
+    }
+
+    // ── enrich_computed_fields for EntityCreated tests ────────────────
+
+    use super::enrich_computed_fields;
+    use crate::watcher::WatchEvent;
+    use serde_json::json;
+    use swissarmyhammer_kanban::{
+        board::InitBoard, task::AddTask, KanbanContext, KanbanOperationProcessor,
+        OperationProcessor,
+    };
+    use tempfile::TempDir;
+
+    /// Build a fresh KanbanContext with an initialized board. Uses
+    /// `KanbanContext::open` rather than `::new` so `ctx.fields()` is
+    /// populated — this matches the production path used by the Tauri app
+    /// (see `state.rs::BoardHandle::new`).
+    async fn setup_ctx() -> (TempDir, KanbanContext, KanbanOperationProcessor) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        // Initialize a board first to create .kanban/ and required subdirs,
+        // then open for the fields-populated context.
+        let setup_ctx = KanbanContext::new(&kanban_dir);
+        let processor = KanbanOperationProcessor::new();
+        processor
+            .process(&InitBoard::new("Test Board"), &setup_ctx)
+            .await
+            .unwrap();
+        drop(setup_ctx);
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        (temp, ctx, processor)
+    }
+
+    /// Regression test for the missing `EntityCreated` enrichment branch.
+    ///
+    /// When a new task lands with GFM checkboxes in its body, `enrich_computed_fields`
+    /// must populate the `progress` computed field on the `EntityCreated` event
+    /// itself — otherwise the frontend's fast-path handler adds the entity
+    /// without computed fields, and no subsequent `EntityFieldChanged` ever
+    /// arrives to fill them in.
+    #[tokio::test]
+    async fn entity_created_event_enriches_progress_for_task_with_checkboxes() {
+        let (_temp, ctx, processor) = setup_ctx().await;
+
+        let body = "- [x] first\n- [x] second\n- [ ] third\n- [ ] fourth\n";
+        let result = processor
+            .process(
+                &AddTask::new("Task with checklist").with_description(body),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        // Simulate what the watcher would emit for a newly-created task:
+        // entity_type + id plus a partial snapshot of on-disk fields. Computed
+        // fields (progress, tags, virtual_tags, filter_tags) are absent by
+        // construction — that's exactly what we're testing gets filled in.
+        let mut on_disk = std::collections::HashMap::new();
+        on_disk.insert("title".to_string(), json!("Task with checklist"));
+        on_disk.insert("body".to_string(), json!(body));
+        let events = vec![WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: task_id.clone(),
+            fields: on_disk,
+        }];
+
+        let enriched = enrich_computed_fields(&ctx, events).await;
+        assert_eq!(enriched.len(), 1, "enrichment must not drop events");
+
+        let fields = match &enriched[0] {
+            WatchEvent::EntityCreated { fields, .. } => fields,
+            other => panic!("expected EntityCreated, got {other:?}"),
+        };
+
+        // progress: parse-body-progress derivation yields {total, completed, percent}.
+        // With "- [x] / - [x] / - [ ] / - [ ]", expect 4 / 2 / 50.
+        let progress = fields
+            .get("progress")
+            .expect("EntityCreated event must include `progress` after enrichment");
+        assert_eq!(progress.get("total").and_then(|v| v.as_u64()), Some(4));
+        assert_eq!(progress.get("completed").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(progress.get("percent").and_then(|v| v.as_u64()), Some(50));
+
+        // Task-specific enrichment: virtual_tags and filter_tags must also be
+        // populated — these are the fields the frontend uses for filter DSL
+        // evaluation and BLOCKED/READY/BLOCKING badges.
+        assert!(
+            fields.get("virtual_tags").is_some(),
+            "virtual_tags must be populated on EntityCreated for tasks"
+        );
+        assert!(
+            fields.get("filter_tags").is_some(),
+            "filter_tags must be populated on EntityCreated for tasks"
+        );
+
+        // The raw on-disk fields the watcher provided must NOT be clobbered.
+        assert_eq!(
+            fields.get("title").and_then(|v| v.as_str()),
+            Some("Task with checklist"),
+            "enrichment must not overwrite raw fields provided by the watcher"
+        );
+    }
+
+    /// Raw on-disk fields already present in an `EntityCreated` payload must
+    /// take precedence — enrichment only fills gaps, never overwrites. This
+    /// protects against the hypothetical case where a future computed-field
+    /// derivation shares a name with a real on-disk field.
+    #[tokio::test]
+    async fn entity_created_enrichment_does_not_overwrite_existing_fields() {
+        let (_temp, ctx, processor) = setup_ctx().await;
+
+        let result = processor
+            .process(&AddTask::new("Plain task"), &ctx)
+            .await
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        // Pre-populate `progress` with a sentinel value the watcher would
+        // never emit. If enrichment clobbers it, the assertion below fails.
+        let sentinel = json!("WATCHER-PROVIDED");
+        let mut on_disk = std::collections::HashMap::new();
+        on_disk.insert("title".to_string(), json!("Plain task"));
+        on_disk.insert("progress".to_string(), sentinel.clone());
+        let events = vec![WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: task_id.clone(),
+            fields: on_disk,
+        }];
+
+        let enriched = enrich_computed_fields(&ctx, events).await;
+        let fields = match &enriched[0] {
+            WatchEvent::EntityCreated { fields, .. } => fields,
+            other => panic!("expected EntityCreated, got {other:?}"),
+        };
+        assert_eq!(
+            fields.get("progress"),
+            Some(&sentinel),
+            "enrichment must not overwrite a field already present in the payload"
+        );
+    }
+
+    /// Non-entity-payload variants (`EntityRemoved`, `AttachmentChanged`) and
+    /// entity types with no computed fields pass through untouched. Guards
+    /// against a future refactor that accidentally reads from `ectx` for
+    /// kinds that carry no readable entity.
+    #[tokio::test]
+    async fn enrichment_passes_non_payload_events_through_unchanged() {
+        let (_temp, ctx, _processor) = setup_ctx().await;
+
+        let events = vec![
+            WatchEvent::EntityRemoved {
+                entity_type: "task".to_string(),
+                id: "gone".to_string(),
+            },
+            WatchEvent::AttachmentChanged {
+                entity_type: "task".to_string(),
+                filename: "foo.png".to_string(),
+                removed: false,
+            },
+        ];
+
+        let enriched = enrich_computed_fields(&ctx, events).await;
+        assert_eq!(enriched.len(), 2);
+        assert!(matches!(enriched[0], WatchEvent::EntityRemoved { .. }));
+        assert!(matches!(enriched[1], WatchEvent::AttachmentChanged { .. }));
     }
 }

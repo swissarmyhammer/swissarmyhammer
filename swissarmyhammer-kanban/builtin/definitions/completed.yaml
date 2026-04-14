@@ -2,13 +2,13 @@
 # real ULIDs. The last two characters are the builtin field code.
 id: "00000000000000000000000016"
 name: completed
-description: Timestamp when the task was moved to the terminal column
+description: When work finished
 type:
   kind: computed
   derive: derive-completed
   depends_on:
     - _changelog
-icon: check-circle
+icon: calendar-check
 editor: none
 display: date
 sort: datetime

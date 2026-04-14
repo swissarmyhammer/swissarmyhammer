@@ -215,7 +215,9 @@ function FieldDisplayContent(props: {
   onEdit?: () => void;
   onCommit: (value: unknown) => void;
 }) {
-  const Display = displayRegistry.get(props.fieldDef.display ?? "text")?.component;
+  const Display = displayRegistry.get(
+    props.fieldDef.display ?? "text",
+  )?.component;
   if (!Display) return null;
   const inner = (
     <Display

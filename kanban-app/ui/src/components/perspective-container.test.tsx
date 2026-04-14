@@ -59,10 +59,9 @@ vi.mock("@/components/rust-engine-container", () => ({
 // `PerspectiveContainer` also reads the active board path via
 // `useActiveBoardPath`; stub it so no board context is required.
 vi.mock("@/lib/command-scope", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/lib/command-scope")>(
-      "@/lib/command-scope",
-    );
+  const actual = await vi.importActual<typeof import("@/lib/command-scope")>(
+    "@/lib/command-scope",
+  );
   return {
     ...actual,
     useActiveBoardPath: () => undefined,

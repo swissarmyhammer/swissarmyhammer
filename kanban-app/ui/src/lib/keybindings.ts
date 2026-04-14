@@ -170,7 +170,10 @@ const SEQUENCE_TIMEOUT_MS = 500;
  * Check if a key event targets an editable context that should not trigger
  * global keybindings (inputs, textareas, CM6 editors, contenteditable).
  */
-function isEditableTarget(normalized: string, target: HTMLElement | null): boolean {
+function isEditableTarget(
+  normalized: string,
+  target: HTMLElement | null,
+): boolean {
   const hasModifier =
     normalized.includes("Mod") ||
     normalized.includes("Alt") ||
@@ -212,7 +215,10 @@ export function createKeyHandler(
   /** Clear the pending buffer and cancel the timeout. */
   function clearPending(): void {
     pending = null;
-    if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
+    if (pendingTimer !== null) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
   }
 
   return (e: KeyboardEvent) => {

@@ -15,7 +15,10 @@ import { createMentionDecorations } from "./cm-mention-decorations";
 import type { MentionMeta } from "./mention-meta";
 
 /** Create a minimal CM6 EditorView with given extensions and doc text. */
-function createEditor(extensions: import("@codemirror/state").Extension[], doc = "") {
+function createEditor(
+  extensions: import("@codemirror/state").Extension[],
+  doc = "",
+) {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const view = new EditorView({
@@ -27,7 +30,11 @@ function createEditor(extensions: import("@codemirror/state").Extension[], doc =
 
 describe("createMentionDecorations", () => {
   it("decorates a known mention with the correct color from metaFacet", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "bug" }],
@@ -48,7 +55,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("applies default mark class when slug has no color in meta", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     // Provide an entry with empty color to test the default path
     const meta = new Map<string, MentionMeta>([
@@ -65,7 +76,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("does not decorate mentions inside fenced code blocks", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "bug" }],
@@ -82,7 +97,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("does not decorate mentions in markdown headings", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "bug" }],
@@ -99,7 +118,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("decorates multiple mentions on separate lines", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "bug" }],
@@ -128,7 +151,11 @@ describe("createMentionDecorations", () => {
   // ── Widget pipeline tests ─────────────────────────────────────────
 
   it("renders a widget with the display name when meta is available", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "Bug Report" }],
@@ -147,7 +174,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("shows raw slug with mark when cursor is inside the mention range", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "Bug Report" }],
@@ -173,7 +204,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("re-applies widget when cursor moves away from the mention", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     const meta = new Map<string, MentionMeta>([
       ["bug", { color: "ff0000", displayName: "Bug Report" }],
@@ -181,7 +216,10 @@ describe("createMentionDecorations", () => {
 
     // Document: "hello #bug world" — mention at positions 6-10
     // Start cursor away from mention so widget renders initially
-    const { view, parent } = createEditor([extension(meta)], "hello #bug world");
+    const { view, parent } = createEditor(
+      [extension(meta)],
+      "hello #bug world",
+    );
     view.dispatch({ selection: { anchor: 0 } });
 
     // Widget should be present initially (cursor far from mention)
@@ -205,7 +243,11 @@ describe("createMentionDecorations", () => {
   });
 
   it("renders stale slug (no valid color) as muted mark, not widget", () => {
-    const { extension } = createMentionDecorations("#", "cm-tag-pill", "--tag-color");
+    const { extension } = createMentionDecorations(
+      "#",
+      "cm-tag-pill",
+      "--tag-color",
+    );
 
     // A slug whose metadata lacks a valid color is considered stale —
     // findMentionsInText only looks at keys in the meta map, so this is
