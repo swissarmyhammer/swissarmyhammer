@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: c380
+position_ordinal: 7f80
 title: Fix "New Task" command appearing in command palette on non-task grid views
 ---
 ## What

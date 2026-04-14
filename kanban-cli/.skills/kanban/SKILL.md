@@ -6,6 +6,8 @@ metadata:
   version: 0.12.11
 ---
 
+{% include "_partials/review-column" %}
+
 # Do
 
 Pick up and execute the next task from the kanban board.
@@ -21,7 +23,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 ## Process
 
 1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
-   - To filter by tag: `op: "next task"`, `filter: "#review-finding"`
+   - To filter by tag: `op: "next task"`, `filter: "#bug"`
    - To filter by assignee: `op: "next task"`, `filter: "@alice"`
    - To combine: `op: "next task"`, `filter: "#bug && @alice"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
@@ -31,7 +33,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
    - **Mark it complete right away**: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
    - Do this after EVERY subtask — not in a batch at the end. The checklist is the progress indicator; leaving boxes unchecked while doing work defeats the purpose.
    - When updating the description, preserve all existing content (other checklist items, prose, etc.) — only flip the one checkbox you just finished.
-5. **Complete the card**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
+5. **Move the card to review**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), the card is ready for code review — not directly for `done`. First ensure the `review` column exists using the **Ensure the Review Column Exists** partial above (idempotent — run every time), then move the card there with `kanban` using `op: "move task"`, `id: "<task-id>"`, `column: "review"`. You MUST do this — never leave a card in "doing" when the work is finished. **Do NOT use `complete task`** — that skips the review gate by jumping to the terminal column. After moving to `review`, stop and tell the user the card is ready for `/review`.
 
 ## Filtering Work
 
@@ -56,7 +58,7 @@ All filtering uses a small expression language with these atoms and operators:
 Use `next task` with a `filter` to pick up specific kinds of work one card at a time:
 
 ```json
-{"op": "next task", "filter": "#review-finding"}
+{"op": "next task", "filter": "#bug"}
 {"op": "next task", "filter": "@alice"}
 {"op": "next task", "filter": "#bug && @alice"}
 {"op": "next task", "filter": "$auth-migration"}

@@ -1,8 +1,11 @@
 ---
 assignees:
 - claude-code
+depends_on:
+- 01KMN0A2T6RHDE4DV7T6PABR0F
 position_column: todo
-position_ordinal: b480
+position_ordinal: 7c80
+project: task-card-fields
 title: Remove order field from project entity
 ---
 ## What
@@ -68,4 +71,4 @@ Remove the `order` field from the project entity definition, the `AddProject`/`U
 - [ ] Run: `cargo clippy -p swissarmyhammer-kanban -- -D warnings` — no new warnings (especially no dead-code warnings for `parse_order`)
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- Use `/tdd` — write failing tests first, then implement to make them pass. #fields
