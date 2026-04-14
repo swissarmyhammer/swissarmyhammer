@@ -1,0 +1,3 @@
+color: 3b82f6
+description: 'Consolidation of the two EntityCache types into a single in-memory entity store at the entity layer; kanban-app collapses to a thin bridge. Parent design: 01KP65FJHDQ5R2N5C5BJHVHFBF'
+tag_name: entity-cache
