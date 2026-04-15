@@ -255,6 +255,49 @@ section: header
 - **Atomic File Writes**: Entity writes use temp-file-then-rename. No partial writes visible to watchers or other processes.
 - **Leader Election**: Multi-process coordination uses OS file locks and ZMQ pub/sub. The leader owns write access; followers read and receive updates via the bus.
 
+### Computed Fields and Pseudo-Field Dependencies
+
+Computed fields (those with `kind: computed` in their YAML definition) are derived at read time by the `ComputeEngine`. Some derivations need data that isn't stored in the entity's own fields — for example, the JSONL changelog or the file's filesystem creation time. These are supplied through **pseudo-fields**: reserved `_`-prefixed names that `EntityContext` injects into `entity.fields` before derivation and strips out afterward so they are never persisted or returned to callers.
+
+#### How a field opts in
+
+A computed field declares its pseudo-field dependencies in its YAML definition via `depends_on`:
+
+```yaml
+name: created
+type:
+  kind: computed
+  derive: derive-created
+  depends_on:
+    - _changelog
+    - _file_created
+```
+
+The entity layer checks whether *any* computed field for the entity type declares a given dependency before loading it. If no field in the type needs `_changelog`, the changelog is never read — the injection is lazy per-dependency, not per-entity.
+
+#### Supported pseudo-fields
+
+| Name | Source | Value | Error / missing semantics |
+|------|--------|-------|---------------------------|
+| `_changelog` | The entity's `.jsonl` changelog file | `Value::Array` of serialized `ChangeEntry` objects | Empty array (`[]`) when the changelog file is missing or unreadable |
+| `_file_created` | `Metadata::created()` on the entity's source file, falling back to `Metadata::modified()` when the platform/filesystem doesn't expose btime | `Value::String` — RFC 3339 timestamp | `Value::Null` when the file is missing or cannot be stat'd |
+
+Both values are memoized in the `EntityCache` when one is attached, so repeated reads (e.g. listing 2000 tasks) don't re-read every changelog or re-stat every file.
+
+#### Current consumers
+
+- **`created`** (`derive-created`) — depends on `_changelog` and `_file_created`. Uses the earliest changelog timestamp, falling back to the file creation time.
+- **`updated`** (`derive-updated`) — depends on `_changelog`. Uses the latest changelog timestamp.
+- **`started`** (`derive-started`) — depends on `_changelog`. Scans changelog for the first move into an active column.
+- **`completed`** (`derive-completed`) — depends on `_changelog`. Scans changelog for the move into the terminal column.
+
+#### Adding a new pseudo-field
+
+1. Add a branch in `EntityContext::inject_compute_dependencies` (`swissarmyhammer-entity/src/context.rs`) that checks `any_field_depends_on(owned_defs, "_name")` and inserts the value into `entity.fields`.
+2. Add a corresponding `entity.fields.remove("_name")` in the strip block at the end of `EntityContext::derive_compute_fields`.
+3. If an `EntityCache` is attached, add a cached loader path in `EntityCache::get_or_load_compute_inputs` alongside the existing `_changelog` / `_file_created` loaders.
+4. Update this section with the new name, source, value format, and error semantics.
+
 ### Practices
 
 1. **No feature flags.** The Cargo workspace says explicitly: "NEVER add features or feature flags." The only exception is `test-support` for test utilities.

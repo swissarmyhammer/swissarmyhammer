@@ -3,6 +3,28 @@
 //! Given a storage root and a FieldsContext, this handles all directory
 //! resolution, file I/O, and changelog management. Consumers (like kanban)
 //! create an EntityContext and delegate all entity I/O to it.
+//!
+//! # Computed fields and pseudo-field dependencies
+//!
+//! Computed fields (YAML `kind: computed`) can declare `depends_on` entries
+//! that name reserved `_`-prefixed pseudo-fields. The entity layer injects
+//! these into `entity.fields` before derivation and strips them afterward so
+//! they are never persisted or surfaced to callers.
+//!
+//! Supported pseudo-fields:
+//!
+//! - **`_changelog`** — the entity's JSONL changelog as a `Value::Array` of
+//!   serialized `ChangeEntry` objects. Empty array on missing/unreadable file.
+//! - **`_file_created`** — RFC 3339 timestamp from `Metadata::created()`,
+//!   falling back to `Metadata::modified()`. `Value::Null` on stat failure.
+//!
+//! Injection is lazy: a pseudo-field is loaded only when at least one computed
+//! field for the entity type declares it in `depends_on`. See
+//! [`EntityContext::inject_compute_dependencies`] for the injection logic and
+//! [`EntityContext::derive_compute_fields`] for the strip block.
+//!
+//! To add a new pseudo-field, see the "Computed Fields and Pseudo-Field
+//! Dependencies" section in `ARCHITECTURE.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
