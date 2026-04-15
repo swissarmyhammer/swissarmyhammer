@@ -1,9 +1,11 @@
 /**
  * Register select editor and badge display with the Field registry.
  *
- * When the field is a reference (field.type.entity is set), uses
- * ReferenceSelectEditor (searchable combobox). Otherwise falls back
- * to the static SelectEditor for enum/options fields.
+ * For reference fields (`field.type.entity` set), delegates to the CM6-based
+ * `SingleSelectEditor`, so every mention-style editor in the app shares the
+ * same CM6 foundation (decorations, pill widgets, autocomplete, submit/cancel
+ * semantics). For static-options fields (enums with `field.type.options`),
+ * falls back to the original shadcn-based `SelectEditor`.
  */
 
 import {
@@ -13,7 +15,7 @@ import {
   type FieldDisplayProps,
 } from "@/components/fields/field";
 import { SelectEditor } from "@/components/fields/editors/select-editor";
-import { ReferenceSelectEditor } from "@/components/fields/editors/reference-select-editor";
+import { SingleSelectEditor } from "@/components/fields/editors/single-select-editor";
 import { BadgeDisplay } from "@/components/fields/displays/badge-display";
 
 function SelectEditorAdapter({
@@ -23,23 +25,25 @@ function SelectEditorAdapter({
   onCommit,
   onCancel,
   onChange,
+  mode,
 }: FieldEditorProps) {
-  // Reference fields use the searchable combobox editor
+  // Reference fields route to the unified CM6 single-select editor.
   if (field.type.entity) {
     return (
-      <ReferenceSelectEditor
+      <SingleSelectEditor
         field={field}
         value={value}
         entity={entity}
         onCommit={onCommit}
         onCancel={onCancel}
         onChange={onChange}
-        mode="compact"
+        mode={mode}
       />
     );
   }
 
-  // Static enum/options fields use the original select editor
+  // Static enum/options fields stay on the shadcn Select — they're not
+  // mention-based, so there's no pill pipeline to share.
   return (
     <SelectEditor
       field={field}

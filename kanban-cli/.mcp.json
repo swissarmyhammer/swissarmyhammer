@@ -1,6 +1,7 @@
 {
-  "mcpServers": {
-    "kanban": {
+  "mcpServers": {}
+}
+ "kanban": {
       "args": [
         "serve"
       ],

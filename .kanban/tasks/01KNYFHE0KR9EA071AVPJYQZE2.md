@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMN0A2T6RHDE4DV7T6PABR0F
-position_column: todo
-position_ordinal: 7c80
+position_column: done
+position_ordinal: ffffffffffffffffffffffd080
 project: task-card-fields
 title: Remove order field from project entity
 ---
@@ -51,24 +51,24 @@ Remove the `order` field from the project entity definition, the `AddProject`/`U
 
 ## Acceptance Criteria
 
-- [ ] `AddProject` struct has no `order` field; MCP schema regenerates without `order` for `add project`
-- [ ] `UpdateProject` struct has no `order` field; MCP schema regenerates without `order` for `update project`
-- [ ] `ListProjects` returns projects sorted alphabetically by `name` (case-insensitive)
-- [ ] `project.yaml` entity definition lists only `name, description, color` in `fields:`
-- [ ] `projects-grid.yaml` view lists only `name, description, color` in `card_fields:`
-- [ ] `parse_order` helper is deleted from `dispatch.rs`
-- [ ] Existing `.kanban/projects/*.yaml` files still load without error (stale `order:` keys ignored)
-- [ ] `cargo build -p swissarmyhammer-kanban` succeeds with no warnings about unused imports or dead code
+- [x] `AddProject` struct has no `order` field; MCP schema regenerates without `order` for `add project`
+- [x] `UpdateProject` struct has no `order` field; MCP schema regenerates without `order` for `update project`
+- [x] `ListProjects` returns projects sorted alphabetically by `name` (case-insensitive)
+- [x] `project.yaml` entity definition lists only `name, description, color` in `fields:`
+- [x] `projects-grid.yaml` view lists only `name, description, color` in `card_fields:`
+- [x] `parse_order` helper is deleted from `dispatch.rs`
+- [x] Existing `.kanban/projects/*.yaml` files still load without error (stale `order:` keys ignored)
+- [x] `cargo build -p swissarmyhammer-kanban` succeeds with no warnings about unused imports or dead code
 
 ## Tests
 
-- [ ] Update `swissarmyhammer-kanban/src/project/add.rs` tests: delete `test_add_project_auto_order`; scrub `order` assertions from `test_add_project` and `test_add_project_with_all_fields`
-- [ ] Update `swissarmyhammer-kanban/src/project/update.rs` tests: scrub `order` from `test_update_project_all_fields`
-- [ ] Replace `test_list_projects_sorted_by_order` in `swissarmyhammer-kanban/src/project/list.rs` with `test_list_projects_sorted_by_name` — add projects in non-alphabetical insertion order (e.g. `zz-last`, `aa-first`, `mm-middle`), assert the returned `projects` array is `[aa-first, mm-middle, zz-last]` by name
-- [ ] Add a regression test in `swissarmyhammer-kanban/src/project/add.rs` asserting the returned JSON from `AddProject` does NOT contain an `order` key
-- [ ] Run: `cargo nextest run -p swissarmyhammer-kanban project::` — all tests in the project module pass
-- [ ] Run: `cargo nextest run -p swissarmyhammer-kanban` — full kanban test suite passes
-- [ ] Run: `cargo clippy -p swissarmyhammer-kanban -- -D warnings` — no new warnings (especially no dead-code warnings for `parse_order`)
+- [x] Update `swissarmyhammer-kanban/src/project/add.rs` tests: delete `test_add_project_auto_order`; scrub `order` assertions from `test_add_project` and `test_add_project_with_all_fields`
+- [x] Update `swissarmyhammer-kanban/src/project/update.rs` tests: scrub `order` from `test_update_project_all_fields`
+- [x] Replace `test_list_projects_sorted_by_order` in `swissarmyhammer-kanban/src/project/list.rs` with `test_list_projects_sorted_by_name` — add projects in non-alphabetical insertion order (e.g. `zz-last`, `aa-first`, `mm-middle`), assert the returned `projects` array is `[aa-first, mm-middle, zz-last]` by name
+- [x] Add a regression test in `swissarmyhammer-kanban/src/project/add.rs` asserting the returned JSON from `AddProject` does NOT contain an `order` key
+- [x] Run: `cargo nextest run -p swissarmyhammer-kanban project::` — all tests in the project module pass
+- [x] Run: `cargo nextest run -p swissarmyhammer-kanban` — full kanban test suite passes
+- [x] Run: `cargo clippy -p swissarmyhammer-kanban -- -D warnings` — no new warnings (especially no dead-code warnings for `parse_order`)
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass. #fields

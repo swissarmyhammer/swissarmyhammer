@@ -59,7 +59,7 @@ function App() {
         <WindowContainer>
           <AppModeContainer>
             <BoardContainer>
-              <div className="h-screen bg-background text-foreground flex flex-col">
+              <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
                 <NavBar />
                 <ViewsContainer>
                   <PerspectivesContainer>

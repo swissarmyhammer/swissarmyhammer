@@ -40,8 +40,8 @@ export { NumberEditor } from "./number-editor";
 export { DateEditor } from "./date-editor";
 export { ColorPaletteEditor } from "./color-palette-editor";
 export { MultiSelectEditor } from "./multi-select-editor";
+export { SingleSelectEditor } from "./single-select-editor";
 export { AttachmentEditor } from "./attachment-editor";
-export { ReferenceSelectEditor } from "./reference-select-editor";
 
 /** Resolve which editor component to use for a field — reads directly from the YAML-configured `editor` property. */
 export function resolveEditor(field: FieldDef): string {

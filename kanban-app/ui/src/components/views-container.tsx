@@ -49,7 +49,7 @@ function ViewsCommandScope({ children }: { children: ReactNode }) {
 
   return (
     <CommandScopeProvider commands={viewCommands}>
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 min-w-0">
         <LeftNav />
         {children}
       </div>

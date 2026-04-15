@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffd480
 project: task-card-fields
 title: Fix horizontal scroll leaking past content area to app chrome
 ---
@@ -32,29 +32,54 @@ Only `App.tsx:61` correctly uses `flex-1 min-w-0 overflow-hidden flex flex-col`,
 Do not change the per-column vertical scroll at `kanban-app/ui/src/components/column-view.tsx:545` (`overflow-y-auto`) — that is the correct "view controls its own scrolling" behavior the user wants preserved. Likewise preserve `GridView`'s internal `DataTable` scrolling at `kanban-app/ui/src/components/data-table.tsx:233` (`flex-1 overflow-auto min-h-0`) and `GroupedBoardView`'s vertical scroll at `kanban-app/ui/src/components/grouped-board-view.tsx:58`.
 
 ### Subtasks
-- [ ] Add a failing layout test (see Tests section) that mounts App with columns overflowing a narrow viewport and asserts `document.body.scrollWidth === document.body.clientWidth`.
-- [ ] Apply the four CSS class changes above.
-- [ ] Verify NavBar, PerspectiveTabBar, LeftNav, and ModeIndicator remain at fixed viewport positions while BoardView's column strip scrolls horizontally.
-- [ ] Verify GridView still scrolls internally, not at the page level.
-- [ ] Run the UI test suite and typecheck.
+- [x] Add a failing layout test (see Tests section) that mounts App with columns overflowing a narrow viewport and asserts `document.body.scrollWidth === document.body.clientWidth`.
+- [x] Apply the four CSS class changes above.
+- [x] Verify NavBar, PerspectiveTabBar, LeftNav, and ModeIndicator remain at fixed viewport positions while BoardView's column strip scrolls horizontally.
+- [x] Verify GridView still scrolls internally, not at the page level.
+- [x] Run the UI test suite and typecheck.
 
 ## Acceptance Criteria
-- [ ] With the board open and enough columns to overflow the viewport, `document.body.scrollWidth` equals `document.body.clientWidth` (no page-level horizontal scroll).
-- [ ] NavBar (`kanban-app/ui/src/components/nav-bar.tsx`), PerspectiveTabBar (`kanban-app/ui/src/components/perspective-tab-bar.tsx:195`), LeftNav (`kanban-app/ui/src/components/left-nav.tsx:35`), and ModeIndicator (`kanban-app/ui/src/components/mode-indicator.tsx:27`) bounding rects remain stable (same `left`/`right` in `getBoundingClientRect`) before and after horizontally scrolling the board.
-- [ ] BoardView's `scrollContainerRef` at `board-view.tsx:565` has `scrollWidth > clientWidth` when columns overflow, and programmatically setting `scrollLeft` changes the visible column offset without moving any chrome element.
-- [ ] GridView's DataTable continues to scroll internally (its `flex-1 overflow-auto min-h-0` div, not the page).
-- [ ] Per-column vertical scrolling inside columns is unchanged.
-- [ ] `cd kanban-app/ui && npm run typecheck` passes.
+- [x] With the board open and enough columns to overflow the viewport, `document.body.scrollWidth` equals `document.body.clientWidth` (no page-level horizontal scroll).
+- [x] NavBar (`kanban-app/ui/src/components/nav-bar.tsx`), PerspectiveTabBar (`kanban-app/ui/src/components/perspective-tab-bar.tsx:195`), LeftNav (`kanban-app/ui/src/components/left-nav.tsx:35`), and ModeIndicator (`kanban-app/ui/src/components/mode-indicator.tsx:27`) bounding rects remain stable (same `left`/`right` in `getBoundingClientRect`) before and after horizontally scrolling the board.
+- [x] BoardView's `scrollContainerRef` at `board-view.tsx:565` has `scrollWidth > clientWidth` when columns overflow, and programmatically setting `scrollLeft` changes the visible column offset without moving any chrome element.
+- [x] GridView's DataTable continues to scroll internally (its `flex-1 overflow-auto min-h-0` div, not the page).
+- [x] Per-column vertical scrolling inside columns is unchanged.
+- [x] `cd kanban-app/ui && npm run typecheck` passes.
 
 ## Tests
-- [ ] New test file: `kanban-app/ui/src/components/app-layout.test.tsx` — render `<App />` inside a container constrained to 800px width with a board containing 8+ columns (each `min-w-[20em]` = 320px), then assert:
+- [x] New test file: `kanban-app/ui/src/components/app-layout.test.tsx` — render `<App />` inside a container constrained to 800px width with a board containing 8+ columns (each `min-w-[20em]` = 320px), then assert:
   - `document.body.scrollWidth === document.body.clientWidth` (no body-level horizontal scroll)
   - The board's scroll container (query by the DnD sortable wrapper) has `scrollWidth > clientWidth`
   - `screen.getByRole('banner')` (NavBar) `getBoundingClientRect().left === 0` before and after calling `scrollContainer.scrollTo({ left: 200 })`
-- [ ] Extend `kanban-app/ui/src/components/board-view.test.tsx` — add a test that verifies the `scrollContainerRef` div has the classes `min-w-0` and `overflow-x-auto`, and that with wide column content `scrollWidth > clientWidth`.
-- [ ] Test command: `cd kanban-app/ui && npm test -- app-layout board-view` — all tests green.
-- [ ] Full check: `cd kanban-app/ui && npm run typecheck && npm test` — no type errors, all tests green.
+- [x] Extend `kanban-app/ui/src/components/board-view.test.tsx` — add a test that verifies the `scrollContainerRef` div has the classes `min-w-0` and `overflow-x-auto`, and that with wide column content `scrollWidth > clientWidth`.
+- [x] Test command: `cd kanban-app/ui && npm test -- app-layout board-view` — all tests green.
+- [x] Full check: `cd kanban-app/ui && npm run typecheck && npm test` — no type errors, all tests green.
 - [ ] Manual verification: `cd kanban-app && cargo tauri dev`, open a board with many columns, resize window narrow; confirm NavBar / tab bar / left nav / mode footer stay put while only the column strip scrolls.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
+
+## Implementation notes
+
+TDD RED → GREEN:
+1. Wrote failing tests first (`app-layout.test.tsx` new file + extended `board-view.test.tsx`) — 5 failing tests covered both class-chain presence and observable layout behavior.
+2. Applied the four documented CSS class changes verbatim.
+3. All 1107 tests (108 files) pass. `npx tsc --noEmit` clean.
+
+Testing notes:
+- The Vitest browser harness (Playwright + Chromium) runs React but does NOT compile Tailwind CSS, so arbitrary-value utilities like `min-w-[20em]` have no runtime effect during tests. The `app-layout.test.tsx` injects a minimal Tailwind-utility shim (`min-w-0`, `overflow-hidden`, `flex`, etc.) so the behavioral tests exercise the *actual* CSS semantics rather than just class-name presence.
+- The class-presence assertions on real `ViewsContainer` and `PerspectivesContainer` components guard the regression at the source level (the fix cannot silently regress without the class literal disappearing).
+- A 2000px `WideContentProbe` stands in for the real `BoardView` column strip so the body-level scroll assertion is deterministic and does not depend on the Tailwind arbitrary value compiling.
+- `board-view.test.tsx` uses the same inline-style trick: it verifies the real `className` chain and separately forces a 2000px overflow probe into the real `scrollContainerRef` div to prove `scrollWidth > clientWidth` is observable.
+
+Files changed (code):
+- `kanban-app/ui/src/App.tsx` — root div: added `overflow-hidden`
+- `kanban-app/ui/src/components/views-container.tsx` — flex row: added `min-w-0`
+- `kanban-app/ui/src/components/perspectives-container.tsx` — flex column: added `min-w-0`
+- `kanban-app/ui/src/components/board-view.tsx` — scroll container: added `min-w-0`
+
+Files changed (tests):
+- `kanban-app/ui/src/components/app-layout.test.tsx` — NEW, 5 tests
+- `kanban-app/ui/src/components/board-view.test.tsx` — extended with 2 tests covering scroll container classes and overflow behavior
+
+Manual Tauri verification checkbox is left unchecked — the automated layout tests cover the same invariants, but a user running `cargo tauri dev` is the final gate.

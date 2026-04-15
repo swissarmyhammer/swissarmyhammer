@@ -60,17 +60,11 @@ mod tests {
     use crate::config::StatuslineConfig;
     use crate::input::StatuslineInput;
 
-    #[test]
-    fn test_git_state_clean() {
-        let input = StatuslineInput::default();
-        let config = StatuslineConfig::default();
-        let ctx = ModuleContext {
-            input: &input,
-            config: &config,
-        };
-        let out = eval(&ctx);
-        assert!(out.is_empty());
-    }
+    // Note: `eval()` discovers the git repo at the process-wide current directory,
+    // so it can't be exercised safely from a unit test without CWD-changing machinery.
+    // The "hidden when clean" contract is covered here by `test_render_state_clean_hidden`
+    // (pure `render_state` input) and, for the `eval()` path, by
+    // `tests/isolated_dir_tests.rs::test_git_state_no_repo` (tempdir + CWD guard).
 
     #[test]
     fn test_state_label_clean() {

@@ -94,7 +94,14 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         match async {
             let ectx = ctx.entity_context().await?;
-            let all_columns = ectx.list("column").await?;
+            // Sort by the declared `order` field so `build_column_order` below
+            // derives a stable index map. `list("column")` returns entities in
+            // completion order from concurrent reads, which is non-deterministic
+            // and would otherwise cause tasks to be ranked by arbitrary column
+            // position. Matches the pattern used by GetBoard/ListColumns.
+            let mut all_columns = ectx.list("column").await?;
+            all_columns
+                .sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
             let mut all_tasks = ectx.list("task").await?;
 
             let terminal_column = all_columns

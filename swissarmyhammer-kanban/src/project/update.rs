@@ -14,7 +14,7 @@ use swissarmyhammer_operations::{
 #[operation(
     verb = "update",
     noun = "project",
-    description = "Update a project's name, description, color, or order"
+    description = "Update a project's name, description, or color"
 )]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateProject {
@@ -26,8 +26,6 @@ pub struct UpdateProject {
     pub description: Option<String>,
     /// New display color
     pub color: Option<String>,
-    /// New position in project order
-    pub order: Option<usize>,
 }
 
 impl UpdateProject {
@@ -38,7 +36,6 @@ impl UpdateProject {
             name: None,
             description: None,
             color: None,
-            order: None,
         }
     }
 
@@ -57,12 +54,6 @@ impl UpdateProject {
     /// Set the color
     pub fn with_color(mut self, color: impl Into<String>) -> Self {
         self.color = Some(color.into());
-        self
-    }
-
-    /// Set the order
-    pub fn with_order(mut self, order: usize) -> Self {
-        self.order = Some(order);
         self
     }
 }
@@ -88,9 +79,6 @@ impl Execute<KanbanContext, KanbanError> for UpdateProject {
             }
             if let Some(color) = &self.color {
                 entity.set("color", json!(color));
-            }
-            if let Some(order) = self.order {
-                entity.set("order", json!(order));
             }
 
             ectx.write(&entity).await?;
@@ -186,7 +174,6 @@ mod tests {
             .with_name("New Name")
             .with_description("New description")
             .with_color("aabbcc")
-            .with_order(42)
             .execute(&ctx)
             .await
             .into_result()
@@ -195,7 +182,6 @@ mod tests {
         assert_eq!(result["name"], "New Name");
         assert_eq!(result["description"], "New description");
         assert_eq!(result["color"], "aabbcc");
-        assert_eq!(result["order"], 42);
     }
 
     #[tokio::test]

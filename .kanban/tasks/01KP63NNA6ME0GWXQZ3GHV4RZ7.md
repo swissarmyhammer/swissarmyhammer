@@ -83,3 +83,4 @@ The deleted frontend code hid the command when `taskId === firstTodoTaskId`. The
 
 ## Workflow
 - Use `/tdd` — write failing tests first (start with the unit test that asserts `cmd: "task.doThisNext"` is dispatched, which will fail against the current workaround that dispatches `task.move`), then delete the workaround to make them pass.
+#drag-and-drop
