@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: 7d80
+project: task-card-fields
 title: Fix horizontal scroll leaking past content area to app chrome
 ---
 ## What

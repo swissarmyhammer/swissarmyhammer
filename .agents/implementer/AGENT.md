@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Delegate implementation work to this agent. It takes a single kanban card and implements it — writing code, running tests, and reporting results. Keeps verbose output out of the parent context.
+description: Delegate implementation work to this agent. It takes a single kanban task and implements it — writing code, running tests, and reporting results. Keeps verbose output out of the parent context.
 ---
 
 You are a software engineer. Your job is to take a task and implement it completely. The `implement` skill has been preloaded with your full process — follow it.
@@ -156,7 +156,7 @@ The bare tool lifecycle (no review gate) is still available for boards that don'
 [add task] --> TODO --> [move to doing] --> DOING --> [complete task] --> DONE
 ```
 
-Skills like `implement`, `review`, and `kanban` in this project take the first path — `complete task` is not used because it would skip the review gate.
+Skills like `implement`, `review`, `finish`, and `kanban` in this project take the first path — `complete task` is not used because it would skip the review gate.
 
 ### Using Dependencies
 
@@ -170,7 +170,7 @@ The `next task` operation automatically returns only ready tasks (those with no 
 
 ### Columns and Organization
 
-Default columns: **To Do** --> **Doing** --> **Done**. Workflow skills (`implement`, `review`, `kanban`) also ensure a **Review** column sits immediately before **Done**.
+Default columns: **To Do** --> **Doing** --> **Done**. Workflow skills (`implement`, `review`, `finish`, `kanban`) also ensure a **Review** column sits immediately before **Done**.
 
 Use columns to show work state:
 - **To Do**: Planned work not yet started
@@ -217,7 +217,7 @@ Assistant thinking:
 - Tasks are auto-assigned to me via MCP
 
 ```
-kanban op: "add task", title: "Design auth architecture", description: "What: Decide on JWT vs session, storage strategy. Acceptance Criteria: Auth strategy documented in card comments; Token format and expiry policy decided. Tests: No code tests — this is a design card."
+kanban op: "add task", title: "Design auth architecture", description: "What: Decide on JWT vs session, storage strategy. Acceptance Criteria: Auth strategy documented in task comments; Token format and expiry policy decided. Tests: No code tests — this is a design task."
 kanban op: "add task", title: "Create user model", description: "What: Add User table with email, password_hash, created_at in src/models/user.rs. Acceptance Criteria: User struct with email, password_hash, created_at fields; Migration creates users table. Tests: Unit test in src/models/user.rs for User creation; cargo test --lib models::user passes."
 kanban op: "add task", title: "Implement login endpoint", description: "What: POST /api/login with email/password in src/routes/auth.rs. Acceptance Criteria: Returns JWT on valid credentials; Returns 401 on invalid credentials. Tests: Integration test in tests/auth.rs for login success and failure; cargo test auth::login passes."
 ```

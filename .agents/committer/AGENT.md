@@ -123,7 +123,7 @@ The bare tool lifecycle (no review gate) is still available for boards that don'
 [add task] --> TODO --> [move to doing] --> DOING --> [complete task] --> DONE
 ```
 
-Skills like `implement`, `review`, and `kanban` in this project take the first path — `complete task` is not used because it would skip the review gate.
+Skills like `implement`, `review`, `finish`, and `kanban` in this project take the first path — `complete task` is not used because it would skip the review gate.
 
 ### Using Dependencies
 
@@ -137,7 +137,7 @@ The `next task` operation automatically returns only ready tasks (those with no 
 
 ### Columns and Organization
 
-Default columns: **To Do** --> **Doing** --> **Done**. Workflow skills (`implement`, `review`, `kanban`) also ensure a **Review** column sits immediately before **Done**.
+Default columns: **To Do** --> **Doing** --> **Done**. Workflow skills (`implement`, `review`, `finish`, `kanban`) also ensure a **Review** column sits immediately before **Done**.
 
 Use columns to show work state:
 - **To Do**: Planned work not yet started
@@ -184,7 +184,7 @@ Assistant thinking:
 - Tasks are auto-assigned to me via MCP
 
 ```
-kanban op: "add task", title: "Design auth architecture", description: "What: Decide on JWT vs session, storage strategy. Acceptance Criteria: Auth strategy documented in card comments; Token format and expiry policy decided. Tests: No code tests — this is a design card."
+kanban op: "add task", title: "Design auth architecture", description: "What: Decide on JWT vs session, storage strategy. Acceptance Criteria: Auth strategy documented in task comments; Token format and expiry policy decided. Tests: No code tests — this is a design task."
 kanban op: "add task", title: "Create user model", description: "What: Add User table with email, password_hash, created_at in src/models/user.rs. Acceptance Criteria: User struct with email, password_hash, created_at fields; Migration creates users table. Tests: Unit test in src/models/user.rs for User creation; cargo test --lib models::user passes."
 kanban op: "add task", title: "Implement login endpoint", description: "What: POST /api/login with email/password in src/routes/auth.rs. Acceptance Criteria: Returns JWT on valid credentials; Returns 401 on invalid credentials. Tests: Integration test in tests/auth.rs for login success and failure; cargo test auth::login passes."
 ```
@@ -227,13 +227,11 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
-- **card**: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
-
 - **code-context**: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use this skill before modifying code to understand structure, dependencies, and impact. Provides indexed, structural code intelligence that is faster and more precise than raw text search. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
-- **coverage**: Run tests with coverage instrumentation, identify uncovered code, and produce kanban cards for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
+- **coverage**: Run tests with coverage instrumentation, identify uncovered code, and produce kanban tasks for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
 
 - **deduplicate**: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent. (local)
 
@@ -243,9 +241,9 @@ use the skill tool to load the full instructions, then follow them.
 
 - **explore**: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting. (local)
 
-- **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
+- **finish**: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag/project/filter). Uses ralph to prevent stopping between iterations. (local)
 
-- **implement-loop**: Implement all ready kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards. (local)
+- **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban task and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
 
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 
@@ -253,7 +251,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **map**: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure. (local)
 
-- **plan**: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact. (local)
+- **plan**: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact. (local)
 
 - **really-done**: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always (local)
 
@@ -261,11 +259,13 @@ use the skill tool to load the full instructions, then follow them.
 
 - **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
 
+- **task**: Create a single, well-researched kanban task. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
+
 - **tdd**: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 
-- **test-loop**: Continuously run tests, create failure cards, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
+- **test-loop**: Continuously run tests, create failure tasks, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
 
 - **thoughtful**: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions (local)
 

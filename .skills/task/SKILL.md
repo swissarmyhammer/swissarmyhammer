@@ -1,6 +1,6 @@
 ---
-name: plan
-description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
+name: task
+description: Create a single, well-researched kanban task. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -39,27 +39,6 @@ metadata:
 - Handle errors at appropriate boundaries
 - Don't add defensive code for scenarios that can't happen
 - Trust internal code and framework guarantees
-
-
-# Plan
-
-Use this skill whenever you enter Plan Mode or the user asks you to plan work.
-
-## Goals
-
-1. **Understand the work** — research the codebase deeply enough to know what needs to change and what will be affected.
-2. **Produce a kanban board** — the plan artifact is kanban tasks with subtasks. Not a markdown document, not built-in task tools (TodoWrite, TaskCreate, TaskUpdate).
-3. **Right-size the tasks** — each task is a single focused unit of work that can be independently implemented and verified.
-4. **Collaborate with the user** — present tasks, discuss, iterate, and refine until the user is satisfied with the plan.
-5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/finish` (autonomous) or `/implement` (one task at a time).
-
-## Constraints
-
-### Plans are kanban tasks — created as you go
-Every planned work item becomes a kanban task. The kanban board IS the plan. No markdown plan files. **Create tasks as they crystallize during discussion, not as a batch at the end.** If a work item is defined enough to describe in conversation, it is defined enough to be a task. Don't wait for the user to ask for tasks — the act of planning IS creating tasks.
-
-### Research before tasks
-Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.
 
 ### Every task must be actionable
 
@@ -102,24 +81,43 @@ Subtasks go in the task's `description` as GFM checklists (`- [ ]` items). There
 Use specific file paths, function names, and type names — not vague descriptions. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" not "improve error handling."
 
 
-### Board naming
-Name the board for the workspace/repository, not the specific feature being planned.
+# Task
 
-### User controls plan mode exit
-Do NOT call ExitPlanMode yourself. The user decides when the plan is ready.
+Create a single, well-researched kanban task from an idea, request, or bug report.
 
-### No auto-implementation on exit
-When the user exits plan mode or approves the plan, do NOT begin implementing. Instead, remind them:
-- Use `/finish` to drive tasks all the way to `done` (implement → test → review) autonomously
-- Use `/implement` to implement one task at a time
 
-### Ordering
-Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between tasks.
 
-## Autonomous Agent Mode
+## Process
 
-When operating as an autonomous agent (no Plan Mode UI), follow the `PLANNING_GUIDE.md` resource file bundled with this skill.
+### 1. Understand the idea
 
-## Updating an Existing Plan
+ If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great task requires clear understanding — don't guess.
 
-Update kanban tasks directly — add new tasks, update existing ones with `op: "update task"`, remove obsolete ones with `op: "delete task"`, and reorder dependencies as needed. The board is a living document.
+### 2. Research the codebase
+
+Use `code_context` as the primary research tool:
+
+- **Find symbols** — `op: "search symbol"` with domain keywords, `op: "get symbol"` for implementations
+- **Map blast radius** — `op: "get blastradius"` on files you expect the work to touch. This reveals callers, downstream consumers, tests, and transitive dependencies.
+- **Trace call chains** — `op: "get callgraph"` with `direction: "inbound"` and `"outbound"` to understand execution flow
+- **Fall back to text search** — Glob, Grep, Read for string literals, config files, or patterns not in the index
+
+Thorough research is always required. The tools you use may differ — a bug fix may focus on blast radius while a feature requires broader symbol exploration — but never skip research because something appears simple.
+
+### 3. Create the task
+
+Create the task on the kanban board using `kanban` with `op: "add task"`. The task must meet the task standards included above — What, Acceptance Criteria, and Tests sections are mandatory.
+
+If the research reveals the work is too large for a single task (exceeds sizing limits), tell the user and suggest they use `/plan` instead.
+
+### 4. Present the result
+
+Show the user the task you created — title, description, and any tags applied.
+
+## Constraints
+
+- **One task per invocation.** If the user describes multiple pieces of work, create one task for the most important item and suggest `/plan` for the rest.
+- **Research before writing.** Don't guess at file paths, function names, or test locations. Look them up.
+- **Ask, don't assume.** If the user's request is vague or could be interpreted multiple ways, use the `question` tool to clarify before creating the task.
+- **Task quality is non-negotiable.** Every task must have What, Acceptance Criteria, and Tests. A task without these is not valid.
+- **Use the kanban board.** Do NOT use TodoWrite, TaskCreate, or any other task tracking. The kanban board is the single source of truth.
