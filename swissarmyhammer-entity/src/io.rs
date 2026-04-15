@@ -29,6 +29,15 @@ use crate::error::{EntityError, Result};
 /// with benchmark evidence.
 const READ_ENTITY_DIR_CONCURRENCY: usize = 64;
 
+/// Test-only counter incremented once per `read_entity_dir` invocation.
+///
+/// Used by tests to assert that caches actually short-circuit the disk path.
+/// Gated on `cfg(any(test, feature = "test-support"))` so release builds pay
+/// no cost for the atomic.
+#[cfg(any(test, feature = "test-support"))]
+pub static READ_ENTITY_DIR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Get the file extension for an entity type.
 pub fn entity_extension(entity_def: &EntityDef) -> &'static str {
     if entity_def.body_field.is_some() {
@@ -147,6 +156,9 @@ pub async fn read_entity_dir(
     entity_type: impl AsRef<str>,
     entity_def: &EntityDef,
 ) -> Result<Vec<Entity>> {
+    #[cfg(any(test, feature = "test-support"))]
+    READ_ENTITY_DIR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let entity_type = entity_type.as_ref();
     let ext = entity_extension(entity_def);
 

@@ -336,7 +336,8 @@ async fn move_to_first_in_production_board_state() {
 ///
 /// Cross-reference: the notification flow after this move emits
 /// `entity-field-changed` with updated `position_ordinal`, tested in
-/// `kanban-app/src/watcher.rs` (`test_flush_and_emit_detects_task_position_ordinal_change`).
+/// `kanban-app/src/watcher.rs`
+/// (`bridge_end_to_end_second_write_emits_field_changed_payload`).
 #[tokio::test]
 async fn move_third_to_second_position_via_dispatch() {
     let (_temp, ctx, id_a, id_b, id_c) = setup_board_with_tasks().await;

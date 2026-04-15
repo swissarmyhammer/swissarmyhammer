@@ -109,6 +109,7 @@ liquid = "0.26.11"
 liquid-core = "0.26"
 walkdir = "2"
 dashmap = "6"
+indexmap = "2"
 regex = "1"
 fuzzy-matcher = "0.3"
 chrono = { version = "0.4", features = ["serde"] }

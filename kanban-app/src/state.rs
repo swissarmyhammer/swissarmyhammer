@@ -17,8 +17,8 @@ use tokio::sync::RwLock;
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
 
-use crate::enrichment::{new_enrichment_cache, EnrichmentCache};
-use crate::watcher::{self, BoardWatcher, EntityCache};
+use crate::watcher;
+use swissarmyhammer_entity::EntityCache;
 
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
@@ -76,19 +76,28 @@ pub(crate) struct BoardHandle {
     pub(crate) ctx: Arc<KanbanContext>,
     /// Store-level undo/redo context shared across all entity type stores.
     pub(crate) store_context: Arc<swissarmyhammer_store::StoreContext>,
-    /// Root paths of all registered stores, used to drive the file watcher.
-    pub(crate) store_roots: Vec<std::path::PathBuf>,
-    /// Entity cache for detecting external file changes with field-level diffing.
-    pub(crate) entity_cache: EntityCache,
+    /// In-memory entity cache shared with the attached `EntityContext`.
+    ///
+    /// This is the single source of truth for entity state in the workspace —
+    /// the same `Arc<EntityCache>` that `KanbanContext::entity_context()`
+    /// attached to the context. The bridge subscribes to this cache and
+    /// forwards events to Tauri; the filesystem watcher lives inside
+    /// `KanbanContext` and pushes external changes through the cache too.
+    pub(crate) entity_cache: Arc<EntityCache>,
     /// In-memory search index over all entities.
     pub(crate) search_index: Arc<RwLock<EntitySearchIndex>>,
-    /// Last-emitted computed-field snapshot per task, used by the post-mutation
-    /// fan-out pass in `enrich_computed_fields` to diff synthetic enrichment
-    /// events and suppress no-ops. Shared with `Arc<Mutex<…>>` so the cache
-    /// survives across every `flush_and_emit` call on this handle.
-    pub(crate) enrichment_cache: EnrichmentCache,
-    /// File watcher — dropped when the handle is dropped.
-    _watcher: Option<BoardWatcher>,
+    /// Handle to the bridge task that subscribes to `entity_cache` and emits
+    /// Tauri events. Aborted when the handle is dropped so the bridge
+    /// doesn't outlive the board.
+    bridge_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for BoardHandle {
+    fn drop(&mut self) {
+        if let Some(task) = self.bridge_task.take() {
+            task.abort();
+        }
+    }
 }
 
 /// Read the board's display name for MRU, falling back to the canonical path
@@ -234,8 +243,8 @@ async fn reassign_ordinals_in_column(
 impl BoardHandle {
     /// Create a handle with a fully-initialized context (views, fields, etc.).
     ///
-    /// Does NOT start the file watcher — call `start_watcher` after the
-    /// Tauri AppHandle is available.
+    /// Does NOT start the bridge task — call `start_watcher` after the
+    /// Tauri `AppHandle` is available so the bridge can emit events.
     pub async fn open(kanban_path: PathBuf) -> Result<Self, String> {
         let ctx = KanbanContext::open(&kanban_path)
             .await
@@ -247,26 +256,29 @@ impl BoardHandle {
         register_entity_stores(&ctx, &store_context).await;
         register_perspective_store(&ctx, &store_context, &kanban_path).await;
 
-        // Collect store roots now that all stores are registered. This drives
-        // the file watcher — every registered store's directory is watched
-        // automatically, no hardcoded list.
-        let store_roots = store_context.watched_roots().await;
-        let entity_cache = watcher::new_entity_cache(&kanban_path, &store_roots);
+        // Ensure the entity context is initialized — this also constructs
+        // and attaches the `EntityCache` and spawns the filesystem watcher
+        // inside the entity crate. After this call, `ctx.entity_cache()`
+        // returns the same `Arc<EntityCache>` that owns the live state.
+        let ectx = ctx
+            .entity_context()
+            .await
+            .map_err(|e| format!("Failed to initialize entity context: {e}"))?;
 
-        if let Ok(ectx) = ctx.entity_context().await {
-            migrate_legacy_ordinals(&ectx).await;
-        }
+        migrate_legacy_ordinals(&ectx).await;
+
+        let entity_cache = ctx
+            .entity_cache()
+            .expect("entity_cache must be populated after entity_context() returns Ok");
 
         let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
         Ok(Self {
             ctx: Arc::new(ctx),
             store_context,
-            store_roots,
             entity_cache,
             search_index,
-            enrichment_cache: new_enrichment_cache(),
-            _watcher: None,
+            bridge_task: None,
         })
     }
 
@@ -310,69 +322,31 @@ impl BoardHandle {
         }
     }
 
-    /// Start the file watcher, emitting entity-level events on the given AppHandle.
+    /// Start the entity-cache → Tauri bridge for this board.
+    ///
+    /// Spawns a background task that subscribes to the entity cache and
+    /// forwards every event as a Tauri emit scoped to this board's path.
+    /// Idempotent: calling twice replaces the previous bridge task.
     pub fn start_watcher(&mut self, app_handle: tauri::AppHandle) {
+        if let Some(task) = self.bridge_task.take() {
+            task.abort();
+        }
         let kanban_root = self.ctx.root().to_path_buf();
-        let cache = self.entity_cache.clone();
-        let search_index = self.search_index.clone();
+        let ctx = Arc::clone(&self.ctx);
+        let cache = Arc::clone(&self.entity_cache);
+        let search_index = Arc::clone(&self.search_index);
         let board_path_str = kanban_root.display().to_string();
 
-        let callback = move |evt: watcher::WatchEvent| {
-            dispatch_watch_event(&search_index, &app_handle, &board_path_str, evt);
-        };
-
-        match watcher::start_watching(
-            kanban_root.clone(),
-            self.store_roots.clone(),
+        tracing::info!(path = %kanban_root.display(), "entity-cache bridge starting for board");
+        let handle = tokio::spawn(watcher::run_bridge(
+            ctx,
             cache,
-            callback,
-        ) {
-            Ok(w) => {
-                tracing::info!(path = %kanban_root.display(), "file watcher started for board");
-                self._watcher = Some(w);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %kanban_root.display(),
-                    error = %e,
-                    "failed to start file watcher"
-                );
-            }
-        }
+            app_handle,
+            board_path_str,
+            search_index,
+        ));
+        self.bridge_task = Some(handle);
     }
-}
-
-/// Update the in-memory search index and forward the watch event to the
-/// frontend via Tauri emit. Uses `try_write` to avoid blocking the notify
-/// thread if the async dispatch_command path holds the write lock concurrently.
-fn dispatch_watch_event(
-    search_index: &Arc<RwLock<EntitySearchIndex>>,
-    app_handle: &tauri::AppHandle,
-    board_path_str: &str,
-    evt: watcher::WatchEvent,
-) {
-    use tauri::Emitter;
-
-    if let Ok(mut idx) = search_index.try_write() {
-        watcher::sync_search_index(&mut idx, &evt);
-    }
-    let event_name = match &evt {
-        watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-        watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-        watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-        watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-    };
-    tracing::info!(
-        event_name,
-        board_path = %board_path_str,
-        event = ?evt,
-        "watcher callback: emitting Tauri event to frontend"
-    );
-    let wrapped = watcher::BoardWatchEvent {
-        event: evt,
-        board_path: board_path_str.to_string(),
-    };
-    let _ = app_handle.emit(event_name, &wrapped);
 }
 
 /// A handle to a native menu item, wrapping both regular and check menu items.

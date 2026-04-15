@@ -38,6 +38,16 @@ pub struct EntityContext {
     /// When set, write/delete operations automatically push onto the undo stack.
     /// Uses `OnceLock` so it can be set after construction through a shared reference.
     store_context: OnceLock<Arc<StoreContext>>,
+    /// Optional in-memory cache. When attached, `read()`, `list()`, and
+    /// `write()` delegate to this cache so repeated reads do not hit disk and
+    /// writes emit `EntityChanged` events on the cache's broadcast channel.
+    /// `OnceLock` guarantees the cache is attached at most once — the cache
+    /// and the context form a fixed pairing.
+    ///
+    /// We store a `Weak` reference to break the Arc cycle: the cache holds
+    /// an `Arc<EntityContext>`, and the context holds a reference back to
+    /// the cache. Using `Weak` here means dropping the cache drops the cycle.
+    cache: OnceLock<std::sync::Weak<crate::cache::EntityCache>>,
 }
 
 impl EntityContext {
@@ -53,7 +63,33 @@ impl EntityContext {
             compute: None,
             store_handles: RwLock::new(HashMap::new()),
             store_context: OnceLock::new(),
+            cache: OnceLock::new(),
         }
+    }
+
+    /// Attach an `EntityCache` so that `read`, `list`, and `write` delegate
+    /// to it instead of hitting disk on every call.
+    ///
+    /// Takes `&Self` (not `self`) because the cache and context form an
+    /// `Arc` cycle — the cache owns an `Arc<EntityContext>`, and this method
+    /// installs a `Weak` reference to that same cache on the context. Callers
+    /// construct the cache from the context's `Arc`, then attach it back
+    /// through this method.
+    ///
+    /// Uses `OnceLock`: only the first call wins. Subsequent calls are no-ops.
+    /// Panics if called after the cache has already been set (which would
+    /// indicate a programming error in the wiring layer).
+    pub fn attach_cache(&self, cache: &Arc<crate::cache::EntityCache>) {
+        let weak = Arc::downgrade(cache);
+        self.cache
+            .set(weak)
+            .expect("EntityContext::attach_cache called more than once");
+    }
+
+    /// Return the attached cache, if any. `None` when no cache has been
+    /// installed or the cache has been dropped.
+    fn attached_cache(&self) -> Option<Arc<crate::cache::EntityCache>> {
+        self.cache.get().and_then(|w| w.upgrade())
     }
 
     /// Set the StoreContext for shared undo/redo stack management.
@@ -166,18 +202,76 @@ impl EntityContext {
 
     /// Read a single entity by type and ID.
     ///
+    /// When a cache is attached via [`attach_cache`], pulls the raw
+    /// cached entity and applies compute fresh. Cache misses fall through
+    /// to disk — misses are rare in practice because `KanbanContext`
+    /// preloads every registered entity type on startup, but they are
+    /// still possible for lazily-added types or files that appeared after
+    /// `load_all`.
+    ///
     /// If a `ComputeEngine` is attached, computed fields are derived after reading.
     pub async fn read(&self, entity_type: impl AsRef<str>, id: impl AsRef<str>) -> Result<Entity> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
-        let def = self.entity_def(entity_type)?;
-        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
-        let mut entity = io::read_entity(&path, entity_type, id, def).await?;
+        if let Some(cache) = self.attached_cache() {
+            if let Some(mut entity) = cache.get(entity_type, id).await {
+                self.apply_compute(entity_type, &mut entity).await?;
+                return Ok(entity);
+            }
+        }
+        self.read_internal(entity_type, id).await
+    }
+
+    /// Read a single entity directly from disk, bypassing any attached cache.
+    ///
+    /// Used by `read()` as the fall-through path on a cache miss. Always
+    /// applies the attached `ComputeEngine` so callers get the same shape
+    /// whether they hit cache or disk.
+    pub(crate) async fn read_internal(&self, entity_type: &str, id: &str) -> Result<Entity> {
+        let mut entity = self.read_raw_internal(entity_type, id).await?;
         self.apply_compute(entity_type, &mut entity).await?;
         Ok(entity)
     }
 
-    /// Write an entity, automatically computing and logging field-level changes.
+    /// Read a single entity from disk without applying any compute.
+    ///
+    /// Used by the cache to store canonical disk-form entities. Aggregate
+    /// compute fields (like `parse-body-tags` whose output depends on
+    /// sibling entity types) must be re-evaluated on every read out of the
+    /// cache to stay correct under cross-type writes — caching their
+    /// output would mean stale data whenever a sibling entity changes.
+    pub(crate) async fn read_raw_internal(&self, entity_type: &str, id: &str) -> Result<Entity> {
+        let def = self.entity_def(entity_type)?;
+        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+        io::read_entity(&path, entity_type, id, def).await
+    }
+
+    /// Write an entity, routing through the cache when one is attached.
+    ///
+    /// When a cache is attached via [`attach_cache`], this method delegates
+    /// to [`EntityCache::write`], which handles hashing, versioning, and event
+    /// emission on top of the underlying disk write. Without a cache it falls
+    /// through to [`write_internal`] directly.
+    ///
+    /// Returns `Ok(Some(ulid))` when changes were logged, or `Ok(None)` when
+    /// no changes were detected (idempotent write).
+    pub async fn write(
+        &self,
+        entity: &Entity,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
+        if let Some(cache) = self.attached_cache() {
+            return cache.write(entity).await;
+        }
+        self.write_internal(entity).await
+    }
+
+    /// Write an entity directly to disk, bypassing any attached cache.
+    ///
+    /// This is the pure disk-write path: validation, attachment handling,
+    /// store-handle delegation, changelog append, and undo-stack push. It is
+    /// the fallback called by `write()` when no cache is attached, and the
+    /// method the cache itself calls to avoid recursing back through its own
+    /// write path.
     ///
     /// If a `ValidationEngine` is attached, fields are validated/transformed
     /// before writing. Computed fields are stripped (they are derived on read).
@@ -186,7 +280,7 @@ impl EntityContext {
     ///
     /// Returns `Ok(Some(ulid))` when changes were logged, or `Ok(None)` when
     /// no changes were detected (idempotent write).
-    pub async fn write(
+    pub(crate) async fn write_internal(
         &self,
         entity: &Entity,
     ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
@@ -262,6 +356,10 @@ impl EntityContext {
 
     /// Delete an entity by type and ID.
     ///
+    /// When a cache is attached via [`attach_cache`], this delegates to
+    /// [`EntityCache::delete`] which updates the cache map and emits an
+    /// `EntityDeleted` event on top of the disk trash operation.
+    ///
     /// Moves the data file to the trash directory (`{root}/{type}s/.trash/`).
     /// The entity is no longer listed or readable, but its files are
     /// preserved for recovery.
@@ -275,6 +373,22 @@ impl EntityContext {
     ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
+        if let Some(cache) = self.attached_cache() {
+            return cache.delete(entity_type, id).await;
+        }
+        self.delete_internal(entity_type, id).await
+    }
+
+    /// Delete an entity directly from disk, bypassing any attached cache.
+    ///
+    /// This is the pure disk-delete path used as the fallback in `delete()`
+    /// and called by the cache itself to avoid recursing through its own
+    /// delete path.
+    pub(crate) async fn delete_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -344,6 +458,20 @@ impl EntityContext {
     ) -> Result<()> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
+        self.restore_from_trash_internal(entity_type, id).await?;
+        // Refresh the cache so the restored entity shows up in `list()`.
+        if let Some(cache) = self.attached_cache() {
+            let _ = cache.refresh_from_disk(entity_type, id).await;
+        }
+        Ok(())
+    }
+
+    /// Pure disk restore-from-trash, bypassing any attached cache.
+    pub(crate) async fn restore_from_trash_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<()> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -363,6 +491,20 @@ impl EntityContext {
     ) -> Result<()> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
+        self.restore_from_archive_internal(entity_type, id).await?;
+        // Refresh the cache so the restored entity shows up in `list()`.
+        if let Some(cache) = self.attached_cache() {
+            let _ = cache.refresh_from_disk(entity_type, id).await;
+        }
+        Ok(())
+    }
+
+    /// Pure disk restore-from-archive, bypassing any attached cache.
+    pub(crate) async fn restore_from_archive_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<()> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -371,6 +513,10 @@ impl EntityContext {
     }
 
     /// Archive an entity by type and ID.
+    ///
+    /// When a cache is attached via [`attach_cache`], this routes through
+    /// [`EntityCache::archive`], which removes the archived entity from the
+    /// in-memory map so `list()` no longer surfaces it.
     ///
     /// When a StoreHandle is registered for the entity type, delegates to
     /// `StoreHandle::archive()` which records an undoable changelog entry and
@@ -388,6 +534,21 @@ impl EntityContext {
     ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
+        if let Some(cache) = self.attached_cache() {
+            return cache.archive(entity_type, id).await;
+        }
+        self.archive_internal(entity_type, id).await
+    }
+
+    /// Archive an entity directly on disk, bypassing any attached cache.
+    ///
+    /// This is the pure archive path — the cache itself calls it, and
+    /// `archive()` falls through to it when no cache is attached.
+    pub(crate) async fn archive_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -437,6 +598,10 @@ impl EntityContext {
 
     /// Restore an entity from the archive back to live storage.
     ///
+    /// When a cache is attached via [`attach_cache`], this routes through
+    /// [`EntityCache::unarchive`], which re-reads the restored entity from
+    /// disk and inserts it back into the in-memory map.
+    ///
     /// When a StoreHandle is registered for the entity type, delegates to
     /// `StoreHandle::unarchive_latest()` which finds the most recently
     /// archived version, restores it, and records an undoable changelog entry.
@@ -453,6 +618,18 @@ impl EntityContext {
     ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
+        if let Some(cache) = self.attached_cache() {
+            return cache.unarchive(entity_type, id).await;
+        }
+        self.unarchive_internal(entity_type, id).await
+    }
+
+    /// Unarchive an entity directly on disk, bypassing any attached cache.
+    pub(crate) async fn unarchive_internal(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
@@ -577,20 +754,55 @@ impl EntityContext {
 
     /// List all entities of a given type.
     ///
-    /// If a `ComputeEngine` is attached, computed fields are derived for each entity.
+    /// When a cache is attached via [`attach_cache`], pulls raw entities
+    /// from the in-memory map and applies compute fresh on the way out —
+    /// no `read_entity_dir` call, no disk parsing, but aggregate computed
+    /// fields (like body-tag parsing that queries sibling entity types)
+    /// still reflect the current state of every entity type.
+    ///
+    /// Per-entity compute runs concurrently (bounded fan-out) so a large
+    /// board doesn't serialize the per-task `_changelog` / `_file_created`
+    /// disk reads that `apply_compute_with_query` injects.
+    ///
+    /// Without a cache, falls through to [`list_internal`].
     pub async fn list(&self, entity_type: impl AsRef<str>) -> Result<Vec<Entity>> {
         let entity_type = entity_type.as_ref();
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let mut entities = io::read_entity_dir(&dir, entity_type, def).await?;
-        if self.compute.is_some() {
-            let query_fn = self.build_entity_query_fn();
-            for entity in &mut entities {
-                self.apply_compute_with_query(entity_type, entity, &query_fn)
-                    .await?;
+        if let Some(cache) = self.attached_cache() {
+            // Validate the type exists — the cache silently returns an
+            // empty vec for unknown types, which would hide real bugs.
+            let _ = self.entity_def(entity_type)?;
+            let mut entities = cache.get_all(entity_type).await;
+            if self.compute.is_some() {
+                self.apply_compute_batch(entity_type, &mut entities).await?;
             }
+            return Ok(entities);
+        }
+        self.list_internal(entity_type).await
+    }
+
+    /// List all entities of a type by reading them from disk, bypassing any
+    /// attached cache.
+    ///
+    /// Used by `list()` as the fallback when no cache is attached. Applies
+    /// the attached `ComputeEngine` to each entity concurrently (bounded
+    /// fan-out) so the per-entity `_changelog` disk reads don't serialize.
+    pub(crate) async fn list_internal(&self, entity_type: &str) -> Result<Vec<Entity>> {
+        let mut entities = self.list_raw_internal(entity_type).await?;
+        if self.compute.is_some() {
+            self.apply_compute_batch(entity_type, &mut entities).await?;
         }
         Ok(entities)
+    }
+
+    /// List all entities of a type from disk without applying any compute.
+    ///
+    /// Used by the cache's `load_all` to seed itself with canonical
+    /// disk-form entities. See [`read_raw_internal`] for why the cache
+    /// stores pre-compute data.
+    pub(crate) async fn list_raw_internal(&self, entity_type: &str) -> Result<Vec<Entity>> {
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        io::read_entity_dir(&dir, entity_type, def).await
     }
 
     /// List entities of a type, filtered by a predicate with access to context.
@@ -911,16 +1123,27 @@ impl EntityContext {
 
     /// Build a read-only entity query function for aggregate computed fields.
     ///
-    /// The query reads raw entities from disk (without applying compute)
-    /// to avoid infinite recursion.
+    /// The query returns raw entities (without applying compute) to avoid
+    /// infinite recursion. When an `EntityCache` is attached, queries serve
+    /// from the in-memory map; otherwise they fall through to disk.
     fn build_entity_query_fn(&self) -> std::sync::Arc<swissarmyhammer_fields::EntityQueryFn> {
         let root = self.root.clone();
         let fields_ctx = Arc::clone(&self.fields);
+        let cache_weak = self.cache.get().cloned();
         std::sync::Arc::new(Box::new(move |et: &str| {
             let root = root.clone();
             let fields_ctx = Arc::clone(&fields_ctx);
+            let cache_weak = cache_weak.clone();
             let et = et.to_string();
             Box::pin(async move {
+                if let Some(cache) = cache_weak.as_ref().and_then(|w| w.upgrade()) {
+                    return cache
+                        .get_all(&et)
+                        .await
+                        .into_iter()
+                        .map(|e| e.fields)
+                        .collect();
+                }
                 let Some(def) = fields_ctx.get_entity(&et) else {
                     return vec![];
                 };
@@ -931,6 +1154,98 @@ impl EntityContext {
                 entities.into_iter().map(|e| e.fields).collect()
             })
         }))
+    }
+
+    /// Apply compute-engine derivation to every entity in `entities`
+    /// concurrently with bounded fan-out, preserving input order.
+    ///
+    /// Serial iteration through a 2000-entity list multiplies per-task
+    /// disk I/O inside `apply_compute_with_query` (each task reads its
+    /// own `.jsonl` changelog and stats its data file for
+    /// `_file_created`). Fanning the compute pass out across many tokio
+    /// tasks lets those reads overlap.
+    ///
+    /// Concurrency is bounded to keep memory footprint and FD pressure
+    /// predictable — the exact fan-out is an internal detail tuned by
+    /// benchmark.
+    async fn apply_compute_batch(
+        &self,
+        entity_type: &str,
+        entities: &mut Vec<Entity>,
+    ) -> Result<()> {
+        use futures::stream::{self, StreamExt};
+
+        // Per-entity compute is a mix of cheap in-memory work (compute
+        // engine derivation) and per-task disk I/O (`_changelog` JSONL
+        // read + `_file_created` stat). 64 balances overlap of the I/O
+        // path against scheduling overhead on the tokio runtime.
+        // Benchmarked on `move_task_bench` — raising to 256 costs more
+        // than it saves under contention.
+        const COMPUTE_CONCURRENCY: usize = 64;
+
+        let query_fn = self.build_entity_query_fn();
+        // Hoist the field-def Vec out of the per-entity loop. The set of
+        // computed fields for an entity type is fixed for the duration of
+        // the batch, so cloning the definitions once and sharing via
+        // `Arc` avoids N clones of a non-trivial `FieldDef` Vec.
+        let owned_defs: std::sync::Arc<Vec<swissarmyhammer_fields::FieldDef>> = std::sync::Arc::new(
+            self.fields
+                .fields_for_entity(entity_type)
+                .into_iter()
+                .cloned()
+                .collect(),
+        );
+        // Pre-compute the subset of attachment fields once per batch. The
+        // per-entity `enrich_attachment_fields` call otherwise calls
+        // `fields_for_entity` and walks every field def looking for the
+        // `Attachment` variant — 2000× that traversal is measurable on
+        // `list_task`. When no attachment fields are declared the batch
+        // can skip enrichment entirely for entities that don't have any
+        // attachment values set.
+        let has_attachment_fields = owned_defs
+            .iter()
+            .any(|fd| matches!(&fd.type_, FieldType::Attachment { .. }));
+        let entity_type_dir = if has_attachment_fields {
+            Some(std::sync::Arc::new(self.entity_dir(entity_type)))
+        } else {
+            None
+        };
+        // Drain the caller's Vec into owned entities so each compute
+        // task can mutate its own value concurrently without needing a
+        // mutable borrow into a shared slice.
+        let taken: Vec<Entity> = std::mem::take(entities);
+        // Tag each entity with its input index so we can reassemble the
+        // output Vec in the original order, independent of the
+        // `buffer_unordered` completion order.
+        let mut indexed: Vec<(usize, Result<Entity>)> = stream::iter(taken.into_iter().enumerate())
+            .map(|(idx, mut entity)| {
+                let query_fn = std::sync::Arc::clone(&query_fn);
+                let owned_defs = std::sync::Arc::clone(&owned_defs);
+                let entity_type_dir = entity_type_dir.clone();
+                async move {
+                    let res = async {
+                        if let Some(dir) = entity_type_dir.as_deref() {
+                            self.enrich_attachment_fields_with_defs(&mut entity, &owned_defs, dir)
+                                .await?;
+                        }
+                        self.derive_compute_fields(entity_type, &mut entity, &query_fn, &owned_defs)
+                            .await
+                    }
+                    .await;
+                    (idx, res.map(|_| entity))
+                }
+            })
+            .buffer_unordered(COMPUTE_CONCURRENCY)
+            .collect()
+            .await;
+
+        // Restore input order by sorting on the captured indices.
+        indexed.sort_by_key(|(idx, _)| *idx);
+        entities.reserve(indexed.len());
+        for (_, res) in indexed {
+            entities.push(res?);
+        }
+        Ok(())
     }
 
     /// Derive computed fields after reading.
@@ -973,9 +1288,9 @@ impl EntityContext {
     ) -> Result<()> {
         self.enrich_attachment_fields(entity_type, entity).await?;
 
-        let Some(ref engine) = self.compute else {
+        if self.compute.is_none() {
             return Ok(());
-        };
+        }
         let owned_defs: Vec<_> = self
             .fields
             .fields_for_entity(entity_type)
@@ -983,31 +1298,203 @@ impl EntityContext {
             .cloned()
             .collect();
 
-        self.inject_compute_dependencies(entity_type, entity, &owned_defs)
-            .await;
-
-        engine
-            .derive_all(&mut entity.fields, &owned_defs, Some(query_fn))
+        self.derive_compute_fields(entity_type, entity, query_fn, &owned_defs)
             .await
-            .map_err(map_compute_error)?;
+    }
 
+    /// Run the compute engine against `entity` using a pre-built
+    /// `owned_defs` slice.
+    ///
+    /// Separated from [`apply_compute_with_query`] so the batch path
+    /// ([`apply_compute_batch`]) can clone the type's field definitions
+    /// exactly once, wrap them in an `Arc`, and share that `Arc` across
+    /// every concurrent compute task. Without this split, each of the
+    /// 2000 per-entity compute calls in `list("task")` would reclone the
+    /// full `FieldDef` Vec, which is non-trivial for entity types with
+    /// many fields.
+    ///
+    /// Callers must have already run `enrich_attachment_fields` on
+    /// `entity` when that enrichment is relevant — this helper only
+    /// handles compute-engine derivation and pseudo-field injection.
+    ///
+    /// When an [`EntityCache`] is attached, the outputs of every
+    /// computed field — simple derivations and aggregates alike — are
+    /// memoized per-entity in the cache's derived-output map. On a warm
+    /// hit the cached values are copied straight into `entity.fields`
+    /// without running the compute engine at all — and without even
+    /// injecting the `_changelog` / `_file_created` pseudo-fields, since
+    /// the derivations that consume them don't run on the warm path.
+    ///
+    /// Aggregate outputs (those produced by derivations that query other
+    /// entity types via the `EntityQueryFn`) are kept fresh by
+    /// cross-entity invalidation: the cache consults
+    /// [`FieldsContext::entity_types_depending_on`] and, when any entity
+    /// of a dependency type changes, bulk-invalidates the derived-output
+    /// slots for every entity type whose aggregates declare that
+    /// dependency. Aggregate fields that do not declare `depends_on` in
+    /// their FieldDef are still cached — their outputs become stale only
+    /// when the aggregate's hidden inputs change, which is a correctness
+    /// bug in the field definition (fix by declaring `depends_on`).
+    async fn derive_compute_fields(
+        &self,
+        entity_type: &str,
+        entity: &mut Entity,
+        query_fn: &std::sync::Arc<swissarmyhammer_fields::EntityQueryFn>,
+        owned_defs: &[swissarmyhammer_fields::FieldDef],
+    ) -> Result<()> {
+        let Some(ref engine) = self.compute else {
+            return Ok(());
+        };
+
+        // Try the derived-output cache. `cached_outputs` carries the
+        // memoized per-entity outputs (a `Some(map)` is a warm hit; `None`
+        // is a cold miss). The observed epoch is captured at read time so a
+        // post-compute memoization attempt can be guarded against any
+        // invalidation that lands mid-derivation.
+        let (cached_outputs, observed_epoch) = if let Some(cache) = self.attached_cache() {
+            cache
+                .get_derived_outputs(entity_type, entity.id.as_str())
+                .await
+        } else {
+            (None, 0)
+        };
+        let has_warm_cache = cached_outputs.is_some();
+
+        // Inject pseudo-field inputs only on the cold path. On a warm hit
+        // every computed field (simple AND aggregate) gets its value from
+        // the cached output, so `_changelog` / `_file_created` are never
+        // read. Cross-entity invalidation
+        // ([`EntityCache::invalidate_cross_type_derived`]) keeps aggregate
+        // cached outputs fresh when sibling entity types change, so
+        // skipping injection here is safe.
+        if !has_warm_cache {
+            self.inject_compute_dependencies(entity_type, entity, owned_defs)
+                .await;
+        }
+
+        // Collect freshly-computed outputs on the cold path so we can
+        // memoize them after the derivation finishes.
+        let mut fresh_outputs: Option<HashMap<String, serde_json::Value>> = if has_warm_cache {
+            None
+        } else {
+            Some(HashMap::new())
+        };
+
+        // Iterate fields in declaration order so aggregate derivations that
+        // read simple-derivation outputs see them already populated — the
+        // same ordering contract `ComputeEngine::derive_all` documents.
+        for field in owned_defs {
+            let FieldType::Computed { .. } = field.type_ else {
+                continue;
+            };
+
+            // Warm path: use the cached output when available.
+            if let Some(ref cached) = cached_outputs {
+                if let Some(value) = cached.get(field.name.as_str()) {
+                    entity.fields.insert(field.name.to_string(), value.clone());
+                    continue;
+                }
+                // Field not in cached map — fall through to compute it.
+                // This can happen when a computed field is added to the
+                // type's `FieldDef` set after the cache was populated;
+                // the next invalidation + repopulation closes the gap.
+            }
+
+            let value = engine
+                .derive(field, &entity.fields, Some(query_fn))
+                .await
+                .map_err(map_compute_error)?;
+
+            if let Some(ref mut fresh) = fresh_outputs {
+                fresh.insert(field.name.to_string(), value.clone());
+            }
+
+            entity.fields.insert(field.name.to_string(), value);
+        }
+
+        // Strip injected pseudo-fields so they are never persisted or
+        // surfaced to callers. Only the cold path inserts them, but the
+        // `remove` is cheap so it is unconditional.
         entity.fields.remove("_changelog");
         entity.fields.remove("_file_created");
+
+        // Memoize the freshly-computed outputs so the next
+        // derive_compute_fields call for this entity can skip the engine.
+        // Guarded by `observed_epoch` so any invalidation that landed
+        // between the cache read and here causes the memoization to be
+        // dropped.
+        if let Some(fresh) = fresh_outputs {
+            if !fresh.is_empty() {
+                if let Some(cache) = self.attached_cache() {
+                    cache
+                        .try_memoize_derived_outputs(
+                            entity_type,
+                            entity.id.as_str(),
+                            observed_epoch,
+                            fresh,
+                        )
+                        .await;
+                }
+            }
+        }
 
         Ok(())
     }
 
     /// Lazily source reserved pseudo-fields and insert them into `entity.fields`
-    /// when at least one computed field in `owned_defs` declares a dependency on
-    /// them. Values are stripped by the caller after derivation so they are
-    /// never persisted or returned to callers.
+    /// when at least one computed field in `owned_defs` declares a
+    /// dependency on them. Values are stripped by the caller after
+    /// derivation so they are never persisted or returned to callers.
+    ///
+    /// When an [`EntityCache`] is attached, both `_changelog` and
+    /// `_file_created` go through the cache's memoization layer
+    /// (`get_or_load_changelog` / `get_or_load_file_created`) so repeated
+    /// list/read calls on a steady-state board do not re-read every task's
+    /// JSONL changelog and re-stat every entity file. The cache invalidates
+    /// those memoized values on any mutation path that might move them, so
+    /// the injected data always reflects the latest on-disk state without
+    /// paying the per-entity I/O cost on every pass.
     async fn inject_compute_dependencies(
         &self,
         entity_type: &str,
         entity: &mut Entity,
         owned_defs: &[swissarmyhammer_fields::FieldDef],
     ) {
-        if any_field_depends_on(owned_defs, "_changelog") {
+        let want_changelog = any_field_depends_on(owned_defs, "_changelog");
+        let want_file_created = any_field_depends_on(owned_defs, "_file_created");
+        if !want_changelog && !want_file_created {
+            return;
+        }
+
+        if let Some(cache) = self.attached_cache() {
+            // Batched loader — at most one read lock and at most one write
+            // lock per entity, regardless of how many pseudo-fields are
+            // requested. Matters under the 64-way `buffer_unordered` fan-out
+            // used by `apply_compute_batch` where per-entity lock
+            // contention would otherwise dominate.
+            let (changelog, file_created) = cache
+                .get_or_load_compute_inputs(
+                    entity_type,
+                    entity.id.as_str(),
+                    want_changelog,
+                    want_file_created,
+                )
+                .await;
+            if want_changelog {
+                entity.fields.insert("_changelog".to_string(), changelog);
+            }
+            if want_file_created {
+                entity
+                    .fields
+                    .insert("_file_created".to_string(), file_created);
+            }
+            return;
+        }
+
+        // No cache — read from disk on every call. Same serialization
+        // semantics as the cache slow path so cached and uncached lookups
+        // produce identical entity.fields.
+        if want_changelog {
             let entries = self
                 .read_changelog(entity_type, entity.id.as_str())
                 .await
@@ -1022,10 +1509,10 @@ impl EntityContext {
             );
         }
 
-        if any_field_depends_on(owned_defs, "_file_created") {
+        if want_file_created {
             entity.fields.insert(
                 "_file_created".to_string(),
-                self.read_file_created_timestamp(entity_type, entity.id.as_str())
+                self.compute_file_created_timestamp(entity_type, entity.id.as_str())
                     .await,
             );
         }
@@ -1036,7 +1523,16 @@ impl EntityContext {
     /// platform/filesystem doesn't expose btime. Returns `Value::Null` on any
     /// I/O error — this is a backstop signal, so a missing file should not
     /// fail the derivation.
-    async fn read_file_created_timestamp(&self, entity_type: &str, id: &str) -> serde_json::Value {
+    ///
+    /// This is the raw I/O path used both by the direct compute dependency
+    /// injection (when no cache is attached) and by the cache's lazy loader
+    /// (`EntityCache::get_or_load_file_created`). It is `pub(crate)` so the
+    /// cache module can call it without going through the public entity API.
+    pub(crate) async fn compute_file_created_timestamp(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> serde_json::Value {
         let Ok(def) = self.entity_def(entity_type) else {
             return serde_json::Value::Null;
         };
@@ -1056,12 +1552,39 @@ impl EntityContext {
     /// Replaces stored filenames with rich JSON objects containing
     /// id, name, size, mime_type, and absolute path.
     async fn enrich_attachment_fields(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
+        let field_defs: Vec<_> = self
+            .fields
+            .fields_for_entity(entity_type)
+            .into_iter()
+            .cloned()
+            .collect();
+        let entity_type_dir = self.entity_dir(entity_type);
+        self.enrich_attachment_fields_with_defs(entity, &field_defs, &entity_type_dir)
+            .await
+    }
+
+    /// Run attachment enrichment over `entity` using a caller-provided
+    /// field-def slice.
+    ///
+    /// Separated from [`enrich_attachment_fields`] so the batch path in
+    /// [`apply_compute_batch`] can reuse the `FieldDef` Vec it already
+    /// cloned once across every entity — otherwise enrichment would
+    /// re-traverse the `FieldsContext` HashMap for each of the 2000
+    /// entities in a large-board `list()`.
+    ///
+    /// The function is a no-op for entities whose type has no attachment
+    /// fields — callers in the batch path should check
+    /// `owned_defs.iter().any(FieldType::Attachment)` up-front to avoid
+    /// even scheduling this call on the hot path.
+    async fn enrich_attachment_fields_with_defs(
+        &self,
+        entity: &mut Entity,
+        field_defs: &[swissarmyhammer_fields::FieldDef],
+        entity_type_dir: &Path,
+    ) -> Result<()> {
         use serde_json::Value;
 
-        let field_defs = self.fields.fields_for_entity(entity_type);
-        let entity_type_dir = self.entity_dir(entity_type);
-
-        for fd in &field_defs {
+        for fd in field_defs {
             if let FieldType::Attachment { multiple, .. } = &fd.type_ {
                 let Some(value) = entity.fields.get(fd.name.as_str()).cloned() else {
                     continue;
@@ -1077,7 +1600,7 @@ impl EntityContext {
                     for v in filenames {
                         if let Value::String(filename) = v {
                             if let Some(meta) =
-                                io::attachment_metadata(&filename, &entity_type_dir).await
+                                io::attachment_metadata(&filename, entity_type_dir).await
                             {
                                 metadata_arr.push(meta);
                             }
@@ -1085,7 +1608,7 @@ impl EntityContext {
                     }
                     entity.set(fd.name.to_string(), Value::Array(metadata_arr));
                 } else if let Value::String(filename) = value {
-                    if let Some(meta) = io::attachment_metadata(&filename, &entity_type_dir).await {
+                    if let Some(meta) = io::attachment_metadata(&filename, entity_type_dir).await {
                         entity.set(fd.name.to_string(), meta);
                     }
                 }
@@ -3008,5 +3531,121 @@ mod tests {
 
         // All 3 pass because entities.len() == 3 > 2
         assert_eq!(result.len(), 3);
+    }
+
+    // =========================================================================
+    // EntityCache integration tests
+    // =========================================================================
+
+    /// When a cache is attached, `list()` should serve from the in-memory map
+    /// and not hit `io::read_entity_dir` — beyond the single preload call
+    /// issued by `EntityCache::load_all`.
+    #[tokio::test]
+    async fn test_list_hits_cache_not_disk() {
+        use crate::cache::EntityCache;
+        use crate::io::READ_ENTITY_DIR_CALLS;
+        use std::sync::atomic::Ordering;
+
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+
+        // Seed some entities on disk through a bare context.
+        let seed_ctx = EntityContext::new(dir.path(), Arc::clone(&fields));
+        for i in 0..5 {
+            let mut tag = Entity::new("tag", format!("t{i}"));
+            tag.set("tag_name", json!(format!("Tag {i}")));
+            seed_ctx.write(&tag).await.unwrap();
+        }
+        drop(seed_ctx);
+
+        // Build a fresh cache-wired context.
+        let ctx = Arc::new(EntityContext::new(dir.path(), Arc::clone(&fields)));
+        let cache = Arc::new(EntityCache::new(Arc::clone(&ctx)));
+        ctx.attach_cache(&cache);
+
+        // One preload call hits disk.
+        let before = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+        cache.load_all("tag").await.unwrap();
+        let after_load = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+        assert_eq!(
+            after_load - before,
+            1,
+            "load_all should issue exactly one read_entity_dir"
+        );
+
+        // 100 list calls must serve from cache — zero additional disk reads.
+        for _ in 0..100 {
+            let tags = ctx.list("tag").await.unwrap();
+            assert_eq!(tags.len(), 5);
+        }
+
+        let after_list = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+        assert_eq!(
+            after_list - after_load,
+            0,
+            "100 list() calls after load_all must not touch disk"
+        );
+    }
+
+    /// When a cache is attached, `EntityContext::write` delegates to
+    /// `EntityCache::write`, which emits an `EntityChanged` event with the
+    /// field-level diff (the sub-card 1 shape).
+    #[tokio::test]
+    async fn test_write_goes_through_cache_when_attached() {
+        use crate::cache::EntityCache;
+        use crate::events::EntityEvent;
+
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+
+        let ctx = Arc::new(EntityContext::new(dir.path(), Arc::clone(&fields)));
+        let cache = Arc::new(EntityCache::new(Arc::clone(&ctx)));
+        ctx.attach_cache(&cache);
+
+        // Subscribe before the write so we catch the event.
+        let mut rx = cache.subscribe();
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Exactly one EntityChanged event with a non-empty `changes` vec.
+        let evt = rx.try_recv().expect("expected EntityChanged event");
+        match evt {
+            EntityEvent::EntityChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "tag");
+                assert_eq!(id, "bug");
+                assert!(
+                    !changes.is_empty(),
+                    "new entity should report fields in `changes`"
+                );
+            }
+            other => panic!("expected EntityChanged, got {other:?}"),
+        }
+
+        // And the cache is populated — subsequent reads don't hit disk.
+        let cached = cache.get("tag", "bug").await.unwrap();
+        assert_eq!(cached.get_str("tag_name"), Some("Bug"));
+    }
+
+    /// Attaching the cache twice is a programming error — second call panics.
+    #[tokio::test]
+    #[should_panic(expected = "attach_cache called more than once")]
+    async fn test_attach_cache_twice_panics() {
+        use crate::cache::EntityCache;
+
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = Arc::new(EntityContext::new(dir.path(), fields));
+        let cache1 = Arc::new(EntityCache::new(Arc::clone(&ctx)));
+        let cache2 = Arc::new(EntityCache::new(Arc::clone(&ctx)));
+        ctx.attach_cache(&cache1);
+        ctx.attach_cache(&cache2); // should panic
     }
 }

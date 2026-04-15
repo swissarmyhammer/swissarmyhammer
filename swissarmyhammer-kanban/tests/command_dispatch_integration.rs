@@ -899,8 +899,9 @@ async fn reorder_move_to_middle() {
     );
 }
 
-/// The YAML registry must mark task.move as undoable — this is the gate for
-/// flush_and_emit_for_handle to run and emit entity-field-changed events.
+/// The YAML registry must mark task.move as undoable — this is the gate that
+/// lets the write-through `EntityCache` emit `entity-field-changed` events on
+/// commit.
 #[tokio::test]
 async fn task_move_is_undoable_in_registry() {
     let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
@@ -911,12 +912,12 @@ async fn task_move_is_undoable_in_registry() {
     );
     assert!(
         cmd_def.unwrap().undoable,
-        "task.move must be marked undoable so flush_and_emit fires events"
+        "task.move must be marked undoable so the write-through cache emits entity-field-changed events on commit"
     );
 }
 
 /// After task.move, the task's .md file on disk must have the updated position_ordinal.
-/// This is the precondition for flush_and_emit to detect the change and fire events.
+/// This is the precondition for the cache diff to detect the change and fire events.
 #[tokio::test]
 async fn task_move_writes_new_ordinal_to_disk() {
     let engine = TestEngine::new().await;
@@ -1482,8 +1483,8 @@ async fn task_untag_with_legacy_written_files() {
 }
 
 /// After task.move, `StoreContext.flush_all()` must return at least one
-/// "item-changed" event for the moved task.  This is the mechanism that
-/// `flush_and_emit_for_handle` relies on to emit `entity-field-changed`
+/// "item-changed" event for the moved task.  This is the mechanism the
+/// write-through `EntityCache` relies on to emit `entity-field-changed`
 /// events to the frontend.
 #[tokio::test]
 async fn task_move_produces_store_event_via_flush_all() {

@@ -147,246 +147,370 @@ impl Command for DragCompleteCmd {
     /// Takes the active drag session, checks if same-board or cross-board,
     /// performs the operation, and returns a `DragComplete` result payload.
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let ui = ctx
-            .ui_state
-            .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
-
-        let session = ui
-            .take_drag()
-            .ok_or_else(|| CommandError::ExecutionFailed("No active drag session".into()))?;
-
-        // Derive target board path from scope chain's store:{path} moniker.
-        // Falls back to explicit targetBoardPath arg for backwards compatibility.
-        let target_board_path = ctx
-            .resolve_store_path()
-            .map(|s| s.to_string())
-            .or_else(|| {
-                ctx.args
-                    .get("targetBoardPath")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .ok_or_else(|| {
-                CommandError::ExecutionFailed(
-                    "No store path in scope chain and no targetBoardPath arg".into(),
-                )
-            })?;
-
-        let target_column = ctx
-            .args
-            .get("targetColumn")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("targetColumn".into()))?
-            .to_string();
-
-        let drop_index = ctx.args.get("dropIndex").and_then(|v| v.as_u64());
-        let before_id = ctx
-            .args
-            .get("beforeId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let after_id = ctx
-            .args
-            .get("afterId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let copy_mode = ctx
-            .args
-            .get("copyMode")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Combine frontend copy_mode with session copy_mode — either can request a copy
-        let effective_copy_mode = copy_mode || session.copy_mode;
-
-        if session.source_board_path == target_board_path {
-            // Same-board: perform task.move directly using KanbanContext extension.
-            // This mirrors the logic in dispatch_command_internal (same-board path).
-            let kanban = ctx.require_extension::<crate::context::KanbanContext>()?;
-
-            let mut op =
-                crate::task::MoveTask::to_column(session.task_id.clone(), target_column.clone());
-
-            // Ordinal resolution: before_id/after_id > drop_index > append at end
-            if before_id.is_some() || after_id.is_some() {
-                use crate::types::Ordinal;
-
-                let ectx = kanban
-                    .entity_context()
-                    .await
-                    .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-                let all_tasks = ectx
-                    .list("task")
-                    .await
-                    .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-                // Sort tasks in target column, excluding the moving task
-                let mut col_tasks: Vec<_> = all_tasks
-                    .into_iter()
-                    .filter(|t| {
-                        t.get_str("position_column") == Some(&target_column)
-                            && t.id.as_str() != session.task_id.as_str()
-                    })
-                    .collect();
-                col_tasks.sort_by(|a, b| {
-                    let oa = a
-                        .get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR);
-                    let ob = b
-                        .get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR);
-                    oa.cmp(ob)
-                });
-
-                let ordinal = if let Some(ref ref_id) = before_id {
-                    let ref_idx = col_tasks
-                        .iter()
-                        .position(|t| t.id.as_str() == ref_id.as_str());
-                    match ref_idx {
-                        Some(0) => {
-                            let ref_ord = Ordinal::from_string(
-                                col_tasks[0]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
-                        }
-                        Some(idx) => {
-                            let pred_ord = Ordinal::from_string(
-                                col_tasks[idx - 1]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            let ref_ord = Ordinal::from_string(
-                                col_tasks[idx]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            crate::task_helpers::compute_ordinal_for_neighbors(
-                                Some(&pred_ord),
-                                Some(&ref_ord),
-                            )
-                        }
-                        None => crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        ),
-                    }
-                } else if let Some(ref ref_id) = after_id {
-                    let ref_idx = col_tasks
-                        .iter()
-                        .position(|t| t.id.as_str() == ref_id.as_str());
-                    match ref_idx {
-                        Some(idx) if idx == col_tasks.len() - 1 => {
-                            let ref_ord = Ordinal::from_string(
-                                col_tasks[idx]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
-                        }
-                        Some(idx) => {
-                            let ref_ord = Ordinal::from_string(
-                                col_tasks[idx]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            let succ_ord = Ordinal::from_string(
-                                col_tasks[idx + 1]
-                                    .get_str("position_ordinal")
-                                    .unwrap_or(Ordinal::DEFAULT_STR),
-                            );
-                            crate::task_helpers::compute_ordinal_for_neighbors(
-                                Some(&ref_ord),
-                                Some(&succ_ord),
-                            )
-                        }
-                        None => crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        ),
-                    }
-                } else {
-                    crate::task_helpers::compute_ordinal_for_neighbors(None, None)
-                };
-
-                op = op.with_ordinal(ordinal.as_str());
-            } else if let Some(idx) = drop_index {
-                let all_tasks = kanban
-                    .list_entities_generic("task")
-                    .await
-                    .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-                let mut column_tasks: Vec<_> = all_tasks
-                    .into_iter()
-                    .filter(|t| {
-                        t.get_str("position_column") == Some(&target_column)
-                            && t.id != session.task_id
-                    })
-                    .collect();
-                column_tasks.sort_by(|a, b| {
-                    let oa = a
-                        .get_str("position_ordinal")
-                        .unwrap_or(crate::types::Ordinal::DEFAULT_STR);
-                    let ob = b
-                        .get_str("position_ordinal")
-                        .unwrap_or(crate::types::Ordinal::DEFAULT_STR);
-                    oa.cmp(ob)
-                });
-                let ordinal =
-                    crate::task_helpers::compute_ordinal_for_drop(&column_tasks, idx as usize);
-                op = op.with_ordinal(ordinal.as_str());
-            }
-
-            let move_result = super::run_op(&op, &kanban).await?;
-
-            Ok(json!({
-                "DragComplete": {
-                    "session_id": session.session_id,
-                    "same_board": true,
-                    "task_id": session.task_id,
-                    "target_column": target_column,
-                    "move_result": move_result,
-                }
-            }))
+        let params = resolve_drag_complete_params(ctx)?;
+        if params.session.source_board_path == params.target_board_path {
+            complete_same_board(ctx, params).await
         } else {
-            // Cross-board: return transfer parameters for Tauri layer to handle.
-            // The Tauri dispatch handler will call cross_board::transfer_task()
-            // with both board handles, then call flush_and_emit for both boards.
-            Ok(json!({
-                "DragComplete": {
-                    "session_id": session.session_id,
-                    "same_board": false,
-                    "cross_board": true,
-                    "source_board_path": session.source_board_path,
-                    "target_board_path": target_board_path,
-                    "task_id": session.task_id,
-                    "target_column": target_column,
-                    "drop_index": drop_index,
-                    "before_id": before_id,
-                    "after_id": after_id,
-                    "copy_mode": effective_copy_mode,
-                }
-            }))
+            Ok(build_cross_board_payload(params))
         }
     }
+}
+
+/// Resolved parameters for a drag-complete invocation.
+///
+/// Bundles the active `DragSession` with the drop-target args extracted from
+/// `CommandContext`, including the `effective_copy_mode` which combines the
+/// session's initial copy flag with the frontend's drop-time flag (either
+/// can trigger a copy).
+struct DragCompleteParams {
+    session: DragSession,
+    target_board_path: String,
+    target_column: String,
+    drop_index: Option<u64>,
+    before_id: Option<String>,
+    after_id: Option<String>,
+    effective_copy_mode: bool,
+}
+
+/// Validate the command context and extract drag-complete parameters.
+///
+/// Returns an error if `UIState` is missing, there is no active drag
+/// session, the target board path cannot be resolved from the scope chain
+/// or args, or the required `targetColumn` arg is absent.
+fn resolve_drag_complete_params(
+    ctx: &CommandContext,
+) -> swissarmyhammer_commands::Result<DragCompleteParams> {
+    let session = take_active_drag_session(ctx)?;
+    let target_board_path = resolve_target_board_path(ctx)?;
+    let target_column = ctx
+        .args
+        .get("targetColumn")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CommandError::MissingArg("targetColumn".into()))?
+        .to_string();
+    let (drop_index, before_id, after_id, copy_mode) = read_drop_target_args(ctx);
+
+    // Combine frontend copy_mode with session copy_mode — either can request a copy
+    let effective_copy_mode = copy_mode || session.copy_mode;
+
+    Ok(DragCompleteParams {
+        session,
+        target_board_path,
+        target_column,
+        drop_index,
+        before_id,
+        after_id,
+        effective_copy_mode,
+    })
+}
+
+/// Take the currently-active drag session from `UIState`.
+///
+/// Errors when `UIState` is not attached to the command context (e.g. a
+/// non-Tauri caller) or when no session is currently pending.
+fn take_active_drag_session(ctx: &CommandContext) -> swissarmyhammer_commands::Result<DragSession> {
+    let ui = ctx
+        .ui_state
+        .as_ref()
+        .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+    ui.take_drag()
+        .ok_or_else(|| CommandError::ExecutionFailed("No active drag session".into()))
+}
+
+/// Resolve the target board path from the scope chain's `store:{path}`
+/// moniker, falling back to the explicit `targetBoardPath` arg for
+/// backwards compatibility.
+fn resolve_target_board_path(ctx: &CommandContext) -> swissarmyhammer_commands::Result<String> {
+    ctx.resolve_store_path()
+        .map(|s| s.to_string())
+        .or_else(|| {
+            ctx.args
+                .get("targetBoardPath")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| {
+            CommandError::ExecutionFailed(
+                "No store path in scope chain and no targetBoardPath arg".into(),
+            )
+        })
+}
+
+/// Read the optional drop-target args: `dropIndex`, `beforeId`, `afterId`,
+/// and `copyMode`. Missing values produce `None`/`false`.
+fn read_drop_target_args(
+    ctx: &CommandContext,
+) -> (Option<u64>, Option<String>, Option<String>, bool) {
+    let drop_index = ctx.args.get("dropIndex").and_then(|v| v.as_u64());
+    let before_id = ctx
+        .args
+        .get("beforeId")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let after_id = ctx
+        .args
+        .get("afterId")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let copy_mode = ctx
+        .args
+        .get("copyMode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    (drop_index, before_id, after_id, copy_mode)
+}
+
+/// Execute the same-board drag path: perform the `task.move` directly via
+/// the `KanbanContext` extension and return the `DragComplete` payload.
+///
+/// Mirrors the logic in `dispatch_command_internal`'s same-board path.
+async fn complete_same_board(
+    ctx: &CommandContext,
+    params: DragCompleteParams,
+) -> swissarmyhammer_commands::Result<Value> {
+    let kanban = ctx.require_extension::<crate::context::KanbanContext>()?;
+
+    let mut op = crate::task::MoveTask::to_column(
+        params.session.task_id.clone(),
+        params.target_column.clone(),
+    );
+
+    // Ordinal resolution: before_id/after_id > drop_index > append at end
+    if params.before_id.is_some() || params.after_id.is_some() {
+        let ordinal = resolve_ordinal_from_neighbors(
+            &kanban,
+            &params.session.task_id,
+            &params.target_column,
+            params.before_id.as_deref(),
+            params.after_id.as_deref(),
+        )
+        .await?;
+        op = op.with_ordinal(ordinal.as_str());
+    } else if let Some(idx) = params.drop_index {
+        let ordinal = resolve_ordinal_from_drop_index(
+            &kanban,
+            &params.session.task_id,
+            &params.target_column,
+            idx as usize,
+        )
+        .await?;
+        op = op.with_ordinal(ordinal.as_str());
+    }
+
+    let move_result = super::run_op(&op, &kanban).await?;
+
+    Ok(json!({
+        "DragComplete": {
+            "session_id": params.session.session_id,
+            "same_board": true,
+            "task_id": params.session.task_id,
+            "target_column": params.target_column,
+            "move_result": move_result,
+        }
+    }))
+}
+
+/// Compute the ordinal for an insert anchored on a neighbouring task id.
+///
+/// Loads the target column's tasks (excluding the moving task), sorts them
+/// by existing ordinal, then picks a fresh ordinal using
+/// `compute_ordinal_for_neighbors`. `before_id` wins over `after_id` when
+/// both are set; unknown reference ids fall through to "append at end".
+async fn resolve_ordinal_from_neighbors(
+    kanban: &crate::context::KanbanContext,
+    moving_task_id: &str,
+    target_column: &str,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
+) -> swissarmyhammer_commands::Result<crate::types::Ordinal> {
+    let ectx = kanban
+        .entity_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+    let all_tasks = ectx
+        .list("task")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+    let col_tasks = sort_column_tasks(all_tasks, target_column, moving_task_id);
+
+    let ordinal = if let Some(ref_id) = before_id {
+        ordinal_before(&col_tasks, ref_id)
+    } else if let Some(ref_id) = after_id {
+        ordinal_after(&col_tasks, ref_id)
+    } else {
+        crate::task_helpers::compute_ordinal_for_neighbors(None, None)
+    };
+    Ok(ordinal)
+}
+
+/// Filter `all_tasks` to tasks in `target_column` (excluding
+/// `moving_task_id`) and sort them ascending by `position_ordinal`.
+fn sort_column_tasks(
+    all_tasks: Vec<swissarmyhammer_entity::Entity>,
+    target_column: &str,
+    moving_task_id: &str,
+) -> Vec<swissarmyhammer_entity::Entity> {
+    use crate::types::Ordinal;
+    let mut col_tasks: Vec<_> = all_tasks
+        .into_iter()
+        .filter(|t| {
+            t.get_str("position_column") == Some(target_column) && t.id.as_str() != moving_task_id
+        })
+        .collect();
+    col_tasks.sort_by(|a, b| {
+        let oa = a
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        let ob = b
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        oa.cmp(ob)
+    });
+    col_tasks
+}
+
+/// Compute an ordinal slotting the moving task immediately before
+/// `ref_id`. When `ref_id` is unknown, appends at the end of the column.
+fn ordinal_before(
+    col_tasks: &[swissarmyhammer_entity::Entity],
+    ref_id: &str,
+) -> crate::types::Ordinal {
+    use crate::types::Ordinal;
+    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+    match ref_idx {
+        Some(0) => {
+            let ref_ord = Ordinal::from_string(
+                col_tasks[0]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
+        }
+        Some(idx) => {
+            let pred_ord = Ordinal::from_string(
+                col_tasks[idx - 1]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            let ref_ord = Ordinal::from_string(
+                col_tasks[idx]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
+        }
+        None => append_ordinal(col_tasks),
+    }
+}
+
+/// Compute an ordinal slotting the moving task immediately after
+/// `ref_id`. When `ref_id` is unknown, appends at the end of the column.
+fn ordinal_after(
+    col_tasks: &[swissarmyhammer_entity::Entity],
+    ref_id: &str,
+) -> crate::types::Ordinal {
+    use crate::types::Ordinal;
+    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+    match ref_idx {
+        Some(idx) if idx == col_tasks.len() - 1 => {
+            let ref_ord = Ordinal::from_string(
+                col_tasks[idx]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
+        }
+        Some(idx) => {
+            let ref_ord = Ordinal::from_string(
+                col_tasks[idx]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            let succ_ord = Ordinal::from_string(
+                col_tasks[idx + 1]
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
+        }
+        None => append_ordinal(col_tasks),
+    }
+}
+
+/// Compute an ordinal that appends to the end of `col_tasks`.
+fn append_ordinal(col_tasks: &[swissarmyhammer_entity::Entity]) -> crate::types::Ordinal {
+    use crate::types::Ordinal;
+    crate::task_helpers::compute_ordinal_for_neighbors(
+        col_tasks
+            .last()
+            .map(|t| {
+                Ordinal::from_string(
+                    t.get_str("position_ordinal")
+                        .unwrap_or(Ordinal::DEFAULT_STR),
+                )
+            })
+            .as_ref(),
+        None,
+    )
+}
+
+/// Compute the ordinal for an insert at `drop_index` within the target
+/// column, using `compute_ordinal_for_drop`.
+async fn resolve_ordinal_from_drop_index(
+    kanban: &crate::context::KanbanContext,
+    moving_task_id: &str,
+    target_column: &str,
+    drop_index: usize,
+) -> swissarmyhammer_commands::Result<crate::types::Ordinal> {
+    use crate::types::Ordinal;
+    let all_tasks = kanban
+        .list_entities_generic("task")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let mut column_tasks: Vec<_> = all_tasks
+        .into_iter()
+        .filter(|t| {
+            t.get_str("position_column") == Some(target_column) && t.id.as_str() != moving_task_id
+        })
+        .collect();
+    column_tasks.sort_by(|a, b| {
+        let oa = a
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        let ob = b
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        oa.cmp(ob)
+    });
+    Ok(crate::task_helpers::compute_ordinal_for_drop(
+        &column_tasks,
+        drop_index,
+    ))
+}
+
+/// Build the cross-board `DragComplete` payload.
+///
+/// Cross-board transfers are executed by the Tauri dispatch handler (which
+/// has both board handles). This helper just packages the parameters the
+/// handler needs.
+fn build_cross_board_payload(params: DragCompleteParams) -> Value {
+    json!({
+        "DragComplete": {
+            "session_id": params.session.session_id,
+            "same_board": false,
+            "cross_board": true,
+            "source_board_path": params.session.source_board_path,
+            "target_board_path": params.target_board_path,
+            "task_id": params.session.task_id,
+            "target_column": params.target_column,
+            "drop_index": params.drop_index,
+            "before_id": params.before_id,
+            "after_id": params.after_id,
+            "copy_mode": params.effective_copy_mode,
+        }
+    })
 }
 
 /// Cancel the active drag session.

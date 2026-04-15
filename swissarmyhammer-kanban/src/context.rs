@@ -13,7 +13,7 @@ use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
-use swissarmyhammer_entity::{Entity, EntityContext};
+use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
 use swissarmyhammer_perspectives::PerspectiveContext;
 use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
@@ -33,6 +33,21 @@ pub struct KanbanContext {
     /// Entity I/O coordinator — lazy-initialized on first access, wrapped in Arc
     /// so it can be shared as a CommandContext extension independently of KanbanContext.
     entities: OnceCell<Arc<EntityContext>>,
+    /// In-memory entity cache — lazy-initialized alongside `entities` on the
+    /// first `entity_context()` call, with `load_all` invoked for every
+    /// registered entity type. Exposed via `entity_cache()` so app layers
+    /// can subscribe to `EntityEvent` broadcasts. The cache is wired back
+    /// into `entities` via `EntityContext::attach_cache`, so reads/writes
+    /// through `entity_context()` automatically route through it.
+    entity_cache: OnceCell<Arc<EntityCache>>,
+    /// File-system watcher that pushes external `.kanban/` changes into the
+    /// cache via `refresh_from_disk`/`evict` and forwards attachment events
+    /// onto the cache's broadcast channel. Constructed lazily inside
+    /// `entity_context()` so the cache exists before the watcher can route
+    /// events into it. Held in an `OnceCell` — once spawned, the watcher's
+    /// lifetime is tied to the `KanbanContext`'s; dropping the context
+    /// triggers the watcher's `Drop` which sends its shutdown signal.
+    entity_watcher: OnceCell<EntityWatcher>,
     /// View registry (populated via `open()`, None when created via `new()`)
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
@@ -69,6 +84,8 @@ impl KanbanContext {
             context_name,
             fields: None,
             entities: OnceCell::new(),
+            entity_cache: OnceCell::new(),
+            entity_watcher: OnceCell::new(),
             views: None,
             views_changelog: None,
             perspectives: OnceCell::new(),
@@ -88,9 +105,11 @@ impl KanbanContext {
         fs::create_dir_all(root.join("definitions")).await?;
         fs::create_dir_all(root.join("entities")).await?;
 
-        let (fields, entities) = Self::build_entity_context(&root)?;
+        // Build the field registry eagerly so callers of `fields()` see a
+        // populated Some. The entity context stays lazy — `entity_context()`
+        // performs store registration + cache preload on first access.
+        let (fields, _entities) = Self::build_entity_context(&root)?;
         let cell = OnceCell::new();
-        cell.set(Arc::new(entities)).ok();
 
         // Build views context: seed builtins to disk (if not present), then load all
         let views_root = root.join("views");
@@ -114,6 +133,8 @@ impl KanbanContext {
             context_name,
             fields: Some(fields),
             entities: cell,
+            entity_cache: OnceCell::new(),
+            entity_watcher: OnceCell::new(),
             views: Some(RwLock::new(views)),
             views_changelog: Some(views_changelog),
             perspectives: persp_cell,
@@ -376,6 +397,12 @@ impl KanbanContext {
     /// this, computed fields that depend on `_changelog` (like `created`,
     /// `updated`, `started`, `completed`) would never see any history.
     ///
+    /// Also constructs an [`EntityCache`] wrapping the entity context,
+    /// preloads every registered entity type via `load_all`, and attaches
+    /// the cache back onto the context so `list`, `read`, and `write`
+    /// automatically route through it. The cache is exposed separately via
+    /// [`entity_cache`] for subscribers that want the `EntityEvent` stream.
+    ///
     /// Returns `Arc<EntityContext>` so it can be set as a direct extension on
     /// `CommandContext` without going through `KanbanContext`.
     pub async fn entity_context(&self) -> Result<Arc<EntityContext>> {
@@ -385,10 +412,65 @@ impl KanbanContext {
                 let (_fields, entities) = Self::build_entity_context(&self.root)?;
                 let entities = Arc::new(entities);
                 Self::register_entity_stores(&entities).await;
+
+                // Construct the cache around the same `Arc<EntityContext>`,
+                // preload every registered entity type, then wire it back
+                // onto the context so subsequent list/read/write calls
+                // serve from memory.
+                let cache = Arc::new(EntityCache::new(Arc::clone(&entities)));
+                let fields_ctx = entities.fields();
+                for entity_def in fields_ctx.all_entities() {
+                    let entity_type = entity_def.name.as_str();
+                    if !is_safe_entity_type(entity_type) {
+                        continue;
+                    }
+                    cache
+                        .load_all(entity_type)
+                        .await
+                        .map_err(|e| KanbanError::FieldsError(e.to_string()))?;
+                }
+                entities.attach_cache(&cache);
+
+                // Install into the cache cell so `entity_cache()` can hand
+                // out the same Arc. `set` is infallible on an empty cell.
+                let _ = self.entity_cache.set(Arc::clone(&cache));
+
+                // Spawn a file-system watcher against the kanban root. Every
+                // external file change (entity or attachment) routes through
+                // the cache — entity edits via `refresh_from_disk`/`evict`,
+                // attachments via `send_attachment_event` — so subscribers
+                // observe a single unified stream regardless of whether the
+                // write came from a command or an outside editor.
+                //
+                // Failure is logged but not fatal: the cache is still usable
+                // for read/write, the app simply won't observe external edits.
+                match EntityWatcher::start(self.root.clone(), Arc::clone(&cache)) {
+                    Ok(watcher) => {
+                        let _ = self.entity_watcher.set(watcher);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            root = %self.root.display(),
+                            error = %e,
+                            "failed to start entity watcher — external file changes will not propagate"
+                        );
+                    }
+                }
+
                 Ok::<Arc<EntityContext>, KanbanError>(entities)
             })
             .await?;
         Ok(Arc::clone(ectx))
+    }
+
+    /// Return the in-memory entity cache wired to the entity context.
+    ///
+    /// Returns `None` until `entity_context()` has been called at least once,
+    /// after which it returns the same `Arc<EntityCache>` that is attached
+    /// to the context. Callers use this to subscribe to `EntityEvent`
+    /// broadcasts without going through the full `EntityContext` facade.
+    pub fn entity_cache(&self) -> Option<Arc<EntityCache>> {
+        self.entity_cache.get().map(Arc::clone)
     }
 
     /// Register an `EntityTypeStore`-backed `StoreHandle` for every entity
@@ -921,6 +1003,121 @@ type:
         ctx.create_directories().await.unwrap();
         // entity_context() lazy-initializes even without explicit open()
         assert!(ctx.entity_context().await.is_ok());
+    }
+
+    /// When `entity_context()` runs for the first time it must preload the
+    /// cache with every entity type registered by the fields context, and
+    /// subsequent reads should serve from memory without hitting disk.
+    #[tokio::test]
+    async fn test_entity_cache_preloads_all_types() {
+        use std::sync::atomic::Ordering;
+        use swissarmyhammer_entity::io::READ_ENTITY_DIR_CALLS;
+
+        let (_temp, ctx) = setup_with_fields().await;
+
+        // Seed a task, a tag, and a column directly on disk via a bare
+        // context so we have something the cache can preload.
+        let ectx_seed = ctx.entity_context().await.unwrap();
+
+        let mut task = Entity::new("task", "01PRELOAD");
+        task.set("title", serde_json::json!("Preload test"));
+        ectx_seed.write(&task).await.unwrap();
+
+        let mut tag = Entity::new("tag", "preload-bug");
+        tag.set("tag_name", serde_json::json!("Bug"));
+        tag.set("color", serde_json::json!("#ff0000"));
+        ectx_seed.write(&tag).await.unwrap();
+
+        let mut col = Entity::new("column", "col-a");
+        col.set("column_name", serde_json::json!("Col A"));
+        col.set("column_order", serde_json::json!(0));
+        ectx_seed.write(&col).await.unwrap();
+
+        // Drop this context reference so the cache cell initialization below
+        // is not racing with it.
+        drop(ectx_seed);
+
+        // Open a fresh KanbanContext over the same directory so the cache
+        // is built from scratch and we can count read_entity_dir calls.
+        let fresh_ctx = KanbanContext::open(_temp.path().join(".kanban"))
+            .await
+            .unwrap();
+
+        let before = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+        let _ = fresh_ctx.entity_context().await.unwrap();
+        let after_init = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+
+        // Preload must hit disk at least once per registered entity type.
+        // The compute engine may read neighboring types while deriving
+        // aggregate fields (e.g. virtual tag counts), so the exact call
+        // count is a per-compute-graph detail. What matters here is that
+        // the preload succeeded and populated the cache.
+        let registered_types = fresh_ctx.fields().unwrap().all_entities().len();
+        assert!(
+            after_init - before >= registered_types,
+            "cache preload should touch disk for every registered entity type (got {} calls for {} types)",
+            after_init - before,
+            registered_types,
+        );
+
+        let cache = fresh_ctx.entity_cache().expect("cache should be populated");
+
+        // The seeded entities must be present in their respective caches.
+        let tasks = cache.get_all("task").await;
+        assert!(
+            tasks.iter().any(|t| t.id == "01PRELOAD"),
+            "preload should have loaded the seeded task"
+        );
+        let tags = cache.get_all("tag").await;
+        assert!(
+            tags.iter().any(|t| t.id == "preload-bug"),
+            "preload should have loaded the seeded tag"
+        );
+        let cols = cache.get_all("column").await;
+        assert!(
+            cols.iter().any(|c| c.id == "col-a"),
+            "preload should have loaded the seeded column"
+        );
+
+        // No additional disk reads beyond the preload — every get_all served
+        // from memory.
+        let after_reads = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
+        assert_eq!(
+            after_reads, after_init,
+            "cache.get_all() calls must not hit disk after preload"
+        );
+    }
+
+    /// `entity_cache()` returns the same `Arc<EntityCache>` that is attached
+    /// to the context produced by `entity_context()`.
+    #[tokio::test]
+    async fn test_entity_cache_shared_with_entity_context() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        // Before init, cache is None.
+        assert!(ctx.entity_cache().is_none());
+
+        // After first entity_context() call, the cache is populated.
+        let _ = ctx.entity_context().await.unwrap();
+        let cache = ctx.entity_cache().expect("cache should be initialized");
+
+        // Subscribing and writing through the context should produce an event
+        // on the cache's broadcast channel — proving they share state.
+        let mut rx = cache.subscribe();
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut tag = Entity::new("tag", "share-test");
+        tag.set("tag_name", serde_json::json!("Shared"));
+        ectx.write(&tag).await.unwrap();
+
+        let evt = rx
+            .try_recv()
+            .expect("write through context should reach cache subscribers");
+        match evt {
+            swissarmyhammer_entity::EntityEvent::EntityChanged { id, .. } => {
+                assert_eq!(id, "share-test");
+            }
+            other => panic!("expected EntityChanged, got {other:?}"),
+        }
     }
 
     #[tokio::test]

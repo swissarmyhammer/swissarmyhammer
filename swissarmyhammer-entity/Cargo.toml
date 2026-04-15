@@ -25,6 +25,7 @@ swissarmyhammer-store = { workspace = true }
 diffy = { workspace = true }
 mime_guess = "2"
 notify = { workspace = true }
+indexmap = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [features]

@@ -4,7 +4,6 @@
 mod cli;
 mod commands;
 mod deeplink;
-mod enrichment;
 mod menu;
 mod state;
 mod tauri_reporter;

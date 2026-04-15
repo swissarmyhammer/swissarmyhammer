@@ -6,6 +6,11 @@ type:
   derive: parse-body-tags
   entity: tag
   commit_display_names: true
+  # Declare the cross-entity dependency so any tag mutation invalidates
+  # the cached `tags` values on all tasks — this is what the derived-output
+  # cache consults via `FieldsContext::entity_types_depending_on`.
+  depends_on:
+    - tag
 icon: tag
 editor: multi-select
 display: badge-list

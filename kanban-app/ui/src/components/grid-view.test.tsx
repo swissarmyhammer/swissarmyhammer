@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, vi } from "vitest";
+import { render, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -53,7 +53,11 @@ vi.mock("@/lib/schema-context", () => ({
     schemas: {},
     loading: false,
   }),
-  useSchemaOptional: () => undefined,
+  useSchemaOptional: () => ({
+    getSchema: () => undefined,
+    getFieldDef: () => undefined,
+    getEntityCommands: () => [],
+  }),
 }));
 
 vi.mock("@/lib/entity-store-context", () => ({
@@ -103,7 +107,7 @@ import { GridView } from "./grid-view";
 // ---------------------------------------------------------------------------
 
 describe("GridView", () => {
-  it("renders without crash when activePerspective is null", () => {
+  it("renders without crash when activePerspective is null", async () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: null,
 
@@ -111,8 +115,12 @@ describe("GridView", () => {
       groupField: undefined,
     });
 
-    // Should not throw ReferenceError: activePerspective is not defined
-    expect(() =>
+    // Should not throw ReferenceError: activePerspective is not defined.
+    // Wrap render + a microtask flush in async act() so the post-mount
+    // setVisibleRowCount effect in DataTable settles inside the test's
+    // act() scope instead of emitting an "update was not wrapped in act(...)"
+    // warning.
+    await act(async () => {
       render(
         <GridView
           view={{
@@ -122,11 +130,11 @@ describe("GridView", () => {
             entity_type: "task",
           }}
         />,
-      ),
-    ).not.toThrow();
+      );
+    });
   });
 
-  it("renders without crash when activePerspective has sort entries", () => {
+  it("renders without crash when activePerspective has sort entries", async () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: {
         id: "p1",
@@ -138,7 +146,7 @@ describe("GridView", () => {
       groupField: undefined,
     });
 
-    expect(() =>
+    await act(async () => {
       render(
         <GridView
           view={{
@@ -148,7 +156,7 @@ describe("GridView", () => {
             entity_type: "task",
           }}
         />,
-      ),
-    ).not.toThrow();
+      );
+    });
   });
 });
