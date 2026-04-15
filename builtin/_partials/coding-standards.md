@@ -4,6 +4,8 @@ description: Shared coding standards for all agents
 partial: true
 ---
 
+{% render '_partials/validators' %}
+
 ## Code Quality
 
 **Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
