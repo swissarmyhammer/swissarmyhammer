@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d580
+position_column: review
+position_ordinal: '80'
 title: Reduce cognitive complexity in EntityContext (context.rs)
 ---
 ## What
@@ -33,8 +33,8 @@ Refactor each function to reduce nesting and branching without changing behavior
 
 ## Acceptance Criteria
 
-- [ ] All five functions are at or below 3-level nesting
-- [ ] No behavioral changes — all existing tests pass
-- [ ] `code-quality:cognitive-complexity` validator passes
+- [x] All five functions are at or below 3-level nesting
+- [x] No behavioral changes — all existing tests pass
+- [x] `code-quality:cognitive-complexity` validator passes
 
 #refactor

@@ -330,50 +330,62 @@ impl EntityContext {
             .get(entity.entity_type.as_str())
             .cloned();
 
-        if let Some(sh) = store_handle {
-            let entry_id = sh.write(&entity).await?;
-
-            // Append a legacy field-level changelog entry so that the activity
-            // log (which reads per-entity JSONL) continues to work even when
-            // I/O is delegated to a StoreHandle.
-            if entry_id.is_some() {
-                let is_create = previous.is_none();
-                let op = if is_create { "create" } else { "update" };
-                let changes = if let Some(ref old) = previous {
-                    changelog::diff_entities(old, &entity)
-                } else {
-                    entity
-                        .fields
-                        .iter()
-                        .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-                        .collect()
-                };
-                if !changes.is_empty() {
-                    let entry = ChangeEntry::new(
-                        entity.entity_type.as_str(),
-                        entity.id.as_str(),
-                        op,
-                        changes,
-                    );
-                    let log_path = path.with_extension("jsonl");
-                    changelog::append_changelog(&log_path, &entry).await?;
-                }
-            }
-
-            // Push onto the shared undo stack if a StoreContext is available
-            if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
-                let is_create = previous.is_none();
-                let op = if is_create { "create" } else { "update" };
-                let label = format!("{} {} {}", op, entity.entity_type, entity.id);
-                let item_id = StoredItemId::from(entity.id.as_str());
-                sc.push(*eid, label, item_id).await;
-            }
-            Ok(entry_id)
-        } else {
+        let Some(sh) = store_handle else {
             // Fallback for tests or entity types without a registered store
             io::write_entity(&path, &entity, def).await?;
-            Ok(None)
+            return Ok(None);
+        };
+
+        let entry_id = sh.write(&entity).await?;
+
+        // Append a legacy field-level changelog entry so that the activity
+        // log (which reads per-entity JSONL) continues to work even when
+        // I/O is delegated to a StoreHandle.
+        if entry_id.is_some() {
+            self.append_write_changelog(&entity, previous.as_ref(), &path)
+                .await?;
         }
+
+        // Push onto the shared undo stack if a StoreContext is available
+        if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
+            let is_create = previous.is_none();
+            let op = if is_create { "create" } else { "update" };
+            let label = format!("{} {} {}", op, entity.entity_type, entity.id);
+            let item_id = StoredItemId::from(entity.id.as_str());
+            sc.push(*eid, label, item_id).await;
+        }
+        Ok(entry_id)
+    }
+
+    /// Append a field-level changelog entry for a write operation.
+    ///
+    /// Computes the diff between the previous entity state and the current
+    /// one (or treats all fields as `Set` for creates) and appends the
+    /// resulting `ChangeEntry` to the entity's JSONL changelog.
+    async fn append_write_changelog(
+        &self,
+        entity: &Entity,
+        previous: Option<&Entity>,
+        path: &Path,
+    ) -> Result<()> {
+        let is_create = previous.is_none();
+        let op = if is_create { "create" } else { "update" };
+        let changes = if let Some(old) = previous {
+            changelog::diff_entities(old, entity)
+        } else {
+            entity
+                .fields
+                .iter()
+                .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+                .collect()
+        };
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let entry = ChangeEntry::new(entity.entity_type.as_str(), entity.id.as_str(), op, changes);
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &entry).await?;
+        Ok(())
     }
 
     /// Delete an entity by type and ID.
@@ -937,35 +949,38 @@ impl EntityContext {
             }
         }
 
-        // Apply defaults for missing fields
+        // Apply defaults for missing non-computed fields
         for fd in &field_defs {
             if matches!(&fd.type_, FieldType::Computed { .. }) {
                 continue;
             }
-            if !entity.fields.contains_key(fd.name.as_str()) {
-                if let Some(ref default) = fd.default {
-                    entity.set(fd.name.to_string(), default.clone());
-                }
+            if entity.fields.contains_key(fd.name.as_str()) {
+                continue;
             }
+            let Some(ref default) = fd.default else {
+                continue;
+            };
+            entity.set(fd.name.to_string(), default.clone());
         }
 
         // Process attachment fields — copy source files, validate sizes.
         let entity_type_dir = self.entity_dir(&entity_type);
         for fd in &field_defs {
-            if let FieldType::Attachment {
+            let FieldType::Attachment {
                 max_bytes,
                 multiple,
             } = &fd.type_
-            {
-                self.process_attachment_field(
-                    &mut entity,
-                    fd.name.as_str(),
-                    *max_bytes,
-                    *multiple,
-                    &entity_type_dir,
-                )
-                .await?;
-            }
+            else {
+                continue;
+            };
+            self.process_attachment_field(
+                &mut entity,
+                fd.name.as_str(),
+                *max_bytes,
+                *multiple,
+                &entity_type_dir,
+            )
+            .await?;
         }
 
         // Validate fields
@@ -1031,88 +1046,110 @@ impl EntityContext {
             return Ok(());
         };
 
-        if multiple {
-            // Array of attachment values
-            let values = match value {
-                Value::Array(arr) => arr,
-                Value::Null => return Ok(()),
-                // Single value provided for a multiple field — wrap in array
-                other => vec![other],
-            };
-            let mut result = Vec::new();
-            for v in values {
-                match v {
-                    Value::String(s) => {
-                        let stored = self
-                            .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
-                            .await?;
-                        result.push(Value::String(stored));
-                    }
-                    Value::Object(ref obj) => {
-                        // Enriched metadata object from a read round-trip.
-                        // Reconstruct the stored filename as `{id}-{name}` and
-                        // verify it still exists in `.attachments/`.
-                        if let (Some(id), Some(name)) = (
-                            obj.get("id").and_then(|v| v.as_str()),
-                            obj.get("name").and_then(|v| v.as_str()),
-                        ) {
-                            let stored = format!("{}-{}", id, name);
-                            let att_dir = crate::io::attachments_dir(entity_type_dir);
-                            let path = att_dir.join(&stored);
-                            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                                result.push(Value::String(stored));
-                            } else {
-                                return Err(EntityError::AttachmentNotFound {
-                                    field: field_name.to_string(),
-                                    filename: stored,
-                                });
-                            }
-                        }
-                    }
-                    other => {
-                        tracing::warn!(
-                            field = field_name,
-                            value = ?other,
-                            "skipping non-string/non-object value in attachment array"
-                        );
-                    }
-                }
+        if !multiple {
+            let resolved = self
+                .resolve_single_attachment(value, field_name, max_bytes, entity_type_dir)
+                .await?;
+            if let Some(stored) = resolved {
+                entity.set(field_name, Value::String(stored));
             }
-            entity.set(field_name, Value::Array(result));
-        } else {
-            // Single attachment value
-            match value {
-                Value::String(s) => {
-                    let stored = self
-                        .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
-                        .await?;
-                    entity.set(field_name, Value::String(stored));
-                }
-                Value::Object(ref obj) => {
-                    // Enriched metadata object — reconstruct stored filename
-                    if let (Some(id), Some(name)) = (
-                        obj.get("id").and_then(|v| v.as_str()),
-                        obj.get("name").and_then(|v| v.as_str()),
-                    ) {
-                        let stored = format!("{}-{}", id, name);
-                        let att_dir = crate::io::attachments_dir(entity_type_dir);
-                        let path = att_dir.join(&stored);
-                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                            entity.set(field_name, Value::String(stored));
-                        } else {
-                            return Err(EntityError::AttachmentNotFound {
-                                field: field_name.to_string(),
-                                filename: stored,
-                            });
-                        }
-                    }
-                }
-                Value::Null => {}
-                _ => {}
-            }
+            return Ok(());
         }
 
+        // Array of attachment values
+        let values = match value {
+            Value::Array(arr) => arr,
+            Value::Null => return Ok(()),
+            other => vec![other],
+        };
+        let mut result = Vec::new();
+        for v in values {
+            let resolved = self
+                .resolve_single_attachment(v, field_name, max_bytes, entity_type_dir)
+                .await?;
+            if let Some(stored) = resolved {
+                result.push(Value::String(stored));
+            }
+        }
+        entity.set(field_name, Value::Array(result));
+
         Ok(())
+    }
+
+    /// Resolve a single attachment value of any shape to its stored filename.
+    ///
+    /// Handles three cases:
+    /// - `Value::String` — delegates to [`resolve_attachment_value`] (copy or
+    ///   verify existing).
+    /// - `Value::Object` — enriched metadata round-trip; reconstructs the
+    ///   `{id}-{name}` filename and verifies it in `.attachments/`.
+    /// - Anything else — logs a warning and returns `None`.
+    async fn resolve_single_attachment(
+        &self,
+        value: serde_json::Value,
+        field_name: &str,
+        max_bytes: u64,
+        entity_type_dir: &Path,
+    ) -> Result<Option<String>> {
+        match value {
+            serde_json::Value::String(s) => {
+                let stored = self
+                    .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
+                    .await?;
+                Ok(Some(stored))
+            }
+            serde_json::Value::Object(ref obj) => {
+                self.resolve_enriched_attachment(obj, field_name, entity_type_dir)
+                    .await
+            }
+            serde_json::Value::Null => Ok(None),
+            other => {
+                tracing::warn!(
+                    field = field_name,
+                    value = ?other,
+                    "skipping non-string/non-object attachment value"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Reconstruct a stored filename from an enriched metadata object and
+    /// verify it still exists in `.attachments/`.
+    ///
+    /// Returns `Ok(Some(filename))` when valid, `Ok(None)` when the object
+    /// lacks the required `id`/`name` keys, or an error when the file is
+    /// missing from disk.
+    async fn resolve_enriched_attachment(
+        &self,
+        obj: &serde_json::Map<String, serde_json::Value>,
+        field_name: &str,
+        entity_type_dir: &Path,
+    ) -> Result<Option<String>> {
+        let (Some(id), Some(name)) = (
+            obj.get("id").and_then(|v| v.as_str()),
+            obj.get("name").and_then(|v| v.as_str()),
+        ) else {
+            return Ok(None);
+        };
+        // Reject path separators to prevent directory traversal via
+        // crafted enriched metadata objects.
+        if id.contains('/') || id.contains('\\') || name.contains('/') || name.contains('\\') {
+            return Err(EntityError::AttachmentNotFound {
+                field: field_name.to_string(),
+                filename: format!("{}-{}", id, name),
+            });
+        }
+        let stored = format!("{}-{}", id, name);
+        let att_dir = crate::io::attachments_dir(entity_type_dir);
+        let path = att_dir.join(&stored);
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(Some(stored));
+        }
+        Err(EntityError::AttachmentNotFound {
+            field: field_name.to_string(),
+            filename: stored,
+        })
     }
 
     /// Resolve a single attachment value: either an existing stored filename
@@ -1410,16 +1447,16 @@ impl EntityContext {
                 continue;
             };
 
-            // Warm path: use the cached output when available.
-            if let Some(ref cached) = cached_outputs {
-                if let Some(value) = cached.get(field.name.as_str()) {
-                    entity.fields.insert(field.name.to_string(), value.clone());
-                    continue;
-                }
-                // Field not in cached map — fall through to compute it.
-                // This can happen when a computed field is added to the
-                // type's `FieldDef` set after the cache was populated;
-                // the next invalidation + repopulation closes the gap.
+            // Warm path: use the cached output when available. A field
+            // missing from the cached map falls through to compute — this
+            // happens when a computed field is added after the cache was
+            // populated; the next invalidation closes the gap.
+            if let Some(value) = cached_outputs
+                .as_ref()
+                .and_then(|c| c.get(field.name.as_str()))
+            {
+                entity.fields.insert(field.name.to_string(), value.clone());
+                continue;
             }
 
             let value = engine
@@ -1445,22 +1482,37 @@ impl EntityContext {
         // Guarded by `observed_epoch` so any invalidation that landed
         // between the cache read and here causes the memoization to be
         // dropped.
-        if let Some(fresh) = fresh_outputs {
-            if !fresh.is_empty() {
-                if let Some(cache) = self.attached_cache() {
-                    cache
-                        .try_memoize_derived_outputs(
-                            entity_type,
-                            entity.id.as_str(),
-                            observed_epoch,
-                            fresh,
-                        )
-                        .await;
-                }
-            }
-        }
+        self.try_memoize_fresh_outputs(entity_type, entity, observed_epoch, fresh_outputs)
+            .await;
 
         Ok(())
+    }
+
+    /// Store freshly-computed field outputs in the entity cache so the next
+    /// derive pass can skip the compute engine.
+    ///
+    /// No-ops when there is no cache, nothing was freshly computed, or the
+    /// cache epoch has advanced since the derivation began (meaning an
+    /// invalidation landed mid-derivation and the outputs are stale).
+    async fn try_memoize_fresh_outputs(
+        &self,
+        entity_type: &str,
+        entity: &Entity,
+        observed_epoch: u64,
+        fresh_outputs: Option<HashMap<String, serde_json::Value>>,
+    ) {
+        let Some(fresh) = fresh_outputs else {
+            return;
+        };
+        if fresh.is_empty() {
+            return;
+        }
+        let Some(cache) = self.attached_cache() else {
+            return;
+        };
+        cache
+            .try_memoize_derived_outputs(entity_type, entity.id.as_str(), observed_epoch, fresh)
+            .await;
     }
 
     /// Lazily source reserved pseudo-fields and insert them into `entity.fields`
@@ -1607,34 +1659,39 @@ impl EntityContext {
         use serde_json::Value;
 
         for fd in field_defs {
-            if let FieldType::Attachment { multiple, .. } = &fd.type_ {
-                let Some(value) = entity.fields.get(fd.name.as_str()).cloned() else {
+            let FieldType::Attachment { multiple, .. } = &fd.type_ else {
+                continue;
+            };
+            let Some(value) = entity.fields.get(fd.name.as_str()).cloned() else {
+                continue;
+            };
+
+            if !*multiple {
+                let Value::String(filename) = value else {
                     continue;
                 };
+                if let Some(meta) = io::attachment_metadata(&filename, entity_type_dir).await {
+                    entity.set(fd.name.to_string(), meta);
+                }
+                continue;
+            }
 
-                if *multiple {
-                    let filenames = match value {
-                        Value::Array(arr) => arr,
-                        Value::Null => continue,
-                        other => vec![other],
-                    };
-                    let mut metadata_arr = Vec::new();
-                    for v in filenames {
-                        if let Value::String(filename) = v {
-                            if let Some(meta) =
-                                io::attachment_metadata(&filename, entity_type_dir).await
-                            {
-                                metadata_arr.push(meta);
-                            }
-                        }
-                    }
-                    entity.set(fd.name.to_string(), Value::Array(metadata_arr));
-                } else if let Value::String(filename) = value {
-                    if let Some(meta) = io::attachment_metadata(&filename, entity_type_dir).await {
-                        entity.set(fd.name.to_string(), meta);
-                    }
+            // Multiple attachments — normalize to array then enrich each.
+            let filenames = match value {
+                Value::Array(arr) => arr,
+                Value::Null => continue,
+                other => vec![other],
+            };
+            let mut metadata_arr = Vec::new();
+            for v in filenames {
+                let Value::String(filename) = v else {
+                    continue;
+                };
+                if let Some(meta) = io::attachment_metadata(&filename, entity_type_dir).await {
+                    metadata_arr.push(meta);
                 }
             }
+            entity.set(fd.name.to_string(), Value::Array(metadata_arr));
         }
 
         Ok(())
