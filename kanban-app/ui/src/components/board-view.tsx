@@ -105,20 +105,18 @@ function useColumnOrdering(board: BoardData): ColumnOrdering {
   return { columns, columnIdList, columnMap };
 }
 
-/** Tasks bucketed into their target columns plus the "first todo" pointer. */
+/** Tasks bucketed into their target columns. */
 interface ColumnTaskBuckets {
   taskMap: Map<string, Entity>;
   baseLayout: ColumnLayout;
   columnTasks: Map<string, Entity[]>;
-  firstTodoTaskId: string | null;
 }
 
 /**
  * Bucket tasks into their target columns and pre-sort each bucket.
  *
  * Output order within each bucket honors the active grouping (when any) and
- * then ordinal. Also exposes the first task in the todo column for the
- * "do this next" helper.
+ * then ordinal.
  */
 function useColumnTaskBuckets(
   columns: Entity[],
@@ -164,13 +162,7 @@ function useColumnTaskBuckets(
     return map;
   }, [columns, baseLayout, taskMap]);
 
-  const firstTodoTaskId = useMemo(() => {
-    if (columns.length === 0) return null;
-    const todoTaskIds = baseLayout.get(columns[0].id);
-    return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
-  }, [columns, baseLayout]);
-
-  return { taskMap, baseLayout, columnTasks, firstTodoTaskId };
+  return { taskMap, baseLayout, columnTasks };
 }
 
 /** Moniker tables needed for cross-column keyboard navigation. */
@@ -233,7 +225,6 @@ interface BoardLayoutResult {
   columnMap: Map<string, Entity>;
   baseLayout: ColumnLayout;
   columnTasks: Map<string, Entity[]>;
-  firstTodoTaskId: string | null;
   columnTaskMonikers: Map<string, string[]>;
   allBoardTaskMonikers: Set<string>;
   allBoardHeaderMonikers: Set<string>;
@@ -252,8 +243,12 @@ function useBoardLayout(
 ): BoardLayoutResult {
   const { groupField } = useActivePerspective();
   const { columns, columnIdList, columnMap } = useColumnOrdering(board);
-  const { taskMap, baseLayout, columnTasks, firstTodoTaskId } =
-    useColumnTaskBuckets(columns, tasks, groupField, groupValue);
+  const { taskMap, baseLayout, columnTasks } = useColumnTaskBuckets(
+    columns,
+    tasks,
+    groupField,
+    groupValue,
+  );
   const { columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers } =
     useBoardMonikers(columns, baseLayout, taskMap);
 
@@ -266,7 +261,6 @@ function useBoardLayout(
     columnMap,
     baseLayout,
     columnTasks,
-    firstTodoTaskId,
     columnTaskMonikers,
     allBoardTaskMonikers,
     allBoardHeaderMonikers,
@@ -870,7 +864,6 @@ function BoardColumnItem({
   const {
     columnMap,
     columnTasks,
-    firstTodoTaskId,
     columnTaskMonikers,
     allBoardTaskMonikers,
     allBoardHeaderMonikers,
@@ -885,7 +878,6 @@ function BoardColumnItem({
         onTaskDragEnd={handleTaskDragEnd}
         onDrop={handleZoneDrop}
         dragTaskId={taskDrag?.sourceTaskId ?? null}
-        firstTodoTaskId={firstTodoTaskId}
         leftColumnTaskMonikers={
           prevColId ? (columnTaskMonikers.get(prevColId) ?? []) : []
         }

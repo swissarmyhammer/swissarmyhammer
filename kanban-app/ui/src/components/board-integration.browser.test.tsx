@@ -472,4 +472,125 @@ describe("Board integration — real .kanban data", () => {
     // CURRENTLY BROKEN: global handler calls preventDefault on everything
     expect(event.defaultPrevented).toBe(false);
   });
+
+  it("Do This Next context menu routes through task.doThisNext backend command", async () => {
+    // Temporarily override the mock to return task.doThisNext as available
+    const savedImpl = mockInvoke.getMockImplementation()!;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doThisNextMock = async (cmd: string, args?: any): Promise<any> => {
+      if (cmd === "list_commands_for_scope") {
+        return [
+          {
+            id: "task.doThisNext",
+            name: "Do This Next",
+            target: `task:${testTaskIds[3]}`,
+            group: "entity",
+            context_menu: true,
+            available: true,
+          },
+        ];
+      }
+      if (cmd === "show_context_menu") return null;
+      return savedImpl(cmd, args);
+    };
+    mockInvoke.mockImplementation(doThisNextMock);
+
+    try {
+      const screen = await renderIntegrationBoard();
+
+      // Find the task card for Card Delta (index 3, in "doing" column)
+      const deltaCard = screen.container.querySelector(
+        `[data-entity-card="${testTaskIds[3]}"]`,
+      );
+      expect(deltaCard).toBeTruthy();
+
+      // Right-click to trigger context menu
+      mockInvoke.mockClear();
+      mockInvoke.mockImplementation(doThisNextMock);
+
+      deltaCard!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+
+      // Wait for async invoke calls to complete
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Assert show_context_menu was called with task.doThisNext
+      const showCall = mockInvoke.mock.calls.find(
+        (c) => c[0] === "show_context_menu",
+      );
+      expect(showCall).toBeTruthy();
+      const items = (
+        showCall![1] as { items: { cmd: string; scope_chain: string[] }[] }
+      ).items;
+      const doThisNext = items.find((i) => i.cmd === "task.doThisNext");
+      expect(doThisNext).toBeTruthy();
+      // Scope chain should contain the task moniker
+      expect(doThisNext!.scope_chain.some((s) => s.startsWith("task:"))).toBe(
+        true,
+      );
+
+      // No task.move should have been dispatched (old workaround gone)
+      const moveCall = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as { cmd?: string })?.cmd === "task.move",
+      );
+      expect(moveCall).toBeUndefined();
+    } finally {
+      // Restore original mock
+      mockInvoke.mockImplementation(savedImpl);
+    }
+  });
+
+  it("Do This Next via CLI moves task to top of first column", async () => {
+    // Refresh state
+    const fresh = await commands.listTasks({ dir: testBoardDir });
+    testTasks = fresh.tasks;
+
+    // Find a task in a non-first column (Card Delta is in "doing")
+    const doingTask = testTasks.find((t) => t.position.column === "doing");
+    expect(doingTask).toBeTruthy();
+
+    // Find the first task in the first column (order-0 = "todo")
+    const todoTasks = testTasks
+      .filter((t) => t.position.column === "todo")
+      .sort((a, b) => a.position.ordinal.localeCompare(b.position.ordinal));
+    const firstTodoTask = todoTasks[0];
+
+    // Simulate DoThisNext: move task to "todo" column, before the first task
+    await commands.moveTask({
+      dir: testBoardDir,
+      taskId: doingTask!.id,
+      column: "todo",
+      ...(firstTodoTask ? { beforeId: firstTodoTask.id } : {}),
+    });
+
+    // Verify on disk: the task is now in the todo column with a lower ordinal
+    const movedEntity = await commands.readEntity({
+      dir: testBoardDir,
+      noun: "task",
+      id: doingTask!.id,
+    });
+    expect(movedEntity.position.column).toBe("todo");
+
+    if (firstTodoTask) {
+      const firstEntity = await commands.readEntity({
+        dir: testBoardDir,
+        noun: "task",
+        id: firstTodoTask.id,
+      });
+      expect(movedEntity.position.ordinal < firstEntity.position.ordinal).toBe(
+        true,
+      );
+    }
+
+    // Re-render and verify the card is in the first column
+    const freshTasks = await commands.listTasks({ dir: testBoardDir });
+    testTasks = freshTasks.tasks;
+
+    const screen = await renderIntegrationBoard();
+    const text = screen.container.textContent || "";
+    expect(text).toContain("Card Delta");
+  });
 });

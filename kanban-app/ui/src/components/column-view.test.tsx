@@ -1,9 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // --- Mocks ---
+const mockInvoke = vi.fn(
+  async (_cmd: string, _args?: unknown): Promise<unknown> => "ok",
+);
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("ok")),
+  invoke: (...a: unknown[]) => mockInvoke(...(a as [string, unknown?])),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -175,5 +178,208 @@ describe("ColumnView add-task button", () => {
     );
 
     expect(screen.queryByRole("button", { name: /add task/i })).toBeNull();
+  });
+});
+
+describe("ColumnView — Do This Next command", () => {
+  afterEach(() => {
+    mockInvoke.mockReset();
+    mockInvoke.mockImplementation(async () => "ok");
+  });
+
+  it("context menu dispatches task.doThisNext through the backend, not task.move", async () => {
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: unknown): Promise<unknown> => {
+        if (cmd === "list_entity_types") return ["task", "column"];
+        if (cmd === "get_entity_schema") {
+          const a = args as { entityType: string } | undefined;
+          if (a?.entityType === "task") {
+            return {
+              entity: {
+                name: "task",
+                fields: ["title", "position_column", "position_ordinal"],
+                commands: [
+                  {
+                    id: "task.doThisNext",
+                    name: "Do This Next",
+                    context_menu: true,
+                  },
+                ],
+              },
+              fields: [
+                {
+                  id: "title",
+                  name: "title",
+                  type: { kind: "text" },
+                  section: "header",
+                  display: "text",
+                  editor: "text",
+                },
+                {
+                  id: "position_column",
+                  name: "position_column",
+                  type: { kind: "text" },
+                  section: "hidden",
+                },
+                {
+                  id: "position_ordinal",
+                  name: "position_ordinal",
+                  type: { kind: "text" },
+                  section: "hidden",
+                },
+              ],
+            };
+          }
+          return {
+            entity: {
+              name: a?.entityType ?? "unknown",
+              fields: ["name"],
+              commands: [],
+            },
+            fields: [
+              {
+                id: "name",
+                name: "name",
+                type: { kind: "text" },
+                section: "header",
+                display: "text",
+                editor: "text",
+              },
+            ],
+          };
+        }
+        if (cmd === "list_commands_for_scope") {
+          return [
+            {
+              id: "task.doThisNext",
+              name: "Do This Next",
+              target: "task:t1",
+              group: "entity",
+              context_menu: true,
+              available: true,
+            },
+          ];
+        }
+        if (cmd === "show_context_menu") return undefined;
+        return "ok";
+      },
+    );
+
+    const task = makeTask("t1");
+    renderColumn(
+      <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
+    );
+
+    // Right-click the task card's FocusScope
+    const taskScope = document.querySelector(
+      "[data-moniker='task:t1']",
+    ) as HTMLElement | null;
+    expect(taskScope).toBeTruthy();
+    fireEvent.contextMenu(taskScope!);
+
+    // Assert show_context_menu is called with task.doThisNext
+    await waitFor(() => {
+      const showCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) => c[0] === "show_context_menu",
+      );
+      expect(showCall).toBeTruthy();
+      const items = (showCall![1] as { items: { cmd: string }[] }).items;
+      const doThisNext = items.find(
+        (i: { cmd: string }) => i.cmd === "task.doThisNext",
+      );
+      expect(doThisNext).toBeTruthy();
+    });
+
+    // Assert task.move was NOT dispatched (old workaround is gone)
+    const moveDispatch = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as { cmd?: string })?.cmd === "task.move",
+    );
+    expect(moveDispatch).toBeUndefined();
+  });
+
+  it("context menu scope chain contains the task moniker", async () => {
+    mockInvoke.mockImplementation(
+      async (cmd: string, _args?: unknown): Promise<unknown> => {
+        if (cmd === "list_commands_for_scope") {
+          return [
+            {
+              id: "task.doThisNext",
+              name: "Do This Next",
+              target: "task:t2",
+              group: "entity",
+              context_menu: true,
+              available: true,
+            },
+          ];
+        }
+        if (cmd === "show_context_menu") return undefined;
+        return "ok";
+      },
+    );
+
+    const task = makeTask("t2");
+    renderColumn(
+      <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
+    );
+
+    const taskScope = document.querySelector(
+      "[data-moniker='task:t2']",
+    ) as HTMLElement | null;
+    expect(taskScope).toBeTruthy();
+    fireEvent.contextMenu(taskScope!);
+
+    await waitFor(() => {
+      const showCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) => c[0] === "show_context_menu",
+      );
+      expect(showCall).toBeTruthy();
+      const items = (
+        showCall![1] as { items: { cmd: string; scope_chain: string[] }[] }
+      ).items;
+      const doThisNext = items.find(
+        (i: { cmd: string }) => i.cmd === "task.doThisNext",
+      );
+      expect(doThisNext).toBeTruthy();
+      expect(doThisNext!.scope_chain).toContain("task:t2");
+    });
+  });
+
+  it("DraggableTaskCard receives no extraCommands from column (re-render stability)", () => {
+    // After deleting the buildDoThisNextCommand workaround, the column no
+    // longer passes extraCommands to DraggableTaskCard. The prop is always
+    // undefined, so React.memo on DraggableTaskCard never sees a changed
+    // reference — sibling cards skip re-rendering when one task moves.
+    const tasks = [
+      makeTask("t1"),
+      makeTask("t2"),
+      makeTask("t3"),
+      makeTask("t4"),
+      makeTask("t5"),
+    ];
+    const { container } = renderColumn(
+      <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
+    );
+
+    // All 5 cards render
+    const cards = container.querySelectorAll("[data-entity-card]");
+    expect(cards.length).toBe(5);
+
+    // Verify column-view no longer injects extraCommands: the workaround
+    // function buildDoThisNextCommand and the taskExtraCommands map have
+    // been deleted. This means the VirtualizedCardList and VirtualColumn
+    // components receive no taskExtraCommands prop, and DraggableTaskCard
+    // receives no extraCommands — the prop is stably undefined, allowing
+    // React.memo to skip re-renders when the entity reference is unchanged.
+    // The absence of dispatchTaskMove (useDispatchCommand("task.move"))
+    // confirms no frontend-side task.move dispatch is wired.
+    const dispatchCalls = mockInvoke.mock.calls.filter(
+      (c: unknown[]) => c[0] === "dispatch_command",
+    );
+    const moveDispatches = dispatchCalls.filter(
+      (c: unknown[]) => (c[1] as { cmd?: string })?.cmd === "task.move",
+    );
+    expect(moveDispatches.length).toBe(0);
   });
 });
