@@ -7,11 +7,11 @@ use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
-/// List all projects ordered by their `order` field.
+/// List all projects sorted alphabetically by name.
 #[operation(
     verb = "list",
     noun = "projects",
-    description = "List all projects ordered by position"
+    description = "List all projects sorted alphabetically by name"
 )]
 #[derive(Debug, Default, Deserialize)]
 pub struct ListProjects;
@@ -22,7 +22,9 @@ impl Execute<KanbanContext, KanbanError> for ListProjects {
         match async {
             let ectx = ctx.entity_context().await?;
             let mut projects = ectx.list("project").await?;
-            projects.sort_by_key(|p| p.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+            // Projects have no intrinsic ordering — present them alphabetically by
+            // name, case-insensitive, so the list is stable and predictable.
+            projects.sort_by_key(|p| p.get_str("name").unwrap_or("").to_lowercase());
 
             let projects_json: Vec<Value> = projects.iter().map(project_entity_to_json).collect();
 
@@ -95,18 +97,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_projects_sorted_by_order() {
+    async fn test_list_projects_sorted_by_name() {
         let (_temp, ctx) = setup().await;
 
+        // Insert out of alphabetical order to verify the sort is by name,
+        // not by insertion order.
         AddProject::new("zz-last", "ZZ Last")
-            .with_order(100)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
         AddProject::new("aa-first", "AA First")
-            .with_order(0)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddProject::new("mm-middle", "MM Middle")
             .execute(&ctx)
             .await
             .into_result()
@@ -115,14 +123,11 @@ mod tests {
         let result = ListProjects.execute(&ctx).await.into_result().unwrap();
 
         let projects = result["projects"].as_array().unwrap();
-        let orders: Vec<u64> = projects
+        let names: Vec<&str> = projects
             .iter()
-            .map(|p| p["order"].as_u64().unwrap_or(0))
+            .map(|p| p["name"].as_str().unwrap_or(""))
             .collect();
 
-        // Verify that the list is sorted ascending by order
-        let mut sorted = orders.clone();
-        sorted.sort();
-        assert_eq!(orders, sorted);
+        assert_eq!(names, vec!["AA First", "MM Middle", "ZZ Last"]);
     }
 }

@@ -26,8 +26,6 @@ pub struct AddProject {
     pub description: Option<String>,
     /// Optional display color (6-char hex without #)
     pub color: Option<String>,
-    /// Optional position in project order
-    pub order: Option<usize>,
 }
 
 impl AddProject {
@@ -38,7 +36,6 @@ impl AddProject {
             name: name.into(),
             description: None,
             color: None,
-            order: None,
         }
     }
 
@@ -51,12 +48,6 @@ impl AddProject {
     /// Set the display color
     pub fn with_color(mut self, color: impl Into<String>) -> Self {
         self.color = Some(color.into());
-        self
-    }
-
-    /// Set the order (position in project list)
-    pub fn with_order(mut self, order: usize) -> Self {
-        self.order = Some(order);
         self
     }
 }
@@ -75,22 +66,8 @@ impl Execute<KanbanContext, KanbanError> for AddProject {
                 return Err(KanbanError::duplicate_id("project", self.id.to_string()));
             }
 
-            // Determine order
-            let order = if let Some(order) = self.order {
-                order
-            } else {
-                let projects = ectx.list("project").await?;
-                projects
-                    .iter()
-                    .filter_map(|p| p.get("order").and_then(|v| v.as_u64()))
-                    .max()
-                    .map(|o| o as usize + 1)
-                    .unwrap_or(0)
-            };
-
             let mut entity = Entity::new("project", self.id.as_str());
             entity.set("name", json!(self.name));
-            entity.set("order", json!(order));
 
             if let Some(ref description) = self.description {
                 entity.set("description", json!(description));
@@ -136,7 +113,6 @@ pub(crate) fn project_entity_to_json(entity: &Entity) -> Value {
         "name": entity.get_str("name").unwrap_or(""),
         "description": entity.get_str("description").unwrap_or(""),
         "color": entity.get_str("color").unwrap_or(""),
-        "order": entity.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
 
@@ -170,7 +146,6 @@ mod tests {
 
         assert_eq!(result["id"], "backend");
         assert_eq!(result["name"], "Backend");
-        assert_eq!(result["order"], 0);
     }
 
     #[tokio::test]
@@ -180,7 +155,6 @@ mod tests {
         let result = AddProject::new("frontend", "Frontend")
             .with_description("The frontend project")
             .with_color("ff0000")
-            .with_order(5)
             .execute(&ctx)
             .await
             .into_result()
@@ -190,7 +164,6 @@ mod tests {
         assert_eq!(result["name"], "Frontend");
         assert_eq!(result["description"], "The frontend project");
         assert_eq!(result["color"], "ff0000");
-        assert_eq!(result["order"], 5);
     }
 
     #[tokio::test]
@@ -210,23 +183,24 @@ mod tests {
         assert!(matches!(result, Err(KanbanError::DuplicateId { .. })));
     }
 
+    /// Regression: the JSON returned by `AddProject` must NOT include an `order` key.
+    /// The `order` field was removed from the project entity schema — see the
+    /// `task-card-fields` kanban project.
     #[tokio::test]
-    async fn test_add_project_auto_order() {
+    async fn test_add_project_result_has_no_order_key() {
         let (_temp, ctx) = setup().await;
 
-        AddProject::new("first", "First")
+        let result = AddProject::new("backend", "Backend")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let result = AddProject::new("second", "Second")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Second project should auto-increment order
-        assert_eq!(result["order"], 1);
+        let obj = result.as_object().expect("result should be a JSON object");
+        assert!(
+            !obj.contains_key("order"),
+            "AddProject result should not contain an `order` key, got: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
     }
 }

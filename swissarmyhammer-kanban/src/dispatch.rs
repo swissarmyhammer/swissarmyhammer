@@ -533,13 +533,6 @@ async fn execute_tag_operation(
     }
 }
 
-/// Parse an optional `order` param as usize.
-fn parse_order(op: &KanbanOperation) -> Option<usize> {
-    op.get_param("order")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-}
-
 /// Dispatch project operations (add, get, update, delete, list).
 async fn execute_project_operation(
     processor: &KanbanOperationProcessor,
@@ -579,9 +572,6 @@ async fn dispatch_add_project(
     if let Some(c) = op.get_string("color") {
         cmd = cmd.with_color(c);
     }
-    if let Some(o) = parse_order(op) {
-        cmd = cmd.with_order(o);
-    }
     processor.process(&cmd, ctx).await
 }
 
@@ -599,9 +589,6 @@ async fn dispatch_update_project(
     }
     if let Some(c) = op.get_string("color") {
         cmd = cmd.with_color(c);
-    }
-    if let Some(o) = parse_order(op) {
-        cmd = cmd.with_order(o);
     }
     processor.process(&cmd, ctx).await
 }
