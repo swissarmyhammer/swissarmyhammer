@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { pickedCompletion } from "@codemirror/autocomplete";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -371,6 +372,156 @@ describe("FilterEditor", () => {
       });
 
       expect(onClose).toHaveBeenCalled();
+    });
+
+    // =======================================================================
+     // Flush-on-accept / flush-on-unmount — guards the perspective-toggle race.
+     // When the 300ms debounce is pending and the user either accepts an
+     // autocomplete completion or the editor unmounts, the pending save must
+     // fire so the user's last action is persisted.
+     // =======================================================================
+
+    it("flushes immediately when a completion is accepted", async () => {
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      mockInvoke.mockClear();
+
+      // Dispatch a completion-accept transaction: inserts `#BLOCKING` and
+      // carries the `pickedCompletion` annotation just like CM6 would if the
+      // user had pressed Enter on the dropdown. The flush extension must
+      // detect the annotation and bypass the 300ms debounce.
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#BLOCKING" },
+          annotations: pickedCompletion.of({
+            label: "#BLOCKING",
+            apply: "#BLOCKING",
+          }),
+        });
+        // One microtask + macrotask is enough for the flush to run —
+        // the 300ms debounce must NOT have elapsed yet.
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.filter",
+          args: { filter: "#BLOCKING", perspective_id: "p1" },
+        }),
+      );
+    });
+
+    it("flushes pending autosave on unmount", async () => {
+      const { container, unmount } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      mockInvoke.mockClear();
+
+      // Raw-typing change (no pickedCompletion annotation): only the 300ms
+      // debounce is running. Unmount before it fires — the unmount-flush
+      // effect must run the pending save synchronously.
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#BLOCKING" },
+        });
+        // Short wait so the debounce is scheduled but NOT yet fired.
+        await new Promise((r) => setTimeout(r, 20));
+        unmount();
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.filter",
+          args: { filter: "#BLOCKING", perspective_id: "p1" },
+        }),
+      );
+    });
+
+    it("does not flush after clear", async () => {
+      const { unmount } = render(
+        <FilterEditor filter="#bug" perspectiveId="p1" />,
+      );
+
+      mockInvoke.mockClear();
+
+      // Click the clear button — dispatches perspective.clearFilter and
+      // cancels the debounce. The clear supersedes any stale pending save.
+      fireEvent.click(screen.getByLabelText("Clear filter"));
+
+      // Count the dispatches after clear — must be exactly the clearFilter
+      // command, no extra perspective.filter from a flushed stale value.
+      const filterDispatchCallsBeforeUnmount = mockInvoke.mock.calls.filter(
+        (call) =>
+          call[0] === "dispatch_command" &&
+          (call[1] as { cmd: string })?.cmd === "perspective.filter",
+      ).length;
+
+      await act(async () => {
+        unmount();
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      const filterDispatchCallsAfterUnmount = mockInvoke.mock.calls.filter(
+        (call) =>
+          call[0] === "dispatch_command" &&
+          (call[1] as { cmd: string })?.cmd === "perspective.filter",
+      ).length;
+
+      expect(filterDispatchCallsAfterUnmount).toBe(
+        filterDispatchCallsBeforeUnmount,
+      );
+    });
+
+    it("autocomplete accept then remount preserves accepted tag", async () => {
+      const { container, unmount } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      // Simulate the bug scenario: user types `#blo` (raw, no annotation),
+      // debounce fires and saves `#blo`, then user accepts `#BLOCKING`
+      // from the dropdown, then immediately toggles perspective (unmount).
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#blo" },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+      });
+
+      // Completion-accept transaction replaces `#blo` with `#BLOCKING`.
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#BLOCKING" },
+          annotations: pickedCompletion.of({
+            label: "#BLOCKING",
+            apply: "#BLOCKING",
+          }),
+        });
+        // Short wait — under the 300ms debounce threshold.
+        await new Promise((r) => setTimeout(r, 50));
+        unmount();
+      });
+
+      // The final perspective.filter call must have been for `#BLOCKING`,
+      // not `#blo` — the flush-on-accept path must have dispatched it.
+      const filterCalls = mockInvoke.mock.calls.filter(
+        (call) =>
+          call[0] === "dispatch_command" &&
+          (call[1] as { cmd: string })?.cmd === "perspective.filter",
+      );
+      expect(filterCalls.length).toBeGreaterThanOrEqual(1);
+      const lastCall = filterCalls[filterCalls.length - 1];
+      expect(lastCall[1]).toMatchObject({
+        cmd: "perspective.filter",
+        args: { filter: "#BLOCKING", perspective_id: "p1" },
+      });
     });
 
     it("vim Escape from insert mode dispatches filter immediately (save-in-place)", async () => {
