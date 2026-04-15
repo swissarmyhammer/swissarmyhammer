@@ -197,6 +197,12 @@ const TEST_ENTITY: Entity = {
     // commit in vim mode but save in CUA mode — an unrelated behavior
     // asymmetry the save-matrix is not trying to exercise here.
     depends_on: ["test-task-2"],
+    // Same rationale for the CM6 `single-select` editor backing `project`:
+    // an empty initial doc would correctly refuse to commit in vim mode,
+    // which is a property of buildVimEnterExtension, not the matrix under
+    // test. Seed with a resolvable project id so the editor renders a
+    // non-empty `$test-project` token.
+    project: "project-1",
     progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
     position_ordinal: "ffff8000",
@@ -239,6 +245,14 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
       id: "todo",
       moniker: "column:todo",
       fields: { name: "Todo", order: 0 },
+    },
+  ],
+  project: [
+    {
+      entity_type: "project",
+      id: "project-1",
+      moniker: "project:project-1",
+      fields: { name: "Test Project", color: "336699" },
     },
   ],
 };
