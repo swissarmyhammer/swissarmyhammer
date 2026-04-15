@@ -1,6 +1,6 @@
 ---
 name: coverage
-description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban cards for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
+description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban tasks for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -94,7 +94,7 @@ Initialize the board and create a coverage-gap tag:
 {"op": "add tag", "id": "coverage-gap", "name": "Coverage Gap", "color": "ff8800", "description": "Function or method lacking test coverage"}
 ```
 
-Create a kanban card for each uncovered function or block:
+Create a kanban task for each uncovered function or block:
 
 ```json
 {"op": "add task", "title": "Add tests for <function_name>", "description": "<file:lines>\n\nCoverage: <X>% (<covered>/<total> lines)\n\nUncovered lines: <line ranges>\n\n<function signature>\n\n<what it does and what to test>", "tags": ["coverage-gap"]}
@@ -105,7 +105,7 @@ Create a kanban card for each uncovered function or block:
 Report:
 - Overall coverage % for files in scope
 - Per-file coverage breakdown (file, covered lines, total lines, %)
-- Count of kanban cards created
+- Count of kanban tasks created
 - Recommendation on where to start writing tests (lowest coverage first)
 
 ## Guidelines
@@ -115,4 +115,4 @@ Report:
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
 - Report only actionable gaps. Ignore: trivial getters/setters, trait impl boilerplate, generated code.
 - If a coverage tool produces no output or errors, fall back to the next tool for that language. If no tool works, report the error clearly.
-- If the user wants to write the missing tests, use the implement skill to pick up the kanban cards.
+- If the user wants to write the missing tests, use the implement skill to pick up the kanban tasks.

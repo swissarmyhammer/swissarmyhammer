@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '7e80'
+position_ordinal: d380
 title: Auto-refresh board view on board/column entity file-change events
 ---
 ## What
