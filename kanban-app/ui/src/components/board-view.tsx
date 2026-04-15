@@ -73,34 +73,19 @@ interface TaskDragState {
   sourceColumn: string;
 }
 
-/** Return value from useBoardLayout — all derived board data needed for rendering. */
-interface BoardLayoutResult {
+/** Ordered column entities and lookup maps derived from the board. */
+interface ColumnOrdering {
   columns: Entity[];
   columnIdList: string[];
-  filteredTasks: Entity[];
-  taskMap: Map<string, Entity>;
   columnMap: Map<string, Entity>;
-  baseLayout: ColumnLayout;
-  columnTasks: Map<string, Entity[]>;
-  firstTodoTaskId: string | null;
-  columnTaskMonikers: Map<string, string[]>;
-  allBoardTaskMonikers: Set<string>;
-  allBoardHeaderMonikers: Set<string>;
 }
 
 /**
- * Derive all board layout data from raw board/task props.
+ * Sort columns by their `order` field and build id-keyed lookup tables.
  *
- * Handles column sorting, task bucketing into columns, moniker tables for
- * cross-column keyboard navigation, and group-aware ordering.
+ * @param board Raw board data whose `columns` list may arrive unsorted.
  */
-function useBoardLayout(
-  board: BoardData,
-  tasks: Entity[],
-  groupValue: string | undefined,
-): BoardLayoutResult {
-  const { groupField } = useActivePerspective();
-
+function useColumnOrdering(board: BoardData): ColumnOrdering {
   const columns = useMemo(
     () =>
       [...board.columns].sort(
@@ -111,25 +96,46 @@ function useBoardLayout(
 
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
-  // Filtering is server-side; alias for clarity.
-  const filteredTasks = tasks;
-
-  const taskMap = useMemo(() => {
-    const map = new Map<string, Entity>();
-    for (const task of filteredTasks) map.set(task.id, task);
-    return map;
-  }, [filteredTasks]);
-
   const columnMap = useMemo(() => {
     const map = new Map<string, Entity>();
     for (const col of columns) map.set(col.id, col);
     return map;
   }, [columns]);
 
+  return { columns, columnIdList, columnMap };
+}
+
+/** Tasks bucketed into their target columns plus the "first todo" pointer. */
+interface ColumnTaskBuckets {
+  taskMap: Map<string, Entity>;
+  baseLayout: ColumnLayout;
+  columnTasks: Map<string, Entity[]>;
+  firstTodoTaskId: string | null;
+}
+
+/**
+ * Bucket tasks into their target columns and pre-sort each bucket.
+ *
+ * Output order within each bucket honors the active grouping (when any) and
+ * then ordinal. Also exposes the first task in the todo column for the
+ * "do this next" helper.
+ */
+function useColumnTaskBuckets(
+  columns: Entity[],
+  tasks: Entity[],
+  groupField: string | undefined,
+  groupValue: string | undefined,
+): ColumnTaskBuckets {
+  const taskMap = useMemo(() => {
+    const map = new Map<string, Entity>();
+    for (const task of tasks) map.set(task.id, task);
+    return map;
+  }, [tasks]);
+
   const baseLayout = useMemo<ColumnLayout>(() => {
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
-    for (const task of filteredTasks) {
+    for (const task of tasks) {
       const col = getStr(task, "position_column");
       map.get(col)?.push(task.id);
     }
@@ -144,7 +150,7 @@ function useBoardLayout(
       );
     }
     return map;
-  }, [columns, filteredTasks, taskMap, groupField, groupValue]);
+  }, [columns, tasks, taskMap, groupField, groupValue]);
 
   const columnTasks = useMemo(() => {
     const map = new Map<string, Entity[]>();
@@ -160,11 +166,32 @@ function useBoardLayout(
 
   const firstTodoTaskId = useMemo(() => {
     if (columns.length === 0) return null;
-    const todoColId = columns[0].id;
-    const todoTaskIds = baseLayout.get(todoColId);
+    const todoTaskIds = baseLayout.get(columns[0].id);
     return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
   }, [columns, baseLayout]);
 
+  return { taskMap, baseLayout, columnTasks, firstTodoTaskId };
+}
+
+/** Moniker tables needed for cross-column keyboard navigation. */
+interface BoardMonikers {
+  columnTaskMonikers: Map<string, string[]>;
+  allBoardTaskMonikers: Set<string>;
+  allBoardHeaderMonikers: Set<string>;
+}
+
+/**
+ * Build the moniker tables that drive cross-column nav predicates.
+ *
+ * - `columnTaskMonikers` preserves per-column task moniker order so each
+ *   column can expose its left/right neighbor's moniker list.
+ * - The two `allBoard*` sets drive nav.first / nav.last claim predicates.
+ */
+function useBoardMonikers(
+  columns: Entity[],
+  baseLayout: ColumnLayout,
+  taskMap: Map<string, Entity>,
+): BoardMonikers {
   const columnTaskMonikers = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const col of columns) {
@@ -194,10 +221,47 @@ function useBoardLayout(
     return set;
   }, [columns]);
 
+  return { columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers };
+}
+
+/** Return value from useBoardLayout — all derived board data needed for rendering. */
+interface BoardLayoutResult {
+  columns: Entity[];
+  columnIdList: string[];
+  filteredTasks: Entity[];
+  taskMap: Map<string, Entity>;
+  columnMap: Map<string, Entity>;
+  baseLayout: ColumnLayout;
+  columnTasks: Map<string, Entity[]>;
+  firstTodoTaskId: string | null;
+  columnTaskMonikers: Map<string, string[]>;
+  allBoardTaskMonikers: Set<string>;
+  allBoardHeaderMonikers: Set<string>;
+}
+
+/**
+ * Derive all board layout data from raw board/task props.
+ *
+ * Thin composer over three focused hooks: column ordering, task bucketing,
+ * and moniker table construction. See each sub-hook for specifics.
+ */
+function useBoardLayout(
+  board: BoardData,
+  tasks: Entity[],
+  groupValue: string | undefined,
+): BoardLayoutResult {
+  const { groupField } = useActivePerspective();
+  const { columns, columnIdList, columnMap } = useColumnOrdering(board);
+  const { taskMap, baseLayout, columnTasks, firstTodoTaskId } =
+    useColumnTaskBuckets(columns, tasks, groupField, groupValue);
+  const { columnTaskMonikers, allBoardTaskMonikers, allBoardHeaderMonikers } =
+    useBoardMonikers(columns, baseLayout, taskMap);
+
   return {
     columns,
     columnIdList,
-    filteredTasks,
+    // Filtering is server-side; alias for clarity with downstream consumers.
+    filteredTasks: tasks,
     taskMap,
     columnMap,
     baseLayout,
@@ -209,98 +273,56 @@ function useBoardLayout(
   };
 }
 
-/** Return value from useBoardDragDrop — drag state and all event handlers. */
-interface BoardDragDropResult {
+/** @dnd-kit column-drag state and the three drag lifecycle handlers. */
+interface ColumnDragHandlers {
   activeColumn: Entity | null;
   currentColumnOrder: string[];
-  taskDrag: TaskDragState | null;
-  sensors: ReturnType<typeof useSensors>;
   handleColumnDragStart: (event: DragStartEvent) => void;
   handleColumnDragOver: (event: DragOverEvent) => void;
   handleColumnDragEnd: (event: DragEndEvent) => void;
-  handleTaskDragStart: (entity: Entity) => void;
-  handleTaskDragEnd: (entity: Entity, dropEffect: string) => void;
-  handleZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
 }
 
 /**
- * Manage all drag-and-drop state for the board.
+ * Manage @dnd-kit-driven column reordering with optimistic ordering.
  *
- * Handles column reordering (via @dnd-kit) and task dragging (via HTML5
- * drag), including optimistic column ordering, Escape cancellation, and
- * cross-board drop support.
+ * While a drag is in flight, `currentColumnOrder` reflects the optimistic
+ * position. After `drag end` the hook dispatches `column.reorder` and keeps
+ * the optimistic order visible until the backend refresh updates
+ * `columnIdList`, at which point the `useEffect` below clears it.
  */
-function useBoardDragDrop(
+/**
+ * Compute the next virtual column order in response to a drag-over event.
+ *
+ * Returns the current order unchanged when the drag is self-targeting or
+ * either id is missing — callers use referential equality to decide whether
+ * to commit the update.
+ */
+function computeDragOverOrder(event: DragOverEvent, order: string[]): string[] {
+  const { active, over } = event;
+  if (!over) return order;
+  const activeId = active.id as string;
+  const overId = over.id as string;
+  if (activeId === overId) return order;
+  const oldIndex = order.indexOf(activeId);
+  const newIndex = order.indexOf(overId);
+  if (oldIndex === -1 || newIndex === -1) return order;
+  return arrayMove(order, oldIndex, newIndex);
+}
+
+/**
+ * Build the async `onDragEnd` handler for a column reorder.
+ *
+ * Factored out so `useColumnDragHandlers` stays short — the drag-end logic
+ * is ~20 lines of validation + a dispatch call + optimistic-state cleanup.
+ */
+function useColumnDragEndHandler(
   columnIdList: string[],
-  columnMap: Map<string, Entity>,
-  taskMap: Map<string, Entity>,
-): BoardDragDropResult {
-  const { startSession, cancelSession, completeSession } = useDragSession();
+  virtualColumnOrder: string[] | null,
+  setVirtualColumnOrder: (v: string[] | null) => void,
+  setActiveColumn: (c: Entity | null) => void,
+): (event: DragEndEvent) => Promise<void> {
   const dispatch = useDispatchCommand();
-
-  // --- Column drag state (managed by @dnd-kit) ---
-  const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
-  const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(
-    null,
-  );
-  const currentColumnOrder = virtualColumnOrder ?? columnIdList;
-
-  // Clear virtual column order when real data catches up from the backend.
-  useEffect(() => {
-    setVirtualColumnOrder(null);
-  }, [columnIdList]);
-
-  // --- HTML5 task drag state ---
-  const [taskDrag, setTaskDrag] = useState<TaskDragState | null>(null);
-
-  // Cancel backend drag session on Escape during an active task drag
-  useEffect(() => {
-    if (!taskDrag) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        cancelSession();
-        setTaskDrag(null);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [taskDrag, cancelSession]);
-
-  // @dnd-kit sensors — columns only
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-  );
-
-  // --- Column drag handlers (@dnd-kit) ---
-  const handleColumnDragStart = useCallback(
-    (event: DragStartEvent) => {
-      const id = event.active.id as string;
-      setActiveColumn(columnMap.get(id) ?? null);
-      setVirtualColumnOrder([...columnIdList]);
-    },
-    [columnMap, columnIdList],
-  );
-
-  const handleColumnDragOver = useCallback(
-    (event: DragOverEvent) => {
-      const { active, over } = event;
-      if (!over || !virtualColumnOrder) return;
-      const activeId = active.id as string;
-      const overId = over.id as string;
-      if (activeId === overId) return;
-
-      const oldIndex = virtualColumnOrder.indexOf(activeId);
-      const newIndex = virtualColumnOrder.indexOf(overId);
-      if (oldIndex === -1 || newIndex === -1) return;
-
-      setVirtualColumnOrder(arrayMove(virtualColumnOrder, oldIndex, newIndex));
-    },
-    [virtualColumnOrder],
-  );
-
-  const handleColumnDragEnd = useCallback(
+  return useCallback(
     async (event: DragEndEvent) => {
       const colOrder = virtualColumnOrder ?? columnIdList;
       setActiveColumn(null);
@@ -331,12 +353,118 @@ function useBoardDragDrop(
         setVirtualColumnOrder(null);
       }
     },
-    [virtualColumnOrder, columnIdList],
+    [
+      virtualColumnOrder,
+      columnIdList,
+      dispatch,
+      setVirtualColumnOrder,
+      setActiveColumn,
+    ],
+  );
+}
+
+/**
+ * Manage @dnd-kit-driven column reordering with optimistic ordering.
+ *
+ * While a drag is in flight, `currentColumnOrder` reflects the optimistic
+ * position. After drag-end the hook dispatches `column.reorder` and keeps
+ * the optimistic order visible until the backend refresh updates
+ * `columnIdList`.
+ */
+function useColumnDragHandlers(
+  columnIdList: string[],
+  columnMap: Map<string, Entity>,
+): ColumnDragHandlers {
+  const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
+  const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(
+    null,
+  );
+  const currentColumnOrder = virtualColumnOrder ?? columnIdList;
+
+  // Clear virtual column order when real data catches up from the backend.
+  useEffect(() => {
+    setVirtualColumnOrder(null);
+  }, [columnIdList]);
+
+  const handleColumnDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const id = event.active.id as string;
+      setActiveColumn(columnMap.get(id) ?? null);
+      setVirtualColumnOrder([...columnIdList]);
+    },
+    [columnMap, columnIdList],
   );
 
-  // --- HTML5 task drag handlers ---
-  const persistMove = useCallback(
-    async (descriptor: DropZoneDescriptor, taskId: string, _entity: Entity) => {
+  const handleColumnDragOver = useCallback(
+    (event: DragOverEvent) => {
+      if (!virtualColumnOrder) return;
+      const next = computeDragOverOrder(event, virtualColumnOrder);
+      if (next !== virtualColumnOrder) setVirtualColumnOrder(next);
+    },
+    [virtualColumnOrder],
+  );
+
+  const handleColumnDragEnd = useColumnDragEndHandler(
+    columnIdList,
+    virtualColumnOrder,
+    setVirtualColumnOrder,
+    setActiveColumn,
+  );
+
+  return {
+    activeColumn,
+    currentColumnOrder,
+    handleColumnDragStart,
+    handleColumnDragOver,
+    handleColumnDragEnd,
+  };
+}
+
+/** HTML5 task-drag state and its three lifecycle handlers. */
+interface TaskDragHandlers {
+  taskDrag: TaskDragState | null;
+  handleTaskDragStart: (entity: Entity) => void;
+  handleTaskDragEnd: (entity: Entity, dropEffect: string) => void;
+  handleZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
+}
+
+/**
+ * Bind a window-level Escape handler that cancels an active task drag.
+ *
+ * The backend drag session is separate from the HTML5 drag; Escape must
+ * cancel both so downstream listeners don't think a drag is still in flight.
+ */
+function useTaskDragEscapeCancel(
+  taskDrag: TaskDragState | null,
+  cancelSession: () => void,
+  setTaskDrag: (v: TaskDragState | null) => void,
+): void {
+  useEffect(() => {
+    if (!taskDrag) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        cancelSession();
+        setTaskDrag(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [taskDrag, cancelSession, setTaskDrag]);
+}
+
+/**
+ * Build the `persistMove` callback that dispatches `task.move` for a drop.
+ *
+ * Board identity is resolved from the scope chain by `useDispatchCommand` —
+ * callers only need to pass the drop descriptor and task id.
+ */
+function usePersistTaskMove(): (
+  descriptor: DropZoneDescriptor,
+  taskId: string,
+) => Promise<void> {
+  const dispatch = useDispatchCommand();
+  return useCallback(
+    async (descriptor: DropZoneDescriptor, taskId: string) => {
       try {
         const args: Record<string, unknown> = {
           id: taskId,
@@ -344,26 +472,32 @@ function useBoardDragDrop(
         };
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;
-        // Board identity is resolved from the scope chain by useDispatchCommand —
-        // no explicit boardPath needed.
-        await dispatch("task.move", {
-          args,
-          target: `task:${taskId}`,
-        });
+        await dispatch("task.move", { args, target: `task:${taskId}` });
       } catch (e) {
         console.error("Failed to move task:", e);
       }
     },
-    [],
+    [dispatch],
   );
+}
+
+/**
+ * Manage HTML5-drag task state: start, end, and the drop-zone handler.
+ *
+ * Delegates Escape cancellation and `task.move` dispatch to dedicated hooks
+ * so this composer stays compact. Cross-board drops are forwarded to the
+ * drag session; same-board drops persist directly.
+ */
+function useTaskDragHandlers(taskMap: Map<string, Entity>): TaskDragHandlers {
+  const { startSession, cancelSession, completeSession } = useDragSession();
+  const [taskDrag, setTaskDrag] = useState<TaskDragState | null>(null);
+  useTaskDragEscapeCancel(taskDrag, cancelSession, setTaskDrag);
+  const persistMove = usePersistTaskMove();
 
   const handleTaskDragStart = useCallback(
     (entity: Entity) => {
       const sourceColumn = getStr(entity, "position_column");
-      setTaskDrag({
-        sourceTaskId: entity.id,
-        sourceColumn,
-      });
+      setTaskDrag({ sourceTaskId: entity.id, sourceColumn });
       startSession(entity.id, entity.fields, false);
     },
     [startSession],
@@ -376,9 +510,7 @@ function useBoardDragDrop(
       // Only cancel the backend session if the drop was rejected (no valid target).
       // Successful drops are handled by handleZoneDrop which calls persistMove
       // or completeSession directly.
-      if (dropEffect === "none") {
-        cancelSession();
-      }
+      if (dropEffect === "none") cancelSession();
     },
     [cancelSession],
   );
@@ -386,26 +518,15 @@ function useBoardDragDrop(
   const handleZoneDrop = useCallback(
     (descriptor: DropZoneDescriptor, taskData: string) => {
       setTaskDrag(null);
-      let entity: Entity | null = null;
-      if (taskData) {
-        try {
-          entity = JSON.parse(taskData);
-        } catch {
-          // ignore
-        }
-      }
-
+      const entity = parseTaskDropPayload(taskData);
       if (!entity) {
         cancelSession();
         return;
       }
-
-      const taskId = entity.id;
-      const isLocalTask = taskMap.has(taskId);
-      if (isLocalTask) {
+      if (taskMap.has(entity.id)) {
         // Same-board drop — descriptor carries all placement params
         cancelSession();
-        persistMove(descriptor, taskId, entity);
+        persistMove(descriptor, entity.id);
       } else {
         // Cross-board drop — pass zone's placement to the session
         completeSession(descriptor.columnId, {
@@ -417,18 +538,51 @@ function useBoardDragDrop(
     [taskMap, persistMove, cancelSession, completeSession],
   );
 
-  return {
-    activeColumn,
-    currentColumnOrder,
-    taskDrag,
-    sensors,
-    handleColumnDragStart,
-    handleColumnDragOver,
-    handleColumnDragEnd,
-    handleTaskDragStart,
-    handleTaskDragEnd,
-    handleZoneDrop,
-  };
+  return { taskDrag, handleTaskDragStart, handleTaskDragEnd, handleZoneDrop };
+}
+
+/**
+ * Parse the JSON string carried on an HTML5 drag's dataTransfer.
+ *
+ * Returns `null` when the payload is empty or malformed — callers treat that
+ * as "rejected drop" and cancel the session.
+ */
+function parseTaskDropPayload(taskData: string): Entity | null {
+  if (!taskData) return null;
+  try {
+    return JSON.parse(taskData) as Entity;
+  } catch {
+    return null;
+  }
+}
+
+/** Return value from useBoardDragDrop — drag state and all event handlers. */
+interface BoardDragDropResult extends ColumnDragHandlers, TaskDragHandlers {
+  sensors: ReturnType<typeof useSensors>;
+}
+
+/**
+ * Compose column and task drag handlers and expose the @dnd-kit sensors.
+ *
+ * The two concerns (column reordering via @dnd-kit vs task dragging via
+ * HTML5 drag) live in their own hooks — this hook is just wiring.
+ */
+function useBoardDragDrop(
+  columnIdList: string[],
+  columnMap: Map<string, Entity>,
+  taskMap: Map<string, Entity>,
+): BoardDragDropResult {
+  const columnDrag = useColumnDragHandlers(columnIdList, columnMap);
+  const taskDragHandlers = useTaskDragHandlers(taskMap);
+
+  // @dnd-kit sensors — columns only
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  return { ...columnDrag, ...taskDragHandlers, sensors };
 }
 
 /** Props for the drag overlay sub-component. */
@@ -455,13 +609,86 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
 }
 
 /**
- * Board view that renders columns and cards.
+ * Resolve the column id the user is focused on (or the leftmost as fallback).
  *
- * Navigation is pull-based: each card and column header FocusScope declares
- * claimWhen predicates. The global KeybindingHandler broadcasts nav.up/down/
- * left/right/first/last, and each predicate evaluates whether it should claim
- * focus. No push-based cursor state is needed.
+ * A column moniker (`column:<id>`) resolves directly. A task moniker
+ * (`task:<id>`) resolves to its home column via `taskMap`. Any other or
+ * missing moniker falls back to the first column.
  */
+function resolveFocusedColumnId(
+  focusedMoniker: string | null,
+  columns: Entity[],
+  taskMap: Map<string, Entity>,
+): string | null {
+  const fallback = columns[0]?.id ?? null;
+  if (!focusedMoniker) return fallback;
+  if (focusedMoniker.startsWith("column:"))
+    return focusedMoniker.slice("column:".length);
+  if (focusedMoniker.startsWith("task:")) {
+    const entity = taskMap.get(focusedMoniker.slice("task:".length));
+    if (entity) return getStr(entity, "position_column") || fallback;
+  }
+  return fallback;
+}
+
+/** Shared dependencies passed to each board-action command factory. */
+interface BoardActionDeps {
+  columns: Entity[];
+  taskMap: Map<string, Entity>;
+  focusedMonikerRef: React.RefObject<string | null>;
+  broadcastRef: React.RefObject<(cmd: string) => void>;
+  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
+  dispatchInspect: ReturnType<typeof useDispatchCommand>;
+}
+
+/** Factory for the "inspect focused entity" command. */
+function makeInspectCommand(deps: BoardActionDeps): CommandDef {
+  return {
+    id: "board.inspect",
+    name: "Inspect",
+    keys: { vim: "Enter", cua: "Enter" },
+    execute: () => {
+      const fm = deps.focusedMonikerRef.current;
+      if (fm) deps.dispatchInspect({ target: fm }).catch(console.error);
+    },
+  };
+}
+
+/** Factory for the "create task in focused column" command. */
+function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
+  return {
+    id: "board.newTask",
+    name: "New Task",
+    keys: { vim: "o", cua: "Mod+Enter" },
+    execute: () => {
+      const colId = resolveFocusedColumnId(
+        deps.focusedMonikerRef.current,
+        deps.columns,
+        deps.taskMap,
+      );
+      if (colId) deps.handleAddTaskRef.current(colId);
+    },
+  };
+}
+
+/** Factory for a nav-broadcast command (first/last column). */
+function makeNavBroadcastCommand(
+  deps: BoardActionDeps,
+  id: string,
+  name: string,
+  keys: CommandDef["keys"],
+  navCmd: string,
+): CommandDef {
+  return {
+    id,
+    name,
+    keys,
+    execute: () => {
+      if (deps.columns.length > 0) deps.broadcastRef.current(navCmd);
+    },
+  };
+}
+
 /**
  * Board-level action commands: inspect, new task, first/last column navigation.
  *
@@ -477,123 +704,73 @@ function useBoardActionCommands(
   dispatchInspect: ReturnType<typeof useDispatchCommand>,
 ): CommandDef[] {
   return useMemo<CommandDef[]>(() => {
-    const findFocusedColumnId = (): string | null => {
-      const fm = focusedMonikerRef.current;
-      if (!fm) return columns[0]?.id ?? null;
-      if (fm.startsWith("column:")) return fm.slice("column:".length);
-      if (fm.startsWith("task:")) {
-        const entity = taskMap.get(fm.slice("task:".length));
-        if (entity)
-          return getStr(entity, "position_column") || (columns[0]?.id ?? null);
-      }
-      return columns[0]?.id ?? null;
+    const deps: BoardActionDeps = {
+      columns,
+      taskMap,
+      focusedMonikerRef,
+      broadcastRef,
+      handleAddTaskRef,
+      dispatchInspect,
     };
-
     return [
-      {
-        id: "board.inspect",
-        name: "Inspect",
-        keys: { vim: "Enter", cua: "Enter" },
-        execute: () => {
-          const fm = focusedMonikerRef.current;
-          if (fm) dispatchInspect({ target: fm }).catch(console.error);
-        },
-      },
-      {
-        id: "board.newTask",
-        name: "New Task",
-        keys: { vim: "o", cua: "Mod+Enter" },
-        execute: () => {
-          const colId = findFocusedColumnId();
-          if (colId) handleAddTaskRef.current(colId);
-        },
-      },
-      {
-        id: "board.firstColumn",
-        name: "First Column",
-        keys: { vim: "0", cua: "Mod+Home" },
-        execute: () => {
-          if (columns.length > 0) broadcastRef.current("nav.first");
-        },
-      },
-      {
-        id: "board.lastColumn",
-        name: "Last Column",
-        keys: { vim: "$", cua: "Mod+End" },
-        execute: () => {
-          if (columns.length > 0) broadcastRef.current("nav.last");
-        },
-      },
+      makeInspectCommand(deps),
+      makeNewTaskCommand(deps),
+      makeNavBroadcastCommand(
+        deps,
+        "board.firstColumn",
+        "First Column",
+        { vim: "0", cua: "Mod+Home" },
+        "nav.first",
+      ),
+      makeNavBroadcastCommand(
+        deps,
+        "board.lastColumn",
+        "Last Column",
+        { vim: "$", cua: "Mod+End" },
+        "nav.last",
+      ),
     ];
-  }, [columns, taskMap, dispatchInspect]);
-}
-
-/**
- * Board view that renders columns and cards.
- *
- * Navigation is pull-based: each card and column header FocusScope declares
- * claimWhen predicates. The global KeybindingHandler broadcasts nav.up/down/
- * left/right/first/last, and each predicate evaluates whether it should claim
- * focus. No push-based cursor state is needed.
- */
-export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
-  const boardMoniker = board.board.moniker;
-  const boardCommands = useEntityCommands("board", "board");
-  const dispatch = useDispatchCommand();
-  const dispatchInspect = useDispatchCommand("ui.inspect");
-  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
-  const focusedMonikerRef = useRef(focusedMoniker);
-  focusedMonikerRef.current = focusedMoniker;
-  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  const layout = useBoardLayout(board, tasks, groupValue);
-  const {
-    columns,
-    columnIdList,
-    taskMap,
-    columnMap,
-    columnTasks,
-    firstTodoTaskId,
-    columnTaskMonikers,
-    allBoardTaskMonikers,
-    allBoardHeaderMonikers,
-  } = layout;
-  const dragDrop = useBoardDragDrop(columnIdList, columnMap, taskMap);
-  const {
-    activeColumn,
-    currentColumnOrder,
-    taskDrag,
-    sensors,
-    handleColumnDragStart,
-    handleColumnDragOver,
-    handleColumnDragEnd,
-    handleTaskDragStart,
-    handleTaskDragEnd,
-    handleZoneDrop,
-  } = dragDrop;
-
-  const boardActionCommands = useBoardActionCommands(
+  }, [
     columns,
     taskMap,
+    dispatchInspect,
     focusedMonikerRef,
     broadcastRef,
     handleAddTaskRef,
-    dispatchInspect,
-  );
+  ]);
+}
 
+/**
+ * Scroll the focused moniker's element into view within the board strip.
+ *
+ * Kept as its own hook so the main BoardView body stays short.
+ */
+function useScrollFocusedIntoView(
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>,
+  focusedMoniker: string | null,
+): void {
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || !focusedMoniker) return;
     const el = container.querySelector<HTMLElement>(
-      `[data-moniker="${focusedMoniker}"]`,
+      `[data-moniker="${CSS.escape(focusedMoniker)}"]`,
     );
     if (el?.scrollIntoView)
       el.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [focusedMoniker]);
+  }, [scrollContainerRef, focusedMoniker]);
+}
 
+/**
+ * Focus the first task (or first column header) exactly once on mount.
+ *
+ * Subsequent focus is driven by pull-based claimWhen predicates — we only
+ * need to seed the initial selection.
+ */
+function useInitialBoardFocus(
+  columns: Entity[],
+  columnTaskMonikers: Map<string, string[]>,
+  setFocus: (moniker: string) => void,
+): void {
   const initialFocusDone = useRef(false);
   useEffect(() => {
     if (initialFocusDone.current) return;
@@ -607,8 +784,20 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
     }
     if (columns.length > 0) setFocus(columns[0].moniker);
   }, [columns, columnTaskMonikers, setFocus]);
+}
 
-  const handleAddTask = useCallback(
+/**
+ * Build the `onAddTask` callback that creates a task in the given column.
+ *
+ * On success, focus moves to the newly-created task. On failure, surfaces
+ * the error via a toast.
+ */
+function useAddTaskHandler(
+  columnMap: Map<string, Entity>,
+  setFocus: (moniker: string) => void,
+): (columnId: string) => Promise<void> {
+  const dispatch = useDispatchCommand();
+  return useCallback(
     async (columnId: string) => {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
@@ -623,86 +812,281 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
         );
       }
     },
-    [columnMap, setFocus],
+    [columnMap, setFocus, dispatch],
   );
+}
+
+/**
+ * Build the header-moniker string for a neighbor column, or null.
+ *
+ * Neighbor columns expose a `<moniker>.name` target that `ColumnView` uses
+ * to wire its cross-column nav predicates; callers pass `null` when there
+ * is no neighbor on that side.
+ */
+function neighborHeaderMoniker(
+  neighborId: string | null,
+  columnMap: Map<string, Entity>,
+): string | null {
+  if (!neighborId) return null;
+  const col = columnMap.get(neighborId);
+  return `${col?.moniker ?? `column:${neighborId}`}.name`;
+}
+
+/** Props for a single positioned column inside the strip. */
+interface BoardColumnItemProps {
+  col: Entity;
+  index: number;
+  total: number;
+  prevColId: string | null;
+  nextColId: string | null;
+  layout: BoardLayoutResult;
+  taskDrag: TaskDragState | null;
+  handleAddTask: (columnId: string) => void;
+  handleTaskDragStart: (entity: Entity) => void;
+  handleTaskDragEnd: (entity: Entity, dropEffect: string) => void;
+  handleZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
+}
+
+/**
+ * Render one sortable column with its neighbor moniker wiring.
+ *
+ * Kept as its own component so the strip map body stays tiny — only
+ * `BoardColumnStrip` knows about neighbor indices; this component takes
+ * the resolved ids as props.
+ */
+function BoardColumnItem({
+  col,
+  index,
+  total,
+  prevColId,
+  nextColId,
+  layout,
+  taskDrag,
+  handleAddTask,
+  handleTaskDragStart,
+  handleTaskDragEnd,
+  handleZoneDrop,
+}: BoardColumnItemProps) {
+  const {
+    columnMap,
+    columnTasks,
+    firstTodoTaskId,
+    columnTaskMonikers,
+    allBoardTaskMonikers,
+    allBoardHeaderMonikers,
+  } = layout;
+  return (
+    <SortableColumn id={col.id} showSeparator={index > 0}>
+      <ColumnView
+        column={col}
+        tasks={columnTasks.get(col.id) ?? []}
+        onAddTask={index === 0 ? handleAddTask : undefined}
+        onTaskDragStart={handleTaskDragStart}
+        onTaskDragEnd={handleTaskDragEnd}
+        onDrop={handleZoneDrop}
+        dragTaskId={taskDrag?.sourceTaskId ?? null}
+        firstTodoTaskId={firstTodoTaskId}
+        leftColumnTaskMonikers={
+          prevColId ? (columnTaskMonikers.get(prevColId) ?? []) : []
+        }
+        leftColumnHeaderMoniker={neighborHeaderMoniker(prevColId, columnMap)}
+        rightColumnTaskMonikers={
+          nextColId ? (columnTaskMonikers.get(nextColId) ?? []) : []
+        }
+        rightColumnHeaderMoniker={neighborHeaderMoniker(nextColId, columnMap)}
+        allBoardTaskMonikers={allBoardTaskMonikers}
+        allBoardHeaderMonikers={allBoardHeaderMonikers}
+        isFirstColumn={index === 0}
+        isLastColumn={index === total - 1}
+      />
+    </SortableColumn>
+  );
+}
+
+/** Props for the column strip sub-component. */
+interface BoardColumnStripProps {
+  layout: BoardLayoutResult;
+  currentColumnOrder: string[];
+  taskDrag: TaskDragState | null;
+  handleAddTask: (columnId: string) => void;
+  handleTaskDragStart: (entity: Entity) => void;
+  handleTaskDragEnd: (entity: Entity, dropEffect: string) => void;
+  handleZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
+}
+
+/**
+ * Render the horizontal strip of sortable columns inside the scroll container.
+ *
+ * Wraps the column list in a @dnd-kit SortableContext and delegates each
+ * slot to `BoardColumnItem`.
+ */
+function BoardColumnStrip({
+  layout,
+  currentColumnOrder,
+  taskDrag,
+  handleAddTask,
+  handleTaskDragStart,
+  handleTaskDragEnd,
+  handleZoneDrop,
+}: BoardColumnStripProps) {
+  const { columnMap } = layout;
+  return (
+    <SortableContext
+      items={currentColumnOrder}
+      strategy={horizontalListSortingStrategy}
+    >
+      {currentColumnOrder.map((colId, i) => {
+        const col = columnMap.get(colId);
+        if (!col) return null;
+        const prevColId = i > 0 ? currentColumnOrder[i - 1] : null;
+        const nextColId =
+          i < currentColumnOrder.length - 1 ? currentColumnOrder[i + 1] : null;
+        return (
+          <BoardColumnItem
+            key={col.id}
+            col={col}
+            index={i}
+            total={currentColumnOrder.length}
+            prevColId={prevColId}
+            nextColId={nextColId}
+            layout={layout}
+            taskDrag={taskDrag}
+            handleAddTask={handleAddTask}
+            handleTaskDragStart={handleTaskDragStart}
+            handleTaskDragEnd={handleTaskDragEnd}
+            handleZoneDrop={handleZoneDrop}
+          />
+        );
+      })}
+    </SortableContext>
+  );
+}
+
+/** Props for the inner DnD-wrapped board body. */
+interface BoardDndWrapperProps {
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  dragDrop: BoardDragDropResult;
+  layout: BoardLayoutResult;
+  handleAddTask: (columnId: string) => void;
+}
+
+/**
+ * Wrap the column strip in a DndContext plus the `min-w-0` scroll container
+ * that owns horizontal overflow. Kept separate so `BoardView` stays focused
+ * on composing scope/command providers.
+ *
+ * The `min-w-0 overflow-x-auto` classes on the inner div are load-bearing —
+ * they keep the column strip from propagating its intrinsic width up through
+ * flex ancestors and scrolling the app chrome.
+ */
+function BoardDndWrapper({
+  scrollContainerRef,
+  dragDrop,
+  layout,
+  handleAddTask,
+}: BoardDndWrapperProps) {
+  return (
+    <DndContext
+      sensors={dragDrop.sensors}
+      onDragStart={dragDrop.handleColumnDragStart}
+      onDragOver={dragDrop.handleColumnDragOver}
+      onDragEnd={dragDrop.handleColumnDragEnd}
+    >
+      <div
+        ref={scrollContainerRef}
+        className="flex flex-1 min-h-0 min-w-0 overflow-x-auto pl-2"
+      >
+        <BoardColumnStrip
+          layout={layout}
+          currentColumnOrder={dragDrop.currentColumnOrder}
+          taskDrag={dragDrop.taskDrag}
+          handleAddTask={handleAddTask}
+          handleTaskDragStart={dragDrop.handleTaskDragStart}
+          handleTaskDragEnd={dragDrop.handleTaskDragEnd}
+          handleZoneDrop={dragDrop.handleZoneDrop}
+        />
+      </div>
+      <BoardDragOverlay activeColumn={dragDrop.activeColumn} />
+    </DndContext>
+  );
+}
+
+/** Mutable refs BoardView threads into its action-command factories. */
+interface BoardCommandRefs {
+  focusedMonikerRef: React.RefObject<string | null>;
+  broadcastRef: React.RefObject<(cmd: string) => void>;
+  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
+}
+
+/**
+ * Allocate and keep up-to-date the refs used by board action commands.
+ *
+ * The commands are memoized but need to see the latest focused moniker and
+ * add-task callback; refs avoid rebuilding the command list on every render.
+ */
+function useBoardCommandRefs(
+  focusedMoniker: string | null,
+  broadcastNavCommand: (cmd: string) => void,
+): BoardCommandRefs {
+  const focusedMonikerRef = useRef(focusedMoniker);
+  focusedMonikerRef.current = focusedMoniker;
+  const broadcastRef = useRef(broadcastNavCommand);
+  broadcastRef.current = broadcastNavCommand;
+  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
+  return { focusedMonikerRef, broadcastRef, handleAddTaskRef };
+}
+
+/**
+ * Board view that renders columns and cards.
+ *
+ * Navigation is pull-based: each card and column header FocusScope declares
+ * claimWhen predicates. The global KeybindingHandler broadcasts nav.up/down/
+ * left/right/first/last, and each predicate evaluates whether it should claim
+ * focus. No push-based cursor state is needed.
+ */
+export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
+  const boardCommands = useEntityCommands("board", "board");
+  const dispatchInspect = useDispatchCommand("ui.inspect");
+  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const { focusedMonikerRef, broadcastRef, handleAddTaskRef } =
+    useBoardCommandRefs(focusedMoniker, broadcastNavCommand);
+
+  const layout = useBoardLayout(board, tasks, groupValue);
+  const dragDrop = useBoardDragDrop(
+    layout.columnIdList,
+    layout.columnMap,
+    layout.taskMap,
+  );
+
+  const boardActionCommands = useBoardActionCommands(
+    layout.columns,
+    layout.taskMap,
+    focusedMonikerRef,
+    broadcastRef,
+    handleAddTaskRef,
+    dispatchInspect,
+  );
+
+  useScrollFocusedIntoView(scrollContainerRef, focusedMoniker);
+  useInitialBoardFocus(layout.columns, layout.columnTaskMonikers, setFocus);
+
+  const handleAddTask = useAddTaskHandler(layout.columnMap, setFocus);
   handleAddTaskRef.current = handleAddTask;
 
   return (
     <FocusScope
-      moniker={boardMoniker}
+      moniker={board.board.moniker}
       commands={boardCommands}
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardActionCommands}>
-        <DndContext
-          sensors={sensors}
-          onDragStart={handleColumnDragStart}
-          onDragOver={handleColumnDragOver}
-          onDragEnd={handleColumnDragEnd}
-        >
-          <div
-            ref={scrollContainerRef}
-            className="flex flex-1 min-h-0 overflow-x-auto pl-2"
-          >
-            <SortableContext
-              items={currentColumnOrder}
-              strategy={horizontalListSortingStrategy}
-            >
-              {currentColumnOrder.map((colId, i) => {
-                const col = columnMap.get(colId);
-                if (!col) return null;
-                const prevColId = i > 0 ? currentColumnOrder[i - 1] : null;
-                const nextColId =
-                  i < currentColumnOrder.length - 1
-                    ? currentColumnOrder[i + 1]
-                    : null;
-                return (
-                  <SortableColumn
-                    key={col.id}
-                    id={col.id}
-                    showSeparator={i > 0}
-                  >
-                    <ColumnView
-                      column={col}
-                      tasks={columnTasks.get(col.id) ?? []}
-                      onAddTask={i === 0 ? handleAddTask : undefined}
-                      onTaskDragStart={handleTaskDragStart}
-                      onTaskDragEnd={handleTaskDragEnd}
-                      onDrop={handleZoneDrop}
-                      dragTaskId={taskDrag?.sourceTaskId ?? null}
-                      firstTodoTaskId={firstTodoTaskId}
-                      leftColumnTaskMonikers={
-                        prevColId
-                          ? (columnTaskMonikers.get(prevColId) ?? [])
-                          : []
-                      }
-                      leftColumnHeaderMoniker={
-                        prevColId
-                          ? `${columnMap.get(prevColId)?.moniker ?? `column:${prevColId}`}.name`
-                          : null
-                      }
-                      rightColumnTaskMonikers={
-                        nextColId
-                          ? (columnTaskMonikers.get(nextColId) ?? [])
-                          : []
-                      }
-                      rightColumnHeaderMoniker={
-                        nextColId
-                          ? `${columnMap.get(nextColId)?.moniker ?? `column:${nextColId}`}.name`
-                          : null
-                      }
-                      allBoardTaskMonikers={allBoardTaskMonikers}
-                      allBoardHeaderMonikers={allBoardHeaderMonikers}
-                      isFirstColumn={i === 0}
-                      isLastColumn={i === currentColumnOrder.length - 1}
-                    />
-                  </SortableColumn>
-                );
-              })}
-            </SortableContext>
-          </div>
-          <BoardDragOverlay activeColumn={activeColumn} />
-        </DndContext>
+        <BoardDndWrapper
+          scrollContainerRef={scrollContainerRef}
+          dragDrop={dragDrop}
+          layout={layout}
+          handleAddTask={handleAddTask}
+        />
       </CommandScopeProvider>
     </FocusScope>
   );

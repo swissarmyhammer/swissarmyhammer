@@ -147,6 +147,105 @@ describe("BoardView navigation commands", () => {
   });
 });
 
+describe("BoardView scrollContainer layout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  it("scroll container has the min-w-0 and overflow-x-auto classes", () => {
+    const { container } = renderBoard();
+    // scrollContainerRef is the direct parent of the SortableContext wrapper.
+    // It must have min-w-0 (so it shrinks to its flex share) plus the
+    // overflow-x-auto that drives horizontal scrolling. Without min-w-0 the
+    // column strip propagates its intrinsic width up through flex parents.
+    const scrollContainer = container.querySelector(
+      "div.overflow-x-auto",
+    ) as HTMLElement;
+    expect(scrollContainer).toBeTruthy();
+    expect(scrollContainer.className).toContain("min-w-0");
+    expect(scrollContainer.className).toContain("overflow-x-auto");
+    expect(scrollContainer.className).toContain("min-h-0");
+    expect(scrollContainer.className).toContain("flex-1");
+  });
+
+  it("scrollWidth exceeds clientWidth when the column strip is wider than the viewport", () => {
+    // Render with many columns so the tree has multiple column children, then
+    // force the scroll container wider than its parent via an inline-width
+    // probe injected alongside the columns. This sidesteps the fact that
+    // Tailwind utilities (like `min-w-[20em]`) are not compiled into the
+    // test environment — we just need the scroll container to actually have
+    // overflow to verify that it, not some ancestor, owns the scrolling.
+    const manyColumns: Entity[] = [];
+    const manyTasks: Entity[] = [];
+    for (let i = 0; i < 3; i++) {
+      manyColumns.push(makeColumn(`c${i}`, `Col ${i}`, i));
+      manyTasks.push(makeTask(`t${i}`, `c${i}`, "a0"));
+    }
+    const wideBoard: BoardData = { ...board, columns: manyColumns };
+
+    // Constrain the rendered tree to 640px so the 2000px probe below
+    // overflows horizontally.
+    const host = document.createElement("div");
+    host.style.width = "640px";
+    host.style.height = "480px";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.overflow = "hidden";
+    document.body.appendChild(host);
+
+    try {
+      const { container } = render(
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/wide">
+                  <DragSessionProvider>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        flex: "1 1 0%",
+                        minHeight: 0,
+                        minWidth: 0,
+                      }}
+                    >
+                      <BoardView board={wideBoard} tasks={manyTasks} />
+                    </div>
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>,
+        { container: host },
+      );
+
+      const scrollContainer = container.querySelector(
+        "div.overflow-x-auto",
+      ) as HTMLElement;
+      expect(scrollContainer).toBeTruthy();
+
+      // Inject a 2000px-wide probe as a child of the scroll container to
+      // force horizontal overflow. Without `min-w-0` on the scroll
+      // container, this would propagate up and make body scroll; with
+      // `min-w-0` the overflow stays here and scrollWidth > clientWidth.
+      const probe = document.createElement("div");
+      probe.style.width = "2000px";
+      probe.style.height = "20px";
+      probe.style.flex = "0 0 auto";
+      scrollContainer.appendChild(probe);
+
+      expect(scrollContainer.scrollWidth).toBeGreaterThan(
+        scrollContainer.clientWidth,
+      );
+    } finally {
+      host.remove();
+    }
+  });
+});
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
