@@ -142,6 +142,15 @@ vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ windows: {} }),
 }));
 
+// Mock perspective-container so BoardView can render in isolation.
+vi.mock("@/components/perspective-container", () => ({
+  useActivePerspective: () => ({
+    activePerspective: null,
+    applySort: (entities: unknown[]) => entities,
+    groupField: undefined,
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports — after mocks.
 // ---------------------------------------------------------------------------
@@ -168,6 +177,14 @@ const TAILWIND_SHIM = `
 .overflow-hidden { overflow: hidden; }
 .overflow-x-auto { overflow-x: auto; }
 .pl-2 { padding-left: 0.5rem; }
+/*
+ * Column-width utilities used in column-view.tsx. These are arbitrary-value
+ * Tailwind classes whose names contain brackets — escape the brackets for
+ * CSS selectors so the shim matches the real class names.
+ */
+.min-w-\\[24em\\] { min-width: 24em; }
+.max-w-\\[48em\\] { max-width: 48em; }
+.shrink-0 { flex-shrink: 0; }
 `;
 
 function installTailwindShim() {
@@ -382,5 +399,213 @@ describe("App layout — horizontal overflow containment", () => {
     // Body still has no horizontal scroll after the inner scroll.
     expect(document.body.scrollWidth).toBe(document.body.clientWidth);
     mount.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Column width behavior — verify min-w-[24em] + shrink-0 hold the line.
+// ---------------------------------------------------------------------------
+
+import { BoardView } from "@/components/board-view";
+import type { BoardData, Entity } from "@/types/kanban";
+
+/**
+ * Build a column entity with the given id, display name, and order. The
+ * field shape matches the real kanban column schema used by BoardView.
+ */
+function makeColumnFixture(id: string, name: string, order: number): Entity {
+  return {
+    id,
+    entity_type: "column",
+    moniker: `column:${id}`,
+    fields: { name, order },
+  };
+}
+
+/**
+ * Render six columns inside an 800px host and verify that every column
+ * keeps its 24em minimum width (shrink-0 stops collapse) and that the
+ * board's horizontal scroll container — not the chrome — owns the overflow.
+ */
+describe("Board column widths — min 24em bound holds, overflow stays in scroll container", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    // Reset horizontal scroll state between runs.
+    document.documentElement.scrollLeft = 0;
+    document.body.scrollLeft = 0;
+  });
+
+  it("with 6 columns in an 800px viewport, every column is ≥24em wide and the board strip scrolls horizontally", () => {
+    installTailwindShim();
+
+    // 800px ≪ 6 × 24em (≈ 2304px at 16px/em). With shrink-0 on each column
+    // the strip becomes wider than the host, and the scroll container's
+    // overflow-x-auto absorbs the overflow — nothing propagates upward.
+    const host = document.createElement("div");
+    host.style.width = "800px";
+    host.style.height = "600px";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.overflow = "hidden";
+    host.setAttribute("data-column-width-host", "");
+    document.body.appendChild(host);
+
+    const columns: Entity[] = [];
+    for (let i = 0; i < 6; i++) {
+      columns.push(makeColumnFixture(`c${i}`, `Col ${i}`, i));
+    }
+    const boardFixture: BoardData = {
+      board: {
+        id: "board-1",
+        entity_type: "board",
+        moniker: "board:board-1",
+        fields: { name: "Wide Board" },
+      },
+      columns,
+      tags: [],
+      virtualTagMeta: [],
+      summary: {
+        total_tasks: 0,
+        total_actors: 0,
+        ready_tasks: 0,
+        blocked_tasks: 0,
+        done_tasks: 0,
+        percent_complete: 0,
+      },
+    };
+
+    try {
+      render(
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/wide-columns">
+                  <DragSessionProvider>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        flex: "1 1 0%",
+                        minHeight: 0,
+                        minWidth: 0,
+                      }}
+                    >
+                      <BoardView board={boardFixture} tasks={[]} />
+                    </div>
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>,
+        { container: host },
+      );
+
+      const rootFontSize = parseFloat(
+        getComputedStyle(document.documentElement).fontSize,
+      );
+      const expectedMinPx = 24 * rootFontSize;
+
+      // Every column FocusScope carries data-moniker="column:<id>" — select
+      // by the stable moniker attribute rather than by Tailwind class names.
+      // Exclude "column:<id>.name" (the header's inner FocusScope for the
+      // name field, used by keyboard navigation).
+      const columnEls = host.querySelectorAll<HTMLElement>(
+        '[data-moniker^="column:"]:not([data-moniker*="."])',
+      );
+      expect(columnEls.length).toBe(6);
+      for (const el of columnEls) {
+        // Allow sub-pixel rounding: use Math.floor against the 24em target.
+        expect(el.getBoundingClientRect().width).toBeGreaterThanOrEqual(
+          Math.floor(expectedMinPx),
+        );
+      }
+
+      const scrollContainer = host.querySelector<HTMLElement>(
+        "div.overflow-x-auto",
+      );
+      expect(scrollContainer).toBeTruthy();
+      expect(scrollContainer!.scrollWidth).toBeGreaterThan(
+        scrollContainer!.clientWidth,
+      );
+
+      // The overflow is contained to the scroll container — nothing leaks
+      // out to the host element (which is where the chrome would live in
+      // the real App shell). The host has `overflow: hidden` so it would
+      // clip anyway; this check verifies the column strip's `shrink-0`
+      // does not push through the min-w-0 chain on the scroll container.
+      expect(host.scrollWidth).toBe(host.clientWidth);
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("each column FocusScope carries shrink-0 plus min-w-[24em]/max-w-[48em]", () => {
+    installTailwindShim();
+
+    const host = document.createElement("div");
+    host.style.width = "800px";
+    host.style.height = "400px";
+    host.style.display = "flex";
+    host.style.flexDirection = "column";
+    host.style.overflow = "hidden";
+    document.body.appendChild(host);
+
+    const columns = [
+      makeColumnFixture("a", "A", 0),
+      makeColumnFixture("b", "B", 1),
+    ];
+    const boardFixture: BoardData = {
+      board: {
+        id: "board-class",
+        entity_type: "board",
+        moniker: "board:board-class",
+        fields: { name: "Class Board" },
+      },
+      columns,
+      tags: [],
+      virtualTagMeta: [],
+      summary: {
+        total_tasks: 0,
+        total_actors: 0,
+        ready_tasks: 0,
+        blocked_tasks: 0,
+        done_tasks: 0,
+        percent_complete: 0,
+      },
+    };
+
+    try {
+      render(
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/class">
+                  <DragSessionProvider>
+                    <BoardView board={boardFixture} tasks={[]} />
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>,
+        { container: host },
+      );
+
+      const columnEls = host.querySelectorAll<HTMLElement>(
+        '[data-moniker^="column:"]:not([data-moniker*="."])',
+      );
+      expect(columnEls.length).toBe(2);
+      for (const el of columnEls) {
+        expect(el.className).toContain("min-w-[24em]");
+        expect(el.className).toContain("max-w-[48em]");
+        expect(el.className).toContain("shrink-0");
+      }
+    } finally {
+      host.remove();
+    }
   });
 });

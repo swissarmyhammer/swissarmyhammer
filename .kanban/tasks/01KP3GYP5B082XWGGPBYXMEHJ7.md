@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ca80
+position_column: done
+position_ordinal: ffffffffffffffffffffffdd80
 title: Document reserved `_`-prefixed pseudo-field dependencies in ARCHITECTURE.md
 ---
 ## What

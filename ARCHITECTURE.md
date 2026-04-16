@@ -244,6 +244,38 @@ width: 300
 section: header
 ```
 
+### Computed Fields and Pseudo-Field Dependencies
+
+Fields with `type.kind: computed` declare a `derive` function that runs after an entity is read. Most derivations only consume other fields on the same entity, but some need inputs that never live in `entity.fields` on disk — the JSONL changelog, filesystem metadata, etc. These inputs are modeled as **pseudo-fields**: reserved names prefixed with `_` that are lazily injected before derivation and stripped immediately after, so they never persist and never reach callers.
+
+**How a computed field opts in.** Declare the pseudo-field in `depends_on` in the field YAML:
+
+```yaml
+name: change_count
+type:
+  kind: computed
+  derive: count-changelog
+  depends_on:
+    - _changelog
+```
+
+At read time the entity layer notices the `_`-prefixed dependency, sources the value, writes it into `entity.fields` under that reserved name, runs the derivation, and then removes the reserved key before the entity is returned.
+
+**Currently supported pseudo-fields.** Both are defined and injected by `EntityContext::inject_compute_dependencies` in `swissarmyhammer-entity/src/context.rs`:
+
+- **`_changelog`** — the entity's JSONL changelog as a JSON array. Missing log file resolves to an empty array (`[]`), not an error — a newly created entity with no recorded mutations is a normal state, not a failure.
+- **`_file_created`** — RFC 3339 timestamp from the entity file's `Metadata::created()`, falling back to `Metadata::modified()` on platforms or filesystems that don't support btime. Resolves to `Value::Null` when the file is missing or cannot be stat'd — this is a backstop signal, never the primary one, so derivations that depend on it must tolerate `null`.
+
+Both are memoized through `EntityCache` when an `EntityCache` is attached, so list/read calls on a steady-state board don't re-read every task's changelog or re-stat every entity file. The cache invalidates on the mutation paths that would move these values.
+
+**Adding a new pseudo-field.** This is a three-point change in `swissarmyhammer-entity/src/context.rs`:
+
+1. Add a `want_<name>` branch in `inject_compute_dependencies` that reads the new source and inserts the value under `_<name>`.
+2. Add `entity.fields.remove("_<name>")` to the strip block in `derive_compute_fields` (immediately after the engine's per-field loop) so the pseudo-field never leaks into persisted output.
+3. Update the list in this section of `ARCHITECTURE.md` and in the docstring on `apply_compute_with_query`.
+
+If the new pseudo-field is expensive (disk I/O, syscall), extend `EntityCache::get_or_load_compute_inputs` to memoize it alongside `_changelog` and `_file_created`. Uncached pseudo-fields are fine for cheap, in-memory derivations but cost real time under the `buffer_unordered` fan-out in batch list operations.
+
 ### Patterns
 
 - **YAML-as-Schema**: YAML is the single source of truth. Rust provides implementations; the frontend interprets metadata. Adding a new field type means adding a YAML file — the UI renders it automatically.

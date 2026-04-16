@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d580
+position_column: done
+position_ordinal: ffffffffffffffffffffffd980
 title: Add display iconOverride to eliminate duplicate icons on status_date
 ---
 ## What
@@ -27,19 +27,19 @@ Extend the existing `DisplayRegistration` interface (which already has `isEmpty`
 
 ## Acceptance Criteria
 
-- [ ] Inspector shows CheckCircle/AlertTriangle/Play/Clock/PlusCircle in the tooltip icon position (not the static `target` icon) based on the status_date's `kind`
-- [ ] Card shows the same kind-specific icon in the tooltip position
-- [ ] Only one icon renders per status_date field (no duplicate)
-- [ ] Tooltip still shows the field description on hover
-- [ ] Fields without an `iconOverride` registration continue using their static YAML icon (no regression)
-- [ ] The `iconOverride` API is general-purpose — not status_date-specific — any display can register one
+- [x] Inspector shows CheckCircle/AlertTriangle/Play/Clock/PlusCircle in the tooltip icon position (not the static `target` icon) based on the status_date's `kind`
+- [x] Card shows the same kind-specific icon in the tooltip position
+- [x] Only one icon renders per status_date field (no duplicate)
+- [x] Tooltip still shows the field description on hover
+- [x] Fields without an `iconOverride` registration continue using their static YAML icon (no regression)
+- [x] The `iconOverride` API is general-purpose — not status_date-specific — any display can register one
 
 ## Tests
 
-- [ ] **`kanban-app/ui/src/components/fields/field.test.tsx`** — Add tests for `getDisplayIconOverride`: returns undefined for unregistered displays, returns the function when registered, returns undefined when registered without an override
-- [ ] **`kanban-app/ui/src/components/fields/displays/status-date-display.test.tsx`** — Update existing tests: the display no longer renders SVG icons inside itself (remove `svg` assertions from kind tests), add tests for the exported `statusDateIconOverride` function returning correct LucideIcon per kind
-- [ ] **`kanban-app/ui/src/components/entity-inspector.test.tsx`** — Verify that when a display has `iconOverride`, the dynamic icon appears in the FieldRow tooltip rather than the static one
-- [ ] Run `cd kanban-app/ui && npx vitest run` — all tests pass
+- [x] **`kanban-app/ui/src/components/fields/field.test.tsx`** — Add tests for `getDisplayIconOverride`: returns undefined for unregistered displays, returns the function when registered, returns undefined when registered without an override
+- [x] **`kanban-app/ui/src/components/fields/displays/status-date-display.test.tsx`** — Update existing tests: the display no longer renders SVG icons inside itself (remove `svg` assertions from kind tests), add tests for the exported `statusDateIconOverride` function returning correct LucideIcon per kind
+- [x] **`kanban-app/ui/src/components/entity-inspector.test.tsx`** — Verify that when a display has `iconOverride`, the dynamic icon appears in the FieldRow tooltip rather than the static one
+- [x] Run `cd kanban-app/ui && npx vitest run` — all tests pass
 
 ## Workflow
 

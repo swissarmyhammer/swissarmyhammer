@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a080
+position_column: doing
+position_ordinal: '80'
 title: Wire update_cache into command execution to suppress self-write watcher events
 ---
 ## What

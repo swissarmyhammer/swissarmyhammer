@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { CheckCircle, AlertTriangle } from "lucide-react";
 import {
   registerDisplay,
   getDisplayIsEmpty,
+  getDisplayIconOverride,
+  getDisplayTooltipOverride,
   type FieldDisplayProps,
 } from "./field";
 
@@ -35,5 +38,72 @@ describe("registerDisplay / getDisplayIsEmpty", () => {
     expect(isEmpty).toBeDefined();
     expect(isEmpty!("empty")).toBe(true);
     expect(isEmpty!("full")).toBe(false);
+  });
+});
+
+describe("registerDisplay / getDisplayIconOverride", () => {
+  it("returns undefined for a display name that has never been registered", () => {
+    expect(getDisplayIconOverride("nonexistent-icon-override")).toBeUndefined();
+  });
+
+  it("returns the iconOverride function when registered", () => {
+    const override = (v: unknown) =>
+      v === "check" ? CheckCircle : AlertTriangle;
+    registerDisplay("display-with-icon-override", DummyDisplay, {
+      iconOverride: override,
+    });
+    expect(getDisplayIconOverride("display-with-icon-override")).toBe(override);
+  });
+
+  it("returns undefined when registered without an iconOverride", () => {
+    registerDisplay("display-no-icon-override", DummyDisplay);
+    expect(getDisplayIconOverride("display-no-icon-override")).toBeUndefined();
+  });
+
+  it("invokes the override with the current value and returns the icon", () => {
+    registerDisplay("display-icon-invoke", DummyDisplay, {
+      iconOverride: (v: unknown) => (v === "check" ? CheckCircle : null),
+    });
+    const override = getDisplayIconOverride("display-icon-invoke");
+    expect(override).toBeDefined();
+    expect(override!("check")).toBe(CheckCircle);
+    expect(override!("other")).toBeNull();
+  });
+});
+
+describe("registerDisplay / getDisplayTooltipOverride", () => {
+  it("returns undefined for a display name that has never been registered", () => {
+    expect(
+      getDisplayTooltipOverride("nonexistent-tooltip-override"),
+    ).toBeUndefined();
+  });
+
+  it("returns the tooltipOverride function when registered", () => {
+    const override = (v: unknown) =>
+      v === "done" ? "Completed 3 days ago" : null;
+    registerDisplay("display-with-tooltip-override", DummyDisplay, {
+      tooltipOverride: override,
+    });
+    expect(getDisplayTooltipOverride("display-with-tooltip-override")).toBe(
+      override,
+    );
+  });
+
+  it("returns undefined when registered without a tooltipOverride", () => {
+    registerDisplay("display-no-tooltip-override", DummyDisplay);
+    expect(
+      getDisplayTooltipOverride("display-no-tooltip-override"),
+    ).toBeUndefined();
+  });
+
+  it("invokes the override with the current value and returns a string or null", () => {
+    registerDisplay("display-tooltip-invoke", DummyDisplay, {
+      tooltipOverride: (v: unknown) =>
+        v === "done" ? "Completed 3 days ago" : null,
+    });
+    const override = getDisplayTooltipOverride("display-tooltip-invoke");
+    expect(override).toBeDefined();
+    expect(override!("done")).toBe("Completed 3 days ago");
+    expect(override!("other")).toBeNull();
   });
 });

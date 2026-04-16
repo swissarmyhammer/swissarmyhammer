@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KP8W22RQ259AKFZC0RQDKN2M
-position_column: todo
-position_ordinal: d680
+position_column: done
+position_ordinal: ffffffffffffffffffffffda80
 title: Add display tooltipOverride to allow value-dependent tooltip text
 ---
 ## What
@@ -29,17 +29,17 @@ Same pattern as `iconOverride`: add an optional `tooltipOverride: (value: unknow
 
 ## Acceptance Criteria
 
-- [ ] Inspector tooltip on the status_date icon shows "Completed 3 days ago" / "Overdue by 5 days" / etc. instead of the static YAML description
-- [ ] Card tooltip shows the same dynamic text
-- [ ] Fields without a `tooltipOverride` continue showing `field.description || fieldLabel(field)` (no regression)
-- [ ] The `tooltipOverride` API is general-purpose — any display can register one
+- [x] Inspector tooltip on the status_date icon shows "Completed 3 days ago" / "Overdue by 5 days" / etc. instead of the static YAML description
+- [x] Card tooltip shows the same dynamic text
+- [x] Fields without a `tooltipOverride` continue showing `field.description || fieldLabel(field)` (no regression)
+- [x] The `tooltipOverride` API is general-purpose — any display can register one
 
 ## Tests
 
-- [ ] **`kanban-app/ui/src/components/fields/field.test.tsx`** — Add tests for `getDisplayTooltipOverride`: returns undefined for unregistered displays, returns the function when registered, returns undefined when registered without an override
-- [ ] **`kanban-app/ui/src/components/fields/displays/status-date-display.test.tsx`** — Add tests for the exported `statusDateTooltipOverride` function: returns correct phrase per kind, returns null for invalid values
-- [ ] **`kanban-app/ui/src/components/entity-inspector.test.tsx`** — Verify that when a display has `tooltipOverride`, the dynamic text appears in the tooltip
-- [ ] Run `cd kanban-app/ui && npx vitest run` — all tests pass
+- [x] **`kanban-app/ui/src/components/fields/field.test.tsx`** — Add tests for `getDisplayTooltipOverride`: returns undefined for unregistered displays, returns the function when registered, returns undefined when registered without an override
+- [x] **`kanban-app/ui/src/components/fields/displays/status-date-display.test.tsx`** — Add tests for the exported `statusDateTooltipOverride` function: returns correct phrase per kind, returns null for invalid values
+- [x] **`kanban-app/ui/src/components/entity-inspector.test.tsx`** — Verify that when a display has `tooltipOverride`, the dynamic text appears in the tooltip
+- [x] Run `cd kanban-app/ui && npx vitest run` — all tests pass
 
 ## Workflow
 
