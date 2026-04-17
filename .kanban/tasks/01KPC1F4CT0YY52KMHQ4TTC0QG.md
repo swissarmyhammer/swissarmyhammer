@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffd980
 title: 'Fix: accepting a tag from autocomplete does not save to perspective filter (and disconnects editor)'
 ---
 ## What

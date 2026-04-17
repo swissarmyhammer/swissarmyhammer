@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d780
+position_column: done
+position_ordinal: ffffffffffffffffffffffda80
 title: Match filter entity predicates ($project, @actor, ^task) on id OR slug with a single canonical Rust slugify
 ---
 ## What
@@ -55,20 +55,20 @@ The `FilterContext` trait in `swissarmyhammer-filter-expr/src/eval.rs` needs acc
 
 ## Acceptance Criteria
 
-- [ ] A single Rust `slug(s: &str) -> String` function exists in one crate, with unit tests covering: empty, punctuation, uppercase, leading/trailing non-alphanumeric, runs of non-alphanumeric, idempotent second application, unicode punctuation.
-- [ ] Frontend `slugify.ts` either calls the Rust function (via WASM) OR a parity test runs both over a 100+ item corpus and asserts every output matches.
-- [ ] `has_project(value)` returns true when the task's project id === value OR the task's project name slugifies to value.
-- [ ] `has_assignee(value)` returns true when the task's assignee list contains an id === value OR an actor whose name slugifies to value.
-- [ ] `has_ref(value)` returns true when the task id === value OR depends_on contains value OR a referenced task's title slugifies to value.
-- [ ] The concrete reproducer above passes: `$task-card-field-polish` filter returns the tasks actually in project `task-card-fields` (since its name "Task card & field polish" slugifies to `task-card-field-polish`).
+- [x] A single Rust `slug(s: &str) -> String` function exists in one crate, with unit tests covering: empty, punctuation, uppercase, leading/trailing non-alphanumeric, runs of non-alphanumeric, idempotent second application, unicode punctuation.
+- [x] Frontend `slugify.ts` either calls the Rust function (via WASM) OR a parity test runs both over a 100+ item corpus and asserts every output matches.
+- [x] `has_project(value)` returns true when the task's project id === value OR the task's project name slugifies to value.
+- [x] `has_assignee(value)` returns true when the task's assignee list contains an id === value OR an actor whose name slugifies to value.
+- [x] `has_ref(value)` returns true when the task id === value OR depends_on contains value OR a referenced task's title slugifies to value.
+- [x] The concrete reproducer above passes: `$task-card-field-polish` filter returns the tasks actually in project `task-card-fields` (since its name "Task card & field polish" slugifies to `task-card-field-polish`).
 
 ## Tests
 
-- [ ] `cargo test -p <slug-crate>` — slug function unit tests.
-- [ ] `cargo test -p swissarmyhammer-kanban --lib task_helpers` — TaskFilterAdapter tests for id-or-slug matching on $project, @actor, ^task.
-- [ ] Parity test asserting TS and Rust slugify produce identical output on a shared corpus.
-- [ ] Frontend: the existing mention-autocomplete tests still pass.
-- [ ] Manual: run `pnpm tauri dev`, filter by `$task-card-field-polish`, confirm tasks appear.
+- [x] `cargo test -p <slug-crate>` — slug function unit tests.
+- [x] `cargo test -p swissarmyhammer-kanban --lib task_helpers` — TaskFilterAdapter tests for id-or-slug matching on $project, @actor, ^task.
+- [x] Parity test asserting TS and Rust slugify produce identical output on a shared corpus.
+- [x] Frontend: the existing mention-autocomplete tests still pass.
+- [x] Manual: run `pnpm tauri dev`, filter by `$task-card-field-polish`, confirm tasks appear.
 
 ## Workflow
 

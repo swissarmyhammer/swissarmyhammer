@@ -3,7 +3,9 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task::shared::parse_filter_expr;
-use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json, TaskFilterAdapter};
+use crate::task_helpers::{
+    enrich_all_task_entities, task_entity_to_rich_json, EntitySlugRegistry, TaskFilterAdapter,
+};
 use crate::types::Ordinal;
 use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
@@ -51,6 +53,7 @@ fn is_actionable(
     t: &swissarmyhammer_entity::Entity,
     terminal_column: &str,
     expr: &Option<swissarmyhammer_filter_expr::Expr>,
+    registry: &EntitySlugRegistry,
 ) -> bool {
     if t.get_str("position_column") == Some(terminal_column) {
         return false;
@@ -59,7 +62,7 @@ fn is_actionable(
         return false;
     }
     if let Some(ref e) = expr {
-        if !e.matches(&TaskFilterAdapter { entity: t }) {
+        if !e.matches(&TaskFilterAdapter::with_registry(t, registry)) {
             return false;
         }
     }
@@ -113,12 +116,18 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
             let registry = default_virtual_tag_registry();
             enrich_all_task_entities(&mut all_tasks, terminal_column, registry);
 
+            // Build the id-or-slug registry so `$project`, `@user`, and
+            // `^task` predicates resolve display-name slugs to entity ids.
+            let all_projects = ectx.list("project").await?;
+            let all_actors = ectx.list("actor").await?;
+            let slug_registry = EntitySlugRegistry::build(&all_projects, &all_actors, &all_tasks);
+
             let expr = parse_filter_expr(self.filter.as_deref())?;
             let column_order = build_column_order(&all_columns);
 
             let mut candidates: Vec<&swissarmyhammer_entity::Entity> = all_tasks
                 .iter()
-                .filter(|t| is_actionable(t, terminal_column, &expr))
+                .filter(|t| is_actionable(t, terminal_column, &expr, &slug_registry))
                 .collect();
 
             candidates.sort_by(|a, b| compare_by_position(a, b, &column_order));
@@ -287,6 +296,44 @@ mod tests {
             .into_result()
             .unwrap();
         assert!(result.is_null());
+    }
+
+    /// End-to-end regression of the task's concrete reproducer, mirror of
+    /// `list.rs::test_list_tasks_filter_by_project_slug_of_name`: the
+    /// `$task-card-field-polish` filter must select the task in project
+    /// `task-card-fields` because the project's display name slugifies to
+    /// the filter value.
+    #[tokio::test]
+    async fn test_next_task_filter_by_project_slug_of_name() {
+        use crate::project::AddProject;
+
+        let (_temp, ctx) = setup().await;
+        AddProject::new("task-card-fields", "Task card & field polish")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Unrelated task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Project task")
+            .with_project("task-card-fields")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Slug-of-name filter.
+        let result = NextTask::new()
+            .with_filter("$task-card-field-polish")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["title"], "Project task");
     }
 
     #[tokio::test]

@@ -1,0 +1,160 @@
+# Parity corpus for `slug()` — the Rust implementation in
+# `swissarmyhammer-common/src/slug.rs` and the TypeScript implementation
+# in `kanban-app/ui/src/lib/slugify.ts` MUST produce byte-identical
+# output for every non-comment, non-blank line in this file.
+#
+# Lines starting with `#` are comments. Blank lines are ignored.
+# Every other line is treated as a literal input string.
+
+# ── Basic passthrough ────────────────────────────────────────────────
+hello
+world
+hello-world
+abc123
+foo42bar
+kanban
+slug
+
+# ── Case folding ─────────────────────────────────────────────────────
+HELLO
+Hello
+HelloWorld
+CamelCase
+SCREAMING
+mixedCASE
+MiXeDcAsE
+
+# ── Whitespace collapsing ────────────────────────────────────────────
+hello world
+hello  world
+hello   world
+  leading
+trailing
+  both sides
+a b c
+one two three four
+
+# ── Punctuation collapsing ───────────────────────────────────────────
+hello.world
+hello,world
+hello!world
+hello?world
+hello/world
+hello\world
+hello:world
+hello;world
+hello=world
+hello+world
+hello*world
+hello(world)
+hello[world]
+hello{world}
+hello&world
+hello|world
+hello@world
+hello#world
+hello$world
+hello%world
+
+# ── Multiple punctuation runs ────────────────────────────────────────
+hello...world
+hello???world
+hello!!!world
+hello & world
+one, two, three
+one + two = three
+a/b/c
+a.b.c
+a--b--c
+a___b___c
+
+# ── Leading / trailing cleanup ───────────────────────────────────────
+!!!hello
+hello!!!
+---hello
+hello---
+___hello
+hello___
+   hello
+hello
+!!!hello!!!
+---hello---
+
+# ── Real-world display names ─────────────────────────────────────────
+Task card & field polish
+Frontend: UI polish
+Claude-Code (v2)
+swissarmyhammer / kanban
+AUTH-Migration
+backend-v1
+my_project
+Server Sent Events
+API v3.0
+Feature Flag: Dark Mode
+[WIP] refactor
+TODO: triage tasks
+bug #42
+user@example.com
+release-0.12.11
+
+# ── Numbers ─────────────────────────────────────────────────────────
+42
+v1
+v1.2.3
+2026-04-17
+3.14159
+100%
+1,000,000
+
+# ── Idempotent candidates (already slug-shaped) ─────────────────────
+already-a-slug
+deeply-nested-slug-name
+a
+ab
+abc
+ab-cd
+a-b-c-d
+
+# ── Edge cases ──────────────────────────────────────────────────────
+-
+--
+---
+----
+
+
+-a-
+a-
+-a
+--a--
+a--b
+a---b
+a----b
+
+# ── Unicode: should collapse to hyphens ─────────────────────────────
+hello–world
+hello—world
+“quoted”
+‘single’
+café
+naïve
+résumé
+über
+北京
+日本語
+테스트
+עברית
+αβγ
+Ωmega
+émoji 🚀 rocket
+snake🐍case
+
+# ── Realistic project / actor names ─────────────────────────────────
+kanban-app
+kanban app
+Claude Code
+alice
+Alice Smith
+Bob (The Builder)
+AI + Human pair
+Team: Platform
+Team — Backend
