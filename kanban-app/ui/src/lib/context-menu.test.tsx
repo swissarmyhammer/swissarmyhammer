@@ -243,3 +243,98 @@ describe("useContextMenu", () => {
     expect(items.some((item) => item.separator)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-entity-type context-menu rendering tests (section 6 — MANDATORY).
+//
+// One test per entity type, each independently named. Each test:
+//   1. Mocks `list_commands_for_scope` to return the exact payload the
+//      real Rust emission produces for the grid's scope chain.
+//   2. Fires the context-menu handler (right-click) returned by
+//      `useContextMenu`.
+//   3. Asserts the `show_context_menu` payload includes the
+//      `entity.add:{type}` item with the correct display name.
+//
+// A regression that drops the dynamic command, mangles its id, or filters
+// it out of the context menu fails here as a single named failure, not a
+// parameterised one.
+// ---------------------------------------------------------------------------
+
+describe("useContextMenu per-entity-type rendering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Drives the context-menu hook through its async invoke chain and
+   * returns the items passed to `show_context_menu`.
+   */
+  async function captureMenuItems(
+    cmds: ResolvedCommand[],
+  ): Promise<Array<{ name: string; cmd: string; separator: boolean }>> {
+    mockResolvedCommands(cmds);
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
+
+    await act(async () => {
+      result.current(fakeMouseEvent());
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    const showCall = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    if (!showCall) return [];
+    return (showCall[1] as { items: Array<{ name: string; cmd: string; separator: boolean }> })
+      .items;
+  }
+
+  it('right-click on tasks grid shows "New Task" in context menu', async () => {
+    // Exactly what `list_commands_for_scope` returns when the active view
+    // is tasks-grid and `context_menu: true` is requested.
+    const items = await captureMenuItems([
+      {
+        id: "entity.add:task",
+        name: "New Task",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+    const newTask = items.find((i) => i.cmd === "entity.add:task");
+    expect(newTask).toBeDefined();
+    expect(newTask!.name).toBe("New Task");
+    expect(newTask!.separator).toBe(false);
+  });
+
+  it('right-click on tags grid shows "New Tag" in context menu', async () => {
+    const items = await captureMenuItems([
+      {
+        id: "entity.add:tag",
+        name: "New Tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+    const newTag = items.find((i) => i.cmd === "entity.add:tag");
+    expect(newTag).toBeDefined();
+    expect(newTag!.name).toBe("New Tag");
+    expect(newTag!.separator).toBe(false);
+  });
+
+  it('right-click on projects grid shows "New Project" in context menu', async () => {
+    const items = await captureMenuItems([
+      {
+        id: "entity.add:project",
+        name: "New Project",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+    const newProject = items.find((i) => i.cmd === "entity.add:project");
+    expect(newProject).toBeDefined();
+    expect(newProject!.name).toBe("New Project");
+    expect(newProject!.separator).toBe(false);
+  });
+});

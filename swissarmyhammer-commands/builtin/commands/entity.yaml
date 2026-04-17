@@ -63,6 +63,14 @@
       from: scope_chain
       entity_type: task
 
+- id: entity.add
+  name: New Entity
+  undoable: true
+  visible: false
+  params:
+    - name: entity_type
+      from: args
+
 - id: entity.update_field
   name: Update Field
   undoable: true

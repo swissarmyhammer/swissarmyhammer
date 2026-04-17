@@ -789,3 +789,132 @@ describe("CommandPalette search mode", () => {
     unmount();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-entity-type palette rendering tests (section 6 — MANDATORY).
+//
+// One test per entity type. Each test must be independently named and
+// runnable; the whole point is that a regression on a single type cannot
+// hide behind the other two passing.
+//
+// `list_commands_for_scope` is mocked to return exactly what the Rust
+// emission produces for each grid view's scope chain, and the test asserts
+// the palette renders the corresponding "New {Type}" entry. Any change to
+// the backend → frontend contract that drops the command (e.g. removing
+// `name` / `id` from the serialized payload) fails here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mock the minimal ResolvedCommand payload the backend returns for a given
+ * active view's scope chain, matching exactly what `emit_entity_add` and
+ * the surrounding registry emit in production.
+ */
+function mockBackendForView(opts: {
+  expectedScope: string[];
+  entityAddId: string;
+  entityAddName: string;
+}) {
+  vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
+    if (cmd === "get_ui_state")
+      return Promise.resolve({
+        palette_open: false,
+        palette_mode: "command",
+        keymap_mode: "cua",
+        scope_chain: opts.expectedScope,
+        open_boards: [],
+        windows: {},
+        recent_boards: [],
+      });
+    if (cmd === "list_commands_for_scope") {
+      // Sanity — the palette must forward exactly the scope chain we
+      // expect. If the frontend ever diverges from useUIState().scope_chain
+      // this throws, catching the regression class "palette sent an empty
+      // scope chain".
+      if (JSON.stringify(args?.scopeChain) !== JSON.stringify(opts.expectedScope)) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([
+        {
+          id: opts.entityAddId,
+          name: opts.entityAddName,
+          group: "entity",
+          context_menu: true,
+          available: true,
+        },
+        {
+          id: "app.quit",
+          name: "Quit",
+          group: "global",
+          context_menu: false,
+          available: true,
+        },
+      ]);
+    }
+    if (cmd === "log_command") return Promise.resolve(null);
+    return Promise.resolve(null);
+  });
+}
+
+describe("CommandPalette per-entity-type rendering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Waits for the UIState effect to pull `scope_chain` out of the mocked
+   * `get_ui_state`, and for the `list_commands_for_scope` fetch-on-open
+   * effect to settle.
+   */
+  async function settleEffects() {
+    // useUIState fetches get_ui_state on mount; the palette then fetches
+    // list_commands_for_scope in a follow-up effect that depends on
+    // scope_chain. Two microtask flushes are enough in jsdom.
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('palette shows "New Task" when active view is tasks-grid', async () => {
+    mockBackendForView({
+      expectedScope: ["view:01JMVIEW0000000000TGRID0", "board:my-board"],
+      entityAddId: "entity.add:task",
+      entityAddName: "New Task",
+    });
+
+    await act(async () => {
+      renderPalette(true);
+      await settleEffects();
+    });
+
+    expect(screen.getByText("New Task")).toBeTruthy();
+  });
+
+  it('palette shows "New Tag" when active view is tags-grid', async () => {
+    mockBackendForView({
+      expectedScope: ["view:01JMVIEW0000000000TGGRD0", "board:my-board"],
+      entityAddId: "entity.add:tag",
+      entityAddName: "New Tag",
+    });
+
+    await act(async () => {
+      renderPalette(true);
+      await settleEffects();
+    });
+
+    expect(screen.getByText("New Tag")).toBeTruthy();
+  });
+
+  it('palette shows "New Project" when active view is projects-grid', async () => {
+    mockBackendForView({
+      expectedScope: ["view:01JMVIEW0000000000PGRID0", "board:my-board"],
+      entityAddId: "entity.add:project",
+      entityAddName: "New Project",
+    });
+
+    await act(async () => {
+      renderPalette(true);
+      await settleEffects();
+    });
+
+    expect(screen.getByText("New Project")).toBeTruthy();
+  });
+});

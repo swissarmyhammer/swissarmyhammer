@@ -645,6 +645,43 @@ mod tests {
         );
     }
 
+    /// Every builtin grid view (tasks, tags, projects) must be embedded and
+    /// loadable. This is the regression guard for "the Projects view is not
+    /// reachable from the left nav": left-nav iterates whatever `list_views`
+    /// returns, which comes from `builtin_view_definitions()` + on-disk
+    /// overrides, so the entry MUST live here at compile time.
+    #[test]
+    fn builtin_views_include_all_grid_views() {
+        let defs = builtin_view_definitions();
+        let names: Vec<&str> = defs.iter().map(|(n, _)| *n).collect();
+        for expected in &["board", "tasks-grid", "tags-grid", "projects-grid"] {
+            assert!(
+                names.contains(expected),
+                "builtin views must include '{expected}', got: {names:?}"
+            );
+        }
+    }
+
+    /// The Projects view must declare `entity_type: project` — this is what
+    /// `emit_entity_add` keys on to surface the dynamic `entity.add:project`
+    /// command when the view's `view:{id}` moniker is in scope.
+    #[test]
+    fn builtin_projects_grid_has_project_entity_type() {
+        let defs = builtin_view_definitions();
+        let (_, yaml) = defs
+            .iter()
+            .find(|(n, _)| *n == "projects-grid")
+            .expect("projects-grid must be a builtin view");
+        let view: swissarmyhammer_views::ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(view.name, "Projects");
+        assert_eq!(view.kind, swissarmyhammer_views::ViewKind::Grid);
+        assert_eq!(
+            view.entity_type.as_deref(),
+            Some("project"),
+            "projects-grid must declare entity_type=project so entity.add:project is emitted on scope"
+        );
+    }
+
     #[test]
     fn builtin_views_parse_as_view_def() {
         for (name, yaml) in builtin_view_definitions() {

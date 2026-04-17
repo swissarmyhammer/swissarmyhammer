@@ -38,13 +38,9 @@ where
         .map_err(|e| CommandError::ExecutionFailed(e.to_string()))
 }
 
-/// Build the full map of kanban command implementations.
-///
-/// Returns command ID -> trait object pairs for all kanban domain commands.
-pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
-    let mut map: HashMap<String, Arc<dyn Command>> = HashMap::new();
+type CmdMap = HashMap<String, Arc<dyn Command>>;
 
-    // Task commands
+fn register_task(map: &mut CmdMap) {
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
@@ -53,22 +49,19 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(task_commands::DoThisNextCmd),
     );
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
+}
 
-    // Clipboard commands
-    map.insert(
-        "entity.copy".into(),
-        Arc::new(clipboard_commands::CopyTaskCmd),
-    );
-    map.insert(
-        "entity.cut".into(),
-        Arc::new(clipboard_commands::CutTaskCmd),
-    );
+fn register_clipboard(map: &mut CmdMap) {
+    map.insert("entity.copy".into(), Arc::new(clipboard_commands::CopyTaskCmd));
+    map.insert("entity.cut".into(), Arc::new(clipboard_commands::CutTaskCmd));
     map.insert(
         "entity.paste".into(),
         Arc::new(clipboard_commands::PasteTaskCmd),
     );
+}
 
-    // Entity commands
+fn register_entity_and_tag(map: &mut CmdMap) {
+    map.insert("entity.add".into(), Arc::new(entity_commands::AddEntityCmd));
     map.insert(
         "entity.update_field".into(),
         Arc::new(entity_commands::UpdateEntityFieldCmd),
@@ -85,11 +78,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "entity.unarchive".into(),
         Arc::new(entity_commands::UnarchiveEntityCmd),
     );
-
-    // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
+}
 
-    // Attachment file commands
+fn register_attachment(map: &mut CmdMap) {
     map.insert(
         "attachment.open".into(),
         Arc::new(entity_commands::AttachmentOpenCmd),
@@ -102,14 +94,13 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "attachment.delete".into(),
         Arc::new(entity_commands::AttachmentDeleteCmd),
     );
+}
 
-    // Column commands
+fn register_column_and_project(map: &mut CmdMap) {
     map.insert(
         "column.reorder".into(),
         Arc::new(column_commands::ColumnReorderCmd),
     );
-
-    // Project commands
     map.insert(
         "project.add".into(),
         Arc::new(project_commands::AddProjectCmd),
@@ -118,8 +109,9 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "project.delete".into(),
         Arc::new(project_commands::DeleteProjectCmd),
     );
+}
 
-    // UI commands
+fn register_ui(map: &mut CmdMap) {
     map.insert("ui.inspect".into(), Arc::new(ui_commands::InspectCmd));
     map.insert(
         "ui.inspector.close".into(),
@@ -137,10 +129,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "ui.palette.close".into(),
         Arc::new(ui_commands::PaletteCloseCmd),
     );
-    map.insert(
-        "ui.view.set".into(),
-        Arc::new(ui_commands::SetActiveViewCmd),
-    );
+    map.insert("ui.view.set".into(), Arc::new(ui_commands::SetActiveViewCmd));
     map.insert(
         "ui.perspective.set".into(),
         Arc::new(ui_commands::SetActivePerspectiveCmd),
@@ -151,16 +140,18 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
     map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
+}
 
-    // Drag session commands
+fn register_drag(map: &mut CmdMap) {
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
     map.insert("drag.cancel".into(), Arc::new(drag_commands::DragCancelCmd));
     map.insert(
         "drag.complete".into(),
         Arc::new(drag_commands::DragCompleteCmd),
     );
+}
 
-    // File / board management commands
+fn register_file(map: &mut CmdMap) {
     map.insert(
         "file.switchBoard".into(),
         Arc::new(file_commands::SwitchBoardCmd),
@@ -170,13 +161,11 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(file_commands::CloseBoardCmd),
     );
     map.insert("file.newBoard".into(), Arc::new(file_commands::NewBoardCmd));
-    map.insert(
-        "file.openBoard".into(),
-        Arc::new(file_commands::OpenBoardCmd),
-    );
+    map.insert("file.openBoard".into(), Arc::new(file_commands::OpenBoardCmd));
     map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
+}
 
-    // Perspective commands
+fn register_perspective(map: &mut CmdMap) {
     map.insert(
         "perspective.load".into(),
         Arc::new(perspective_commands::LoadPerspectiveCmd),
@@ -237,8 +226,9 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "perspective.goto".into(),
         Arc::new(perspective_commands::GotoPerspectiveCmd),
     );
+}
 
-    // App commands
+fn register_app(map: &mut CmdMap) {
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
     map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
     map.insert("app.help".into(), Arc::new(app_commands::HelpCmd));
@@ -270,7 +260,23 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "settings.keymap.emacs".into(),
         Arc::new(app_commands::SetKeymapModeCmd("emacs")),
     );
+}
 
+/// Build the full map of kanban command implementations.
+///
+/// Returns command ID -> trait object pairs for all kanban domain commands.
+pub fn register_commands() -> CmdMap {
+    let mut map: CmdMap = HashMap::new();
+    register_task(&mut map);
+    register_clipboard(&mut map);
+    register_entity_and_tag(&mut map);
+    register_attachment(&mut map);
+    register_column_and_project(&mut map);
+    register_ui(&mut map);
+    register_drag(&mut map);
+    register_file(&mut map);
+    register_perspective(&mut map);
+    register_app(&mut map);
     map
 }
 
@@ -307,15 +313,16 @@ mod tests {
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
         // 5 task (add, move, untag, doThisNext, delete) + 3 clipboard
-        // + 4 entity + 1 tag + 1 column + 9 UI (+ startRename)
+        // + 5 entity (add, update_field, delete, archive, unarchive)
+        // + 1 tag + 1 column + 9 UI (+ startRename)
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
         // + 3 attachment (open, reveal, delete)
-        // + 2 project (add, delete) + 1 ui.mode.set = 64
+        // + 2 project (add, delete) + 1 ui.mode.set = 65
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 64);
+        assert_eq!(cmds.len(), 65);
     }
 
     // =========================================================================

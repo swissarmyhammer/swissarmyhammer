@@ -7,7 +7,6 @@ card_fields:
   - name
   - description
   - color
-  - order
 commands:
   - id: grid.edit
     name: Edit Cell

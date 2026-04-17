@@ -5,7 +5,50 @@ use super::run_op;
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
+
+/// Create a new entity of any type using field-default values.
+///
+/// This is the backend for the dynamic `entity.add:{type}` palette /
+/// context-menu command. The dispatch layer rewrites `entity.add:{type}`
+/// into canonical `entity.add` with `entity_type: <type>` merged into the
+/// arg bag (see `match_dynamic_prefix` in `kanban-app/src/commands.rs`).
+///
+/// Required arg: `entity_type`. All other args are forwarded as field
+/// overrides to `AddEntity`; unknown or positional-only keys are silently
+/// dropped by the operation (so the frontend can supply a generic arg bag
+/// without having to know which fields each entity type actually declares).
+pub struct AddEntityCmd;
+
+#[async_trait]
+impl Command for AddEntityCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.arg("entity_type")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let entity_type = ctx.require_arg_str("entity_type")?.to_string();
+
+        // Everything except `entity_type` flows through as a field
+        // override. The operation itself filters out unknown / positional
+        // keys — we don't need to know the entity's schema here.
+        let mut overrides: HashMap<String, Value> = HashMap::new();
+        for (key, value) in ctx.args.iter() {
+            if key == "entity_type" {
+                continue;
+            }
+            overrides.insert(key.clone(), value.clone());
+        }
+
+        let op = crate::entity::AddEntity::new(entity_type).with_overrides(overrides);
+        run_op(&op, &kanban).await
+    }
+}
 
 /// Update a single field on any entity.
 ///

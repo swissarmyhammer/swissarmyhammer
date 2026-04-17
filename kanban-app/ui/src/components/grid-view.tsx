@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
@@ -12,6 +13,11 @@ import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { fieldMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
@@ -21,6 +27,81 @@ import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
  * Returns an array of ClaimPredicate entries that let the cell claim focus
  * when adjacent cells are focused and a navigation command fires.
  */
+interface CellCtx {
+  ri: number;
+  ci: number;
+  cellMonikers: string[][];
+  cellMonikerMap: Map<string, { row: number; col: number }>;
+  rowCount: number;
+  colCount: number;
+}
+
+function orthogonalNavPredicates(c: CellCtx): ClaimPredicate[] {
+  const out: ClaimPredicate[] = [];
+  if (c.ri > 0)
+    out.push({
+      command: "nav.down",
+      when: (f) => f === c.cellMonikers[c.ri - 1][c.ci],
+    });
+  if (c.ri < c.rowCount - 1)
+    out.push({
+      command: "nav.up",
+      when: (f) => f === c.cellMonikers[c.ri + 1][c.ci],
+    });
+  if (c.ci > 0)
+    out.push({
+      command: "nav.right",
+      when: (f) => f === c.cellMonikers[c.ri][c.ci - 1],
+    });
+  if (c.ci < c.colCount - 1)
+    out.push({
+      command: "nav.left",
+      when: (f) => f === c.cellMonikers[c.ri][c.ci + 1],
+    });
+  return out;
+}
+
+function rowEdgeNavPredicates(c: CellCtx): ClaimPredicate[] {
+  const out: ClaimPredicate[] = [];
+  if (c.ci === 0)
+    out.push({
+      command: "nav.rowStart",
+      when: (f) => {
+        const pos = f ? c.cellMonikerMap.get(f) : undefined;
+        return pos !== undefined && pos.row === c.ri && pos.col !== 0;
+      },
+    });
+  if (c.ci === c.colCount - 1)
+    out.push({
+      command: "nav.rowEnd",
+      when: (f) => {
+        const pos = f ? c.cellMonikerMap.get(f) : undefined;
+        return (
+          pos !== undefined && pos.row === c.ri && pos.col !== c.colCount - 1
+        );
+      },
+    });
+  return out;
+}
+
+function gridEdgeNavPredicates(c: CellCtx): ClaimPredicate[] {
+  const out: ClaimPredicate[] = [];
+  const isGridCell = (mk: string | null) => !!mk && c.cellMonikerMap.has(mk);
+  if (c.ri === 0 && c.ci === 0)
+    out.push({
+      command: "nav.first",
+      when: (f) => isGridCell(f) && f !== c.cellMonikers[0][0],
+    });
+  if (c.ri === c.rowCount - 1 && c.ci === c.colCount - 1)
+    out.push({
+      command: "nav.last",
+      when: (f) =>
+        isGridCell(f) &&
+        f !== c.cellMonikers[c.rowCount - 1][c.colCount - 1],
+    });
+  return out;
+}
+
 function buildCellPredicates(
   ri: number,
   ci: number,
@@ -29,60 +110,12 @@ function buildCellPredicates(
   rowCount: number,
   colCount: number,
 ): ClaimPredicate[] {
-  const predicates: ClaimPredicate[] = [];
-
-  if (ri > 0)
-    predicates.push({
-      command: "nav.down",
-      when: (f) => f === cellMonikers[ri - 1][ci],
-    });
-  if (ri < rowCount - 1)
-    predicates.push({
-      command: "nav.up",
-      when: (f) => f === cellMonikers[ri + 1][ci],
-    });
-  if (ci > 0)
-    predicates.push({
-      command: "nav.right",
-      when: (f) => f === cellMonikers[ri][ci - 1],
-    });
-  if (ci < colCount - 1)
-    predicates.push({
-      command: "nav.left",
-      when: (f) => f === cellMonikers[ri][ci + 1],
-    });
-
-  if (ci === 0)
-    predicates.push({
-      command: "nav.rowStart",
-      when: (f) => {
-        const pos = f ? cellMonikerMap.get(f) : undefined;
-        return pos !== undefined && pos.row === ri && pos.col !== 0;
-      },
-    });
-  if (ci === colCount - 1)
-    predicates.push({
-      command: "nav.rowEnd",
-      when: (f) => {
-        const pos = f ? cellMonikerMap.get(f) : undefined;
-        return pos !== undefined && pos.row === ri && pos.col !== colCount - 1;
-      },
-    });
-
-  const isGridCell = (mk: string | null) => !!mk && cellMonikerMap.has(mk);
-  if (ri === 0 && ci === 0)
-    predicates.push({
-      command: "nav.first",
-      when: (f) => isGridCell(f) && f !== cellMonikers[0][0],
-    });
-  if (ri === rowCount - 1 && ci === colCount - 1)
-    predicates.push({
-      command: "nav.last",
-      when: (f) =>
-        isGridCell(f) && f !== cellMonikers[rowCount - 1][colCount - 1],
-    });
-
-  return predicates;
+  const c: CellCtx = { ri, ci, cellMonikers, cellMonikerMap, rowCount, colCount };
+  return [
+    ...orthogonalNavPredicates(c),
+    ...rowEdgeNavPredicates(c),
+    ...gridEdgeNavPredicates(c),
+  ];
 }
 
 /**
@@ -91,6 +124,74 @@ function buildCellPredicates(
  * anything that doesn't match to prevent command-injection via crafted views.
  */
 const VALID_ENTITY_TYPE = /^[a-z][a-z0-9_-]*$/;
+
+/**
+ * De-dupe key set for `unknown card_field` warnings.
+ *
+ * The view's `card_fields` list is applied on every render via `useMemo`, so
+ * a naive `console.warn` in the resolution step would spam the log on each
+ * state update. We warn exactly once per `(viewId, fieldName)` pair for the
+ * lifetime of the app by recording which pairs we've already complained
+ * about in this module-scoped Set. Module scope is fine because the log is
+ * a developer-facing diagnostic — surviving a fast-refresh or component
+ * remount does not meaningfully change the signal.
+ */
+const warnedUnknownCardFields = new Set<string>();
+
+/**
+ * Emit a single `console.warn` the first time we see a `card_fields` entry
+ * that does not resolve to a known `FieldDef` for this view.
+ *
+ * The warning includes the view id, view name, bad field name, and the list
+ * of valid field names for the entity so the author sees the typo and its
+ * correction in one place. Uses `console.warn` per the project's
+ * `frontend-logging` convention — it surfaces in `log show --predicate
+ * 'subsystem == "com.swissarmyhammer.kanban"'`.
+ *
+ * @param viewId - The stable id of the ViewDef whose `card_fields` has the
+ *                 bad entry.
+ * @param viewName - Human-readable view name for log context.
+ * @param badFieldName - The unresolved `card_fields` entry.
+ * @param validFieldNames - The field names that exist on the entity schema,
+ *                          offered as the set of correct alternatives.
+ */
+function warnUnknownCardField(
+  viewId: string,
+  viewName: string | undefined,
+  badFieldName: string,
+  validFieldNames: string[],
+): void {
+  const key = `${viewId}::${badFieldName}`;
+  if (warnedUnknownCardFields.has(key)) return;
+  warnedUnknownCardFields.add(key);
+  // Emit the warn on a single line so the project's acceptance grep matches
+  // exactly this call site — splitting it across lines would hide the string
+  // literal from a non-multiline grep.
+  console.warn(`[GridView] unknown card_field "${badFieldName}" in view ${viewId} (${viewName ?? "<unnamed>"}); valid fields: [${validFieldNames.join(", ")}]`);
+}
+
+/**
+ * Dispatch `entity.add:{entityType}` to create a new entity of the given type.
+ *
+ * Relies on each entity type's schema-declared `default` for its title-ish
+ * field — we intentionally do NOT pass a `title` override because
+ * `AddEntity` silently drops overrides for fields not present on the schema
+ * (e.g. `tag` has `tag_name`, `project` has `name`). Passing `title` would
+ * be honoured only for `task` and discarded for other types, which is
+ * confusing. Using schema defaults gives a consistent "new-{type}" label
+ * for every entity type.
+ *
+ * @param dispatch - The dispatch function from `useDispatchCommand`.
+ * @param entityType - The sanitized entity type slug.
+ */
+function addNewEntity(
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
+  entityType: string,
+): void {
+  dispatch(`entity.add:${entityType}`).catch((err) =>
+    console.error("Failed to add entity:", err),
+  );
+}
 
 /**
  * Derive entity data, schema columns, and perspective sorting/grouping.
@@ -125,11 +226,25 @@ function useGridData(view: ViewDef) {
         .map((f) => ({ field: f }));
     const fieldMap = new Map<string, FieldDef>();
     for (const f of fields) fieldMap.set(f.name, f);
-    return fieldNames
-      .map((name) => fieldMap.get(name))
-      .filter((f): f is FieldDef => f !== undefined)
-      .map((f) => ({ field: f }));
-  }, [view.card_fields, fields]);
+    const resolved: DataTableColumn[] = [];
+    for (const name of fieldNames) {
+      const fieldDef = fieldMap.get(name);
+      if (fieldDef === undefined) {
+        // Surface the silent-drop so a future author sees the typo. The helper
+        // dedupes per (viewId, fieldName) so the log doesn't repeat on each
+        // re-render.
+        warnUnknownCardField(
+          view.id,
+          view.name,
+          name,
+          fields.map((f) => f.name),
+        );
+        continue;
+      }
+      resolved.push({ field: fieldDef });
+    }
+    return resolved;
+  }, [view.card_fields, view.id, view.name, fields]);
 
   return {
     entityType,
@@ -147,31 +262,7 @@ function useGridData(view: ViewDef) {
  * Handles the pull-based navigation system: each cell declares predicates
  * for which nav commands it should claim focus on.
  */
-function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
-  const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
-  useEffect(() => {
-    setVisibleRowCount(entities.length);
-  }, [entities.length]);
-
-  const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
-
-  const cellMonikerMap = useMemo(() => {
-    const map = new Map<string, { row: number; col: number }>();
-    for (let r = 0; r < entities.length; r++) {
-      for (let c = 0; c < columns.length; c++) {
-        map.set(
-          fieldMoniker(
-            entities[r].entity_type,
-            entities[r].id,
-            columns[c].field.name,
-          ),
-          { row: r, col: c },
-        );
-      }
-    }
-    return map;
-  }, [entities, columns]);
-
+function useCellMonikers(entities: Entity[], columns: DataTableColumn[]) {
   const cellMonikers = useMemo(
     () =>
       entities.map((e) =>
@@ -179,19 +270,21 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
       ),
     [entities, columns],
   );
+  const cellMonikerMap = useMemo(() => {
+    const map = new Map<string, { row: number; col: number }>();
+    cellMonikers.forEach((row, r) => {
+      row.forEach((mk, c) => map.set(mk, { row: r, col: c }));
+    });
+    return map;
+  }, [cellMonikers]);
+  return { cellMonikers, cellMonikerMap };
+}
 
-  const derivedCursor = useMemo(() => {
-    if (!focusedMoniker) return null;
-    return cellMonikerMap.get(focusedMoniker) ?? null;
-  }, [focusedMoniker, cellMonikerMap]);
-
-  const grid = useGrid({
-    rowCount: visibleRowCount,
-    colCount: columns.length,
-    cursor: derivedCursor ?? undefined,
-  });
-
-  const firstCellMoniker = cellMonikers[0]?.[0] ?? null;
+function useInitialCellFocus(
+  firstCellMoniker: string | null,
+  derivedCursor: { row: number; col: number } | null,
+  setFocus: (mk: string) => void,
+) {
   const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker || hasInitialFocusRef.current) return;
@@ -200,20 +293,35 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
       hasInitialFocusRef.current = true;
     }
   }, [firstCellMoniker, setFocus, derivedCursor]);
+}
+
+function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
+  const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
+  useEffect(() => {
+    setVisibleRowCount(entities.length);
+  }, [entities.length]);
+
+  const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
+  const { cellMonikers, cellMonikerMap } = useCellMonikers(entities, columns);
+
+  const derivedCursor = useMemo(
+    () => (focusedMoniker ? cellMonikerMap.get(focusedMoniker) ?? null : null),
+    [focusedMoniker, cellMonikerMap],
+  );
+  const grid = useGrid({
+    rowCount: visibleRowCount,
+    colCount: columns.length,
+    cursor: derivedCursor ?? undefined,
+  });
+
+  useInitialCellFocus(cellMonikers[0]?.[0] ?? null, derivedCursor, setFocus);
 
   const claimPredicates = useMemo(() => {
     const rowCount = cellMonikers.length;
     const colCount = columns.length;
     return cellMonikers.map((row, ri) =>
       row.map((_, ci) =>
-        buildCellPredicates(
-          ri,
-          ci,
-          cellMonikers,
-          cellMonikerMap,
-          rowCount,
-          colCount,
-        ),
+        buildCellPredicates(ri, ci, cellMonikers, cellMonikerMap, rowCount, colCount),
       ),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
@@ -335,9 +443,8 @@ function buildGridEditCommands(
       name: "New Row Below",
       keys: { vim: "o", cua: "Mod+Enter" },
       execute: () => {
-        dispatch(`${entityType}.add`, {
-          args: { title: `New ${entityType}` },
-        }).catch((err) => console.error("Failed to add row:", err));
+        if (entityType === "") return;
+        addNewEntity(dispatch, entityType);
       },
     },
     {
@@ -345,9 +452,8 @@ function buildGridEditCommands(
       name: "New Row Above",
       keys: { vim: "O", cua: "Mod+Shift+Enter" },
       execute: () => {
-        dispatch(`${entityType}.add`, {
-          args: { title: `New ${entityType}` },
-        }).catch((err) => console.error("Failed to add row:", err));
+        if (entityType === "") return;
+        addNewEntity(dispatch, entityType);
       },
     },
   ];
@@ -388,6 +494,26 @@ interface GridViewProps {
  * Returns memoized callbacks for cell clicks, row entity commands, and
  * cell editor rendering.
  */
+/** Render the inline cell editor — a Field in compact editing mode. */
+function renderGridCellEditor(
+  entity: Entity,
+  field: FieldDef,
+  onCommit: (value: unknown) => void,
+  onCancel: () => void,
+) {
+  return (
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={true}
+      onDone={() => onCommit(undefined)}
+      onCancel={onCancel}
+    />
+  );
+}
+
 function useGridCallbacks(
   cellMonikers: string[][],
   setFocus: (mk: string) => void,
@@ -396,7 +522,6 @@ function useGridCallbacks(
 ) {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
-      // On click, set focus to the clicked cell's moniker
       const mk = cellMonikers[row]?.[col];
       if (mk) setFocus(mk);
     },
@@ -404,51 +529,23 @@ function useGridCallbacks(
   );
 
   /**
-   * Factory that builds entity-specific context menu commands for a given row.
+   * Build entity-specific context menu commands for a given row.
    *
-   * Used by DataTable to wrap each row's selector cell in its own
+   * Called by DataTable to wrap each row's selector cell in its own
    * CommandScopeProvider so right-clicking row N always resolves commands for
-   * row N's entity -- regardless of the grid cursor position at the time of
-   * the right-click.
-   *
-   * Uses buildEntityCommandDefs (non-hook) because this factory is called
-   * inside a callback, not in the React render cycle.
+   * row N's entity, regardless of the grid cursor position at right-click time.
    */
   const buildRowEntityCommands = useCallback(
-    (entity: Entity): CommandDef[] => {
-      return buildEntityCommandDefs(
-        schemaCommands,
-        entityType,
-        entity.id,
-        entity,
-      );
-    },
+    (entity: Entity): CommandDef[] =>
+      buildEntityCommandDefs(schemaCommands, entityType, entity.id, entity),
     [schemaCommands, entityType],
   );
 
-  const renderEditor = useCallback(
-    (
-      entity: Entity,
-      field: FieldDef,
-      onCommit: (value: unknown) => void,
-      onCancel: () => void,
-    ) => {
-      return (
-        <Field
-          fieldDef={field}
-          entityType={entity.entity_type}
-          entityId={entity.id}
-          mode="compact"
-          editing={true}
-          onDone={() => onCommit(undefined)}
-          onCancel={onCancel}
-        />
-      );
-    },
-    [],
-  );
-
-  return { handleCellClick, buildRowEntityCommands, renderEditor };
+  return {
+    handleCellClick,
+    buildRowEntityCommands,
+    renderEditor: renderGridCellEditor,
+  };
 }
 
 /**
@@ -487,69 +584,117 @@ function GridStatusBar({
   );
 }
 
+/**
+ * Thin action bar below the grid with a "+" button that dispatches
+ * `entity.add:{entityType}` to create a new entity of the correct type.
+ *
+ * Mirrors the add-task button in `column-view.tsx`: plain `<button>`, `Plus`
+ * icon, tooltip, muted styling. Aria-label and tooltip read as
+ * "Add {EntityType}" with the type title-cased.
+ */
+function AddEntityBar({
+  entityType,
+  dispatch,
+}: {
+  entityType: string;
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+}) {
+  const label = `Add ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+  return (
+    <div className="flex items-center px-2 py-1 border-t border-border">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={label}
+            className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+            onClick={() => addNewEntity(dispatch, entityType)}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 /** Grid (spreadsheet-style) view for entities. */
+/** Empty-state fallback when the view's entity_type is missing or invalid. */
+function GridViewMissingEntityType() {
+  return (
+    <main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+      View is missing an entity_type definition.
+    </main>
+  );
+}
+
+interface GridBodyProps {
+  data: ReturnType<typeof useGridData>;
+  nav: ReturnType<typeof useGridNavigation>;
+  callbacks: ReturnType<typeof useGridCallbacks>;
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+}
+
+function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
+  return (
+    <main className="flex-1 flex flex-col min-h-0">
+      <GridStatusBar
+        rowCount={data.entities.length}
+        mode={nav.grid.mode}
+        cursor={nav.grid.cursor}
+      />
+      <DataTable
+        columns={data.columns}
+        rows={data.entities}
+        grid={nav.grid}
+        cellMonikers={nav.cellMonikers}
+        claimPredicates={nav.claimPredicates}
+        onCellClick={callbacks.handleCellClick}
+        renderEditor={callbacks.renderEditor}
+        grouping={data.grouping}
+        onVisibleRowCount={nav.setVisibleRowCount}
+        rowEntityCommands={callbacks.buildRowEntityCommands}
+        perspectiveSort={data.activePerspective?.sort}
+        perspectiveId={data.activePerspective?.id}
+      />
+      <AddEntityBar entityType={data.entityType} dispatch={dispatch} />
+    </main>
+  );
+}
+
 export function GridView({ view }: GridViewProps) {
   const dispatch = useDispatchCommand();
-  const {
-    entityType,
-    entities,
-    columns,
-    grouping,
-    schemaCommands,
-    activePerspective,
-  } = useGridData(view);
-  const {
-    setVisibleRowCount,
-    grid,
-    cellMonikers,
-    claimPredicates,
-    setFocus,
-    broadcastNavCommand,
-  } = useGridNavigation(entities, columns);
+  const data = useGridData(view);
+  const nav = useGridNavigation(data.entities, data.columns);
   const gridCommands = useGridCommands(
-    broadcastNavCommand,
-    grid,
-    entities,
-    entityType,
+    nav.broadcastNavCommand,
+    nav.grid,
+    data.entities,
+    data.entityType,
     dispatch,
   );
-  const { handleCellClick, buildRowEntityCommands, renderEditor } =
-    useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
+  const callbacks = useGridCallbacks(
+    nav.cellMonikers,
+    nav.setFocus,
+    data.schemaCommands,
+    data.entityType,
+  );
 
-  if (!view.entity_type) {
+  // Guard on the sanitized `entityType`, not raw `view.entity_type`.
+  // `useGridData` reduces invalid values to the empty string via
+  // `VALID_ENTITY_TYPE`; dispatching `entity.add:` with no suffix would
+  // surface a confusing user-facing failure from the backend.
+  if (data.entityType === "") {
     console.warn(
-      `[GridView] view "${view.name ?? view.id}" has no entity_type`,
+      `[GridView] view "${view.name ?? view.id}" has missing or invalid entity_type: ${JSON.stringify(view.entity_type)}`,
     );
-    return (
-      <main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-        View is missing an entity_type definition.
-      </main>
-    );
+    return <GridViewMissingEntityType />;
   }
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      <main className="flex-1 flex flex-col min-h-0">
-        <GridStatusBar
-          rowCount={entities.length}
-          mode={grid.mode}
-          cursor={grid.cursor}
-        />
-        <DataTable
-          columns={columns}
-          rows={entities}
-          grid={grid}
-          cellMonikers={cellMonikers}
-          claimPredicates={claimPredicates}
-          onCellClick={handleCellClick}
-          renderEditor={renderEditor}
-          grouping={grouping}
-          onVisibleRowCount={setVisibleRowCount}
-          rowEntityCommands={buildRowEntityCommands}
-          perspectiveSort={activePerspective?.sort}
-          perspectiveId={activePerspective?.id}
-        />
-      </main>
+      <GridBody data={data} nav={nav} callbacks={callbacks} dispatch={dispatch} />
     </CommandScopeProvider>
   );
 }

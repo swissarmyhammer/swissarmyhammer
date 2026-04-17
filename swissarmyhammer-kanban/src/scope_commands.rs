@@ -8,7 +8,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use swissarmyhammer_commands::{Command, CommandContext, CommandsRegistry, KeysDef, UIState};
+use swissarmyhammer_commands::{
+    Command, CommandContext, CommandDef, CommandsRegistry, KeysDef, UIState,
+};
 use swissarmyhammer_fields::FieldsContext;
 
 /// Lightweight view descriptor for dynamic command generation.
@@ -22,6 +24,12 @@ pub struct ViewInfo {
     pub id: String,
     /// Human-readable name (e.g. "Board View", "Task Grid").
     pub name: String,
+    /// Entity type this view renders (e.g. "task", "tag", "project").
+    ///
+    /// When present, the scope dispatcher emits a dynamic
+    /// `entity.add:{entity_type}` command so every view type gets a
+    /// generic "New {Type}" creation action without per-type Rust code.
+    pub entity_type: Option<String>,
 }
 
 /// Lightweight open-window descriptor for dynamic command generation.
@@ -179,38 +187,65 @@ fn check_available(
 /// Emit dynamic commands from runtime data into the result list.
 ///
 /// Generates `view.switch:{id}`, `board.switch:{path}`, `window.focus:{label}`,
-/// and `perspective.goto:{id}` commands from the dynamic sources. Skips
-/// commands already in the `seen` set.
-fn emit_dynamic_commands(
-    dyn_src: &DynamicSources,
+/// `perspective.goto:{id}`, and `entity.add:{type}` commands from the
+/// dynamic sources. Skips commands already in the `seen` set.
+///
+/// `entity.add:{type}` is the only dynamic command that depends on the current
+/// scope chain: it surfaces only when a `view:{id}` moniker is active and
+/// the matching view declares an `entity_type`. Unlike the navigation
+/// dynamics (`view.switch`, `board.switch`, `perspective.goto`,
+/// `window.focus`) which all set `context_menu: false`, `entity.add:*` is a
+/// first-class creation action and is emitted with `context_menu: true` so
+/// it appears on right-click inside the view.
+///
+/// The dispatch-side handler that actually creates the entity lives in
+/// `crate::entity::add::AddEntity`; `entity.add:{type}` monikers produced
+/// here are rewritten to the canonical `entity.add` command in
+/// `kanban-app/src/commands.rs::dispatch_command_internal` and routed into
+/// that operation.
+/// Push a command once, honoring the `(id, target)` seen-set for dedup.
+fn push_dedup(
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+    cmd: ResolvedCommand,
+) {
+    let key = (cmd.id.clone(), cmd.target.clone());
+    if seen.contains(&key) {
+        return;
+    }
+    seen.insert(key);
+    result.push(cmd);
+}
+
+fn emit_view_switch(
+    views: &[ViewInfo],
     seen: &mut HashSet<(String, Option<String>)>,
     result: &mut Vec<ResolvedCommand>,
 ) {
-    for view in &dyn_src.views {
-        let cmd_id = format!("view.switch:{}", view.id);
-        let key = (cmd_id.clone(), None);
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.insert(key);
-        result.push(ResolvedCommand {
-            id: cmd_id,
-            name: format!("Switch to {}", view.name),
-            menu_name: None,
-            target: None,
-            group: "view".into(),
-            context_menu: false,
-            keys: None,
-            available: true,
-        });
+    for view in views {
+        push_dedup(
+            seen,
+            result,
+            ResolvedCommand {
+                id: format!("view.switch:{}", view.id),
+                name: format!("Switch to {}", view.name),
+                menu_name: None,
+                target: None,
+                group: "view".into(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            },
+        );
     }
-    for board in &dyn_src.boards {
-        let cmd_id = format!("board.switch:{}", board.path);
-        let key = (cmd_id.clone(), None);
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.insert(key);
+}
+
+fn emit_board_switch(
+    boards: &[BoardInfo],
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for board in boards {
         let tpl = TemplateParams {
             entity_type: "board",
             entity_name: &board.entity_name,
@@ -221,53 +256,165 @@ fn emit_dynamic_commands(
             &tpl,
         );
         let menu_name = resolve_name_template("{{entity.context.display_name}}", &tpl);
-        result.push(ResolvedCommand {
-            id: cmd_id,
-            name,
-            menu_name: Some(menu_name),
-            target: None,
-            group: "board".into(),
-            context_menu: false,
-            keys: None,
-            available: true,
-        });
+        push_dedup(
+            seen,
+            result,
+            ResolvedCommand {
+                id: format!("board.switch:{}", board.path),
+                name,
+                menu_name: Some(menu_name),
+                target: None,
+                group: "board".into(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            },
+        );
     }
-    for window in &dyn_src.windows {
-        let cmd_id = format!("window.focus:{}", window.label);
-        let key = (cmd_id.clone(), None);
-        if seen.contains(&key) {
+}
+
+fn emit_window_focus(
+    windows: &[WindowInfo],
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for window in windows {
+        push_dedup(
+            seen,
+            result,
+            ResolvedCommand {
+                id: format!("window.focus:{}", window.label),
+                name: window.title.clone(),
+                menu_name: Some(window.title.clone()),
+                target: None,
+                group: "window".into(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            },
+        );
+    }
+}
+
+fn emit_perspective_goto(
+    perspectives: &[PerspectiveInfo],
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for perspective in perspectives {
+        push_dedup(
+            seen,
+            result,
+            ResolvedCommand {
+                id: format!("perspective.goto:{}", perspective.id),
+                name: format!("Go to Perspective: {}", perspective.name),
+                menu_name: None,
+                target: None,
+                group: "perspective".into(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            },
+        );
+    }
+}
+
+/// Emit `entity.add:{type}` commands for each view type in the scope chain.
+///
+/// Surfaces only when a `view:{id}` moniker is present and the matching view
+/// declares an `entity_type`. One command per distinct type; dedup handles
+/// overlapping views. Marked `context_menu: true` because creation is a
+/// first-class action, unlike navigation dynamics.
+///
+/// Emits `debug` traces at each decision point so a missing entity.add in
+/// the final result can be diagnosed from logs alone — see the task
+/// `Fix "New" so it works uniformly on every grid` for the intended
+/// capture protocol.
+fn emit_entity_add(
+    views_by_id: &HashMap<&str, &ViewInfo>,
+    scope_chain: &[String],
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for moniker in scope_chain {
+        let Some(view_id) = moniker.strip_prefix("view:") else {
+            continue;
+        };
+        let Some(view) = views_by_id.get(view_id) else {
+            tracing::debug!(
+                scope_moniker = %moniker,
+                view_id = %view_id,
+                known_view_count = views_by_id.len(),
+                "emit_entity_add: view moniker has no matching ViewInfo — \
+                 gather_views did not populate this view"
+            );
+            continue;
+        };
+        let Some(entity_type) = view.entity_type.as_deref() else {
+            tracing::debug!(
+                scope_moniker = %moniker,
+                view_id = %view_id,
+                view_name = %view.name,
+                "emit_entity_add: view has no entity_type — skipping (dashboard-style view)"
+            );
+            continue;
+        };
+        if entity_type.is_empty() {
+            tracing::debug!(
+                scope_moniker = %moniker,
+                view_id = %view_id,
+                view_name = %view.name,
+                "emit_entity_add: view entity_type is empty string — skipping"
+            );
             continue;
         }
-        seen.insert(key);
-        result.push(ResolvedCommand {
-            id: cmd_id,
-            name: window.title.clone(),
-            menu_name: Some(window.title.clone()),
-            target: None,
-            group: "window".into(),
-            context_menu: false,
-            keys: None,
-            available: true,
-        });
+        let tpl = TemplateParams {
+            entity_type,
+            ..Default::default()
+        };
+        let cmd_id = format!("entity.add:{entity_type}");
+        tracing::debug!(
+            scope_moniker = %moniker,
+            view_id = %view_id,
+            entity_type = %entity_type,
+            cmd_id = %cmd_id,
+            "emit_entity_add: pushing dynamic command"
+        );
+        push_dedup(
+            seen,
+            result,
+            ResolvedCommand {
+                id: cmd_id,
+                name: resolve_name_template("New {{entity.type}}", &tpl),
+                menu_name: None,
+                target: None,
+                group: "entity".into(),
+                context_menu: true,
+                keys: None,
+                available: true,
+            },
+        );
     }
-    for perspective in &dyn_src.perspectives {
-        let cmd_id = format!("perspective.goto:{}", perspective.id);
-        let key = (cmd_id.clone(), None);
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.insert(key);
-        result.push(ResolvedCommand {
-            id: cmd_id,
-            name: format!("Go to Perspective: {}", perspective.name),
-            menu_name: None,
-            target: None,
-            group: "perspective".into(),
-            context_menu: false,
-            keys: None,
-            available: true,
-        });
-    }
+}
+
+fn emit_dynamic_commands(
+    dyn_src: &DynamicSources,
+    scope_chain: &[String],
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    // Index views by id once so the `entity.add` emission below is O(scope)
+    // rather than O(scope × views).
+    let views_by_id: HashMap<&str, &ViewInfo> = dyn_src
+        .views
+        .iter()
+        .map(|v| (v.id.as_str(), v))
+        .collect();
+    emit_view_switch(&dyn_src.views, seen, result);
+    emit_board_switch(&dyn_src.boards, seen, result);
+    emit_window_focus(&dyn_src.windows, seen, result);
+    emit_perspective_goto(&dyn_src.perspectives, seen, result);
+    emit_entity_add(&views_by_id, scope_chain, seen, result);
 }
 
 /// Compute all available commands for a given scope chain.
@@ -298,184 +445,249 @@ pub fn commands_for_scope(
     let clipboard_type = ui_state.clipboard_entity_type();
     let all_registry_cmds = registry.available_commands(scope_chain);
 
-    // Walk scope chain in order (innermost first). For each moniker, emit
-    // entity schema commands then scoped registry commands. This ensures
-    // commands appear in scope order: attachment before task before global.
+    emit_scoped_commands(
+        scope_chain,
+        &all_registry_cmds,
+        command_impls,
+        fields,
+        ui_state,
+        clipboard_type.as_deref(),
+        &mut seen,
+        &mut result,
+    );
+    emit_global_registry_commands(
+        &all_registry_cmds,
+        scope_chain,
+        command_impls,
+        ui_state,
+        clipboard_type.as_deref(),
+        &mut seen,
+        &mut result,
+    );
+    if let Some(dyn_src) = dynamic {
+        emit_dynamic_commands(dyn_src, scope_chain, &mut seen, &mut result);
+    }
+    dedupe_by_id(&mut result);
+    if context_menu_only {
+        result.retain(|c| c.context_menu);
+    }
+    result.retain(|c| c.available);
+
+    result
+}
+
+/// Emit entity-schema commands for the current moniker.
+///
+/// Two passes: commands declared directly on `entity_type`, then commands from
+/// any entity whose `scope` references this type (e.g. `task.add` declared on
+/// task with scope `entity:column` matches when processing a column moniker).
+///
+/// Walks each moniker in `scope_chain` in order (innermost first), skipping
+/// `field:*` monikers. For each entity moniker, delegates to
+/// `emit_entity_schema_commands` (if `fields` is supplied) then to
+/// `emit_scoped_registry_commands`. This ensures commands appear in scope
+/// order: attachment before task before global.
+#[allow(clippy::too_many_arguments)]
+fn emit_scoped_commands(
+    scope_chain: &[String],
+    all_registry_cmds: &[&CommandDef],
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    fields: Option<&FieldsContext>,
+    ui_state: &Arc<UIState>,
+    clipboard_type: Option<&str>,
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
     for moniker in scope_chain {
         let Some((entity_type, entity_id)) = moniker.split_once(':') else {
             continue;
         };
-
         // Field monikers ("field:task:abc.title") are not entities — skip them.
         // The frontend prefixes field-level FocusScopes with "field:" so they
         // don't masquerade as entity monikers in the scope chain.
         if entity_type == "field" {
             continue;
         }
-
         let entity_moniker = format!("{entity_type}:{entity_id}");
 
-        // Entity schema commands (from entity YAML definitions).
-        // Two passes: (1) commands declared directly on this entity type,
-        // (2) commands from ANY entity definition whose `scope` field
-        // references this entity type (e.g. task.add on task entity with
-        // scope "entity:column" when processing a column moniker).
         if let Some(fields) = fields {
-            let scope_bare_et = entity_type;
-            let scope_prefixed_et = format!("entity:{entity_type}");
-
-            let direct_cmds: Vec<_> = fields
-                .get_entity(entity_type)
-                .map(|e| e.commands.iter().collect())
-                .unwrap_or_default();
-
-            let scoped_cmds: Vec<_> = fields
-                .all_entities()
-                .iter()
-                .flat_map(|e| e.commands.iter())
-                .filter(|cmd| {
-                    cmd.scope.as_deref().is_some_and(|s| {
-                        s.split(',').any(|r| {
-                            let r = r.trim();
-                            r == scope_bare_et || r == scope_prefixed_et
-                        })
-                    })
-                })
-                .collect();
-
-            for cmd in direct_cmds.into_iter().chain(scoped_cmds) {
-                if cmd.visible == Some(false) {
-                    continue;
-                }
-                let key = (cmd.id.clone(), Some(entity_moniker.clone()));
-                if seen.contains(&key) {
-                    continue;
-                }
-                seen.insert(key);
-
-                let tpl = TemplateParams {
-                    entity_type: if cmd.id == "entity.paste" {
-                        clipboard_type.as_deref().unwrap_or("entity")
-                    } else {
-                        entity_type
-                    },
-                    ..Default::default()
-                };
-                let name = resolve_name_template(&cmd.name, &tpl);
-                let menu_name = cmd
-                    .menu_name
-                    .as_ref()
-                    .map(|mn| resolve_name_template(mn, &tpl));
-
-                let keys = cmd.keys.as_ref().map(|k| KeysDef {
-                    vim: k.vim.clone(),
-                    cua: k.cua.clone(),
-                    emacs: k.emacs.clone(),
-                });
-
-                let available =
-                    check_available(&cmd.id, scope_chain, Some(moniker), command_impls, ui_state);
-
-                result.push(ResolvedCommand {
-                    id: cmd.id.clone(),
-                    name,
-                    menu_name,
-                    target: Some(entity_moniker.clone()),
-                    group: entity_type.to_string(),
-                    context_menu: cmd.context_menu,
-                    keys,
-                    available,
-                });
-            }
+            emit_entity_schema_commands(
+                fields,
+                entity_type,
+                &entity_moniker,
+                moniker,
+                scope_chain,
+                command_impls,
+                ui_state,
+                clipboard_type,
+                seen,
+                result,
+            );
         }
+        emit_scoped_registry_commands(
+            all_registry_cmds,
+            entity_type,
+            scope_chain,
+            command_impls,
+            ui_state,
+            clipboard_type,
+            seen,
+            result,
+        );
+    }
+}
 
-        // Registry commands scoped to this entity type (e.g. attachment.open
-        // with scope "attachment" or "entity:attachment"). These appear right
-        // after the entity schema commands for the same scope level.
-        let scope_bare = entity_type;
-        let scope_prefixed = format!("entity:{entity_type}");
-        for cmd_def in &all_registry_cmds {
-            if !cmd_def.visible {
-                continue;
-            }
-            // Only include commands whose scope mentions THIS specific type
-            let matches_this_type = cmd_def.scope.as_deref().is_some_and(|s| {
-                s.split(',').any(|r| {
-                    let r = r.trim();
-                    r == scope_bare || r == scope_prefixed
-                })
-            });
-            if !matches_this_type {
-                continue;
-            }
+/// Collect direct + transitively-scoped entity-declared commands for a type.
+fn collect_entity_schema_cmds<'a>(
+    fields: &'a FieldsContext,
+    entity_type: &str,
+) -> Vec<&'a swissarmyhammer_fields::types::EntityCommand> {
+    let scope_prefixed_et = format!("entity:{entity_type}");
+    let direct_cmds = fields
+        .get_entity(entity_type)
+        .map(|e| e.commands.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let scoped_cmds: Vec<_> = fields
+        .all_entities()
+        .iter()
+        .flat_map(|e| e.commands.iter())
+        .filter(|cmd| scope_matches(cmd.scope.as_deref(), entity_type, &scope_prefixed_et))
+        .collect();
+    direct_cmds.into_iter().chain(scoped_cmds).collect()
+}
 
-            let key = (cmd_def.id.clone(), None);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
+#[allow(clippy::too_many_arguments)]
+fn emit_entity_schema_commands(
+    fields: &FieldsContext,
+    entity_type: &str,
+    entity_moniker: &str,
+    moniker: &str,
+    scope_chain: &[String],
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    ui_state: &Arc<UIState>,
+    clipboard_type: Option<&str>,
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for cmd in collect_entity_schema_cmds(fields, entity_type) {
+        if cmd.visible == Some(false) {
+            continue;
+        }
+        let key = (cmd.id.clone(), Some(entity_moniker.to_string()));
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
 
-            let tpl = TemplateParams {
-                entity_type: if cmd_def.id == "entity.paste" {
-                    clipboard_type.as_deref().unwrap_or("entity")
-                } else {
-                    entity_type
-                },
-                ..Default::default()
-            };
-            let name = resolve_name_template(&cmd_def.name, &tpl);
-            let menu_name = cmd_def
+        let tpl = paste_aware_tpl(&cmd.id, entity_type, clipboard_type);
+        let keys = cmd.keys.as_ref().map(|k| KeysDef {
+            vim: k.vim.clone(),
+            cua: k.cua.clone(),
+            emacs: k.emacs.clone(),
+        });
+        result.push(ResolvedCommand {
+            id: cmd.id.clone(),
+            name: resolve_name_template(&cmd.name, &tpl),
+            menu_name: cmd
                 .menu_name
                 .as_ref()
-                .map(|mn| resolve_name_template(mn, &tpl));
-
-            let available =
-                check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
-
-            result.push(ResolvedCommand {
-                id: cmd_def.id.clone(),
-                name,
-                menu_name,
-                target: None,
-                group: entity_type.to_string(),
-                context_menu: cmd_def.context_menu,
-                keys: cmd_def.keys.clone(),
-                available,
-            });
-        }
+                .map(|mn| resolve_name_template(mn, &tpl)),
+            target: Some(entity_moniker.to_string()),
+            group: entity_type.to_string(),
+            context_menu: cmd.context_menu,
+            keys,
+            available: check_available(
+                &cmd.id,
+                scope_chain,
+                Some(moniker),
+                command_impls,
+                ui_state,
+            ),
+        });
     }
+}
 
-    // Global (unscoped) registry commands — appear after all scoped commands.
-    for cmd_def in &all_registry_cmds {
+/// Emit registry commands whose `scope` names the current entity type.
+#[allow(clippy::too_many_arguments)]
+fn emit_scoped_registry_commands(
+    all_registry_cmds: &[&CommandDef],
+    entity_type: &str,
+    scope_chain: &[String],
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    ui_state: &Arc<UIState>,
+    clipboard_type: Option<&str>,
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    let scope_prefixed = format!("entity:{entity_type}");
+    for cmd_def in all_registry_cmds {
         if !cmd_def.visible {
             continue;
         }
-
+        if !scope_matches(cmd_def.scope.as_deref(), entity_type, &scope_prefixed) {
+            continue;
+        }
         let key = (cmd_def.id.clone(), None);
         if seen.contains(&key) {
             continue;
         }
         seen.insert(key);
 
-        let innermost_type = scope_chain
-            .first()
-            .and_then(|m| m.split_once(':').map(|(t, _)| t))
-            .unwrap_or("entity");
-        let tpl = TemplateParams {
-            entity_type: if cmd_def.id == "entity.paste" {
-                clipboard_type.as_deref().unwrap_or("entity")
-            } else {
-                innermost_type
-            },
-            ..Default::default()
-        };
+        let tpl = paste_aware_tpl(&cmd_def.id, entity_type, clipboard_type);
         let name = resolve_name_template(&cmd_def.name, &tpl);
         let menu_name = cmd_def
             .menu_name
             .as_ref()
             .map(|mn| resolve_name_template(mn, &tpl));
+        let available =
+            check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
 
-        let available = check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
+        result.push(ResolvedCommand {
+            id: cmd_def.id.clone(),
+            name,
+            menu_name,
+            target: None,
+            group: entity_type.to_string(),
+            context_menu: cmd_def.context_menu,
+            keys: cmd_def.keys.clone(),
+            available,
+        });
+    }
+}
+
+/// Emit global (unscoped) registry commands after all scoped commands.
+fn emit_global_registry_commands(
+    all_registry_cmds: &[&CommandDef],
+    scope_chain: &[String],
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    ui_state: &Arc<UIState>,
+    clipboard_type: Option<&str>,
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    let innermost_type = scope_chain
+        .first()
+        .and_then(|m| m.split_once(':').map(|(t, _)| t))
+        .unwrap_or("entity");
+
+    for cmd_def in all_registry_cmds {
+        if !cmd_def.visible {
+            continue;
+        }
+        let key = (cmd_def.id.clone(), None);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+
+        let tpl = paste_aware_tpl(&cmd_def.id, innermost_type, clipboard_type);
+        let name = resolve_name_template(&cmd_def.name, &tpl);
+        let menu_name = cmd_def
+            .menu_name
+            .as_ref()
+            .map(|mn| resolve_name_template(mn, &tpl));
+        let available =
+            check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
 
         result.push(ResolvedCommand {
             id: cmd_def.id.clone(),
@@ -488,36 +700,49 @@ pub fn commands_for_scope(
             available,
         });
     }
+}
 
-    // 3. Dynamic commands from runtime data (views, boards, windows, perspectives).
-    if let Some(dyn_src) = dynamic {
-        emit_dynamic_commands(dyn_src, &mut seen, &mut result);
+/// True when `scope` mentions either the bare entity type or `entity:{type}`.
+fn scope_matches(scope: Option<&str>, bare: &str, prefixed: &str) -> bool {
+    scope.is_some_and(|s| {
+        s.split(',').any(|r| {
+            let r = r.trim();
+            r == bare || r == prefixed
+        })
+    })
+}
+
+/// Build a TemplateParams that substitutes the clipboard type for `entity.paste`.
+fn paste_aware_tpl<'a>(
+    cmd_id: &str,
+    default_type: &'a str,
+    clipboard_type: Option<&'a str>,
+) -> TemplateParams<'a> {
+    TemplateParams {
+        entity_type: if cmd_id == "entity.paste" {
+            clipboard_type.unwrap_or("entity")
+        } else {
+            default_type
+        },
+        ..Default::default()
     }
+}
 
-    // 4. Deduplicate: same id → keep innermost (first seen).
-    // When a command like "entity.cut" appears in both tag and task scopes, only
-    // the innermost (tag) version is shown. To act on the task, right-click the
-    // task card directly. This prevents confusing menus that show both "Cut Tag"
-    // and "Cut Task" when right-clicking a tag pill.
-    {
-        let mut seen_ids: HashSet<String> = HashSet::new();
-        result.retain(|c| {
-            if seen_ids.contains(&c.id) {
-                return false;
-            }
-            seen_ids.insert(c.id.clone());
-            true
-        });
-    }
-
-    // 5. Filter
-    if context_menu_only {
-        result.retain(|c| c.context_menu);
-    }
-    // Only return available commands
-    result.retain(|c| c.available);
-
-    result
+/// Keep only the innermost occurrence of each command id.
+///
+/// When a command like `entity.cut` appears in both tag and task scopes, only
+/// the innermost (tag) copy is kept. To act on the task, right-click it
+/// directly. This prevents confusing menus that show both "Cut Tag" and
+/// "Cut Task" when right-clicking a tag pill.
+fn dedupe_by_id(result: &mut Vec<ResolvedCommand>) {
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    result.retain(|c| {
+        if seen_ids.contains(&c.id) {
+            return false;
+        }
+        seen_ids.insert(c.id.clone());
+        true
+    });
 }
 
 #[cfg(test)]
@@ -1243,14 +1468,17 @@ mod tests {
                 ViewInfo {
                     id: "board-view".into(),
                     name: "Board View".into(),
+                    entity_type: None,
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
+                    entity_type: None,
                 },
                 ViewInfo {
                     id: "tags-grid".into(),
                     name: "Tag Grid".into(),
+                    entity_type: None,
                 },
             ],
             boards: vec![],
@@ -1294,10 +1522,12 @@ mod tests {
                 ViewInfo {
                     id: "board-view".into(),
                     name: "Board View".into(),
+                    entity_type: None,
                 },
                 ViewInfo {
                     id: "tasks-grid".into(),
                     name: "Task Grid".into(),
+                    entity_type: None,
                 },
             ],
             boards: vec![],
@@ -1423,6 +1653,7 @@ mod tests {
             views: vec![ViewInfo {
                 id: "board-view".into(),
                 name: "Board View".into(),
+                entity_type: None,
             }],
             boards: vec![BoardInfo {
                 path: "/tmp/board".into(),
@@ -1469,6 +1700,234 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.starts_with("board.switch:")),
             "no board commands without dynamic sources"
+        );
+    }
+
+    // =========================================================================
+    // Dynamic entity.add commands (view-scope driven) — UNIT-LEVEL
+    //
+    // The four tests immediately below hand-construct `ViewInfo` entries.
+    // They prove the `emit_entity_add` *algorithm* but NOT that the real
+    // builtin YAML registry → `gather_views` projection → emission chain
+    // holds end-to-end. Registry-backed coverage lives in the
+    // `*_for_tasks_grid_view_scope`, `*_for_tags_grid_view_scope`, and
+    // `*_for_projects_grid_view_scope` tests further down in this module,
+    // plus the `entity_add_emitted_for_every_builtin_view_with_entity_type_real_registry`
+    // cross-cutting guard. A regression that breaks only the YAML
+    // projection will pass the hand-constructed tests and fail the
+    // registry-backed ones — that is by design.
+    // =========================================================================
+
+    #[test]
+    fn entity_add_emitted_when_view_in_scope() {
+        // When a `view:*` moniker is active and the matching view declares
+        // an `entity_type`, a dynamic `entity.add:{type}` command appears.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:tasks-grid".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "tasks-grid".into(),
+                name: "Task Grid".into(),
+                entity_type: Some("task".into()),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let add_cmd = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:task")
+            .expect("entity.add:task should be emitted when view scope declares entity_type=task");
+        assert_eq!(add_cmd.name, "New Task");
+        assert_eq!(add_cmd.group, "entity");
+        assert!(add_cmd.context_menu, "entity.add must opt into context menu");
+        assert!(add_cmd.target.is_none());
+        assert!(add_cmd.available);
+    }
+
+    #[test]
+    fn entity_add_not_emitted_without_view_in_scope() {
+        // Without a `view:*` moniker, no entity.add:{type} is emitted even
+        // when the view is listed in DynamicSources (it isn't the active one).
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "tasks-grid".into(),
+                name: "Task Grid".into(),
+                entity_type: Some("task".into()),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(
+            !ids.iter().any(|id| id.starts_with("entity.add:")),
+            "no entity.add without a view moniker in scope: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn entity_add_present_in_context_menu() {
+        // Unlike view.switch / board.switch / perspective.goto which are
+        // navigation and context_menu: false, entity.add:* is a first-class
+        // creation action and IS present with context_menu_only=true.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:tags-grid".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "tags-grid".into(),
+                name: "Tag Grid".into(),
+                entity_type: Some("tag".into()),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true,
+            Some(&dynamic),
+        );
+        let add_cmd = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:tag")
+            .expect("entity.add:tag should remain after context_menu_only filter");
+        assert!(add_cmd.context_menu);
+    }
+
+    /// The kanban board view declares `entity_type: task` in its YAML, so
+    /// its `view:{id}` moniker in scope must surface `entity.add:task` as a
+    /// context-menu + palette command. This is the Rust-side regression guard
+    /// for the "Board view: New Task does nothing" bug — the frontend relies
+    /// on this list to render the context menu and keyboard command, so if
+    /// this test fails the palette loses its New Task entry across the board.
+    #[test]
+    fn entity_add_task_emitted_for_board_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        // Mirrors the scope chain `ViewContainer` + `BoardView` produce: the
+        // innermost view moniker first, then the board moniker.
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".into(), "board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "01JMVIEW0000000000BOARD0".into(),
+                name: "Board".into(),
+                entity_type: Some("task".into()),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let add_cmd = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:task")
+            .expect(
+                "entity.add:task must be emitted on the board view scope chain — \
+                 the board's view:{id} moniker drives this the same way as grids",
+            );
+        assert!(
+            add_cmd.context_menu,
+            "entity.add:task must opt into the context menu so right-click works",
+        );
+        assert_eq!(add_cmd.name, "New Task");
+    }
+
+    /// The Projects grid view declares `entity_type: project` in its YAML.
+    /// Its `view:{id}` moniker must surface `entity.add:project` in the
+    /// palette / context menu. Regression guard for the "New Project never
+    /// appears in the command palette or context menu" bug.
+    #[test]
+    fn entity_add_project_emitted_for_projects_grid_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["view:01JMVIEW0000000000PGRID0".into(), "board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "01JMVIEW0000000000PGRID0".into(),
+                name: "Projects".into(),
+                entity_type: Some("project".into()),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let add_cmd = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:project")
+            .expect(
+                "entity.add:project must be emitted on the projects grid scope \
+                 chain — this is what drives the `New Project` menu item",
+            );
+        assert!(add_cmd.context_menu);
+        assert_eq!(add_cmd.name, "New Project");
+    }
+
+    #[test]
+    fn entity_add_not_emitted_for_views_without_entity_type() {
+        // A view with entity_type: None (e.g. a dashboard view) should not
+        // produce any entity.add command even when its moniker is active.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "view:dashboard".into(),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "dashboard".into(),
+                name: "Dashboard".into(),
+                entity_type: None,
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        assert!(
+            !cmds.iter().any(|c| c.id.starts_with("entity.add:")),
+            "view without entity_type must not emit entity.add"
         );
     }
 
@@ -2175,5 +2634,231 @@ mod tests {
             "real task commands should still appear: {:?}",
             names
         );
+    }
+
+    // =========================================================================
+    // Real-registry entity.add emission tests
+    //
+    // The tests above that construct `ViewInfo` by hand are unit-level
+    // coverage. They establish that the *algorithm* in `emit_entity_add`
+    // works given a DynamicSources payload. They do NOT prove that the
+    // payload built from the real builtin YAML registry + the real
+    // `gather_views` shape is ever populated with a grid view whose
+    // `entity_type` survives the round-trip.
+    //
+    // These tests load the real builtin view YAMLs through
+    // `ViewsContext::from_yaml_sources`, walk the loaded defs to build the
+    // same `ViewInfo` list that production's `gather_views` assembles, and
+    // assert that `commands_for_scope` surfaces `entity.add:{type}` for
+    // every builtin grid view declaring an `entity_type`.
+    //
+    // When these tests fail while the hand-constructed tests pass, the bug
+    // lives in the YAML → `ViewInfo` projection, not in `emit_entity_add`.
+    // =========================================================================
+
+    /// Load the real builtin view registry and return ViewInfo entries.
+    ///
+    /// Mirrors what `kanban-app::gather_views` produces in production:
+    /// pulls every builtin view YAML through `ViewsContext::from_yaml_sources`
+    /// and projects the loaded `ViewDef`s onto the `ViewInfo` shape that
+    /// `emit_entity_add` consumes. This is the registry-backed alternative
+    /// to hand-constructing `ViewInfo` — it catches any YAML drift, schema
+    /// change, or `entity_type` deserialization issue.
+    fn load_real_views() -> Vec<ViewInfo> {
+        let builtin = crate::defaults::builtin_view_definitions();
+        // Writable root is a bogus path — we never persist in this test,
+        // only read back `all_views()` from the in-memory parsed list.
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let vctx = swissarmyhammer_views::ViewsContext::from_yaml_sources(
+            temp.path().to_path_buf(),
+            &builtin,
+        )
+        .expect("builtin views must parse");
+        vctx.all_views()
+            .iter()
+            .map(|v| ViewInfo {
+                id: v.id.clone(),
+                name: v.name.clone(),
+                entity_type: v.entity_type.clone(),
+            })
+            .collect()
+    }
+
+    /// Find a view by name from the real builtin registry; fail loudly if
+    /// the builtin YAMLs no longer contain the expected view.
+    fn view_by_name<'a>(views: &'a [ViewInfo], name: &str) -> &'a ViewInfo {
+        views
+            .iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("builtin views must contain view named '{name}'"))
+    }
+
+    /// The Tasks grid view declares `entity_type: task`. When its
+    /// `view:{id}` moniker is in scope, `entity.add:task` must be emitted.
+    /// Uses the REAL view registry (not a hand-constructed `ViewInfo`) so
+    /// `tasks-grid.yaml` → `entity_type` → emission is proven end-to-end.
+    #[test]
+    fn entity_add_task_emitted_for_tasks_grid_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let views = load_real_views();
+        let tasks_grid = view_by_name(&views, "Tasks Grid");
+        assert_eq!(
+            tasks_grid.entity_type.as_deref(),
+            Some("task"),
+            "tasks-grid YAML must still declare entity_type=task"
+        );
+        let scope = vec![format!("view:{}", tasks_grid.id), "board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: views.clone(),
+            ..Default::default()
+        };
+        let cmds =
+            commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, Some(&dynamic));
+        let add = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:task")
+            .expect(
+                "entity.add:task must be emitted on the tasks-grid scope chain using the REAL \
+                 view registry — this is the regression guard against YAML drift, not the \
+                 hand-constructed test above",
+            );
+        assert_eq!(add.name, "New Task");
+        assert!(add.context_menu, "entity.add:task must opt into context menu");
+        assert!(add.available);
+    }
+
+    /// The Tags grid view declares `entity_type: tag`. Mirrors
+    /// `entity_add_task_emitted_for_tasks_grid_view_scope` using the REAL
+    /// builtin registry. Regression guard for "New Tag missing from palette
+    /// and context menu on the tags grid".
+    #[test]
+    fn entity_add_tag_emitted_for_tags_grid_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let views = load_real_views();
+        let tags_grid = view_by_name(&views, "Tags");
+        assert_eq!(
+            tags_grid.entity_type.as_deref(),
+            Some("tag"),
+            "tags-grid YAML must still declare entity_type=tag"
+        );
+        let scope = vec![format!("view:{}", tags_grid.id), "board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: views.clone(),
+            ..Default::default()
+        };
+        let cmds =
+            commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, Some(&dynamic));
+        let add = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:tag")
+            .expect(
+                "entity.add:tag must be emitted on the tags-grid scope chain using the REAL \
+                 view registry",
+            );
+        assert_eq!(add.name, "New Tag");
+        assert!(add.context_menu);
+        assert!(add.available);
+    }
+
+    /// The Projects grid view declares `entity_type: project`. Mirrors the
+    /// task/tag tests above using the REAL builtin registry. Regression
+    /// guard for "New Project missing from palette and context menu".
+    #[test]
+    fn entity_add_project_emitted_for_projects_grid_view_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let views = load_real_views();
+        let projects_grid = view_by_name(&views, "Projects");
+        assert_eq!(
+            projects_grid.entity_type.as_deref(),
+            Some("project"),
+            "projects-grid YAML must still declare entity_type=project"
+        );
+        let scope = vec![
+            format!("view:{}", projects_grid.id),
+            "board:my-board".into(),
+        ];
+        let dynamic = DynamicSources {
+            views: views.clone(),
+            ..Default::default()
+        };
+        let cmds =
+            commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, Some(&dynamic));
+        let add = cmds
+            .iter()
+            .find(|c| c.id == "entity.add:project")
+            .expect(
+                "entity.add:project must be emitted on the projects-grid scope chain using \
+                 the REAL view registry — this is the regression guard the hand-constructed \
+                 test could never catch",
+            );
+        assert_eq!(add.name, "New Project");
+        assert!(add.context_menu);
+        assert!(add.available);
+    }
+
+    /// Cross-cutting real-registry guard: every builtin view that declares
+    /// an `entity_type` must surface a working `entity.add:{type}` command
+    /// in its scope chain, in BOTH the palette (context_menu_only=false)
+    /// and the context menu (context_menu_only=true).
+    ///
+    /// This is the "future grids inherit the fix automatically" guard — a
+    /// new grid view YAML declaring `entity_type: foo` is covered for free.
+    /// A regression that silently drops the entity.add emission for any
+    /// one entity type fails this test as a single, named failure.
+    #[test]
+    fn entity_add_emitted_for_every_builtin_view_with_entity_type_real_registry() {
+        let (registry, impls, fields, ui) = setup();
+        let views = load_real_views();
+        let with_entity_type: Vec<&ViewInfo> = views
+            .iter()
+            .filter(|v| {
+                v.entity_type
+                    .as_deref()
+                    .is_some_and(|s| !s.is_empty())
+            })
+            .collect();
+        assert!(
+            with_entity_type.len() >= 3,
+            "expected at least board + tasks-grid + tags-grid + projects-grid to declare \
+             entity_type; got {} views: {:?}",
+            with_entity_type.len(),
+            views
+                .iter()
+                .map(|v| (&v.name, &v.entity_type))
+                .collect::<Vec<_>>()
+        );
+        for view in with_entity_type {
+            let entity_type = view.entity_type.as_deref().unwrap();
+            let scope = vec![format!("view:{}", view.id), "board:my-board".into()];
+            let dynamic = DynamicSources {
+                views: views.clone(),
+                ..Default::default()
+            };
+
+            // Palette path — context_menu_only=false
+            let palette =
+                commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, Some(&dynamic));
+            let expected_id = format!("entity.add:{entity_type}");
+            let palette_add = palette.iter().find(|c| c.id == expected_id);
+            assert!(
+                palette_add.is_some_and(|c| c.available),
+                "palette must surface {expected_id} for view '{}' (entity_type={entity_type}); \
+                 got commands: {:?}",
+                view.name,
+                palette.iter().map(|c| &c.id).collect::<Vec<_>>()
+            );
+
+            // Context menu path — context_menu_only=true
+            let menu =
+                commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, Some(&dynamic));
+            let menu_add = menu.iter().find(|c| c.id == expected_id);
+            assert!(
+                menu_add.is_some_and(|c| c.available && c.context_menu),
+                "context menu must surface {expected_id} for view '{}' (entity_type={entity_type}); \
+                 got commands: {:?}",
+                view.name,
+                menu.iter().map(|c| &c.id).collect::<Vec<_>>()
+            );
+        }
     }
 }

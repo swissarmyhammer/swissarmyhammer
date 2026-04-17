@@ -4,6 +4,7 @@ description: Tag identifier
 type:
   kind: text
   single_line: true
+default: new-tag
 icon: tag
 editor: markdown
 display: text

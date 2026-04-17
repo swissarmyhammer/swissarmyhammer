@@ -411,9 +411,9 @@ mod tests {
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
         // entity: task.add, task.move, task.delete, task.untag, task.doThisNext,
-        //         entity.update_field, entity.delete, entity.archive, entity.unarchive,
-        //         tag.update, column.reorder, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 15
+        //         entity.add, entity.update_field, entity.delete, entity.archive,
+        //         entity.unarchive, tag.update, column.reorder, attachment.delete,
+        //         entity.copy, entity.cut, entity.paste = 16
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
         //     palette.close, view.set, perspective.set, perspective.startRename,
         //     setFocus, window.new = 10
@@ -424,7 +424,7 @@ mod tests {
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 62);
+        assert_eq!(registry.all_commands().len(), 63);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

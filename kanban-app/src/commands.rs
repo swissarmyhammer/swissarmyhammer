@@ -116,6 +116,7 @@ fn gather_views(
         .map(|v| ViewInfo {
             id: v.id.clone(),
             name: v.name.clone(),
+            entity_type: v.entity_type.clone(),
         })
         .collect()
 }
@@ -1243,6 +1244,15 @@ fn match_dynamic_prefix(
             suffix.to_string(),
             false,
         )))
+    } else if let Some(suffix) = cmd.strip_prefix("entity.add:") {
+        // `entity.add:{type}` → canonical `entity.add` with the type moved
+        // into the arg bag. The generic `AddEntityCmd` reads `entity_type`
+        // from args and forwards every other arg as a field override, so
+        // adding a new entity type requires zero Rust changes here.
+        if suffix.is_empty() {
+            return Err(format!("Missing entity type in command: {:?}", cmd));
+        }
+        Ok(Some(("entity.add", "entity_type", suffix.to_string(), false)))
     } else {
         Ok(None)
     }
@@ -1356,10 +1366,11 @@ fn apply_prefix_rewrite(
 /// It handles: command lookup, context building, execution, undo tracking,
 /// entity flush, event emission, and UIState change broadcasting.
 ///
-/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
-/// to their canonical command IDs via a single-pass loop. The rewrite is
-/// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
-/// recursion from malformed command chains like `board.switch:board.switch:…`.
+/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`,
+/// `perspective.goto:*`, `entity.add:*`) are rewritten to their canonical
+/// command IDs via a single-pass loop. The rewrite is limited to one
+/// iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded recursion from
+/// malformed command chains like `board.switch:board.switch:…`.
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
@@ -1929,6 +1940,26 @@ pub async fn list_commands_for_scope(
         }
     };
 
+    // Surface the gathered view count and entity_type presence so the
+    // "entity.add missing" class of bugs can be diagnosed from logs alone.
+    // This is the top-level instrumentation called out in section 1 of the
+    // `Fix "New" so it works uniformly on every grid` task.
+    let views_with_entity_type = dynamic
+        .views
+        .iter()
+        .filter(|v| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
+        .count();
+    tracing::info!(
+        scope_chain = ?scope_chain,
+        context_menu = ?context_menu,
+        views_count = dynamic.views.len(),
+        views_with_entity_type,
+        boards_count = dynamic.boards.len(),
+        windows_count = dynamic.windows.len(),
+        perspectives_count = dynamic.perspectives.len(),
+        "list_commands_for_scope"
+    );
+
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope_chain,
         &registry,
@@ -1938,6 +1969,26 @@ pub async fn list_commands_for_scope(
         context_menu == Some(true),
         Some(&dynamic),
     );
+
+    // Break the emitted commands down by group so a "no entity.add" bug is
+    // immediately visible: the entity.* group is empty on the affected grid.
+    if tracing::enabled!(tracing::Level::INFO) {
+        let mut by_group: HashMap<&str, usize> = HashMap::new();
+        for cmd in &result {
+            *by_group.entry(cmd.group.as_str()).or_default() += 1;
+        }
+        let entity_add_ids: Vec<&str> = result
+            .iter()
+            .filter(|c| c.id.starts_with("entity.add:"))
+            .map(|c| c.id.as_str())
+            .collect();
+        tracing::info!(
+            total = result.len(),
+            by_group = ?by_group,
+            entity_add_ids = ?entity_add_ids,
+            "list_commands_for_scope result"
+        );
+    }
 
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
@@ -2258,6 +2309,40 @@ mod tests {
             row.get("display_name").and_then(|v| v.as_str()),
             Some("Auth Migration System")
         );
+    }
+
+    // ── match_dynamic_prefix tests ────────────────────────────────
+
+    use super::match_dynamic_prefix;
+
+    #[test]
+    fn match_dynamic_prefix_rewrites_entity_add_to_canonical_command() {
+        // `entity.add:task` rewrites to canonical `entity.add` with the
+        // type moved into the arg bag under `entity_type`. The dispatcher
+        // then routes to the generic `AddEntityCmd`.
+        let (new_cmd, arg_key, arg_val, updates_bp) =
+            match_dynamic_prefix("entity.add:task").unwrap().unwrap();
+        assert_eq!(new_cmd, "entity.add");
+        assert_eq!(arg_key, "entity_type");
+        assert_eq!(arg_val, "task");
+        assert!(!updates_bp);
+    }
+
+    #[test]
+    fn match_dynamic_prefix_entity_add_requires_type_suffix() {
+        // An empty suffix is a malformed command — reject it rather than
+        // dispatch to `entity.add` with `entity_type: ""` which would
+        // then fail availability checks.
+        assert!(match_dynamic_prefix("entity.add:").is_err());
+    }
+
+    #[test]
+    fn match_dynamic_prefix_passes_through_non_prefix_commands() {
+        // Non-prefix commands (like `entity.add` without a suffix) are
+        // NOT rewritten — the rewriter returns Ok(None) so the dispatcher
+        // can fall through to the registry.
+        assert!(match_dynamic_prefix("entity.add").unwrap().is_none());
+        assert!(match_dynamic_prefix("task.add").unwrap().is_none());
     }
 
     #[test]

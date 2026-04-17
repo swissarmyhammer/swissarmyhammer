@@ -26,10 +26,6 @@ import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
-/** Default title for new tasks — the Rust side also uses this as fallback. */
-function defaultTaskTitle(_columnName: string): string {
-  return "New task";
-}
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -603,26 +599,26 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
 }
 
 /**
- * Resolve the column id the user is focused on (or the leftmost as fallback).
+ * Resolve the column id implied by the current focus, or `null` if unknown.
  *
  * A column moniker (`column:<id>`) resolves directly. A task moniker
  * (`task:<id>`) resolves to its home column via `taskMap`. Any other or
- * missing moniker falls back to the first column.
+ * missing moniker returns `null`, signalling that the caller should let the
+ * backend fall back to the lowest-order column (the default placement path
+ * in `AddEntity`).
  */
 function resolveFocusedColumnId(
   focusedMoniker: string | null,
-  columns: Entity[],
   taskMap: Map<string, Entity>,
 ): string | null {
-  const fallback = columns[0]?.id ?? null;
-  if (!focusedMoniker) return fallback;
+  if (!focusedMoniker) return null;
   if (focusedMoniker.startsWith("column:"))
     return focusedMoniker.slice("column:".length);
   if (focusedMoniker.startsWith("task:")) {
     const entity = taskMap.get(focusedMoniker.slice("task:".length));
-    if (entity) return getStr(entity, "position_column") || fallback;
+    if (entity) return getStr(entity, "position_column") || null;
   }
-  return fallback;
+  return null;
 }
 
 /** Shared dependencies passed to each board-action command factory. */
@@ -631,8 +627,9 @@ interface BoardActionDeps {
   taskMap: Map<string, Entity>;
   focusedMonikerRef: React.RefObject<string | null>;
   broadcastRef: React.RefObject<(cmd: string) => void>;
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
   dispatchInspect: ReturnType<typeof useDispatchCommand>;
+  dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>;
+  setFocus: (moniker: string) => void;
 }
 
 /** Factory for the "inspect focused entity" command. */
@@ -648,19 +645,36 @@ function makeInspectCommand(deps: BoardActionDeps): CommandDef {
   };
 }
 
-/** Factory for the "create task in focused column" command. */
+/** Factory for the "create task in focused column" command.
+ *
+ * Dispatches the unified `entity.add:task` command. When the focus is on a
+ * column or a task, passes that column as an override so the new task lands
+ * in the expected place. With no focus, passes no column — `AddEntity`
+ * resolves the lowest-order column as its default.
+ */
 function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
   return {
     id: "board.newTask",
     name: "New Task",
     keys: { vim: "o", cua: "Mod+Enter" },
     execute: () => {
+      if (deps.columns.length === 0) return;
       const colId = resolveFocusedColumnId(
         deps.focusedMonikerRef.current,
-        deps.columns,
         deps.taskMap,
       );
-      if (colId) deps.handleAddTaskRef.current(colId);
+      const args = colId ? { column: colId } : {};
+      deps
+        .dispatchEntityAddTask({ args })
+        .then((result) => {
+          const id = (result as { id?: string } | undefined)?.id;
+          if (id) deps.setFocus(`task:${id}`);
+        })
+        .catch((e) => {
+          toast.error(
+            `Failed to add task: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        });
     },
   };
 }
@@ -686,16 +700,17 @@ function makeNavBroadcastCommand(
 /**
  * Board-level action commands: inspect, new task, first/last column navigation.
  *
- * Uses refs for focused moniker and add-task callback to avoid circular
- * dependency between commands and the handlers that depend on them.
+ * Uses refs for focused moniker and broadcast callback to avoid rebuilding
+ * the command list on every focus change.
  */
 function useBoardActionCommands(
   columns: Entity[],
   taskMap: Map<string, Entity>,
   focusedMonikerRef: React.RefObject<string | null>,
   broadcastRef: React.RefObject<(cmd: string) => void>,
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>,
   dispatchInspect: ReturnType<typeof useDispatchCommand>,
+  dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>,
+  setFocus: (moniker: string) => void,
 ): CommandDef[] {
   return useMemo<CommandDef[]>(() => {
     const deps: BoardActionDeps = {
@@ -703,8 +718,9 @@ function useBoardActionCommands(
       taskMap,
       focusedMonikerRef,
       broadcastRef,
-      handleAddTaskRef,
       dispatchInspect,
+      dispatchEntityAddTask,
+      setFocus,
     };
     return [
       makeInspectCommand(deps),
@@ -728,9 +744,10 @@ function useBoardActionCommands(
     columns,
     taskMap,
     dispatchInspect,
+    dispatchEntityAddTask,
     focusedMonikerRef,
     broadcastRef,
-    handleAddTaskRef,
+    setFocus,
   ]);
 }
 
@@ -783,21 +800,22 @@ function useInitialBoardFocus(
 /**
  * Build the `onAddTask` callback that creates a task in the given column.
  *
+ * Dispatches the unified `entity.add:task` command that the grid view and the
+ * palette also route through — the backend `AddEntity` operation honours the
+ * `column` override, so a single creation path serves every UI entry point.
+ *
  * On success, focus moves to the newly-created task. On failure, surfaces
  * the error via a toast.
  */
 function useAddTaskHandler(
-  columnMap: Map<string, Entity>,
   setFocus: (moniker: string) => void,
 ): (columnId: string) => Promise<void> {
   const dispatch = useDispatchCommand();
   return useCallback(
     async (columnId: string) => {
-      const col = columnMap.get(columnId);
-      const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        const result = (await dispatch("task.add", {
-          args: { title, column: columnId },
+        const result = (await dispatch("entity.add:task", {
+          args: { column: columnId },
         })) as { id?: string } | undefined;
         if (result?.id) setFocus(`task:${result.id}`);
       } catch (e) {
@@ -806,7 +824,7 @@ function useAddTaskHandler(
         );
       }
     },
-    [columnMap, setFocus, dispatch],
+    [setFocus, dispatch],
   );
 }
 
@@ -1007,14 +1025,13 @@ function BoardDndWrapper({
 interface BoardCommandRefs {
   focusedMonikerRef: React.RefObject<string | null>;
   broadcastRef: React.RefObject<(cmd: string) => void>;
-  handleAddTaskRef: React.RefObject<(columnId: string) => void>;
 }
 
 /**
  * Allocate and keep up-to-date the refs used by board action commands.
  *
  * The commands are memoized but need to see the latest focused moniker and
- * add-task callback; refs avoid rebuilding the command list on every render.
+ * broadcast callback; refs avoid rebuilding the command list on every render.
  */
 function useBoardCommandRefs(
   focusedMoniker: string | null,
@@ -1024,8 +1041,7 @@ function useBoardCommandRefs(
   focusedMonikerRef.current = focusedMoniker;
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
-  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
-  return { focusedMonikerRef, broadcastRef, handleAddTaskRef };
+  return { focusedMonikerRef, broadcastRef };
 }
 
 /**
@@ -1039,10 +1055,13 @@ function useBoardCommandRefs(
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const boardCommands = useEntityCommands("board", "board");
   const dispatchInspect = useDispatchCommand("ui.inspect");
+  const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
   const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { focusedMonikerRef, broadcastRef, handleAddTaskRef } =
-    useBoardCommandRefs(focusedMoniker, broadcastNavCommand);
+  const { focusedMonikerRef, broadcastRef } = useBoardCommandRefs(
+    focusedMoniker,
+    broadcastNavCommand,
+  );
 
   const layout = useBoardLayout(board, tasks, groupValue);
   const dragDrop = useBoardDragDrop(
@@ -1056,15 +1075,15 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
     layout.taskMap,
     focusedMonikerRef,
     broadcastRef,
-    handleAddTaskRef,
     dispatchInspect,
+    dispatchEntityAddTask,
+    setFocus,
   );
 
   useScrollFocusedIntoView(scrollContainerRef, focusedMoniker);
   useInitialBoardFocus(layout.columns, layout.columnTaskMonikers, setFocus);
 
-  const handleAddTask = useAddTaskHandler(layout.columnMap, setFocus);
-  handleAddTaskRef.current = handleAddTask;
+  const handleAddTask = useAddTaskHandler(setFocus);
 
   return (
     <FocusScope
