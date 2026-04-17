@@ -223,30 +223,83 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives).toHaveLength(1);
   });
 
-  it("refreshes on entity-field-changed event for perspective type", async () => {
+  it("applies entity-field-changed event in place preserving identity for other perspectives", async () => {
+    const initial = [
+      makePerspective("p1", "First"),
+      makePerspective("p2", "Second"),
+    ];
     mockInvoke.mockResolvedValue({
-      result: { perspectives: [], count: 0 },
+      result: { perspectives: initial, count: 2 },
       undoable: false,
     });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
 
-    // Set up a perspective to be returned on next fetch
-    mockInvoke.mockResolvedValue({
-      result: { perspectives: [makePerspective("p1", "Updated")], count: 1 },
-      undoable: false,
-    });
+    const p1Before = result.current.perspectives.find((p) => p.id === "p1");
+    const p2Before = result.current.perspectives.find((p) => p.id === "p2");
+    expect(p1Before).toBeTruthy();
+    expect(p2Before).toBeTruthy();
 
+    // Field change for p1 — must update p1 in place and leave p2 identity stable.
     await act(async () => {
       listenCallbacks["entity-field-changed"]?.({
-        payload: { entity_type: "perspective", id: "p1" },
+        payload: {
+          entity_type: "perspective",
+          id: "p1",
+          fields: { name: "Updated" },
+        },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    expect(result.current.perspectives).toHaveLength(1);
-    expect(result.current.perspectives[0].name).toBe("Updated");
+    const p1After = result.current.perspectives.find((p) => p.id === "p1");
+    const p2After = result.current.perspectives.find((p) => p.id === "p2");
+    expect(p1After?.name).toBe("Updated");
+    // CRITICAL invariant — unchanged perspective keeps its object identity.
+    expect(p2After).toBe(p2Before);
+    // Changed perspective gets a new object (immutable update).
+    expect(p1After).not.toBe(p1Before);
+  });
+
+  it("does not refetch perspective.list on entity-field-changed", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [makePerspective("p1", "First")], count: 1 },
+      undoable: false,
+    });
+
+    const { result } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {});
+    const initialInvokeCount = mockInvoke.mock.calls.length;
+
+    await act(async () => {
+      listenCallbacks["entity-field-changed"]?.({
+        payload: {
+          entity_type: "perspective",
+          id: "p1",
+          fields: { filter: "#bug" },
+        },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // No new perspective.list call — the field delta is applied locally.
+    const listCalls = mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd: string })?.cmd === "perspective.list",
+    );
+    const initialListCalls = mockInvoke.mock.calls
+      .slice(0, initialInvokeCount)
+      .filter(
+        (call) =>
+          call[0] === "dispatch_command" &&
+          (call[1] as { cmd: string })?.cmd === "perspective.list",
+      );
+    expect(listCalls.length).toBe(initialListCalls.length);
+
+    // Verify the filter field was applied.
+    expect(result.current.perspectives[0].filter).toBe("#bug");
   });
 
   it("refreshes on entity-created event for perspective type", async () => {

@@ -337,13 +337,34 @@ impl BoardHandle {
         let search_index = Arc::clone(&self.search_index);
         let board_path_str = kanban_root.display().to_string();
 
-        tracing::info!(path = %kanban_root.display(), "entity-cache bridge starting for board");
+        // Subscribe to the perspective broadcast channel so the bridge can
+        // forward perspective mutations as Tauri events.
+        //
+        // Invariant: `start_watcher` must be called after `register_perspective_store`
+        // has initialized the PerspectiveContext (via `perspective_context().await`)
+        // and before any concurrent perspective writes begin. This ensures:
+        //   1. `perspective_context_if_ready()` returns `Some` (context is initialized)
+        //   2. `try_read()` succeeds (no write lock held during startup)
+        //
+        // `try_read()` is used instead of `.read().await` because `start_watcher`
+        // is a synchronous function. The lock is only held momentarily to call
+        // `subscribe()` — the guard is dropped immediately.
+        let perspective_rx = ctx
+            .perspective_context_if_ready()
+            .and_then(|pctx| pctx.try_read().ok().map(|guard| guard.subscribe()));
+
+        tracing::info!(
+            path = %kanban_root.display(),
+            has_perspective_rx = perspective_rx.is_some(),
+            "entity-cache bridge starting for board"
+        );
         let handle = tokio::spawn(watcher::run_bridge(
             ctx,
             cache,
             app_handle,
             board_path_str,
             search_index,
+            perspective_rx,
         ));
         self.bridge_task = Some(handle);
     }
@@ -535,62 +556,9 @@ impl AppState {
             tracing::info!("auto_open_board: skipping — deep link handled");
             return;
         }
-        // Restore previously-open boards from UIState.
-        {
-            let paths: Vec<PathBuf> = self
-                .ui_state
-                .open_boards()
-                .into_iter()
-                .map(PathBuf::from)
-                .collect();
-            for path in paths {
-                // Skip and remove entries with empty or invalid paths (trashed config entries)
-                if path.as_os_str().is_empty() {
-                    tracing::warn!("auto_open_board: removing entry with empty path from config");
-                    self.ui_state.remove_open_board("");
-                    continue;
-                }
-                if path.is_dir() {
-                    tracing::info!(path = %path.display(), "auto_open_board: restoring persisted board");
-                    if let Err(e) = self.open_board(&path, None).await {
-                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore board");
-                    }
-                } else {
-                    tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, removing");
-                    self.ui_state.remove_open_board(&path.display().to_string());
-                }
-            }
-        }
 
-        // Also open any boards referenced in UIState window_boards that aren't already open.
-        // This handles the case where a secondary window shows a different board
-        // than the ones in open_boards.
-        {
-            // Collect all board paths from UIState window_boards
-            let wb_paths: Vec<PathBuf> = self
-                .ui_state
-                .all_window_boards()
-                .into_values()
-                .map(PathBuf::from)
-                .collect();
-
-            let boards = self.boards.read().await;
-            let already_open: HashSet<PathBuf> = boards.keys().cloned().collect();
-            drop(boards);
-
-            for path in wb_paths {
-                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if already_open.contains(&canonical) {
-                    continue;
-                }
-                if path.is_dir() {
-                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from UIState window_boards");
-                    if let Err(e) = self.open_board(&path, None).await {
-                        tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore windows board");
-                    }
-                }
-            }
-        }
+        self.restore_persisted_boards().await;
+        self.restore_window_boards().await;
 
         // If we restored boards, we're done — don't override with CWD discovery.
         {
@@ -605,65 +573,7 @@ impl AppState {
             }
         }
 
-        let cwd = match std::env::current_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                tracing::warn!("Cannot determine current directory: {e}");
-                return;
-            }
-        };
-        tracing::info!(cwd = %cwd.display(), "auto_open_board: starting discovery");
-
-        // Strategy 1: walk up from CWD
-        let mut board_dir = discover_board(&cwd);
-        if let Some(ref dir) = board_dir {
-            tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via CWD walk");
-        } else {
-            tracing::info!("auto_open_board: no .kanban found walking up from CWD");
-        }
-
-        // Strategy 2: if CWD walk didn't pass through home, check home as backstop
-        if board_dir.is_none() {
-            if let Some(home) = dirs::home_dir() {
-                let walked_through_home = cwd.starts_with(&home);
-                tracing::info!(
-                    home = %home.display(),
-                    walked_through_home,
-                    "auto_open_board: checking home dir backstop"
-                );
-                if !walked_through_home {
-                    board_dir = discover_board(&home);
-                    if let Some(ref dir) = board_dir {
-                        tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
-                    }
-                }
-            }
-        }
-
-        // Strategy 3: fall back to MRU — the most recently opened board
-        if board_dir.is_none() {
-            let recent_boards = self.ui_state.recent_boards();
-            if let Some(recent) = recent_boards.first() {
-                let path = std::path::PathBuf::from(&recent.path);
-                tracing::info!(
-                    path = %path.display(),
-                    name = %recent.name,
-                    "auto_open_board: falling back to MRU board"
-                );
-                // MRU stores the canonical .kanban path — check its parent exists
-                if path.is_dir() {
-                    board_dir = Some(path);
-                } else {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "auto_open_board: MRU path no longer exists"
-                    );
-                }
-            } else {
-                tracing::info!("auto_open_board: no MRU boards in config");
-            }
-        }
-
+        let board_dir = self.discover_board_from_environment();
         match board_dir {
             Some(ref dir) => {
                 tracing::info!(path = %dir.display(), "auto_open_board: opening board");
@@ -679,6 +589,96 @@ impl AppState {
                 tracing::info!("auto_open_board: no board found, starting without one");
             }
         }
+    }
+
+    /// Restore previously-open boards from UIState's `open_boards` list.
+    ///
+    /// Removes stale entries (empty paths, directories that no longer exist)
+    /// and opens all valid board paths.
+    async fn restore_persisted_boards(&self) {
+        let paths: Vec<PathBuf> = self
+            .ui_state
+            .open_boards()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        for path in paths {
+            if path.as_os_str().is_empty() {
+                tracing::warn!("auto_open_board: removing entry with empty path from config");
+                self.ui_state.remove_open_board("");
+                continue;
+            }
+            if path.is_dir() {
+                tracing::info!(path = %path.display(), "auto_open_board: restoring persisted board");
+                if let Err(e) = self.open_board(&path, None).await {
+                    tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore board");
+                }
+            } else {
+                tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, removing");
+                self.ui_state.remove_open_board(&path.display().to_string());
+            }
+        }
+    }
+
+    /// Open boards referenced in UIState `window_boards` that aren't already open.
+    ///
+    /// Handles the case where a secondary window shows a different board
+    /// than the ones in `open_boards`.
+    async fn restore_window_boards(&self) {
+        let wb_paths: Vec<PathBuf> = self
+            .ui_state
+            .all_window_boards()
+            .into_values()
+            .map(PathBuf::from)
+            .collect();
+
+        let boards = self.boards.read().await;
+        let already_open: HashSet<PathBuf> = boards.keys().cloned().collect();
+        drop(boards);
+
+        for path in wb_paths {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if already_open.contains(&canonical) {
+                continue;
+            }
+            if path.is_dir() {
+                tracing::info!(path = %path.display(), "auto_open_board: restoring board from UIState window_boards");
+                if let Err(e) = self.open_board(&path, None).await {
+                    tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore windows board");
+                }
+            }
+        }
+    }
+
+    /// Discover a board from CWD, home directory, or MRU history.
+    ///
+    /// Tries three strategies in order: (1) walk up from CWD, (2) check
+    /// home directory as backstop, (3) fall back to the most recently
+    /// used board from config.
+    fn discover_board_from_environment(&self) -> Option<PathBuf> {
+        let cwd = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!("Cannot determine current directory: {e}");
+                return None;
+            }
+        };
+        tracing::info!(cwd = %cwd.display(), "auto_open_board: starting discovery");
+
+        // Strategy 1: walk up from CWD
+        if let Some(dir) = discover_board(&cwd) {
+            tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via CWD walk");
+            return Some(dir);
+        }
+        tracing::info!("auto_open_board: no .kanban found walking up from CWD");
+
+        // Strategy 2: if CWD walk didn't pass through home, check home as backstop
+        if let Some(dir) = try_home_backstop(&cwd) {
+            return Some(dir);
+        }
+
+        // Strategy 3: fall back to MRU — the most recently opened board
+        try_mru_fallback(&self.ui_state)
     }
 
     /// Rebuild the commands registry from builtins + user overrides from the
@@ -788,6 +788,50 @@ pub fn discover_board(start_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Try the home directory as a backstop for board discovery.
+///
+/// If the CWD walk already passed through `$HOME`, this returns `None`
+/// (the walk already checked it). Otherwise, runs `discover_board` on the
+/// home directory and returns whatever it finds.
+fn try_home_backstop(cwd: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let walked_through_home = cwd.starts_with(&home);
+    tracing::info!(
+        home = %home.display(),
+        walked_through_home,
+        "auto_open_board: checking home dir backstop"
+    );
+    if walked_through_home {
+        return None;
+    }
+    let board_dir = discover_board(&home);
+    if let Some(ref dir) = board_dir {
+        tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
+    }
+    board_dir
+}
+
+/// Try the most recently used board as a fallback.
+///
+/// Reads the MRU list from UIState and returns the first entry whose
+/// path still exists on disk, or `None` if no valid MRU entry is found.
+fn try_mru_fallback(ui_state: &swissarmyhammer_commands::UIState) -> Option<PathBuf> {
+    let recent_boards = ui_state.recent_boards();
+    let recent = recent_boards.first()?;
+    let path = PathBuf::from(&recent.path);
+    tracing::info!(
+        path = %path.display(),
+        name = %recent.name,
+        "auto_open_board: falling back to MRU board"
+    );
+    if path.is_dir() {
+        Some(path)
+    } else {
+        tracing::warn!(path = %path.display(), "auto_open_board: MRU path no longer exists");
+        None
+    }
+}
+
 /// Resolve a user-provided path to a .kanban directory path.
 ///
 /// Rules:
@@ -843,9 +887,6 @@ fn deterministic_color(username: &str) -> String {
 fn macos_profile_picture(username: &str) -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    // macOS stores user profile pictures via dscl; the actual file is at:
-    // /var/db/dslocal/nodes/Default/users/<username>.plist (needs root)
-    // But a more accessible copy often exists at:
     let home = std::env::var("HOME").ok()?;
     let candidates = [
         format!("{home}/Library/Caches/com.apple.user-picture/user-picture.jpeg"),
@@ -868,37 +909,42 @@ fn macos_profile_picture(username: &str) -> Option<String> {
         }
     }
 
-    // Try dscl as a fallback — reads the JPEGPhoto attribute.
-    // dscl outputs hex-encoded text like "JPEGPhoto:\n ffd8ffe0 00104a46 ..."
-    // We need to parse the hex back to binary bytes.
+    dscl_jpeg_photo(username)
+}
+
+/// Try reading a profile picture from macOS's `dscl` JPEGPhoto attribute.
+///
+/// Falls back to shelling out to `dscl . -read /Users/<username> JPEGPhoto`,
+/// which outputs hex-encoded JPEG data. Returns a data URI if a valid JPEG
+/// header is found, or `None` otherwise.
+fn dscl_jpeg_photo(username: &str) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
     let output = std::process::Command::new("dscl")
         .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
         .output()
         .ok()?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Skip the "JPEGPhoto:\n" header line
-        let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
-        // Remove all whitespace to get a continuous hex string
-        let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        // Decode hex pairs to bytes
-        let bytes: Vec<u8> = (0..hex_clean.len())
-            .step_by(2)
-            .filter_map(|i| {
-                hex_clean
-                    .get(i..i + 2)
-                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-            })
-            .collect();
-        if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
-            return Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(&bytes)
-            ));
-        }
+    if !output.status.success() {
+        return None;
     }
-
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
+    let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    let bytes: Vec<u8> = (0..hex_clean.len())
+        .step_by(2)
+        .filter_map(|i| {
+            hex_clean
+                .get(i..i + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect();
+    if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+        return Some(format!(
+            "data:image/jpeg;base64,{}",
+            STANDARD.encode(&bytes)
+        ));
+    }
     None
 }
 

@@ -180,6 +180,15 @@ impl KanbanContext {
         self.views_changelog.as_ref()
     }
 
+    /// Access the perspective registry if it has already been initialized.
+    ///
+    /// Returns `None` if `perspective_context()` has not been called yet.
+    /// This is a synchronous, non-initializing accessor suitable for use in
+    /// non-async contexts (e.g. `start_watcher`).
+    pub fn perspective_context_if_ready(&self) -> Option<&RwLock<PerspectiveContext>> {
+        self.perspectives.get()
+    }
+
     /// Access the perspective registry lock, lazy-initializing on first call.
     pub async fn perspective_context(&self) -> Result<&RwLock<PerspectiveContext>> {
         self.perspectives

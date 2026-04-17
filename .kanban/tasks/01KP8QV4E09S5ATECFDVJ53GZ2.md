@@ -17,7 +17,7 @@ There are currently three near-identical implementations of "compute an ordinal 
 
 1. **`MoveTask::execute`** — `swissarmyhammer-kanban/src/task/mv.rs:108-~215`. The canonical operation. When `before_id` / `after_id` is set on the op, it loads and sorts the column tasks and calls `compute_ordinal_for_neighbors` with the correct neighbor pair.
 2. **`MoveTaskCmd`** — `swissarmyhammer-kanban/src/commands/drag_commands.rs:220-329`. The drag command pre-computes the ordinal inline (copy-pasted copy of `MoveTask::execute`'s logic) and then calls `MoveTask::to_column(...).with_ordinal(ord)`. The explicit ordinal wins over `before_id/after_id` in `MoveTask::execute`, so the op's own placement logic is bypassed.
-3. **`DoThisNextCmd`** — `swissarmyhammer-kanban/src/commands/task_commands.rs:323-349`. Uses extracted helpers `load_sorted_column_tasks`, `task_ordinal`, and `compute_ordinal_for_neighbors(None, Some(&first_ord))` to pre-compute the ordinal, then calls `MoveTask::to_column(...).with_ordinal(ord)` — same bypass pattern as #2.
+3. **`DoThisNextCmd`** — `swissarmyhammer-kanban/src/commands/task_commands.rs:323-349`. Uses extracted helpers `load_sorted_column_tasks`, `task_ordinal`, and `compute_ordinal_for_neighbors(None, Some(&first_ord))` to pre-compute the ordinal, then calls `MoveTask::to_column(...).with_ordinal(ord)` — same bypass pattern as
 
 All three call `compute_ordinal_for_neighbors(None, Some(&first_ord))` for "place before first task", but through three different call sites with three different excluding/sorting/loading behaviors. Any divergence (a caching choice, an entity filter, a sort tiebreaker) between these paths produces exactly the symptoms the user reports: flaky, almost-correct placement.
 

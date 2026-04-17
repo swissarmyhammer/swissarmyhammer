@@ -14,13 +14,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use tokio::fs;
+use tokio::sync::broadcast;
 use tracing::debug;
 
 use crate::error::{PerspectiveError, Result};
+use crate::events::PerspectiveEvent;
 use crate::store::PerspectiveStore;
 use crate::types::Perspective;
 use crate::PerspectiveId;
 use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
+
+/// Default capacity for the perspective event broadcast channel.
+///
+/// Sized smaller than the entity cache channel (256) because perspective
+/// mutations are infrequent — a handful per session, not hundreds per second.
+const EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Read cache and write coordinator for perspective definitions.
 ///
@@ -37,6 +45,11 @@ pub struct PerspectiveContext {
     store_handle: Option<Arc<StoreHandle<PerspectiveStore>>>,
     /// Shared undo/redo stack. When set, write/delete push entries.
     store_context: OnceLock<Arc<StoreContext>>,
+    /// Broadcast channel for perspective change events.
+    ///
+    /// Consumers (e.g. the Tauri bridge) subscribe to this channel to learn
+    /// about perspective mutations without coupling to the perspectives crate.
+    event_sender: broadcast::Sender<PerspectiveEvent>,
 }
 
 impl PerspectiveContext {
@@ -48,12 +61,14 @@ impl PerspectiveContext {
         let root = dir.into();
         fs::create_dir_all(&root).await?;
 
+        let (event_sender, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let mut ctx = Self {
             root,
             perspectives: Vec::new(),
             id_index: HashMap::new(),
             store_handle: None,
             store_context: OnceLock::new(),
+            event_sender,
         };
 
         ctx.load_all().await?;
@@ -76,6 +91,9 @@ impl PerspectiveContext {
     ///
     /// Multiple perspectives may share the same name — only IDs are unique.
     pub async fn write(&mut self, perspective: &Perspective) -> Result<Option<UndoEntryId>> {
+        // Snapshot the old state for diff computation.
+        let old = self.get_by_id(&perspective.id).cloned();
+
         // Persist to disk — delegate to StoreHandle when available.
         let entry_id = if let Some(ref sh) = self.store_handle {
             sh.write(perspective).await?
@@ -88,7 +106,7 @@ impl PerspectiveContext {
 
         // Push onto the shared undo stack if a StoreContext is available.
         if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
-            let is_create = !self.id_index.contains_key(&perspective.id);
+            let is_create = old.is_none();
             let op = if is_create { "create" } else { "update" };
             let label = format!("{} perspective {}", op, perspective.id);
             let item_id = StoredItemId::from(perspective.id.as_str());
@@ -102,6 +120,20 @@ impl PerspectiveContext {
             let idx = self.perspectives.len();
             self.perspectives.push(perspective.clone());
             self.id_index.insert(perspective.id.clone(), idx);
+        }
+
+        // Broadcast the change event. Compute the field-level diff so
+        // consumers know which fields actually changed.
+        let is_create = old.is_none();
+        let changed_fields = diff_perspective(old.as_ref(), perspective);
+        if !changed_fields.is_empty() {
+            let _ = self
+                .event_sender
+                .send(PerspectiveEvent::PerspectiveChanged {
+                    id: perspective.id.clone(),
+                    changed_fields,
+                    is_create,
+                });
         }
 
         Ok(entry_id)
@@ -203,6 +235,13 @@ impl PerspectiveContext {
             self.id_index.insert(moved.id.clone(), idx);
         }
 
+        // Broadcast the deletion event.
+        let _ = self
+            .event_sender
+            .send(PerspectiveEvent::PerspectiveDeleted {
+                id: deleted.id.clone(),
+            });
+
         Ok((deleted, entry_id))
     }
 
@@ -220,6 +259,14 @@ impl PerspectiveContext {
     /// Can be called through a shared reference (uses `OnceLock`).
     pub fn set_store_context(&self, ctx: Arc<StoreContext>) {
         let _ = self.store_context.set(ctx);
+    }
+
+    /// Subscribe to perspective change events.
+    ///
+    /// Returns a receiver that will get all events emitted after this call.
+    /// Missed events (due to slow consumption) result in `RecvError::Lagged`.
+    pub fn subscribe(&self) -> broadcast::Receiver<PerspectiveEvent> {
+        self.event_sender.subscribe()
     }
 
     /// The root directory path.
@@ -259,6 +306,49 @@ impl PerspectiveContext {
         }
         Ok(())
     }
+}
+
+/// Compute which perspective fields changed between the old and new state.
+///
+/// Returns a list of field names that differ. When `old` is `None` (a create),
+/// all fields are listed. Returns an empty vec only when both states are
+/// byte-identical (a no-op write).
+fn diff_perspective(old: Option<&Perspective>, new: &Perspective) -> Vec<String> {
+    let Some(old) = old else {
+        // Brand-new perspective — every field counts as changed.
+        // NOTE: keep this list in sync with the `Perspective` struct fields.
+        // If a new field is added to `Perspective`, add it here AND add a
+        // comparison branch in the update diff below.
+        return vec![
+            "name".into(),
+            "view".into(),
+            "fields".into(),
+            "filter".into(),
+            "group".into(),
+            "sort".into(),
+        ];
+    };
+
+    let mut changed = Vec::new();
+    if old.name != new.name {
+        changed.push("name".into());
+    }
+    if old.view != new.view {
+        changed.push("view".into());
+    }
+    if old.fields != new.fields {
+        changed.push("fields".into());
+    }
+    if old.filter != new.filter {
+        changed.push("filter".into());
+    }
+    if old.group != new.group {
+        changed.push("group".into());
+    }
+    if old.sort != new.sort {
+        changed.push("sort".into());
+    }
+    changed
 }
 
 /// Write to a temp file then rename for atomic persistence.
@@ -830,12 +920,14 @@ mod tests {
         assert!(!dir.exists());
 
         // Build the context manually to bypass open()'s create_dir_all
+        let (event_sender, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let mut ctx = PerspectiveContext {
             root: dir,
             perspectives: Vec::new(),
             id_index: HashMap::new(),
             store_handle: None,
             store_context: OnceLock::new(),
+            event_sender,
         };
 
         // load_all should return Ok with zero perspectives
@@ -1046,5 +1138,142 @@ mod tests {
 
         let err = ctx.rename("01ZZZZZZZZZZZZZZZZZZZZZZZZ", "New").await;
         assert!(err.is_err());
+    }
+
+    // =========================================================================
+    // Broadcast event tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn write_emits_perspective_changed_event_on_create() {
+        let tmp = TempDir::new().unwrap();
+        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
+            .await
+            .unwrap();
+        let mut rx = ctx.subscribe();
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "New View");
+        ctx.write(&p).await.unwrap();
+
+        let evt = rx.try_recv().unwrap();
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(is_create, "first write must be flagged as create");
+                // Create emits all fields
+                assert!(changed_fields.contains(&"name".to_string()));
+                assert!(changed_fields.contains(&"view".to_string()));
+                assert!(changed_fields.contains(&"filter".to_string()));
+            }
+            other => panic!("expected PerspectiveChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_emits_perspective_changed_with_correct_diff() {
+        let tmp = TempDir::new().unwrap();
+        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
+            .await
+            .unwrap();
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Original");
+        ctx.write(&p).await.unwrap();
+
+        // Subscribe AFTER the create so we only see the update event
+        let mut rx = ctx.subscribe();
+
+        let mut updated = p.clone();
+        updated.filter = Some("#bug".to_string());
+        ctx.write(&updated).await.unwrap();
+
+        let evt = rx.try_recv().unwrap();
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(!is_create, "update must not be flagged as create");
+                assert_eq!(changed_fields, vec!["filter".to_string()]);
+            }
+            other => panic!("expected PerspectiveChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_does_not_emit_event_on_noop() {
+        let tmp = TempDir::new().unwrap();
+        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
+            .await
+            .unwrap();
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Stable");
+        ctx.write(&p).await.unwrap();
+
+        let mut rx = ctx.subscribe();
+
+        // Write the exact same perspective — no fields changed
+        ctx.write(&p).await.unwrap();
+
+        assert!(rx.try_recv().is_err(), "no-op write must not emit an event");
+    }
+
+    #[tokio::test]
+    async fn delete_emits_perspective_deleted_event() {
+        let tmp = TempDir::new().unwrap();
+        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
+            .await
+            .unwrap();
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Doomed");
+        ctx.write(&p).await.unwrap();
+
+        let mut rx = ctx.subscribe();
+
+        ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+
+        let evt = rx.try_recv().unwrap();
+        match evt {
+            PerspectiveEvent::PerspectiveDeleted { id } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+            }
+            other => panic!("expected PerspectiveDeleted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_emits_perspective_changed_with_name_field() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle) = setup_with_store(&dir).await;
+
+        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Before"))
+            .await
+            .unwrap();
+
+        let mut rx = ctx.subscribe();
+
+        ctx.rename("01AAAAAAAAAAAAAAAAAAAAAAAA", "After")
+            .await
+            .unwrap();
+
+        let evt = rx.try_recv().unwrap();
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(!is_create, "rename is an update, not a create");
+                assert_eq!(changed_fields, vec!["name".to_string()]);
+            }
+            other => panic!("expected PerspectiveChanged, got {other:?}"),
+        }
     }
 }

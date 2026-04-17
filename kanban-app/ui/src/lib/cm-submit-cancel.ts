@@ -106,8 +106,11 @@ function buildVimEnterExtension(
           {
             key: "Enter",
             run: (view) => {
-              // Yield to autocomplete so Enter accepts the selected completion.
-              if (completionStatus(view.state) === "active") return false;
+              // Yield to autocomplete so Enter can accept a selected
+              // completion. "pending" counts too: the async source is
+              // in-flight and the user is waiting on a suggestion, so
+              // Enter must not commit stale partial text.
+              if (completionStatus(view.state) !== null) return false;
               const text = view.state.doc.toString();
               if (text.length > 0) onSubmitRef.current?.();
               return true;
@@ -124,8 +127,9 @@ function buildVimEnterExtension(
         if (event.key !== "Enter") return;
         const cm = getCM(view);
         if (cm?.state?.vim?.insertMode) return;
-        // Yield to autocomplete so Enter accepts the selected completion.
-        if (completionStatus(view.state) === "active") return;
+        // Yield to autocomplete so Enter can accept a selected completion.
+        // Includes "pending" — see alwaysSubmitOnEnter branch above.
+        if (completionStatus(view.state) !== null) return;
         const text = view.state.doc.toString();
         if (text.length > 0) {
           event.preventDefault();
@@ -204,8 +208,10 @@ function buildCuaExtensions(
               {
                 key: "Enter",
                 run: (view: import("@codemirror/view").EditorView) => {
-                  // Yield to autocomplete so Enter accepts the selected completion.
-                  if (completionStatus(view.state) === "active") return false;
+                  // Yield to autocomplete so Enter can accept a selected
+                  // completion. "pending" counts too: the async source is
+                  // in-flight and the user is waiting on a suggestion.
+                  if (completionStatus(view.state) !== null) return false;
                   onSubmitRef.current?.();
                   return true;
                 },
