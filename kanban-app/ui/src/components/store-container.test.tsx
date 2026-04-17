@@ -6,11 +6,21 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+  transformCallback: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("ulid", () => {
+  let counter = 0;
+  return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
+});
 
 // Import after mocks
 import { StoreContainer } from "./store-container";

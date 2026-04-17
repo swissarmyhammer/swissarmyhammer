@@ -11,7 +11,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 import {
   useEntitySections,
@@ -27,8 +26,6 @@ interface EntityCardProps {
   onDragEnd?: (e: React.DragEvent) => void;
   /** Additional commands to append to the entity's context menu. */
   extraCommands?: CommandDef[];
-  /** Predicates for pull-based navigation via broadcastNavCommand. */
-  claimWhen?: ClaimPredicate[];
 }
 
 /**
@@ -54,7 +51,6 @@ export const EntityCard = memo(
       onDragStart,
       onDragEnd,
       extraCommands,
-      claimWhen,
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
@@ -69,7 +65,6 @@ export const EntityCard = memo(
       <FocusScope
         moniker={entity.moniker}
         commands={commands}
-        claimWhen={claimWhen}
         className="entity-card-focus"
       >
         <div

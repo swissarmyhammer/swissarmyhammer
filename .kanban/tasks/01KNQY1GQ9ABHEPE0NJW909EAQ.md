@@ -5,8 +5,8 @@ depends_on:
 - 01KNQXZ81QBSS1M9WFD7VQJNAJ
 - 01KNQXZZ9VQBHFX091P0K4F4YC
 - 01KNQY0P9J03T24FSM8AVPFPZ9
-position_column: todo
-position_ordinal: a780
+position_column: done
+position_ordinal: ffffffffffffffffffffffde80
 project: spatial-nav
 title: 'Clean up: rename claimWhen to navOverride, remove bulk predicate code'
 ---
@@ -49,30 +49,27 @@ This matches how every other system works: Android's `nextFocusRight` is a prope
 4. **Send overrides to Rust** via `spatial_register` — the override map travels with the spatial entry
 
 ### Subtasks
-- [ ] Replace `claimWhen: ClaimPredicate[]` with `navOverride: Record<string, string | null>` on FocusScope
-- [ ] Add `overrides: HashMap<Direction, Option<String>>` to `SpatialEntry` in Rust
-- [ ] Update `navigate()` to check focused entry's overrides before beam test
-- [ ] Delete `ClaimPredicate` type, predicate registry, and broadcast walk from entity-focus-context
-- [ ] Remove `useRestoreFocus` hook (replaced by FocusLayer focus memory)
+- [x] Replace `claimWhen: ClaimPredicate[]` with `navOverride: Record<string, string | null>` on FocusScope
+- [x] Add `overrides: HashMap<Direction, Option<String>>` to `SpatialEntry` in Rust
+- [x] Update `navigate()` to check focused entry's overrides before beam test
+- [x] Delete `ClaimPredicate` type, predicate registry, and broadcast walk from entity-focus-context
+- [x] Remove `useRestoreFocus` hook (replaced by FocusLayer focus memory)
 
 ## Acceptance Criteria
-- [ ] `claimWhen` prop removed, replaced by `navOverride` with simple directive map
-- [ ] Override check is O(1) — lookup on focused entry, no broadcast walk
-- [ ] `navOverride={{ "nav.right": "task:02" }}` sends focus to task:02 on nav.right
-- [ ] `navOverride={{ "nav.left": null }}` blocks nav.left (no movement)
-- [ ] Missing direction key → spatial nav (default behavior)
-- [ ] Overrides stored in Rust `SpatialEntry`, checked in `navigate()` before beam test
-- [ ] `ClaimPredicate` type deleted, predicate registry deleted
-- [ ] `useRestoreFocus` deleted
-- [ ] `cargo test` passes, `pnpm vitest run` passes
+- [x] `claimWhen` prop removed, replaced by `navOverride` with simple directive map
+- [x] Override check is O(1) — lookup on focused entry, no broadcast walk
+- [x] `navOverride={{ "nav.right": "task:02" }}` sends focus to task:02 on nav.right
+- [x] `navOverride={{ "nav.left": null }}` blocks nav.left (no movement)
+- [x] Missing direction key → spatial nav (default behavior)
+- [x] Overrides stored in Rust `SpatialEntry`, checked in `navigate()` before beam test
+- [x] `ClaimPredicate` type deleted, predicate registry deleted
+- [x] `useRestoreFocus` deleted
+- [x] `cargo test` passes, `pnpm vitest run` passes
 
 ## Tests
-- [ ] `Rust unit tests` — navigate with override returns override target
-- [ ] `Rust unit tests` — navigate with null override returns None (blocked)
-- [ ] `Rust unit tests` — navigate with no override for direction falls through to spatial
-- [ ] `focus-scope.test.tsx` — navOverride prop accepted and sent to Rust
-- [ ] All navigation works via spatial nav with no overrides in production code
-- [ ] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
-
-## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- [x] `Rust unit tests` — navigate with override returns override target
+- [x] `Rust unit tests` — navigate with null override returns None (blocked)
+- [x] `Rust unit tests` — navigate with no override for direction falls through to spatial
+- [x] `focus-scope.test.tsx` — navOverride prop accepted and sent to Rust
+- [x] All navigation works via spatial nav with no overrides in production code
+- [x] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass

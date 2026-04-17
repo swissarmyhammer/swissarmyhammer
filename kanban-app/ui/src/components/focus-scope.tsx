@@ -4,6 +4,8 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
+  useState,
   type ReactNode,
 } from "react";
 import {
@@ -14,10 +16,12 @@ import {
 } from "@/lib/command-scope";
 import {
   useEntityFocus,
-  type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
+import { useFocusLayerKey } from "@/components/focus-layer";
+import { ulid } from "ulid";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * React context that carries the moniker of the nearest ancestor FocusScope.
@@ -25,6 +29,143 @@ import { FocusHighlight } from "@/components/ui/focus-highlight";
  * without walking the command scope chain.
  */
 const FocusScopeContext = createContext<string | null>(null);
+
+// ---------------------------------------------------------------------------
+// Custom hooks — extracted to keep FocusScope and FocusScopeInner under 50 lines
+// ---------------------------------------------------------------------------
+
+/** Generate a stable ULID spatial key per mount — new on remount. */
+function useSpatialKey(): string {
+  const ref = useRef<string | null>(null);
+  if (ref.current === null) ref.current = ulid();
+  return ref.current;
+}
+
+/**
+ * Register a spatial focus claim and Tauri spatial entry for this key.
+ * Measures the element rect via ResizeObserver and reports updates to Rust.
+ * When `layerKey` is `null` (no FocusLayer ancestor), spatial registration
+ * is skipped — the claim callback still works for focus events.
+ *
+ * The optional `navOverride` map is forwarded to Rust as `overrides` on each
+ * spatial registration call, enabling per-scope navigation redirection or blocking.
+ *
+ * Returns `{ isClaimed, elementRef }` — attach `elementRef` to the DOM node.
+ */
+function useSpatialClaim(
+  spatialKey: string,
+  moniker: string,
+  layerKey: string | null,
+  navOverride?: Record<string, string | null>,
+) {
+  const { registerClaim, unregisterClaim } = useEntityFocus();
+  const [isClaimed, setIsClaimed] = useState(false);
+  const elementRef = useRef<HTMLElement | null>(null);
+
+  // Register claim callback (always — works even without FocusLayer).
+  useEffect(() => {
+    registerClaim(spatialKey, moniker, setIsClaimed);
+    return () => {
+      unregisterClaim(spatialKey);
+      if (layerKey) invoke("spatial_unregister", { key: spatialKey }).catch(() => {});
+    };
+  }, [spatialKey, moniker, layerKey, registerClaim, unregisterClaim]);
+
+  // ResizeObserver: measure DOM rect and report to Rust on mount + resize.
+  // Skipped when no FocusLayer is present (layerKey is null).
+  useEffect(() => {
+    if (!layerKey) return;
+    const el = elementRef.current;
+    if (!el) return;
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      invoke("spatial_register", {
+        key: spatialKey,
+        moniker,
+        x: r.x,
+        y: r.y,
+        w: r.width,
+        h: r.height,
+        layer_key: layerKey,
+        parent_scope: null,
+        overrides: navOverride ?? null,
+      }).catch(() => {});
+    };
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [spatialKey, moniker, layerKey, navOverride]);
+
+  return { isClaimed, elementRef };
+}
+
+/**
+ * Build a `CommandScope` and register it in the EntityFocus scope registry.
+ * Returns the built scope.
+ */
+function useScopeRegistration(
+  moniker: string,
+  commands: CommandDef[],
+): CommandScope {
+  const { registerScope, unregisterScope } = useEntityFocus();
+  const parent = useContext(CommandScopeContext);
+
+  const scope = useMemo<CommandScope>(() => {
+    const map = new Map<string, CommandDef>();
+    for (const cmd of commands) map.set(cmd.id, cmd);
+    return { commands: map, parent, moniker };
+  }, [commands, parent, moniker]);
+
+  useEffect(() => {
+    registerScope(moniker, scope);
+    return () => unregisterScope(moniker);
+  }, [moniker, scope, registerScope, unregisterScope]);
+
+  return scope;
+}
+
+/**
+ * Returns context-menu and double-click handlers for FocusScopeInner.
+ *
+ * Must be called inside `CommandScopeContext.Provider` so `useContextMenu`
+ * and `useDispatchCommand` see the correct scope chain.
+ */
+function useScopeEventHandlers(moniker: string, handleEvents: boolean) {
+  const contextMenuHandler = useContextMenu();
+  const dispatch = useDispatchCommand("ui.inspect");
+  const { setFocus } = useEntityFocus();
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!handleEvents) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFocus(moniker);
+      contextMenuHandler(e);
+    },
+    [moniker, setFocus, contextMenuHandler, handleEvents],
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!handleEvents) return;
+      const target = e.target as HTMLElement;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (target.closest("[contenteditable]")) return;
+      e.stopPropagation();
+      dispatch({ target: moniker }).catch(console.error);
+    },
+    [dispatch, moniker, handleEvents],
+  );
+
+  return { handleContextMenu, handleDoubleClick };
+}
+
+// ---------------------------------------------------------------------------
+// Component props
+// ---------------------------------------------------------------------------
 
 /** Own props for FocusScope; HTML attributes (className, style, data-*) pass through. */
 type FocusScopeOwnProps = {
@@ -34,11 +175,15 @@ type FocusScopeOwnProps = {
   commands: CommandDef[];
   children: ReactNode;
   /**
-   * Predicates that let this scope claim focus when a nav command is broadcast.
-   * Callers must memoize this array (e.g. with useMemo) to avoid unnecessary
-   * effect re-runs on every render.
+   * Directional navigation overrides for this scope.
+   *
+   * Key is a direction string (e.g. `"Right"`, `"Up"`). Value is a target
+   * moniker to redirect navigation to, or `null` to block that direction.
+   * Missing keys fall through to spatial navigation.
+   *
+   * Forwarded to Rust via `spatial_register` as the `overrides` parameter.
    */
-  claimWhen?: ClaimPredicate[];
+  navOverride?: Record<string, string | null>;
   /** When false, suppresses the data-focused attribute (hides the focus bar).
    *  The scope still participates in focus/commands — only the visual indicator is hidden. */
   showFocusBar?: boolean;
@@ -56,6 +201,10 @@ type FocusScopeOwnProps = {
 type FocusScopeProps = FocusScopeOwnProps &
   Omit<React.HTMLAttributes<HTMLElement>, keyof FocusScopeOwnProps>;
 
+// ---------------------------------------------------------------------------
+// FocusScope — outer component that owns scope registration and spatial state
+// ---------------------------------------------------------------------------
+
 /**
  * Combines CommandScopeProvider + entity focus + context menu into one wrapper.
  *
@@ -69,68 +218,33 @@ export function FocusScope({
   moniker,
   commands,
   children,
-  claimWhen,
+  navOverride,
   showFocusBar = true,
   handleEvents = true,
   renderContainer = true,
   ...rest
 }: FocusScopeProps) {
-  const {
-    focusedMoniker,
-    setFocus,
-    registerScope,
-    unregisterScope,
-    registerClaimPredicates,
-    unregisterClaimPredicates,
-  } = useEntityFocus();
-
-  // Build the scope ourselves so we can register it
-  const parent = useContext(CommandScopeContext);
-  const scope = useMemo<CommandScope>(() => {
-    const map = new Map<string, CommandDef>();
-    for (const cmd of commands) {
-      map.set(cmd.id, cmd);
-    }
-    return { commands: map, parent, moniker };
-  }, [commands, parent, moniker]);
-
-  const isDirectFocus = showFocusBar && focusedMoniker === moniker;
-
-  // Register/deregister scope in the EntityFocus registry
-  useEffect(() => {
-    registerScope(moniker, scope);
-    return () => unregisterScope(moniker);
-  }, [moniker, scope, registerScope, unregisterScope]);
-
-  // Register/deregister claim predicates when claimWhen is provided
-  useEffect(() => {
-    if (claimWhen && claimWhen.length > 0) {
-      registerClaimPredicates(moniker, claimWhen);
-      return () => unregisterClaimPredicates(moniker);
-    }
-  }, [moniker, claimWhen, registerClaimPredicates, unregisterClaimPredicates]);
+  const { focusedMoniker, setFocus } = useEntityFocus();
+  const spatialKey = useSpatialKey();
+  const layerKey = useFocusLayerKey();
+  const { isClaimed, elementRef } = useSpatialClaim(spatialKey, moniker, layerKey, navOverride);
+  const scope = useScopeRegistration(moniker, commands);
+  const isDirectFocus = showFocusBar && (focusedMoniker === moniker || isClaimed);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // When handleEvents is false, don't claim focus on click — let the
-      // event propagate to the parent FocusScope (e.g. grid cell, card).
       if (!handleEvents) return;
-
-      // Don't change entity focus when clicking inputs/textareas/selects
       const target = e.target as HTMLElement;
       const tag = target.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      // Don't change if the target is inside a contenteditable
       if (target.closest("[contenteditable]")) return;
-
       e.stopPropagation();
+      // setFocus internally bridges to spatial_focus via moniker→key lookup.
       setFocus(moniker);
     },
     [moniker, setFocus, handleEvents],
   );
 
-  // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)
-  // so we have access to the scope object for registry
   return (
     <FocusScopeContext.Provider value={moniker}>
       <CommandScopeContext.Provider value={scope}>
@@ -138,9 +252,9 @@ export function FocusScope({
           <FocusScopeInner
             moniker={moniker}
             isDirectFocus={isDirectFocus}
-            showFocusBar={showFocusBar}
             handleEvents={handleEvents}
             onClick={handleClick}
+            elementRef={elementRef}
             {...rest}
           >
             {children}
@@ -153,6 +267,10 @@ export function FocusScope({
   );
 }
 
+// ---------------------------------------------------------------------------
+// FocusScopeInner — rendered inside CommandScopeContext so hooks see the scope
+// ---------------------------------------------------------------------------
+
 /** Props for the inner focus-scope wrapper rendered inside CommandScopeContext. */
 interface FocusScopeInnerProps extends Omit<
   React.HTMLAttributes<HTMLElement>,
@@ -160,11 +278,10 @@ interface FocusScopeInnerProps extends Omit<
 > {
   moniker: string;
   isDirectFocus: boolean;
-  /** When false, hides the focus bar visual indicator. */
-  showFocusBar: boolean;
-  /** When false, suppresses click/right-click/double-click event handling. */
   handleEvents: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
+  /** Ref for the DOM element — used by ResizeObserver for rect measurement. */
+  elementRef: React.RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
@@ -172,50 +289,18 @@ interface FocusScopeInnerProps extends Omit<
 function FocusScopeInner({
   moniker,
   isDirectFocus,
-  showFocusBar,
   handleEvents,
   onClick,
+  elementRef,
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const contextMenuHandler = useContextMenu();
-  const dispatch = useDispatchCommand("ui.inspect");
-  const { setFocus } = useEntityFocus();
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      // When handleEvents is false, let the event propagate to the parent
-      // entity scope (e.g. EntityRow).
-      if (!handleEvents) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-      setFocus(moniker);
-      contextMenuHandler(e);
-    },
-    [moniker, setFocus, contextMenuHandler, handleEvents],
-  );
-
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      // When handleEvents is false, let the event propagate to the parent
-      // entity scope (e.g. EntityRow).
-      if (!handleEvents) return;
-
-      // Skip if target is an interactive element
-      const target = e.target as HTMLElement;
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (target.closest("[contenteditable]")) return;
-
-      e.stopPropagation();
-      dispatch({ target: moniker }).catch(console.error);
-    },
-    [dispatch, moniker, handleEvents],
-  );
+  const { handleContextMenu, handleDoubleClick } =
+    useScopeEventHandlers(moniker, handleEvents);
 
   return (
     <FocusHighlight
+      ref={elementRef}
       focused={isDirectFocus}
       data-moniker={moniker}
       onClick={onClick}

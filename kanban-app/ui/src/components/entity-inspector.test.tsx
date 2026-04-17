@@ -223,10 +223,7 @@ import { InspectorFocusBridge } from "./inspector-focus-bridge";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
-import {
-  EntityFocusProvider,
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -242,21 +239,6 @@ function makeEntity(fields: Record<string, unknown> = {}): Entity {
   };
 }
 
-/**
- * Helper that exposes `broadcastNavCommand` via a hidden button. Rendered
- * inside the EntityFocusProvider tree so tests can synthesise keyboard
- * navigation without importing the command plumbing.
- */
-function NavBroadcastButton({ commandId }: { commandId: string }) {
-  const { broadcastNavCommand } = useEntityFocus();
-  return (
-    <button
-      data-testid={`nav-broadcast-${commandId}`}
-      onClick={() => broadcastNavCommand(commandId)}
-    />
-  );
-}
-
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   const result = render(
     <TooltipProvider>
@@ -267,8 +249,6 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
               <UIStateProvider>
                 <CommandScopeProvider commands={[]}>
                   <EntityInspector entity={entity} />
-                  <NavBroadcastButton commandId="nav.down" />
-                  <NavBroadcastButton commandId="nav.up" />
                 </CommandScopeProvider>
               </UIStateProvider>
             </FieldUpdateProvider>
@@ -538,8 +518,8 @@ describe("EntityInspector", () => {
       ).toBeTruthy();
     });
 
-    it("ArrowDown from title skips the hidden progress row", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("hidden progress row has no FocusScope so spatial nav skips it", async () => {
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -548,28 +528,22 @@ describe("EntityInspector", () => {
         }),
       );
 
-      const titleRow = container.querySelector(
-        '[data-testid="field-row-title"]',
-      );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
-
-      // ArrowDown from title — progress is hidden, so the next navigable row
-      // is `tags` (the remaining header field).
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-      expect(titleRow!.getAttribute("data-focused")).toBeNull();
+      // Progress is hidden — no field-row renders, so spatial nav has
+      // nothing to land on. The field ordering is title → tags → body,
+      // with no progress row in between.
       expect(
         container.querySelector('[data-testid="field-row-progress"]'),
       ).toBeNull();
+      expect(
+        container.querySelector('[data-testid="field-row-title"]'),
+      ).toBeTruthy();
+      expect(
+        container.querySelector('[data-testid="field-row-tags"]'),
+      ).toBeTruthy();
     });
 
-    it("ArrowDown from title lands on the progress row when it is visible", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("visible progress row has a FocusScope so spatial nav can reach it", async () => {
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -578,30 +552,15 @@ describe("EntityInspector", () => {
         }),
       );
 
-      const titleRow = container.querySelector(
-        '[data-testid="field-row-title"]',
-      );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
-
-      // Header order is title → tags → progress, so ArrowDown from title
-      // lands on tags first.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-
-      // Second ArrowDown should now land on the visible progress row.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
+      // Progress is visible — the row renders a FocusScope with a
+      // data-moniker. Spatial nav in Rust resolves directional movement
+      // via DOM rects, so the progress row is reachable from its
+      // neighbors.
       const progressRow = container.querySelector(
         '[data-testid="field-row-progress"]',
       );
       expect(progressRow).toBeTruthy();
-      expect(progressRow!.getAttribute("data-focused")).toBe("true");
+      expect(progressRow!.getAttribute("data-moniker")).toBeTruthy();
     });
   });
 
@@ -801,8 +760,8 @@ describe("EntityInspector", () => {
       expect(dividers.length).toBe(2);
     });
 
-    it("ArrowDown from the last body field focuses the first dates field", async () => {
-      const { container, getByTestId } = await renderWithSectionedSchema(
+    it("dates-section fields have FocusScopes so spatial nav can reach them across sections", async () => {
+      const { container } = await renderWithSectionedSchema(
         makeEntity({
           title: "T",
           body: "B",
@@ -811,27 +770,18 @@ describe("EntityInspector", () => {
         }),
       );
 
-      // Navigable order is title (header) → body (body) → due (dates) → scheduled (dates).
-      // From the default first-focus on `title`, two ArrowDowns should land on `due`.
-      const titleRow = container.querySelector(
-        '[data-testid="field-row-title"]',
-      );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
-
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-      expect(bodyRow!.getAttribute("data-focused")).toBe("true");
-
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
+      // Navigable order: title (header) → body (body) → due (dates) → scheduled (dates).
+      // Spatial nav in Rust resolves directional movement via DOM rects —
+      // verify each field renders a FocusScope so Rust can discover them.
       const dueRow = container.querySelector('[data-testid="field-row-due"]');
       expect(dueRow).toBeTruthy();
-      expect(dueRow!.getAttribute("data-focused")).toBe("true");
+      expect(dueRow!.getAttribute("data-moniker")).toBeTruthy();
+
+      const scheduledRow = container.querySelector(
+        '[data-testid="field-row-scheduled"]',
+      );
+      expect(scheduledRow).toBeTruthy();
+      expect(scheduledRow!.getAttribute("data-moniker")).toBeTruthy();
     });
   });
 });

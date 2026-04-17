@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod deeplink;
 mod menu;
+mod spatial;
 mod state;
 mod tauri_reporter;
 mod watcher;
@@ -73,6 +74,15 @@ fn run_app(app_state: AppState) {
             commands::get_undo_state,
             commands::create_window,
             commands::save_dropped_file,
+            spatial::spatial_register,
+            spatial::spatial_register_batch,
+            spatial::spatial_unregister,
+            spatial::spatial_unregister_batch,
+            spatial::spatial_focus,
+            spatial::spatial_clear_focus,
+            spatial::spatial_navigate,
+            spatial::spatial_push_layer,
+            spatial::spatial_remove_layer,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)

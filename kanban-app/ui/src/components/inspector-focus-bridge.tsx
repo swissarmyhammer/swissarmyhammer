@@ -5,6 +5,7 @@ import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusLayer } from "@/components/focus-layer";
 import { useEntityCommands } from "@/lib/entity-commands";
 
 interface InspectorFocusBridgeProps {
@@ -12,17 +13,35 @@ interface InspectorFocusBridgeProps {
 }
 
 /**
- * Wraps EntityInspector in a CommandScopeProvider with inspector navigation commands.
+ * Build inspector navigation commands that broadcast through the focus system.
  *
- * Navigation is pull-based: vim/arrow/tab keys broadcast nav commands (nav.up, nav.down,
- * nav.first, nav.last) via broadcastNavCommand. Each field row's FocusScope uses claimWhen
- * predicates to claim focus when the command matches its position.
+ * Kept as a factory so the component body stays compact and the
+ * command array identity is stable (refs, not render-time values).
+ */
+function buildInspectorCommands(
+  broadcastRef: React.MutableRefObject<(id: string) => void>,
+  navRef: React.MutableRefObject<UseInspectorNavReturn | null>,
+): CommandDef[] {
+  return [
+    { id: "inspector.moveUp", name: "Move Up", keys: { vim: "k", cua: "ArrowUp" }, execute: () => broadcastRef.current("nav.up") },
+    { id: "inspector.moveDown", name: "Move Down", keys: { vim: "j", cua: "ArrowDown" }, execute: () => broadcastRef.current("nav.down") },
+    { id: "inspector.edit", name: "Edit Field", keys: { vim: "i", cua: "Enter" }, execute: () => navRef.current?.enterEdit() },
+    { id: "inspector.editEnter", name: "Edit Field (Enter)", keys: { vim: "Enter" }, execute: () => navRef.current?.enterEdit() },
+    { id: "inspector.exitEdit", name: "Exit Edit", execute: () => { if (navRef.current?.mode === "edit") navRef.current.exitEdit(); } },
+    { id: "inspector.moveToFirst", name: "Move to First", keys: { vim: "g g", cua: "Home" }, execute: () => broadcastRef.current("nav.first") },
+    { id: "inspector.moveToLast", name: "Move to Last", keys: { vim: "G", cua: "End" }, execute: () => broadcastRef.current("nav.last") },
+    { id: "inspector.nextField", name: "Next Field", keys: { cua: "Tab" }, execute: () => broadcastRef.current("nav.down") },
+    { id: "inspector.prevField", name: "Previous Field", keys: { cua: "Shift+Tab" }, execute: () => broadcastRef.current("nav.up") },
+  ];
+}
+
+/**
+ * Wraps EntityInspector in a FocusLayer + CommandScopeProvider with
+ * inspector navigation commands.
  *
- * Edit mode is managed by the inspector nav hook exposed via navRef.
- *
- * On unmount (panel close), restores focus to whatever was focused before (via setFocus).
- *
- * @param entity - The entity to inspect
+ * Navigation between field rows is handled by spatial nav — each row's
+ * FocusScope registers its DOM rect with Rust, which resolves directional
+ * movement via rect geometry.
  */
 export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const navRef = useRef<UseInspectorNavReturn | null>(null);
@@ -30,98 +49,16 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  const entityMoniker = entity.moniker;
-  const entityCommands = useEntityCommands(
-    entity.entity_type,
-    entity.id,
-    entity,
-  );
-
-  // Commands with keys — resolved by the global KeybindingHandler via scope bindings
-  const commands = useMemo<CommandDef[]>(
-    () => [
-      {
-        id: "inspector.moveUp",
-        name: "Move Up",
-        keys: { vim: "k", cua: "ArrowUp" },
-        execute: () => {
-          broadcastRef.current("nav.up");
-        },
-      },
-      {
-        id: "inspector.moveDown",
-        name: "Move Down",
-        keys: { vim: "j", cua: "ArrowDown" },
-        execute: () => {
-          broadcastRef.current("nav.down");
-        },
-      },
-      {
-        id: "inspector.edit",
-        name: "Edit Field",
-        keys: { vim: "i", cua: "Enter" },
-        execute: () => navRef.current?.enterEdit(),
-      },
-      {
-        id: "inspector.editEnter",
-        name: "Edit Field (Enter)",
-        keys: { vim: "Enter" },
-        execute: () => navRef.current?.enterEdit(),
-      },
-      {
-        id: "inspector.exitEdit",
-        name: "Exit Edit",
-        // No keys — field editors handle Escape internally via onCancel.
-        // Escape falls through to app.dismiss which closes the panel.
-        execute: () => {
-          if (navRef.current?.mode === "edit") navRef.current.exitEdit();
-        },
-      },
-      {
-        id: "inspector.moveToFirst",
-        name: "Move to First",
-        keys: { vim: "g g", cua: "Home" },
-        execute: () => {
-          broadcastRef.current("nav.first");
-        },
-      },
-      {
-        id: "inspector.moveToLast",
-        name: "Move to Last",
-        keys: { vim: "G", cua: "End" },
-        execute: () => {
-          broadcastRef.current("nav.last");
-        },
-      },
-      {
-        id: "inspector.nextField",
-        name: "Next Field",
-        keys: { cua: "Tab" },
-        execute: () => {
-          broadcastRef.current("nav.down");
-        },
-      },
-      {
-        id: "inspector.prevField",
-        name: "Previous Field",
-        keys: { cua: "Shift+Tab" },
-        execute: () => {
-          broadcastRef.current("nav.up");
-        },
-      },
-    ],
-    [],
-  );
+  const entityCommands = useEntityCommands(entity.entity_type, entity.id, entity);
+  const commands = useMemo(() => buildInspectorCommands(broadcastRef, navRef), []);
 
   return (
-    <FocusScope
-      moniker={entityMoniker}
-      commands={entityCommands}
-      showFocusBar={false}
-    >
-      <CommandScopeProvider commands={commands}>
-        <EntityInspector entity={entity} navRef={navRef} />
-      </CommandScopeProvider>
-    </FocusScope>
+    <FocusLayer name="inspector">
+      <FocusScope moniker={entity.moniker} commands={entityCommands} showFocusBar={false}>
+        <CommandScopeProvider commands={commands}>
+          <EntityInspector entity={entity} navRef={navRef} />
+        </CommandScopeProvider>
+      </FocusScope>
+    </FocusLayer>
   );
 }

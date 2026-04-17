@@ -1,14 +1,11 @@
 /**
- * Integration tests for pill navigation via claimWhen predicates.
+ * Integration tests for pill FocusScope registration.
  *
- * Uses the real EntityFocusProvider and FocusScope (no mocking of
- * entity-focus-context) so broadcastNavCommand actually evaluates
- * registered claim predicates.
- *
- * After the MentionView migration, BadgeListDisplay delegates to
- * MentionView which generates per-pill FocusScopes. The pill monikers
- * still follow `${entityType}:${entityId}`, so these tests verify that
- * navigation between those MentionView-generated scopes works.
+ * After the spatial nav migration, directional navigation between pills
+ * (nav.left/nav.right) is handled by Rust via DOM rect geometry. These
+ * tests verify that each pill renders a FocusScope with the correct
+ * moniker so spatial nav can discover them, and that setFocus can target
+ * individual pills.
  */
 import { describe, it, expect, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -154,22 +151,10 @@ function FocusMonitor() {
 /** Button to set focus imperatively. */
 function SetFocusButton({ moniker }: { moniker: string }) {
   const { setFocus } = useEntityFocus();
-  return <button data-testid="set-focus" onClick={() => setFocus(moniker)} />;
-}
-
-/** Button to call broadcastNavCommand. */
-function BroadcastButton({
-  commandId,
-  testId,
-}: {
-  commandId: string;
-  testId?: string;
-}) {
-  const { broadcastNavCommand } = useEntityFocus();
   return (
     <button
-      data-testid={testId ?? "broadcast"}
-      onClick={() => broadcastNavCommand(commandId)}
+      data-testid={`set-focus-${moniker}`}
+      onClick={() => setFocus(moniker)}
     />
   );
 }
@@ -199,8 +184,9 @@ function NavHarness({
       </TooltipProvider>
       <FocusMonitor />
       <SetFocusButton moniker={parentMoniker} />
-      <BroadcastButton commandId="nav.right" testId="nav-right" />
-      <BroadcastButton commandId="nav.left" testId="nav-left" />
+      <SetFocusButton moniker="tag:tag-1" />
+      <SetFocusButton moniker="tag:tag-2" />
+      <SetFocusButton moniker="tag:tag-3" />
     </EntityFocusProvider>
   );
 }
@@ -229,14 +215,30 @@ function RefNavHarness({
       </TooltipProvider>
       <FocusMonitor />
       <SetFocusButton moniker={parentMoniker} />
-      <BroadcastButton commandId="nav.right" testId="nav-right" />
-      <BroadcastButton commandId="nav.left" testId="nav-left" />
+      <SetFocusButton moniker="task:task-dep-A" />
+      <SetFocusButton moniker="task:task-dep-B" />
     </EntityFocusProvider>
   );
 }
 
-describe("BadgeListDisplay pill navigation", () => {
-  it("nav.right from field moniker focuses first pill", async () => {
+describe("BadgeListDisplay pill FocusScope registration", () => {
+  it("each pill renders a FocusScope with the correct tag moniker", async () => {
+    const { container } = render(
+      <NavHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+      />,
+    );
+    await flush();
+
+    const scopes = Array.from(container.querySelectorAll("[data-moniker]"));
+    const monikers = scopes.map((s) => s.getAttribute("data-moniker"));
+    expect(monikers).toContain("tag:tag-1");
+    expect(monikers).toContain("tag:tag-2");
+    expect(monikers).toContain("tag:tag-3");
+  });
+
+  it("setFocus can target individual pills directly", async () => {
     const { getByTestId } = render(
       <NavHarness
         values={["bugfix", "feature", "docs"]}
@@ -245,148 +247,56 @@ describe("BadgeListDisplay pill navigation", () => {
     );
     await flush();
 
-    // Focus the parent field
+    // Focus first pill directly
     await act(async () => {
-      getByTestId("set-focus").click();
+      getByTestId("set-focus-tag:tag-1").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
+
+    // Focus second pill directly
+    await act(async () => {
+      getByTestId("set-focus-tag:tag-2").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-2");
+
+    // Focus third pill directly
+    await act(async () => {
+      getByTestId("set-focus-tag:tag-3").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-3");
+  });
+
+  it("parent field and pills have distinct monikers", async () => {
+    const { getByTestId } = render(
+      <NavHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+      />,
+    );
+    await flush();
+
+    // Focus parent
+    await act(async () => {
+      getByTestId("set-focus-field:tags").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe("field:tags");
 
-    // nav.right → first pill (tag:tag-1)
+    // Focus a pill — moves away from parent
     await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
-  });
-
-  it("nav.right from first pill focuses second pill", async () => {
-    const { getByTestId } = render(
-      <NavHarness
-        values={["bugfix", "feature", "docs"]}
-        parentMoniker="field:tags"
-      />,
-    );
-    await flush();
-
-    // Focus the parent field, then nav.right twice
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
-
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-2");
-  });
-
-  it("nav.right from last pill leaves focus unchanged (clamp)", async () => {
-    const { getByTestId } = render(
-      <NavHarness
-        values={["bugfix", "feature", "docs"]}
-        parentMoniker="field:tags"
-      />,
-    );
-    await flush();
-
-    // Navigate to the last pill (tag:tag-3)
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-3");
-
-    // One more nav.right — should stay on last pill
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-3");
-  });
-
-  it("nav.left from second pill focuses first pill", async () => {
-    const { getByTestId } = render(
-      <NavHarness
-        values={["bugfix", "feature", "docs"]}
-        parentMoniker="field:tags"
-      />,
-    );
-    await flush();
-
-    // Navigate to second pill
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-2");
-
-    // nav.left → first pill
-    await act(async () => {
-      getByTestId("nav-left").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
-  });
-
-  it("nav.left from first pill leaves focus unchanged (clamp)", async () => {
-    const { getByTestId } = render(
-      <NavHarness
-        values={["bugfix", "feature", "docs"]}
-        parentMoniker="field:tags"
-      />,
-    );
-    await flush();
-
-    // Navigate to first pill
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
-
-    // nav.left — first pill has no nav.left predicate, so focus stays
-    await act(async () => {
-      getByTestId("nav-left").click();
+      getByTestId("set-focus-tag:tag-1").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
   });
 });
 
-describe("BadgeListDisplay reference-field pill navigation", () => {
-  it("monikers use buildMoniker(entityType, entityId) directly — no slug resolution", async () => {
-    const { getByTestId } = render(
+describe("BadgeListDisplay reference-field pill registration", () => {
+  it("reference pills use entity ID monikers directly (no slug resolution)", async () => {
+    const { container, getByTestId } = render(
       <RefNavHarness
         values={["task-dep-A", "task-dep-B"]}
         parentMoniker="field:depends_on"
@@ -394,32 +304,23 @@ describe("BadgeListDisplay reference-field pill navigation", () => {
     );
     await flush();
 
-    // Focus the parent field
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:depends_on");
+    // Verify monikers are based on entity IDs, not slugs
+    const scopes = Array.from(container.querySelectorAll("[data-moniker]"));
+    const monikers = scopes.map((s) => s.getAttribute("data-moniker"));
+    expect(monikers).toContain("task:task-dep-A");
+    expect(monikers).toContain("task:task-dep-B");
 
-    // nav.right → first pill uses entity ID directly: task:task-dep-A
+    // setFocus can target each pill
     await act(async () => {
-      getByTestId("nav-right").click();
+      getByTestId("set-focus-task:task-dep-A").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-A");
 
-    // nav.right → second pill: task:task-dep-B
     await act(async () => {
-      getByTestId("nav-right").click();
+      getByTestId("set-focus-task:task-dep-B").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-B");
-
-    // nav.left → back to first pill
-    await act(async () => {
-      getByTestId("nav-left").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-A");
   });
 });

@@ -18,8 +18,7 @@ import {
 } from "@/hooks/use-entity-sections";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
-import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
+import { useEntityFocus, useIsFocused } from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { HelpCircle, type LucideIcon } from "lucide-react";
@@ -44,10 +43,10 @@ interface EntityInspectorProps {
  * `section` value is not in the declared list fall through to `body`
  * so schema typos stay visible.
  *
- * Navigation is pull-based: each field row's FocusScope gets claimWhen
- * predicates computed from its position in the field list. A mount effect
- * focuses the first field via setFocus. After that, navigation is purely
- * driven by broadcastNavCommand triggering claimWhen predicates.
+ * Navigation between field rows is handled by spatial nav — each row's
+ * FocusScope registers its DOM rect with Rust, which resolves directional
+ * movement via rect geometry. A mount effect focuses the first field via
+ * setFocus.
  *
  * Pulls everything from context:
  * - Field definitions and ordering from SchemaContext
@@ -63,20 +62,19 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     () => sections.flatMap((s) => s.fields),
     [sections],
   );
-  const fieldMonikers = useMemo(
+  const firstMoniker = useMemo(
     () =>
-      navigableFields.map((f) =>
-        fieldMoniker(entity.entity_type, entity.id, f.name),
-      ),
+      navigableFields.length > 0
+        ? fieldMoniker(entity.entity_type, entity.id, navigableFields[0].name)
+        : undefined,
     [navigableFields, entity.entity_type, entity.id],
   );
-  const claimPredicates = useFieldClaimPredicates(fieldMonikers);
 
   const nav = useInspectorNav();
   // Expose nav to parent (InspectorFocusBridge) via ref
   if (navRef) navRef.current = nav;
 
-  useFirstFieldFocus(fieldMonikers[0]);
+  useFirstFieldFocus(firstMoniker);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -85,7 +83,6 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     <InspectorSections
       entity={entity}
       sections={sections}
-      claimPredicates={claimPredicates}
       nav={nav}
     />
   );
@@ -100,8 +97,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
  * to edit them. A display without a registered `isEmpty` predicate is always
  * considered non-empty (opt-in behaviour).
  *
- * Filtering runs *before* sectioning and predicate assembly so keyboard nav
- * indexes stay contiguous — there is no way to focus a hidden row.
+ * Filtering runs *before* sectioning so keyboard nav indexes stay
+ * contiguous — there is no way to focus a hidden row.
  */
 function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
   return useMemo(() => {
@@ -112,87 +109,6 @@ function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
       return !isEmpty(entity.fields[field.name]);
     });
   }, [entity, fields]);
-}
-
-/**
- * Compute the `claimWhen` predicate list for every navigable field, indexed
- * by its flat position in the inspector. Predicates wire up nav.up, nav.down,
- * nav.left, nav.first, and nav.last so keyboard navigation walks the list.
- */
-function useFieldClaimPredicates(fieldMonikers: string[]): ClaimPredicate[][] {
-  return useMemo(
-    () => fieldMonikers.map((_, i) => predicatesForField(fieldMonikers, i)),
-    [fieldMonikers],
-  );
-}
-
-/** Build the ClaimPredicate list for the field at index `i` in `monikers`. */
-function predicatesForField(monikers: string[], i: number): ClaimPredicate[] {
-  const predicates: ClaimPredicate[] = [];
-  // nav.down: claim if the field above me (or a child of it) is focused
-  if (i > 0) {
-    const prev = monikers[i - 1];
-    predicates.push({
-      command: "nav.down",
-      when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
-    });
-  }
-  // nav.up: claim if the field below me (or a child of it) is focused
-  if (i < monikers.length - 1) {
-    const next = monikers[i + 1];
-    predicates.push({
-      command: "nav.up",
-      when: (f, isDescendantOf) => f === next || isDescendantOf(next),
-    });
-  }
-  // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
-  // Pill predicates register before field rows (children before parents), so a
-  // middle pill's nav.left fires first.  Only when no pill matches (the first
-  // pill has no nav.left predicate) does this field-row predicate win.
-  predicates.push({
-    command: "nav.left",
-    when: (f, isDescendantOf) =>
-      f !== monikers[i] && isDescendantOf(monikers[i]),
-  });
-  predicates.push(...edgePredicates(monikers, i));
-  return predicates;
-}
-
-/**
- * nav.first / nav.last predicates for edge fields. The first field claims
- * nav.first when any other inspector field is focused; the last claims
- * nav.last symmetrically. Middle fields return an empty array.
- */
-function edgePredicates(monikers: string[], i: number): ClaimPredicate[] {
-  const edges: ClaimPredicate[] = [];
-  if (i === 0) {
-    edges.push({
-      command: "nav.first",
-      when: (f, isDescendantOf) =>
-        isInspectorField(monikers, f, isDescendantOf) && f !== monikers[0],
-    });
-  }
-  if (i === monikers.length - 1) {
-    edges.push({
-      command: "nav.last",
-      when: (f, isDescendantOf) =>
-        isInspectorField(monikers, f, isDescendantOf) &&
-        f !== monikers[monikers.length - 1],
-    });
-  }
-  return edges;
-}
-
-/** Check if a moniker is one of the inspector's fields or a descendant of one. */
-function isInspectorField(
-  monikers: string[],
-  f: string | null,
-  isDescendantOf: (a: string) => boolean,
-): boolean {
-  if (!f) return false;
-  if (monikers.includes(f)) return true;
-  // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
-  return monikers.some((m) => isDescendantOf(m));
 }
 
 /**
@@ -226,7 +142,6 @@ function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
 interface InspectorSectionsProps {
   entity: Entity;
   sections: ResolvedSection[];
-  claimPredicates: ClaimPredicate[][];
   nav: UseInspectorNavReturn;
 }
 
@@ -240,24 +155,19 @@ interface InspectorSectionsProps {
  * dense). The `header` section renders without field labels (legacy
  * compact styling); all other sections render field labels.
  *
- * `flatIndex` walks the already-flattened navigable field order so each
- * `FieldRow` receives its matching pull-based claim predicates.
+ * Navigation between rows is handled by spatial nav (DOM rect resolution).
  */
 function InspectorSections({
   entity,
   sections,
-  claimPredicates,
   nav,
 }: InspectorSectionsProps) {
-  /** Track the running index across sections so each FieldRow knows its flat position. */
-  const flatIndex = { i: 0 };
   const rowFor = (field: FieldDef, showLabel = true) => (
     <FieldRow
       key={field.name}
       field={field}
       entity={entity}
       showLabel={showLabel}
-      claimWhen={claimPredicates[flatIndex.i++]}
       inspectorMode={nav.mode}
       onExitEdit={nav.exitEdit}
       onEnterEdit={nav.enterEdit}
@@ -328,7 +238,6 @@ interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
   showLabel?: boolean;
-  claimWhen?: ClaimPredicate[];
   inspectorMode?: InspectorMode;
   onExitEdit?: () => void;
   onEnterEdit?: () => void;
@@ -343,8 +252,8 @@ interface FieldRowProps {
  *
  * Uses useIsFocused to determine if this row is the focused field.
  * Editing is triggered when isFocused AND inspectorMode === "edit".
+ * Navigation between fields is handled by spatial nav (DOM rects in Rust).
  *
- * @param claimWhen - Predicates for pull-based navigation via broadcastNavCommand
  * @param inspectorMode - Current inspector mode (normal or edit)
  * @param onExitEdit - Callback to tell the inspector nav that editing is done
  * @param onEnterEdit - Callback to enter edit mode on the inspector
@@ -353,7 +262,6 @@ function FieldRow({
   field,
   entity,
   showLabel = true,
-  claimWhen,
   inspectorMode,
   onExitEdit,
   onEnterEdit,
@@ -383,7 +291,6 @@ function FieldRow({
     <FocusScope
       moniker={scopeMoniker}
       commands={[]}
-      claimWhen={claimWhen}
       data-testid={`field-row-${field.name}`}
       className={bare ? undefined : "flex items-start gap-2"}
     >

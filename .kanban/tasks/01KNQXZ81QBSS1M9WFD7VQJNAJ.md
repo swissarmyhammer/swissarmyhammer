@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXYC4RBQP1N2NQ33P8DPB9
-position_column: todo
-position_ordinal: a480
+position_column: done
+position_ordinal: ffffffffffffffffffffffdb80
 project: spatial-nav
 title: Remove manual claimWhen predicates from column-view and board-view
 ---
@@ -20,17 +20,17 @@ Delete the manual `claimWhen` predicate construction in the board view. Spatial 
 4. **`kanban-app/ui/src/components/entity-card.tsx`** — Remove `claimWhen` prop passthrough.
 
 ### Subtasks
-- [ ] Delete `nameFieldClaimWhen` and `cardClaimPredicates` memos from column-view.tsx
-- [ ] Remove moniker-passing plumbing from board-view.tsx → column-view.tsx props
-- [ ] Remove `claimWhen` prop from sortable-task-card.tsx and entity-card.tsx
-- [ ] Verify cross-column clamping via Rust test suite (card 2 covers this)
-- [ ] Run existing React tests — they should pass with predicates removed
+- [x] Delete `nameFieldClaimWhen` and `cardClaimPredicates` memos from column-view.tsx
+- [x] Remove moniker-passing plumbing from board-view.tsx → column-view.tsx props
+- [x] Remove `claimWhen` prop from sortable-task-card.tsx and entity-card.tsx
+- [x] Verify cross-column clamping via Rust test suite (card 2 covers this)
+- [x] Run existing React tests — they should pass with predicates removed
 
 ## Acceptance Criteria
-- [ ] Column-view has no `claimWhen` predicates — ~140 lines removed
-- [ ] Board-view no longer passes moniker arrays to columns
-- [ ] All existing column-view and board-view React tests pass unchanged
-- [ ] `pnpm vitest run` passes
+- [x] Column-view has no `claimWhen` predicates — ~140 lines removed
+- [x] Board-view no longer passes moniker arrays to columns
+- [x] All existing column-view and board-view React tests pass unchanged
+- [x] `pnpm vitest run` passes
 
 ## Tests
 

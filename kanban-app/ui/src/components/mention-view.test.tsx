@@ -300,28 +300,18 @@ describe("MentionView — list mode", () => {
     expect(scopes.length).toBe(0);
   });
 
-  it("nav.right from parent field focuses first pill, then the second", async () => {
-    /** Button that broadcasts a nav command imperatively. */
-    function BroadcastButton({
-      commandId,
+  it("pills register FocusScopes that can be targeted by setFocus", async () => {
+    /** Button that sets focus imperatively. */
+    function SetFocusButton({
+      moniker,
       testId,
     }: {
-      commandId: string;
+      moniker: string;
       testId: string;
     }) {
-      const { broadcastNavCommand } = useEntityFocus();
-      return (
-        <button
-          data-testid={testId}
-          onClick={() => broadcastNavCommand(commandId)}
-        />
-      );
-    }
-    /** Button that sets focus imperatively. */
-    function SetFocusButton({ moniker }: { moniker: string }) {
       const { setFocus } = useEntityFocus();
       return (
-        <button data-testid="set-focus" onClick={() => setFocus(moniker)} />
+        <button data-testid={testId} onClick={() => setFocus(moniker)} />
       );
     }
     /** Reads focusedMoniker from context. */
@@ -332,7 +322,7 @@ describe("MentionView — list mode", () => {
 
     const parentMoniker = "field:mixed";
 
-    const { getByTestId } = render(
+    const { getByTestId, container } = render(
       <EntityFocusProvider>
         <TooltipProvider>
           <FocusScope moniker={parentMoniker} commands={[]}>
@@ -347,40 +337,31 @@ describe("MentionView — list mode", () => {
           </FocusScope>
         </TooltipProvider>
         <FocusReader />
-        <SetFocusButton moniker={parentMoniker} />
-        <BroadcastButton commandId="nav.right" testId="nav-right" />
-        <BroadcastButton commandId="nav.left" testId="nav-left" />
+        <SetFocusButton moniker="tag:tag-1" testId="set-tag-1" />
+        <SetFocusButton moniker="tag:tag-2" testId="set-tag-2" />
       </EntityFocusProvider>,
     );
     await flush();
 
-    // Start by focusing the parent field.
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe(parentMoniker);
+    // Verify FocusScope monikers are present for spatial nav discovery.
+    const scopes = Array.from(container.querySelectorAll("[data-moniker]"));
+    const monikers = scopes.map((s) => s.getAttribute("data-moniker"));
+    expect(monikers).toContain("tag:tag-1");
+    expect(monikers).toContain("tag:tag-2");
 
-    // nav.right → first pill
+    // setFocus can target individual pills (spatial nav in Rust does this
+    // via DOM rect resolution; here we verify the moniker registration works).
     await act(async () => {
-      getByTestId("nav-right").click();
+      getByTestId("set-tag-1").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-reader").textContent).toBe("tag:tag-1");
 
-    // nav.right → second pill
     await act(async () => {
-      getByTestId("nav-right").click();
+      getByTestId("set-tag-2").click();
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-reader").textContent).toBe("tag:tag-2");
-
-    // nav.left → back to first pill
-    await act(async () => {
-      getByTestId("nav-left").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe("tag:tag-1");
   });
 });
 

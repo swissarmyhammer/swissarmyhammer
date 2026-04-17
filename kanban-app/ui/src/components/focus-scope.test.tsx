@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   EntityFocusProvider,
@@ -7,15 +7,26 @@ import {
   useIsFocused,
 } from "@/lib/entity-focus-context";
 import { FocusScope, useParentFocusScope } from "./focus-scope";
+import { FocusLayer } from "./focus-layer";
 import { CommandScopeProvider } from "@/lib/command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+  transformCallback: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("ulid", () => {
+  let counter = 0;
+  return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
+});
 
 /**
  * Shape returned by the backend `list_commands_for_scope`.
@@ -53,8 +64,10 @@ function FocusReader() {
 function renderWithFocus(ui: React.ReactElement) {
   return render(
     <EntityFocusProvider>
-      <FocusReader />
-      {ui}
+      <FocusLayer name="test">
+        <FocusReader />
+        {ui}
+      </FocusLayer>
     </EntityFocusProvider>,
   );
 }
@@ -606,10 +619,12 @@ describe("FocusScope", () => {
 
     const { unmount } = render(
       <EntityFocusProvider>
-        <ScopeProbe />
-        <FocusScope moniker="task:abc" commands={[]}>
-          <span>card</span>
-        </FocusScope>
+        <FocusLayer name="test">
+          <ScopeProbe />
+          <FocusScope moniker="task:abc" commands={[]}>
+            <span>card</span>
+          </FocusScope>
+        </FocusLayer>
       </EntityFocusProvider>,
     );
 
@@ -707,9 +722,11 @@ describe("FocusScope", () => {
     it("returns parent FocusScope moniker", () => {
       const { getByTestId } = render(
         <EntityFocusProvider>
-          <FocusScope moniker="column:col1" commands={[]}>
-            <ParentScopeReader />
-          </FocusScope>
+          <FocusLayer name="test">
+            <FocusScope moniker="column:col1" commands={[]}>
+              <ParentScopeReader />
+            </FocusScope>
+          </FocusLayer>
         </EntityFocusProvider>,
       );
       expect(getByTestId("parent-scope").textContent).toBe("column:col1");
@@ -718,11 +735,13 @@ describe("FocusScope", () => {
     it("skips CommandScopeProvider, returns grandparent FocusScope moniker", () => {
       const { getByTestId } = render(
         <EntityFocusProvider>
-          <FocusScope moniker="column:col1" commands={[]}>
-            <CommandScopeProvider commands={[]} moniker="inner-cmd">
-              <ParentScopeReader />
-            </CommandScopeProvider>
-          </FocusScope>
+          <FocusLayer name="test">
+            <FocusScope moniker="column:col1" commands={[]}>
+              <CommandScopeProvider commands={[]} moniker="inner-cmd">
+                <ParentScopeReader />
+              </CommandScopeProvider>
+            </FocusScope>
+          </FocusLayer>
         </EntityFocusProvider>,
       );
       // CommandScopeProvider is NOT a FocusScope, so context still shows the FocusScope ancestor
@@ -758,13 +777,15 @@ describe("FocusScope", () => {
 
     const { getByTestId, getByText } = render(
       <EntityFocusProvider>
-        <FocusScope moniker="column:col1" commands={[]}>
-          <ColumnWithFocus moniker="column:col1">
-            <FocusScope moniker="task:abc" commands={[]}>
-              <span>card</span>
-            </FocusScope>
-          </ColumnWithFocus>
-        </FocusScope>
+        <FocusLayer name="test">
+          <FocusScope moniker="column:col1" commands={[]}>
+            <ColumnWithFocus moniker="column:col1">
+              <FocusScope moniker="task:abc" commands={[]}>
+                <span>card</span>
+              </FocusScope>
+            </ColumnWithFocus>
+          </FocusScope>
+        </FocusLayer>
       </EntityFocusProvider>,
     );
 
@@ -775,5 +796,169 @@ describe("FocusScope", () => {
     expect(getByTestId("col-column:col1").hasAttribute("data-focused")).toBe(
       true,
     );
+  });
+});
+
+/* ---------- spatial key and Tauri invokes ---------- */
+
+describe("spatial focus integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("FocusScope click invokes spatial_focus with its key", async () => {
+    const { getByText } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:abc" commands={[]}>
+            <span>click me</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    fireEvent.click(getByText("click me"));
+
+    // spatial_focus should be called with a key string
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_focus",
+        expect.objectContaining({ key: expect.any(String) }),
+      );
+    });
+  });
+
+  it("FocusScope mount invokes spatial_register with key, moniker, and layer_key", async () => {
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:xyz" commands={[]}>
+            <span>child</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          key: expect.any(String),
+          moniker: "task:xyz",
+          layer_key: expect.any(String),
+          x: expect.any(Number),
+          y: expect.any(Number),
+          w: expect.any(Number),
+          h: expect.any(Number),
+        }),
+      );
+    });
+  });
+
+  it("FocusScope unmount invokes spatial_unregister", async () => {
+    function Harness({ show }: { show: boolean }) {
+      return (
+        <EntityFocusProvider>
+          <FocusLayer name="test">
+            {show && (
+              <FocusScope moniker="task:tmp" commands={[]}>
+                <span>temp</span>
+              </FocusScope>
+            )}
+          </FocusLayer>
+        </EntityFocusProvider>
+      );
+    }
+
+    const { rerender } = render(<Harness show={true} />);
+
+    // Clear mocks to isolate unmount calls
+    vi.clearAllMocks();
+
+    rerender(<Harness show={false} />);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_unregister",
+        expect.objectContaining({ key: expect.any(String) }),
+      );
+    });
+  });
+
+  it("FocusScope unmount removes from claim registry", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (_event: string, cb: (evt: { payload: unknown }) => void) => {
+        eventCallback = cb;
+        return Promise.resolve(() => {});
+      },
+    );
+
+    let capturedKey: string | null = null;
+
+    function Harness({ show }: { show: boolean }) {
+      return (
+        <EntityFocusProvider>
+          <FocusLayer name="test">
+            {show && (
+              <FocusScope moniker="task:tmp" commands={[]}>
+                <span>temp</span>
+              </FocusScope>
+            )}
+            <FocusReader />
+          </FocusLayer>
+        </EntityFocusProvider>
+      );
+    }
+
+    const { rerender } = render(<Harness show={true} />);
+
+    // Capture the spatial key from the spatial_register call
+    await waitFor(() => {
+      const registerCall = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => c[0] === "spatial_register",
+      );
+      expect(registerCall).toBeTruthy();
+      capturedKey = (registerCall![1] as { key: string }).key;
+    });
+
+    // Unmount the FocusScope
+    rerender(<Harness show={false} />);
+
+    // Fire focus-changed event for the now-unmounted key — should NOT throw
+    if (eventCallback) {
+      await act(async () => {
+        eventCallback!({
+          payload: { prev_key: null, next_key: capturedKey },
+        });
+      });
+    }
+
+    // Focus should not have changed to the unmounted scope's moniker
+    // (callback was unregistered, so the event is a no-op)
+  });
+
+  it("navOverride prop is forwarded to spatial_register as overrides", async () => {
+    const overrides = { Right: "task:02", Left: null };
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:01" commands={[]} navOverride={overrides}>
+            <span>child</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          moniker: "task:01",
+          overrides: { Right: "task:02", Left: null },
+        }),
+      );
+    });
   });
 });

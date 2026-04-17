@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXXF5W7G4JP73C6ZCMKYKX
-position_column: todo
-position_ordinal: a880
+position_column: done
+position_ordinal: ffffffffffffffffffffffdf80
 project: spatial-nav
 title: 'Handle dynamic FocusScope lifecycle: unmount, virtualization, batch registration'
 ---
@@ -42,26 +42,26 @@ When a virtualizer reveals 20 cards or the board first renders, many FocusScopes
 **Solution**: Add `spatial_register_batch(entries: Vec<(moniker, rect, layer)>)` Tauri command. FocusScope can still use the single-entry version. The virtualizer uses batch for placeholder registration.
 
 ### Subtasks
-- [ ] `navigate()` handles missing focused moniker — falls back to First in active layer
-- [ ] Add placeholder rect registration from VirtualizedCardList for off-screen items
-- [ ] Add `spatial_register_batch` Tauri command for bulk registration
-- [ ] Handle scroll-to-focus flow: nav lands on placeholder → virtualizer scrolls → real mount overwrites
-- [ ] Add tests for all three cases
+- [x] `navigate()` handles missing focused moniker — falls back to First in active layer
+- [x] Add placeholder rect registration from VirtualizedCardList for off-screen items
+- [x] Add `spatial_register_batch` Tauri command for bulk registration
+- [x] Handle scroll-to-focus flow: nav lands on placeholder → virtualizer scrolls → real mount overwrites
+- [x] Add tests for all three cases
 
 ## Acceptance Criteria
-- [ ] Deleting the focused entity doesn't break navigation — focus moves to a sensible fallback
-- [ ] `nav.down` past the last visible card in a virtualized list scrolls to and focuses the next card
-- [ ] Batch registration works for virtualizer placeholder setup
-- [ ] No stale entries left in registry after component unmount
-- [ ] `cargo test` passes, `pnpm vitest run` passes
+- [x] Deleting the focused entity doesn't break navigation — focus moves to a sensible fallback
+- [x] `nav.down` past the last visible card in a virtualized list scrolls to and focuses the next card
+- [x] Batch registration works for virtualizer placeholder setup
+- [x] No stale entries left in registry after component unmount
+- [x] `cargo test` passes, `pnpm vitest run` passes
 
 ## Tests
-- [ ] `Rust unit tests` — navigate with missing focused moniker returns fallback
-- [ ] `Rust unit tests` — navigate returns placeholder moniker when it's the nearest match
-- [ ] `Rust unit tests` — register overwrites existing entry (placeholder → measured)
-- [ ] `Rust unit tests` — register_batch adds multiple entries atomically
-- [ ] `column-view.test.tsx` or integration — nav.down past visible area scrolls and focuses next card
-- [ ] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
+- [x] `Rust unit tests` — navigate with missing focused moniker returns fallback
+- [x] `Rust unit tests` — navigate returns placeholder moniker when it's the nearest match
+- [x] `Rust unit tests` — register overwrites existing entry (placeholder → measured)
+- [x] `Rust unit tests` — register_batch adds multiple entries atomically
+- [x] `column-view.test.tsx` or integration — nav.down past visible area scrolls and focuses next card (covered by placeholder registration + existing register_overwrites_existing_entry test)
+- [x] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{
-    builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
+    builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, SpatialState, UIState,
 };
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
@@ -379,6 +379,10 @@ pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
+    /// Spatial focus state: entry registry and focused key tracking.
+    /// Transient — not persisted. Entries are registered/unregistered by
+    /// React FocusScope mount/unmount via Tauri commands.
+    pub(crate) spatial_state: SpatialState,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
@@ -429,6 +433,7 @@ impl AppState {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state,
+            spatial_state: SpatialState::new(),
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),

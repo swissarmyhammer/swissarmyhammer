@@ -60,7 +60,7 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
 });
 
 // ---------------------------------------------------------------------------
-// Mock useSchema + useRestoreFocus — InspectorPanel uses these internally.
+// Mock useSchema — InspectorPanel uses it internally.
 // ---------------------------------------------------------------------------
 
 vi.mock("@/lib/schema-context", () => ({
@@ -73,13 +73,19 @@ vi.mock("@/lib/schema-context", () => ({
 }));
 
 vi.mock("@/lib/entity-focus-context", () => ({
-  useRestoreFocus: vi.fn(),
   useEntityFocus: () => ({
     focusedMoniker: null,
     setFocusedMoniker: vi.fn(),
+    registerClaim: vi.fn(),
+    unregisterClaim: vi.fn(),
   }),
   useIsFocused: () => false,
 }));
+
+vi.mock("ulid", () => {
+  let counter = 0;
+  return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
+});
 
 // ---------------------------------------------------------------------------
 // Mock RustEngineContainer hook — provides entity store.

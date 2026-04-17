@@ -1,19 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, renderHook, act } from "@testing-library/react";
-import { useState } from "react";
 import {
   EntityFocusProvider,
   useEntityFocus,
   useFocusedScope,
   useIsFocused,
-  useRestoreFocus,
-  type ClaimPredicate,
 } from "./entity-focus-context";
-import { FocusScope } from "@/components/focus-scope";
+import { FocusLayer } from "@/components/focus-layer";
 import { type CommandScope } from "./command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+  transformCallback: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({ label: "main" })),
@@ -21,6 +19,10 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+vi.mock("ulid", () => {
+  let counter = 0;
+  return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
+});
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
@@ -31,7 +33,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <EntityFocusProvider>{children}</EntityFocusProvider>
+  <EntityFocusProvider><FocusLayer name="test">{children}</FocusLayer></EntityFocusProvider>
 );
 
 describe("useEntityFocus", () => {
@@ -234,173 +236,59 @@ function FocusMonitor() {
 }
 
 // ---------------------------------------------------------------------------
-// broadcastNavCommand tests
+// broadcastNavCommand tests — verifies spatial_navigate delegation
 // ---------------------------------------------------------------------------
 
 describe("broadcastNavCommand", () => {
-  it("matching predicate claims focus", async () => {
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: (f) => f === "field:tags" },
-    ];
+  it("invokes spatial_navigate for a valid nav command", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
 
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope moniker="field:tags" commands={[]}>
-          <span>tags</span>
-        </FocusScope>
-        <FocusScope
-          moniker="panel:inspector"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>inspector</span>
-        </FocusScope>
-        <FocusMonitor />
-        <SetFocusButton moniker="field:tags" />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+
+    // Register a claim so the moniker-to-key mapping exists
+    act(() => {
+      result.current.registerClaim("key-A", "task:01", () => {});
+      result.current.setFocus("task:01");
+    });
     await flush();
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
 
-    // Set focus to field:tags
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
+    // Broadcast nav.right
+    act(() => {
+      result.current.broadcastNavCommand("nav.right");
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags");
 
-    // Broadcast nav.right — should claim focus for panel:inspector
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
+    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
+      key: "key-A",
+      direction: "Right",
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("panel:inspector");
   });
 
-  it("no matching predicate leaves focus unchanged", async () => {
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: (f) => f === "field:tags" },
-    ];
+  it("returns false for unknown command id", async () => {
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
 
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope
-          moniker="panel:inspector"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>inspector</span>
-        </FocusScope>
-        <FocusMonitor />
-        <SetFocusButton moniker="field:title" />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
+    act(() => {
+      result.current.registerClaim("key-A", "task:01", () => {});
+      result.current.setFocus("task:01");
+    });
     await flush();
 
-    // Set focus to field:title (not field:tags, so predicate won't match)
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
+    let dispatched = false;
+    act(() => {
+      dispatched = result.current.broadcastNavCommand("unknown.cmd");
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:title");
-
-    // Broadcast nav.right — predicate checks for field:tags, won't match
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:title");
+    expect(dispatched).toBe(false);
   });
 
-  it("first match wins (short-circuit)", async () => {
-    const secondPredWhen = vi.fn(() => true);
-    const claimA: ClaimPredicate[] = [
-      { command: "nav.right", when: () => true },
-    ];
-    const claimB: ClaimPredicate[] = [
-      { command: "nav.right", when: secondPredWhen },
-    ];
+  it("returns false when no moniker is focused", () => {
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
 
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope moniker="panel:a" commands={[]} claimWhen={claimA}>
-          <span>a</span>
-        </FocusScope>
-        <FocusScope moniker="panel:b" commands={[]} claimWhen={claimB}>
-          <span>b</span>
-        </FocusScope>
-        <FocusMonitor />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
+    let dispatched = false;
+    act(() => {
+      dispatched = result.current.broadcastNavCommand("nav.right");
     });
-
-    // First registered (panel:a) should win
-    expect(getByTestId("focus-monitor").textContent).toBe("panel:a");
-    // Second predicate should NOT have been called (short-circuit)
-    expect(secondPredWhen).not.toHaveBeenCalled();
-  });
-
-  it("unmounted scope's predicate is not evaluated", async () => {
-    const predWhen = vi.fn(() => true);
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: predWhen },
-    ];
-
-    function UnmountableScope({ show }: { show: boolean }) {
-      return show ? (
-        <FocusScope
-          moniker="panel:temp"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>temp</span>
-        </FocusScope>
-      ) : null;
-    }
-
-    function Harness() {
-      const [show, setShow] = useState(true);
-      return (
-        <>
-          <UnmountableScope show={show} />
-          <FocusMonitor />
-          <button data-testid="toggle" onClick={() => setShow(false)} />
-          <BroadcastButton commandId="nav.right" />
-        </>
-      );
-    }
-
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <Harness />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    // Unmount the scope
-    await act(async () => {
-      getByTestId("toggle").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    // Reset the spy to clear any calls from mount phase
-    predWhen.mockClear();
-
-    // Broadcast — predicate should NOT be evaluated since scope is unmounted
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    expect(predWhen).not.toHaveBeenCalled();
-    expect(getByTestId("focus-monitor").textContent).toBe("null");
+    expect(dispatched).toBe(false);
   });
 });
 
@@ -420,154 +308,6 @@ function BroadcastButton({ commandId }: { commandId: string }) {
     />
   );
 }
-
-describe("useRestoreFocus", () => {
-  /**
-   * Helper component that conditionally renders a child that calls useRestoreFocus.
-   * The parent manages focus state and controls when the child mounts/unmounts.
-   */
-  function RestoreFocusHarness({
-    initialMoniker,
-    scope,
-  }: {
-    initialMoniker: string | null;
-    scope?: CommandScope;
-  }) {
-    const [showChild, setShowChild] = useState(false);
-    const focus = useEntityFocus();
-
-    return (
-      <>
-        <button
-          data-testid="setup"
-          onClick={() => {
-            if (initialMoniker && scope) {
-              focus.registerScope(initialMoniker, scope);
-            }
-            if (initialMoniker) {
-              focus.setFocus(initialMoniker);
-            }
-          }}
-        />
-        <button data-testid="show" onClick={() => setShowChild(true)} />
-        <button data-testid="hide" onClick={() => setShowChild(false)} />
-        <button
-          data-testid="steal-focus"
-          onClick={() => focus.setFocus("task:inspected")}
-        />
-        <button
-          data-testid="unregister"
-          onClick={() => {
-            if (initialMoniker) focus.unregisterScope(initialMoniker);
-          }}
-        />
-        <span data-testid="focused">{focus.focusedMoniker ?? "null"}</span>
-        {showChild && <RestoreChild />}
-      </>
-    );
-  }
-
-  function RestoreChild() {
-    useRestoreFocus();
-    return <span data-testid="child">child</span>;
-  }
-
-  it("restores focus to saved moniker when scope still exists", () => {
-    const scope: CommandScope = {
-      commands: new Map(),
-      parent: null,
-      moniker: "task:abc",
-    };
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
-      </EntityFocusProvider>,
-    );
-
-    // 1. Set up focus
-    act(() => {
-      getByTestId("setup").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:abc");
-
-    // 2. Mount the restore hook — captures "task:abc"
-    act(() => {
-      getByTestId("show").click();
-    });
-    expect(getByTestId("child")).toBeTruthy();
-
-    // 3. Inspector steals focus
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:inspected");
-
-    // 4. Unmount — should restore to "task:abc"
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:abc");
-  });
-
-  it("clears focus when saved moniker no longer exists in registry", () => {
-    const scope: CommandScope = {
-      commands: new Map(),
-      parent: null,
-      moniker: "task:abc",
-    };
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
-      </EntityFocusProvider>,
-    );
-
-    act(() => {
-      getByTestId("setup").click();
-    });
-    act(() => {
-      getByTestId("show").click();
-    });
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-
-    // Simulate deletion — unregister the scope
-    act(() => {
-      getByTestId("unregister").click();
-    });
-
-    // Unmount — should clear to null since scope no longer exists
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("null");
-  });
-
-  it("clears focus when there was no previous focus", () => {
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker={null} />
-      </EntityFocusProvider>,
-    );
-
-    // Mount with no focus
-    act(() => {
-      getByTestId("show").click();
-    });
-
-    // Inspector steals focus
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:inspected");
-
-    // Unmount — should restore to null
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("null");
-  });
-});
 
 /* ---------- window moniker in scope chain ---------- */
 
@@ -615,5 +355,140 @@ describe("window moniker in scope chain", () => {
         args: { scope_chain: ["task:abc", "column:col1", "window:main"] },
       }),
     );
+  });
+});
+
+/* ---------- spatial focus claim registry ---------- */
+
+describe("spatial focus claim registry", () => {
+  it("claim registry calls previous callback with false and next with true on focus-changed event", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (_event: string, cb: (evt: { payload: unknown }) => void) => {
+        eventCallback = cb;
+        return Promise.resolve(() => {});
+      },
+    );
+
+    const cbA = vi.fn();
+    const cbB = vi.fn();
+
+    function Harness() {
+      const { registerClaim, unregisterClaim } = useEntityFocus();
+      return (
+        <>
+          <button
+            data-testid="register"
+            onClick={() => {
+              registerClaim("key-A", "task:01", cbA);
+              registerClaim("key-B", "task:02", cbB);
+            }}
+          />
+          <button
+            data-testid="unregister"
+            onClick={() => {
+              unregisterClaim("key-A");
+              unregisterClaim("key-B");
+            }}
+          />
+        </>
+      );
+    }
+
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <Harness />
+      </EntityFocusProvider>,
+    );
+    await flush();
+
+    // Register claims
+    await act(async () => {
+      getByTestId("register").click();
+    });
+
+    // Fire focus-changed: nothing → key-A
+    await act(async () => {
+      eventCallback!({ payload: { prev_key: null, next_key: "key-A" } });
+    });
+    expect(cbA).toHaveBeenCalledWith(true);
+    expect(cbB).not.toHaveBeenCalled();
+
+    cbA.mockClear();
+    cbB.mockClear();
+
+    // Fire focus-changed: key-A → key-B
+    await act(async () => {
+      eventCallback!({ payload: { prev_key: "key-A", next_key: "key-B" } });
+    });
+    expect(cbA).toHaveBeenCalledWith(false);
+    expect(cbB).toHaveBeenCalledWith(true);
+  });
+
+  it("unregistered key in focus-changed event is a no-op", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (_event: string, cb: (evt: { payload: unknown }) => void) => {
+        eventCallback = cb;
+        return Promise.resolve(() => {});
+      },
+    );
+
+    const cbA = vi.fn();
+
+    function Harness() {
+      const { registerClaim } = useEntityFocus();
+      return (
+        <button
+          data-testid="register"
+          onClick={() => registerClaim("key-A", "task:01", cbA)}
+        />
+      );
+    }
+
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <Harness />
+      </EntityFocusProvider>,
+    );
+    await flush();
+
+    await act(async () => {
+      getByTestId("register").click();
+    });
+
+    // Fire event referencing a nonexistent prev_key — should not throw
+    await act(async () => {
+      eventCallback!({
+        payload: { prev_key: "nonexistent", next_key: "key-A" },
+      });
+    });
+    expect(cbA).toHaveBeenCalledWith(true);
+  });
+
+  it("EntityFocusProvider unmount cleans up event listener", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const unsub = vi.fn();
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      Promise.resolve(unsub),
+    );
+
+    const { unmount } = render(
+      <EntityFocusProvider>
+        <div />
+      </EntityFocusProvider>,
+    );
+    await flush();
+
+    // listen should have been called for "focus-changed"
+    expect(listen).toHaveBeenCalledWith("focus-changed", expect.any(Function));
+
+    unmount();
+    await flush();
+
+    // The unsub function should have been called on unmount
+    expect(unsub).toHaveBeenCalled();
   });
 });

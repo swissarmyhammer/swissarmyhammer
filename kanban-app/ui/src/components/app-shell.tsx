@@ -7,6 +7,7 @@ import {
   type CommandDef,
 } from "@/lib/command-scope";
 import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
@@ -16,6 +17,39 @@ import {
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
+
+/** Route native menu commands through the command scope dispatch. */
+function useMenuCommandListener(
+  executeCommand: (id: string) => Promise<boolean>,
+) {
+  useEffect(() => {
+    const unlisten = listen<string>("menu-command", async (event) => {
+      const executed = await executeCommand(event.payload);
+      if (!executed) console.warn(`Menu command not found: ${event.payload}`);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [executeCommand]);
+}
+
+/** Route native context-menu commands through useDispatchCommand. */
+function useContextMenuCommandListener(
+  dispatchRef: React.RefObject<ReturnType<typeof useDispatchCommand>>,
+) {
+  useEffect(() => {
+    const unlisten = listen<{
+      cmd: string;
+      target?: string;
+      scope_chain?: string[];
+    }>("context-menu-command", async (event) => {
+      const { cmd, target, scope_chain } = event.payload;
+      if (!cmd) return;
+      await dispatchRef.current(cmd, { target, scopeChain: scope_chain });
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  // dispatchRef is stable.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -35,23 +69,18 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
 
-  /** Execute a command via useDispatchCommand (focused scope preferred). */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
-    // When a CM6 editor has focus, let it handle its own undo/redo
     if (
       (id === "app.undo" || id === "app.redo") &&
       document.activeElement?.closest(".cm-editor")
     ) {
       return false;
     }
-
     await dispatchRef.current(id);
     return true;
   }, []);
 
   useEffect(() => {
-    // Pass scope bindings so command `keys` from the focused scope (inspector,
-    // grid, board nav) are resolved through the same single key handler.
     const handler = createKeyHandler(mode, executeCommand, () =>
       extractScopeBindings(focusedScopeRef.current, mode),
     );
@@ -59,44 +88,8 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     return () => document.removeEventListener("keydown", handler);
   }, [mode, executeCommand]);
 
-  // Listen for menu-command events from the native menu and route them
-  // through the command scope so they behave identically to keybindings
-  // and palette invocations.
-  useEffect(() => {
-    const unlisten = listen<string>("menu-command", async (event) => {
-      const commandId = event.payload;
-      const executed = await executeCommand(commandId);
-      if (!executed) {
-        console.warn(`Menu command not found: ${commandId}`);
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [executeCommand]);
-
-  // Listen for context-menu-command events from native context menus.
-  // These carry the full ContextMenuItem payload (cmd, target, scope_chain)
-  // from the right-click point. Dispatched through useDispatchCommand so
-  // they get busy tracking, client-side resolution, and the same dispatch
-  // path as keybindings/palette/drag.
-  useEffect(() => {
-    const unlisten = listen<{
-      cmd: string;
-      target?: string;
-      scope_chain?: string[];
-    }>("context-menu-command", async (event) => {
-      const { cmd, target, scope_chain } = event.payload;
-      if (!cmd) return;
-      await dispatchRef.current(cmd, {
-        target,
-        scopeChain: scope_chain,
-      });
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
+  useMenuCommandListener(executeCommand);
+  useContextMenuCommandListener(dispatchRef);
 
   return null;
 }
@@ -220,8 +213,8 @@ const NAV_COMMAND_SPEC: ReadonlyArray<{
 
 /**
  * Build universal navigation CommandDefs that broadcast through
- * EntityFocusContext. Each FocusScope with a matching `claimWhen` predicate
- * can pull focus when these fire.
+ * EntityFocusContext. Each command delegates to `spatial_navigate` on the
+ * Rust side, which resolves focus targets from DOM rects at runtime.
  */
 function buildNavCommands(
   broadcastRef: React.MutableRefObject<NavBroadcaster>,
@@ -311,6 +304,7 @@ interface AppShellProps {
   onSwitchBoard?: (path: string) => void;
 }
 
+/** Top-level shell that wires global commands, keybindings, and the command palette. */
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
   const { broadcastNavCommand } = useEntityFocus();
@@ -336,15 +330,17 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   }, [dismiss]);
 
   return (
-    <CommandScopeProvider commands={globalCommands}>
-      <KeybindingHandler mode={keymapMode} />
-      {children}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={closePalette}
-        mode={paletteMode}
-        onSwitchBoard={onSwitchBoard}
-      />
-    </CommandScopeProvider>
+    <FocusLayer name="window">
+      <CommandScopeProvider commands={globalCommands}>
+        <KeybindingHandler mode={keymapMode} />
+        {children}
+        <CommandPalette
+          open={paletteOpen}
+          onClose={closePalette}
+          mode={paletteMode}
+          onSwitchBoard={onSwitchBoard}
+        />
+      </CommandScopeProvider>
+    </FocusLayer>
   );
 }

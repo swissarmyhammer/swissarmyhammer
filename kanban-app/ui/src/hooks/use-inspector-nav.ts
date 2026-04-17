@@ -11,8 +11,8 @@ export interface UseInspectorNavReturn {
 /**
  * Hook for managing inspector edit mode.
  *
- * Field navigation is handled by pull-based claimWhen predicates on each
- * field row's FocusScope. This hook only manages the normal/edit mode toggle.
+ * Field navigation is handled by Rust spatial nav on each field row's
+ * FocusScope. This hook only manages the normal/edit mode toggle.
  *
  * @returns Inspector mode state and control functions
  */

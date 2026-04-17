@@ -18,7 +18,7 @@ export interface UseGridOptions {
   /**
    * Externally-derived cursor position (from the focused moniker).
    * When provided, the grid does not maintain its own cursor state --
-   * navigation is pull-based via claimWhen.
+   * navigation is driven by Rust spatial nav.
    */
   cursor?: GridCursor;
 }
@@ -48,7 +48,7 @@ export interface UseGridReturn {
  *
  * Navigation is pull-based: callers pass the cursor position derived from
  * the focused moniker via options.cursor. This hook no longer drives
- * cursor movement -- that is handled by claimWhen predicates on each
+ * cursor movement -- that is handled by Rust spatial navigation on each
  * cell's FocusScope.
  *
  * When options.cursor is not provided, falls back to internal state
