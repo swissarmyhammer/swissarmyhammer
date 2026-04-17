@@ -1,15 +1,3 @@
-- id: task.add
-  name: New Task
-  scope: "entity:column"
-  undoable: true
-  keys:
-    cua: Mod+N
-    vim: a
-  params:
-    - name: column
-      from: scope_chain
-      entity_type: column
-
 - id: task.move
   name: Move Task
   scope: "entity:task"

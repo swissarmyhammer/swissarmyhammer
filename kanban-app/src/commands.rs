@@ -1252,7 +1252,12 @@ fn match_dynamic_prefix(
         if suffix.is_empty() {
             return Err(format!("Missing entity type in command: {:?}", cmd));
         }
-        Ok(Some(("entity.add", "entity_type", suffix.to_string(), false)))
+        Ok(Some((
+            "entity.add",
+            "entity_type",
+            suffix.to_string(),
+            false,
+        )))
     } else {
         Ok(None)
     }
@@ -1912,38 +1917,34 @@ async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: 
 /// This is the single source of truth for what commands are available.
 /// The frontend calls this with a scope chain and renders the result.
 /// No command logic in the UI — just render and dispatch.
-#[tauri::command]
-pub async fn list_commands_for_scope(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    scope_chain: Vec<String>,
+/// Build a `DynamicSources` for the current app state (views, boards,
+/// windows, perspectives).
+async fn build_dynamic_sources(
+    app: &AppHandle,
+    state: &AppState,
+    active_handle: Option<&crate::state::BoardHandle>,
+) -> swissarmyhammer_kanban::scope_commands::DynamicSources {
+    use swissarmyhammer_kanban::scope_commands::DynamicSources;
+    let views = gather_views(active_handle);
+    let boards = gather_boards(&state.ui_state, &state.boards).await;
+    let windows = gather_windows(app);
+    let view_kind = resolve_active_view_kind(active_handle, &state.ui_state);
+    let perspectives = gather_perspectives(active_handle, view_kind.as_deref()).await;
+    DynamicSources {
+        views,
+        boards,
+        windows,
+        perspectives,
+    }
+}
+
+/// Emit `info`-level telemetry about the resolved-command list so a
+/// "no entity.add" bug is diagnosable from logs alone.
+fn log_scope_inputs(
+    scope_chain: &[String],
     context_menu: Option<bool>,
-) -> Result<Value, String> {
-    let active_handle = state.active_handle().await;
-    let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
-
-    let registry = state.commands_registry.read().await;
-
-    let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::DynamicSources;
-        let views = gather_views(active_handle.as_deref());
-        let boards = gather_boards(&state.ui_state, &state.boards).await;
-        let windows = gather_windows(&app);
-        let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
-        let perspectives =
-            gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
-        DynamicSources {
-            views,
-            boards,
-            windows,
-            perspectives,
-        }
-    };
-
-    // Surface the gathered view count and entity_type presence so the
-    // "entity.add missing" class of bugs can be diagnosed from logs alone.
-    // This is the top-level instrumentation called out in section 1 of the
-    // `Fix "New" so it works uniformly on every grid` task.
+    dynamic: &swissarmyhammer_kanban::scope_commands::DynamicSources,
+) {
     let views_with_entity_type = dynamic
         .views
         .iter()
@@ -1959,6 +1960,41 @@ pub async fn list_commands_for_scope(
         perspectives_count = dynamic.perspectives.len(),
         "list_commands_for_scope"
     );
+}
+
+fn log_scope_result(result: &[swissarmyhammer_kanban::scope_commands::ResolvedCommand]) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
+    let mut by_group: HashMap<&str, usize> = HashMap::new();
+    for cmd in result {
+        *by_group.entry(cmd.group.as_str()).or_default() += 1;
+    }
+    let entity_add_ids: Vec<&str> = result
+        .iter()
+        .filter(|c| c.id.starts_with("entity.add:"))
+        .map(|c| c.id.as_str())
+        .collect();
+    tracing::info!(
+        total = result.len(),
+        by_group = ?by_group,
+        entity_add_ids = ?entity_add_ids,
+        "list_commands_for_scope result"
+    );
+}
+
+#[tauri::command]
+pub async fn list_commands_for_scope(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    scope_chain: Vec<String>,
+    context_menu: Option<bool>,
+) -> Result<Value, String> {
+    let active_handle = state.active_handle().await;
+    let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
+    let registry = state.commands_registry.read().await;
+    let dynamic = build_dynamic_sources(&app, &state, active_handle.as_deref()).await;
+    log_scope_inputs(&scope_chain, context_menu, &dynamic);
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope_chain,
@@ -1970,26 +2006,7 @@ pub async fn list_commands_for_scope(
         Some(&dynamic),
     );
 
-    // Break the emitted commands down by group so a "no entity.add" bug is
-    // immediately visible: the entity.* group is empty on the affected grid.
-    if tracing::enabled!(tracing::Level::INFO) {
-        let mut by_group: HashMap<&str, usize> = HashMap::new();
-        for cmd in &result {
-            *by_group.entry(cmd.group.as_str()).or_default() += 1;
-        }
-        let entity_add_ids: Vec<&str> = result
-            .iter()
-            .filter(|c| c.id.starts_with("entity.add:"))
-            .map(|c| c.id.as_str())
-            .collect();
-        tracing::info!(
-            total = result.len(),
-            by_group = ?by_group,
-            entity_add_ids = ?entity_add_ids,
-            "list_commands_for_scope result"
-        );
-    }
-
+    log_scope_result(&result);
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 

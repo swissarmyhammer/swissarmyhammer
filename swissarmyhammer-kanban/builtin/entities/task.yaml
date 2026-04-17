@@ -48,13 +48,6 @@ commands:
     scope: "entity:task"
     undoable: true
     context_menu: true
-  - id: task.add
-    name: New Task
-    scope: "entity:column"
-    undoable: true
-    keys:
-      cua: Mod+N
-      vim: a
   - id: task.move
     name: Move Task
     scope: "entity:task"

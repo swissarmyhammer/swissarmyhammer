@@ -207,6 +207,24 @@ impl TestEngine {
     ) -> swissarmyhammer_commands::Result<Value> {
         self.dispatch(cmd_id, scope, target, HashMap::new()).await
     }
+
+    /// Create a task via the unified `entity.add` command with
+    /// `entity_type: task` and an optional column override. This is the
+    /// single production creation path — tests that need a fixture task
+    /// must use this helper so any regression in the `entity.add` pipeline
+    /// is caught by setup, not by dispatch tests further down.
+    async fn add_task(
+        &self,
+        column: Option<&str>,
+        extra_args: HashMap<String, Value>,
+    ) -> swissarmyhammer_commands::Result<Value> {
+        let mut args = extra_args;
+        args.insert("entity_type".to_string(), json!("task"));
+        if let Some(c) = column {
+            args.insert("column".to_string(), json!(c));
+        }
+        self.dispatch("entity.add", &[], None, args).await
+    }
 }
 
 // ===========================================================================
@@ -218,9 +236,9 @@ async fn task_add_creates_task() {
     let engine = TestEngine::new().await;
 
     let result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
 
     // Should return a JSON object with a task id
     assert!(result.get("id").is_some(), "result should contain task id");
@@ -240,10 +258,7 @@ async fn task_move_to_column() {
     let engine = TestEngine::new().await;
 
     // Add a task in todo
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .unwrap();
+    let add_result = engine.add_task(Some("todo"), HashMap::new()).await.unwrap();
     let task_id = add_result["id"].as_str().unwrap();
 
     // Move to doing via args
@@ -344,10 +359,7 @@ async fn entity_update_field() {
     let engine = TestEngine::new().await;
 
     // Add a task
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .unwrap();
+    let add_result = engine.add_task(Some("todo"), HashMap::new()).await.unwrap();
     let task_id = add_result["id"].as_str().unwrap();
 
     // Update the title via entity.update_field
@@ -375,15 +387,24 @@ async fn entity_update_field() {
 // Availability tests
 // ===========================================================================
 
+/// The legacy `task.add` command is retired — creation flows through
+/// dynamic `entity.add:task`. This regression guard proves the registry
+/// no longer exposes `task.add` so a future refactor can't silently
+/// re-introduce the duplicate "New Task" palette item (and its slug-id
+/// collision on repeated creates) by re-registering the command.
 #[tokio::test]
-async fn task_add_unavailable_without_column() {
+async fn task_add_retired_registry_rejects_it() {
     let engine = TestEngine::new().await;
 
-    let result = engine.dispatch_simple("task.add", &[], None).await;
+    let result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await;
 
+    let err = result.expect_err("task.add must be rejected — use entity.add:task");
+    let msg = err.to_string();
     assert!(
-        result.is_err(),
-        "task.add should fail without column in scope"
+        msg.contains("unknown command: task.add"),
+        "expected `unknown command: task.add`, got: {msg}"
     );
 }
 
@@ -601,7 +622,7 @@ async fn full_session_add_move_update() {
 
     // 1. Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
         .expect("add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
@@ -666,9 +687,9 @@ async fn add_tasks(engine: &TestEngine, titles: &[&str]) -> Vec<String> {
         let mut args = HashMap::new();
         args.insert("title".into(), json!(title));
         let result = engine
-            .dispatch("task.add", &["column:todo"], None, args)
+            .add_task(Some("todo"), args)
             .await
-            .expect("task.add should succeed");
+            .expect("entity.add:task should succeed");
         let id = result["id"].as_str().unwrap().to_string();
 
         // Set distinct ordinals using Ordinal::after chain so tasks have a
@@ -973,9 +994,7 @@ async fn dispatch_entity_add_task_creates_task_in_lowest_order_column() {
         .expect("entity.add should succeed after registry entry exists");
 
     // Returned payload is the serialized entity
-    let task_id = result["id"]
-        .as_str()
-        .expect("entity.add must return an id");
+    let task_id = result["id"].as_str().expect("entity.add must return an id");
     assert_eq!(
         result["position_column"], "todo",
         "task must land in the lowest-order column when no override is given"
@@ -1264,9 +1283,9 @@ async fn dispatch_entity_add_unified_path_for_task_tag_project() {
         ("tag", &tag_result),
         ("project", &project_result),
     ] {
-        let id = result["id"].as_str().unwrap_or_else(|| {
-            panic!("entity.add:{entity_type} must return an id in result")
-        });
+        let id = result["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("entity.add:{entity_type} must return an id in result"));
         engine
             .kanban
             .read_entity_generic(entity_type, id)
@@ -1409,9 +1428,9 @@ async fn task_delete_removes_task() {
 
     // Add a task
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Verify the task exists
@@ -1454,9 +1473,9 @@ async fn drag_complete_same_board_moves_task() {
 
     // Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Start a drag session — board path derived from scope chain's store: moniker
@@ -1528,9 +1547,9 @@ async fn drag_complete_cross_board_returns_transfer_params() {
 
     // Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Start a drag session — source board path from scope chain store: moniker
@@ -1619,9 +1638,9 @@ async fn entity_copy_copies_task_to_clipboard() {
     let mut args = HashMap::new();
     args.insert("title".to_string(), json!("Clipboard test task"));
     let add_result = engine
-        .dispatch("task.add", &["column:todo"], None, args)
+        .add_task(Some("todo"), args)
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Dispatch entity.copy with task in scope
@@ -1979,10 +1998,7 @@ async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
     let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
     let fields = engine.kanban.entity_context().await.unwrap();
     let views_with_kind = load_builtin_views_with_kind();
-    let views: Vec<ViewInfo> = views_with_kind
-        .iter()
-        .map(|(v, _)| v.clone())
-        .collect();
+    let views: Vec<ViewInfo> = views_with_kind.iter().map(|(v, _)| v.clone()).collect();
 
     // Filter to kind: grid views that declare an entity_type. The task's
     // requirement is explicitly scoped to grids — the board view is
@@ -1991,18 +2007,17 @@ async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
     let grids: Vec<&ViewInfo> = views_with_kind
         .iter()
         .filter(|(_, kind)| *kind == ViewKind::Grid)
-        .filter(|(v, _)| {
-            v.entity_type
-                .as_deref()
-                .is_some_and(|s| !s.is_empty())
-        })
+        .filter(|(v, _)| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
         .map(|(v, _)| v)
         .collect();
     assert!(
         !grids.is_empty(),
         "expected at least one builtin grid view with entity_type; got none. \
          Loaded views: {:?}",
-        views.iter().map(|v| (&v.name, &v.entity_type)).collect::<Vec<_>>()
+        views
+            .iter()
+            .map(|v| (&v.name, &v.entity_type))
+            .collect::<Vec<_>>()
     );
 
     for view in grids {
@@ -2072,6 +2087,9 @@ fn load_builtin_view_infos_projects_entity_type() {
         with_type.len() >= 3,
         "expected at least 3 builtin views to declare entity_type; got {}: {:?}",
         with_type.len(),
-        with_type.iter().map(|v| (&v.name, &v.entity_type)).collect::<Vec<_>>()
+        with_type
+            .iter()
+            .map(|v| (&v.name, &v.entity_type))
+            .collect::<Vec<_>>()
     );
 }

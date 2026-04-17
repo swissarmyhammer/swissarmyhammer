@@ -369,13 +369,8 @@ mod tests {
             "view_id".to_string(),
             serde_json::json!("01JMVIEW0000000000TGGRD0"),
         );
-        let ctx = CommandContext::new(
-            "ui.view.set",
-            vec!["window:main".to_string()],
-            None,
-            args,
-        )
-        .with_ui_state(Arc::clone(&ui));
+        let ctx = CommandContext::new("ui.view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
 
         SetActiveViewCmd.execute(&ctx).await.unwrap();
 
@@ -397,23 +392,15 @@ mod tests {
     #[tokio::test]
     async fn set_active_view_leaves_scope_chain_alone_when_no_view_moniker() {
         let ui = Arc::new(UIState::new());
-        ui.set_scope_chain(vec![
-            "window:main".to_string(),
-            "engine".to_string(),
-        ]);
+        ui.set_scope_chain(vec!["window:main".to_string(), "engine".to_string()]);
 
         let mut args = HashMap::new();
         args.insert(
             "view_id".to_string(),
             serde_json::json!("01JMVIEW0000000000TGGRD0"),
         );
-        let ctx = CommandContext::new(
-            "ui.view.set",
-            vec!["window:main".to_string()],
-            None,
-            args,
-        )
-        .with_ui_state(Arc::clone(&ui));
+        let ctx = CommandContext::new("ui.view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
 
         SetActiveViewCmd.execute(&ctx).await.unwrap();
 

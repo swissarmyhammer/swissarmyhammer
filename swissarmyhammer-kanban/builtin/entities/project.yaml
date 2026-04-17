@@ -20,9 +20,6 @@ commands:
       - name: id
         from: scope_chain
         entity_type: project
-  - id: project.add
-    name: New Project
-    undoable: true
 fields:
   - name
   - description

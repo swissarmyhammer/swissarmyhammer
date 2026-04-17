@@ -1792,8 +1792,7 @@ mod tests {
 
         let ordinal = Ordinal::DEFAULT_STR;
         let ops =
-            parse_input(json!({"op": "add task", "title": "Ordered", "ordinal": ordinal}))
-                .unwrap();
+            parse_input(json!({"op": "add task", "title": "Ordered", "ordinal": ordinal})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Ordered");
         assert_eq!(result["position"]["ordinal"], ordinal);

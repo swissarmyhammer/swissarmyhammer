@@ -41,7 +41,7 @@ where
 type CmdMap = HashMap<String, Arc<dyn Command>>;
 
 fn register_task(map: &mut CmdMap) {
-    map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
+    // task.add removed: unified into dynamic `entity.add:task` in scope_commands.
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert(
@@ -52,8 +52,14 @@ fn register_task(map: &mut CmdMap) {
 }
 
 fn register_clipboard(map: &mut CmdMap) {
-    map.insert("entity.copy".into(), Arc::new(clipboard_commands::CopyTaskCmd));
-    map.insert("entity.cut".into(), Arc::new(clipboard_commands::CutTaskCmd));
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyTaskCmd),
+    );
+    map.insert(
+        "entity.cut".into(),
+        Arc::new(clipboard_commands::CutTaskCmd),
+    );
     map.insert(
         "entity.paste".into(),
         Arc::new(clipboard_commands::PasteTaskCmd),
@@ -101,10 +107,7 @@ fn register_column_and_project(map: &mut CmdMap) {
         "column.reorder".into(),
         Arc::new(column_commands::ColumnReorderCmd),
     );
-    map.insert(
-        "project.add".into(),
-        Arc::new(project_commands::AddProjectCmd),
-    );
+    // project.add removed: unified into dynamic `entity.add:project`.
     map.insert(
         "project.delete".into(),
         Arc::new(project_commands::DeleteProjectCmd),
@@ -129,7 +132,10 @@ fn register_ui(map: &mut CmdMap) {
         "ui.palette.close".into(),
         Arc::new(ui_commands::PaletteCloseCmd),
     );
-    map.insert("ui.view.set".into(), Arc::new(ui_commands::SetActiveViewCmd));
+    map.insert(
+        "ui.view.set".into(),
+        Arc::new(ui_commands::SetActiveViewCmd),
+    );
     map.insert(
         "ui.perspective.set".into(),
         Arc::new(ui_commands::SetActivePerspectiveCmd),
@@ -161,7 +167,10 @@ fn register_file(map: &mut CmdMap) {
         Arc::new(file_commands::CloseBoardCmd),
     );
     map.insert("file.newBoard".into(), Arc::new(file_commands::NewBoardCmd));
-    map.insert("file.openBoard".into(), Arc::new(file_commands::OpenBoardCmd));
+    map.insert(
+        "file.openBoard".into(),
+        Arc::new(file_commands::OpenBoardCmd),
+    );
     map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
 }
 
@@ -312,37 +321,49 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task (add, move, untag, doThisNext, delete) + 3 clipboard
-        // + 5 entity (add, update_field, delete, archive, unarchive)
+        // 4 task (move, untag, doThisNext, delete) — task.add retired in
+        // favour of dynamic `entity.add:task`.
+        // + 3 clipboard + 5 entity (add, update_field, delete, archive, unarchive)
         // + 1 tag + 1 column + 9 UI (+ startRename)
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
         // + 3 attachment (open, reveal, delete)
-        // + 2 project (add, delete) + 1 ui.mode.set = 65
-        // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 65);
+        // + 1 project (delete) — project.add retired in favour of dynamic
+        // `entity.add:project`.
+        // + 1 ui.mode.set = 63
+        assert_eq!(cmds.len(), 63);
     }
 
     // =========================================================================
     // Availability tests — no disk I/O needed
     // =========================================================================
 
+    /// Task creation is now the dynamic `entity.add:task` emitted from the
+    /// active view scope, not a discrete `task.add` command. The registry
+    /// must NOT contain `task.add` — if anything re-introduces it, palette
+    /// duplication (and the slug-id collision that made legacy creates
+    /// silently fail after the first attempt) returns.
     #[test]
-    fn add_task_available_with_column_in_scope() {
+    fn task_add_not_registered_uses_entity_add_instead() {
         let cmds = register_commands();
-        let cmd = cmds.get("task.add").unwrap();
-        let ctx = ctx_scope(&["column:todo", "board:board"]);
-        assert!(cmd.available(&ctx));
+        assert!(
+            !cmds.contains_key("task.add"),
+            "task.add must not be re-registered — use entity.add:task via emit_entity_add"
+        );
     }
 
+    /// Same invariant for projects — legacy `project.add` generated a slug
+    /// id from the name so a second "New project" collided with the first
+    /// and silently dropped. The unified `entity.add:project` uses a ULID.
     #[test]
-    fn add_task_not_available_without_column() {
+    fn project_add_not_registered_uses_entity_add_instead() {
         let cmds = register_commands();
-        let cmd = cmds.get("task.add").unwrap();
-        let ctx = ctx_scope(&["board:board"]);
-        assert!(!cmd.available(&ctx));
+        assert!(
+            !cmds.contains_key("project.add"),
+            "project.add must not be re-registered — use entity.add:project via emit_entity_add"
+        );
     }
 
     #[test]
