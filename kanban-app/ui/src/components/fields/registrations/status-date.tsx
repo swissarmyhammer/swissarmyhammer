@@ -17,7 +17,11 @@ import {
   registerDisplay,
   type FieldDisplayProps,
 } from "@/components/fields/field";
-import { StatusDateDisplay } from "@/components/fields/displays/status-date-display";
+import {
+  StatusDateDisplay,
+  statusDateIconOverride,
+  statusDateTooltipOverride,
+} from "@/components/fields/displays/status-date-display";
 import { isStatusDateEmpty } from "@/components/fields/displays/status-date-empty";
 
 function StatusDateDisplayAdapter({
@@ -38,4 +42,6 @@ function StatusDateDisplayAdapter({
 
 registerDisplay("status-date", StatusDateDisplayAdapter, {
   isEmpty: isStatusDateEmpty,
+  iconOverride: statusDateIconOverride,
+  tooltipOverride: statusDateTooltipOverride,
 });

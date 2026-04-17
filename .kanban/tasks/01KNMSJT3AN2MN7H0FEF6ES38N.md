@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a480
+position_column: done
+position_ordinal: ffffffffffffffffffffffdc80
 title: Add `log` and `turn_pre/` to AvpConfig::GITIGNORE_CONTENT
 ---
 ## What

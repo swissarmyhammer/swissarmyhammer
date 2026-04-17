@@ -263,7 +263,9 @@ fn read_drop_target_args(
 /// Execute the same-board drag path: perform the `task.move` directly via
 /// the `KanbanContext` extension and return the `DragComplete` payload.
 ///
-/// Mirrors the logic in `dispatch_command_internal`'s same-board path.
+/// `before_id` / `after_id` placement is delegated to `MoveTask::execute`
+/// (the canonical ordinal computation path). Only `drop_index` is resolved
+/// locally because `MoveTask` does not have a `drop_index` field.
 async fn complete_same_board(
     ctx: &CommandContext,
     params: DragCompleteParams,
@@ -276,16 +278,11 @@ async fn complete_same_board(
     );
 
     // Ordinal resolution: before_id/after_id > drop_index > append at end
-    if params.before_id.is_some() || params.after_id.is_some() {
-        let ordinal = resolve_ordinal_from_neighbors(
-            &kanban,
-            &params.session.task_id,
-            &params.target_column,
-            params.before_id.as_deref(),
-            params.after_id.as_deref(),
-        )
-        .await?;
-        op = op.with_ordinal(ordinal.as_str());
+    // Delegate before/after placement to MoveTask::execute (single canonical path).
+    if let Some(ref before_id) = params.before_id {
+        op = op.with_before(before_id.as_str());
+    } else if let Some(ref after_id) = params.after_id {
+        op = op.with_after(after_id.as_str());
     } else if let Some(idx) = params.drop_index {
         let ordinal = resolve_ordinal_from_drop_index(
             &kanban,
@@ -308,152 +305,6 @@ async fn complete_same_board(
             "move_result": move_result,
         }
     }))
-}
-
-/// Compute the ordinal for an insert anchored on a neighbouring task id.
-///
-/// Loads the target column's tasks (excluding the moving task), sorts them
-/// by existing ordinal, then picks a fresh ordinal using
-/// `compute_ordinal_for_neighbors`. `before_id` wins over `after_id` when
-/// both are set; unknown reference ids fall through to "append at end".
-async fn resolve_ordinal_from_neighbors(
-    kanban: &crate::context::KanbanContext,
-    moving_task_id: &str,
-    target_column: &str,
-    before_id: Option<&str>,
-    after_id: Option<&str>,
-) -> swissarmyhammer_commands::Result<crate::types::Ordinal> {
-    let ectx = kanban
-        .entity_context()
-        .await
-        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-    let all_tasks = ectx
-        .list("task")
-        .await
-        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-    let col_tasks = sort_column_tasks(all_tasks, target_column, moving_task_id);
-
-    let ordinal = if let Some(ref_id) = before_id {
-        ordinal_before(&col_tasks, ref_id)
-    } else if let Some(ref_id) = after_id {
-        ordinal_after(&col_tasks, ref_id)
-    } else {
-        crate::task_helpers::compute_ordinal_for_neighbors(None, None)
-    };
-    Ok(ordinal)
-}
-
-/// Filter `all_tasks` to tasks in `target_column` (excluding
-/// `moving_task_id`) and sort them ascending by `position_ordinal`.
-fn sort_column_tasks(
-    all_tasks: Vec<swissarmyhammer_entity::Entity>,
-    target_column: &str,
-    moving_task_id: &str,
-) -> Vec<swissarmyhammer_entity::Entity> {
-    use crate::types::Ordinal;
-    let mut col_tasks: Vec<_> = all_tasks
-        .into_iter()
-        .filter(|t| {
-            t.get_str("position_column") == Some(target_column) && t.id.as_str() != moving_task_id
-        })
-        .collect();
-    col_tasks.sort_by(|a, b| {
-        let oa = a
-            .get_str("position_ordinal")
-            .unwrap_or(Ordinal::DEFAULT_STR);
-        let ob = b
-            .get_str("position_ordinal")
-            .unwrap_or(Ordinal::DEFAULT_STR);
-        oa.cmp(ob)
-    });
-    col_tasks
-}
-
-/// Compute an ordinal slotting the moving task immediately before
-/// `ref_id`. When `ref_id` is unknown, appends at the end of the column.
-fn ordinal_before(
-    col_tasks: &[swissarmyhammer_entity::Entity],
-    ref_id: &str,
-) -> crate::types::Ordinal {
-    use crate::types::Ordinal;
-    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-    match ref_idx {
-        Some(0) => {
-            let ref_ord = Ordinal::from_string(
-                col_tasks[0]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
-        }
-        Some(idx) => {
-            let pred_ord = Ordinal::from_string(
-                col_tasks[idx - 1]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            let ref_ord = Ordinal::from_string(
-                col_tasks[idx]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            crate::task_helpers::compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
-        }
-        None => append_ordinal(col_tasks),
-    }
-}
-
-/// Compute an ordinal slotting the moving task immediately after
-/// `ref_id`. When `ref_id` is unknown, appends at the end of the column.
-fn ordinal_after(
-    col_tasks: &[swissarmyhammer_entity::Entity],
-    ref_id: &str,
-) -> crate::types::Ordinal {
-    use crate::types::Ordinal;
-    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-    match ref_idx {
-        Some(idx) if idx == col_tasks.len() - 1 => {
-            let ref_ord = Ordinal::from_string(
-                col_tasks[idx]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
-        }
-        Some(idx) => {
-            let ref_ord = Ordinal::from_string(
-                col_tasks[idx]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            let succ_ord = Ordinal::from_string(
-                col_tasks[idx + 1]
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
-            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
-        }
-        None => append_ordinal(col_tasks),
-    }
-}
-
-/// Compute an ordinal that appends to the end of `col_tasks`.
-fn append_ordinal(col_tasks: &[swissarmyhammer_entity::Entity]) -> crate::types::Ordinal {
-    use crate::types::Ordinal;
-    crate::task_helpers::compute_ordinal_for_neighbors(
-        col_tasks
-            .last()
-            .map(|t| {
-                Ordinal::from_string(
-                    t.get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR),
-                )
-            })
-            .as_ref(),
-        None,
-    )
 }
 
 /// Compute the ordinal for an insert at `drop_index` within the target
@@ -1306,5 +1157,117 @@ mod tests {
             .expect("session should be set after execute");
         assert_eq!(session.task_id, "task-1");
         assert_eq!(session.source_board_path, "/boards/a");
+    }
+
+    /// Drag-complete with `beforeId = first_task` produces the same ordinal
+    /// as `DoThisNextCmd` on an identical board, since both now delegate to
+    /// `MoveTask::execute`'s `before_id` logic.
+    #[tokio::test]
+    async fn drag_before_first_matches_do_this_next() {
+        use crate::board::InitBoard;
+        use crate::task::AddTask;
+
+        // Board A: DoThisNextCmd path
+        let temp_a = tempfile::TempDir::new().unwrap();
+        let kanban_dir_a = temp_a.path().join(".kanban");
+        let kctx_a = crate::context::KanbanContext::new(kanban_dir_a.clone());
+        InitBoard::new("Test")
+            .execute(&kctx_a)
+            .await
+            .into_result()
+            .unwrap();
+
+        let mut anchor_a = AddTask::new("Anchor");
+        anchor_a.column = Some("todo".into());
+        anchor_a.execute(&kctx_a).await.into_result().unwrap();
+
+        let mut target_a = AddTask::new("Target");
+        target_a.column = Some("doing".into());
+        let target_a_result = target_a.execute(&kctx_a).await.into_result().unwrap();
+        let target_a_id = target_a_result["id"].as_str().unwrap().to_string();
+
+        // Execute DoThisNextCmd via the Command trait
+        let kanban_a = Arc::new(kctx_a);
+        let dtn_ctx = {
+            let mut ctx = CommandContext::new(
+                "task.do-this-next",
+                vec![format!("task:{target_a_id}")],
+                None,
+                HashMap::new(),
+            );
+            ctx.set_extension(Arc::clone(&kanban_a));
+            ctx
+        };
+        let dtn_result = super::super::task_commands::DoThisNextCmd
+            .execute(&dtn_ctx)
+            .await
+            .unwrap();
+        let dtn_ordinal = dtn_result["position"]["ordinal"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Board B: DragCompleteCmd with beforeId path
+        let temp_b = tempfile::TempDir::new().unwrap();
+        let kanban_dir_b = temp_b.path().join(".kanban");
+        let kctx_b = crate::context::KanbanContext::new(kanban_dir_b.clone());
+        InitBoard::new("Test")
+            .execute(&kctx_b)
+            .await
+            .into_result()
+            .unwrap();
+
+        let mut anchor_b = AddTask::new("Anchor");
+        anchor_b.column = Some("todo".into());
+        anchor_b.execute(&kctx_b).await.into_result().unwrap();
+        let anchor_b_id = {
+            let tasks = kctx_b.list_entities_generic("task").await.unwrap();
+            tasks
+                .iter()
+                .find(|t| t.get_str("position_column") == Some("todo"))
+                .unwrap()
+                .id
+                .as_str()
+                .to_string()
+        };
+
+        let mut target_b = AddTask::new("Target");
+        target_b.column = Some("doing".into());
+        let target_b_result = target_b.execute(&kctx_b).await.into_result().unwrap();
+        let target_b_id = target_b_result["id"].as_str().unwrap().to_string();
+
+        let board_path_b = kanban_dir_b.display().to_string();
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "parity-s1".into(),
+            source_board_path: board_path_b.clone(),
+            source_window_label: "main".into(),
+            task_id: target_b_id.clone(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path_b));
+        args.insert("targetColumn".into(), json!("todo"));
+        args.insert("beforeId".into(), json!(anchor_b_id));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui.clone());
+        cmd_ctx.set_extension(Arc::new(kctx_b));
+
+        let drag_result = DragCompleteCmd.execute(&cmd_ctx).await.unwrap();
+        let dc = drag_result.get("DragComplete").unwrap();
+        let drag_ordinal = dc["move_result"]["position"]["ordinal"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Both paths must produce the same ordinal
+        assert_eq!(
+            dtn_ordinal, drag_ordinal,
+            "DoThisNextCmd ordinal {dtn_ordinal:?} must match drag-before-first ordinal {drag_ordinal:?}"
+        );
     }
 }

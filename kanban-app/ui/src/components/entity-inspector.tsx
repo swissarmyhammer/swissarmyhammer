@@ -5,7 +5,12 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { resolveEditor } from "@/components/fields/editors";
-import { Field, getDisplayIsEmpty } from "@/components/fields/field";
+import {
+  Field,
+  getDisplayIsEmpty,
+  getDisplayIconOverride,
+  getDisplayTooltipOverride,
+} from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import {
   useInspectorNav,
@@ -372,8 +377,25 @@ function FieldRow({
   // Inspector shows a HelpCircle fallback for icon names that don't resolve
   // to a known lucide component (legacy behavior). The card does not — see
   // fields/field-icon.ts for the shared null-returning utility.
-  const Icon = field.icon ? (fieldIcon(field) ?? HelpCircle) : null;
-  const tip = field.description || fieldLabel(field);
+  //
+  // When the display registers an iconOverride, call it with the current value
+  // to get a dynamic, value-dependent icon. Falls back to the static YAML icon.
+  const staticIcon = field.icon ? (fieldIcon(field) ?? HelpCircle) : null;
+  const overrideFn = getDisplayIconOverride(field.display ?? "");
+  const overrideResult = overrideFn
+    ? overrideFn(entity.fields[field.name])
+    : null;
+  const Icon = overrideResult ?? staticIcon;
+
+  // When the display registers a tooltipOverride, call it with the current
+  // value to get a dynamic, value-dependent tooltip. Falls back to the static
+  // YAML description or the humanised field name.
+  const staticTip = field.description || fieldLabel(field);
+  const tooltipOverrideFn = getDisplayTooltipOverride(field.display ?? "");
+  const overrideTip = tooltipOverrideFn
+    ? tooltipOverrideFn(entity.fields[field.name])
+    : null;
+  const tip = overrideTip ?? staticTip;
   const content = (
     <FieldContent field={field} entity={entity} editState={editState} />
   );
@@ -459,7 +481,7 @@ function FieldIconTooltip({ Icon, tip }: { Icon: LucideIcon; tip: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="mt-0.5 shrink-0 text-muted-foreground">
+        <span className="h-5 inline-flex items-center shrink-0 text-muted-foreground">
           <Icon size={14} />
         </span>
       </TooltipTrigger>

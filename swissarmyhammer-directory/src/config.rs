@@ -112,6 +112,7 @@ impl DirectoryConfig for AvpConfig {
 
 # Log files
 *.log
+log
 
 # Turn state (ephemeral, per-session)
 turn_state/
@@ -218,7 +219,12 @@ mod tests {
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("*.log"));
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("turn_state/"));
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("turn_diffs/"));
+        assert!(AvpConfig::GITIGNORE_CONTENT.contains("turn_pre/"));
         assert!(!AvpConfig::GITIGNORE_CONTENT.contains("turn_state.yaml"));
+
+        // `log` must match as a standalone token (bare filename), not merely as a
+        // substring of `*.log`. Check for the line anchored by a newline on each side.
+        assert!(AvpConfig::GITIGNORE_CONTENT.contains("\nlog\n"));
         assert!(AvpConfig::init_subdirs().is_empty());
     }
 
