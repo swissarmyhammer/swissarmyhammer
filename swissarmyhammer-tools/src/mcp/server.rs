@@ -326,54 +326,7 @@ impl McpServer {
 
         // Start LSP supervisor — it spawns rust-analyzer and does the handshake.
         // After handshake, we grab the shared client Arc for the indexing worker.
-        let lsp_root = workspace_root.clone();
-        let lsp_handle = tokio::spawn(async move {
-            let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(lsp_root);
-            let results = supervisor.start().await;
-            let ok_count = results.iter().filter(|r| r.is_ok()).count();
-            let err_count = results.iter().filter(|r| r.is_err()).count();
-            tracing::info!(
-                "code-context: LSP supervisor started — {} servers ok, {} failed",
-                ok_count,
-                err_count
-            );
-            for r in &results {
-                if let Err(e) = r {
-                    tracing::warn!("code-context: LSP start error: {}", e);
-                }
-            }
-
-            // Grab shared client handles from ALL running daemons,
-            // not just rust-analyzer. Each (command_name, client) pair
-            // will get its own LSP indexing worker.
-            let clients: Vec<(String, swissarmyhammer_code_context::SharedLspClient)> = supervisor
-                .daemon_names()
-                .into_iter()
-                .filter_map(|name| {
-                    let daemon = supervisor.get_daemon(&name)?;
-                    if matches!(
-                        daemon.state(),
-                        swissarmyhammer_lsp::LspDaemonState::Running { .. }
-                    ) {
-                        Some((name, daemon.shared_client()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            tracing::info!(
-                "code-context: {} LSP clients available for indexing: {:?}",
-                clients.len(),
-                clients.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
-            );
-
-            // Store supervisor for status queries and periodic health checks
-            use super::tools::code_context::LSP_SUPERVISOR;
-            let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
-
-            clients
-        });
+        let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
 
         // Open the workspace — may become leader or follower depending on election.
         use swissarmyhammer_code_context::CodeContextWorkspace;
@@ -411,95 +364,87 @@ impl McpServer {
         }
 
         // Re-election loop: followers poll every 5s trying to become leader.
-        // Once promoted (or if already leader), exits the loop permanently.
-        //
-        // NOTE: This is a one-shot promotion — once we become leader, the loop
-        // exits and never re-runs. If leadership is lost after promotion (e.g.
-        // the LeaderGuard is dropped), there is no automatic recovery. This is
-        // acceptable today because the guard is held for the process lifetime
-        // via the Arc below, but a future improvement could keep the loop alive
-        // to handle unexpected demotion.
-        //
-        // The Arc keeps the workspace (and its LeaderGuard) alive for the
-        // lifetime of this process via the LSP task below.
-        let reelection_ws = Arc::clone(&ws);
-        let reelection_root = workspace_root.clone();
+        Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
+
+        // LSP health check loop (runs independently of leader/follower status).
+        Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
+    }
+
+    /// Spawn the LSP supervisor task. Starts every configured LSP daemon,
+    /// installs the supervisor into `LSP_SUPERVISOR`, and returns the list of
+    /// successfully-running `(server_name, shared_client)` pairs via the
+    /// task's join handle.
+    fn spawn_lsp_supervisor(
+        workspace_root: std::path::PathBuf,
+    ) -> tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspClient)>> {
+        tokio::spawn(async move {
+            let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root);
+            let results = supervisor.start().await;
+            let ok_count = results.iter().filter(|r| r.is_ok()).count();
+            let err_count = results.iter().filter(|r| r.is_err()).count();
+            tracing::info!(
+                "code-context: LSP supervisor started — {} servers ok, {} failed",
+                ok_count,
+                err_count
+            );
+            for r in &results {
+                if let Err(e) = r {
+                    tracing::warn!("code-context: LSP start error: {}", e);
+                }
+            }
+
+            let clients = collect_running_lsp_clients(&supervisor);
+            tracing::info!(
+                "code-context: {} LSP clients available for indexing: {:?}",
+                clients.len(),
+                clients.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+            );
+
+            use super::tools::code_context::LSP_SUPERVISOR;
+            let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
+
+            clients
+        })
+    }
+
+    /// Followers poll every 5s trying to become leader. Once promoted (or if
+    /// already leader), the loop exits permanently.
+    ///
+    /// One-shot promotion: if leadership is lost after promotion there is no
+    /// automatic recovery, but the LeaderGuard is held for the process lifetime
+    /// via the Arc kept by `spawn_lsp_health_loop`.
+    fn spawn_reelection_loop(
+        ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+        workspace_root: std::path::PathBuf,
+    ) {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-                let promoted = {
-                    let mut ws_lock = reelection_ws.lock().expect("workspace mutex poisoned");
-                    if ws_lock.is_leader() {
-                        break;
-                    }
-                    ws_lock.try_promote()
-                };
-
-                match promoted {
-                    Ok(Some(shared_db)) => {
-                        tracing::info!(
-                            "code-context: promoted to leader for {}, starting indexing workers",
-                            reelection_root.display()
-                        );
-                        Self::start_indexing_workers_after_promotion(
-                            reelection_root.clone(),
-                            shared_db,
-                        );
-                        break;
-                    }
-                    Ok(None) => {
-                        // Lock still held by another process — try again next cycle
-                    }
-                    Err(e) => {
-                        tracing::warn!("code-context: re-election error: {}", e);
-                    }
+                let promoted = try_promote_workspace(&ws);
+                if handle_promotion_result(promoted, &workspace_root) {
+                    break;
                 }
             }
         });
+    }
 
-        // LSP health check loop (runs independently of leader/follower status)
+    /// Waits for the LSP supervisor to finish, starts LSP indexing workers if
+    /// we're the leader, then runs the 60s LSP health-check loop forever.
+    fn spawn_lsp_health_loop(
+        lsp_handle: tokio::task::JoinHandle<
+            Vec<(String, swissarmyhammer_code_context::SharedLspClient)>,
+        >,
+        ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+        workspace_root: std::path::PathBuf,
+    ) {
         tokio::spawn(async move {
-            // Wait for LSP supervisor to finish starting
-            match lsp_handle.await {
-                Ok(clients) if !clients.is_empty() => {
-                    // If we're already leader, start LSP workers now
-                    let ws_lock = ws.lock().expect("workspace mutex poisoned");
-                    if let Some(shared_db) = ws_lock.shared_db() {
-                        use swissarmyhammer_code_context::{
-                            new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
-                        };
-                        for (server_name, shared_client) in &clients {
-                            let worker_db = std::sync::Arc::clone(&shared_db);
-                            spawn_lsp_indexing_worker(
-                                workspace_root.clone(),
-                                worker_db,
-                                std::sync::Arc::clone(shared_client),
-                                LspWorkerConfig::default(),
-                                server_name.clone(),
-                                new_shutdown_flag(),
-                            );
-                            tracing::info!(
-                                "code-context: LSP indexing worker started for {} (server: {})",
-                                workspace_root.display(),
-                                server_name,
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
-                }
+            let clients = lsp_handle.await.unwrap_or_default();
+            if clients.is_empty() {
+                tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
+            } else {
+                start_lsp_workers_if_leader(&ws, &workspace_root, &clients, "");
             }
-
-            // Periodic health check
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                use super::tools::code_context::LSP_SUPERVISOR;
-                if let Some(sup) = LSP_SUPERVISOR.get() {
-                    sup.lock().await.health_check_all().await;
-                }
-            }
+            run_lsp_health_check_loop().await;
         });
     }
 
@@ -562,72 +507,13 @@ impl McpServer {
         );
 
         // LSP workers: wait for the supervisor to become available, then start them.
-        // After promotion, the OnceCell may not be set yet — poll briefly.
         let lsp_db = std::sync::Arc::clone(&shared_db);
         tokio::spawn(async move {
-            use super::tools::code_context::LSP_SUPERVISOR;
-
-            // Wait up to 30 seconds for the LSP supervisor to initialize
-            let sup = {
-                let mut attempt = 0;
-                loop {
-                    if let Some(s) = LSP_SUPERVISOR.get() {
-                        break Some(s);
-                    }
-                    attempt += 1;
-                    if attempt > 60 {
-                        tracing::warn!(
-                            "code-context: LSP supervisor not available after 30s post-promotion for {}; \
-                             LSP indexing will not run until next restart",
-                            workspace_root.display(),
-                        );
-                        break None;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
+            let Some(sup) = wait_for_lsp_supervisor(&workspace_root).await else {
+                return;
             };
-
-            if let Some(sup) = sup {
-                let supervisor = sup.lock().await;
-                let clients: Vec<(String, swissarmyhammer_code_context::SharedLspClient)> =
-                    supervisor
-                        .daemon_names()
-                        .into_iter()
-                        .filter_map(|name| {
-                            let daemon = supervisor.get_daemon(&name)?;
-                            if matches!(
-                                daemon.state(),
-                                swissarmyhammer_lsp::LspDaemonState::Running { .. }
-                            ) {
-                                Some((name, daemon.shared_client()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                if !clients.is_empty() {
-                    use swissarmyhammer_code_context::{
-                        new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
-                    };
-                    for (server_name, shared_client) in &clients {
-                        let worker_db = std::sync::Arc::clone(&lsp_db);
-                        spawn_lsp_indexing_worker(
-                            workspace_root.clone(),
-                            worker_db,
-                            std::sync::Arc::clone(shared_client),
-                            LspWorkerConfig::default(),
-                            server_name.clone(),
-                            new_shutdown_flag(),
-                        );
-                        tracing::info!(
-                            "code-context: LSP indexing worker started for {} (after promotion, server: {})",
-                            workspace_root.display(),
-                            server_name,
-                        );
-                    }
-                }
-            }
+            let clients = collect_running_lsp_clients(&*sup.lock().await);
+            spawn_lsp_workers_for_clients(&workspace_root, &lsp_db, &clients, " (after promotion)");
         });
     }
 
@@ -1402,6 +1288,159 @@ fn agent_deterministic_color(id: &str) -> String {
         .bytes()
         .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
     AGENT_COLORS[(hash as usize) % AGENT_COLORS.len()].to_string()
+}
+
+/// Collect every running daemon's `(server_name, shared_client)` pair from
+/// the supervisor. Daemons that are not in the `Running` state are skipped.
+fn collect_running_lsp_clients(
+    supervisor: &swissarmyhammer_lsp::LspSupervisorManager,
+) -> Vec<(String, swissarmyhammer_code_context::SharedLspClient)> {
+    supervisor
+        .daemon_names()
+        .into_iter()
+        .filter_map(|name| lsp_client_if_running(supervisor, name))
+        .collect()
+}
+
+/// Return `(name, client)` for the daemon if it's in the `Running` state.
+fn lsp_client_if_running(
+    supervisor: &swissarmyhammer_lsp::LspSupervisorManager,
+    name: String,
+) -> Option<(String, swissarmyhammer_code_context::SharedLspClient)> {
+    let daemon = supervisor.get_daemon(&name)?;
+    match daemon.state() {
+        swissarmyhammer_lsp::LspDaemonState::Running { .. } => Some((name, daemon.shared_client())),
+        _ => None,
+    }
+}
+
+/// Spawn an `spawn_lsp_indexing_worker` per running LSP client. `log_suffix`
+/// is appended to the startup log so callers can distinguish fresh startup
+/// from post-promotion startup (e.g. `" (after promotion)"` or `""`).
+fn spawn_lsp_workers_for_clients(
+    workspace_root: &std::path::Path,
+    shared_db: &swissarmyhammer_code_context::SharedDb,
+    clients: &[(String, swissarmyhammer_code_context::SharedLspClient)],
+    log_suffix: &str,
+) {
+    if clients.is_empty() {
+        return;
+    }
+    use swissarmyhammer_code_context::{
+        new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig,
+    };
+    for (server_name, shared_client) in clients {
+        let worker_db = std::sync::Arc::clone(shared_db);
+        spawn_lsp_indexing_worker(
+            workspace_root.to_path_buf(),
+            worker_db,
+            std::sync::Arc::clone(shared_client),
+            LspWorkerConfig::default(),
+            server_name.clone(),
+            new_shutdown_flag(),
+        );
+        tracing::info!(
+            "code-context: LSP indexing worker started for {}{} (server: {})",
+            workspace_root.display(),
+            log_suffix,
+            server_name,
+        );
+    }
+}
+
+/// Try to promote the workspace to leader. Returns `Ok(Some(db))` on success,
+/// `Ok(None)` if the lock is still held elsewhere, `Err` on a real failure.
+/// Returns `Ok(None)` (and signals "stop looping") via the caller if the
+/// workspace is already the leader.
+enum PromotionState {
+    AlreadyLeader,
+    Outcome(
+        std::result::Result<
+            Option<swissarmyhammer_code_context::SharedDb>,
+            swissarmyhammer_code_context::CodeContextError,
+        >,
+    ),
+}
+
+fn try_promote_workspace(
+    ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+) -> PromotionState {
+    let mut ws_lock = ws.lock().expect("workspace mutex poisoned");
+    if ws_lock.is_leader() {
+        return PromotionState::AlreadyLeader;
+    }
+    PromotionState::Outcome(ws_lock.try_promote())
+}
+
+/// Handle the outcome of `try_promote_workspace`. Returns `true` when the
+/// re-election loop should stop (either because we're already leader or the
+/// promotion succeeded).
+fn handle_promotion_result(state: PromotionState, workspace_root: &std::path::Path) -> bool {
+    match state {
+        PromotionState::AlreadyLeader => true,
+        PromotionState::Outcome(Ok(Some(shared_db))) => {
+            tracing::info!(
+                "code-context: promoted to leader for {}, starting indexing workers",
+                workspace_root.display()
+            );
+            McpServer::start_indexing_workers_after_promotion(
+                workspace_root.to_path_buf(),
+                shared_db,
+            );
+            true
+        }
+        PromotionState::Outcome(Ok(None)) => false,
+        PromotionState::Outcome(Err(e)) => {
+            tracing::warn!("code-context: re-election error: {}", e);
+            false
+        }
+    }
+}
+
+/// If the workspace is currently leader, spawn LSP indexing workers for the
+/// supplied clients. No-op if the workspace has no shared DB.
+fn start_lsp_workers_if_leader(
+    ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+    workspace_root: &std::path::Path,
+    clients: &[(String, swissarmyhammer_code_context::SharedLspClient)],
+    log_suffix: &str,
+) {
+    let ws_lock = ws.lock().expect("workspace mutex poisoned");
+    let Some(shared_db) = ws_lock.shared_db() else {
+        return;
+    };
+    spawn_lsp_workers_for_clients(workspace_root, &shared_db, clients, log_suffix);
+}
+
+/// Run the 60-second LSP supervisor health-check loop forever.
+async fn run_lsp_health_check_loop() -> ! {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        use super::tools::code_context::LSP_SUPERVISOR;
+        if let Some(sup) = LSP_SUPERVISOR.get() {
+            sup.lock().await.health_check_all().await;
+        }
+    }
+}
+
+/// Wait up to 30 seconds for the `LSP_SUPERVISOR` OnceCell to be initialized
+/// and return it. Returns `None` and logs a warning if it never appears.
+async fn wait_for_lsp_supervisor(
+    workspace_root: &std::path::Path,
+) -> Option<Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>> {
+    use super::tools::code_context::LSP_SUPERVISOR;
+    for _ in 0..60 {
+        if let Some(s) = LSP_SUPERVISOR.get() {
+            return Some(Arc::clone(s));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    tracing::warn!(
+        "code-context: LSP supervisor not available after 30s post-promotion for {}; \
+         LSP indexing will not run until next restart",
+        workspace_root.display(),
+    );
+    None
 }
 
 impl ServerHandler for McpServer {
