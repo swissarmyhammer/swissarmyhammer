@@ -1227,6 +1227,22 @@ impl McpServer {
         watcher.stop_watching();
     }
 
+    /// Spawn the prompt-directory file watcher on a background task so the
+    /// MCP initialize handshake can return without waiting for FSEvents
+    /// debouncer construction (~400ms on macOS). Failures are logged; they
+    /// never fail the handshake.
+    fn spawn_background_file_watcher(&self, peer: rmcp::Peer<RoleServer>) {
+        let server = self.clone();
+        tokio::spawn(async move {
+            match server.start_file_watching(peer).await {
+                Ok(_) => tracing::info!("🔍 File watching started for MCP client"),
+                Err(e) => {
+                    tracing::error!("✗ Failed to start file watching for MCP client: {}", e)
+                }
+            }
+        });
+    }
+
     /// Validate that a prompt can be accessed via MCP.
     ///
     /// # Arguments
@@ -1400,16 +1416,7 @@ impl ServerHandler for McpServer {
             request.client_info.version
         );
 
-        // Start file watching when MCP client connects
-        match self.start_file_watching(context.peer).await {
-            Ok(_) => {
-                tracing::info!("🔍 File watching started for MCP client");
-            }
-            Err(e) => {
-                tracing::error!("✗ Failed to start file watching for MCP client: {}", e);
-                // Continue initialization even if file watching fails
-            }
-        }
+        self.spawn_background_file_watcher(context.peer);
 
         // Auto-create agent actor for the connecting MCP client
         self.ensure_agent_actor(&request.client_info.name).await;
