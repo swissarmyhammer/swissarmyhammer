@@ -1,20 +1,23 @@
 /**
  * Inline filter expression editor for the perspective formula bar.
  *
- * Wraps `TextEditor` with the filter DSL language and mention autocomplete,
- * layering validation and command dispatch on top. Exposes a `focus()` handle
- * via forwardRef so the parent can focus the editor programmatically (e.g. when
- * the filter button on the active tab is clicked).
+ * Wraps the pure {@link TextEditor} primitive with the filter DSL language,
+ * mention autocomplete, debounced autosave, Enter-flush, completion-accept
+ * flush, and clear-button handling. The formula bar is always-open and
+ * always-live: there is no popover, no draft, no commit-and-close semantics.
+ * Typing schedules a debounced save; Enter hurries it along; nothing else
+ * about the editor changes on Enter.
  *
- * The filter expression uses the kanban filter DSL (`#tag && @user || !#done`).
- * Invalid expressions show a subtle error indicator inline. Clear button (×)
- * removes the filter via `perspective.clearFilter`.
+ * Exposes a `focus()` handle via forwardRef so the parent can focus the
+ * editor programmatically (e.g. when the filter button on the active tab is
+ * clicked).
  */
 
 import {
   forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -24,13 +27,15 @@ import { filterLanguage } from "@/lang-filter";
 import { X } from "lucide-react";
 import { EditorView } from "@codemirror/view";
 import { pickedCompletion } from "@codemirror/autocomplete";
-import { useDispatchCommand } from "@/lib/command-scope";
+import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
+import { useUIState } from "@/lib/ui-state-context";
 import { useMentionExtensions } from "@/hooks/use-mention-extensions";
 import { cn } from "@/lib/utils";
 import {
   TextEditor,
   type TextEditorHandle,
 } from "@/components/fields/text-editor";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 
 /** Handle exposed via forwardRef so parents can programmatically focus the editor. */
 export type FilterEditorHandle = TextEditorHandle;
@@ -42,7 +47,7 @@ interface FilterEditorProps {
   /** Perspective ID to update. */
   perspectiveId: string;
   /**
-   * Called after a successful submit or clear.
+   * Called when the user explicitly dismisses the editor (Escape or clear ×).
    *
    * Optional — the formula bar usage has no popover to close, so this
    * defaults to a no-op.
@@ -91,21 +96,41 @@ function applyFilter(
 ): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
+    console.warn("[filter-diag] applyFilter clear", { perspectiveId });
     setError(null);
     dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
       console.error,
     );
     return true;
   }
+  // The buffer is the source of truth. Always dispatch, even if the parser
+  // rejects the expression — intermediate edit states are frequently invalid
+  // (trailing operator, half-typed tag) and silently refusing to save would
+  // desync the saved filter from what the user sees. The error is surfaced
+  // to the editor via `setError` for visual indication only.
   const err = validateFilter(trimmed);
-  if (err) {
-    setError(err);
-    return false;
-  }
-  setError(null);
+  setError(err);
+  console.warn("[filter-diag] applyFilter DISPATCH", {
+    perspectiveId,
+    filter: trimmed,
+    validationError: err,
+  });
   dispatchFilter({
     args: { filter: trimmed, perspective_id: perspectiveId },
-  }).catch(console.error);
+  })
+    .then(() =>
+      console.warn("[filter-diag] applyFilter DISPATCH_RESOLVED", {
+        perspectiveId,
+        filter: trimmed,
+      }),
+    )
+    .catch((e) => {
+      console.warn("[filter-diag] applyFilter DISPATCH_FAILED", {
+        perspectiveId,
+        filter: trimmed,
+        error: String(e),
+      });
+    });
   return true;
 }
 
@@ -113,12 +138,10 @@ function applyFilter(
  * Debounced timer with cancel, flush, and unmount flush-cleanup.
  *
  * - `schedule(fn, delayMs)` — (re)start the debounce with a new callback.
- * - `cancel()` — drop any pending callback without invoking it (used by the
- *   clear-button path where the filter is being replaced, so running the
- *   stale pending callback would clobber the clear).
- * - `flush()` — if a timer is pending, clear it and invoke the stored
- *   callback synchronously. Used to commit a pending save when the user
- *   signals commit (completion accept) or the component unmounts.
+ * - `cancel()` — drop any pending callback without invoking it.
+ * - `flush()` — if a timer is pending, clear it and invoke the stored callback
+ *   synchronously. Used to commit a pending save on Enter, on completion
+ *   accept, or on unmount.
  *
  * On unmount, `flush` is called (not `cancel`) so that a pending autosave
  * still fires — otherwise React reconciliation can silently drop a save
@@ -129,6 +152,9 @@ function useDebouncedTimer() {
   const pendingFnRef = useRef<(() => void) | null>(null);
 
   const cancel = useCallback(() => {
+    console.warn("[filter-diag] debounce CANCEL", {
+      hadPending: pendingFnRef.current !== null,
+    });
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -137,6 +163,9 @@ function useDebouncedTimer() {
   }, []);
 
   const flush = useCallback(() => {
+    console.warn("[filter-diag] debounce FLUSH", {
+      hadPending: pendingFnRef.current !== null,
+    });
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -146,97 +175,22 @@ function useDebouncedTimer() {
     if (fn) fn();
   }, []);
 
-  // Flush (not cancel) on unmount so a pending autosave still fires when the
-  // component is unmounted before the debounce elapses.
+  // Flush (not cancel) on unmount so a pending autosave still fires.
   useEffect(() => flush, [flush]);
 
-  const schedule = useCallback(
-    (fn: () => void, delayMs: number) => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-      pendingFnRef.current = fn;
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        pendingFnRef.current = null;
-        fn();
-      }, delayMs);
-    },
-    [],
-  );
+  const schedule = useCallback((fn: () => void, delayMs: number) => {
+    console.warn("[filter-diag] debounce SCHEDULE", { delayMs });
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    pendingFnRef.current = fn;
+    timerRef.current = setTimeout(() => {
+      console.warn("[filter-diag] debounce FIRE");
+      timerRef.current = null;
+      pendingFnRef.current = null;
+      fn();
+    }, delayMs);
+  }, []);
 
   return { schedule, cancel, flush };
-}
-
-/**
- * Manages filter dispatch, validation, error state, and debounced autosave.
- *
- * Typing auto-applies the filter after a short debounce. Enter commits
- * immediately and calls onClose. The clear button cancels any pending
- * debounce and dispatches clearFilter. Vim Esc from insert mode triggers
- * onChange (via TextEditor's saveInPlace) which feeds through the same
- * debounced autosave path.
- */
-function useFilterDispatch(perspectiveId: string, onClose: () => void) {
-  const dispatchFilter = useDispatchCommand("perspective.filter");
-  const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
-  const [error, setError] = useState<string | null>(null);
-  const { schedule, cancel, flush } = useDebouncedTimer();
-
-  const apply = useCallback(
-    (text: string) =>
-      applyFilter(
-        text,
-        perspectiveId,
-        dispatchFilter,
-        dispatchClearFilter,
-        setError,
-      ),
-    [perspectiveId, dispatchFilter, dispatchClearFilter],
-  );
-
-  /** Debounced autosave — called on every doc change and vim save-in-place. */
-  const handleChange = useCallback(
-    (text: string) => schedule(() => apply(text), AUTOSAVE_DELAY_MS),
-    [schedule, apply],
-  );
-
-  /** Immediate commit (Enter key) — cancels debounce, dispatches now, closes. */
-  const handleCommit = useCallback(
-    (text: string) => {
-      cancel();
-      apply(text);
-      onClose();
-    },
-    [cancel, apply, onClose],
-  );
-
-  const handleCancel = useCallback(() => onClose(), [onClose]);
-
-  /** Clear button — cancels debounce, clears filter immediately, closes. */
-  const handleClear = useCallback(() => {
-    cancel();
-    dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
-      console.error,
-    );
-    onClose();
-  }, [perspectiveId, dispatchClearFilter, cancel, onClose]);
-
-  /**
-   * Flush any pending debounced save immediately.
-   *
-   * Used by the completion-accept updateListener so that picking a tag from
-   * the autocomplete dropdown commits the filter without waiting for the
-   * 300ms debounce (which may never fire if the user then toggles perspective).
-   */
-  const handleFlush = useCallback(() => flush(), [flush]);
-
-  return {
-    error,
-    handleCommit,
-    handleCancel,
-    handleChange,
-    handleClear,
-    handleFlush,
-  };
 }
 
 /**
@@ -245,19 +199,15 @@ function useFilterDispatch(perspectiveId: string, onClose: () => void) {
  *
  * The flush is scheduled via `queueMicrotask` so it runs *after* the change
  * extension's own updateListener (which schedules the debounced save for the
- * just-inserted text). Net effect: completion accept → schedule save for the
- * new text → immediately flush it → synchronous dispatch.
- *
- * Specific to the formula-bar autosave model. Other mention-autocomplete
- * consumers (task description, etc.) save via explicit commit and must not
- * get this immediate-dispatch behavior, so this extension is intentionally
- * NOT added to `useMentionExtensions`.
+ * just-inserted text). Net effect: completion accept → schedule save → flush
+ * it synchronously. Reads the flush function through a ref so the extension
+ * identity stays stable.
  */
-function buildCompletionFlushExtension(flush: () => void) {
+function buildCompletionFlushExtension(flushRef: { current: () => void }) {
   return EditorView.updateListener.of((update) => {
     for (const tr of update.transactions) {
       if (tr.annotation(pickedCompletion)) {
-        queueMicrotask(flush);
+        queueMicrotask(() => flushRef.current?.());
         return;
       }
     }
@@ -265,25 +215,117 @@ function buildCompletionFlushExtension(flush: () => void) {
 }
 
 /**
+ * Builds the filter-apply function in a ref and returns it alongside error state.
+ *
+ * The ref prevents stale captures inside extension-hosted callbacks when
+ * dispatch identities churn across renders.
+ */
+function useApplyFilterRef(perspectiveId: string) {
+  const dispatchFilter = useDispatchCommand("perspective.filter");
+  const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
+  const [error, setError] = useState<string | null>(null);
+
+  const applyRef = useRef<(text: string) => boolean>(() => false);
+  applyRef.current = (text: string) =>
+    applyFilter(
+      text,
+      perspectiveId,
+      dispatchFilter,
+      dispatchClearFilter,
+      setError,
+    );
+
+  return { applyRef, error, dispatchClearFilter };
+}
+
+/**
+ * Manages filter dispatch, validation, error state, and debounced autosave.
+ *
+ * Typing auto-applies the filter after a short debounce. Enter flushes the
+ * pending debounced save immediately (never destroys it) so completion-accept
+ * transactions still in flight can land without being clobbered. The clear
+ * button cancels any pending debounce and dispatches clearFilter.
+ */
+function useFilterDispatch(perspectiveId: string, onClose: () => void) {
+  const { applyRef, error, dispatchClearFilter } =
+    useApplyFilterRef(perspectiveId);
+  const { schedule, cancel, flush } = useDebouncedTimer();
+
+  const handleChange = useCallback(
+    (text: string) => {
+      console.warn("[filter-diag] handleChange", {
+        perspectiveId,
+        text,
+        len: text.length,
+      });
+      schedule(() => applyRef.current(text), AUTOSAVE_DELAY_MS);
+    },
+    [schedule, applyRef, perspectiveId],
+  );
+
+  // Enter handler: flush pending save synchronously. Must NOT cancel — that
+  // would poison a save just scheduled by a completion-accept transaction
+  // still propagating through update listeners. Does NOT close the formula bar.
+  const handleFlush = useCallback(() => {
+    console.warn("[filter-diag] handleFlush", { perspectiveId });
+    flush();
+  }, [flush, perspectiveId]);
+  const handleCancel = useCallback(() => onClose(), [onClose]);
+
+  /** Clear × button — cancels debounce, clears filter immediately, closes. */
+  const handleClear = useCallback(() => {
+    cancel();
+    dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
+      console.error,
+    );
+    onClose();
+  }, [perspectiveId, dispatchClearFilter, cancel, onClose]);
+
+  return { error, handleFlush, handleCancel, handleChange, handleClear };
+}
+
+/**
  * Compose the CM6 extensions passed to the formula-bar editor.
  *
- * Combines the shared mention-autocomplete extensions (tags, virtual tags,
- * filter sigils) with a local flush-on-completion-accept extension. The flush
- * extension is intentionally scoped to this hook so other mention-autocomplete
- * consumers (task description, etc.) don't inherit immediate-dispatch behavior.
+ * Combines the shared mention-autocomplete extensions with a local flush-on-
+ * completion-accept extension and Enter-flush / Escape-dismiss keymaps. The
+ * flush extension is intentionally scoped to this hook so other mention-
+ * autocomplete consumers don't inherit immediate-dispatch behavior.
+ *
+ * The Enter/Escape keymaps are built once per mode and use stable refs to the
+ * flush and cancel callbacks — that keeps the extension array identity stable
+ * across re-renders so the CM6 EditorView is not reconfigured mid-typing.
  */
-function useFilterEditorExtensions(handleFlush: () => void) {
+function useFilterEditorExtensions(
+  flushRef: { current: (() => void) | null },
+  cancelRef: { current: (() => void) | null },
+) {
+  const { keymap_mode: mode } = useUIState();
   const mentionExts = useMentionExtensions({
     includeVirtualTags: true,
     includeFilterSigils: true,
   });
   const completionFlushExt = useMemo(
-    () => buildCompletionFlushExtension(handleFlush),
-    [handleFlush],
+    () =>
+      buildCompletionFlushExtension({
+        current: () => flushRef.current?.(),
+      }),
+    [flushRef],
+  );
+  const submitCancelExts = useMemo(
+    () =>
+      buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: flushRef,
+        onCancelRef: cancelRef,
+        singleLine: true,
+        alwaysSubmitOnEnter: true,
+      }),
+    [mode, flushRef, cancelRef],
   );
   return useMemo(
-    () => [...mentionExts, completionFlushExt],
-    [mentionExts, completionFlushExt],
+    () => [...mentionExts, completionFlushExt, ...submitCancelExts],
+    [mentionExts, completionFlushExt, submitCancelExts],
   );
 }
 
@@ -304,26 +346,63 @@ function ClearFilterButton({ onClick }: { onClick: () => void }) {
  * CM6 editor for editing perspective filter DSL expressions.
  *
  * Renders as a borderless inline editor suitable for embedding in the
- * perspective tab bar formula bar. Uses `TextEditor` with `filterLanguage()`
- * so it shares all keymap, vim mode, and extension infrastructure. Exposes
- * `focus()` via forwardRef so the parent can focus the editor without managing
- * internal refs.
- *
- * - Enter saves the filter via `perspective.filter` command
- * - Escape cancels (no-op in formula bar context)
- * - Clear button (×) removes the filter via `perspective.clearFilter`
+ * perspective tab bar formula bar. Uses the pure {@link TextEditor} primitive
+ * and wires its own debounced-autosave, Enter-flush, completion-flush, and
+ * clear-button policy.
  */
-export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
-  function FilterEditor({ filter, perspectiveId, onClose = () => {} }, ref) {
-    const {
-      error,
-      handleCommit,
-      handleCancel,
-      handleChange,
-      handleClear,
-      handleFlush,
-    } = useFilterDispatch(perspectiveId, onClose);
-    const extraExtensions = useFilterEditorExtensions(handleFlush);
+/**
+ * Inner editor body — assumes a `CommandScopeProvider` with the perspective
+ * moniker is already in the tree above it, so every dispatch carries
+ * `perspective:{id}` in its scope chain regardless of focus state.
+ */
+const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
+  function FilterEditorBody(
+    { filter, perspectiveId, onClose = () => {} },
+    ref,
+  ) {
+    console.warn("[filter-diag] FilterEditor RENDER", {
+      perspectiveId,
+      filter,
+    });
+    useEffect(() => {
+      console.warn("[filter-diag] FilterEditor MOUNT", { perspectiveId });
+      return () => {
+        console.warn("[filter-diag] FilterEditor UNMOUNT", { perspectiveId });
+      };
+    }, [perspectiveId]);
+    const { error, handleFlush, handleCancel, handleChange, handleClear } =
+      useFilterDispatch(perspectiveId, onClose);
+
+    // Stable refs for extensions — callback identities churn, but ref
+    // identities never do.
+    const flushRef = useRef<(() => void) | null>(handleFlush);
+    flushRef.current = handleFlush;
+    const cancelRef = useRef<(() => void) | null>(handleCancel);
+    cancelRef.current = handleCancel;
+
+    const extensions = useFilterEditorExtensions(flushRef, cancelRef);
+    const languageExtension = useMemo(() => filterLanguage(), []);
+
+    // Inner ref so the clear button can imperatively empty the CM6 buffer.
+    // Forward both `focus` and `setValue` out to the external consumer.
+    const innerRef = useRef<TextEditorHandle>(null);
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus() {
+          innerRef.current?.focus();
+        },
+        setValue(text: string) {
+          innerRef.current?.setValue(text);
+        },
+      }),
+      [],
+    );
+
+    const handleClearAndReset = useCallback(() => {
+      handleClear();
+      innerRef.current?.setValue("");
+    }, [handleClear]);
 
     return (
       <div
@@ -335,21 +414,41 @@ export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
       >
         <div className="flex-1 min-w-0">
           <TextEditor
-            ref={ref}
+            ref={innerRef}
             value={filter}
-            onCommit={handleCommit}
-            onCancel={handleCancel}
             onChange={handleChange}
+            extensions={extensions}
+            languageExtension={languageExtension}
             placeholder="Filter… e.g. #bug @alice $spatial-nav"
             singleLine
             autoFocus={false}
-            repeatable
-            languageExtension={filterLanguage()}
-            extraExtensions={extraExtensions}
           />
         </div>
-        {filter && <ClearFilterButton onClick={handleClear} />}
+        {filter && <ClearFilterButton onClick={handleClearAndReset} />}
       </div>
+    );
+  },
+);
+
+/**
+ * CM6 editor for editing perspective filter DSL expressions.
+ *
+ * Wraps {@link FilterEditorBody} in a `CommandScopeProvider` with moniker
+ * `perspective:{id}` so every `perspective.filter` / `perspective.clearFilter`
+ * dispatch carries that scope on its chain. Without this wrapper, dispatches
+ * made while the editor has no focus (autocomplete pick, unmount-flush, etc.)
+ * travel with a scope chain missing `perspective:` and the backend rejects
+ * them with "command not available in current context".
+ */
+export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
+  function FilterEditor(props, ref) {
+    return (
+      <CommandScopeProvider
+        commands={[]}
+        moniker={`perspective:${props.perspectiveId}`}
+      >
+        <FilterEditorBody ref={ref} {...props} />
+      </CommandScopeProvider>
     );
   },
 );

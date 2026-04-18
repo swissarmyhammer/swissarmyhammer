@@ -34,9 +34,9 @@ Alternatively (or additionally) write a module-level `//!` doc on `swissarmyhamm
 
 ## Acceptance Criteria
 
-- [ ] A contributor searching for "_changelog" or "_file_created" in `ARCHITECTURE.md` finds a section that explains the mechanism and lists both.
-- [ ] The section names the file and function (`apply_compute_with_query` in `swissarmyhammer-entity/src/context.rs`) that a new pseudo-field would need to extend.
-- [ ] No code changes — docs only.
+- [x] A contributor searching for "_changelog" or "_file_created" in `ARCHITECTURE.md` finds a section that explains the mechanism and lists both.
+- [x] The section names the file and function (`apply_compute_with_query` in `swissarmyhammer-entity/src/context.rs`) that a new pseudo-field would need to extend.
+- [x] No code changes — docs only.
 
 ## Non-goals
 

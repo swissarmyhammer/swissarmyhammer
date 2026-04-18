@@ -3,7 +3,6 @@
 
 # Log files
 *.log
-log
 
 # Turn state (ephemeral, per-session)
 turn_state/

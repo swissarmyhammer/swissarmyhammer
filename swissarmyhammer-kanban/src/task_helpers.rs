@@ -499,6 +499,105 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     result
 }
 
+/// Lookup table for resolving entity ids from display-name slugs.
+///
+/// The filter DSL lets users write `$project-slug`, `@user-slug`, or
+/// `^task-slug`. Those literal strings may be an entity's stored id OR the
+/// canonical slug of its display name — the frontend autocomplete offers the
+/// name-slug, while older hand-written filters still use the id. To match
+/// both, the adapter needs to resolve a filter value against a name-slug
+/// index.
+///
+/// This struct pre-computes that index once per filter pass. The `HashMap`s
+/// are keyed by the canonical slug of the entity's display-name field
+/// (`name` for projects/actors, `title` for tasks) and yield the entity id.
+/// Lookup is O(1); construction is O(N) over the respective entity lists.
+///
+/// The adapter holds a reference to this registry so we amortize the slug
+/// computation across every task being filtered instead of rebuilding per
+/// task.
+#[derive(Debug, Default)]
+pub struct EntitySlugRegistry {
+    /// Slug of each project's `name` → project id.
+    project_slug_to_id: HashMap<String, String>,
+    /// Slug of each actor's `name` → actor id.
+    actor_slug_to_id: HashMap<String, String>,
+    /// Slug of each task's `title` → task id.
+    task_slug_to_id: HashMap<String, String>,
+}
+
+impl EntitySlugRegistry {
+    /// Build a slug registry from the full actor/project/task entity lists.
+    ///
+    /// Each entity contributes a `(slug(display_name), id)` entry; empty
+    /// slugs (entities whose name contains no ASCII alphanumerics) are
+    /// skipped. If two entities share a slug the later one wins — this
+    /// is a display-name ambiguity the user already has to resolve in
+    /// the UI, and picking either is better than refusing to match.
+    pub fn build(projects: &[Entity], actors: &[Entity], tasks: &[Entity]) -> Self {
+        let project_slug_to_id = build_slug_index(projects, "name");
+        let actor_slug_to_id = build_slug_index(actors, "name");
+        let task_slug_to_id = build_slug_index(tasks, "title");
+        Self {
+            project_slug_to_id,
+            actor_slug_to_id,
+            task_slug_to_id,
+        }
+    }
+
+    /// Empty registry — equivalent to having no projects/actors/tasks loaded.
+    /// Mainly useful for unit tests and the degenerate case where the caller
+    /// doesn't have access to the registries.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Look up the project id whose `name` slugifies to `value`.
+    ///
+    /// Returns `None` when no project's name-slug matches. Matching is done
+    /// against the pre-computed index; callers must pass the raw filter
+    /// value — slugification of `value` itself is NOT applied, because
+    /// frontend autocomplete already feeds canonical slugs in. Case is
+    /// normalized to ASCII lowercase before lookup to match slug semantics.
+    pub fn project_id_for_slug(&self, value: &str) -> Option<&str> {
+        self.project_slug_to_id
+            .get(&value.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+
+    /// Look up the actor id whose `name` slugifies to `value`.
+    pub fn actor_id_for_slug(&self, value: &str) -> Option<&str> {
+        self.actor_slug_to_id
+            .get(&value.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+
+    /// Look up the task id whose `title` slugifies to `value`.
+    pub fn task_id_for_slug(&self, value: &str) -> Option<&str> {
+        self.task_slug_to_id
+            .get(&value.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+}
+
+/// Build a `slug(entity[field]) → entity.id` map from a slice of entities.
+///
+/// Skips entities whose display field is missing or slugifies to the empty
+/// string — those can't participate in slug-based matching and would
+/// otherwise pollute the index with ambiguous empty-string keys.
+fn build_slug_index(entities: &[Entity], display_field: &str) -> HashMap<String, String> {
+    let mut map = HashMap::with_capacity(entities.len());
+    for entity in entities {
+        if let Some(name) = entity.get_str(display_field) {
+            let s = swissarmyhammer_common::slug(name);
+            if !s.is_empty() {
+                map.insert(s, entity.id.to_string());
+            }
+        }
+    }
+    map
+}
+
 /// Adapter that maps filter DSL atoms to enriched task entity fields.
 ///
 /// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
@@ -506,9 +605,39 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
 /// and the single-value `project` field for `$project` lookups.
 /// Entities must be enriched (via `enrich_task_entity` or `enrich_all_task_entities`)
 /// before evaluation — unenriched entities won't have `filter_tags`.
+///
+/// `$project`, `@actor`, and `^task` predicates match on the stored id OR
+/// on the slug of the referenced entity's display name. The latter requires
+/// a `registry` populated from the actor/project/task lists; passing the
+/// empty registry falls back to id-only matching (backwards compatible).
 pub struct TaskFilterAdapter<'a> {
     /// The enriched task entity to evaluate against.
     pub entity: &'a Entity,
+    /// Optional slug-to-id registry for resolving `$project` / `@user` /
+    /// `^task` values against display-name slugs. When omitted, only the
+    /// stored id comparison is performed.
+    pub registry: Option<&'a EntitySlugRegistry>,
+}
+
+impl<'a> TaskFilterAdapter<'a> {
+    /// Construct an adapter with id-only matching semantics.
+    ///
+    /// Equivalent to `TaskFilterAdapter { entity, registry: None }`, but
+    /// reads more clearly at call sites that don't have a registry handy.
+    pub fn new(entity: &'a Entity) -> Self {
+        Self {
+            entity,
+            registry: None,
+        }
+    }
+
+    /// Construct an adapter that resolves id-or-slug against `registry`.
+    pub fn with_registry(entity: &'a Entity, registry: &'a EntitySlugRegistry) -> Self {
+        Self {
+            entity,
+            registry: Some(registry),
+        }
+    }
 }
 
 impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
@@ -520,26 +649,69 @@ impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
     }
 
     fn has_assignee(&self, user: &str) -> bool {
-        self.entity
-            .get_string_list("assignees")
-            .iter()
-            .any(|a| a.eq_ignore_ascii_case(user))
+        // Direct id match on the task's assignees list.
+        let assignees = self.entity.get_string_list("assignees");
+        if assignees.iter().any(|a| a.eq_ignore_ascii_case(user)) {
+            return true;
+        }
+        // Fall back to slug-of-name: resolve `user` through the actor
+        // registry and check if any assignee id matches the resolved id.
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.actor_id_for_slug(user) {
+                if assignees
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(resolved_id))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn has_ref(&self, id: &str) -> bool {
-        self.entity.id.as_ref() == id
-            || self
-                .entity
-                .get_string_list("depends_on")
-                .iter()
-                .any(|r| r == id)
+        // Direct id match on the task's own id or depends_on list.
+        if self.entity.id.as_ref() == id {
+            return true;
+        }
+        let depends_on = self.entity.get_string_list("depends_on");
+        if depends_on.iter().any(|r| r == id) {
+            return true;
+        }
+        // Fall back to slug-of-title: resolve `id` to a task id via the
+        // registry and compare against both the entity's own id and its
+        // depends_on list.
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.task_id_for_slug(id) {
+                if self.entity.id.as_ref() == resolved_id {
+                    return true;
+                }
+                if depends_on.iter().any(|r| r == resolved_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn has_project(&self, project: &str) -> bool {
-        self.entity
-            .get_str("project")
-            .map(|p| p.eq_ignore_ascii_case(project))
-            .unwrap_or(false)
+        let Some(stored) = self.entity.get_str("project") else {
+            return false;
+        };
+        // Direct id match.
+        if stored.eq_ignore_ascii_case(project) {
+            return true;
+        }
+        // Fall back to slug-of-name: resolve `project` to a project id
+        // via the registry and compare against the stored value.
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.project_id_for_slug(project) {
+                if stored.eq_ignore_ascii_case(resolved_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1359,7 +1531,7 @@ mod tests {
 
         let mut e = make_task("t1", "Test", "", "todo");
         e.set("project", json!("AUTH-Migration"));
-        let adapter = TaskFilterAdapter { entity: &e };
+        let adapter = TaskFilterAdapter::new(&e);
 
         // Exact match.
         assert!(adapter.has_project("AUTH-Migration"));
@@ -1368,5 +1540,199 @@ mod tests {
         assert!(adapter.has_project("AUTH-MIGRATION"));
         // Non-match.
         assert!(!adapter.has_project("frontend"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // EntitySlugRegistry + TaskFilterAdapter id-or-slug matching tests
+    //
+    // These tests pin the contract laid out in
+    // `.kanban/tasks/01KPDWC4F4QPVTJZNN1NQKJAPJ.md`: `$project`, `@user`,
+    // and `^task` predicates must match on BOTH the stored entity id AND
+    // the slug of the referenced entity's display-name field. The
+    // concrete reproducer (project "Task card & field polish" with id
+    // `task-card-fields` matching filter `$task-card-field-polish`) is
+    // covered by the reproducer test at the bottom of this block.
+    // ─────────────────────────────────────────────────────────────────
+
+    fn make_project(id: &str, name: &str) -> Entity {
+        let mut e = Entity::new("project", id);
+        e.set("name", json!(name));
+        e
+    }
+
+    fn make_actor(id: &str, name: &str) -> Entity {
+        let mut e = Entity::new("actor", id);
+        e.set("name", json!(name));
+        e
+    }
+
+    #[test]
+    fn slug_registry_build_maps_name_slug_to_id() {
+        let projects = vec![
+            make_project("task-card-fields", "Task card & field polish"),
+            make_project("auth-migration", "Auth Migration"),
+        ];
+        let actors = vec![make_actor("claude-code", "Claude Code")];
+        let tasks = vec![{
+            let mut t = make_task("01TASK", "Fix login bug", "", "todo");
+            t.set("title", json!("Fix login bug"));
+            t
+        }];
+
+        let reg = EntitySlugRegistry::build(&projects, &actors, &tasks);
+
+        assert_eq!(
+            reg.project_id_for_slug("task-card-field-polish"),
+            Some("task-card-fields")
+        );
+        assert_eq!(
+            reg.project_id_for_slug("auth-migration"),
+            Some("auth-migration")
+        );
+        assert_eq!(reg.actor_id_for_slug("claude-code"), Some("claude-code"));
+        assert_eq!(reg.task_id_for_slug("fix-login-bug"), Some("01TASK"));
+        assert!(reg.project_id_for_slug("unknown").is_none());
+    }
+
+    #[test]
+    fn slug_registry_skips_empty_slugs() {
+        // A project with a name that slugifies to empty must not clobber
+        // other empty-named entries. The registry simply skips them.
+        let projects = vec![
+            make_project("ok", "Normal"),
+            make_project("punctuation", "!!!"),
+        ];
+        let reg = EntitySlugRegistry::build(&projects, &[], &[]);
+        assert_eq!(reg.project_id_for_slug("normal"), Some("ok"));
+        assert!(reg.project_id_for_slug("").is_none());
+    }
+
+    #[test]
+    fn slug_registry_lookup_is_case_insensitive() {
+        let projects = vec![make_project("backend", "Backend")];
+        let reg = EntitySlugRegistry::build(&projects, &[], &[]);
+        // `slug()` already lowercases — callers passing an upper-cased
+        // value must still resolve.
+        assert_eq!(reg.project_id_for_slug("BACKEND"), Some("backend"));
+        assert_eq!(reg.project_id_for_slug("Backend"), Some("backend"));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_project_matches_slug_of_name() {
+        // The task description's concrete reproducer: project with id
+        // `task-card-fields` but a name slug of `task-card-field-polish`
+        // must match a filter of `$task-card-field-polish`.
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let projects = vec![make_project("task-card-fields", "Task card & field polish")];
+        let reg = EntitySlugRegistry::build(&projects, &[], &[]);
+
+        let mut task = make_task("t1", "Test", "", "todo");
+        task.set("project", json!("task-card-fields"));
+        let adapter = TaskFilterAdapter::with_registry(&task, &reg);
+
+        // Matches by id (current behavior).
+        assert!(adapter.has_project("task-card-fields"));
+        // Matches by slug of name (new behavior).
+        assert!(adapter.has_project("task-card-field-polish"));
+        // Does not match unrelated values.
+        assert!(!adapter.has_project("other-project"));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_project_without_registry_falls_back_to_id_only() {
+        // Backwards compatibility: callers that don't provide a registry
+        // get the old id-only semantics.
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let mut task = make_task("t1", "Test", "", "todo");
+        task.set("project", json!("task-card-fields"));
+        let adapter = TaskFilterAdapter::new(&task);
+
+        assert!(adapter.has_project("task-card-fields"));
+        // Slug-of-name does NOT match because we have no registry.
+        assert!(!adapter.has_project("task-card-field-polish"));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_assignee_matches_slug_of_name() {
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let actors = vec![make_actor("alice", "Alice Smith")];
+        let reg = EntitySlugRegistry::build(&[], &actors, &[]);
+
+        let mut task = make_task("t1", "Test", "", "todo");
+        task.set("assignees", json!(["alice"]));
+        let adapter = TaskFilterAdapter::with_registry(&task, &reg);
+
+        // Matches by id (current behavior).
+        assert!(adapter.has_assignee("alice"));
+        // Matches by slug of name (new behavior).
+        assert!(adapter.has_assignee("alice-smith"));
+        // Does not match unrelated values.
+        assert!(!adapter.has_assignee("bob"));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_ref_matches_slug_of_title() {
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        // Build a task registry with a well-known title.
+        let other = {
+            let mut t = make_task("01OTHER", "Fix login bug", "", "todo");
+            t.set("title", json!("Fix login bug"));
+            t
+        };
+        let tasks = vec![other.clone()];
+        let reg = EntitySlugRegistry::build(&[], &[], &tasks);
+
+        // Task that depends on `01OTHER`.
+        let mut task = make_task("01SELF", "Other", "", "todo");
+        task.set("depends_on", json!(["01OTHER"]));
+        let adapter = TaskFilterAdapter::with_registry(&task, &reg);
+
+        // Matches by id (current behavior).
+        assert!(adapter.has_ref("01OTHER"));
+        // Matches by slug of title (new behavior).
+        assert!(adapter.has_ref("fix-login-bug"));
+        // Does not match unrelated values.
+        assert!(!adapter.has_ref("unrelated"));
+    }
+
+    #[test]
+    fn task_filter_adapter_has_ref_matches_own_title_slug() {
+        // The adapter should also match when the filter's slug points at
+        // the current task's own title (not just a dependency).
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let task = {
+            let mut t = make_task("01SELF", "Refactor parser", "", "todo");
+            t.set("title", json!("Refactor parser"));
+            t
+        };
+        let tasks = vec![task.clone()];
+        let reg = EntitySlugRegistry::build(&[], &[], &tasks);
+        let adapter = TaskFilterAdapter::with_registry(&task, &reg);
+
+        // Matches by own id.
+        assert!(adapter.has_ref("01SELF"));
+        // Matches by slug of own title.
+        assert!(adapter.has_ref("refactor-parser"));
+    }
+
+    #[test]
+    fn task_filter_adapter_ref_id_takes_precedence_over_slug() {
+        // A direct id match must work even when the registry doesn't know
+        // about a task of that id — the registry is an additive lookup,
+        // not a gate.
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let reg = EntitySlugRegistry::empty();
+        let mut task = make_task("01SELF", "whatever", "", "todo");
+        task.set("depends_on", json!(["01OTHER"]));
+        let adapter = TaskFilterAdapter::with_registry(&task, &reg);
+
+        assert!(adapter.has_ref("01OTHER"));
+        assert!(adapter.has_ref("01SELF"));
     }
 }

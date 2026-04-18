@@ -31,7 +31,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_filter_expr::FilterContext;
-use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
+use swissarmyhammer_kanban::task_helpers::{
+    enrich_all_task_entities, enrich_task_entity, EntitySlugRegistry,
+};
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
@@ -360,8 +362,16 @@ pub async fn list_entity_types(
 /// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
 /// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
 /// and the single-value `project` field for `$project` lookups.
+///
+/// When a `registry` is provided, `$project` / `@user` / `^task` predicates
+/// ALSO match the slug of the referenced entity's display name (project
+/// `name`, actor `name`, task `title`). This keeps backend filter semantics
+/// aligned with the frontend autocomplete, which offers name-slugs. Without
+/// a registry, only the stored id is compared — preserving backwards
+/// compatibility for callers that don't have the registry loaded.
 struct EntityFilterAdapter<'a> {
     entity: &'a Entity,
+    registry: Option<&'a EntitySlugRegistry>,
 }
 
 impl<'a> FilterContext for EntityFilterAdapter<'a> {
@@ -373,26 +383,59 @@ impl<'a> FilterContext for EntityFilterAdapter<'a> {
     }
 
     fn has_assignee(&self, user: &str) -> bool {
-        self.entity
-            .get_string_list("assignees")
-            .iter()
-            .any(|a| a.eq_ignore_ascii_case(user))
+        let assignees = self.entity.get_string_list("assignees");
+        if assignees.iter().any(|a| a.eq_ignore_ascii_case(user)) {
+            return true;
+        }
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.actor_id_for_slug(user) {
+                if assignees
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case(resolved_id))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn has_ref(&self, id: &str) -> bool {
-        self.entity.id.as_ref() == id
-            || self
-                .entity
-                .get_string_list("depends_on")
-                .iter()
-                .any(|r| r == id)
+        if self.entity.id.as_ref() == id {
+            return true;
+        }
+        let depends_on = self.entity.get_string_list("depends_on");
+        if depends_on.iter().any(|r| r == id) {
+            return true;
+        }
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.task_id_for_slug(id) {
+                if self.entity.id.as_ref() == resolved_id {
+                    return true;
+                }
+                if depends_on.iter().any(|r| r == resolved_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn has_project(&self, project: &str) -> bool {
-        self.entity
-            .get_str("project")
-            .map(|p| p.eq_ignore_ascii_case(project))
-            .unwrap_or(false)
+        let Some(stored) = self.entity.get_str("project") else {
+            return false;
+        };
+        if stored.eq_ignore_ascii_case(project) {
+            return true;
+        }
+        if let Some(registry) = self.registry {
+            if let Some(resolved_id) = registry.project_id_for_slug(project) {
+                if stored.eq_ignore_ascii_case(resolved_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -434,13 +477,25 @@ async fn enrich_and_sort_tasks(
 /// Apply a filter DSL expression to an entity list, retaining only matches.
 ///
 /// Parses the filter string and evaluates it against each entity via
-/// `EntityFilterAdapter`. Returns an error if the expression is invalid.
-fn apply_filter(entities: &mut Vec<Entity>, filter_str: &str) -> Result<(), String> {
+/// `EntityFilterAdapter`. The `registry` carries project/actor/task display
+/// name slugs so `$project`, `@user`, and `^task` predicates can match on
+/// id OR slug-of-name — keeping backend filter semantics aligned with the
+/// frontend autocomplete. Returns an error if the expression is invalid.
+fn apply_filter(
+    entities: &mut Vec<Entity>,
+    filter_str: &str,
+    registry: &EntitySlugRegistry,
+) -> Result<(), String> {
     let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
         let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
         format!("invalid filter expression: {}", msgs.join("; "))
     })?;
-    entities.retain(|e| expr.matches(&EntityFilterAdapter { entity: e }));
+    entities.retain(|e| {
+        expr.matches(&EntityFilterAdapter {
+            entity: e,
+            registry: Some(registry),
+        })
+    });
     Ok(())
 }
 
@@ -477,7 +532,32 @@ pub async fn list_entities(
     }
 
     if let Some(filter_str) = filter.as_deref().filter(|f| !f.trim().is_empty()) {
-        apply_filter(&mut entities, filter_str)?;
+        // Build the id-or-slug registry once so `$project`, `@user`, and
+        // `^task` predicates resolve display-name slugs to entity ids.
+        // For non-task entity types, `entities` wouldn't contribute a
+        // useful task-title index, so we list tasks separately to keep
+        // the registry complete.
+        let projects = ectx
+            .list("project")
+            .await
+            .map_err(|e| format!("list_entities({}): list(project): {}", entity_type, e))?;
+        let actors = ectx
+            .list("actor")
+            .await
+            .map_err(|e| format!("list_entities({}): list(actor): {}", entity_type, e))?;
+        let tasks = if entity_type == "task" {
+            // Reuse the already-loaded tasks to avoid a redundant list.
+            None
+        } else {
+            Some(
+                ectx.list("task")
+                    .await
+                    .map_err(|e| format!("list_entities({}): list(task): {}", entity_type, e))?,
+            )
+        };
+        let task_slice: &[Entity] = tasks.as_deref().unwrap_or(&entities);
+        let registry = EntitySlugRegistry::build(&projects, &actors, task_slice);
+        apply_filter(&mut entities, filter_str, &registry)?;
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -2166,7 +2246,10 @@ mod tests {
     #[test]
     fn adapter_has_tag_matches_filter_tags() {
         let e = make_entity("t1", &["bug", "READY"], &[], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_tag("bug"));
         assert!(adapter.has_tag("READY"));
         assert!(!adapter.has_tag("feature"));
@@ -2175,7 +2258,10 @@ mod tests {
     #[test]
     fn adapter_has_tag_case_insensitive() {
         let e = make_entity("t1", &["READY"], &[], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_tag("ready"));
         assert!(adapter.has_tag("Ready"));
     }
@@ -2183,7 +2269,10 @@ mod tests {
     #[test]
     fn adapter_has_assignee() {
         let e = make_entity("t1", &[], &["alice", "bob"], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_assignee("alice"));
         assert!(adapter.has_assignee("bob"));
         assert!(!adapter.has_assignee("carol"));
@@ -2192,14 +2281,20 @@ mod tests {
     #[test]
     fn adapter_has_assignee_case_insensitive() {
         let e = make_entity("t1", &[], &["Alice"], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_assignee("alice"));
     }
 
     #[test]
     fn adapter_has_ref_matches_depends_on() {
         let e = make_entity("t1", &[], &[], &["dep1", "dep2"]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_ref("dep1"));
         assert!(adapter.has_ref("dep2"));
         assert!(!adapter.has_ref("dep3"));
@@ -2208,14 +2303,20 @@ mod tests {
     #[test]
     fn adapter_has_ref_matches_own_id() {
         let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_ref("t1"));
     }
 
     #[test]
     fn adapter_end_to_end_with_filter_expr() {
         let e = make_entity("t1", &["bug", "READY"], &["will"], &["dep1"]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
 
         let expr = swissarmyhammer_filter_expr::parse("#bug && @will").unwrap();
         assert!(expr.matches(&adapter));
@@ -2243,7 +2344,10 @@ mod tests {
     #[test]
     fn adapter_has_project_matches_project_field() {
         let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_project("auth-migration"));
         assert!(!adapter.has_project("frontend"));
     }
@@ -2251,7 +2355,10 @@ mod tests {
     #[test]
     fn adapter_has_project_case_insensitive() {
         let e = make_entity_with_project("t1", "auth-migration");
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(adapter.has_project("AUTH-MIGRATION"));
         assert!(adapter.has_project("Auth-Migration"));
     }
@@ -2260,14 +2367,20 @@ mod tests {
     fn adapter_has_project_absent_field_is_false() {
         // Entity with no `project` field set — should never match a `$project` filter.
         let e = make_entity("t1", &[], &[], &[]);
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
         assert!(!adapter.has_project("anything"));
     }
 
     #[test]
     fn adapter_has_project_with_filter_expr() {
         let e = make_entity_with_project("t1", "auth");
-        let adapter = EntityFilterAdapter { entity: &e };
+        let adapter = EntityFilterAdapter {
+            entity: &e,
+            registry: None,
+        };
 
         let expr = swissarmyhammer_filter_expr::parse("$auth").unwrap();
         assert!(expr.matches(&adapter));

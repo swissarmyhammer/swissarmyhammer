@@ -1,31 +1,55 @@
-//! Incremental invalidation engine (2-generation strategy).
+//! Incremental invalidation engine for LSP symbol tracking.
 //!
-//! **Generation 0 -- ReextractFile**: When a file changes, delete its old
-//! symbols and outgoing edges, then write fresh symbols/edges supplied by the
-//! caller (from LSP or tree-sitter).
+//! The engine tracks which symbols exist in a file before and after re-extraction
+//! and uses that diff to propagate edge refreshes to dependent files.
 //!
-//! **Generation 1 -- RefreshEdges**: After reextraction, diff old vs new
-//! symbol IDs.  For any symbol ID that was deleted (existed before, not after),
-//! find files that had edges pointing TO that symbol (reverse lookup in
-//! `lsp_call_edges.callee_id`).  Those files need their edges refreshed but
-//! NOT their symbols re-extracted.
+//! The invalidation action produced is [`InvalidationAction::RefreshEdges`],
+//! which the worker applies by flipping `lsp_indexed = 0` on the dependent file.
+//! On the next worker pass the dependent is re-queried end-to-end (symbols and
+//! outgoing call edges), which rewrites its edge set against the current symbol
+//! universe — including the fact that a previously-referenced callee is gone.
 //!
-//! **Key rule**: `RefreshEdges` never triggers further propagation -- this
-//! closes the loop and prevents cascading re-indexing.
+//! **Propagation terminates at one hop.** `RefreshEdges` only re-queries the
+//! flagged file's outgoing edges; it does not re-run symbol extraction for that
+//! file. Since edge rewriting cannot produce new deleted symbols, the cycle
+//! cannot continue past the first generation.
+//!
+//! Full-file re-extraction (e.g. after a watcher-observed content change) is
+//! handled by flipping `ts_indexed` and `lsp_indexed` to `0` directly on the
+//! file row — the watcher does this in [`crate::watcher::FanoutWatcher::notify`]
+//! and the worker picks the file up automatically. That path does not flow
+//! through this module.
 
 use std::collections::HashSet;
 
 use rusqlite::Connection;
 
 use crate::error::CodeContextError;
-use crate::lsp_indexer::{write_edges, write_symbols, CallEdge, FlatSymbol};
+use crate::lsp_indexer::{symbol_kind_to_i32, FlatSymbol};
+
+/// Maximum number of `?` bind parameters in a single prepared statement.
+///
+/// SQLite ships with a default `SQLITE_MAX_VARIABLE_NUMBER` of 32766 on modern
+/// builds (set at compile time — older builds cap at 999). We use a
+/// conservative 900 so a single chunk comfortably fits under either bound
+/// while leaving room for auxiliary bind parameters (e.g. the `exclude_file`
+/// in [`find_reverse_edge_files`]).
+const SQLITE_IN_CHUNK_SIZE: usize = 900;
 
 /// Actions that the invalidation engine can produce.
+///
+/// Only one variant exists today. Additional variants may be added if a future
+/// action cannot be expressed as an edges-only refresh — but the propagation
+/// invariant (no cascading re-extracts) must be preserved so the algorithm
+/// terminates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidationAction {
-    /// Full re-extract: delete old symbols+edges, write new ones.
-    ReextractFile { file_path: String },
-    /// Edges-only refresh: keep symbols, re-query outgoing calls.
+    /// The listed file's outgoing call edges need to be refreshed because at
+    /// least one of its callees was deleted from the triggering file.
+    ///
+    /// The worker applies this by flipping `lsp_indexed = 0` on the file; the
+    /// next pass re-queries the LSP call hierarchy and replaces the file's
+    /// edge rows with fresh data. Symbol rows are left untouched.
     RefreshEdges { file_path: String },
 }
 
@@ -57,8 +81,9 @@ pub fn get_symbol_id_set(
 /// Excludes `exclude_file` from the results so the triggering file is not
 /// included in its own propagation list.
 ///
-/// Uses a dynamically built `IN` clause since rusqlite does not support
-/// native array binding.
+/// Chunks the input through [`SQLITE_IN_CHUNK_SIZE`] so the dynamic `IN`
+/// clause never exceeds SQLite's bind-parameter limit even on pathological
+/// symbol counts. Results are deduplicated across chunks.
 pub fn find_reverse_edge_files(
     conn: &Connection,
     callee_ids: &[String],
@@ -68,68 +93,82 @@ pub fn find_reverse_edge_files(
         return Ok(Vec::new());
     }
 
-    // Build "?,?,?" placeholders
-    let placeholders: Vec<&str> = callee_ids.iter().map(|_| "?").collect();
-    let sql = format!(
-        "SELECT DISTINCT caller_file FROM lsp_call_edges \
-         WHERE callee_id IN ({}) AND caller_file != ?",
-        placeholders.join(", ")
-    );
+    let mut found: HashSet<String> = HashSet::new();
 
-    let mut stmt = conn.prepare(&sql)?;
+    for chunk in callee_ids.chunks(SQLITE_IN_CHUNK_SIZE) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT DISTINCT caller_file FROM lsp_call_edges \
+             WHERE callee_id IN ({}) AND caller_file != ?",
+            placeholders.join(", ")
+        );
 
-    // Bind callee IDs (1-based) then the exclude file
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = callee_ids
-        .iter()
-        .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    params.push(Box::new(exclude_file.to_string()));
+        let mut stmt = conn.prepare(&sql)?;
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        // Bind callee IDs followed by the exclude file.
+        let params =
+            rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str()).chain([exclude_file]));
 
-    let files: Vec<String> = stmt
-        .query_map(param_refs.as_slice(), |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-    Ok(files)
+        let rows = stmt
+            .query_map(params, |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        found.extend(rows);
+    }
+
+    Ok(found.into_iter().collect())
 }
 
-/// Execute a ReextractFile: snapshot old symbol IDs, write new symbols and
-/// edges, then compute 1-hop propagation actions.
+/// Re-extract only the symbols for a file, preserving any outgoing call edges
+/// whose caller symbol still exists.
 ///
-/// Steps:
-/// 1. Snapshot old symbol IDs for the file.
-/// 2. Call `write_symbols` (delete-then-insert) and `write_edges`.
-/// 3. Compute new symbol ID set from `new_symbols`.
-/// 4. Find deleted IDs: old - new.
-/// 5. Reverse-lookup files with edges to deleted IDs.
-/// 6. Return `RefreshEdges` for each affected file (excluding self).
+/// This is the LSP worker's symbol-pass primitive. It is paired with a
+/// separate call-hierarchy pass that rewrites outgoing edges; the two passes
+/// together keep a file's symbol and edge state aligned.
 ///
-/// **Important**: The old symbol IDs and reverse-edge files must be captured
-/// *before* `write_symbols` runs, because CASCADE deletes on `lsp_symbols`
-/// will also remove the edges we need to query.
-pub fn reextract_file(
+/// Steps (in order, all under the caller's transaction/connection):
+///
+/// 1. Snapshot old symbol IDs for `file_path`.
+/// 2. Compute the new-symbol ID set from `new_symbols`.
+/// 3. Diff: `deleted_ids = old - new`.
+/// 4. Reverse-lookup dependent files that had outgoing edges to any deleted
+///    symbol (must be done **before** step 5 because the `lsp_symbols`
+///    CASCADE on step 5 would otherwise remove the rows we are querying).
+/// 5. `DELETE FROM lsp_symbols WHERE id IN (deleted_ids)`. CASCADE cleans up
+///    edges that depend on these rows as caller or callee.
+/// 6. Upsert `new_symbols` via `INSERT ... ON CONFLICT DO UPDATE` — this
+///    updates existing rows in place (preserving their outgoing edges) and
+///    inserts new ones.
+/// 7. Return one [`InvalidationAction::RefreshEdges`] per dependent file.
+///
+/// Using `INSERT OR REPLACE` here would be incorrect: SQLite implements it as
+/// DELETE + INSERT, which would fire the `lsp_call_edges` CASCADE on every row
+/// — wiping the edges we are trying to preserve.
+pub fn reextract_symbols(
     conn: &Connection,
     file_path: &str,
     new_symbols: &[FlatSymbol],
-    new_edges: &[CallEdge],
 ) -> Result<Vec<InvalidationAction>, CodeContextError> {
-    // 1. Snapshot old symbol IDs
+    // 1. Snapshot old symbol IDs.
     let old_ids = get_symbol_id_set(conn, file_path)?;
 
-    // 2. Compute new symbol IDs from the incoming symbols
+    // 2. Compute new symbol IDs from the incoming symbols.
     let new_ids: HashSet<String> = new_symbols.iter().map(|s| s.id.clone()).collect();
 
-    // 3. Find deleted IDs: old - new
+    // 3. Find deleted IDs: old - new.
     let deleted_ids: Vec<String> = old_ids.difference(&new_ids).cloned().collect();
 
-    // 4. Find files with reverse edges to deleted symbols BEFORE we delete them
+    // 4. Find files with reverse edges to deleted symbols BEFORE we delete them.
     let affected_files = find_reverse_edge_files(conn, &deleted_ids, file_path)?;
 
-    // 5. Now write (delete old + insert new)
-    write_symbols(conn, file_path, new_symbols)?;
-    write_edges(conn, file_path, new_edges)?;
+    // 5. Delete only the rows that actually disappeared. CASCADE cleans up
+    //    edges where they appear as caller or callee.
+    delete_symbols_by_id(conn, &deleted_ids)?;
 
-    // 6. Build RefreshEdges actions
+    // 6. UPSERT via ON CONFLICT: update existing rows in place (preserves
+    //    their outgoing/inbound edges) and insert new ones.
+    upsert_symbols(conn, new_symbols)?;
+
+    // 7. Build RefreshEdges actions.
     let actions = affected_files
         .into_iter()
         .map(|fp| InvalidationAction::RefreshEdges { file_path: fp })
@@ -138,16 +177,75 @@ pub fn reextract_file(
     Ok(actions)
 }
 
-/// Execute a RefreshEdges: delete old outgoing edges for the file, write new
-/// ones.
+/// Delete a batch of `lsp_symbols` rows by primary key.
 ///
-/// Does **not** trigger further propagation (closes the loop).
-pub fn refresh_edges(
-    conn: &Connection,
-    file_path: &str,
-    new_edges: &[CallEdge],
-) -> Result<(), CodeContextError> {
-    write_edges(conn, file_path, new_edges)?;
+/// Chunks the input through [`SQLITE_IN_CHUNK_SIZE`] so the generated `IN`
+/// clause never exceeds SQLite's bind-parameter limit.
+fn delete_symbols_by_id(conn: &Connection, ids: &[String]) -> Result<(), CodeContextError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in ids.chunks(SQLITE_IN_CHUNK_SIZE) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "DELETE FROM lsp_symbols WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        stmt.execute(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())))?;
+    }
+
+    Ok(())
+}
+
+/// Insert new symbols and update existing rows in place using `ON CONFLICT`.
+///
+/// Unlike `INSERT OR REPLACE` (which SQLite implements as DELETE + INSERT and
+/// therefore cascades away edges on every conflicting row), `ON CONFLICT DO
+/// UPDATE` modifies the row in place without firing CASCADE. That is
+/// essential for the symbols-only re-extract path — we must keep the edges
+/// of unchanged symbols intact.
+///
+/// **Trigger note**: any future trigger attached to `lsp_symbols` must account
+/// for both paths. `ON CONFLICT DO UPDATE` fires `AFTER UPDATE` triggers per
+/// conflicting row (and `AFTER INSERT` per new row), while `INSERT OR REPLACE`
+/// fires `AFTER DELETE` + `AFTER INSERT`. Do not assume the two paths are
+/// interchangeable when adding trigger-based invariants.
+fn upsert_symbols(conn: &Connection, symbols: &[FlatSymbol]) -> Result<(), CodeContextError> {
+    if symbols.is_empty() {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO lsp_symbols \
+         (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+         ON CONFLICT(id) DO UPDATE SET \
+            name = excluded.name, \
+            kind = excluded.kind, \
+            file_path = excluded.file_path, \
+            start_line = excluded.start_line, \
+            start_char = excluded.start_char, \
+            end_line = excluded.end_line, \
+            end_char = excluded.end_char, \
+            detail = excluded.detail",
+    )?;
+
+    for sym in symbols {
+        stmt.execute(rusqlite::params![
+            sym.id,
+            sym.name,
+            symbol_kind_to_i32(sym.kind),
+            sym.file_path,
+            sym.start_line,
+            sym.start_char,
+            sym.end_line,
+            sym.end_char,
+            sym.detail,
+        ])?;
+    }
+
     Ok(())
 }
 
@@ -155,6 +253,7 @@ pub fn refresh_edges(
 mod tests {
     use super::*;
     use crate::db;
+    use crate::lsp_indexer::{write_edges, write_symbols, CallEdge};
     use lsp_types::SymbolKind;
 
     /// Open an in-memory DB with the full schema.
@@ -259,23 +358,111 @@ mod tests {
     }
 
     #[test]
-    fn test_reextract_triggers_refresh_for_affected_files() {
+    fn test_find_reverse_edge_files_chunks_over_limit() {
+        // Pathological: more deleted callee IDs than fit in one bind-parameter
+        // batch. The function must chunk the IN clause and still return the
+        // complete, de-duplicated set of caller files.
+        let conn = open_memory_db();
+        seed_file(&conn, "src/callee.rs");
+        seed_file(&conn, "src/caller.rs");
+
+        // Build (SQLITE_IN_CHUNK_SIZE + 50) callee symbols in src/callee.rs
+        // plus a single caller symbol in src/caller.rs that calls all of them.
+        let total = SQLITE_IN_CHUNK_SIZE + 50;
+        let mut callees: Vec<FlatSymbol> = Vec::with_capacity(total);
+        let mut callee_ids: Vec<String> = Vec::with_capacity(total);
+        for i in 0..total {
+            let qpath = format!("callee_{i}");
+            let sym = make_symbol("src/callee.rs", &qpath);
+            callee_ids.push(sym.id.clone());
+            callees.push(sym);
+        }
+        write_symbols(&conn, "src/callee.rs", &callees).unwrap();
+
+        let caller_sym = make_symbol("src/caller.rs", "caller_fn");
+        write_symbols(&conn, "src/caller.rs", &[caller_sym]).unwrap();
+
+        let edges: Vec<CallEdge> = (0..total)
+            .map(|i| {
+                make_edge(
+                    "src/caller.rs",
+                    "caller_fn",
+                    "src/callee.rs",
+                    &format!("callee_{i}"),
+                )
+            })
+            .collect();
+        write_edges(&conn, "src/caller.rs", &edges).unwrap();
+
+        let files = find_reverse_edge_files(&conn, &callee_ids, "src/callee.rs").unwrap();
+        assert_eq!(files, vec!["src/caller.rs"]);
+    }
+
+    // ── reextract_symbols tests ────────────────────────────────────────
+    //
+    // The symbols-only variant must preserve existing outgoing edges for the
+    // target file while still propagating `RefreshEdges` actions to files
+    // that called into deleted/renamed symbols.
+
+    #[test]
+    fn test_reextract_symbols_preserves_outgoing_edges() {
+        // When re-extracting only symbols, the caller file's own outgoing
+        // edges must not be touched — they were produced by a separate
+        // call-hierarchy request and are still valid until a full re-extract.
         let conn = open_memory_db();
         seed_file(&conn, "src/f.rs");
         seed_file(&conn, "src/g.rs");
 
-        // File F has symbol A, file G has symbol foo
+        // F calls G's symbol g_sym — edge lives on F (caller_file = src/f.rs)
         let sym_a = make_symbol("src/f.rs", "A");
+        let sym_g = make_symbol("src/g.rs", "g_sym");
+        write_symbols(&conn, "src/f.rs", std::slice::from_ref(&sym_a)).unwrap();
+        write_symbols(&conn, "src/g.rs", &[sym_g]).unwrap();
+
+        let edge = make_edge("src/f.rs", "A", "src/g.rs", "g_sym");
+        write_edges(&conn, "src/f.rs", &[edge]).unwrap();
+
+        // Re-extract F's symbols only (same symbol set).
+        let actions = reextract_symbols(&conn, "src/f.rs", &[sym_a]).unwrap();
+        assert!(
+            actions.is_empty(),
+            "no symbol churn should produce no actions"
+        );
+
+        // F's outgoing edge must still be present.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lsp_call_edges WHERE caller_file = 'src/f.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "outgoing edge on F must survive symbols-only re-extract"
+        );
+    }
+
+    #[test]
+    fn test_reextract_symbols_deleted_symbol_triggers_refresh() {
+        // Classic rename/delete: F loses a symbol that G was calling.
+        // reextract_symbols should emit a RefreshEdges action for G.
+        let conn = open_memory_db();
+        seed_file(&conn, "src/f.rs");
+        seed_file(&conn, "src/g.rs");
+
+        let sym_old = make_symbol("src/f.rs", "old_name");
         let sym_foo = make_symbol("src/g.rs", "foo");
-        write_symbols(&conn, "src/f.rs", &[sym_a]).unwrap();
+        write_symbols(&conn, "src/f.rs", &[sym_old]).unwrap();
         write_symbols(&conn, "src/g.rs", &[sym_foo]).unwrap();
 
-        // Edge: foo -> A (G calls F's symbol A)
-        let edge = make_edge("src/g.rs", "foo", "src/f.rs", "A");
+        // G calls F::old_name
+        let edge = make_edge("src/g.rs", "foo", "src/f.rs", "old_name");
         write_edges(&conn, "src/g.rs", &[edge]).unwrap();
 
-        // Reextract F with NO symbols (A is deleted)
-        let actions = reextract_file(&conn, "src/f.rs", &[], &[]).unwrap();
+        // F is re-extracted with a renamed symbol
+        let sym_new = make_symbol("src/f.rs", "new_name");
+        let actions = reextract_symbols(&conn, "src/f.rs", &[sym_new]).unwrap();
 
         assert_eq!(
             actions,
@@ -286,25 +473,66 @@ mod tests {
     }
 
     #[test]
-    fn test_refresh_edges_no_propagation() {
+    fn test_reextract_symbols_caller_rename_cascade_deletes_own_edges() {
+        // When a caller symbol in F is renamed, the CASCADE constraint on
+        // lsp_call_edges.caller_id removes F's outgoing edges for that
+        // caller. This is correct: the edge's caller_id no longer resolves.
+        // We document the behaviour here so callers of reextract_symbols
+        // know they may need to re-collect call hierarchy afterwards.
         let conn = open_memory_db();
         seed_file(&conn, "src/f.rs");
         seed_file(&conn, "src/g.rs");
 
-        // Set up symbols
+        let sym_a = make_symbol("src/f.rs", "A");
+        let sym_g = make_symbol("src/g.rs", "g_sym");
+        write_symbols(&conn, "src/f.rs", &[sym_a]).unwrap();
+        write_symbols(&conn, "src/g.rs", &[sym_g]).unwrap();
+
+        // F::A calls G::g_sym
+        let edge = make_edge("src/f.rs", "A", "src/g.rs", "g_sym");
+        write_edges(&conn, "src/f.rs", &[edge]).unwrap();
+
+        // Rename F's A -> A_renamed (A disappears from F)
+        let sym_renamed = make_symbol("src/f.rs", "A_renamed");
+        let _actions = reextract_symbols(&conn, "src/f.rs", &[sym_renamed]).unwrap();
+
+        // F's edge (caller_id = lsp:src/f.rs:A) cascaded away because the
+        // caller symbol was deleted.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lsp_call_edges WHERE caller_file = 'src/f.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "cascade removes edges whose caller symbol was deleted"
+        );
+    }
+
+    #[test]
+    fn test_reextract_symbols_no_deleted_symbols_no_actions() {
+        // Adding new symbols without removing any should not emit actions.
+        let conn = open_memory_db();
+        seed_file(&conn, "src/f.rs");
+        seed_file(&conn, "src/g.rs");
+
         let sym_a = make_symbol("src/f.rs", "A");
         let sym_foo = make_symbol("src/g.rs", "foo");
-        write_symbols(&conn, "src/f.rs", &[sym_a]).unwrap();
+        write_symbols(&conn, "src/f.rs", std::slice::from_ref(&sym_a)).unwrap();
         write_symbols(&conn, "src/g.rs", &[sym_foo]).unwrap();
 
-        // Call refresh_edges on G with new edges
         let edge = make_edge("src/g.rs", "foo", "src/f.rs", "A");
-        let result = refresh_edges(&conn, "src/g.rs", &[edge]);
+        write_edges(&conn, "src/g.rs", &[edge]).unwrap();
 
-        // Should succeed with no further actions
-        assert!(result.is_ok());
+        // Re-extract F with an additional symbol B. A still exists.
+        let sym_b = make_symbol("src/f.rs", "B");
+        let actions = reextract_symbols(&conn, "src/f.rs", &[sym_a, sym_b]).unwrap();
 
-        // Verify edge was written
+        assert!(actions.is_empty());
+
+        // G's edge to F::A is still intact.
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM lsp_call_edges WHERE caller_file = 'src/g.rs'",
@@ -316,51 +544,54 @@ mod tests {
     }
 
     #[test]
-    fn test_reextract_with_renamed_symbol() {
+    fn test_reextract_symbols_empty_new_symbols_propagates_to_all_callers() {
+        // When a file is re-extracted with zero symbols (e.g. temporary parse
+        // failure or file emptied), every dependent file must be flagged for
+        // edge refresh.
         let conn = open_memory_db();
         seed_file(&conn, "src/f.rs");
         seed_file(&conn, "src/g.rs");
+        seed_file(&conn, "src/h.rs");
 
-        // F has old_name, G calls old_name
-        let sym_old = make_symbol("src/f.rs", "old_name");
-        let sym_foo = make_symbol("src/g.rs", "foo");
-        write_symbols(&conn, "src/f.rs", &[sym_old]).unwrap();
-        write_symbols(&conn, "src/g.rs", &[sym_foo]).unwrap();
-
-        let edge = make_edge("src/g.rs", "foo", "src/f.rs", "old_name");
-        write_edges(&conn, "src/g.rs", &[edge]).unwrap();
-
-        // Reextract F with new_name (old_name is gone -> rename)
-        let sym_new = make_symbol("src/f.rs", "new_name");
-        let actions = reextract_file(&conn, "src/f.rs", &[sym_new], &[]).unwrap();
-
-        // Should trigger RefreshEdges for G because old_name was deleted
-        assert_eq!(
-            actions,
-            vec![InvalidationAction::RefreshEdges {
-                file_path: "src/g.rs".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn test_reextract_no_changes() {
-        let conn = open_memory_db();
-        seed_file(&conn, "src/f.rs");
-        seed_file(&conn, "src/g.rs");
-
-        // F has symbol A, G calls A
         let sym_a = make_symbol("src/f.rs", "A");
         let sym_foo = make_symbol("src/g.rs", "foo");
-        write_symbols(&conn, "src/f.rs", std::slice::from_ref(&sym_a)).unwrap();
+        let sym_bar = make_symbol("src/h.rs", "bar");
+        write_symbols(&conn, "src/f.rs", &[sym_a]).unwrap();
         write_symbols(&conn, "src/g.rs", &[sym_foo]).unwrap();
+        write_symbols(&conn, "src/h.rs", &[sym_bar]).unwrap();
 
-        let edge = make_edge("src/g.rs", "foo", "src/f.rs", "A");
-        write_edges(&conn, "src/g.rs", &[edge]).unwrap();
+        write_edges(
+            &conn,
+            "src/g.rs",
+            &[make_edge("src/g.rs", "foo", "src/f.rs", "A")],
+        )
+        .unwrap();
+        write_edges(
+            &conn,
+            "src/h.rs",
+            &[make_edge("src/h.rs", "bar", "src/f.rs", "A")],
+        )
+        .unwrap();
 
-        // Reextract F with same symbol A -> no deletions -> no RefreshEdges
-        let actions = reextract_file(&conn, "src/f.rs", &[sym_a], &[]).unwrap();
+        // F becomes empty of symbols.
+        let mut actions = reextract_symbols(&conn, "src/f.rs", &[]).unwrap();
+        actions.sort_by(|a, b| match (a, b) {
+            (
+                InvalidationAction::RefreshEdges { file_path: a },
+                InvalidationAction::RefreshEdges { file_path: b },
+            ) => a.cmp(b),
+        });
 
-        assert!(actions.is_empty());
+        assert_eq!(
+            actions,
+            vec![
+                InvalidationAction::RefreshEdges {
+                    file_path: "src/g.rs".to_string()
+                },
+                InvalidationAction::RefreshEdges {
+                    file_path: "src/h.rs".to_string()
+                },
+            ]
+        );
     }
 }

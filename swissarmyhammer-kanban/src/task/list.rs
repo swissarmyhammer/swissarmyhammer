@@ -3,7 +3,9 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task::shared::parse_filter_expr;
-use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json, TaskFilterAdapter};
+use crate::task_helpers::{
+    enrich_all_task_entities, task_entity_to_rich_json, EntitySlugRegistry, TaskFilterAdapter,
+};
 use crate::types::ColumnId;
 use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
@@ -60,6 +62,12 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
             let registry = default_virtual_tag_registry();
             enrich_all_task_entities(&mut all_tasks, terminal_column, registry);
 
+            // Build the id-or-slug registry so `$project`, `@user`, and
+            // `^task` predicates resolve display-name slugs to entity ids.
+            let all_projects = ectx.list("project").await?;
+            let all_actors = ectx.list("actor").await?;
+            let slug_registry = EntitySlugRegistry::build(&all_projects, &all_actors, &all_tasks);
+
             let expr = parse_filter_expr(self.filter.as_deref())?;
             let column = &self.column;
 
@@ -74,7 +82,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                         return false;
                     }
                     if let Some(ref e) = expr {
-                        if !e.matches(&TaskFilterAdapter { entity: t }) {
+                        if !e.matches(&TaskFilterAdapter::with_registry(t, &slug_registry)) {
                             return false;
                         }
                     }
@@ -375,6 +383,97 @@ mod tests {
             .unwrap();
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Project task");
+    }
+
+    /// End-to-end regression of the concrete reproducer in
+    /// `.kanban/tasks/01KPDWC4F4QPVTJZNN1NQKJAPJ.md`: project id
+    /// `task-card-fields` with name "Task card & field polish" must
+    /// match a filter of `$task-card-field-polish` (the slug of the
+    /// display name, which is what the frontend autocomplete offers).
+    #[tokio::test]
+    async fn test_list_tasks_filter_by_project_slug_of_name() {
+        use crate::project::AddProject;
+
+        let (_temp, ctx) = setup().await;
+        AddProject::new("task-card-fields", "Task card & field polish")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Project task")
+            .with_project("task-card-fields")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Unrelated task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by the slug of the project's display name, not the id.
+        let result = ListTasks::new()
+            .with_filter("$task-card-field-polish")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Project task");
+
+        // The id-based filter still works (backwards compat).
+        let result = ListTasks::new()
+            .with_filter("$task-card-fields")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Project task");
+    }
+
+    /// Assignee filter must match the slug of an actor's display name as
+    /// well as the actor's id — the frontend autocomplete offers the
+    /// name-slug for `@user` mentions.
+    #[tokio::test]
+    async fn test_list_tasks_filter_by_assignee_slug_of_name() {
+        use crate::actor::AddActor;
+        use crate::task::AssignTask;
+
+        let (_temp, ctx) = setup().await;
+        AddActor::new("alice", "Alice Smith")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let r1 = AddTask::new("Alice's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AssignTask::new(r1["id"].as_str().unwrap(), "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Unassigned")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Match by slug of the actor's display name.
+        let result = ListTasks::new()
+            .with_filter("@alice-smith")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Alice's task");
     }
 
     #[tokio::test]

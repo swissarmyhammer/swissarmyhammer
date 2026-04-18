@@ -3,9 +3,35 @@ assignees:
 - claude-code
 depends_on:
 - 01KNT1PDFJHP3SAYVQKFFK39GW
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffe080
 project: null
 title: Implement incremental invalidation for symbol tracking
 ---
 When files change, only re-index the changed files and their dependents instead of full workspace invalidation. Track which symbols/definitions were affected and cascade invalidation appropriately.
+
+## Review Findings (2026-04-17 18:35)
+
+### Blockers
+- [x] `swissarmyhammer-code-context/src/lsp_worker.rs:311-366` — `apply_invalidation_actions` claims that flipping `lsp_indexed = 0` on a dependent file causes the worker to "re-query the LSP call hierarchy and therefore produce fresh outgoing edges against the current symbol set" (doc comment at lines 313-315). This is not what happens. `index_single_file` (lines 271-309) only calls `collect_and_persist_file_symbols`, which runs `reextract_symbols` (symbols only, preserves outgoing edges). No call to `collect_and_persist_call_edges` exists anywhere in the worker path. The propagation loop is a no-op: a file flagged by `RefreshEdges` gets picked up, its symbols are re-upserted (identical, since the file did not change), its stale outgoing edges are preserved, and the stale edges that pointed at the now-deleted callee are never refreshed. Either (a) extend `index_single_file` to also call `collect_and_persist_call_edges` when the file was flagged by `RefreshEdges` — e.g. clear its outgoing edges first and then re-collect — or (b) document that this task only builds the propagation signal and a follow-up card wires edge re-collection into the worker. Right now the task as-landed does not deliver the behavior the commit message implies.
+    - Resolution: Option (a). `index_single_file` now runs a dedicated edge phase via `collect_and_persist_call_edges` after the symbol phase. `write_edges` is already a DELETE-then-INSERT for the caller file, so rewriting outgoing edges against the current symbol universe naturally drops references to deleted callees. Initial indexing also now produces LSP edges (which it never did before).
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:110-139` + `swissarmyhammer-code-context/src/lib.rs:49` — `reextract_file` and `refresh_edges` are exported from the crate root but never called from production code. Only `reextract_symbols` is wired in. That means `InvalidationAction::ReextractFile` is unreachable in the current flow, and the branch handling it in `apply_invalidation_actions` (lines 342-363) is dead code. Either remove the unused paths, or explicitly document them as the seam for the not-yet-wired call-hierarchy pass and cover that with a TODO referencing the follow-up task. Leaving dead code that the worker pretends to handle hides the fact that the invalidation engine is only half-connected.
+    - Resolution: Removed. Full-file re-extract is handled by the watcher flipping `ts_indexed = 0` and `lsp_indexed = 0` directly on the file row, which the worker picks up automatically — there was no need for an `InvalidationAction` variant for that path. Removed `ReextractFile` variant, `reextract_file`, `refresh_edges`, their `lib.rs` exports, the `apply_invalidation_actions` branch, and the now-obsolete `test_apply_invalidation_reextract_file_flips_both_flags` test. Updated `ideas/code-context-architecture.md` to describe the two recompute paths (watcher-driven full re-extract + `RefreshEdges`) as they actually work.
+
+### Warnings
+- [x] `swissarmyhammer-code-context/src/lsp_worker.rs:302-306` — The comment "any file whose outgoing edges pointed at symbols that no longer exist in `relative_path` must be re-indexed" matches the propagation signal, but the subsequent action (flip flag only) does not perform re-indexing of edges. Update the comment to describe what actually happens today, or implement the re-indexing. As written, the comment will mislead the next reader.
+    - Resolution: Implementation changed; comments rewritten end-to-end for `index_single_file` and `apply_invalidation_actions` to describe the two-phase symbol+edge indexing and how `RefreshEdges` triggers edge rewriting on the next pass.
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:154-162` — The step-by-step comment for `reextract_symbols` lists steps 5 (DELETE deleted rows) and 6 (UPDATE + INSERT existing/new). The implementation merges the update/insert into a single `ON CONFLICT DO UPDATE` upsert (see `upsert_symbols` at lines 216-251). The comment block should reflect the actual two-step flow (DELETE deleted, then UPSERT), otherwise readers look for code that does not exist.
+    - Resolution: Rewrote the `reextract_symbols` docstring. Steps are now numbered 1–7 matching the code exactly (snapshot, compute, diff, reverse-lookup, DELETE, UPSERT, emit), and a closing note explains why `INSERT OR REPLACE` is wrong here.
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:62-94` and `:182-194` — Two separate dynamic `IN (?,?,...)` builders exist (`find_reverse_edge_files` and the delete statement inside `reextract_symbols`). Both will hit SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` (32766 on modern builds, 999 on older ones) on pathological symbol counts. Either extract a shared helper that chunks large ID lists, or document the assumed upper bound. Nothing enforces a cap today.
+    - Resolution: Both sites now chunk through a shared `SQLITE_IN_CHUNK_SIZE` constant (900, conservative for both old and new SQLite builds with headroom for auxiliary bind params). Extracted `delete_symbols_by_id` helper. `find_reverse_edge_files` de-duplicates across chunks via a `HashSet`. Added regression test `test_find_reverse_edge_files_chunks_over_limit` that builds `SQLITE_IN_CHUNK_SIZE + 50` callees and confirms the lookup still returns the single caller.
+
+### Nits
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:216-251` — `upsert_symbols` is private to the module, which is correct, but its docstring is the right place to warn that `ON CONFLICT` fires per-row triggers differently from `INSERT OR REPLACE`. Consider a one-line note that any future trigger added to `lsp_symbols` must account for both paths.
+    - Resolution: Added a trigger note to the `upsert_symbols` docstring spelling out the AFTER UPDATE vs AFTER DELETE + AFTER INSERT trigger-firing difference.
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:82-92` — The allocation pattern `Vec<Box<dyn ToSql>>` followed by a parallel `Vec<&dyn ToSql>` is clever but noisy. `rusqlite::params_from_iter(callee_ids.iter().chain(std::iter::once(&exclude_file_owned)))` (after materializing `exclude_file` into an owned `String`) reads more clearly. Minor style preference.
+    - Resolution: Both dynamic-IN sites now use `rusqlite::params_from_iter` over borrowed `&str` iterators. No more `Box<dyn ToSql>` allocations.
+- [x] `swissarmyhammer-code-context/src/invalidation.rs:265-267` — `refresh_edges` is a one-line wrapper around `write_edges` that does nothing else. It reads like a leftover from an earlier design where refresh had to diff edges. Either delete it and have callers use `write_edges` directly, or give it meaningful behavior (e.g. explicit `DELETE then INSERT` for clarity).
+    - Resolution: Deleted (covered by Blocker #2).
+- [x] `swissarmyhammer-code-context/src/lsp_indexer.rs` — Visibility bump of `symbol_kind_to_i32` from `fn` to `pub(crate) fn` is fine; no concerns.
+    - Resolution: No action needed per the reviewer.

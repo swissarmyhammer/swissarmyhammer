@@ -134,7 +134,7 @@ Only exception: if the task description explicitly says **auto-continue** or **c
 - Do the work. No excuses, no "too complex". Find a way.
 - Follow the coding standards — correct, robust, well-designed code that follows prevailing patterns.
 - Don't refactor unrelated code while implementing.
-- Stay focused on the task you were given.
+- Stay focused on the task you were given. Validator feedback IS part of the task — fixing issues raised by validators is never a deviation from the task.
 - ALL tests must pass before you report success. Zero failures, zero warnings.
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
 - If you discover new work, add it as a new kanban task.

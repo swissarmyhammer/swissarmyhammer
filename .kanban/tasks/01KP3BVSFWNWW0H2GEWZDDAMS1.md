@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KP236XG87W8WVB42T2CQ85FD
 position_column: todo
-position_ordinal: c980
+position_ordinal: 7d80
 title: 'Date editor: replace bespoke CM6 with TextEditor, autosave + borderless icon+input layout'
 ---
 ## What
