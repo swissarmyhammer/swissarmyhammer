@@ -14,7 +14,7 @@ use crate::error::CodeContextError;
 ///
 /// `SymbolKind` is `#[serde(transparent)]` over `i32` but the field is private,
 /// so we roundtrip through JSON to get the numeric value.
-fn symbol_kind_to_i32(kind: SymbolKind) -> i32 {
+pub(crate) fn symbol_kind_to_i32(kind: SymbolKind) -> i32 {
     serde_json::to_value(kind)
         .ok()
         .and_then(|v| v.as_i64())

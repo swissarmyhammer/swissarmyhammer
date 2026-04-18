@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ce80
+position_ordinal: '7e80'
 title: Fix pre-existing React act() warnings in UI tests (131 instances)
 ---
 What: kanban-app/ui vitest suite emits ~131 'An update to X inside a test was not wrapped in act(...)' warnings on stderr. Providers involved include UIStateProvider, SchemaProvider, InspectorPanel (pre-entity-cache work), EntityInspector, PerspectiveTabBar, FocusScope, and others.

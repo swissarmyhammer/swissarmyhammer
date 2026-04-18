@@ -20,6 +20,7 @@ use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
 use crate::error::CodeContextError;
+use crate::invalidation::InvalidationAction;
 use crate::lsp_communication::LspJsonRpcClient;
 use crate::lsp_indexer::mark_lsp_indexed;
 use crate::workspace::SharedDb;
@@ -255,12 +256,31 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
     }
 }
 
-/// Index a single file via LSP: didOpen, documentSymbol, persist, mark indexed.
+/// Index a single file via LSP: didOpen, documentSymbol, call hierarchy,
+/// persist, mark indexed.
 ///
-/// Locks the shared DB only for the persist step — LSP I/O happens without
+/// Locks the shared DB only for the persist steps — LSP I/O happens without
 /// holding the mutex so other writers aren't blocked during network waits.
 ///
-/// Returns the number of symbols persisted on success.
+/// Two persist phases run under the DB lock:
+/// 1. **Symbol phase** — `collect_and_persist_file_symbols` runs the
+///    invalidation-aware symbol re-extract and returns any
+///    [`InvalidationAction`]s for dependents.
+/// 2. **Edge phase** — `collect_and_persist_call_edges` re-queries the LSP
+///    call hierarchy for every callable symbol in the file and rewrites the
+///    file's outgoing call edges. This is the step that gives
+///    [`InvalidationAction::RefreshEdges`] observable effect: when a
+///    dependent is flipped to `lsp_indexed = 0` by a previous file's
+///    invalidation, its next pass through this function will rewrite its
+///    edges against the current symbol universe and drop references to
+///    callees that have since been deleted or renamed.
+///
+/// Any [`InvalidationAction`] is applied after both phases complete by
+/// marking the affected dependent file as `lsp_indexed = 0`.
+///
+/// Returns the number of symbols persisted on success. Edge-collection
+/// failures are logged but do not fail the whole index pass — a file without
+/// edges is still useful, and the next pass will try again.
 fn index_single_file(
     client: &mut LspJsonRpcClient,
     db: &SharedDb,
@@ -274,16 +294,11 @@ fn index_single_file(
     // Send didOpen notification (no DB lock needed)
     client.send_did_open(full_path, language_id, &content)?;
 
-    // Collect symbols and persist them — lock DB for the write
+    // Symbol phase — lock DB for the write.
     let result = {
         let conn = db.lock().unwrap_or_else(|p| p.into_inner());
         client.collect_and_persist_file_symbols(&conn, full_path, relative_path)?
     };
-
-    // Close the document so re-indexing won't trigger "duplicate didOpen"
-    if let Err(e) = client.send_did_close(full_path) {
-        debug!("Failed to send didClose for {}: {}", relative_path, e);
-    }
 
     if let Some(err) = &result.error {
         warn!(
@@ -292,7 +307,83 @@ fn index_single_file(
         );
     }
 
+    // Edge phase — re-query call hierarchy and rewrite outgoing edges.
+    //
+    // This runs unconditionally for two reasons:
+    // * Initial indexing would otherwise never produce LSP call edges.
+    // * A file flagged by `RefreshEdges` has `lsp_indexed = 0`, so it re-
+    //   enters the worker loop here. Rewriting edges at this step is what
+    //   makes the invalidation propagation signal actually refresh the
+    //   stale edges.
+    //
+    // We hold the DB lock only for the write; the LSP round-trips (prepare
+    // call hierarchy, outgoing calls) happen before the lock is taken inside
+    // `collect_and_persist_call_edges`.
+    let edge_persist_result = {
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        client.collect_and_persist_call_edges(&conn, full_path, relative_path)
+    };
+    match edge_persist_result {
+        Ok(edge_count) => debug!(
+            "LSP persisted {} outgoing call edges for {}",
+            edge_count, relative_path
+        ),
+        Err(e) => warn!(
+            "LSP call-edge collection failed for {}: {} (symbols were still persisted)",
+            relative_path, e
+        ),
+    }
+
+    // Close the document so re-indexing won't trigger "duplicate didOpen"
+    if let Err(e) = client.send_did_close(full_path) {
+        debug!("Failed to send didClose for {}: {}", relative_path, e);
+    }
+
+    // Apply invalidation propagation: any file whose outgoing edges pointed
+    // at symbols that no longer exist in `relative_path` must have its edge
+    // set refreshed on the next worker pass.
+    if !result.pending_actions.is_empty() {
+        apply_invalidation_actions(db, relative_path, &result.pending_actions);
+    }
+
     Ok(result.symbol_count)
+}
+
+/// Apply [`InvalidationAction`]s by marking affected files as `lsp_indexed = 0`.
+///
+/// Each action signals that a dependent file's outgoing edges may contain
+/// stale references (because the triggering file deleted or renamed a symbol
+/// the dependent was calling). Flipping `lsp_indexed = 0` re-enqueues the
+/// dependent in the worker loop, and its next pass through
+/// [`index_single_file`] runs both the symbol phase and the edge phase — the
+/// edge phase is what rewrites the stale edge rows against the current
+/// symbol universe.
+///
+/// Errors are logged but never propagated — a failure to enqueue refreshes
+/// must not abort the current file's successful indexing.
+fn apply_invalidation_actions(db: &SharedDb, source_file: &str, actions: &[InvalidationAction]) {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    for action in actions {
+        match action {
+            InvalidationAction::RefreshEdges { file_path } => match conn.execute(
+                "UPDATE indexed_files SET lsp_indexed = 0 WHERE file_path = ?1",
+                [file_path],
+            ) {
+                Ok(updated) => debug!(
+                    source = %source_file,
+                    dependent = %file_path,
+                    "queued edge refresh ({} rows flipped)",
+                    updated
+                ),
+                Err(e) => warn!(
+                    source = %source_file,
+                    dependent = %file_path,
+                    "failed to queue edge refresh: {}",
+                    e
+                ),
+            },
+        }
+    }
 }
 
 /// File extensions supported by a given LSP server.
@@ -625,10 +716,11 @@ mod tests {
             children: None,
         }];
 
-        let count =
+        let (count, actions) =
             crate::lsp_communication::collect_and_persist_symbols(&db, "src/demo.rs", &symbols)
                 .unwrap();
         assert_eq!(count, 1);
+        assert!(actions.is_empty());
 
         // Verify lsp_indexed is now 1
         let lsp: i64 = db
@@ -1419,6 +1511,119 @@ mod tests {
     }
 
     #[test]
+    fn test_index_single_file_propagates_invalidation_to_dependents() {
+        // Full end-to-end: file F is re-indexed with a symbol set that drops
+        // `old_symbol`. Before the run, file G has an outgoing edge to
+        // `lsp:src/f.rs:old_symbol` (so it's a dependent). After index_single_file
+        // runs, G must be marked lsp_indexed = 0 so the worker re-collects
+        // its call edges against the new symbol set.
+        use std::io::Write;
+
+        // Mock documentSymbol response for F that contains NEW_symbol only
+        // — old_symbol is intentionally missing so it registers as deleted.
+        let symbol_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "new_symbol",
+                    "kind": 12,
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 2, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 13}}
+                }
+            ]
+        });
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let f_path = temp_dir.path().join("f.rs");
+        {
+            let mut f = std::fs::File::create(&f_path).unwrap();
+            writeln!(f, "fn new_symbol() {{}}").unwrap();
+        }
+        let response_file = temp_dir.path().join("mock_response.json");
+
+        // Seed the DB with both files, an old symbol on F, and a G→F edge.
+        let db = create_test_db();
+        insert_test_file(&db, "src/f.rs");
+        insert_test_file(&db, "src/g.rs");
+        // G starts fully indexed.
+        db.execute(
+            "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = 'src/g.rs'",
+            [],
+        )
+        .unwrap();
+
+        // F::old_symbol — will disappear after reindex
+        db.execute(
+            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char) \
+             VALUES ('lsp:src/f.rs:old_symbol', 'old_symbol', 12, 'src/f.rs', 0, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        // G::caller_fn — will hold an outgoing edge to F::old_symbol
+        db.execute(
+            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char) \
+             VALUES ('lsp:src/g.rs:caller_fn', 'caller_fn', 12, 'src/g.rs', 0, 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        db.execute(
+            "INSERT INTO lsp_call_edges (caller_id, callee_id, caller_file, callee_file, from_ranges) \
+             VALUES ('lsp:src/g.rs:caller_fn', 'lsp:src/f.rs:old_symbol', 'src/g.rs', 'src/f.rs', '[]')",
+            [],
+        )
+        .unwrap();
+
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+
+        // Run the worker on F.
+        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+        let result = index_single_file(&mut client, &shared_db, &f_path, "src/f.rs");
+        assert!(
+            result.is_ok(),
+            "index_single_file should succeed: {:?}",
+            result
+        );
+
+        // Post-conditions:
+        let conn = shared_db.lock().unwrap();
+
+        // (a) F now has new_symbol instead of old_symbol.
+        let f_symbols: Vec<String> = conn
+            .prepare("SELECT name FROM lsp_symbols WHERE file_path = 'src/f.rs'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(f_symbols, vec!["new_symbol".to_string()]);
+
+        // (b) G must be flagged for re-indexing (lsp_indexed = 0) because its
+        //     outgoing edge referenced F's deleted symbol. ts_indexed stays 1.
+        let (g_ts, g_lsp): (i64, i64) = conn
+            .query_row(
+                "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path = 'src/g.rs'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(g_ts, 1, "G's tree-sitter index is still valid");
+        assert_eq!(
+            g_lsp, 0,
+            "G must be queued for re-indexing because its outgoing edge is stale"
+        );
+
+        drop(conn);
+        let _ = child.wait();
+    }
+
+    #[test]
     fn test_index_single_file_missing_file_returns_io_error() {
         // When the file doesn't exist on disk, index_single_file should return
         // an I/O error before any LSP interaction occurs.
@@ -1583,5 +1788,160 @@ mod tests {
             result.is_ok(),
             "Loop should return Ok after recovering from poisoned DB mutex"
         );
+    }
+
+    // ── apply_invalidation_actions tests ────────────────────────────────
+    //
+    // These unit tests verify that the worker correctly enqueues dependent
+    // files for re-indexing when it receives InvalidationActions from the
+    // symbol collection step.
+
+    /// Mark a file as fully indexed (ts_indexed = 1, lsp_indexed = 1).
+    fn mark_fully_indexed(db: &SharedDb, file_path: &str) {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE indexed_files SET ts_indexed = 1, lsp_indexed = 1 WHERE file_path = ?1",
+            [file_path],
+        )
+        .unwrap();
+    }
+
+    /// Look up `(ts_indexed, lsp_indexed)` for a file, both as `i64`.
+    fn get_flags(db: &SharedDb, file_path: &str) -> (i64, i64) {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT ts_indexed, lsp_indexed FROM indexed_files WHERE file_path = ?1",
+            [file_path],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_apply_invalidation_refresh_edges_flips_lsp_indexed_only() {
+        // A RefreshEdges action must set lsp_indexed = 0 on the affected file
+        // but leave ts_indexed untouched (tree-sitter data is still valid).
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/caller.rs");
+        }
+        mark_fully_indexed(&db, "src/caller.rs");
+
+        let actions = vec![InvalidationAction::RefreshEdges {
+            file_path: "src/caller.rs".to_string(),
+        }];
+
+        apply_invalidation_actions(&db, "src/changed.rs", &actions);
+
+        let (ts, lsp) = get_flags(&db, "src/caller.rs");
+        assert_eq!(ts, 1, "ts_indexed should be preserved");
+        assert_eq!(lsp, 0, "lsp_indexed should be flipped to 0");
+    }
+
+    #[test]
+    fn test_apply_invalidation_empty_list_is_noop() {
+        // An empty action list must not change any rows.
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/untouched.rs");
+        }
+        mark_fully_indexed(&db, "src/untouched.rs");
+
+        apply_invalidation_actions(&db, "src/changed.rs", &[]);
+
+        let (ts, lsp) = get_flags(&db, "src/untouched.rs");
+        assert_eq!(ts, 1);
+        assert_eq!(lsp, 1);
+    }
+
+    #[test]
+    fn test_apply_invalidation_nonexistent_file_is_silent_noop() {
+        // When the action refers to a file not in indexed_files, the UPDATE
+        // affects zero rows. apply_invalidation_actions must not panic or
+        // propagate an error — propagation is explicitly non-fatal.
+        let db = create_shared_test_db();
+
+        let actions = vec![InvalidationAction::RefreshEdges {
+            file_path: "src/never_indexed.rs".to_string(),
+        }];
+
+        apply_invalidation_actions(&db, "src/changed.rs", &actions);
+        // No panic → success. Nothing to assert on the DB (zero rows affected).
+    }
+
+    #[test]
+    fn test_apply_invalidation_multiple_actions_handled_in_order() {
+        // A realistic propagation set with multiple dependent files.
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/a.rs");
+            insert_test_file(&conn, "src/b.rs");
+            insert_test_file(&conn, "src/c.rs");
+        }
+        mark_fully_indexed(&db, "src/a.rs");
+        mark_fully_indexed(&db, "src/b.rs");
+        mark_fully_indexed(&db, "src/c.rs");
+
+        let actions = vec![
+            InvalidationAction::RefreshEdges {
+                file_path: "src/a.rs".to_string(),
+            },
+            InvalidationAction::RefreshEdges {
+                file_path: "src/b.rs".to_string(),
+            },
+            InvalidationAction::RefreshEdges {
+                file_path: "src/c.rs".to_string(),
+            },
+        ];
+
+        apply_invalidation_actions(&db, "src/changed.rs", &actions);
+
+        // Every dependent has only lsp_indexed flipped; ts_indexed stays 1
+        // because tree-sitter symbols are not invalidated by LSP edge churn.
+        assert_eq!(get_flags(&db, "src/a.rs"), (1, 0));
+        assert_eq!(get_flags(&db, "src/b.rs"), (1, 0));
+        assert_eq!(get_flags(&db, "src/c.rs"), (1, 0));
+    }
+
+    #[test]
+    fn test_apply_invalidation_recovers_from_poisoned_mutex() {
+        // The helper uses unwrap_or_else(into_inner) to recover from a
+        // poisoned DB mutex. Verify it does not panic.
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/poisoned.rs");
+        }
+        mark_fully_indexed(&db, "src/poisoned.rs");
+
+        // Poison the DB mutex
+        let db_clone = Arc::clone(&db);
+        let poison_handle = thread::spawn(move || {
+            let _guard = db_clone.lock().unwrap();
+            panic!("poison");
+        });
+        let _ = poison_handle.join();
+        assert!(db.lock().is_err(), "DB mutex should be poisoned");
+
+        let actions = vec![InvalidationAction::RefreshEdges {
+            file_path: "src/poisoned.rs".to_string(),
+        }];
+
+        // Must not panic despite poisoned mutex
+        apply_invalidation_actions(&db, "src/changed.rs", &actions);
+
+        // Verify the update still landed
+        let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+        let lsp: i64 = conn
+            .query_row(
+                "SELECT lsp_indexed FROM indexed_files WHERE file_path = 'src/poisoned.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(lsp, 0, "RefreshEdges should have taken effect");
     }
 }

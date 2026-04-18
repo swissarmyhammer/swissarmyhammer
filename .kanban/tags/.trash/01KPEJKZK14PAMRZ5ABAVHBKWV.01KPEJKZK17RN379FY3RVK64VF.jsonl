@@ -1,0 +1,2 @@
+{"id":"01KPEJKZK17RN379FY3RVK64VF","timestamp":"2026-04-17T20:37:48.257686Z","op":"create","item_id":"01KPEJKZK14PAMRZ5ABAVHBKWV","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1 @@\n+tag_name: new-tag\n","reverse_patch":"--- original\n+++ modified\n@@ -1 +0,0 @@\n-tag_name: new-tag\n","transaction_id":null}
+{"id":"01KPEJKZK23MS76XF6B2BGE8B7","timestamp":"2026-04-17T20:37:48.258381Z","entity_type":"tag","entity_id":"01KPEJKZK14PAMRZ5ABAVHBKWV","op":"create","changes":[["tag_name",{"kind":"set","value":"new-tag"}]]}

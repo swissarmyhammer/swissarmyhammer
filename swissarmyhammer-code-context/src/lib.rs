@@ -46,7 +46,7 @@ pub use config::{
 };
 pub use error::CodeContextError;
 pub use hints::hint_for_operation;
-pub use invalidation::{reextract_file, refresh_edges, InvalidationAction};
+pub use invalidation::InvalidationAction;
 pub use layered_context::{
     CallEdgeInfo, ChunkInfo, DefinitionLocation, EnrichmentResult, FileEdit, LayeredContext,
     LspRange, SourceLayer, SymbolInfo, TextEdit,

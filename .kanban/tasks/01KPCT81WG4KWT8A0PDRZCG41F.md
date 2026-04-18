@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: todo
-position_ordinal: d680
+position_ordinal: 7f80
 title: 'Fix: inspector edits of non-hardcoded fields don''t update board/card view without refresh'
 ---
 ## What

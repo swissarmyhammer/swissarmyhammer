@@ -208,12 +208,12 @@ After step 4, G's edges are fresh. G's symbol set is unchanged (G's source didn'
 
 The exception would be if G's *signature* changed in a way that breaks callers — but signature changes are caught by a file change on G itself, which starts a fresh generation-0 recompute for G, not a propagation from F.
 
-### Two recompute operations
+### Two recompute paths
 
 There are two distinct recompute jobs, not one. This is what makes the 1-hop bound work:
 
-- **`ReextractFile`** — full recompute: delete and re-extract symbols, then re-extract edges. Triggered for the directly changed file (generation 0).
-- **`RefreshEdges`** — edge-only recompute: keep existing symbols, re-query outgoing calls. Triggered for files whose callees changed (generation 1). About 10x cheaper than a full re-extract since no symbol extraction is needed.
+- **Full re-extract** — generation 0. Triggered for the directly changed file. The file watcher flips `ts_indexed = 0` and `lsp_indexed = 0` on the file row; the worker loop then re-runs symbol extraction and the call-hierarchy pass against fresh content.
+- **`RefreshEdges`** — generation 1. Triggered for dependent files whose callees were renamed or deleted during generation 0. The invalidation engine emits a `RefreshEdges` action for each dependent; the worker applies it by flipping only `lsp_indexed = 0`, so the next pass re-queries outgoing call edges while leaving tree-sitter data intact. About 10x cheaper than a full re-extract since the symbol set is unchanged.
 
 `RefreshEdges` never triggers further propagation, which closes the loop.
 

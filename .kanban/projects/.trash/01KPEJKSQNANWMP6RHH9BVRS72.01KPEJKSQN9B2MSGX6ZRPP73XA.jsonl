@@ -1,0 +1,2 @@
+{"id":"01KPEJKSQN9B2MSGX6ZRPP73XA","timestamp":"2026-04-17T20:37:42.261548Z","op":"create","item_id":"01KPEJKSQNANWMP6RHH9BVRS72","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1 @@\n+name: New item\n","reverse_patch":"--- original\n+++ modified\n@@ -1 +0,0 @@\n-name: New item\n","transaction_id":null}
+{"id":"01KPEJKSQPTY1XMWEXN905X566","timestamp":"2026-04-17T20:37:42.262122Z","entity_type":"project","entity_id":"01KPEJKSQNANWMP6RHH9BVRS72","op":"create","changes":[["name",{"kind":"set","value":"New item"}]]}
