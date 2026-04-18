@@ -792,6 +792,23 @@ async fn wait_for_server_ready(ready_rx: oneshot::Receiver<()>) -> Result<()> {
     })
 }
 
+/// Resolve the effective bind port: use the caller-specified one if present,
+/// otherwise ask the OS for an ephemeral free port.
+async fn resolve_http_port(port: Option<u16>) -> Result<u16> {
+    match port {
+        Some(bind_port) => {
+            tracing::debug!("Using specified port: {}", bind_port);
+            Ok(bind_port)
+        }
+        None => {
+            tracing::debug!("Finding available random port");
+            let resolved_port = resolve_port(None).await?;
+            tracing::debug!("Found random port: {}", resolved_port);
+            Ok(resolved_port)
+        }
+    }
+}
+
 /// Start MCP server with HTTP transport using rmcp SseServer
 async fn start_http_server(
     port: Option<u16>,
@@ -802,15 +819,7 @@ async fn start_http_server(
 ) -> Result<McpServerHandle> {
     tracing::debug!("start_http_server called with port: {}", Pretty(&port));
 
-    let actual_port = if let Some(bind_port) = port {
-        tracing::debug!("Using specified port: {}", bind_port);
-        bind_port
-    } else {
-        tracing::debug!("Finding available random port");
-        let resolved_port = resolve_port(None).await?;
-        tracing::debug!("Found random port: {}", resolved_port);
-        resolved_port
-    };
+    let actual_port = resolve_http_port(port).await?;
 
     tracing::debug!("Creating MCP server");
     let server_arc = initialize_mcp_server(
@@ -822,8 +831,6 @@ async fn start_http_server(
     )
     .await?;
     tracing::debug!("MCP server initialized");
-    tracing::debug!("Set MCP server port {} in tool context", actual_port);
-    tracing::debug!("Set MCP server self-reference in tool context");
 
     let router = create_mcp_router(server_arc.clone());
     let (listener, connection_url) = create_tcp_listener(actual_port).await?;

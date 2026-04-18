@@ -6,8 +6,8 @@
 use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use async_watcher::{
-    notify::{Event, EventKind, RecursiveMode},
-    AsyncDebouncer,
+    notify::{Error as NotifyError, Event, EventKind, RecursiveMode},
+    AsyncDebouncer, DebouncedEvent,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -103,58 +103,14 @@ impl WorkspaceWatcher {
             return Err(TreeSitterError::FileNotFound(root_path));
         }
 
-        // Stop any existing watcher
         self.stop();
 
         let callback = Arc::new(callback);
-        let root_clone = root_path.clone();
-
-        // Create the async debouncer
-        let (mut debouncer, mut file_events) =
-            AsyncDebouncer::new_with_channel(Duration::from_millis(DEBOUNCE_DURATION_MS), None)
-                .await
-                .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
-
-        // Start watching
-        debouncer
-            .watcher()
-            .watch(&root_path, RecursiveMode::Recursive)
-            .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
-
-        // Spawn task to handle events
-        let handle = tokio::spawn(async move {
-            // Keep debouncer alive
-            let _debouncer = debouncer;
-
-            while let Some(result) = file_events.recv().await {
-                match result {
-                    Ok(debounced_events) => {
-                        // Extract events from DebouncedEvent
-                        let events: Vec<Event> =
-                            debounced_events.into_iter().map(|de| de.event).collect();
-                        let (changed, removed) = categorize_events(events);
-
-                        if !changed.is_empty() {
-                            if let Err(e) = callback.on_files_changed(changed).await {
-                                callback.on_error(e.to_string()).await;
-                            }
-                        }
-
-                        if !removed.is_empty() {
-                            callback.on_files_removed(removed).await;
-                        }
-                    }
-                    Err(errors) => {
-                        for error in errors {
-                            callback.on_error(error.to_string()).await;
-                        }
-                    }
-                }
-            }
-        });
+        let (debouncer, file_events) = build_debouncer(&root_path).await?;
+        let handle = tokio::spawn(run_event_loop(debouncer, file_events, callback));
 
         self.stop_handle = Some(handle);
-        self.root_path = Some(root_clone);
+        self.root_path = Some(root_path);
         self.is_watching = true;
 
         Ok(())
@@ -188,6 +144,69 @@ impl Default for WorkspaceWatcher {
 impl Drop for WorkspaceWatcher {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Alias for the debounced-event channel payload — matches the return type
+/// of `AsyncDebouncer::new_with_channel`.
+type DebounceEventBatch = std::result::Result<Vec<DebouncedEvent>, Vec<NotifyError>>;
+
+/// Construct the async debouncer and register a recursive watch on `root_path`.
+async fn build_debouncer(
+    root_path: &Path,
+) -> Result<(
+    AsyncDebouncer<async_watcher::notify::RecommendedWatcher>,
+    tokio::sync::mpsc::Receiver<DebounceEventBatch>,
+)> {
+    let (mut debouncer, file_events) =
+        AsyncDebouncer::new_with_channel(Duration::from_millis(DEBOUNCE_DURATION_MS), None)
+            .await
+            .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
+    debouncer
+        .watcher()
+        .watch(root_path, RecursiveMode::Recursive)
+        .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
+    Ok((debouncer, file_events))
+}
+
+/// Forever-loop that drains debounced events and dispatches to the callback.
+/// The debouncer is moved in so it stays alive for the task's lifetime.
+async fn run_event_loop<C>(
+    debouncer: AsyncDebouncer<async_watcher::notify::RecommendedWatcher>,
+    mut file_events: tokio::sync::mpsc::Receiver<DebounceEventBatch>,
+    callback: Arc<C>,
+) where
+    C: WorkspaceWatcherCallback + 'static,
+{
+    let _keep_alive = debouncer;
+    while let Some(result) = file_events.recv().await {
+        match result {
+            Ok(debounced_events) => {
+                let events: Vec<Event> = debounced_events.into_iter().map(|de| de.event).collect();
+                dispatch_events(&*callback, events).await;
+            }
+            Err(errors) => {
+                for error in errors {
+                    callback.on_error(error.to_string()).await;
+                }
+            }
+        }
+    }
+}
+
+/// Categorize a batch of raw events and invoke the matching callback entries.
+async fn dispatch_events<C>(callback: &C, events: Vec<Event>)
+where
+    C: WorkspaceWatcherCallback,
+{
+    let (changed, removed) = categorize_events(events);
+    if !changed.is_empty() {
+        if let Err(e) = callback.on_files_changed(changed).await {
+            callback.on_error(e.to_string()).await;
+        }
+    }
+    if !removed.is_empty() {
+        callback.on_files_removed(removed).await;
     }
 }
 

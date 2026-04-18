@@ -244,23 +244,8 @@ impl McpServer {
         let tool_handlers = ToolHandlers::new();
         let agent_config = Self::resolve_agent_config(model_override)?;
 
-        // Initialize skill library
-        let skill_library = Arc::new(RwLock::new(SkillLibrary::new()));
-        {
-            let mut lib = skill_library.write().await;
-            lib.load_defaults();
-            tracing::debug!("Loaded {} skills", lib.len());
-        }
-
-        // Initialize agent library
-        let agent_library = Arc::new(RwLock::new(AgentLibrary::new()));
-        {
-            let mut lib = agent_library.write().await;
-            lib.load_defaults();
-            tracing::debug!("Loaded {} agents", lib.names().len());
-        }
-
-        // Wrap prompt library in Arc<RwLock<>> for shared access by skill tool
+        let skill_library = Self::init_skill_library().await;
+        let agent_library = Self::init_agent_library().await;
         let prompt_library = Arc::new(RwLock::new(library));
 
         let (tool_registry_arc, tool_context) = Self::create_tool_context_and_registry(
@@ -275,7 +260,7 @@ impl McpServer {
         )
         .await;
 
-        let server = Self {
+        Ok(Self {
             library: prompt_library,
             file_watcher: Arc::new(Mutex::new(FileWatcher::new())),
             tool_registry: tool_registry_arc,
@@ -284,9 +269,27 @@ impl McpServer {
             agent_library,
             work_dir: Some(work_dir),
             tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
-        };
+        })
+    }
 
-        Ok(server)
+    /// Construct a `SkillLibrary` pre-populated with the builtin skills.
+    async fn init_skill_library() -> Arc<RwLock<SkillLibrary>> {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        let mut lib = library.write().await;
+        lib.load_defaults();
+        tracing::debug!("Loaded {} skills", lib.len());
+        drop(lib);
+        library
+    }
+
+    /// Construct an `AgentLibrary` pre-populated with the builtin agents.
+    async fn init_agent_library() -> Arc<RwLock<AgentLibrary>> {
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let mut lib = library.write().await;
+        lib.load_defaults();
+        tracing::debug!("Loaded {} agents", lib.names().len());
+        drop(lib);
+        library
     }
 
     /// How often followers retry promotion to leader.
@@ -320,66 +323,37 @@ impl McpServer {
     }
 
     fn do_initialize_code_context(work_dir: &std::path::Path) {
-        let workspace_root = match find_git_repository_root_from(work_dir) {
-            Some(root) => root,
-            None => {
-                tracing::info!(
-                    "code-context: no git repository found from {}, skipping initialization",
-                    work_dir.display()
-                );
-                return;
-            }
+        let Some(workspace_root) = resolve_workspace_root(work_dir) else {
+            return;
         };
-
         tracing::info!(
             "code-context: initializing for workspace {}",
             workspace_root.display()
         );
 
-        // Start LSP supervisor — it spawns rust-analyzer and does the handshake.
-        // After handshake, we grab the shared client Arc for the indexing worker.
         let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
 
-        // Open the workspace — may become leader or follower depending on election.
-        use swissarmyhammer_code_context::CodeContextWorkspace;
-
-        tracing::info!(
-            "code-context: opening workspace for {}",
-            workspace_root.display()
-        );
-        let ws = match CodeContextWorkspace::open(&workspace_root) {
-            Ok(ws) => {
-                tracing::info!(
-                    "code-context: workspace opened as {}",
-                    if ws.is_leader() { "leader" } else { "follower" }
-                );
-                ws
-            }
-            Err(e) => {
-                tracing::warn!("code-context: failed to open workspace: {}", e);
-                return;
-            }
+        let Some(ws) = open_workspace(&workspace_root) else {
+            return;
         };
-
-        // Wrap workspace in Arc<Mutex> so the re-election loop can access it.
-        // The workspace (and its LeaderGuard/FollowerGuard) lives as long as
-        // this Arc — dropping it releases leadership.
-        let ws = Arc::new(std::sync::Mutex::new(ws));
 
         // If we're already leader, start TS indexing + file watcher immediately.
         // If follower, the re-election loop below will start workers on promotion.
-        {
-            let ws_lock = ws.lock().expect("workspace mutex poisoned");
-            if let Some(shared_db) = ws_lock.shared_db() {
-                Self::start_indexing_workers(workspace_root.clone(), shared_db);
-            }
-        }
+        Self::start_workers_if_leader(&ws, &workspace_root);
 
-        // Re-election loop: followers poll every 5s trying to become leader.
         Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone());
-
-        // LSP health check loop (runs independently of leader/follower status).
         Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
+    }
+
+    /// If the workspace is already leader, start TS indexing + watcher workers.
+    fn start_workers_if_leader(
+        ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+        workspace_root: &std::path::Path,
+    ) {
+        let ws_lock = ws.lock().expect("workspace mutex poisoned");
+        if let Some(shared_db) = ws_lock.shared_db() {
+            Self::start_indexing_workers(workspace_root.to_path_buf(), shared_db);
+        }
     }
 
     /// Spawn the LSP supervisor task. Starts every configured LSP daemon,
@@ -1300,6 +1274,46 @@ fn agent_deterministic_color(id: &str) -> String {
         .bytes()
         .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
     AGENT_COLORS[(hash as usize) % AGENT_COLORS.len()].to_string()
+}
+
+/// Walk up from `work_dir` to find the enclosing git repository root. Returns
+/// `None` (and logs) if we're not inside a repo — callers use that signal to
+/// skip code-context initialization.
+fn resolve_workspace_root(work_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    match find_git_repository_root_from(work_dir) {
+        Some(root) => Some(root),
+        None => {
+            tracing::info!(
+                "code-context: no git repository found from {}, skipping initialization",
+                work_dir.display()
+            );
+            None
+        }
+    }
+}
+
+/// Open the code-context workspace and wrap it in an `Arc<Mutex>` for sharing
+/// across the spawned background tasks. Logs and returns `None` on failure.
+fn open_workspace(
+    workspace_root: &std::path::Path,
+) -> Option<Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>> {
+    tracing::info!(
+        "code-context: opening workspace for {}",
+        workspace_root.display()
+    );
+    match swissarmyhammer_code_context::CodeContextWorkspace::open(workspace_root) {
+        Ok(ws) => {
+            tracing::info!(
+                "code-context: workspace opened as {}",
+                if ws.is_leader() { "leader" } else { "follower" }
+            );
+            Some(Arc::new(std::sync::Mutex::new(ws)))
+        }
+        Err(e) => {
+            tracing::warn!("code-context: failed to open workspace: {}", e);
+            None
+        }
+    }
 }
 
 /// Collect every running daemon's `(server_name, shared_client)` pair from
