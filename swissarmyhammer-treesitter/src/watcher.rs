@@ -501,6 +501,12 @@ mod tests {
         );
     }
 
+    // Gated off macOS: FSEvents does not reliably deliver Remove events for
+    // files deleted inside a watched directory — the kind is sometimes absent
+    // or coalesced into a Modify, and sometimes nothing fires at all. The
+    // `on_files_removed` callback wiring is covered by
+    // `test_custom_callback_implementation` on every platform.
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn test_watcher_fires_callback_on_file_remove() {
         let dir = setup_minimal_test_dir();
@@ -512,29 +518,13 @@ mod tests {
         // Remove the existing main.rs file
         std::fs::remove_file(dir.path().join("main.rs")).unwrap();
 
-        // Wait for debounce plus processing.
-        // On macOS FSEvents, removal events may arrive as Remove or Modify
-        // depending on the OS version. We accept either kind of notification.
         let fired = wait_for(
             || callback.removed_count() > 0 || callback.changed_count() > 0,
             3000,
         )
         .await;
-
-        // On some platforms (particularly macOS FSEvents), file deletions
-        // within a watched directory are not always reported as Remove events.
-        // If no event arrives, skip rather than fail — the test infrastructure
-        // for verifying the on_files_removed callback is covered in
-        // test_custom_callback_implementation.
-        if !fired {
-            eprintln!(
-                "Note: no file-removal event received (platform may not support it) — skipping assertion"
-            );
-            return;
-        }
-
         assert!(
-            callback.removed_count() > 0 || callback.changed_count() > 0,
+            fired,
             "Expected on_files_removed or on_files_changed callback to fire after deleting a Rust file"
         );
     }
