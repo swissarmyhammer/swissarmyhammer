@@ -257,9 +257,9 @@ impl BoardHandle {
         register_perspective_store(&ctx, &store_context, &kanban_path).await;
 
         // Ensure the entity context is initialized — this also constructs
-        // and attaches the `EntityCache` and spawns the filesystem watcher
-        // inside the entity crate. After this call, `ctx.entity_cache()`
-        // returns the same `Arc<EntityCache>` that owns the live state.
+        // and attaches the `EntityCache`. After this call,
+        // `ctx.entity_cache()` returns the same `Arc<EntityCache>` that
+        // owns the live state.
         let ectx = ctx
             .entity_context()
             .await
@@ -270,6 +270,14 @@ impl BoardHandle {
         let entity_cache = ctx
             .entity_cache()
             .expect("entity_cache must be populated after entity_context() returns Ok");
+
+        // Spawn the filesystem watcher explicitly — long-running processes
+        // want to see external edits propagate through the cache. One-shot
+        // callers (MCP, CLI, tests) intentionally skip this because
+        // building an FSEvents watcher on macOS costs hundreds of ms.
+        if let Err(e) = ctx.start_watcher() {
+            tracing::warn!(error = %e, "failed to spawn kanban filesystem watcher");
+        }
 
         let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
