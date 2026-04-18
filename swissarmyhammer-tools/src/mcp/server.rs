@@ -289,6 +289,18 @@ impl McpServer {
         Ok(server)
     }
 
+    /// How often followers retry promotion to leader.
+    const REELECTION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// How often the LSP supervisor is polled for daemon health.
+    const LSP_HEALTH_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// Poll interval when waiting for the LSP supervisor OnceCell to be set.
+    const LSP_SUPERVISOR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+    /// Maximum total time to wait for the LSP supervisor after a promotion.
+    const LSP_SUPERVISOR_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
     /// Initialize code-context workspace and start indexing at MCP startup.
     ///
     /// Finds the git repository root from the working directory, opens a
@@ -419,7 +431,7 @@ impl McpServer {
     ) {
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(Self::REELECTION_POLL_INTERVAL).await;
                 let promoted = try_promote_workspace(&ws);
                 if handle_promotion_result(promoted, &workspace_root) {
                     break;
@@ -1412,10 +1424,11 @@ fn start_lsp_workers_if_leader(
     spawn_lsp_workers_for_clients(workspace_root, &shared_db, clients, log_suffix);
 }
 
-/// Run the 60-second LSP supervisor health-check loop forever.
+/// Run the LSP supervisor health-check loop forever, polling on the
+/// `McpServer::LSP_HEALTH_CHECK_INTERVAL` cadence.
 async fn run_lsp_health_check_loop() -> ! {
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(McpServer::LSP_HEALTH_CHECK_INTERVAL).await;
         use super::tools::code_context::LSP_SUPERVISOR;
         if let Some(sup) = LSP_SUPERVISOR.get() {
             sup.lock().await.health_check_all().await;
@@ -1423,21 +1436,27 @@ async fn run_lsp_health_check_loop() -> ! {
     }
 }
 
-/// Wait up to 30 seconds for the `LSP_SUPERVISOR` OnceCell to be initialized
-/// and return it. Returns `None` and logs a warning if it never appears.
+/// Wait for the `LSP_SUPERVISOR` OnceCell to be initialized, polling on the
+/// `McpServer::LSP_SUPERVISOR_POLL_INTERVAL` cadence up to
+/// `McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT`. Returns `None` and logs a
+/// warning if it never appears.
 async fn wait_for_lsp_supervisor(
     workspace_root: &std::path::Path,
 ) -> Option<Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>> {
     use super::tools::code_context::LSP_SUPERVISOR;
-    for _ in 0..60 {
+    let poll = McpServer::LSP_SUPERVISOR_POLL_INTERVAL;
+    let max_attempts =
+        (McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT.as_millis() / poll.as_millis().max(1)) as u32;
+    for _ in 0..max_attempts {
         if let Some(s) = LSP_SUPERVISOR.get() {
             return Some(Arc::clone(s));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(poll).await;
     }
     tracing::warn!(
-        "code-context: LSP supervisor not available after 30s post-promotion for {}; \
+        "code-context: LSP supervisor not available after {:?} post-promotion for {}; \
          LSP indexing will not run until next restart",
+        McpServer::LSP_SUPERVISOR_WAIT_TIMEOUT,
         workspace_root.display(),
     );
     None
