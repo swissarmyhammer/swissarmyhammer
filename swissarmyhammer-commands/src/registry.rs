@@ -410,10 +410,12 @@ mod tests {
         let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
-        // entity: task.add, task.move, task.delete, task.untag, task.doThisNext,
+        // entity: task.move, task.delete, task.untag, task.doThisNext,
         //         entity.add, entity.update_field, entity.delete, entity.archive,
         //         entity.unarchive, tag.update, column.reorder, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 16
+        //         entity.copy, entity.cut, entity.paste = 15
+        // (task.add and project.add were retired in favor of the dynamic
+        // entity.add:{type} pipeline — see commit 8973cf694.)
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
         //     palette.close, view.set, perspective.set, perspective.startRename,
         //     setFocus, window.new = 10
@@ -424,18 +426,22 @@ mod tests {
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 63);
+        assert_eq!(registry.all_commands().len(), 62);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
-        assert!(registry.get("task.add").is_some());
+        assert!(registry.get("entity.add").is_some());
         assert!(registry.get("ui.palette.open").is_some());
         assert!(registry.get("settings.keymap.vim").is_some());
         assert!(registry.get("task.untag").unwrap().context_menu);
-        assert!(registry.get("task.add").unwrap().undoable);
+        assert!(registry.get("entity.add").unwrap().undoable);
         assert!(!registry.get("app.undo").unwrap().undoable);
         assert!(registry.get("file.closeBoard").is_some());
         assert!(registry.get("drag.start").is_some());
+        // task.add and project.add must NOT be registered — they were
+        // replaced by the dynamic entity.add:{type} pipeline.
+        assert!(registry.get("task.add").is_none());
+        assert!(registry.get("project.add").is_none());
     }
 
     #[test]
