@@ -15,9 +15,6 @@ mention_prefix: "^"
 mention_display_field: title
 mention_color_field: color
 commands:
-  - id: ui.inspect
-    name: "Inspect {{entity.type}}"
-    context_menu: true
   - id: entity.copy
     name: "Copy {{entity.type}}"
     context_menu: true

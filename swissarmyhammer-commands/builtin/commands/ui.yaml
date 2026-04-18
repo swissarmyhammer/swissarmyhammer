@@ -1,9 +1,9 @@
 - id: ui.inspect
-  name: Inspect
-  visible: false
+  name: "Inspect {{entity.type}}"
+  context_menu: true
   params:
     - name: moniker
-      from: args
+      from: target
 
 - id: ui.inspector.close
   name: Close Inspector

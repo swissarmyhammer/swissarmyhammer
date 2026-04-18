@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPENGNDX2526DZCRYT9N1E9P
-position_column: todo
-position_ordinal: d080
+position_column: done
+position_ordinal: ffffffffffffffffffffffe480
 title: 'Commands: document cross-cutting rule + YAML hygiene test (no cross-cutting in entity schemas)'
 ---
 ## What
@@ -32,20 +32,20 @@ The test scans every `swissarmyhammer-kanban/builtin/entities/*.yaml` and fails 
 
 ### Subtasks
 
-- [ ] Write rule as a header comment in `entity.yaml` with the cross-cutting ID list.
-- [ ] Write the feedback memory file and link from `MEMORY.md`.
-- [ ] Add the hygiene test. It MUST fail on the current branch (six entity YAMLs list `ui.inspect`; task/tag/project YAMLs list more cross-cutting commands).
+- [x] Write rule as a header comment in `entity.yaml` with the cross-cutting ID list.
+- [x] Write the feedback memory file and link from `MEMORY.md`.
+- [x] Add the hygiene test. It MUST fail on the current branch (six entity YAMLs list `ui.inspect`; task/tag/project YAMLs list more cross-cutting commands).
 
 ## Acceptance Criteria
 
-- [ ] `entity.yaml` opens with the rule-comment header naming the cross-cutting IDs.
-- [ ] `MEMORY.md` indexes a new `feedback_command_organization.md` memory.
-- [ ] Hygiene test exists and **fails on this branch** — the failure drives the rest of the plan.
+- [x] `entity.yaml` opens with the rule-comment header naming the cross-cutting IDs.
+- [x] `MEMORY.md` indexes a new `feedback_command_organization.md` memory.
+- [x] Hygiene test exists and **fails on this branch** — the failure drives the rest of the plan.
 
 ## Tests
 
-- [ ] Add `yaml_hygiene_no_cross_cutting_in_entity_schemas` in `swissarmyhammer-kanban/src/scope_commands.rs` tests module. Load every `builtin/entities/*.yaml`, iterate `commands:` entries, fail listing every entity/command pair that violates the rule.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban yaml_hygiene_no_cross_cutting_in_entity_schemas` — expect FAIL on this branch, expect PASS after the plan lands.
+- [x] Add `yaml_hygiene_no_cross_cutting_in_entity_schemas` in `swissarmyhammer-kanban/src/scope_commands.rs` tests module. Load every `builtin/entities/*.yaml`, iterate `commands:` entries, fail listing every entity/command pair that violates the rule.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban yaml_hygiene_no_cross_cutting_in_entity_schemas` — expect FAIL on this branch, expect PASS after the plan lands. CONFIRMED: fails with 17 violations across 6 entity YAMLs.
 
 ## Workflow
 

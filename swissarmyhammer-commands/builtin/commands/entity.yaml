@@ -1,3 +1,51 @@
+# =============================================================================
+# COMMAND ORGANIZATION RULE — read this before adding or moving commands.
+# =============================================================================
+#
+# Command declarations (the full contract: id, name, params, undoable, keys,
+# context_menu, scope) live in `swissarmyhammer-commands/builtin/commands/`,
+# split by noun:
+#
+#   * entity.yaml      — cross-cutting commands that apply to any entity by
+#                        target moniker. Listed below.
+#   * ui.yaml          — UI commands, including the cross-cutting `ui.inspect`.
+#   * task.yaml,       — type-specific commands only. A command that operates
+#     tag.yaml,          on a single entity type belongs in that type's file,
+#     project.yaml,      not here.
+#     column.yaml,
+#     attachment.yaml,
+#     perspective.yaml
+#
+# A command is "cross-cutting" when its primary param declares `from: target`
+# — it operates on whatever entity the context menu fired over, regardless of
+# type. The scope_commands emitter auto-emits each cross-cutting command once
+# per entity moniker in the scope chain. Per-type opt-out lives in Rust
+# `Command::available()` (e.g. attachments reject `entity.archive`); it is
+# never declared by re-listing the command in a per-entity schema.
+#
+# CROSS-CUTTING COMMAND IDS (must NOT appear in
+# `swissarmyhammer-kanban/builtin/entities/*.yaml`):
+#
+#   * ui.inspect          (declared in ui.yaml)
+#   * entity.add
+#   * entity.delete
+#   * entity.archive
+#   * entity.unarchive
+#   * entity.copy
+#   * entity.cut
+#   * entity.paste
+#   * entity.update_field
+#
+# Per-entity schemas (`swissarmyhammer-kanban/builtin/entities/*.yaml`) list
+# ONLY type-specific command references with overlay metadata
+# (`context_menu`, `keys`, `menu_name`). Cross-cutting commands are NOT
+# listed there — they auto-emit from this registry.
+#
+# A YAML hygiene test enforces this rule:
+#   `cargo nextest run -p swissarmyhammer-kanban \
+#       yaml_hygiene_no_cross_cutting_in_entity_schemas`
+# =============================================================================
+
 - id: task.move
   name: Move Task
   scope: "entity:task"
@@ -83,7 +131,6 @@
 
 - id: entity.archive
   name: Archive
-  scope: "entity:task"
   undoable: true
   context_menu: true
   keys:
@@ -94,7 +141,6 @@
 
 - id: entity.unarchive
   name: Unarchive
-  scope: "entity:task"
   undoable: true
   context_menu: true
   params:
@@ -123,7 +169,6 @@
 
 - id: entity.cut
   name: "Cut {{entity.type}}"
-  scope: "entity:task"
   undoable: true
   context_menu: true
   keys:
@@ -140,7 +185,6 @@
 
 - id: entity.copy
   name: "Copy {{entity.type}}"
-  scope: "entity:task"
   undoable: false
   context_menu: true
   keys:

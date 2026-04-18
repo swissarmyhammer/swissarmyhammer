@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 depends_on:
-- 01KPEN0JMTVSCW8PZW6RRD0NC3
+- 01KPG6XZ9GKP2VJPA6XWNE8WN4
 position_column: todo
 position_ordinal: d580
 title: 'Commands: retire DeleteProjectCmd and project.delete registration (superseded by entity.delete auto-emit)'

@@ -5,9 +5,6 @@ mention_display_field: tag_name
 mention_color_field: color
 search_display_field: tag_name
 commands:
-  - id: ui.inspect
-    name: "Inspect {{entity.type}}"
-    context_menu: true
   - id: entity.archive
     name: "Archive {{entity.type}}"
     context_menu: true

@@ -1,10 +1,9 @@
 ---
 assignees:
 - claude-code
-depends_on:
-- 01KPEPTF55TWT0NB6SGX2JWJ6T
-position_column: todo
-position_ordinal: d780
+depends_on: []
+position_column: done
+position_ordinal: ffffffffffffffffffffffe680
 title: 'Commands: add emit_cross_cutting_commands pass driven by existing from:target params; migrate ui.inspect as pilot'
 ---
 ## What
@@ -53,25 +52,25 @@ Drop `visible: false`. The new emission pass picks it up and surfaces it on ever
 
 ### Subtasks
 
-- [ ] Confirm the existing `ParamDef`/`ParamSource` schema cleanly expresses "from target"; no new fields added unless necessary.
-- [ ] Implement `emit_cross_cutting_commands` driven by the target-param signal.
-- [ ] Wire into `commands_for_scope`; document emission ordering.
-- [ ] Promote `ui.inspect` to target-driven in `ui.yaml`; delete six entity-schema copies.
+- [x] Confirm the existing `ParamDef`/`ParamSource` schema cleanly expresses "from target"; no new fields added unless necessary.
+- [x] Implement `emit_cross_cutting_commands` driven by the target-param signal.
+- [x] Wire into `commands_for_scope`; document emission ordering.
+- [x] Promote `ui.inspect` to target-driven in `ui.yaml`; delete six entity-schema copies.
 
 ## Acceptance Criteria
 
-- [ ] No `per_entity` / `cross_cutting` field added to `CommandDef`.
-- [ ] `emit_cross_cutting_commands` exists and is called once per `commands_for_scope` invocation.
-- [ ] Right-click on every entity type (task, tag, project, column, board, actor) shows "Inspect <Type>" and opens the inspector.
-- [ ] `grep -n 'id: ui\\.inspect' swissarmyhammer-kanban/builtin/entities/` returns zero matches.
-- [ ] `ui.inspect` is declared exactly once in the registry.
+- [x] No `per_entity` / `cross_cutting` field added to `CommandDef`.
+- [x] `emit_cross_cutting_commands` exists and is called once per `commands_for_scope` invocation.
+- [x] Right-click on every entity type (task, tag, project, column, board, actor) shows "Inspect <Type>" and opens the inspector.
+- [x] `grep -n 'id: ui\\.inspect' swissarmyhammer-kanban/builtin/entities/` returns zero matches.
+- [x] `ui.inspect` is declared exactly once in the registry.
 
 ## Tests
 
-- [ ] Add `ui_inspect_auto_emits_on_every_entity_type` in `scope_commands.rs` tests — parameterized over `["task:01X", "tag:01T", "project:backend", "column:todo", "board:main", "actor:alice"]`. Each scope yields a `ResolvedCommand` with `id == "ui.inspect"` and `target == Some(moniker)`.
-- [ ] Add `cross_cutting_dedupes_per_target` — scope `["task:01X", "column:todo", "board:main"]` emits `ui.inspect` exactly once per distinct target, never duplicated.
-- [ ] Add `cross_cutting_respects_available_opt_out` — stub command whose `available()` returns false for a given moniker type does NOT emit for it.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-commands -p swissarmyhammer-kanban scope_commands` — all green.
+- [x] Add `ui_inspect_auto_emits_on_every_entity_type` in `scope_commands.rs` tests — parameterized over `["task:01X", "tag:01T", "project:backend", "column:todo", "board:main", "actor:alice"]`. Each scope yields a `ResolvedCommand` with `id == "ui.inspect"` and `target == Some(moniker)`.
+- [x] Add `cross_cutting_dedupes_per_target` — scope `["task:01X", "column:todo", "board:main"]` emits `ui.inspect` exactly once per distinct target, never duplicated.
+- [x] Add `cross_cutting_respects_available_opt_out` — stub command whose `available()` returns false for a given moniker type does NOT emit for it.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-commands -p swissarmyhammer-kanban scope_commands` — all green except the pre-existing `yaml_hygiene_no_cross_cutting_in_entity_schemas` test which is documented as expected-to-fail until follow-up cards strip the rest of the cross-cutting opt-ins from entity YAMLs (this card removes only `ui.inspect` per its scope).
 
 ## Workflow
 
@@ -80,3 +79,11 @@ Drop `visible: false`. The new emission pass picks it up and surfaces it on ever
 #commands
 
 Depends on: 01KPEMA771EPB8V51SPKAE0PBB (scope pins must be off so the cross-cutting pass emits without fighting `scope_matches`)
+
+## Implementation notes (post-completion)
+
+- `ParamSource::Target` already existed in `swissarmyhammer-commands/src/types.rs`; no schema change needed.
+- New emitter `emit_cross_cutting_commands` lives in `swissarmyhammer-kanban/src/scope_commands.rs` and is gated on the entity type being declared in `FieldsContext` (so synthetic monikers like `foo:bar` don't sprout cross-cutting commands).
+- Inserted into `emit_scoped_commands` between `emit_entity_schema_commands` and `emit_scoped_registry_commands` per the documented ordering.
+- Module doc-comment at the top of `scope_commands.rs` documents the full emission ordering.
+- `attachment_commands_appear_before_task_commands` test was tightened to compare resolved `group` instead of fragile id-prefix matching, which broke once cross-cutting started emitting `entity.*` commands targeting attachments.

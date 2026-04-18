@@ -2,10 +2,16 @@
 assignees:
 - claude-code
 depends_on:
-- 01KPEMYJV7BMTJB6GZ8MGTD04J
+- 01KPG6G4SGXW1FN92YDXFNEAQ2
+- 01KPG6GD34NMPQE1DZD0MHWE0N
+- 01KPG6GN9JQSCZKFER5ZJ5JC62
+- 01KPG6GYSNGTEJ42XA2QNB3VE0
+- 01KPG6H74Z24N48DQR75CT7HP7
+- 01KPG6HF1ZHWZ981PS3BEPP1HE
+- 01KPG6HQYRRWCP52VH1KNKR35B
 position_column: todo
 position_ordinal: d880
-title: 'Commands: migrate entity.delete/archive/unarchive/copy/cut/paste to target-driven params; purge entity schema opt-ins'
+title: 'Commands: migrate entity.delete/archive/unarchive/copy/cut/paste to auto-emit; purge entity schema opt-ins'
 ---
 ## What
 

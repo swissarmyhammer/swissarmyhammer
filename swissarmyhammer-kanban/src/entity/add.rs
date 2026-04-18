@@ -95,13 +95,25 @@ impl AddEntity {
 /// are never written directly onto the entity as field values, even when
 /// the entity schema happens to declare a field with the same name.
 ///
+/// Both the dispatcher-convention names (`column`, `ordinal`) and the raw
+/// field names ([`POSITION_COLUMN_FIELD`], [`POSITION_ORDINAL_FIELD`]) are
+/// reserved. The dispatcher contract guarantees only the short names will
+/// flow through, but reserving the field names too prevents a hostile or
+/// buggy caller from bypassing [`apply_position`] by writing the resolved
+/// columns directly via the override bag.
+///
 /// This reservation is a deliberate trade-off: the generic dispatch arg
-/// bag is flat (no distinct "positional args" namespace), so the two
-/// special keys must be picked by name. If a future entity type ever needs
-/// to declare a field literally named `column` or `ordinal`, this list is
+/// bag is flat (no distinct "positional args" namespace), so the special
+/// keys must be picked by name. If a future entity type ever needs to
+/// declare a field literally named `column` or `ordinal`, this list is
 /// where that collision would need to be resolved (e.g. by migrating to
 /// sentinel keys like `_column` / `_ordinal`).
-const RESERVED_POSITION_OVERRIDE_KEYS: &[&str] = &["column", "ordinal"];
+const RESERVED_POSITION_OVERRIDE_KEYS: &[&str] = &[
+    "column",
+    "ordinal",
+    POSITION_COLUMN_FIELD,
+    POSITION_ORDINAL_FIELD,
+];
 
 impl AddEntity {
     /// Apply schema field defaults to an entity in place.

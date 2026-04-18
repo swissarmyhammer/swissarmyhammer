@@ -4,9 +4,6 @@ mention_prefix: "%"
 mention_display_field: name
 search_display_field: name
 commands:
-  - id: ui.inspect
-    name: "Inspect {{entity.type}}"
-    context_menu: true
   - id: entity.paste
     name: "Paste {{entity.type}}"
     context_menu: true
