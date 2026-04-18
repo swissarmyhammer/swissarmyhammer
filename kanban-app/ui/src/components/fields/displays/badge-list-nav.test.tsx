@@ -104,6 +104,7 @@ import { FocusScope } from "@/components/focus-scope";
 import {
   EntityFocusProvider,
   useEntityFocus,
+  useFocusedMoniker,
 } from "@/lib/entity-focus-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -142,9 +143,9 @@ async function flush() {
   });
 }
 
-/** Reads focusedMoniker from context and renders it as text. */
+/** Reads the focused moniker from the focus store and renders it as text. */
 function FocusMonitor() {
-  const { focusedMoniker } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
 }
 

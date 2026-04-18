@@ -10,9 +10,9 @@ export const FocusLayerContext = createContext<string | null>(null);
 
 /** Generate a stable ULID layer key per mount — new on remount. */
 function useLayerKey(): string {
-  const ref = useRef<string | null>(null);
-  if (ref.current === null) ref.current = ulid();
-  return ref.current;
+  const keyRef = useRef<string | null>(null);
+  if (keyRef.current === null) keyRef.current = ulid();
+  return keyRef.current;
 }
 
 /** Register/unregister the layer with the Rust spatial layer stack. */

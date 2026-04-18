@@ -1,11 +1,11 @@
 import {
   createContext,
   useContext,
-  useState,
   useCallback,
   useEffect,
   useRef,
   useMemo,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import type { CommandScope } from "./command-scope";
@@ -16,9 +16,10 @@ import { listen } from "@tauri-apps/api/event";
 /** Callback type for the spatial focus claim registry. */
 export type ClaimCallback = (focused: boolean) => void;
 
+/** Listener signature for focused-moniker subscriptions. */
+type FocusListener = () => void;
+
 interface EntityFocusContextValue {
-  /** The moniker ("type:id") of the currently focused entity, or null. */
-  focusedMoniker: string | null;
   /** Set the focused entity. Pass null to clear focus. */
   setFocus: (moniker: string | null) => void;
   /** Register a scope for a given moniker. Does not trigger re-renders. */
@@ -48,6 +49,22 @@ interface EntityFocusContextValue {
   ) => void;
   /** Unregister a spatial focus claim by key. */
   unregisterClaim: (key: string) => void;
+  /**
+   * Read the current focused moniker imperatively.
+   *
+   * Does NOT subscribe — call this inside event handlers or effects where
+   * a snapshot is needed. Use `useFocusedMoniker()` from React render code
+   * so the component re-renders when focus changes.
+   */
+  getFocusedMoniker: () => string | null;
+  /**
+   * Subscribe to focused-moniker changes. Returns an unsubscribe function.
+   *
+   * Primarily used by `useFocusedMoniker`, `useIsFocused`, and
+   * `useFocusedScope` via `useSyncExternalStore`. Direct callers should
+   * typically use those hooks instead of subscribing manually.
+   */
+  subscribeFocus: (listener: FocusListener) => () => void;
 }
 
 const EntityFocusContext = createContext<EntityFocusContextValue | null>(null);
@@ -69,6 +86,45 @@ function buildScopeChain(
 // ---------------------------------------------------------------------------
 // Custom hooks — extracted to keep EntityFocusProvider under 50 lines
 // ---------------------------------------------------------------------------
+
+/**
+ * Focused-moniker store: ref-based state with a subscriber list.
+ *
+ * Replaces the former `useState<focusedMoniker>` so Rust is the sole owner of
+ * focus — React state never mirrors it. The ref holds the current value;
+ * callers use `setFocusedMoniker` to mutate and fan out, and subscribe via
+ * `subscribe()` (consumed by `useSyncExternalStore` in the public hooks).
+ */
+function useFocusedMonikerStore() {
+  const focusedMonikerRef = useRef<string | null>(null);
+  const listenersRef = useRef<Set<FocusListener>>(new Set());
+
+  const getFocusedMoniker = useCallback(
+    (): string | null => focusedMonikerRef.current,
+    [],
+  );
+
+  const subscribeFocus = useCallback((listener: FocusListener) => {
+    listenersRef.current.add(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
+
+  /**
+   * Update the focused moniker and notify subscribers.
+   *
+   * Skips the notify when the value is unchanged to avoid redundant re-renders
+   * in components subscribed via `useSyncExternalStore`.
+   */
+  const setFocusedMoniker = useCallback((next: string | null) => {
+    if (focusedMonikerRef.current === next) return;
+    focusedMonikerRef.current = next;
+    for (const listener of listenersRef.current) listener();
+  }, []);
+
+  return { focusedMonikerRef, getFocusedMoniker, subscribeFocus, setFocusedMoniker };
+}
 
 /** Scope registry: ref-based Map<moniker, CommandScope> with register/unregister/get. */
 function useScopeRegistry() {
@@ -119,23 +175,40 @@ function useClaimRegistry() {
 }
 
 /**
- * Returns a `setFocus` callback that updates React state, dispatches
+ * Returns a `setFocus` callback that writes the focused moniker, dispatches
  * `ui.setFocus` to the backend, and syncs with Rust spatial state.
+ *
+ * The moniker is stored only in the ref-backed focus store — there is no
+ * parallel React state. Consumers that need to re-render on focus change
+ * subscribe via `useFocusedMoniker()` / `useIsFocused()` / `useFocusedScope()`.
+ *
+ * Claim callbacks for the outgoing and incoming keys are fired synchronously
+ * (optimistic UI) so the focus highlight responds immediately without waiting
+ * for the Rust `focus-changed` round trip. Rust remains the authoritative
+ * owner — its event can override or confirm this local update.
  */
 function useFocusSetter(
-  focusedMonikerRef: React.RefObject<string | null>,
+  getFocusedMoniker: () => string | null,
   setFocusedMoniker: (m: string | null) => void,
   dispatch: (opts: { args: Record<string, unknown> }) => Promise<unknown>,
   registryRef: React.RefObject<Map<string, CommandScope>>,
   monikerToKeysRef: React.RefObject<Map<string, Set<string>>>,
+  claimRegistryRef: React.RefObject<Map<string, ClaimCallback>>,
 ) {
   return useCallback(
     (moniker: string | null) => {
-      focusedMonikerRef.current = moniker;
+      const prev = getFocusedMoniker();
       setFocusedMoniker(moniker);
       if (import.meta.env.DEV) {
         console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
       }
+      // Optimistic claim update — fire the un-focus callback for the previous
+      // moniker and the focus callback for the new one so the highlight flips
+      // without waiting for the Rust `focus-changed` event. Both transitions
+      // are idempotent: the event handler does the same lookups and is safe
+      // to re-run.
+      notifyClaim(prev, false, monikerToKeysRef.current, claimRegistryRef.current);
+      notifyClaim(moniker, true, monikerToKeysRef.current, claimRegistryRef.current);
       const chain = moniker ? buildScopeChain(moniker, registryRef.current) : [];
       dispatch({ args: { scope_chain: chain } }).catch((error) =>
         console.error("ui.setFocus failed:", error),
@@ -151,18 +224,46 @@ function useFocusSetter(
         invoke("spatial_clear_focus").catch(() => {});
       }
     },
-    [focusedMonikerRef, setFocusedMoniker, dispatch, registryRef, monikerToKeysRef],
+    [getFocusedMoniker, setFocusedMoniker, dispatch, registryRef, monikerToKeysRef, claimRegistryRef],
   );
 }
 
 /**
+ * Fire the claim callback for every key registered against `moniker`, with
+ * the given focus state. Used by `setFocus` to drive the focus highlight
+ * immediately on user-initiated focus changes.
+ *
+ * A single moniker can have multiple spatial keys (one per mounted FocusScope
+ * instance sharing that moniker) — all of them receive the notification so
+ * every visible highlight stays in sync.
+ */
+function notifyClaim(
+  moniker: string | null,
+  focused: boolean,
+  monikerToKeys: Map<string, Set<string>>,
+  claimRegistry: Map<string, ClaimCallback>,
+): void {
+  if (!moniker) return;
+  const keys = monikerToKeys.get(moniker);
+  if (!keys) return;
+  for (const key of keys) {
+    claimRegistry.get(key)?.(focused);
+  }
+}
+
+/**
  * Listen for `focus-changed` events from Rust. Drives claim callbacks and
- * updates `focusedMoniker` state for backward compatibility.
+ * updates the focused-moniker store so subscribers (`useFocusedMoniker` etc.)
+ * re-render on focus transitions.
+ *
+ * The event listener is the sole authority for "current focused moniker" —
+ * Rust owns focus, React only mirrors the scalar via the ref + listener
+ * pattern below.
  */
 function useFocusChangedEffect(
   claimRegistryRef: React.RefObject<Map<string, ClaimCallback>>,
   keyToMonikerRef: React.RefObject<Map<string, string>>,
-  focusedMonikerRef: React.RefObject<string | null>,
+  getFocusedMoniker: () => string | null,
   setFocusedMoniker: (m: string | null) => void,
   registryRef: React.RefObject<Map<string, CommandScope>>,
   dispatchRef: React.RefObject<(opts: { args: Record<string, unknown> }) => Promise<unknown>>,
@@ -175,8 +276,7 @@ function useFocusChangedEffect(
         if (prev_key) claimRegistryRef.current.get(prev_key)?.(false);
         if (next_key) claimRegistryRef.current.get(next_key)?.(true);
         const newMoniker = next_key ? (keyToMonikerRef.current.get(next_key) ?? null) : null;
-        if (focusedMonikerRef.current !== newMoniker) {
-          focusedMonikerRef.current = newMoniker;
+        if (getFocusedMoniker() !== newMoniker) {
           setFocusedMoniker(newMoniker);
           const chain = newMoniker ? buildScopeChain(newMoniker, registryRef.current) : [];
           dispatchRef.current({ args: { scope_chain: chain } }).catch((e: unknown) =>
@@ -186,7 +286,7 @@ function useFocusChangedEffect(
       },
     );
     return () => { unlisten.then((fn) => fn()); };
-  // Refs are stable — effect runs once on mount.
+  // Refs and setters are stable — effect runs once on mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
@@ -211,14 +311,14 @@ const NAV_DIRECTION_MAP: Record<string, string> = {
  * spatial key, and fires an async invoke. Returns `true` if dispatched.
  */
 function useBroadcastNav(
-  focusedMonikerRef: React.RefObject<string | null>,
+  getFocusedMoniker: () => string | null,
   monikerToKeysRef: React.RefObject<Map<string, Set<string>>>,
 ) {
   return useCallback(
     (commandId: string): boolean => {
       const direction = NAV_DIRECTION_MAP[commandId];
       if (!direction) return false;
-      const focusedMk = focusedMonikerRef.current;
+      const focusedMk = getFocusedMoniker();
       if (!focusedMk) return false;
       const keys = monikerToKeysRef.current.get(focusedMk);
       if (!keys || keys.size === 0) return false;
@@ -226,19 +326,19 @@ function useBroadcastNav(
       invoke("spatial_navigate", { key, direction }).catch(() => {});
       return true;
     },
-    [focusedMonikerRef, monikerToKeysRef],
+    [getFocusedMoniker, monikerToKeysRef],
   );
 }
 
 /** Re-dispatch the scope chain when the OS window gains focus (Alt-Tab). */
 function useWindowFocusEffect(
-  focusedMonikerRef: React.RefObject<string | null>,
+  getFocusedMoniker: () => string | null,
   registryRef: React.RefObject<Map<string, CommandScope>>,
   dispatchRef: React.RefObject<(opts: { args: Record<string, unknown> }) => Promise<unknown>>,
 ) {
   useEffect(() => {
     const handler = () => {
-      const moniker = focusedMonikerRef.current;
+      const moniker = getFocusedMoniker();
       const chain = moniker ? buildScopeChain(moniker, registryRef.current) : [];
       dispatchRef.current({ args: { scope_chain: chain } }).catch((e) =>
         console.error("ui.setFocus (window focus) failed:", e),
@@ -246,7 +346,7 @@ function useWindowFocusEffect(
     };
     window.addEventListener("focus", handler);
     return () => window.removeEventListener("focus", handler);
-  // Refs are stable — effect runs once on mount.
+  // Refs and getters are stable — effect runs once on mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
@@ -258,32 +358,48 @@ function useWindowFocusEffect(
 /**
  * Provides entity focus state and a scope registry to the component tree.
  * Should be provided once at the App level.
+ *
+ * Focus state is owned by Rust — this provider holds no `useState` mirror of
+ * the focused moniker. Instead, it exposes a subscribe/getSnapshot pair and
+ * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
+ * that re-render via `useSyncExternalStore` when focus changes.
  */
 export function EntityFocusProvider({ children }: { children: ReactNode }) {
-  const [focusedMoniker, setFocusedMoniker] = useState<string | null>(null);
   const dispatch = useDispatchCommand("ui.setFocus");
-  const focusedMonikerRef = useRef<string | null>(null);
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
 
+  const { getFocusedMoniker, subscribeFocus, setFocusedMoniker } = useFocusedMonikerStore();
   const { registryRef, registerScope, unregisterScope, getScope } = useScopeRegistry();
   const { claimRegistryRef, keyToMonikerRef, monikerToKeysRef, registerClaim, unregisterClaim } = useClaimRegistry();
-  const setFocus = useFocusSetter(focusedMonikerRef, setFocusedMoniker, dispatch, registryRef, monikerToKeysRef);
-  useFocusChangedEffect(claimRegistryRef, keyToMonikerRef, focusedMonikerRef, setFocusedMoniker, registryRef, dispatchRef);
-  const broadcastNavCommand = useBroadcastNav(focusedMonikerRef, monikerToKeysRef);
-  useWindowFocusEffect(focusedMonikerRef, registryRef, dispatchRef);
+  const setFocus = useFocusSetter(
+    getFocusedMoniker,
+    setFocusedMoniker,
+    dispatch,
+    registryRef,
+    monikerToKeysRef,
+    claimRegistryRef,
+  );
+  useFocusChangedEffect(claimRegistryRef, keyToMonikerRef, getFocusedMoniker, setFocusedMoniker, registryRef, dispatchRef);
+  const broadcastNavCommand = useBroadcastNav(getFocusedMoniker, monikerToKeysRef);
+  useWindowFocusEffect(getFocusedMoniker, registryRef, dispatchRef);
 
   const value = useMemo<EntityFocusContextValue>(
     () => ({
-      focusedMoniker, setFocus, registerScope, unregisterScope, getScope,
+      setFocus, registerScope, unregisterScope, getScope,
       broadcastNavCommand,
       registerClaim, unregisterClaim,
+      getFocusedMoniker, subscribeFocus,
     }),
-    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope,
+    [setFocus, registerScope, unregisterScope, getScope,
       broadcastNavCommand,
-      registerClaim, unregisterClaim],
+      registerClaim, unregisterClaim,
+      getFocusedMoniker, subscribeFocus],
   );
 
+  // Subscribe the provider itself so FocusedScopeContext re-renders when focus
+  // changes — useDispatchCommand depends on this context to compute scope chains.
+  const focusedMoniker = useSyncExternalStore(subscribeFocus, getFocusedMoniker);
   const focusedScope = focusedMoniker
     ? (registryRef.current.get(focusedMoniker) ?? null)
     : null;
@@ -298,8 +414,12 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * Returns the entity focus state and setter.
+ * Returns the entity focus context (setters and registries).
  * Must be used within an EntityFocusProvider.
+ *
+ * Does NOT subscribe to focus changes. To read the focused moniker reactively,
+ * use `useFocusedMoniker()`; for imperative snapshot reads from inside an
+ * effect or event handler, call `getFocusedMoniker()` on the returned object.
  */
 export function useEntityFocus(): EntityFocusContextValue {
   const ctx = useContext(EntityFocusContext);
@@ -311,18 +431,30 @@ export function useEntityFocus(): EntityFocusContextValue {
 }
 
 /**
+ * Subscribe to the focused moniker and re-render when it changes.
+ *
+ * Returns the current focused moniker, or `null` when nothing is focused.
+ * This is the idiomatic hook for React code that needs to render differently
+ * based on which entity has focus. For imperative reads (e.g. inside
+ * event handlers), call `useEntityFocus().getFocusedMoniker()` instead.
+ */
+export function useFocusedMoniker(): string | null {
+  const { subscribeFocus, getFocusedMoniker } = useEntityFocus();
+  return useSyncExternalStore(subscribeFocus, getFocusedMoniker);
+}
+
+/**
  * Returns the CommandScope of the currently focused entity, or null.
  *
- * Uses the scope registry (a ref) to look up the focused moniker.
- * Note: the registry is stored in a ref for performance (scope
- * registrations don't trigger re-renders). This means the returned
- * value may be stale if a FocusScope registers in the same render
- * cycle as a focus change. In practice this is safe because setFocus
- * is called from click handlers (after mount) while scopes register
- * during mount effects.
+ * Subscribes to focus changes so the component re-renders when focus moves.
+ * The registry itself is stored in a ref (scope registrations don't trigger
+ * re-renders) — the returned value reflects the registry state at the time
+ * focus changed. In practice this is safe because `setFocus` is called from
+ * click handlers (after mount) while scopes register during mount effects.
  */
 export function useFocusedScope(): CommandScope | null {
-  const { focusedMoniker, getScope } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
+  const { getScope } = useEntityFocus();
   if (focusedMoniker === null) return null;
   return getScope(focusedMoniker);
 }
@@ -331,14 +463,16 @@ export function useFocusedScope(): CommandScope | null {
  * Returns true if the given moniker is the focused moniker or an ancestor
  * of the focused scope in the scope chain.
  *
- * Walk: look up focusedMoniker in registry, get scope, walk .parent chain
- * checking scope.moniker === moniker.
+ * Subscribes to focus changes so consumers re-render when focus moves into
+ * or out of the subtree. Walks the scope-registry ancestor chain starting
+ * from the focused scope, matching by `scope.moniker`.
  *
  * @param moniker - The moniker to test.
  * @returns true if directly focused or an ancestor of the focused scope.
  */
 export function useIsFocused(moniker: string): boolean {
-  const { focusedMoniker, getScope } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
+  const { getScope } = useEntityFocus();
   if (focusedMoniker === null) return false;
   if (focusedMoniker === moniker) return true;
 
@@ -353,4 +487,3 @@ export function useIsFocused(moniker: string): boolean {
   }
   return false;
 }
-

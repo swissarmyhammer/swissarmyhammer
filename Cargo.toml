@@ -63,6 +63,7 @@ members = [
     "swissarmyhammer-merge",
     "swissarmyhammer-store",
     "swissarmyhammer-commands",
+    "swissarmyhammer-spatial-nav",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
     "heb",
@@ -272,6 +273,7 @@ swissarmyhammer-project-detection = { path = "swissarmyhammer-project-detection"
 swissarmyhammer-prompts = { path = "swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "swissarmyhammer-skills" }
+swissarmyhammer-spatial-nav = { path = "swissarmyhammer-spatial-nav" }
 swissarmyhammer-statusline = { path = "swissarmyhammer-statusline" }
 swissarmyhammer-store = { path = "swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "swissarmyhammer-templating" }

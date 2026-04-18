@@ -15,7 +15,13 @@
  */
 
 import { execSync } from "child_process";
-import { mkdtempSync, writeFileSync, readdirSync, readFileSync } from "fs";
+import {
+  existsSync,
+  mkdtempSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import yaml from "js-yaml";
@@ -23,6 +29,9 @@ import type { BrowserCommand } from "vitest/node";
 
 // Resolve the kanban CLI binary from the project's debug build
 const KANBAN_BIN = resolve(__dirname, "../../../../target/debug/kanban");
+
+// Workspace root — parent of the kanban binary's target/ directory.
+const WORKSPACE_ROOT = resolve(__dirname, "../../../..");
 
 // Resolve builtin YAML directories relative to this file
 const DEFINITIONS_DIR = resolve(
@@ -34,8 +43,41 @@ const BUILTIN_ENTITIES_DIR = resolve(
   "../../../../swissarmyhammer-kanban/builtin/entities",
 );
 
+/**
+ * Ensure the kanban CLI binary exists. Builds it on demand when missing so
+ * `npx vitest run` works without a manual `cargo build --bin kanban` step.
+ *
+ * Cached across invocations within a single vitest process — we only build
+ * once per process even if many commands call into the CLI.
+ */
+let kanbanBinaryEnsured = false;
+function ensureKanbanBinary(): void {
+  if (kanbanBinaryEnsured) return;
+  if (existsSync(KANBAN_BIN)) {
+    kanbanBinaryEnsured = true;
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[integration-commands] kanban CLI binary missing at ${KANBAN_BIN}; running \`cargo build --bin kanban\`...`,
+  );
+  execSync("cargo build --bin kanban", {
+    cwd: WORKSPACE_ROOT,
+    stdio: "inherit",
+    // Rust builds can be slow on cold caches — allow up to 10 minutes.
+    timeout: 600_000,
+  });
+  if (!existsSync(KANBAN_BIN)) {
+    throw new Error(
+      `kanban CLI binary still missing at ${KANBAN_BIN} after \`cargo build --bin kanban\``,
+    );
+  }
+  kanbanBinaryEnsured = true;
+}
+
 /** Run a kanban CLI command in the given directory. */
 function kanban(dir: string, cmd: string): string {
+  ensureKanbanBinary();
   return execSync(`"${KANBAN_BIN}" ${cmd}`, {
     cwd: dir,
     encoding: "utf-8",

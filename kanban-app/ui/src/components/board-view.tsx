@@ -25,7 +25,7 @@ import {
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useEntityFocus, useFocusedMoniker } from "@/lib/entity-focus-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
@@ -977,7 +977,8 @@ function useBoardCommandRefs(
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const boardCommands = useEntityCommands("board", "board");
   const dispatchInspect = useDispatchCommand("ui.inspect");
-  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
+  const { broadcastNavCommand, setFocus } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { focusedMonikerRef, broadcastRef, handleAddTaskRef } =
     useBoardCommandRefs(focusedMoniker, broadcastNavCommand);

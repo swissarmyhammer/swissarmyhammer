@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   EntityFocusProvider,
   useEntityFocus,
+  useFocusedMoniker,
   useIsFocused,
 } from "@/lib/entity-focus-context";
 import { FocusScope, useParentFocusScope } from "./focus-scope";
@@ -57,7 +58,7 @@ function mockListCommands(commands: ResolvedCommand[]) {
 
 /** Helper to read focus state from inside the provider. */
 function FocusReader() {
-  const { focusedMoniker } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   return <div data-testid="focus-reader">{focusedMoniker ?? "null"}</div>;
 }
 
@@ -960,5 +961,127 @@ describe("spatial focus integration", () => {
         }),
       );
     });
+  });
+
+  it("navOverride end-to-end: broadcastNavCommand routes override target through focus-changed", async () => {
+    // This test exercises the full navOverride path end-to-end:
+    //   React (mount FocusScope with navOverride)
+    //   → Rust spatial_register (overrides payload captured)
+    //   → user sets focus on the source scope
+    //   → React broadcastNavCommand("nav.right")
+    //   → Rust spatial_navigate invoked with source key + "Right"
+    //   → Rust would apply the override and emit focus-changed(next_key = target)
+    //     (simulated here by firing the event directly, since Rust is not in scope
+    //      for this harness)
+    //   → React focus-changed listener routes back to focused moniker + claim flip
+    //
+    // The Rust override *selection* is covered by unit tests in spatial_state.rs;
+    // this test proves React is wired such that if Rust returns the override
+    // target, the UI picks it up on both the focus-state and the claim
+    // highlight path.
+    const { listen } = await import("@tauri-apps/api/event");
+    let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
+    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (event: string, cb: (evt: { payload: unknown }) => void) => {
+        if (event === "focus-changed") eventCallback = cb;
+        return Promise.resolve(() => {});
+      },
+    );
+
+    // Helper that exposes broadcastNavCommand so the test can drive it.
+    function NavBroadcaster() {
+      const { broadcastNavCommand } = useEntityFocus();
+      return (
+        <button
+          data-testid="broadcast-right"
+          onClick={() => broadcastNavCommand("nav.right")}
+        />
+      );
+    }
+
+    const { getByText, getByTestId } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusReader />
+          <NavBroadcaster />
+          <FocusScope
+            moniker="task:01"
+            commands={[]}
+            navOverride={{ Right: "task:02" }}
+          >
+            <span>source</span>
+          </FocusScope>
+          <FocusScope moniker="task:02" commands={[]}>
+            <span>target</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    // Both scopes should register with Rust. Capture each scope's spatial key
+    // from its spatial_register call so we can correlate later invokes.
+    let sourceKey: string | null = null;
+    let targetKey: string | null = null;
+    await waitFor(() => {
+      const calls = (invoke as ReturnType<typeof vi.fn>).mock.calls;
+      const sourceCall = calls.find(
+        (c: unknown[]) =>
+          c[0] === "spatial_register" &&
+          (c[1] as { moniker: string }).moniker === "task:01",
+      );
+      const targetCall = calls.find(
+        (c: unknown[]) =>
+          c[0] === "spatial_register" &&
+          (c[1] as { moniker: string }).moniker === "task:02",
+      );
+      expect(sourceCall).toBeTruthy();
+      expect(targetCall).toBeTruthy();
+      sourceKey = (sourceCall![1] as { key: string }).key;
+      targetKey = (targetCall![1] as { key: string }).key;
+    });
+
+    // Confirm the override payload reached Rust exactly as declared.
+    expect(invoke).toHaveBeenCalledWith(
+      "spatial_register",
+      expect.objectContaining({
+        key: sourceKey,
+        moniker: "task:01",
+        overrides: { Right: "task:02" },
+      }),
+    );
+
+    // Seed focus on the source scope so broadcastNavCommand has something to
+    // navigate from. Clicking the scope populates the moniker→key map in
+    // entity-focus-context and calls spatial_focus.
+    fireEvent.click(getByText("source"));
+    expect(getByTestId("focus-reader").textContent).toBe("task:01");
+
+    // Clear mocks so we can assert exactly one spatial_navigate call.
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+
+    // User presses nav.right. React should invoke spatial_navigate with the
+    // source scope's spatial key and direction "Right".
+    fireEvent.click(getByTestId("broadcast-right"));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
+        key: sourceKey,
+        direction: "Right",
+      });
+    });
+
+    // Simulate Rust applying the override and emitting focus-changed with
+    // next_key = target scope's key. This is the exact event shape Rust
+    // fires after navigate() returns Some(override_target_key).
+    expect(eventCallback).toBeTruthy();
+    await act(async () => {
+      eventCallback!({
+        payload: { prev_key: sourceKey, next_key: targetKey },
+      });
+    });
+
+    // The React side picked up the override target: focused moniker is now
+    // task:02, proving the full loop closed.
+    expect(getByTestId("focus-reader").textContent).toBe("task:02");
   });
 });

@@ -8,6 +8,17 @@ mod menu;
 mod spatial;
 mod state;
 mod tauri_reporter;
+// Test infrastructure (board fixtures) is compiled for debug builds so that
+// the tauri-driver E2E harness can invoke the `fixture-3x3` CLI subcommand
+// from a debug `kanban-app` binary to produce a deterministic board on disk.
+// Release binaries exclude the module entirely.
+//
+// Note: the `write_*` helpers that return a `TempDir` live under a further
+// `#[cfg(test)]` gate inside the module, because `tempfile` is only a
+// dev-dependency. Debug (non-test) callers reach the factory through
+// `build_fixture`, which takes a caller-provided `PathBuf`.
+#[cfg(debug_assertions)]
+mod test_support;
 mod watcher;
 
 pub use tauri_reporter::TauriReporter;
@@ -41,7 +52,16 @@ fn main() {
     // Tauri app exists. Session restore is driven from inside `setup_app`,
     // after the deep-link handler has had its chance to set
     // `AppState::deep_link_handled`.
-    let app_state = AppState::new();
+    //
+    // `--only <board>` is an orthogonal escape hatch for hermetic test
+    // launches: when set, `setup_app` skips both `auto_open_board` and
+    // session restore and opens exactly the given board, and the
+    // ExitRequested handler skips `UIState::save()` so the developer's real
+    // config is untouched.
+    let app_state = match cli.only {
+        Some(path) => AppState::with_only(path),
+        None => AppState::new(),
+    };
     run_app(app_state);
 }
 
@@ -83,6 +103,12 @@ fn run_app(app_state: AppState) {
             spatial::spatial_navigate,
             spatial::spatial_push_layer,
             spatial::spatial_remove_layer,
+            // Debug-only spatial state snapshot for tauri-driver E2E and the
+            // mock_app integration test. The cfg gate matches the one on
+            // the command definition in `spatial.rs`, so release builds
+            // drop the symbol entirely.
+            #[cfg(debug_assertions)]
+            spatial::__spatial_dump,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)
@@ -111,10 +137,25 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Must run before auto_open_board / restore_session_windows. Cold-start
     // URL delivery is synchronous — when this returns, the board is open and
     // a window is visible, and `deep_link_handled` is set for the two
-    // downstream steps to observe.
+    // downstream steps to observe. We still wire deep links in `--only`
+    // mode so a mid-session `kanban://` URL still works; only the session
+    // restore + auto-open paths are skipped.
     wire_deep_links(app);
 
     let state = app.state::<AppState>();
+
+    // Hermetic `--only` mode short-circuits the normal startup sequence:
+    // no auto-open, no session restore, exactly one window for the given
+    // board. See `AppState::only` for the full contract.
+    if let Some(only_path) = state.only.clone() {
+        open_only_board(app, &state, only_path);
+        let app_handle = app.handle().clone();
+        tauri::async_runtime::block_on(state.start_watchers(app_handle));
+        configure_quick_capture(app);
+        register_quick_capture_hotkey(app)?;
+        return Ok(());
+    }
+
     tauri::async_runtime::block_on(state.auto_open_board());
 
     let app_handle = app.handle().clone();
@@ -129,6 +170,35 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     configure_quick_capture(app);
     register_quick_capture_hotkey(app)?;
     Ok(())
+}
+
+/// Hermetic-launch path for `--only <board>`. Opens exactly one window for
+/// the given board, bypassing MRU discovery, saved open-boards restore, and
+/// per-window geometry restore. The caller is responsible for starting
+/// watchers and configuring the quick-capture window separately.
+fn open_only_board(app: &tauri::App, state: &AppState, only_path: std::path::PathBuf) {
+    tracing::info!(path = %only_path.display(), "setup_app: --only mode, opening single board");
+    let app_handle = app.handle().clone();
+    // Open the board in AppState first so `create_window_impl` finds it
+    // when resolving the window's board. A cold-start failure to open is
+    // fatal for `--only` (there's no fallback board), so we log and
+    // continue with an empty window rather than panicking.
+    if let Err(e) =
+        tauri::async_runtime::block_on(state.open_board(&only_path, Some(app_handle.clone())))
+    {
+        tracing::error!(path = %only_path.display(), error = %e, "setup_app: --only board failed to open");
+        return;
+    }
+    let board_path_str = only_path.display().to_string();
+    if let Err(e) = tauri::async_runtime::block_on(commands::create_window_impl(
+        &app_handle,
+        state,
+        Some(board_path_str),
+        None,
+        None,
+    )) {
+        tracing::error!(error = %e, "setup_app: --only failed to create window");
+    }
 }
 
 fn build_initial_menu(app: &tauri::App) {
@@ -354,6 +424,13 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
     let state = app_handle.state::<AppState>();
     // Set flag FIRST so window event handlers stop mutating state.
     state.shutting_down.store(true, Ordering::SeqCst);
+    // `--only` launches must never touch the developer's real UIState —
+    // their whole purpose is hermetic startup. Skip the save entirely;
+    // the scratch-path routing in `AppState::with_only` is belt-and-braces.
+    if state.only.is_some() {
+        tracing::info!("exit: --only mode, skipping UIState save");
+        return;
+    }
     // Persist final window geometry. Move/resize events only update memory
     // (via update_window_geometry), so this is the single save point that
     // captures the latest positions.

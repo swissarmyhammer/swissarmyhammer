@@ -126,3 +126,66 @@ jobs:
                 cargo build --example "$name" -p "$pkg"
                 echo "::endgroup::"
               done
+
+  kanban-app-e2e:
+    # End-to-end tauri-driver scenario for the spatial-nav loop. Boots a real
+    # kanban-app debug binary against a synthetic 3x3 board fixture and drives
+    # it through WebdriverIO (see kanban-app/wdio.conf.ts and kanban-app/e2e/).
+    #
+    # Platform: self-hosted macOS runner. tauri-driver on macOS talks to the
+    # system WebKitWebDriver, which requires a logged-in session — no headless
+    # mode, no xvfb. Linux/Windows coverage is intentionally deferred; extend
+    # this job (or add a sibling) once a Linux runner with xvfb is available.
+    #
+    # No test retries are configured. A flaky E2E is a bug to fix, not mask.
+    name: Kanban app E2E (tauri-driver)
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # Cache the npm download cache keyed on the harness lockfile. The
+          # UI workspace (kanban-app/ui) commits a pnpm-lock.yaml but the
+          # existing `frontend` job runs `npm install` there without a
+          # committed package-lock.json, so we follow the same convention
+          # and scope the cache key to the harness lockfile only.
+          cache: "npm"
+          cache-dependency-path: kanban-app/package-lock.json
+      - name: Install tauri-driver
+        # Idempotent: skip the cargo install when the binary is already on PATH
+        # from a previous run on this self-hosted runner. `--locked` pins the
+        # transitive deps to the committed lockfile inside the tauri-driver
+        # crate, which avoids a fresh resolve on every cache miss.
+        run: |
+          if ! command -v tauri-driver >/dev/null 2>&1; then
+            cargo install tauri-driver --locked
+          else
+            echo "tauri-driver already installed: $(command -v tauri-driver)"
+          fi
+      - name: Install kanban-app harness dependencies
+        working-directory: kanban-app
+        run: npm install
+      - name: Build kanban-app UI bundle
+        # wdio.conf.ts launches the debug binary, which serves the UI from
+        # kanban-app/ui/dist/. Build it before cargo build so the binary
+        # links against a real dist tree.
+        working-directory: kanban-app/ui
+        run: |
+          npm install
+          npm run build
+      - name: Build kanban-app debug binary
+        # The E2E harness resolves the binary via `target/debug/kanban-app`
+        # (see kanban-app/e2e/setup.ts resolveBinary). The fixture-3x3
+        # subcommand is gated behind #[cfg(debug_assertions)], so we must
+        # build debug (not release).
+        run: cargo build -p kanban-app
+      - name: Run tauri-driver E2E
+        working-directory: kanban-app
+        run: npm run e2e

@@ -3,7 +3,7 @@ import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useEntityFocus, useFocusedMoniker } from "@/lib/entity-focus-context";
 import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -128,7 +128,8 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
   useEffect(() => { setVisibleRowCount(entities.length); }, [entities.length]);
 
-  const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
+  const { setFocus, broadcastNavCommand } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   const { cellMonikerMap, cellMonikers } = useCellMonikers(entities, columns);
 
   const derivedCursor = useMemo(() => {

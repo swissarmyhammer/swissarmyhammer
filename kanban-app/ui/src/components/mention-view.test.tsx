@@ -114,6 +114,7 @@ import { MentionView } from "./mention-view";
 import {
   EntityFocusProvider,
   useEntityFocus,
+  useFocusedMoniker,
 } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -314,9 +315,9 @@ describe("MentionView — list mode", () => {
         <button data-testid={testId} onClick={() => setFocus(moniker)} />
       );
     }
-    /** Reads focusedMoniker from context. */
+    /** Reads the focused moniker from the focus store. */
     function FocusReader() {
-      const { focusedMoniker } = useEntityFocus();
+      const focusedMoniker = useFocusedMoniker();
       return <span data-testid="focus-reader">{focusedMoniker ?? "null"}</span>;
     }
 

@@ -3,6 +3,7 @@ import { render, renderHook, act } from "@testing-library/react";
 import {
   EntityFocusProvider,
   useEntityFocus,
+  useFocusedMoniker,
   useFocusedScope,
   useIsFocused,
 } from "./entity-focus-context";
@@ -38,27 +39,51 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe("useEntityFocus", () => {
   it("returns null initially", () => {
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    expect(result.current.focusedMoniker).toBeNull();
+    const { result } = renderHook(
+      () => {
+        const focus = useEntityFocus();
+        const focused = useFocusedMoniker();
+        return { focus, focused };
+      },
+      { wrapper },
+    );
+    expect(result.current.focused).toBeNull();
+    expect(result.current.focus.getFocusedMoniker()).toBeNull();
   });
 
-  it("setFocus updates focusedMoniker", () => {
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+  it("setFocus updates the focused moniker", () => {
+    const { result } = renderHook(
+      () => {
+        const focus = useEntityFocus();
+        const focused = useFocusedMoniker();
+        return { focus, focused };
+      },
+      { wrapper },
+    );
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.focus.setFocus("task:abc");
     });
-    expect(result.current.focusedMoniker).toBe("task:abc");
+    expect(result.current.focused).toBe("task:abc");
+    expect(result.current.focus.getFocusedMoniker()).toBe("task:abc");
   });
 
   it("setFocus(null) clears focus", () => {
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+    const { result } = renderHook(
+      () => {
+        const focus = useEntityFocus();
+        const focused = useFocusedMoniker();
+        return { focus, focused };
+      },
+      { wrapper },
+    );
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.focus.setFocus("task:abc");
     });
     act(() => {
-      result.current.setFocus(null);
+      result.current.focus.setFocus(null);
     });
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focused).toBeNull();
+    expect(result.current.focus.getFocusedMoniker()).toBeNull();
   });
 
   it("throws outside provider", () => {
@@ -229,9 +254,9 @@ async function flush() {
   });
 }
 
-/** Reads focusedMoniker from context and renders it as text. */
+/** Reads the focused moniker from the focus store and renders it as text. */
 function FocusMonitor() {
-  const { focusedMoniker } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
 }
 

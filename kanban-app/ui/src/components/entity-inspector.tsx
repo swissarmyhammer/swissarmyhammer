@@ -117,17 +117,21 @@ function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
  * not when focus state changes under us (see inline eslint-disable).
  */
 function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
-  const { setFocus, focusedMoniker } = useEntityFocus();
+  const { setFocus, getFocusedMoniker } = useEntityFocus();
   const setFocusRef = useRef(setFocus);
   setFocusRef.current = setFocus;
+  const getFocusedMonikerRef = useRef(getFocusedMoniker);
+  getFocusedMonikerRef.current = getFocusedMoniker;
   const prevFocusRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
 
   useEffect(() => {
     if (!firstFieldMoniker) return;
-    // Only capture previous focus on true first mount, not on re-runs
+    // Only capture previous focus on true first mount, not on re-runs.
+    // Read the focused moniker imperatively from the store — this effect
+    // intentionally does not subscribe to focus changes.
     if (!mountedRef.current) {
-      prevFocusRef.current = focusedMoniker;
+      prevFocusRef.current = getFocusedMonikerRef.current();
       mountedRef.current = true;
     }
     setFocusRef.current(firstFieldMoniker);

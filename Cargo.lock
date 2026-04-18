@@ -4012,6 +4012,7 @@ dependencies = [
  "swissarmyhammer-filter-expr",
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
+ "swissarmyhammer-spatial-nav",
  "swissarmyhammer-store",
  "swissarmyhammer-views",
  "tauri",
@@ -8649,6 +8650,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "swissarmyhammer-spatial-nav"
+version = "0.12.11"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

@@ -25,8 +25,14 @@ export function SlidePanel({
   const dispatchClose = useDispatchCommand("ui.inspector.close");
 
   return (
+    // `role="dialog"` + `aria-modal="true"` is both an a11y improvement
+    // (assistive tech announces the panel as a modal dialog) and the stable
+    // selector the E2E harness uses to wait for inspector mount. See
+    // `kanban-app/e2e/spatial-nav.e2e.ts`.
     <div
       ref={panelRef}
+      role="dialog"
+      aria-modal="true"
       className={`fixed top-0 z-30 h-full w-[420px] max-w-[85vw] bg-background border-l border-border shadow-xl flex flex-col transition-transform duration-200 ease-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}

@@ -19,6 +19,7 @@ swissarmyhammer-kanban = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-spatial-nav = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-views = { workspace = true }
 swissarmyhammer-entity-search = { workspace = true }
@@ -58,3 +59,10 @@ tauri-build = { version = "2", features = [] }
 [dev-dependencies]
 tempfile = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+# Enable the tauri "test" feature in dev builds only. This pulls in
+# `tauri::test::mock_app` and `MockRuntime` for in-process integration tests
+# of Tauri command handlers (see the `tauri_integration_tests` module in
+# `src/spatial.rs`).
+# Production builds never see this feature — the `[dependencies]` entry
+# above is the release-facing declaration.
+tauri = { version = "2", features = ["macos-private-api", "devtools", "test"] }

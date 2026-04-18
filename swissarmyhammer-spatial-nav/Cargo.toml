@@ -1,0 +1,11 @@
+[package]
+name = "swissarmyhammer-spatial-nav"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Spatial (XY) focus navigation state machine and beam-test algorithm"
+
+[dependencies]
+serde = { workspace = true }

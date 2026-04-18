@@ -126,6 +126,26 @@ function useScopeRegistration(
 }
 
 /**
+ * Returns a click handler that sets focus on the scope's moniker, skipping
+ * clicks that originate inside editable controls.
+ */
+function useScopeClickHandler(moniker: string, handleEvents: boolean) {
+  const { setFocus } = useEntityFocus();
+  return useCallback(
+    (e: React.MouseEvent) => {
+      if (!handleEvents) return;
+      const target = e.target as HTMLElement;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (target.closest("[contenteditable]")) return;
+      e.stopPropagation();
+      setFocus(moniker);
+    },
+    [moniker, setFocus, handleEvents],
+  );
+}
+
+/**
  * Returns context-menu and double-click handlers for FocusScopeInner.
  *
  * Must be called inside `CommandScopeContext.Provider` so `useContextMenu`
@@ -224,26 +244,12 @@ export function FocusScope({
   renderContainer = true,
   ...rest
 }: FocusScopeProps) {
-  const { focusedMoniker, setFocus } = useEntityFocus();
   const spatialKey = useSpatialKey();
   const layerKey = useFocusLayerKey();
   const { isClaimed, elementRef } = useSpatialClaim(spatialKey, moniker, layerKey, navOverride);
   const scope = useScopeRegistration(moniker, commands);
-  const isDirectFocus = showFocusBar && (focusedMoniker === moniker || isClaimed);
-
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (!handleEvents) return;
-      const target = e.target as HTMLElement;
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (target.closest("[contenteditable]")) return;
-      e.stopPropagation();
-      // setFocus internally bridges to spatial_focus via moniker→key lookup.
-      setFocus(moniker);
-    },
-    [moniker, setFocus, handleEvents],
-  );
+  const handleClick = useScopeClickHandler(moniker, handleEvents);
+  const isDirectFocus = showFocusBar && isClaimed;
 
   return (
     <FocusScopeContext.Provider value={moniker}>
