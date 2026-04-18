@@ -1325,8 +1325,7 @@ mod tests {
                         NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
                     ));
                     assert!(
-                        context.url == "http://127.0.0.1:1"
-                            || context.url == "http://127.0.0.1:1/"
+                        context.url == "http://127.0.0.1:1" || context.url == "http://127.0.0.1:1/"
                     );
                 }
                 other => panic!("expected EnhancedNetworkError, got {other:?}"),

@@ -92,6 +92,11 @@ impl Default for IndexConfig {
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
             respect_gitignore: true,
             embedding_model: swissarmyhammer_embedding::DEFAULT_MODEL_NAME.to_string(),
+            // Embeddings are enabled everywhere by default — including tests —
+            // so the test suite exercises the real embedding pipeline instead
+            // of silently skipping it. Tests that specifically want to skip the
+            // model load can opt out via `IndexConfig { embedding_enabled:
+            // false, ..Default::default() }`.
             embedding_enabled: true,
         }
     }
