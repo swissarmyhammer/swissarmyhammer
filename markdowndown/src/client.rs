@@ -66,6 +66,7 @@ impl HttpClient {
                 http_config.max_redirects as usize,
             ))
             .user_agent(&http_config.user_agent)
+            .no_proxy()
             .build()
             .expect("Failed to create HTTP client");
 
@@ -1022,13 +1023,12 @@ mod tests {
                 .await;
 
             // Should fail with a connection error
-            assert!(result.is_err());
-            if let MarkdownError::EnhancedNetworkError { kind, .. } = result.unwrap_err() {
-                // Should be connection failed or timeout
-                assert!(matches!(
+            match result.expect_err("expected connection failure") {
+                MarkdownError::EnhancedNetworkError { kind, .. } => assert!(matches!(
                     kind,
                     NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
-                ));
+                )),
+                other => panic!("expected EnhancedNetworkError, got {other:?}"),
             }
         }
 
@@ -1044,13 +1044,12 @@ mod tests {
             // Use an unreachable URL that will definitely fail
             let result = client.get_bytes("http://127.0.0.1:1/bytes-failure").await;
 
-            assert!(result.is_err());
-            if let MarkdownError::EnhancedNetworkError { kind, .. } = result.unwrap_err() {
-                // Should be connection failed or timeout
-                assert!(matches!(
+            match result.expect_err("expected connection failure") {
+                MarkdownError::EnhancedNetworkError { kind, .. } => assert!(matches!(
                     kind,
                     NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
-                ));
+                )),
+                other => panic!("expected EnhancedNetworkError, got {other:?}"),
             }
         }
 
@@ -1092,76 +1091,6 @@ mod tests {
 
             let result = client.get_text(&localhost_url).await;
             assert!(result.is_ok());
-        }
-
-        #[tokio::test]
-        async fn test_office365_authentication_injection() {
-            // Test Office365 token injection
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path("/office-resource"))
-                .and(header("Authorization", "Bearer office365-token"))
-                .respond_with(ResponseTemplate::new(200).set_body_string("Office365 response"))
-                .mount(&mock_server)
-                .await;
-
-            let auth_config = AuthConfig {
-                github_token: None,
-                office365_token: Some("office365-token".to_string()),
-                google_api_key: None,
-            };
-            let http_config = HttpConfig {
-                timeout: Duration::from_secs(30),
-                user_agent: "test-agent".to_string(),
-                max_retries: 3,
-                retry_delay: Duration::from_secs(1),
-                max_redirects: 10,
-            };
-            let client = HttpClient::with_config(&http_config, &auth_config);
-
-            // Mock an office.com URL (we'll need to test against the actual mock server)
-            let url = format!("{}/office-resource", mock_server.uri());
-
-            // Since we can't easily change the host, we'll test the auth injection manually
-            // This exercises the authentication code path
-            let headers = HashMap::new();
-            let result = client.get_text_with_headers(&url, &headers).await;
-            // Test should pass regardless of auth header requirement since this is just exercising code paths
-            assert!(result.is_ok() || result.is_err()); // Either result is acceptable for code coverage
-        }
-
-        #[tokio::test]
-        async fn test_google_api_authentication_injection() {
-            // Test Google API key injection
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path("/google-api"))
-                .and(header("Authorization", "Bearer google-api-key"))
-                .respond_with(ResponseTemplate::new(200).set_body_string("Google API response"))
-                .mount(&mock_server)
-                .await;
-
-            let auth_config = AuthConfig {
-                github_token: None,
-                office365_token: None,
-                google_api_key: Some("google-api-key".to_string()),
-            };
-            let http_config = HttpConfig {
-                timeout: Duration::from_secs(30),
-                user_agent: "test-agent".to_string(),
-                max_retries: 3,
-                retry_delay: Duration::from_secs(1),
-                max_redirects: 10,
-            };
-            let client = HttpClient::with_config(&http_config, &auth_config);
-
-            let url = format!("{}/google-api", mock_server.uri());
-            let headers = HashMap::new();
-            let result = client.get_text_with_headers(&url, &headers).await;
-            // Test should pass regardless of auth header requirement since this is just exercising code paths
-            assert!(result.is_ok() || result.is_err()); // Either result is acceptable for code coverage
         }
 
         #[tokio::test]
@@ -1360,19 +1289,21 @@ mod tests {
             };
             let client = HttpClient::with_config(&http_config, &auth_config);
 
-            // Use httpbin delay endpoint that will definitely timeout
-            let result = client.get_text("https://httpbin.org/delay/2").await;
+            // Use an unreachable local port with a 1ms timeout so we exercise the
+            // error-mapping path without depending on external services.
+            let url = "http://127.0.0.1:1/timeout";
+            let result = client.get_text(url).await;
 
-            // Should produce a timeout error that gets mapped correctly
-            if let Err(MarkdownError::EnhancedNetworkError { kind, context }) = result {
-                // Should be either timeout or connection failed
-                assert!(matches!(
-                    kind,
-                    NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionFailed
-                ));
-                assert_eq!(context.url, "https://httpbin.org/delay/2");
+            match result.expect_err("expected network error") {
+                MarkdownError::EnhancedNetworkError { kind, context } => {
+                    assert!(matches!(
+                        kind,
+                        NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionFailed
+                    ));
+                    assert!(context.url == url || context.url == format!("{url}/"));
+                }
+                other => panic!("expected EnhancedNetworkError, got {other:?}"),
             }
-            // Test passes regardless of actual network conditions
         }
 
         #[tokio::test]
@@ -1387,19 +1318,19 @@ mod tests {
             // Use a port that should be unreachable to trigger connection error
             let result = client.get_text("http://127.0.0.1:1").await;
 
-            // Should produce a connection error that gets mapped correctly
-            if let Err(MarkdownError::EnhancedNetworkError { kind, context }) = result {
-                // Should be connection failed or timeout
-                assert!(matches!(
-                    kind,
-                    NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
-                ));
-                // URL might have trailing slash added by reqwest
-                assert!(
-                    context.url == "http://127.0.0.1:1" || context.url == "http://127.0.0.1:1/"
-                );
+            match result.expect_err("expected connection failure") {
+                MarkdownError::EnhancedNetworkError { kind, context } => {
+                    assert!(matches!(
+                        kind,
+                        NetworkErrorKind::ConnectionFailed | NetworkErrorKind::Timeout
+                    ));
+                    assert!(
+                        context.url == "http://127.0.0.1:1"
+                            || context.url == "http://127.0.0.1:1/"
+                    );
+                }
+                other => panic!("expected EnhancedNetworkError, got {other:?}"),
             }
-            // Test passes regardless of actual connection behavior
         }
 
         #[tokio::test]
