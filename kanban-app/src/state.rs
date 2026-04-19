@@ -367,6 +367,7 @@ impl MenuItemHandle {
         }
     }
 
+    /// Update this menu item's display label.
     pub(crate) fn set_text(&self, text: &str) -> tauri::Result<()> {
         match self {
             Self::Regular(item) => item.set_text(text),
@@ -857,24 +858,22 @@ const ACTOR_COLORS: &[&str] = &[
 
 /// Derive a deterministic hex color from a username.
 fn deterministic_color(username: &str) -> String {
-    let hash: u64 = username
-        .bytes()
-        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    // djb2 hash (Dan Bernstein): seed 5381, multiplier 33. Cheap,
+    // well-distributed enough for a 15-bucket palette lookup.
+    const DJB2_SEED: u64 = 5381;
+    const DJB2_MULTIPLIER: u64 = 33;
+    let hash: u64 = username.bytes().fold(DJB2_SEED, |h, b| {
+        h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(b as u64)
+    });
     ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
 }
 
-/// Try to load the macOS user profile picture as a data URI.
-///
-/// macOS stores user pictures at `/Users/<username>/Library/Caches/com.apple.user-picture/`
-/// or via the DSCL directory services. We try the simplest approach: read the JPEG
-/// from the standard DS picture path.
+/// Scan the well-known cache/face-file locations for a user picture.
+/// Returns a `data:` URI on the first readable, non-empty candidate.
 #[cfg(target_os = "macos")]
-fn macos_profile_picture(username: &str) -> Option<String> {
+fn macos_profile_picture_from_files() -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    // macOS stores user profile pictures via dscl; the actual file is at:
-    // /var/db/dslocal/nodes/Default/users/<username>.plist (needs root)
-    // But a more accessible copy often exists at:
     let home = std::env::var("HOME").ok()?;
     let candidates = [
         format!("{home}/Library/Caches/com.apple.user-picture/user-picture.jpeg"),
@@ -884,51 +883,65 @@ fn macos_profile_picture(username: &str) -> Option<String> {
     ];
 
     for path in &candidates {
-        if let Ok(data) = std::fs::read(path) {
-            if data.is_empty() {
-                continue;
-            }
-            let mime = if path.ends_with(".png") {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
-            return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
+        let Ok(data) = std::fs::read(path) else {
+            continue;
+        };
+        if data.is_empty() {
+            continue;
         }
+        let mime = if path.ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
     }
+    None
+}
 
-    // Try dscl as a fallback — reads the JPEGPhoto attribute.
-    // dscl outputs hex-encoded text like "JPEGPhoto:\n ffd8ffe0 00104a46 ..."
-    // We need to parse the hex back to binary bytes.
+/// Fallback: ask `dscl` for the user's `JPEGPhoto` attribute and parse the
+/// hex-encoded output. dscl prints lines like `JPEGPhoto:\n ffd8ffe0 …`.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture_from_dscl(username: &str) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
     let output = std::process::Command::new("dscl")
         .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
         .output()
         .ok()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Skip the "JPEGPhoto:\n" header line
-        let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
-        // Remove all whitespace to get a continuous hex string
-        let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        // Decode hex pairs to bytes
-        let bytes: Vec<u8> = (0..hex_clean.len())
-            .step_by(2)
-            .filter_map(|i| {
-                hex_clean
-                    .get(i..i + 2)
-                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-            })
-            .collect();
-        if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
-            return Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(&bytes)
-            ));
-        }
+    if !output.status.success() {
+        return None;
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hex_body = stdout.strip_prefix("JPEGPhoto:\n").unwrap_or(&stdout);
+    let hex_clean: String = hex_body.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    let bytes: Vec<u8> = (0..hex_clean.len())
+        .step_by(2)
+        .filter_map(|i| {
+            hex_clean
+                .get(i..i + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect();
+    // Validate JPEG SOI marker (0xFFD8) so we don't emit garbage if the
+    // attribute was missing or decoded wrong.
+    if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+        Some(format!(
+            "data:image/jpeg;base64,{}",
+            STANDARD.encode(&bytes)
+        ))
+    } else {
+        None
+    }
+}
 
-    None
+/// Try to load the macOS user profile picture as a data URI.
+///
+/// Walks two fallbacks: well-known file paths under the user's home, then
+/// the `dscl` directory-services query for `JPEGPhoto`.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture(username: &str) -> Option<String> {
+    macos_profile_picture_from_files().or_else(|| macos_profile_picture_from_dscl(username))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1369,9 +1382,8 @@ mod tests {
     /// the given board and AppState lists exactly that board, no others.
     /// This is the Rust-side mirror of the acceptance criterion
     /// "`kanban-app --only /tmp/test.kanban` opens exactly that board".
-    /// The Tauri window-creation step is exercised by `setup_app` itself
-    /// and not reachable without a running Tauri event loop, so it's
-    /// covered by the tauri-driver E2E instead.
+    /// The Tauri window-creation step inside `setup_app` is not reachable
+    /// without a running Tauri event loop, so it is not asserted here.
     #[tokio::test]
     async fn test_with_only_opens_exactly_one_board() {
         let tmp = TempDir::new().unwrap();

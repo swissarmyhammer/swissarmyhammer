@@ -1,30 +1,13 @@
-//! Test infrastructure: synthetic board fixtures for Tauri integration tests
-//! and end-to-end drivers.
+//! Test infrastructure: synthetic board fixtures for in-process Rust tests.
 //!
 //! This module is intentionally **backend-only** — everything here writes
-//! content to disk and returns a handle that downstream code can feed to
-//! [`AppState::open_board`] or the `--only` launch path. The factory never
-//! invokes React and never talks to a window.
+//! content to disk and returns a handle that downstream test code can feed
+//! to [`AppState::open_board`] or the `--only` launch path. The factory
+//! never invokes React and never talks to a window.
 //!
-//! The fixtures are available whenever `debug_assertions` is on (i.e.
-//! unit-test builds and debug `cargo build`) so that:
-//!
-//! - Unit tests under `kanban-app` can call them directly.
-//! - A locally-built debug binary can be driven by `tauri-driver` via
-//!   `--only <fixture-path>` or the `__spatial_dump` debug command.
-//! - The `fixture-3x3` hidden CLI subcommand can materialise a deterministic
-//!   3x3 board on disk for the `tauri-driver` E2E suite to point `--only` at.
-//!
-//! Release binaries exclude the module entirely — the `#[cfg(debug_assertions)]`
-//! gate on the `mod test_support;` declaration in `main.rs` is what enforces
-//! that, not any `#[cfg]` inside this file.
-//!
-//! The [`write_3x3_board`], [`write_long_column`], and
-//! [`write_grid_view_fixture`] helpers return a [`TempDir`] and therefore
-//! live under a further `#[cfg(test)]` gate — `tempfile` is a
-//! dev-dependency and cannot link into a debug `cargo build`. Non-test
-//! callers drive [`build_fixture`] directly with a caller-owned path (see
-//! the `fixture-3x3` CLI subcommand in `cli.rs`).
+//! The `mod test_support;` declaration in `main.rs` is `#[cfg(test)]`, so
+//! the whole module compiles only for test builds — the `tempfile`
+//! dev-dependency stays out of the production binary.
 //!
 //! # Example
 //!

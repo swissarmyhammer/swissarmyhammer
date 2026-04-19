@@ -8,8 +8,6 @@ use std::collections::HashMap;
 
 use crate::state::AppState;
 use serde::Deserialize;
-#[cfg(debug_assertions)]
-use serde::Serialize;
 use swissarmyhammer_spatial_nav::{BatchEntry, Direction, Rect};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
@@ -227,105 +225,152 @@ pub async fn spatial_unregister_batch<R: Runtime>(
 // Debug-only: __spatial_dump
 // ---------------------------------------------------------------------------
 //
-// Exposes a snapshot of the spatial state to tauri-driver E2E tests and to
-// the in-process mock_app integration tests. The `#[cfg(debug_assertions)]`
-// gate below also gates the registration in `main.rs` — the `__` prefix
-// signals "testing only" and matches the convention established by the
-// task spec.
+// SINGLE SOURCE OF TRUTH for the `__spatial_dump` debug command gate.
+//
+// Everything that distinguishes debug from release builds for this command
+// lives inside the `debug_commands` submodule below: the command itself, its
+// serde payload types, and the macro (`kanban_invoke_handler!`) that wires
+// it into `tauri::generate_handler!` in `main.rs`. The module is gated by
+// exactly one `#[cfg(debug_assertions)]` — if the gate is wrong, nothing
+// downstream compiles, and there is no way for a future edit to leak
+// `__spatial_dump` into a release binary while the registration quietly
+// drops it (or vice-versa).
+//
+// Do NOT add another `#[cfg(debug_assertions)]` anywhere else for this
+// command. The `main.rs` registration calls `kanban_invoke_handler!`
+// unconditionally; the macro handles debug vs. release internally.
 //
 // Tests can check `typeof (window as any).__TAURI__ === 'object'` and
 // then `invoke('__spatial_dump')` without any further setup. Release
 // builds omit the symbol entirely so there is no way for a user-level
 // caller to reach it.
 
-/// Serializable snapshot of the spatial focus state.
-///
-/// Returned by `__spatial_dump` for test assertions against the Rust-side
-/// state — tests that rely only on DOM inspection can't tell whether
-/// `SpatialState` and the React tree agree, so this command closes that
-/// gap. Release builds exclude this struct with the command itself.
 #[cfg(debug_assertions)]
-#[derive(Debug, Serialize)]
-pub struct SpatialDump {
-    /// The currently-focused spatial key, or `None` if nothing is focused.
-    pub focused_key: Option<String>,
-    /// The entity moniker of the focused entry, resolved via the entry
-    /// registry. `None` when either nothing is focused or the focused key
-    /// is no longer in the registry (a stale focus the caller should
-    /// investigate).
-    pub focused_moniker: Option<String>,
-    /// Total number of registered spatial entries across every layer.
-    pub entry_count: usize,
-    /// Layer stack snapshot, bottom-first. The last element is the active
-    /// layer. Each entry carries its own per-layer entry count and
-    /// `last_focused` memory so tests can verify focus-restoration logic.
-    pub layer_stack: Vec<LayerDumpEntry>,
-}
+pub mod debug_commands {
+    use super::*;
+    use serde::Serialize;
 
-/// Serializable snapshot of a single layer in the spatial layer stack.
-#[cfg(debug_assertions)]
-#[derive(Debug, Serialize)]
-pub struct LayerDumpEntry {
-    /// Layer key (ULID minted client-side).
-    pub key: String,
-    /// Human-readable layer name — e.g. `"window"`, `"inspector"`.
-    pub name: String,
-    /// The key of the entry most recently focused in this layer, if any.
-    pub last_focused: Option<String>,
-    /// Number of registered spatial entries tagged with this layer's key.
-    pub entry_count_in_layer: usize,
-}
-
-/// Dump the full spatial state for test assertions.
-///
-/// Gated behind `#[cfg(debug_assertions)]` so the symbol is absent from
-/// release builds. Registered in `main.rs` behind the same gate — there is
-/// no way to invoke this command from a production binary.
-#[cfg(debug_assertions)]
-#[tauri::command]
-pub async fn __spatial_dump(state: State<'_, AppState>) -> Result<SpatialDump, String> {
-    let entries = state.spatial_state.entries_snapshot();
-    let layers = state.spatial_state.layers_snapshot();
-    let focused_key = state.spatial_state.focused_key();
-
-    // Resolve focused moniker by walking the entries snapshot rather than
-    // round-tripping back through `SpatialState::get` — cheaper, and keeps
-    // the two halves of the snapshot internally consistent even if another
-    // thread mutates state between the two calls.
-    let focused_moniker = focused_key.as_deref().and_then(|fk| {
-        entries
-            .iter()
-            .find(|e| e.key == fk)
-            .map(|e| e.moniker.clone())
-    });
-
-    // Per-layer counts: one pass over the entries vector keyed by layer_key.
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for entry in &entries {
-        *counts.entry(entry.layer_key.clone()).or_insert(0) += 1;
+    /// Serializable snapshot of the spatial focus state.
+    ///
+    /// Returned by `__spatial_dump` for test assertions against the Rust-side
+    /// state — tests that rely only on DOM inspection can't tell whether
+    /// `SpatialState` and the React tree agree, so this command closes that
+    /// gap. Release builds exclude this struct with the command itself.
+    #[derive(Debug, Serialize)]
+    pub struct SpatialDump {
+        /// The currently-focused spatial key, or `None` if nothing is focused.
+        pub focused_key: Option<String>,
+        /// The entity moniker of the focused entry, resolved via the entry
+        /// registry. `None` when either nothing is focused or the focused key
+        /// is no longer in the registry (a stale focus the caller should
+        /// investigate).
+        pub focused_moniker: Option<String>,
+        /// Total number of registered spatial entries across every layer.
+        pub entry_count: usize,
+        /// Layer stack snapshot, bottom-first. The last element is the active
+        /// layer. Each entry carries its own per-layer entry count and
+        /// `last_focused` memory so tests can verify focus-restoration logic.
+        pub layer_stack: Vec<LayerDumpEntry>,
     }
 
-    let layer_stack = layers
-        .into_iter()
-        .map(|layer| LayerDumpEntry {
-            entry_count_in_layer: counts.get(&layer.key).copied().unwrap_or(0),
-            key: layer.key,
-            name: layer.name,
-            last_focused: layer.last_focused,
-        })
-        .collect();
+    /// Serializable snapshot of a single layer in the spatial layer stack.
+    #[derive(Debug, Serialize)]
+    pub struct LayerDumpEntry {
+        /// Layer key (ULID minted client-side).
+        pub key: String,
+        /// Human-readable layer name — e.g. `"window"`, `"inspector"`.
+        pub name: String,
+        /// The key of the entry most recently focused in this layer, if any.
+        pub last_focused: Option<String>,
+        /// Number of registered spatial entries tagged with this layer's key.
+        pub entry_count_in_layer: usize,
+    }
 
-    Ok(SpatialDump {
-        focused_key,
-        focused_moniker,
-        entry_count: entries.len(),
-        layer_stack,
-    })
+    /// Dump the full spatial state for test assertions.
+    ///
+    /// Only compiled into debug builds (this entire module is gated by
+    /// `#[cfg(debug_assertions)]`). Registered via `kanban_invoke_handler!`
+    /// in `main.rs`, which drops the identifier from the handler list in
+    /// release builds — so there is no way to invoke this command from a
+    /// production binary.
+    #[tauri::command]
+    pub async fn __spatial_dump(state: State<'_, AppState>) -> Result<SpatialDump, String> {
+        let entries = state.spatial_state.entries_snapshot();
+        let layers = state.spatial_state.layers_snapshot();
+        let focused_key = state.spatial_state.focused_key();
+
+        // Resolve focused moniker by walking the entries snapshot rather than
+        // round-tripping back through `SpatialState::get` — cheaper, and keeps
+        // the two halves of the snapshot internally consistent even if another
+        // thread mutates state between the two calls.
+        let focused_moniker = focused_key.as_deref().and_then(|fk| {
+            entries
+                .iter()
+                .find(|e| e.key == fk)
+                .map(|e| e.moniker.clone())
+        });
+
+        // Per-layer counts: one pass over the entries vector keyed by layer_key.
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for entry in &entries {
+            *counts.entry(entry.layer_key.clone()).or_insert(0) += 1;
+        }
+
+        let layer_stack = layers
+            .into_iter()
+            .map(|layer| LayerDumpEntry {
+                entry_count_in_layer: counts.get(&layer.key).copied().unwrap_or(0),
+                key: layer.key,
+                name: layer.name,
+                last_focused: layer.last_focused,
+            })
+            .collect();
+
+        Ok(SpatialDump {
+            focused_key,
+            focused_moniker,
+            entry_count: entries.len(),
+            layer_stack,
+        })
+    }
+}
+
+/// Build the kanban-app Tauri `invoke_handler` from a comma-separated list of
+/// command idents, automatically appending the debug-only `__spatial_dump`
+/// command in debug builds and omitting it entirely in release builds.
+///
+/// This is the single wiring point for debug commands. `main.rs` calls it
+/// unconditionally, without any `#[cfg]` of its own. Adding a new debug-only
+/// command means appending it inside the `#[cfg(debug_assertions)]` branch of
+/// this macro — nothing else changes.
+///
+/// Why a macro instead of a helper function? `tauri::generate_handler!` is a
+/// proc-macro that must see the full comma-separated list of command idents
+/// as literal tokens at call time; it cannot accept a pre-built handler
+/// value. `macro_rules!` runs before the proc-macro expands, so by the time
+/// `generate_handler!` sees its input, the debug command is either present
+/// or absent — no runtime dispatch, no `Fn` chaining, no Tauri-builder
+/// limitation (`invoke_handler` replaces, it does not append).
+#[macro_export]
+macro_rules! kanban_invoke_handler {
+    ($($cmd:path),* $(,)?) => {{
+        #[cfg(debug_assertions)]
+        {
+            ::tauri::generate_handler![
+                $($cmd,)*
+                $crate::spatial::debug_commands::__spatial_dump,
+            ]
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            ::tauri::generate_handler![$($cmd,)*]
+        }
+    }};
 }
 
 #[cfg(all(test, debug_assertions))]
 mod debug_dump_tests {
-    use super::*;
+    use super::debug_commands::{LayerDumpEntry, SpatialDump};
     use std::collections::HashMap;
     use swissarmyhammer_spatial_nav::{Rect, SpatialState};
 
@@ -333,10 +378,9 @@ mod debug_dump_tests {
     /// then render it to `SpatialDump` the same way the Tauri command does
     /// and check every field of the payload shape.
     ///
-    /// This is the unit-level mirror of what a tauri-driver E2E will
-    /// observe over IPC — the Tauri command itself is a thin wrapper over
-    /// the logic below, so covering the wrapper's body here avoids the need
-    /// to stand up a full Tauri app for a pure state snapshot.
+    /// The Tauri command is a thin wrapper over the logic below, so
+    /// covering the wrapper's body here is enough — no full Tauri app
+    /// needed for a pure state snapshot.
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
         Rect {
             x,

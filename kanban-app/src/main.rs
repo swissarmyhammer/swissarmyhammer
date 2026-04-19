@@ -8,19 +8,16 @@ mod menu;
 mod spatial;
 mod state;
 mod tauri_reporter;
-// Test infrastructure (board fixtures) is compiled for debug builds so that
-// the tauri-driver E2E harness can invoke the `fixture-3x3` CLI subcommand
-// from a debug `kanban-app` binary to produce a deterministic board on disk.
-// Release binaries exclude the module entirely.
-//
-// Note: the `write_*` helpers that return a `TempDir` live under a further
-// `#[cfg(test)]` gate inside the module, because `tempfile` is only a
-// dev-dependency. Debug (non-test) callers reach the factory through
-// `build_fixture`, which takes a caller-provided `PathBuf`.
-#[cfg(debug_assertions)]
+// Board-fixture factory used by in-process Rust tests (unit + tauri
+// integration). `#[cfg(test)]` keeps it out of production binaries and
+// scopes the `tempfile` dev-dependency to the test build.
+#[cfg(test)]
 mod test_support;
 mod watcher;
 
+/// Re-exported so integration tests and binary-adjacent tooling can install
+/// the custom `tracing` subscriber layer that routes records into Tauri's log
+/// plugin.
 pub use tauri_reporter::TauriReporter;
 
 use clap::Parser;
@@ -73,7 +70,13 @@ fn run_app(app_state: AppState) {
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
-        .invoke_handler(tauri::generate_handler![
+        // `kanban_invoke_handler!` (defined in `spatial.rs`) is the single
+        // source of truth for the debug-only command surface: it appends
+        // `__spatial_dump` to the handler list in debug builds and drops it
+        // entirely in release builds. No `#[cfg]` required here — the macro
+        // internalizes the distinction so this call site cannot drift out of
+        // sync with the command definition.
+        .invoke_handler(kanban_invoke_handler![
             commands::log_command,
             commands::dispatch_command,
             commands::list_commands_for_scope,
@@ -103,12 +106,6 @@ fn run_app(app_state: AppState) {
             spatial::spatial_navigate,
             spatial::spatial_push_layer,
             spatial::spatial_remove_layer,
-            // Debug-only spatial state snapshot for tauri-driver E2E and the
-            // mock_app integration test. The cfg gate matches the one on
-            // the command definition in `spatial.rs`, so release builds
-            // drop the symbol entirely.
-            #[cfg(debug_assertions)]
-            spatial::__spatial_dump,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)
