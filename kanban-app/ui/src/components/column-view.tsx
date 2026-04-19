@@ -52,6 +52,8 @@ const ESTIMATED_ITEM_HEIGHT = 80;
 const TRAILING_ZONE_HEIGHT = 6;
 /** Minimum task count to activate virtualization. Below this, all items render directly. */
 const VIRTUALIZE_THRESHOLD = 25;
+/** Rows to render outside the visible viewport on each side for smoother scrolling. */
+const VIRTUALIZER_OVERSCAN = 5;
 
 /**
  * Manage auto-scroll during drag near the top/bottom edges of a scroll container.
@@ -548,7 +550,7 @@ function VirtualColumn({
     count: tasks.length + 1,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (i < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT),
-    overscan: 5,
+    overscan: VIRTUALIZER_OVERSCAN,
   });
 
   return (
