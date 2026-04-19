@@ -86,10 +86,20 @@ impl ToJsonRpcError for MimeTypeValidationError {
     }
 }
 
+/// How aggressively MIME types and binary contents should be validated.
+///
+/// Used by [`MimeTypePolicy`] to pick defaults for allow-lists, format
+/// matching, and security filtering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationLevel {
+    /// Only a small curated set of MIME types is accepted and binary payloads
+    /// must match their declared format exactly.
     Strict,
+    /// A broader set of text/document MIME types is allowed, but magic-byte
+    /// validation and security filtering are still active.
     Moderate,
+    /// Most MIME types are accepted without magic-byte validation or security
+    /// filtering. Suitable for trusted/debug-only contexts.
     Permissive,
 }
 
@@ -111,6 +121,9 @@ impl Default for MimeTypePolicy {
 }
 
 impl MimeTypePolicy {
+    /// Build a [`MimeTypePolicy`] tuned for untrusted input — only core
+    /// image/audio/resource types are allowed and payloads must pass
+    /// magic-byte validation.
     pub fn strict() -> Self {
         let mut allowed_image_types = HashSet::new();
         allowed_image_types.insert("image/png".to_string());
@@ -147,6 +160,9 @@ impl MimeTypePolicy {
         }
     }
 
+    /// Build a [`MimeTypePolicy`] that accepts a wider set of text/document
+    /// resource types but still validates binary formats and applies security
+    /// filtering. This is the `Default` policy.
     pub fn moderate() -> Self {
         let mut policy = Self::strict();
         policy.validation_level = ValidationLevel::Moderate;
@@ -178,6 +194,8 @@ impl MimeTypePolicy {
         policy
     }
 
+    /// Build a [`MimeTypePolicy`] that accepts most MIME types without any
+    /// format or security checks. Only appropriate for trusted/debug contexts.
     pub fn permissive() -> Self {
         let mut policy = Self::moderate();
         policy.validation_level = ValidationLevel::Permissive;
@@ -211,18 +229,22 @@ impl Default for MimeTypeValidator {
 }
 
 impl MimeTypeValidator {
+    /// Build a validator from an explicit [`MimeTypePolicy`].
     pub fn new(policy: MimeTypePolicy) -> Self {
         Self { policy }
     }
 
+    /// Convenience constructor for [`MimeTypePolicy::strict`].
     pub fn strict() -> Self {
         Self::new(MimeTypePolicy::strict())
     }
 
+    /// Convenience constructor for [`MimeTypePolicy::moderate`].
     pub fn moderate() -> Self {
         Self::new(MimeTypePolicy::moderate())
     }
 
+    /// Convenience constructor for [`MimeTypePolicy::permissive`].
     pub fn permissive() -> Self {
         Self::new(MimeTypePolicy::permissive())
     }
@@ -330,6 +352,9 @@ impl MimeTypeValidator {
         Ok(())
     }
 
+    /// Return `true` when the MIME type is not on the policy's deny-list — the
+    /// logical inverse of [`Self::is_mime_type_blocked`]. Useful as a simple
+    /// security pre-check before more expensive validation.
     pub fn is_mime_type_secure(&self, mime_type: &str) -> bool {
         !self.is_mime_type_blocked(mime_type)
     }
@@ -367,14 +392,12 @@ impl MimeTypeValidator {
         };
 
         match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) => {
-                if expected != detected {
-                    return Err(MimeTypeValidationError::FormatMismatch {
-                        expected: expected.to_string(),
-                        detected: detected.to_string(),
-                        mime_type: mime_type.to_string(),
-                    });
-                }
+            (Some(expected), Some(detected)) if expected != detected => {
+                return Err(MimeTypeValidationError::FormatMismatch {
+                    expected: expected.to_string(),
+                    detected: detected.to_string(),
+                    mime_type: mime_type.to_string(),
+                });
             }
             (Some(expected), None) => {
                 // Expected a specific format but couldn't detect it - this is an error
@@ -406,14 +429,12 @@ impl MimeTypeValidator {
         };
 
         match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) => {
-                if expected != detected {
-                    return Err(MimeTypeValidationError::FormatMismatch {
-                        expected: expected.to_string(),
-                        detected: detected.to_string(),
-                        mime_type: mime_type.to_string(),
-                    });
-                }
+            (Some(expected), Some(detected)) if expected != detected => {
+                return Err(MimeTypeValidationError::FormatMismatch {
+                    expected: expected.to_string(),
+                    detected: detected.to_string(),
+                    mime_type: mime_type.to_string(),
+                });
             }
             (Some(expected), None) => {
                 // Expected a specific format but couldn't detect it - this is an error

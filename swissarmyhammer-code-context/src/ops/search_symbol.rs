@@ -115,7 +115,7 @@ pub fn search_symbol(
         })
         .collect();
 
-    matches.sort_by(|a, b| b.score.cmp(&a.score));
+    matches.sort_by_key(|b| std::cmp::Reverse(b.score));
     matches.truncate(max);
 
     Ok(matches)
@@ -142,62 +142,66 @@ fn load_candidates(conn: &Connection) -> Result<Vec<Candidate>, CodeContextError
     use std::collections::HashMap;
 
     let mut seen: HashMap<(String, u32), Candidate> = HashMap::new();
+    load_lsp_candidates(conn, &mut seen)?;
+    load_treesitter_candidates(conn, &mut seen)?;
+    Ok(seen.into_values().collect())
+}
 
-    // LSP symbols
-    {
-        let mut stmt =
-            conn.prepare("SELECT id, name, kind, file_path, start_line FROM lsp_symbols")?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?, // id
-                row.get::<_, String>(1)?, // name
-                row.get::<_, i32>(2)?,    // kind
-                row.get::<_, String>(3)?, // file_path
-                row.get::<_, u32>(4)?,    // start_line
-            ))
-        })?;
-
-        for row in rows {
-            let (id, name, kind, file_path, start_line) = row?;
-            let qpath = qualified_path_from_id(&id, &file_path);
-            let key = (file_path.clone(), start_line);
-
-            seen.insert(
-                key,
-                Candidate {
-                    name,
-                    qualified_path: qpath,
-                    kind: symbol_kind_name(kind).map(|s| s.to_string()),
-                    file_path,
-                    start_line,
-                    source: "lsp".to_string(),
-                },
-            );
-        }
+/// Load LSP symbol rows into `seen`, overwriting any existing entries so LSP
+/// always wins the dedup race.
+fn load_lsp_candidates(
+    conn: &Connection,
+    seen: &mut std::collections::HashMap<(String, u32), Candidate>,
+) -> Result<(), CodeContextError> {
+    let mut stmt = conn.prepare("SELECT id, name, kind, file_path, start_line FROM lsp_symbols")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?, // id
+            row.get::<_, String>(1)?, // name
+            row.get::<_, i32>(2)?,    // kind
+            row.get::<_, String>(3)?, // file_path
+            row.get::<_, u32>(4)?,    // start_line
+        ))
+    })?;
+    for row in rows {
+        let (id, name, kind, file_path, start_line) = row?;
+        let qpath = qualified_path_from_id(&id, &file_path);
+        seen.insert(
+            (file_path.clone(), start_line),
+            Candidate {
+                name,
+                qualified_path: qpath,
+                kind: symbol_kind_name(kind).map(|s| s.to_string()),
+                file_path,
+                start_line,
+                source: "lsp".to_string(),
+            },
+        );
     }
+    Ok(())
+}
 
-    // Tree-sitter symbols
-    {
-        let mut stmt = conn.prepare(
-            "SELECT file_path, start_line, symbol_path \
-             FROM ts_chunks WHERE symbol_path IS NOT NULL",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?, // file_path
-                row.get::<_, u32>(1)?,    // start_line
-                row.get::<_, String>(2)?, // symbol_path
-            ))
-        })?;
-
-        for row in rows {
-            let (file_path, start_line, symbol_path) = row?;
-            let key = (file_path.clone(), start_line);
-
-            // Only insert if LSP hasn't already provided this location
-            seen.entry(key).or_insert_with(|| {
+/// Load tree-sitter symbol rows into `seen`, only filling locations that aren't
+/// already covered by an LSP entry.
+fn load_treesitter_candidates(
+    conn: &Connection,
+    seen: &mut std::collections::HashMap<(String, u32), Candidate>,
+) -> Result<(), CodeContextError> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, start_line, symbol_path \
+         FROM ts_chunks WHERE symbol_path IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?, // file_path
+            row.get::<_, u32>(1)?,    // start_line
+            row.get::<_, String>(2)?, // symbol_path
+        ))
+    })?;
+    for row in rows {
+        let (file_path, start_line, symbol_path) = row?;
+        seen.entry((file_path.clone(), start_line))
+            .or_insert_with(|| {
                 let name = symbol_path
                     .rsplit("::")
                     .next()
@@ -212,10 +216,8 @@ fn load_candidates(conn: &Connection) -> Result<Vec<Candidate>, CodeContextError
                     source: "treesitter".to_string(),
                 }
             });
-        }
     }
-
-    Ok(seen.into_values().collect())
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -272,55 +274,52 @@ mod tests {
     fn seed_fixtures(conn: &Connection) {
         insert_file(conn, "src/lib.rs");
         insert_file(conn, "src/auth.rs");
+        seed_fixture_lsp_symbols(conn);
+        seed_fixture_ts_chunks(conn);
+    }
 
-        // LSP symbols
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/lib.rs:MyStruct",
-            "MyStruct",
-            23,
-            "src/lib.rs",
-            0,
-        );
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/lib.rs:MyStruct::new",
-            "new",
-            12,
-            "src/lib.rs",
-            5,
-        );
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/lib.rs:MyStruct::authenticate",
-            "authenticate",
-            6,
-            "src/lib.rs",
-            10,
-        );
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/auth.rs:AuthService",
-            "AuthService",
-            5,
-            "src/auth.rs",
-            0,
-        );
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/auth.rs:AuthService::validate",
-            "validate",
-            6,
-            "src/auth.rs",
-            15,
-        );
+    fn seed_fixture_lsp_symbols(conn: &Connection) {
+        let lsp_rows: &[(&str, &str, i32, &str, u32)] = &[
+            ("lsp:src/lib.rs:MyStruct", "MyStruct", 23, "src/lib.rs", 0),
+            ("lsp:src/lib.rs:MyStruct::new", "new", 12, "src/lib.rs", 5),
+            (
+                "lsp:src/lib.rs:MyStruct::authenticate",
+                "authenticate",
+                6,
+                "src/lib.rs",
+                10,
+            ),
+            (
+                "lsp:src/auth.rs:AuthService",
+                "AuthService",
+                5,
+                "src/auth.rs",
+                0,
+            ),
+            (
+                "lsp:src/auth.rs:AuthService::validate",
+                "validate",
+                6,
+                "src/auth.rs",
+                15,
+            ),
+        ];
+        for (id, name, kind, path, line) in lsp_rows {
+            insert_lsp_symbol(conn, id, name, *kind, path, *line);
+        }
+    }
 
-        // Tree-sitter chunks
-        insert_ts_chunk(conn, "src/lib.rs", 0, 20, "MyStruct");
-        insert_ts_chunk(conn, "src/lib.rs", 5, 8, "MyStruct::new");
-        insert_ts_chunk(conn, "src/lib.rs", 10, 15, "MyStruct::authenticate");
-        insert_ts_chunk(conn, "src/auth.rs", 0, 30, "AuthService");
-        insert_ts_chunk(conn, "src/auth.rs", 15, 20, "AuthService::validate");
+    fn seed_fixture_ts_chunks(conn: &Connection) {
+        let ts_rows: &[(&str, u32, u32, &str)] = &[
+            ("src/lib.rs", 0, 20, "MyStruct"),
+            ("src/lib.rs", 5, 8, "MyStruct::new"),
+            ("src/lib.rs", 10, 15, "MyStruct::authenticate"),
+            ("src/auth.rs", 0, 30, "AuthService"),
+            ("src/auth.rs", 15, 20, "AuthService::validate"),
+        ];
+        for (path, start, end, name) in ts_rows {
+            insert_ts_chunk(conn, path, *start, *end, name);
+        }
     }
 
     #[test]

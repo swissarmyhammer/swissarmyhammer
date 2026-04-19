@@ -102,6 +102,53 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// What to do with the event loop after handling a single key.
+enum KeyOutcome {
+    /// Keep looping (state was updated in place).
+    Continue,
+    /// Exit the loop with this result (None = cancel, Some(name) = install).
+    Exit(Option<String>),
+}
+
+/// Mutable state threaded through the interactive search event loop.
+struct SearchState {
+    query: String,
+    results: Vec<FuzzySearchResult>,
+    total: usize,
+    selected: usize,
+    last_keypress: Instant,
+    last_sent_query: String,
+    loading: bool,
+    error_msg: Option<String>,
+}
+
+impl SearchState {
+    fn new() -> Self {
+        Self {
+            query: String::new(),
+            results: Vec::new(),
+            total: 0,
+            selected: 0,
+            last_keypress: Instant::now(),
+            last_sent_query: String::new(),
+            loading: false,
+            error_msg: None,
+        }
+    }
+
+    fn render(&self, stdout: &mut io::Stdout) -> Result<(), RegistryError> {
+        render(
+            stdout,
+            &self.query,
+            &self.results,
+            self.total,
+            self.selected,
+            self.loading,
+            &self.error_msg,
+        )
+    }
+}
+
 fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
     let handle = tokio::runtime::Handle::current();
     let client = RegistryClient::new();
@@ -112,124 +159,22 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
     let _guard = RawModeGuard;
 
-    let mut query = String::new();
-    let mut results: Vec<FuzzySearchResult> = Vec::new();
-    let mut total: usize = 0;
-    let mut selected: usize = 0;
-    let mut last_keypress = Instant::now();
-    let mut last_sent_query = String::new();
-    let mut loading = false;
-    let mut error_msg: Option<String> = None;
+    let mut state = SearchState::new();
 
     let action = loop {
-        render(
-            &mut stdout,
-            &query,
-            &results,
-            total,
-            selected,
-            loading,
-            &error_msg,
-        )?;
+        state.render(&mut stdout)?;
 
-        // Adaptive debounce: longer for short queries (more ambiguous)
-        let debounce = if query.len() <= 3 {
-            Duration::from_millis(250)
-        } else {
-            Duration::from_millis(150)
-        };
-
-        let needs_query = query.len() >= MIN_QUERY_LEN && query != last_sent_query;
-        let poll_timeout = if needs_query {
-            let elapsed = last_keypress.elapsed();
-            if elapsed >= debounce {
-                Duration::ZERO
-            } else {
-                debounce - elapsed
-            }
-        } else {
-            Duration::from_millis(100)
-        };
+        let needs_query =
+            state.query.len() >= MIN_QUERY_LEN && state.query != state.last_sent_query;
+        let poll_timeout = compute_poll_timeout(&state, needs_query);
 
         if event::poll(poll_timeout)? {
-            if let Event::Key(key) = event::read()? {
-                // Only handle key press events (ignore release/repeat)
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-
-                match key.code {
-                    KeyCode::Esc => break None,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        break None;
-                    }
-                    KeyCode::Enter => {
-                        if let Some(result) = results.get(selected) {
-                            break Some(result.name.clone());
-                        }
-                    }
-                    KeyCode::Backspace => {
-                        query.pop();
-                        last_keypress = Instant::now();
-                        if query.len() < MIN_QUERY_LEN {
-                            results.clear();
-                            total = 0;
-                            selected = 0;
-                            last_sent_query.clear();
-                        }
-                        error_msg = None;
-                    }
-                    KeyCode::Char(c) => {
-                        query.push(c);
-                        last_keypress = Instant::now();
-                        error_msg = None;
-                    }
-                    KeyCode::Up => {
-                        selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down => {
-                        if !results.is_empty() && selected < results.len() - 1 {
-                            selected += 1;
-                        }
-                    }
-                    _ => {}
-                }
+            match read_and_handle_key(&mut state)? {
+                KeyOutcome::Continue => continue,
+                KeyOutcome::Exit(result) => break result,
             }
         } else if needs_query {
-            // Debounce expired — fire API call
-            loading = true;
-            render(
-                &mut stdout,
-                &query,
-                &results,
-                total,
-                selected,
-                loading,
-                &error_msg,
-            )?;
-
-            let snapshot = query.clone();
-            let (_cols, rows) = terminal::size().unwrap_or((80, 24));
-            let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
-            let max_results = max_results.clamp(2, 20);
-            match handle.block_on(client.fuzzy_search(&snapshot, Some(max_results))) {
-                Ok(response) => {
-                    if query == snapshot {
-                        results = response.results;
-                        total = response.total;
-                        selected = selected.min(results.len().saturating_sub(1));
-                        last_sent_query = snapshot;
-                        error_msg = None;
-                    }
-                }
-                Err(e) => {
-                    if query == snapshot {
-                        error_msg = Some(e.to_string());
-                        last_sent_query = snapshot;
-                    }
-                }
-            }
-            loading = false;
+            fetch_and_apply_results(&mut state, &mut stdout, &handle, &client)?;
         }
     };
 
@@ -237,6 +182,120 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
     drop(_guard);
 
     Ok(action)
+}
+
+/// Compute how long to block in `event::poll` before either firing a query
+/// (debounce expired) or simply re-rendering.
+fn compute_poll_timeout(state: &SearchState, needs_query: bool) -> Duration {
+    if !needs_query {
+        return Duration::from_millis(100);
+    }
+    // Adaptive debounce: longer for short queries (more ambiguous)
+    let debounce = if state.query.len() <= 3 {
+        Duration::from_millis(250)
+    } else {
+        Duration::from_millis(150)
+    };
+    let elapsed = state.last_keypress.elapsed();
+    debounce.saturating_sub(elapsed)
+}
+
+/// Read the next terminal event (we know `poll` just returned true) and apply
+/// it to `state`. Only keyboard press events cause state changes.
+fn read_and_handle_key(state: &mut SearchState) -> Result<KeyOutcome, RegistryError> {
+    let Event::Key(key) = event::read()? else {
+        return Ok(KeyOutcome::Continue);
+    };
+    if key.kind != KeyEventKind::Press {
+        return Ok(KeyOutcome::Continue);
+    }
+
+    match key.code {
+        KeyCode::Esc => Ok(KeyOutcome::Exit(None)),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Ok(KeyOutcome::Exit(None))
+        }
+        KeyCode::Enter => {
+            let selected_name = state.results.get(state.selected).map(|r| r.name.clone());
+            match selected_name {
+                Some(name) => Ok(KeyOutcome::Exit(Some(name))),
+                None => Ok(KeyOutcome::Continue),
+            }
+        }
+        KeyCode::Backspace => {
+            handle_backspace(state);
+            Ok(KeyOutcome::Continue)
+        }
+        KeyCode::Char(c) => {
+            state.query.push(c);
+            state.last_keypress = Instant::now();
+            state.error_msg = None;
+            Ok(KeyOutcome::Continue)
+        }
+        KeyCode::Up => {
+            state.selected = state.selected.saturating_sub(1);
+            Ok(KeyOutcome::Continue)
+        }
+        KeyCode::Down if !state.results.is_empty() && state.selected < state.results.len() - 1 => {
+            state.selected += 1;
+            Ok(KeyOutcome::Continue)
+        }
+        _ => Ok(KeyOutcome::Continue),
+    }
+}
+
+/// Pop a character from the query and reset any pending result view if we're
+/// now below the minimum query length.
+fn handle_backspace(state: &mut SearchState) {
+    state.query.pop();
+    state.last_keypress = Instant::now();
+    if state.query.len() < MIN_QUERY_LEN {
+        state.results.clear();
+        state.total = 0;
+        state.selected = 0;
+        state.last_sent_query.clear();
+    }
+    state.error_msg = None;
+}
+
+/// Fire the fuzzy-search API call and write the response into `state`. If the
+/// user typed more characters while the request was in flight we discard the
+/// response so the newer query wins.
+fn fetch_and_apply_results(
+    state: &mut SearchState,
+    stdout: &mut io::Stdout,
+    handle: &tokio::runtime::Handle,
+    client: &RegistryClient,
+) -> Result<(), RegistryError> {
+    state.loading = true;
+    state.render(stdout)?;
+
+    let snapshot = state.query.clone();
+    let (_cols, rows) = terminal::size().unwrap_or((80, 24));
+    let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
+    let max_results = max_results.clamp(2, 20);
+
+    let response = handle.block_on(client.fuzzy_search(&snapshot, Some(max_results)));
+
+    // Only apply the response if the query hasn't changed while we waited.
+    if state.query == snapshot {
+        match response {
+            Ok(response) => {
+                state.results = response.results;
+                state.total = response.total;
+                state.selected = state.selected.min(state.results.len().saturating_sub(1));
+                state.last_sent_query = snapshot;
+                state.error_msg = None;
+            }
+            Err(e) => {
+                state.error_msg = Some(e.to_string());
+                state.last_sent_query = snapshot;
+            }
+        }
+    }
+
+    state.loading = false;
+    Ok(())
 }
 
 fn render(
@@ -250,12 +309,20 @@ fn render(
 ) -> Result<(), RegistryError> {
     let (cols, _rows) = terminal::size().unwrap_or((80, 24));
     let w = cols as usize;
-    // Usable content width inside the 4-char left margin
-    let content_w = w.saturating_sub(6);
+    let content_w = w.saturating_sub(6); // 4-char left margin
 
     execute!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
+    render_header(stdout)?;
+    render_prompt(stdout, query, loading)?;
+    render_body(
+        stdout, query, results, selected, loading, content_w, error_msg,
+    )?;
+    render_footer(stdout, results, total, w)?;
+    stdout.flush()?;
+    Ok(())
+}
 
-    // Header
+fn render_header(stdout: &mut io::Stdout) -> Result<(), RegistryError> {
     raw_line(stdout, "")?;
     execute!(
         stdout,
@@ -264,8 +331,10 @@ fn render(
     )?;
     raw_line(stdout, "  mirdan search")?;
     execute!(stdout, SetAttribute(Attribute::Reset))?;
+    Ok(())
+}
 
-    // Query prompt
+fn render_prompt(stdout: &mut io::Stdout, query: &str, loading: bool) -> Result<(), RegistryError> {
     raw_line(stdout, "")?;
     let loading_ind = if loading { " ..." } else { "" };
     let prompt = format!("  > {}{}", query, loading_ind);
@@ -277,90 +346,116 @@ fn render(
     raw_line(stdout, &prompt)?;
     execute!(stdout, SetAttribute(Attribute::Reset))?;
     raw_line(stdout, "")?;
+    Ok(())
+}
 
-    // Body
+fn render_body(
+    stdout: &mut io::Stdout,
+    query: &str,
+    results: &[FuzzySearchResult],
+    selected: usize,
+    loading: bool,
+    content_w: usize,
+    error_msg: &Option<String>,
+) -> Result<(), RegistryError> {
     if let Some(err) = error_msg {
-        execute!(stdout, SetForegroundColor(Color::Red))?;
-        raw_line(stdout, &format!("  {}", tui_truncate(err, content_w)))?;
-        execute!(stdout, ResetColor)?;
-    } else if query.len() < MIN_QUERY_LEN {
-        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-        raw_line(stdout, "  Type at least 2 characters to search...")?;
-        execute!(stdout, ResetColor)?;
-    } else if results.is_empty() && !loading {
-        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-        raw_line(stdout, "  No results found.")?;
-        execute!(stdout, ResetColor)?;
-    } else {
-        for (i, result) in results.iter().enumerate() {
-            let is_sel = i == selected;
-            let marker = if is_sel { "▸" } else { " " };
-            let dl = format_downloads(result.downloads);
-            let pkg_type = result.package_type.as_deref().unwrap_or("package");
-
-            // --- Line 1: marker + name (bold) ... downloads right-aligned ---
-            if is_sel {
-                execute!(
-                    stdout,
-                    SetForegroundColor(Color::Cyan),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            } else {
-                execute!(
-                    stdout,
-                    SetForegroundColor(Color::White),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            }
-            // "  ▸ name" on the left, "1.2k ↓" on the right
-            let dl_display = format!("{} dl", dl);
-            let name_budget = content_w.saturating_sub(dl_display.len() + 2);
-            let name = tui_truncate(&result.name, name_budget);
-            let pad = content_w.saturating_sub(name.len() + dl_display.len());
-            raw_line(
-                stdout,
-                &format!("  {} {}{:>pad$}", marker, name, dl_display, pad = pad),
-            )?;
-            execute!(stdout, SetAttribute(Attribute::Reset))?;
-
-            // --- Line 2: description (full width, wraps naturally via truncation) ---
-            if is_sel {
-                execute!(stdout, SetForegroundColor(Color::Cyan))?;
-            }
-            let desc = tui_truncate(&result.description, content_w);
-            raw_line(stdout, &format!("    {}", desc))?;
-
-            // --- Line 3: author · type ---
-            execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-            let meta = format!("by {} · {}", result.author, pkg_type);
-            raw_line(stdout, &format!("    {}", tui_truncate(&meta, content_w)))?;
-            execute!(stdout, SetAttribute(Attribute::Reset))?;
-
-            // --- Blank separator between cards ---
-            raw_line(stdout, "")?;
-        }
-    }
-
-    // Footer
-    execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-    if !results.is_empty() {
-        raw_line(
+        return render_centered_line(
             stdout,
-            &tui_truncate(
-                &format!(
-                    "  {} of {} results  |  up/down navigate  enter install  esc quit",
-                    results.len(),
-                    total
-                ),
-                w,
-            ),
-        )?;
-    } else {
+            Color::Red,
+            &format!("  {}", tui_truncate(err, content_w)),
+        );
+    }
+    if query.len() < MIN_QUERY_LEN {
+        return render_centered_line(
+            stdout,
+            Color::DarkGrey,
+            "  Type at least 2 characters to search...",
+        );
+    }
+    if results.is_empty() && !loading {
+        return render_centered_line(stdout, Color::DarkGrey, "  No results found.");
+    }
+    for (i, result) in results.iter().enumerate() {
+        render_result_card(stdout, result, i == selected, content_w)?;
+    }
+    Ok(())
+}
+
+fn render_centered_line(
+    stdout: &mut io::Stdout,
+    color: Color,
+    text: &str,
+) -> Result<(), RegistryError> {
+    execute!(stdout, SetForegroundColor(color))?;
+    raw_line(stdout, text)?;
+    execute!(stdout, ResetColor)?;
+    Ok(())
+}
+
+fn render_result_card(
+    stdout: &mut io::Stdout,
+    result: &FuzzySearchResult,
+    is_sel: bool,
+    content_w: usize,
+) -> Result<(), RegistryError> {
+    let marker = if is_sel { "▸" } else { " " };
+    let dl = format_downloads(result.downloads);
+    let pkg_type = result.package_type.as_deref().unwrap_or("package");
+
+    // --- Line 1: marker + name (bold) ... downloads right-aligned ---
+    let name_color = if is_sel { Color::Cyan } else { Color::White };
+    execute!(
+        stdout,
+        SetForegroundColor(name_color),
+        SetAttribute(Attribute::Bold)
+    )?;
+    let dl_display = format!("{} dl", dl);
+    let name_budget = content_w.saturating_sub(dl_display.len() + 2);
+    let name = tui_truncate(&result.name, name_budget);
+    let pad = content_w.saturating_sub(name.len() + dl_display.len());
+    raw_line(
+        stdout,
+        &format!("  {} {}{:>pad$}", marker, name, dl_display, pad = pad),
+    )?;
+    execute!(stdout, SetAttribute(Attribute::Reset))?;
+
+    // --- Line 2: description ---
+    if is_sel {
+        execute!(stdout, SetForegroundColor(Color::Cyan))?;
+    }
+    raw_line(
+        stdout,
+        &format!("    {}", tui_truncate(&result.description, content_w)),
+    )?;
+
+    // --- Line 3: author · type ---
+    execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+    let meta = format!("by {} · {}", result.author, pkg_type);
+    raw_line(stdout, &format!("    {}", tui_truncate(&meta, content_w)))?;
+    execute!(stdout, SetAttribute(Attribute::Reset))?;
+
+    raw_line(stdout, "")?; // blank separator between cards
+    Ok(())
+}
+
+fn render_footer(
+    stdout: &mut io::Stdout,
+    results: &[FuzzySearchResult],
+    total: usize,
+    w: usize,
+) -> Result<(), RegistryError> {
+    execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+    if results.is_empty() {
         raw_line(stdout, "  esc quit")?;
+    } else {
+        let line = format!(
+            "  {} of {} results  |  up/down navigate  enter install  esc quit",
+            results.len(),
+            total
+        );
+        raw_line(stdout, &tui_truncate(&line, w))?;
     }
     execute!(stdout, ResetColor)?;
-
-    stdout.flush()?;
     Ok(())
 }
 
