@@ -187,10 +187,8 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
                     KeyCode::Up => {
                         selected = selected.saturating_sub(1);
                     }
-                    KeyCode::Down => {
-                        if !results.is_empty() && selected < results.len() - 1 {
-                            selected += 1;
-                        }
+                    KeyCode::Down if !results.is_empty() && selected < results.len() - 1 => {
+                        selected += 1;
                     }
                     _ => {}
                 }

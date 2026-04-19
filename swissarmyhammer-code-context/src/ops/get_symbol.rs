@@ -223,7 +223,7 @@ pub fn get_symbol(
         })
         .collect();
     if !suffix.is_empty() {
-        suffix.sort_by(|a, b| b.1.cmp(&a.1));
+        suffix.sort_by_key(|b| std::cmp::Reverse(b.1));
         return Ok(make_result_scored(query, &suffix, MatchTier::Suffix, max));
     }
 
@@ -256,7 +256,7 @@ pub fn get_symbol(
                 .map(|score| (s, score))
         })
         .collect();
-    fuzzy.sort_by(|a, b| b.1.cmp(&a.1));
+    fuzzy.sort_by_key(|b| std::cmp::Reverse(b.1));
     if !fuzzy.is_empty() {
         return Ok(make_result_scored(query, &fuzzy, MatchTier::Fuzzy, max));
     }

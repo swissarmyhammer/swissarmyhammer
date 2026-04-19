@@ -498,7 +498,7 @@ impl SpatialState {
                     && e.key != from_key
                     && active_layer_key
                         .as_deref()
-                        .map_or(true, |lk| e.layer_key == lk)
+                        .is_none_or(|lk| e.layer_key == lk)
             })
             .map(|e| e.key.clone());
         match target_key {
@@ -532,7 +532,7 @@ impl SpatialState {
             .filter(|e| {
                 active_layer_key
                     .as_deref()
-                    .map_or(true, |lk| e.layer_key == lk)
+                    .is_none_or(|lk| e.layer_key == lk)
             })
             .collect();
         if candidates.is_empty() {
@@ -575,7 +575,7 @@ impl SpatialState {
                     e.key != from_key
                         && active_layer_key
                             .as_deref()
-                            .map_or(true, |lk| e.layer_key == lk)
+                            .is_none_or(|lk| e.layer_key == lk)
                 })
                 .collect();
             crate::spatial_nav::container_first_search(source, &candidates, direction)

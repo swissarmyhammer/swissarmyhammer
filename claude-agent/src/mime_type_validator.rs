@@ -367,14 +367,12 @@ impl MimeTypeValidator {
         };
 
         match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) => {
-                if expected != detected {
-                    return Err(MimeTypeValidationError::FormatMismatch {
-                        expected: expected.to_string(),
-                        detected: detected.to_string(),
-                        mime_type: mime_type.to_string(),
-                    });
-                }
+            (Some(expected), Some(detected)) if expected != detected => {
+                return Err(MimeTypeValidationError::FormatMismatch {
+                    expected: expected.to_string(),
+                    detected: detected.to_string(),
+                    mime_type: mime_type.to_string(),
+                });
             }
             (Some(expected), None) => {
                 // Expected a specific format but couldn't detect it - this is an error
@@ -406,14 +404,12 @@ impl MimeTypeValidator {
         };
 
         match (expected_format, detected_format.as_deref()) {
-            (Some(expected), Some(detected)) => {
-                if expected != detected {
-                    return Err(MimeTypeValidationError::FormatMismatch {
-                        expected: expected.to_string(),
-                        detected: detected.to_string(),
-                        mime_type: mime_type.to_string(),
-                    });
-                }
+            (Some(expected), Some(detected)) if expected != detected => {
+                return Err(MimeTypeValidationError::FormatMismatch {
+                    expected: expected.to_string(),
+                    detected: detected.to_string(),
+                    mime_type: mime_type.to_string(),
+                });
             }
             (Some(expected), None) => {
                 // Expected a specific format but couldn't detect it - this is an error

@@ -84,8 +84,7 @@ impl QueueMetrics {
             .fetch_add(tokens_generated as u64, Ordering::Relaxed);
 
         // Calculate and store current throughput (tokens per second)
-        if processing_ms > 0 {
-            let throughput = (tokens_generated as u64 * 1000) / processing_ms;
+        if let Some(throughput) = (tokens_generated as u64 * 1000).checked_div(processing_ms) {
             self.last_throughput_tokens_per_second
                 .store(throughput, Ordering::Relaxed);
         }
@@ -111,11 +110,7 @@ impl QueueMetrics {
             average_processing_time_ms: {
                 let total_time = self.total_processing_time_ms.load(Ordering::Relaxed);
                 let completed = self.completed_requests.load(Ordering::Relaxed);
-                if completed > 0 {
-                    total_time / completed
-                } else {
-                    0
-                }
+                total_time.checked_div(completed).unwrap_or(0)
             },
             total_tokens_generated: self.total_tokens_generated.load(Ordering::Relaxed),
             peak_queue_size: self.peak_queue_size.load(Ordering::Relaxed),

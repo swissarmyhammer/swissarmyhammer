@@ -17,6 +17,10 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 /// spatial key is a ULID generated client-side, stable across re-renders,
 /// unique per mount. The optional `overrides` map allows per-entry
 /// navigation redirection or blocking by direction string.
+// Tauri command signatures are the frontend API contract — each JS-side
+// arg is one parameter here. Refactoring to a struct would require changes
+// on the React side that aren't in scope.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn spatial_register(
     key: String,

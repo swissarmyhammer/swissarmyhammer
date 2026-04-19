@@ -378,17 +378,13 @@ impl CompactionPrompt {
             }
 
             match current_section {
-                "system" => {
-                    if !line.trim().is_empty() && !line.starts_with('#') {
-                        system_instructions.push_str(line);
-                        system_instructions.push('\n');
-                    }
+                "system" if !line.trim().is_empty() && !line.starts_with('#') => {
+                    system_instructions.push_str(line);
+                    system_instructions.push('\n');
                 }
-                "user" => {
-                    if !line.trim().is_empty() && !line.starts_with('#') {
-                        user_template.push_str(line);
-                        user_template.push('\n');
-                    }
+                "user" if !line.trim().is_empty() && !line.starts_with('#') => {
+                    user_template.push_str(line);
+                    user_template.push('\n');
                 }
                 _ => {}
             }

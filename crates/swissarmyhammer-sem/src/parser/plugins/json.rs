@@ -130,20 +130,18 @@ fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
                     key_buf.clear();
                 }
             }
-            ':' => {
-                if depth == 1 {
-                    if let Some(ref key) = current_key {
-                        // Found a key: value pair at depth 1
-                        let escaped_key = key.replace('~', "~0").replace('/', "~1");
-                        let pointer = format!("/{escaped_key}");
-                        entries.push(JsonEntry {
-                            key: key.clone(),
-                            pointer,
-                            entity_type: String::new(), // filled in below
-                            start_line: line_num,
-                        });
-                        key_start = true;
-                    }
+            ':' if depth == 1 => {
+                if let Some(ref key) = current_key {
+                    // Found a key: value pair at depth 1
+                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
+                    let pointer = format!("/{escaped_key}");
+                    entries.push(JsonEntry {
+                        key: key.clone(),
+                        pointer,
+                        entity_type: String::new(), // filled in below
+                        start_line: line_num,
+                    });
+                    key_start = true;
                 }
             }
             '{' | '[' => {
@@ -158,17 +156,15 @@ fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
             '}' | ']' => {
                 depth -= 1;
             }
-            ',' => {
-                if depth == 1 {
-                    // End of a top-level entry
-                    if let Some(entry) = entries.last_mut() {
-                        if entry.entity_type.is_empty() {
-                            entry.entity_type = "property".to_string();
-                        }
+            ',' if depth == 1 => {
+                // End of a top-level entry
+                if let Some(entry) = entries.last_mut() {
+                    if entry.entity_type.is_empty() {
+                        entry.entity_type = "property".to_string();
                     }
-                    current_key = None;
-                    key_start = false;
                 }
+                current_key = None;
+                key_start = false;
             }
             _ => {}
         }
