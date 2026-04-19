@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
-position_column: todo
-position_ordinal: df80
+position_column: done
+position_ordinal: fffffffffffffffffffffff080
 title: 'Commands: paste handler — task onto board'
 ---
 ## What
@@ -27,24 +27,24 @@ Implement `TaskIntoBoardHandler` — pastes a task into the *leftmost column* of
 
 ### Subtasks
 
-- [ ] Implement leftmost-column lookup helper (reuse existing positional query if one exists).
-- [ ] Implement `TaskIntoBoardHandler`.
-- [ ] Register.
-- [ ] Colocate tests.
+- [x] Implement leftmost-column lookup helper (reuse existing positional query if one exists).
+- [x] Implement `TaskIntoBoardHandler`.
+- [ ] Register. (Deferred — orchestrator will batch-register `m.register(TaskIntoBoardHandler);` to avoid mod.rs collision with sibling agents implementing other paste handlers.)
+- [x] Colocate tests.
 
 ## Acceptance Criteria
 
-- [ ] Handler matches `("task", "board")`.
-- [ ] Pasting a task onto a board creates a new task in the leftmost column.
-- [ ] When the board has no columns, `available()` returns false (no crash, no silent no-op).
-- [ ] Cut variant deletes the source task.
+- [x] Handler matches `("task", "board")`.
+- [x] Pasting a task onto a board creates a new task in the leftmost column.
+- [x] When the board has no columns, `available()` returns false (no crash, no silent no-op).
+- [x] Cut variant deletes the source task.
 
 ## Tests
 
-- [ ] `paste_task_into_board_uses_leftmost_column` — fixture with columns at positions 0, 100, 200; assert new task lands in position-0 column.
-- [ ] `paste_task_into_empty_board_unavailable` — board with zero columns; handler's `available()` returns false.
-- [ ] `paste_cut_task_into_board_deletes_source` — cut path.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::task_into_board` — all green.
+- [x] `paste_task_into_board_uses_leftmost_column` — fixture with columns at positions 0, 100, 200; assert new task lands in position-0 column.
+- [x] `paste_task_into_empty_board_unavailable` — board with zero columns; handler's `available()` returns false.
+- [x] `paste_cut_task_into_board_deletes_source` — cut path.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::task_into_board` — all green (8 tests pass).
 
 ## Workflow
 

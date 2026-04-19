@@ -7,8 +7,8 @@ depends_on:
 - 01KPG5XK61ND4JKXW3FCM3CC97
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6GN9JQSCZKFER5ZJ5JC62
-position_column: todo
-position_ordinal: e880
+position_column: done
+position_ordinal: fffffffffffffffffffffff980
 title: 'Commands: project.yaml cleanup — purge cross-cutting opt-ins'
 ---
 ## What
@@ -33,24 +33,30 @@ Delete these:
 
 ### Subtasks
 
-- [ ] Delete cross-cutting opt-ins.
-- [ ] Delete `project.delete` entry (Rust retirement is F's job).
-- [ ] Hygiene test green for project.yaml.
+- [x] Delete cross-cutting opt-ins.
+- [x] Delete `project.delete` entry (Rust retirement is F's job).
+- [x] Hygiene test green for project.yaml.
 
 ## Acceptance Criteria
 
-- [ ] `project.yaml`'s `commands:` is empty or absent.
-- [ ] Right-click on a project shows Inspect Project (via auto-emit ui.inspect), Delete Project (via auto-emit entity.delete), Archive Project, Unarchive Project.
-- [ ] Hygiene test green for project.yaml.
+- [x] `project.yaml`'s `commands:` is empty or absent.
+- [x] Right-click on a project shows Inspect Project (via auto-emit ui.inspect), Delete Project (via auto-emit entity.delete), Archive Project, Unarchive Project.
+- [x] Hygiene test green for project.yaml.
 
 ## Tests
 
-- [ ] Add `entity_delete_surfaces_on_project_via_autoemit` — scope `["project:backend"]`, target `"project:backend"`; context_menu emission contains `entity.delete` with `available: true`.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban scope_commands project` — all green.
+- [x] Add `entity_delete_surfaces_on_project_via_autoemit` — scope `["project:backend"]`, target `"project:backend"`; context_menu emission contains `entity.delete` with `available: true`.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban scope_commands project` — all green.
 
 ## Workflow
 
 - Use `/tdd`.
+
+## Implementation note (added during /implement)
+
+Per user-approved scope expansion (Q&A 20260418_204916): the test acceptance for `entity_delete_surfaces_on_project_via_autoemit` required `entity.delete` to actually auto-emit, which it could not because `swissarmyhammer-commands/builtin/commands/entity.yaml` declared it `visible: false` with no `context_menu` opt-in. Flipped to `name: "Delete {{entity.type}}"`, `context_menu: true`, default `visible: true`. This is the registry-side counterpart to retiring per-entity Delete opt-ins and unblocks the F card (01KPEME1897275TKE61EKN6EVX) on the Rust-impl removal step.
+
+The crate-wide `yaml_hygiene_no_cross_cutting_in_entity_schemas` still fails on column.yaml, tag.yaml, task.yaml — those are the other per-entity cleanup cards' jobs. Project.yaml correctly drops from the violations list, satisfying this card's "Hygiene test green for project.yaml" deliverable.
 
 #commands
 

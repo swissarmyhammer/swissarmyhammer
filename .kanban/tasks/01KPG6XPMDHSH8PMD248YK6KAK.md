@@ -8,47 +8,50 @@ depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6GYSNGTEJ42XA2QNB3VE0
 position_column: todo
-position_ordinal: e780
+position_ordinal: f580
 title: 'Commands: tag.yaml cleanup — move tag.update declaration in, purge cross-cutting opt-ins'
 ---
 ## What
 
-Clean up `swissarmyhammer-kanban/builtin/entities/tag.yaml`: type-specific `tag.update` lives here as a full declaration; cross-cutting commands auto-emit and are not mentioned.
+Finish the tag entity's command story per the final architecture: type-specific `tag.update` lives as a full `CommandDef` in `swissarmyhammer-commands/builtin/commands/tag.yaml` (NEW file). The tag entity schema loses its `commands:` list entirely.
 
-### Moves IN
+### Create `builtin/commands/tag.yaml`
 
-- Move `tag.update` declaration from `swissarmyhammer-commands/builtin/commands/entity.yaml` into `tag.yaml`'s `commands:` list. Full entry with `name`, `visible: false`, `params`.
+NEW file `swissarmyhammer-commands/builtin/commands/tag.yaml` holding the full `tag.update` declaration — copy verbatim from `entity.yaml` (id, name, scope, undoable, visible, params).
 
-### Moves OUT
+### Remove from `entity.yaml`
 
-Delete these from tag.yaml (they auto-emit now):
+Delete the `tag.update` entry.
 
-- `ui.inspect`
-- `entity.archive`
-- `entity.copy`
-- `entity.cut`
+### Remove `commands:` from tag entity schema
+
+`swissarmyhammer-kanban/builtin/entities/tag.yaml` — delete the entire `commands:` list. Entity schema is fields-only.
 
 ### Files to touch
 
-- `swissarmyhammer-kanban/builtin/entities/tag.yaml`
-- `swissarmyhammer-commands/builtin/commands/entity.yaml` — remove `tag.update`.
+- CREATE `swissarmyhammer-commands/builtin/commands/tag.yaml`
+- MODIFY `swissarmyhammer-commands/builtin/commands/entity.yaml` — remove `tag.update`
+- MODIFY `swissarmyhammer-kanban/builtin/entities/tag.yaml` — delete `commands:` list
 
 ### Subtasks
 
-- [ ] Move `tag.update` declaration from entity.yaml to tag.yaml.
-- [ ] Delete the 4 cross-cutting opt-ins from tag.yaml.
+- [ ] Create `tag.yaml` command file with `tag.update`.
+- [ ] Delete `tag.update` from `entity.yaml`.
+- [ ] Delete `commands:` list from `tag.yaml` entity schema.
 - [ ] Hygiene test green for tag.yaml.
 
 ## Acceptance Criteria
 
-- [ ] `tag.yaml`'s `commands:` list contains exactly `tag.update`.
+- [ ] `tag.yaml`'s entity schema has no `commands:` key.
 - [ ] `entity.yaml` no longer contains `tag.update`.
+- [ ] `builtin/commands/tag.yaml` exists and declares `tag.update`.
 - [ ] Right-click on a tag shows Inspect Tag, Delete Tag (via auto-emit entity.delete), Archive Tag, Copy Tag, Cut Tag.
 - [ ] Hygiene test green for tag.yaml.
 
 ## Tests
 
 - [ ] Existing tag-scope emission tests still pass.
+- [ ] `test_all_yaml_commands_have_rust_implementations` passes.
 - [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban scope_commands tag` — all green.
 
 ## Workflow

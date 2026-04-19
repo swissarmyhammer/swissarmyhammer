@@ -122,9 +122,9 @@
       from: args
 
 - id: entity.delete
-  name: Delete
+  name: "Delete {{entity.type}}"
   undoable: true
-  visible: false
+  context_menu: true
   params:
     - name: moniker
       from: target
@@ -146,26 +146,6 @@
   params:
     - name: moniker
       from: target
-
-- id: tag.update
-  name: Update Tag
-  scope: "entity:tag"
-  undoable: true
-  visible: false
-  params:
-    - name: id
-      from: scope_chain
-      entity_type: tag
-
-- id: column.reorder
-  name: Reorder Columns
-  undoable: true
-  visible: false
-  params:
-    - name: id
-      from: args
-    - name: target_index
-      from: args
 
 - id: entity.cut
   name: "Cut {{entity.type}}"

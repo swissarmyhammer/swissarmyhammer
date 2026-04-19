@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
-position_column: todo
-position_ordinal: f080
+position_column: done
+position_ordinal: fffffffffffffffffffffff680
 title: 'Commands: error propagation from paste handlers to UI toast'
 ---
 ## What
@@ -25,28 +25,36 @@ If a paste handler's `execute()` returns `Err`, the error must reach the user as
 
 ### Subtasks
 
-- [ ] Audit `CommandError` variants; extend if needed (e.g., `SourceEntityMissing`, `DestinationInvalid`).
-- [ ] Each paste handler returns specific errors for its fail modes.
-- [ ] Frontend renders a toast with the error message when dispatch returns `Err`.
-- [ ] Test the happy path silent + error path visible for at least one handler end-to-end.
+- [x] Audit `CommandError` variants; extend if needed (e.g., `SourceEntityMissing`, `DestinationInvalid`).
+- [x] Each paste handler returns specific errors for its fail modes.
+- [x] Frontend renders a toast with the error message when dispatch returns `Err`.
+- [x] Test the happy path silent + error path visible for at least one handler end-to-end.
 
 ## Acceptance Criteria
 
-- [ ] Every paste handler returns a `CommandError` with a user-readable message for each of its fail modes.
-- [ ] A dispatched paste that errors shows a toast in the app.
-- [ ] The toast message names the specific failure (not a generic "paste failed").
-- [ ] A dispatched paste that succeeds shows no toast.
+- [x] Every paste handler returns a `CommandError` with a user-readable message for each of its fail modes.
+- [x] A dispatched paste that errors shows a toast in the app.
+- [x] The toast message names the specific failure (not a generic "paste failed").
+- [x] A dispatched paste that succeeds shows no toast.
 
 ## Tests
 
-- [ ] `paste_task_into_nonexistent_column_returns_destination_invalid_error` (Rust).
-- [ ] `paste_tag_onto_deleted_task_returns_source_entity_missing_error` (Rust).
-- [ ] `paste_error_renders_toast` in `kanban-app/ui/src/lib/dispatch.test.ts` (frontend) — mock a failing dispatch, assert the toast component appears with the error message.
-- [ ] Run commands: `cargo nextest run -p swissarmyhammer-kanban paste_handlers`, `bun test kanban-app/ui/src/lib/dispatch.test.ts` — all green.
+- [x] `paste_task_into_nonexistent_column_returns_destination_invalid_error` (Rust).
+- [x] `paste_tag_onto_deleted_task_returns_source_entity_missing_error` (Rust).
+- [x] `paste_error_renders_toast` in `kanban-app/ui/src/lib/dispatch-error.test.ts` (frontend) — the centralised `reportDispatchError` helper, exercised through six cases that mock failing dispatches and assert the toast is called with the specific backend message.
+- [x] Run commands: `cargo nextest run -p swissarmyhammer-kanban paste_handlers` (64 passing) and `npx vitest run src/lib/dispatch-error.test.ts` (6 passing).
 
 ## Workflow
 
 - Use `/tdd` — write the frontend toast test first; it should fail until the dispatch error handler wires to the toast component.
+
+## Implementation Notes
+
+- New `CommandError` variants: `SourceEntityMissing(String)` and `DestinationInvalid(String)`. Existing `ExecutionFailed` stays for genuinely unstructured failures from downstream operation processors.
+- Each paste handler now validates its destination/source up-front and emits the structured variant with a user-readable message ("Column 'doing' no longer exists", "Task '<id>' no longer exists", etc.) before delegating to the underlying operation.
+- Variant choice convention: `DestinationInvalid` for container-style destinations (column, board, project) where the new entity would be placed; `SourceEntityMissing` for referenced subjects (target task in tag/actor/attachment-onto-task), missing source files, and missing clipboard source entities.
+- Frontend: added `kanban-app/ui/src/lib/dispatch-error.ts` with a single `reportDispatchError(cmdId, err)` helper. Wired it into `app-shell.tsx`'s keybinding `executeCommand` and the `context-menu-command` listener — the two generic dispatch entry points that previously let backend rejections vanish into unhandled promise rejections. Sites with their own contextual error UI (e.g. `useAddTaskHandler`) keep their existing per-call `.catch` since those messages are tailored to the action.
+- The `reportDispatchError` helper strips the Tauri "Command failed: " framing so the toast reads cleanly and prefixes with `<cmdId> failed: ` so the user can correlate the toast to the action they took.
 
 #commands
 

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPEMYJV7BMTJB6GZ8MGTD04J
-position_column: todo
-position_ordinal: ee80
+position_column: done
+position_ordinal: ffffffffffffffffffffffed80
 title: 'Commands: tracing for emit_cross_cutting_commands (mirror emit_entity_add instrumentation)'
 ---
 ## What

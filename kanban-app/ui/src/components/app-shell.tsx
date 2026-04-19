@@ -14,6 +14,7 @@ import {
   extractScopeBindings,
   type KeymapMode,
 } from "@/lib/keybindings";
+import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
 
@@ -45,7 +46,17 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       return false;
     }
 
-    await dispatchRef.current(id);
+    // Generic dispatch entry point: keybindings have no per-command UI
+    // around them, so a backend failure must be surfaced as a toast or
+    // it vanishes into an unhandled promise rejection. Sites that own
+    // their own contextual error UI (e.g. `useAddTaskHandler`) already
+    // catch the rejection and toast their own message — they call
+    // dispatch directly and never go through this generic path.
+    try {
+      await dispatchRef.current(id);
+    } catch (e) {
+      reportDispatchError(id, e);
+    }
     return true;
   }, []);
 
@@ -88,10 +99,17 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     }>("context-menu-command", async (event) => {
       const { cmd, target, scope_chain } = event.payload;
       if (!cmd) return;
-      await dispatchRef.current(cmd, {
-        target,
-        scopeChain: scope_chain,
-      });
+      try {
+        await dispatchRef.current(cmd, {
+          target,
+          scopeChain: scope_chain,
+        });
+      } catch (e) {
+        // Same rationale as the keybinding handler: a context-menu
+        // dispatch has no per-command UI around it, so a failure that
+        // isn't surfaced as a toast vanishes silently.
+        reportDispatchError(cmd, e);
+      }
     });
     return () => {
       unlisten.then((fn) => fn());

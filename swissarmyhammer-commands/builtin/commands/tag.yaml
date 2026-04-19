@@ -1,0 +1,16 @@
+# Type-specific commands for the `tag` entity.
+#
+# See the rule-comment header at the top of `entity.yaml` for the
+# command organization rule. Cross-cutting commands (those that
+# operate on any entity via `from: target`) live in `entity.yaml`
+# and `ui.yaml`; tag-specific commands belong here.
+
+- id: tag.update
+  name: Update Tag
+  scope: "entity:tag"
+  undoable: true
+  visible: false
+  params:
+    - name: id
+      from: scope_chain
+      entity_type: tag

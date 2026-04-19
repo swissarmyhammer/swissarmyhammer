@@ -16,6 +16,7 @@ depends_on:
 - 01KPG7HK6TJZ6C14JKZXH3KWRK
 - 01KPG7J5H41P36A4ARFZ67Q909
 - 01KPG7KH75NXGD65J1479HWMBN
+- 01KPJSSVCW774TK2E2JSMD3Y1J
 position_column: todo
 position_ordinal: d680
 title: 'Commands: automated verification — matrix test, snapshot tests, keybinding dispatch tests'

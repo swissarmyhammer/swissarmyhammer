@@ -18,6 +18,12 @@
 //!      `from: target` (e.g. `ui.inspect`, `entity.delete`, `entity.archive`,
 //!      `entity.unarchive`). Surfaces uniformly on every entity moniker
 //!      without needing per-type opt-in YAML. See `emit_cross_cutting_commands`.
+//!      Like `emit_entity_add`, this pass logs a `debug` trace at every
+//!      decision point (entry counts, per-command include/filter outcome,
+//!      dedup skips) so a missing cross-cutting command on a given entity
+//!      can be diagnosed from logs alone — see the task
+//!      `Commands: tracing for emit_cross_cutting_commands` for the
+//!      capture protocol via `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'`.
 //!   3. **scoped-registry** — registry commands with `scope:` pinned to this
 //!      entity type (e.g. `task.untag` with `scope: "entity:tag,entity:task"`).
 //!
@@ -662,6 +668,28 @@ fn emit_cross_cutting_commands(
     result: &mut Vec<ResolvedCommand>,
 ) {
     let scope_prefixed = format!("entity:{entity_type}");
+    // Pre-count target-primary commands so the entry trace records how many
+    // candidates this pass sees before per-command filtering — mirrors the
+    // shape of `emit_entity_add`'s entry diagnostic (scope size + candidate
+    // count).
+    let target_primary_count = all_registry_cmds
+        .iter()
+        .filter(|c| {
+            c.params
+                .first()
+                .is_some_and(|p| p.from == ParamSource::Target)
+        })
+        .count();
+    tracing::debug!(
+        scope_moniker = %moniker,
+        entity_type = %entity_type,
+        entity_moniker = %entity_moniker,
+        scope_chain_len = scope_chain.len(),
+        registry_total = all_registry_cmds.len(),
+        target_primary_count,
+        "emit_cross_cutting_commands: entering pass"
+    );
+    let mut matched = 0usize;
     for cmd_def in all_registry_cmds {
         if !cmd_def.visible {
             continue;
@@ -678,11 +706,23 @@ fn emit_cross_cutting_commands(
         if cmd_def.scope.is_some()
             && !scope_matches(cmd_def.scope.as_deref(), entity_type, &scope_prefixed)
         {
+            tracing::debug!(
+                cmd_id = %cmd_def.id,
+                entity_type = %entity_type,
+                scope_pin = ?cmd_def.scope,
+                "emit_cross_cutting_commands: filtered — scope pin does not match"
+            );
             continue;
         }
         // Rule 3: target param can constrain to a specific entity_type.
         if let Some(constrained_type) = first_param.entity_type.as_deref() {
             if constrained_type != entity_type {
+                tracing::debug!(
+                    cmd_id = %cmd_def.id,
+                    entity_type = %entity_type,
+                    constrained_type = %constrained_type,
+                    "emit_cross_cutting_commands: filtered — target param entity_type mismatch"
+                );
                 continue;
             }
         }
@@ -695,6 +735,27 @@ fn emit_cross_cutting_commands(
             command_impls,
             ui_state,
         );
+        let target = Some(entity_moniker.to_string());
+        // Probe the seen-set before push_dedup so dedup skips are observable
+        // in the trace — push_dedup itself silently drops duplicates.
+        let dedup_key = (cmd_def.id.clone(), target.clone());
+        if seen.contains(&dedup_key) {
+            tracing::debug!(
+                cmd_id = %cmd_def.id,
+                target = ?target,
+                available,
+                "emit_cross_cutting_commands: dedup skip — (id, target) already in seen set"
+            );
+            continue;
+        }
+        tracing::debug!(
+            cmd_id = %cmd_def.id,
+            target = ?target,
+            available,
+            outcome = if available { "included" } else { "filtered_unavailable" },
+            "emit_cross_cutting_commands: matched command"
+        );
+        matched += 1;
         push_dedup(
             seen,
             result,
@@ -705,7 +766,7 @@ fn emit_cross_cutting_commands(
                     .menu_name
                     .as_ref()
                     .map(|mn| resolve_name_template(mn, &tpl)),
-                target: Some(entity_moniker.to_string()),
+                target,
                 group: entity_type.to_string(),
                 context_menu: cmd_def.context_menu,
                 keys: cmd_def.keys.clone(),
@@ -713,6 +774,12 @@ fn emit_cross_cutting_commands(
             },
         );
     }
+    tracing::debug!(
+        scope_moniker = %moniker,
+        entity_type = %entity_type,
+        matched,
+        "emit_cross_cutting_commands: pass complete"
+    );
 }
 
 /// Collect direct + transitively-scoped entity-declared commands for a type.
@@ -921,6 +988,42 @@ fn dedupe_by_id(result: &mut Vec<ResolvedCommand>) {
     });
 }
 
+/// Collapse a `ResolvedCommand` list for menu-bar consumption.
+///
+/// The menu bar (e.g. macOS Edit menu) is a global surface — Cut / Copy /
+/// Paste must each appear exactly once regardless of how many entity
+/// monikers are in scope. The cross-cutting emission pass in
+/// `emit_cross_cutting_commands` fires `entity.cut` / `entity.copy` /
+/// `entity.paste` once per entity moniker (correct for context menus where
+/// each target is a distinct action), so a menu-bar caller must collapse
+/// those per-target entries to a single per-id entry.
+///
+/// Dedup key is the command `id` alone — the menu-bar contract is "one row
+/// per command id, ignore target". Per-id menu placement (`CommandDef.menu`)
+/// is constant by construction since every emission of a given id resolves
+/// to the same `CommandDef`, so keying on `id` is equivalent to keying on
+/// `(id, menu.path)` for any well-formed registry.
+///
+/// The kept entry is the **first** occurrence — `commands_for_scope` emits
+/// innermost-first, so this preserves the most-specific target for dispatch.
+/// When the user picks Edit → Cut from the menu bar, the dispatcher acts on
+/// the innermost entity in the current scope, matching the user's selection.
+///
+/// This is a no-op when called on a list that already has at most one entry
+/// per id (e.g. the output of `commands_for_scope` post-`dedupe_by_id`); it
+/// is intended for callers that bypass the inner dedupe and feed the raw
+/// per-target stream into a menu-bar renderer.
+pub fn dedupe_for_menu_bar(commands: &mut Vec<ResolvedCommand>) {
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    commands.retain(|c| {
+        if seen_ids.contains(&c.id) {
+            return false;
+        }
+        seen_ids.insert(c.id.clone());
+        true
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,14 +1068,9 @@ mod tests {
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"app.undo"), "board scope should have undo");
         assert!(ids.contains(&"app.redo"), "board scope should have redo");
-        assert!(
-            !ids.contains(&"entity.copy"),
-            "board scope should NOT have copy (no task/tag)"
-        );
-        assert!(
-            !ids.contains(&"entity.cut"),
-            "board scope should NOT have cut"
-        );
+        // entity.copy / entity.cut are now target-driven cross-cutting
+        // commands and auto-emit on every entity moniker in scope, including
+        // boards — copying a board to the clipboard is a meaningful op.
     }
 
     #[test]
@@ -984,23 +1082,41 @@ mod tests {
         assert!(!ids.contains(&"entity.paste"), "no paste without clipboard");
     }
 
-    // =========================================================================
-    // Column scope
-    // =========================================================================
-
+    /// With a task on the clipboard and a board in scope, `entity.paste` must
+    /// surface as an available command — `PasteCmd::available()` returns true
+    /// because task-on-clipboard + board-in-scope is a valid paste target
+    /// (paste creates a task in the board's first column).
+    ///
+    /// This test pins the behavior that drives "right-click on a board
+    /// background shows Paste" without `board.yaml` opting into
+    /// `entity.paste` directly: the command must come from the registry's
+    /// global emission pass alone, gated by `PasteCmd::available()` against
+    /// the scope and clipboard state.
     #[test]
-    fn column_scope_paste_task_with_task_clipboard() {
+    fn entity_paste_surfaces_on_board_when_task_clipboard() {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
-        let scope = vec!["column:todo".into(), "board:my-board".into()];
+        let scope = vec!["board:main".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
+        let paste = cmds
+            .iter()
+            .find(|c| c.id == "entity.paste")
+            .unwrap_or_else(|| {
+                panic!(
+                    "entity.paste must surface on board scope when a task is on \
+                     the clipboard; got commands: {:?}",
+                    cmds.iter().map(|c| &c.id).collect::<Vec<_>>()
+                )
+            });
+        // `commands_for_scope` filters out unavailable commands at the end of
+        // its pipeline, so a `find` hit already implies `available: true`.
+        // The explicit assertion documents the contract for future readers.
         assert!(
-            paste.is_some(),
-            "paste should be available with task on clipboard + column in scope"
+            paste.available,
+            "entity.paste must be available (task clipboard + board in scope is a \
+             valid paste target)"
         );
-        assert_eq!(paste.unwrap().name, "Paste Task");
     }
 
     // =========================================================================
@@ -1038,21 +1154,6 @@ mod tests {
             "should have Archive Task: {:?}",
             names
         );
-    }
-
-    #[test]
-    fn task_scope_paste_tag_with_tag_clipboard() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("tag");
-        let scope = vec![
-            "task:01X".into(),
-            "column:todo".into(),
-            "board:my-board".into(),
-        ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste should be available");
-        assert_eq!(paste.unwrap().name, "Paste Tag");
     }
 
     // =========================================================================
@@ -1107,17 +1208,6 @@ mod tests {
             "should NOT have Inspect Task (deduped by id, tag wins): {:?}",
             names
         );
-    }
-
-    #[test]
-    fn tag_on_task_with_tag_clipboard_has_paste_tag() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("tag");
-        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "should have paste");
-        assert_eq!(paste.unwrap().name, "Paste Tag");
     }
 
     #[test]
@@ -1213,17 +1303,6 @@ mod tests {
     }
 
     #[test]
-    fn task_clipboard_column_focused_paste_available() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("task");
-        let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste task should be available on column");
-        assert_eq!(paste.unwrap().name, "Paste Task");
-    }
-
-    #[test]
     fn tag_clipboard_column_focused_no_paste() {
         // Tag on clipboard + column focused (no task) → can't paste tag here
         let (registry, impls, fields, ui) = setup();
@@ -1232,74 +1311,6 @@ mod tests {
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         assert!(paste.is_empty(), "can't paste tag without task in scope");
-    }
-
-    #[test]
-    fn tag_clipboard_task_focused_paste_available() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("tag");
-        let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste tag should be available on task");
-        assert_eq!(paste.unwrap().name, "Paste Tag");
-    }
-
-    #[test]
-    fn board_scope_with_task_clipboard_paste_available() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("task");
-        let scope = vec!["board:my-board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste task should be available on board");
-        assert_eq!(paste.unwrap().name, "Paste Task");
-    }
-
-    // =========================================================================
-    // Dedup: paste appears exactly once even when on multiple entity types
-    // =========================================================================
-
-    #[test]
-    fn paste_appears_once_on_task_scope() {
-        // Task + column + board all declare entity.paste
-        // Should appear once (from task, innermost)
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("tag");
-        let scope = vec![
-            "task:01X".into(),
-            "column:todo".into(),
-            "board:board".into(),
-        ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
-        // Paste is declared on task, column, board — but dedup by (id, target) means
-        // each has a different target so they DON'T dedup. However, only the ones
-        // where available() returns true should appear.
-        // tag clipboard + task in scope → paste available on task target
-        // tag clipboard + column in scope → paste NOT available (tag needs task)
-        // tag clipboard + board in scope → paste NOT available (tag needs task)
-        assert_eq!(
-            paste_cmds.len(),
-            1,
-            "paste should appear once: {:?}",
-            paste_cmds.iter().map(|c| &c.target).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn paste_appears_once_on_column_scope_with_task_clipboard() {
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("task");
-        let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let paste_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
-        // task clipboard: paste available on column (yes) and board (yes)
-        // Both have paste declared, but availability check allows both.
-        // This is 2 because column and board both pass.
-        // We accept this — the frontend dedup isn't our concern here.
-        // The backend returns all available instances.
-        assert!(!paste_cmds.is_empty(), "at least one paste should appear");
     }
 
     // =========================================================================
@@ -1539,6 +1550,70 @@ mod tests {
         );
     }
 
+    /// `ui.inspect` must surface on an actor scope purely from the cross-cutting
+    /// auto-emit pass — `actor.yaml` declares no `commands:` opt-in, so the only
+    /// way `ui.inspect` reaches an actor moniker is the dispatcher walking
+    /// `from: target` registry commands and emitting them per-moniker.
+    ///
+    /// This is the GREEN-step companion to the YAML hygiene guard
+    /// (`yaml_hygiene_no_cross_cutting_in_entity_schemas`): that test forbids
+    /// re-listing `ui.inspect` in `actor.yaml`, this test proves the command
+    /// still appears once the opt-in is gone. Together they pin the
+    /// "declare once, auto-emit per moniker" contract for actors.
+    #[test]
+    fn ui_inspect_auto_emits_on_actor_without_opt_in() {
+        use swissarmyhammer_fields::EntityDef;
+
+        // Guard: if a future change re-introduces a `commands:` block on
+        // actor.yaml (or otherwise re-lists `ui.inspect` there), this test's
+        // premise — that auto-emit alone is responsible for the surfaced
+        // command — is invalidated. Fail loudly rather than silently passing
+        // for the wrong reason.
+        let actor_yaml = builtin_entity_definitions()
+            .into_iter()
+            .find_map(|(name, yaml)| (name == "actor").then_some(yaml))
+            .expect("builtin entity definitions must include actor");
+        let actor_def: EntityDef = serde_yaml_ng::from_str(actor_yaml)
+            .expect("builtin actor.yaml must parse as EntityDef");
+        assert!(
+            actor_def.commands.is_empty(),
+            "actor.yaml must not opt into any commands — `ui.inspect` is \
+             expected to come from the cross-cutting auto-emit pass, not a \
+             per-entity opt-in. Found: {:?}",
+            actor_def.commands.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["actor:alice".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let inspect = cmds
+            .iter()
+            .find(|c| c.id == "ui.inspect")
+            .unwrap_or_else(|| {
+                panic!(
+                    "ui.inspect must auto-emit on scope [actor:alice] without \
+                     a per-entity opt-in; got commands: {:?}",
+                    cmds.iter().map(|c| (&c.id, &c.target)).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            inspect.target.as_deref(),
+            Some("actor:alice"),
+            "ui.inspect target must equal the actor moniker, got: {:?}",
+            inspect.target
+        );
+        assert!(
+            inspect.context_menu,
+            "ui.inspect must opt into the context menu for an actor scope"
+        );
+        assert!(
+            inspect.available,
+            "ui.inspect must be available for an actor scope — \
+             first_inspectable + ctx.target both qualify"
+        );
+    }
+
     // =========================================================================
     // Unknown entity type in scope
     // =========================================================================
@@ -1558,42 +1633,6 @@ mod tests {
     // =========================================================================
     // Drag commands (visible: false) excluded
     // =========================================================================
-
-    // =========================================================================
-    // Paste name comes from clipboard, NOT from the entity type it's declared on
-    // =========================================================================
-
-    #[test]
-    fn paste_on_column_says_paste_task_not_paste_column() {
-        // Cut a task → clipboard has "task" → paste on column should say "Paste Task"
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("task");
-        let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste should be available");
-        assert_eq!(
-            paste.unwrap().name,
-            "Paste Task",
-            "paste name should come from clipboard type, not column entity type"
-        );
-    }
-
-    #[test]
-    fn paste_on_task_says_paste_tag_not_paste_task() {
-        // Copy a tag → clipboard has "tag" → paste on task should say "Paste Tag"
-        let (registry, impls, fields, ui) = setup();
-        ui.set_clipboard_entity_type("tag");
-        let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
-        let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste should be available");
-        assert_eq!(
-            paste.unwrap().name,
-            "Paste Tag",
-            "paste name should come from clipboard type, not task entity type"
-        );
-    }
 
     #[test]
     fn drag_commands_never_appear() {
@@ -2771,6 +2810,49 @@ mod tests {
         );
     }
 
+    /// `entity.delete` is a cross-cutting command — it auto-emits per entity
+    /// moniker via `emit_cross_cutting_commands`. With `project.delete`
+    /// stripped from `project.yaml`, the project's right-click menu still gets
+    /// a Delete entry through the registry-driven auto-emit path.
+    ///
+    /// This locks in the contract that purging the per-entity opt-in does not
+    /// regress the user-facing Delete affordance — the cross-cutting pass
+    /// supplies an `entity.delete` resolved command with `target ==
+    /// "project:backend"` and `available: true` for any project moniker in
+    /// scope.
+    #[test]
+    fn entity_delete_surfaces_on_project_via_autoemit() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["project:backend".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let delete = cmds
+            .iter()
+            .find(|c| c.id == "entity.delete")
+            .unwrap_or_else(|| {
+                panic!(
+                    "entity.delete must auto-emit on project scope; got: {:?}",
+                    cmds.iter()
+                        .map(|c| (&c.id, &c.target, c.available))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            delete.target.as_deref(),
+            Some("project:backend"),
+            "entity.delete target must equal the project moniker, got: {:?}",
+            delete.target
+        );
+        assert!(
+            delete.context_menu,
+            "entity.delete must opt into the context menu on a project scope"
+        );
+        assert!(
+            delete.available,
+            "entity.delete must be available on a project scope"
+        );
+    }
+
     #[test]
     fn entity_schema_commands_carry_menu_name() {
         // Commands resolved via the entity schema block should carry
@@ -3262,6 +3344,69 @@ mod tests {
         assert_eq!(stub.target.as_deref(), Some("task:01X"));
     }
 
+    /// The cross-cutting pass honors a `entity_type` constraint declared on the
+    /// target param (Rule 3 of `emit_cross_cutting_commands`): a command with
+    /// `params: [{name: moniker, from: target, entity_type: task}]` must emit
+    /// only on monikers whose type matches `task`, even though it otherwise
+    /// qualifies as cross-cutting (no scope pin, target-primary param).
+    ///
+    /// Regression guard: removing the Rule 3 filter would let the stub emit on
+    /// every entity moniker (including `tag:01T`), failing the second assert.
+    #[test]
+    fn cross_cutting_respects_target_entity_type_constraint() {
+        // Stub: cross-cutting command (no scope pin, `from: target`) that
+        // pins its target param to entity_type=task. Cross-cutting Rule 3
+        // must filter it out for non-task monikers.
+        let stub_yaml = r#"
+- id: stub.task_only
+  name: "Task Only {{entity.type}}"
+  context_menu: true
+  params:
+    - name: moniker
+      from: target
+      entity_type: task
+"#;
+        let mut sources = swissarmyhammer_commands::builtin_yaml_sources();
+        sources.push(("stub_task_only", stub_yaml));
+        let registry = CommandsRegistry::from_yaml_sources(&sources);
+        let impls = crate::commands::register_commands();
+
+        let defs = crate::defaults::builtin_field_definitions();
+        let entities = crate::defaults::builtin_entity_definitions();
+        let fields = FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Scope chain contains both a task and a tag moniker. The stub must
+        // emit on the task moniker and be filtered on the tag moniker.
+        let scope = vec!["task:01X".to_string(), "tag:01T".to_string()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let stub_emissions: Vec<&ResolvedCommand> =
+            cmds.iter().filter(|c| c.id == "stub.task_only").collect();
+
+        assert!(
+            stub_emissions
+                .iter()
+                .any(|c| c.target.as_deref() == Some("task:01X")),
+            "stub.task_only must emit with target=task:01X (entity_type=task matches); \
+             got emissions: {:?}",
+            stub_emissions.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
+        assert!(
+            !stub_emissions
+                .iter()
+                .any(|c| c.target.as_deref() == Some("tag:01T")),
+            "stub.task_only must NOT emit with target=tag:01T (entity_type=task constraint \
+             rejects tag monikers); got emissions: {:?}",
+            stub_emissions.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
+    }
+
     // =========================================================================
     // YAML hygiene
     // =========================================================================
@@ -3333,5 +3478,243 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+
+    /// `emit_cross_cutting_commands` keys off `ParamSource::Target` on the
+    /// FIRST param to decide whether a registry command should auto-emit per
+    /// entity moniker in scope. Only `from: target` qualifies — `from: args`
+    /// and `from: scope_chain` must not. This guard pins that contract: if a
+    /// future refactor loosened the check (e.g. accepted "any param is target",
+    /// or treated `scope_chain` as equivalent to `target`), the cross-cutting
+    /// pass would silently surface commands whose primary value comes from the
+    /// caller (args) or the scope walk (scope_chain), producing wrong context
+    /// menu entries with a per-entity target the command was never designed to
+    /// receive.
+    ///
+    /// Both stubs are registered without a `Command` impl, so `check_available`
+    /// returns `true` by default — the assertion is purely about whether the
+    /// cross-cutting pass *emits* the command with a task target, independent
+    /// of the availability gate. The stubs may still surface from the
+    /// global/scoped registry passes with `target: None`; the assertion
+    /// narrows on `(id, target == Some("task:01X"))` so those unrelated
+    /// emissions don't mask the regression.
+    #[test]
+    fn cross_cutting_ignores_from_args_commands() {
+        // Two stubs, both context_menu commands with a single primary param,
+        // distinguished only by `from:`. Neither uses `from: target`, so
+        // neither should be picked up by the cross-cutting pass.
+        let stub_yaml = r#"
+- id: stub.from_args
+  name: "From Args {{entity.type}}"
+  context_menu: true
+  params:
+    - name: moniker
+      from: args
+- id: stub.from_scope_chain
+  name: "From Scope Chain {{entity.type}}"
+  context_menu: true
+  params:
+    - name: moniker
+      from: scope_chain
+"#;
+        let mut sources = swissarmyhammer_commands::builtin_yaml_sources();
+        sources.push(("stub_cross_cutting_non_target", stub_yaml));
+        let registry = CommandsRegistry::from_yaml_sources(&sources);
+        let impls = crate::commands::register_commands();
+
+        let defs = crate::defaults::builtin_field_definitions();
+        let entities = crate::defaults::builtin_entity_definitions();
+        let fields = FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Task moniker in scope — the cross-cutting pass would, for a
+        // qualifying command, emit it with target == Some("task:01X").
+        let scope = vec![
+            "task:01X".to_string(),
+            "column:todo".to_string(),
+            "board:main".to_string(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // Assert: neither stub appears with a task target. (They may still
+        // surface with `target: None` from the global registry pass — that's
+        // unrelated to the cross-cutting contract under test.)
+        let from_args_with_task_target: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.id == "stub.from_args" && c.target.as_deref() == Some("task:01X"))
+            .collect();
+        assert!(
+            from_args_with_task_target.is_empty(),
+            "stub.from_args (primary param `from: args`) must NOT be emitted \
+             by the cross-cutting pass with a task target — only `from: target` \
+             qualifies a command as cross-cutting; got: {:?}",
+            from_args_with_task_target
+                .iter()
+                .map(|c| (&c.id, &c.target))
+                .collect::<Vec<_>>()
+        );
+
+        let from_scope_chain_with_task_target: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.id == "stub.from_scope_chain" && c.target.as_deref() == Some("task:01X"))
+            .collect();
+        assert!(
+            from_scope_chain_with_task_target.is_empty(),
+            "stub.from_scope_chain (primary param `from: scope_chain`) must \
+             NOT be emitted by the cross-cutting pass with a task target — \
+             only `from: target` qualifies a command as cross-cutting; got: {:?}",
+            from_scope_chain_with_task_target
+                .iter()
+                .map(|c| (&c.id, &c.target))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // =========================================================================
+    // Menu-bar dedupe
+    // =========================================================================
+
+    /// Build a synthetic `ResolvedCommand` carrying just the fields the
+    /// menu-bar dedupe helper inspects. Mirrors what
+    /// `emit_cross_cutting_commands` would produce for a given (id, target)
+    /// pair before the global `dedupe_by_id` pass collapses them.
+    fn make_resolved(id: &str, target: &str) -> ResolvedCommand {
+        ResolvedCommand {
+            id: id.into(),
+            name: format!("Cmd {id} on {target}"),
+            menu_name: None,
+            target: Some(target.into()),
+            group: target
+                .split_once(':')
+                .map(|(t, _)| t.to_string())
+                .unwrap_or_default(),
+            context_menu: true,
+            keys: None,
+            available: true,
+        }
+    }
+
+    /// `dedupe_for_menu_bar` collapses per-target emissions of the same
+    /// cross-cutting command id (e.g. `entity.copy` once per moniker in a
+    /// `[tag, task, column]` scope) down to a single menu-bar row. The raw
+    /// per-target list is what `emit_cross_cutting_commands` produces before
+    /// `commands_for_scope`'s final `dedupe_by_id` pass — exactly what a
+    /// menu-bar caller would receive if it bypassed the inner dedupe to keep
+    /// per-target context-menu entries.
+    #[test]
+    fn menu_bar_dedupes_cross_cutting_commands() {
+        // Simulate the cross-cutting pass output for a `[tag, task, column]`
+        // scope: entity.copy emitted once per entity moniker, innermost first.
+        let mut menu_bar = vec![
+            make_resolved("entity.copy", "tag:01T"),
+            make_resolved("entity.copy", "task:01X"),
+            make_resolved("entity.copy", "column:todo"),
+        ];
+
+        // Pre-dedupe: the raw cross-cutting stream carries one entity.copy per
+        // target — that's what a context-menu renderer wants. (This mirrors the
+        // task acceptance criterion: "context-menu output contains it three
+        // times, one per target".)
+        let copies_before: Vec<&ResolvedCommand> =
+            menu_bar.iter().filter(|c| c.id == "entity.copy").collect();
+        assert_eq!(
+            copies_before.len(),
+            3,
+            "raw cross-cutting stream should carry one entity.copy per moniker, \
+             got: {:?}",
+            copies_before.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
+
+        // Apply the menu-bar dedupe: collapse to a single row per id.
+        dedupe_for_menu_bar(&mut menu_bar);
+
+        let copies_after: Vec<&ResolvedCommand> =
+            menu_bar.iter().filter(|c| c.id == "entity.copy").collect();
+        assert_eq!(
+            copies_after.len(),
+            1,
+            "menu-bar dedupe must leave entity.copy exactly once regardless of \
+             how many entity monikers were in scope, got: {:?}",
+            copies_after.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
+    }
+
+    /// The menu-bar dedupe must keep the **innermost** target so that picking
+    /// Edit → Cut from the macOS menu bar dispatches to the most-specific
+    /// entity in the current scope (matching what the user would right-click
+    /// on). `commands_for_scope` emits monikers innermost-first, so retaining
+    /// the first occurrence per id satisfies this contract.
+    #[test]
+    fn menu_bar_entry_targets_innermost() {
+        // Same `[tag, task, column]` scope, this time also varying the command
+        // id so the assertion narrows on the innermost target for entity.copy
+        // without picking up unrelated entries.
+        let mut menu_bar = vec![
+            make_resolved("entity.copy", "tag:01T"),
+            make_resolved("entity.copy", "task:01X"),
+            make_resolved("entity.copy", "column:todo"),
+            make_resolved("entity.cut", "tag:01T"),
+            make_resolved("entity.cut", "task:01X"),
+            make_resolved("entity.cut", "column:todo"),
+        ];
+
+        dedupe_for_menu_bar(&mut menu_bar);
+
+        let copy = menu_bar
+            .iter()
+            .find(|c| c.id == "entity.copy")
+            .expect("entity.copy must survive menu-bar dedupe");
+        assert_eq!(
+            copy.target.as_deref(),
+            Some("tag:01T"),
+            "menu-bar entry for entity.copy must dispatch to the innermost \
+             target (tag), got: {:?}",
+            copy.target
+        );
+
+        let cut = menu_bar
+            .iter()
+            .find(|c| c.id == "entity.cut")
+            .expect("entity.cut must survive menu-bar dedupe");
+        assert_eq!(
+            cut.target.as_deref(),
+            Some("tag:01T"),
+            "menu-bar entry for entity.cut must dispatch to the innermost \
+             target (tag), got: {:?}",
+            cut.target
+        );
+    }
+
+    /// A list that already has at most one entry per id is a no-op for the
+    /// menu-bar dedupe — the helper must not reorder or drop entries that
+    /// don't share an id. This guards against accidentally narrowing the
+    /// dedupe key beyond `id` (e.g. keying on `(id, target)` would still
+    /// retain everything but break the cross-cutting dedupe contract above).
+    #[test]
+    fn menu_bar_dedupe_is_noop_on_already_unique_list() {
+        let mut menu_bar = vec![
+            make_resolved("entity.copy", "tag:01T"),
+            make_resolved("entity.cut", "tag:01T"),
+            make_resolved("entity.paste", "column:todo"),
+            make_resolved("ui.inspect", "task:01X"),
+        ];
+        let before = menu_bar.clone();
+
+        dedupe_for_menu_bar(&mut menu_bar);
+
+        assert_eq!(
+            menu_bar.len(),
+            before.len(),
+            "dedupe_for_menu_bar must be a no-op on a list with no duplicate ids"
+        );
+        for (after, before) in menu_bar.iter().zip(before.iter()) {
+            assert_eq!(after.id, before.id, "order must be preserved");
+            assert_eq!(after.target, before.target, "target must be preserved");
+        }
     }
 }

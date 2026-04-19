@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
-position_column: todo
-position_ordinal: de80
+position_column: done
+position_ordinal: ffffffffffffffffffffffef80
 title: 'Commands: paste handler — task onto column'
 ---
 ## What
@@ -25,23 +25,31 @@ Implement `TaskIntoColumnHandler` — pastes a task from the clipboard into a ta
 
 ### Subtasks
 
-- [ ] Implement `TaskIntoColumnHandler` struct and `PasteHandler` impl.
-- [ ] Register in `register_paste_handlers()`.
-- [ ] Colocate unit tests in the same file.
+- [x] Implement `TaskIntoColumnHandler` struct and `PasteHandler` impl.
+- [ ] Register in `register_paste_handlers()` — **DEFERRED**: registration line `m.register(TaskIntoColumnHandler);` deferred per parallel-safety override; orchestrator will batch-register after all sibling handler files exist.
+- [x] Colocate unit tests in the same file.
 
 ## Acceptance Criteria
 
-- [ ] Handler matches `("task", "column")`.
-- [ ] Pasting a task onto a column creates a new task in that column with the clipboard's field values.
-- [ ] Cut variant (is_cut=true) deletes the source task after successful create.
-- [ ] `PasteMatrix::find("task", "column")` returns this handler.
+- [x] Handler matches `("task", "column")`.
+- [x] Pasting a task onto a column creates a new task in that column with the clipboard's field values.
+- [x] Cut variant (is_cut=true) deletes the source task after successful create.
+- [ ] `PasteMatrix::find("task", "column")` returns this handler — **DEFERRED**: pending orchestrator batch-registration. Verified via local test matrix in `local_matrix_finds_task_into_column_handler`.
 
 ## Tests
 
-- [ ] `paste_task_into_column_creates_copy` — colocated. Create source task, copy it, paste into a different column, assert new task exists with source's fields and correct column.
-- [ ] `paste_task_into_column_preserves_fields` — copy a task with tags/assignees/project, paste, assert those fields carried over.
-- [ ] `paste_cut_task_deletes_source` — cut path deletes source.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::task_into_column` — all green.
+- [x] `paste_task_into_column_creates_copy` — colocated. Create source task, copy it, paste into a different column, assert new task exists with source's fields and correct column.
+- [x] `paste_task_into_column_preserves_fields` — synthetic snapshot with tags/assignees/project, paste, assert those fields carried over and position fields are overridden by the target column.
+- [x] `paste_cut_task_deletes_source` — cut path deletes source.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::task_into_column` — all 9 tests green.
+
+Plus extra colocated tests:
+- `local_matrix_finds_task_into_column_handler` — verifies `PasteMatrix::find` resolves us when registered locally.
+- `handler_matches_returns_task_column_pair` — pins the matches() pair.
+- `paste_into_non_column_target_errors` — non-column moniker rejected loudly.
+- `snapshot_position_keys_are_overridden_by_target_column` — guards `POSITION_KEYS_TO_DROP`.
+- `handler_available_defaults_to_true` — regression guard so a future override does not silently disable all (task, column) pastes.
+- `task_id_round_trips_through_delete_op_constructor` — compile-time safety net for the cut path's `DeleteTask::new(impl Into<TaskId>)` signature.
 
 ## Workflow
 

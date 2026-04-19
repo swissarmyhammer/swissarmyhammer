@@ -1,0 +1,16 @@
+# Type-specific commands for the `column` entity.
+#
+# See the rule-comment header at the top of `entity.yaml` for the
+# command organization rule. Cross-cutting commands (those that
+# operate on any entity via `from: target`) live in `entity.yaml`
+# and `ui.yaml`; column-specific commands belong here.
+
+- id: column.reorder
+  name: Reorder Columns
+  undoable: true
+  visible: false
+  params:
+    - name: id
+      from: args
+    - name: target_index
+      from: args

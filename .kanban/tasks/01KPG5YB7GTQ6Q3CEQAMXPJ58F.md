@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5XK61ND4JKXW3FCM3CC97
-position_column: todo
-position_ordinal: dd80
+position_column: done
+position_ordinal: ffffffffffffffffffffffeb80
 title: 'Commands: paste dispatcher mechanism (PasteHandler trait, PasteMatrix registry, PasteEntityCmd walker)'
 ---
 ## What

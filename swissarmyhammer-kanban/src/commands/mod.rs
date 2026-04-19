@@ -10,6 +10,7 @@ pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
+pub mod paste_handlers;
 pub mod perspective_commands;
 pub mod project_commands;
 pub mod task_commands;

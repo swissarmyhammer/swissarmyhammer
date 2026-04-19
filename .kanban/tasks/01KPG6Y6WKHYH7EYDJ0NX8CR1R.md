@@ -8,41 +8,40 @@ depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6G4SGXW1FN92YDXFNEAQ2
 - 01KPG6H74Z24N48DQR75CT7HP7
-position_column: todo
-position_ordinal: e980
+position_column: done
+position_ordinal: fffffffffffffffffffffffa80
 title: 'Commands: column.yaml cleanup — move column.reorder declaration in, purge cross-cutting opt-ins'
 ---
 ## What
 
-Clean up `swissarmyhammer-kanban/builtin/entities/column.yaml`: migrate `column.reorder` declaration in; purge cross-cutting opt-ins.
+Finish the column entity's command story. The implementor has already created `swissarmyhammer-commands/builtin/commands/column.yaml` with `column.reorder` as a full `CommandDef` (landed in WIP). This card completes the migration by removing the duplicate entries from both `entity.yaml` and the column entity schema.
 
-### Moves IN
+### Remove from `entity.yaml`
 
-- `column.reorder` full declaration moves from `entity.yaml` to `column.yaml`.
+Delete the `column.reorder` entry — it now lives in `builtin/commands/column.yaml`.
 
-### Moves OUT
+### Remove `commands:` from column entity schema
 
-Delete these:
-
-- `ui.inspect`
-- `entity.paste`
+`swissarmyhammer-kanban/builtin/entities/column.yaml` — delete the entire `commands:` list. Entity schema is fields-only.
 
 ### Files to touch
 
-- `swissarmyhammer-kanban/builtin/entities/column.yaml`
-- `swissarmyhammer-commands/builtin/commands/entity.yaml` — remove `column.reorder`.
+- MODIFY `swissarmyhammer-commands/builtin/commands/entity.yaml` — remove `column.reorder`
+- MODIFY `swissarmyhammer-kanban/builtin/entities/column.yaml` — delete `commands:` list
 
 ### Subtasks
 
-- [ ] Move `column.reorder` from entity.yaml into column.yaml.
-- [ ] Delete the 2 cross-cutting opt-ins from column.yaml.
+- [ ] Verify `builtin/commands/column.yaml` already declares `column.reorder` (landed via WIP).
+- [ ] Delete `column.reorder` from `entity.yaml`.
+- [ ] Delete `commands:` list from column entity schema.
 - [ ] Hygiene test green for column.yaml.
 
 ## Acceptance Criteria
 
-- [ ] `column.yaml`'s `commands:` list contains exactly `column.reorder`.
+- [ ] `column.yaml`'s entity schema has no `commands:` key.
 - [ ] `entity.yaml` no longer contains `column.reorder`.
-- [ ] Right-click on a column shows Inspect Column, Paste into Column (when clipboard holds a task), Delete Column, Reorder (palette only).
+- [ ] `builtin/commands/column.yaml` declares `column.reorder` (verify).
+- [ ] Right-click on a column shows Inspect Column, Delete Column (auto-emit), Paste (when clipboard applicable).
 - [ ] Hygiene test green for column.yaml.
 
 ## Tests

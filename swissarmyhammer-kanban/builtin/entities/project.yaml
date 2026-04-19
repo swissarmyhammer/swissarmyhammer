@@ -4,19 +4,6 @@ mention_prefix: "$"
 mention_display_field: name
 mention_slug_field: id
 search_display_field: name
-commands:
-  - id: entity.archive
-    name: "Archive {{entity.type}}"
-    context_menu: true
-  - id: project.delete
-    name: "Delete {{entity.type}}"
-    scope: "entity:project"
-    undoable: false
-    context_menu: true
-    params:
-      - name: id
-        from: scope_chain
-        entity_type: project
 fields:
   - name
   - description

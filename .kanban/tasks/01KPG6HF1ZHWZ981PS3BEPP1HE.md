@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
-position_column: todo
-position_ordinal: e380
+position_column: done
+position_ordinal: fffffffffffffffffffffff280
 title: 'Commands: paste handler — actor onto task'
 ---
 ## What
@@ -25,24 +25,25 @@ Implement `ActorOntoTaskHandler` — assigns an actor to a task. Handler at `swi
 
 ### Subtasks
 
-- [ ] Audit existing assignee ops; use the one that appends an assignee.
-- [ ] Implement `ActorOntoTaskHandler`.
-- [ ] Register.
-- [ ] Colocate tests.
+- [x] Audit existing assignee ops; use the one that appends an assignee. — Used `crate::task::AssignTask` (already idempotent: only appends an assignee not already present).
+- [x] Implement `ActorOntoTaskHandler`.
+- [x] Register. `m.register(ActorOntoTaskHandler);` added to `paste_handlers/mod.rs::register_paste_handlers()` during the orchestrator's batch-registration after all 7 sibling handler files landed.
+- [x] Colocate tests.
 
 ## Acceptance Criteria
 
-- [ ] Handler matches `("actor", "task")`.
-- [ ] Pasting an actor onto a task adds them to the task's assignees.
-- [ ] `is_cut` is ignored — source actor entity not deleted.
-- [ ] Re-pasting the same actor is idempotent.
+- [x] Handler matches `("actor", "task")`.
+- [x] Pasting an actor onto a task adds them to the task's assignees.
+- [x] `is_cut` is ignored — source actor entity not deleted.
+- [x] Re-pasting the same actor is idempotent.
 
 ## Tests
 
-- [ ] `paste_actor_onto_task_adds_assignee` — task has no assignees; after paste, has actor.
-- [ ] `paste_actor_onto_task_ignores_cut_flag`.
-- [ ] `paste_same_actor_twice_is_idempotent`.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::actor_onto_task` — all green.
+- [x] `paste_actor_onto_task_adds_assignee` — task has no assignees; after paste, has actor.
+- [x] `paste_actor_onto_task_ignores_cut_flag`.
+- [x] `paste_same_actor_twice_is_idempotent`.
+- [x] Bonus: `handler_matches_actor_onto_task` (dispatch key + matrix lookup) and `paste_actor_onto_non_task_target_errors` (clear failure on wrong target type).
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::actor_onto_task` — 5/5 pass after sibling handlers and batch registration landed.
 
 ## Workflow
 

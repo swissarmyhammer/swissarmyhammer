@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
-position_column: todo
-position_ordinal: e480
+position_column: done
+position_ordinal: fffffffffffffffffffffff380
 title: 'Commands: paste handler — attachment onto task'
 ---
 ## What
@@ -21,28 +21,28 @@ Implement `AttachmentOntoTaskHandler` — attaches a file (by path from the clip
 ### Files
 
 - CREATE `swissarmyhammer-kanban/src/commands/paste_handlers/attachment_onto_task.rs`.
-- MODIFY `swissarmyhammer-kanban/src/commands/paste_handlers/mod.rs` — register call.
+- MODIFY `swissarmyhammer-kanban/src/commands/paste_handlers/mod.rs` — added `pub mod attachment_onto_task;`. Registration line `m.register(AttachmentOntoTaskHandler);` deferred — orchestrator will batch-register (parallel-safety: 2 sibling agents are concurrently creating other paste handlers).
 
 ### Subtasks
 
-- [ ] Audit `AddAttachment` op signature; confirm what fields are needed.
-- [ ] Implement `AttachmentOntoTaskHandler`.
-- [ ] Register.
-- [ ] Colocate tests.
+- [x] Audit `AddAttachment` op signature; confirm what fields are needed.
+- [x] Implement `AttachmentOntoTaskHandler`.
+- [x] Register — `pub mod` declaration only; `m.register(AttachmentOntoTaskHandler);` deferred to orchestrator (parallel-safety override).
+- [x] Colocate tests.
 
 ## Acceptance Criteria
 
-- [ ] Handler matches `("attachment", "task")`.
-- [ ] Pasting an attachment onto a task adds it to the task's attachments.
-- [ ] Source attachment remains on the original task regardless of `is_cut` (product decision; revisit if users ask for move semantics).
-- [ ] Duplicate attachments on the same task are allowed (the attachment entity id differs even if the path matches).
+- [x] Handler matches `("attachment", "task")`.
+- [x] Pasting an attachment onto a task adds it to the task's attachments.
+- [x] Source attachment remains on the original task regardless of `is_cut` (product decision; revisit if users ask for move semantics).
+- [x] Duplicate attachments on the same task are allowed (the attachment entity id differs even if the path matches).
 
 ## Tests
 
-- [ ] `paste_attachment_onto_task_adds_attachment` — target task starts with zero attachments; after paste, has one with the expected path.
-- [ ] `paste_attachment_preserves_original` — source task still has the attachment after paste.
-- [ ] `paste_attachment_ignores_cut_flag` — cut attachment still exists on source.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::attachment_onto_task` — all green.
+- [x] `paste_attachment_onto_task_adds_attachment` — target task starts with zero attachments; after paste, has one with the expected path.
+- [x] `paste_attachment_preserves_original` — source task still has the attachment after paste.
+- [x] `paste_attachment_ignores_cut_flag` — cut attachment still exists on source.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers::attachment_onto_task` — all green (10 tests passed).
 
 ## Workflow
 
