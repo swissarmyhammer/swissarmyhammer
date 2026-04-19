@@ -92,6 +92,11 @@ impl Default for IndexConfig {
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
             respect_gitignore: true,
             embedding_model: swissarmyhammer_embedding::DEFAULT_MODEL_NAME.to_string(),
+            // Embeddings are enabled everywhere by default — including tests —
+            // so the test suite exercises the real embedding pipeline instead
+            // of silently skipping it. Tests that specifically want to skip the
+            // model load can opt out via `IndexConfig { embedding_enabled:
+            // false, ..Default::default() }`.
             embedding_enabled: true,
         }
     }
@@ -954,13 +959,15 @@ impl IndexContext {
         self.files.insert(path.to_path_buf(), parsed.clone());
 
         // Re-embed chunks (database cleanup happens in prepare_file_in_db)
-        let model_name = self.config.embedding_model.clone();
-        self.ensure_embedding_model_loaded(&model_name).await?;
-        let mut errors = Vec::new();
-        // Set up chunk tracking for this single file refresh
-        self.last_status.chunks_total = chunk_file(parsed.clone()).len();
-        self.last_status.chunks_embedded = 0;
-        self.embed_file_chunks(path, &mut errors).await;
+        if self.config.embedding_enabled {
+            let model_name = self.config.embedding_model.clone();
+            self.ensure_embedding_model_loaded(&model_name).await?;
+            let mut errors = Vec::new();
+            // Set up chunk tracking for this single file refresh
+            self.last_status.chunks_total = chunk_file(parsed.clone()).len();
+            self.last_status.chunks_embedded = 0;
+            self.embed_file_chunks(path, &mut errors).await;
+        }
 
         Ok((*parsed).clone())
     }
@@ -1363,7 +1370,11 @@ mod tests {
     #[tokio::test]
     async fn test_embed_text() {
         let dir = setup_test_dir();
-        let mut context = IndexContext::new(dir.path());
+        let config = IndexConfig {
+            embedding_enabled: true,
+            ..Default::default()
+        };
+        let mut context = IndexContext::new(dir.path()).with_config(config);
 
         // Scan to initialize the embedding model
         context.scan().await.unwrap();

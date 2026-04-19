@@ -29,7 +29,9 @@ use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::task_helpers::enrich_task_entity;
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use swissarmyhammer_kanban::KanbanContext;
+use swissarmyhammer_perspectives::PerspectiveEvent;
 use tauri::Emitter;
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock};
 
@@ -670,6 +672,7 @@ pub async fn run_bridge(
     app: tauri::AppHandle,
     board_path: String,
     search_index: Arc<RwLock<EntitySearchIndex>>,
+    perspective_rx: Option<broadcast::Receiver<PerspectiveEvent>>,
 ) {
     // Pre-populate BEFORE subscribing so no event lands between the snapshot
     // and the receiver. A write that lands *before* subscribe will be
@@ -678,28 +681,81 @@ pub async fn run_bridge(
     let seen = pre_populate_seen(&cache).await;
     let preloaded_entities = seen.len();
     let state = Arc::new(Mutex::new(BridgeState::new(seen)));
-    let mut rx = cache.subscribe();
+    let mut entity_rx = cache.subscribe();
+    let mut perspective_rx = perspective_rx;
     tracing::info!(
         board_path = %board_path,
         preloaded_entities,
+        has_perspective_rx = perspective_rx.is_some(),
         "entity-cache bridge started"
     );
 
     loop {
-        match rx.recv().await {
-            Ok(evt) => {
+        let action = recv_next_event(&mut entity_rx, &mut perspective_rx).await;
+        match action {
+            BridgeAction::Entity(evt) => {
                 process_cache_event(evt, &ctx, &state, &app, &board_path, &search_index).await;
             }
-            Err(RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    board_path = %board_path,
-                    skipped = n,
-                    "bridge lagged — search index and frontend may briefly drift"
-                );
+            BridgeAction::EntityLagged(n) => {
+                tracing::warn!(board_path = %board_path, skipped = n,
+                    "bridge lagged — search index and frontend may briefly drift");
             }
-            Err(RecvError::Closed) => {
+            BridgeAction::Perspective(evt) => {
+                process_perspective_event(evt, &app, &board_path);
+            }
+            BridgeAction::PerspectiveLagged(n) => {
+                tracing::warn!(board_path = %board_path, skipped = n,
+                    "perspective bridge lagged");
+            }
+            BridgeAction::PerspectiveClosed => {
+                tracing::info!(board_path = %board_path, "perspective event channel closed");
+                perspective_rx = None;
+            }
+            BridgeAction::Shutdown => {
                 tracing::info!(board_path = %board_path, "entity-cache bridge stopped");
                 break;
+            }
+        }
+    }
+}
+
+/// Discriminant for the next event received by the bridge loop.
+enum BridgeAction {
+    Entity(EntityEvent),
+    EntityLagged(u64),
+    Perspective(PerspectiveEvent),
+    PerspectiveLagged(u64),
+    PerspectiveClosed,
+    Shutdown,
+}
+
+/// Wait for the next event from either the entity or perspective channel.
+///
+/// Uses `tokio::select!` to multiplex both receivers. The perspective
+/// channel is optional — when `None`, that arm pends forever so only
+/// entity events are processed.
+async fn recv_next_event(
+    entity_rx: &mut broadcast::Receiver<EntityEvent>,
+    perspective_rx: &mut Option<broadcast::Receiver<PerspectiveEvent>>,
+) -> BridgeAction {
+    tokio::select! {
+        entity_result = entity_rx.recv() => {
+            match entity_result {
+                Ok(evt) => BridgeAction::Entity(evt),
+                Err(RecvError::Lagged(n)) => BridgeAction::EntityLagged(n),
+                Err(RecvError::Closed) => BridgeAction::Shutdown,
+            }
+        }
+        perspective_result = async {
+            match perspective_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        } => {
+            match perspective_result {
+                Ok(evt) => BridgeAction::Perspective(evt),
+                Err(RecvError::Lagged(n)) => BridgeAction::PerspectiveLagged(n),
+                Err(RecvError::Closed) => BridgeAction::PerspectiveClosed,
             }
         }
     }
@@ -731,6 +787,62 @@ async fn process_cache_event(
     for watch_event in resolved {
         emit_watch_event(app, board_path, watch_event);
     }
+}
+
+/// Translate a `PerspectiveEvent` into a Tauri event and emit it.
+///
+/// Perspectives are not entities, but the frontend's `PerspectiveProvider`
+/// already listens for `entity-field-changed` / `entity-created` /
+/// `entity-removed` with `entity_type === "perspective"`. We map perspective
+/// events into the same shape so the existing frontend refresh logic fires
+/// without any React changes.
+///
+/// Creates emit `entity-created`, updates emit `entity-field-changed`, and
+/// deletes emit `entity-removed` — matching the entity bridge's contract.
+fn process_perspective_event(evt: PerspectiveEvent, app: &tauri::AppHandle, board_path: &str) {
+    let watch_event = match evt {
+        PerspectiveEvent::PerspectiveChanged {
+            id,
+            changed_fields,
+            is_create,
+        } => {
+            if is_create {
+                // The frontend only needs the event signal to trigger a
+                // perspective list refresh — field values are re-fetched
+                // from the backend via `perspective.list`.
+                let fields = changed_fields
+                    .into_iter()
+                    .map(|field| (field, serde_json::Value::Null))
+                    .collect();
+                WatchEvent::EntityCreated {
+                    entity_type: "perspective".to_string(),
+                    id,
+                    fields,
+                }
+            } else {
+                let changes = changed_fields
+                    .into_iter()
+                    .map(|field| FieldChange {
+                        field,
+                        // The frontend only needs to know *which* fields changed
+                        // to trigger a perspective list refresh — the actual value
+                        // is re-fetched from the backend via `perspective.list`.
+                        value: serde_json::Value::Null,
+                    })
+                    .collect();
+                WatchEvent::EntityFieldChanged {
+                    entity_type: "perspective".to_string(),
+                    id,
+                    changes,
+                }
+            }
+        }
+        PerspectiveEvent::PerspectiveDeleted { id } => WatchEvent::EntityRemoved {
+            entity_type: "perspective".to_string(),
+            id,
+        },
+    };
+    emit_watch_event(app, board_path, watch_event);
 }
 
 #[cfg(test)]

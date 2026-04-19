@@ -17,6 +17,7 @@ import { useFieldUpdate } from "@/lib/field-update-context";
 import { useDebouncedSave } from "@/lib/use-debounced-save";
 import { resolveEditor } from "@/components/fields/editors";
 import type { EditorProps } from "@/components/fields/editors";
+import type { LucideIcon } from "lucide-react";
 import type { FieldDef, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -59,16 +60,34 @@ export interface FieldDisplayProps {
  *   nothing. Consulted only for non-editable fields so editable fields with
  *   empty values stay clickable. Displays own their own notion of emptiness
  *   so the inspector stays free of hardcoded field names.
+ *
+ * - `iconOverride`: value-dependent icon function the parent layout (inspector
+ *   row, card field) calls to replace the static YAML field icon. When the
+ *   function returns a LucideIcon it replaces the static icon; when it
+ *   returns null the static icon is used as fallback. This is general-purpose
+ *   — any display can register one.
+ *
+ * - `tooltipOverride`: value-dependent tooltip text function the parent layout
+ *   calls to replace the static YAML field description in the icon tooltip.
+ *   When the function returns a non-null string it replaces the static text;
+ *   when it returns null the static text is used as fallback. This is
+ *   general-purpose — any display can register one.
  */
 export interface DisplayRegistration {
   component: ComponentType<FieldDisplayProps>;
   isEmpty?: (value: unknown) => boolean;
+  iconOverride?: (value: unknown) => LucideIcon | null;
+  tooltipOverride?: (value: unknown) => string | null;
 }
 
 /** Options accepted by {@link registerDisplay}. */
 export interface RegisterDisplayOptions {
   /** See {@link DisplayRegistration.isEmpty}. */
   isEmpty?: (value: unknown) => boolean;
+  /** See {@link DisplayRegistration.iconOverride}. */
+  iconOverride?: (value: unknown) => LucideIcon | null;
+  /** See {@link DisplayRegistration.tooltipOverride}. */
+  tooltipOverride?: (value: unknown) => string | null;
 }
 
 const editorRegistry = new Map<string, ComponentType<FieldEditorProps>>();
@@ -94,7 +113,12 @@ export function registerDisplay(
   component: ComponentType<FieldDisplayProps>,
   options?: RegisterDisplayOptions,
 ) {
-  displayRegistry.set(name, { component, isEmpty: options?.isEmpty });
+  displayRegistry.set(name, {
+    component,
+    isEmpty: options?.isEmpty,
+    iconOverride: options?.iconOverride,
+    tooltipOverride: options?.tooltipOverride,
+  });
 }
 
 /**
@@ -107,6 +131,30 @@ export function getDisplayIsEmpty(
   name: string,
 ): ((value: unknown) => boolean) | undefined {
   return displayRegistry.get(name)?.isEmpty;
+}
+
+/**
+ * Look up the `iconOverride` function registered for a display, if any.
+ *
+ * Returns `undefined` when the display is unregistered or when the
+ * registration did not supply an `iconOverride` option.
+ */
+export function getDisplayIconOverride(
+  name: string,
+): ((value: unknown) => LucideIcon | null) | undefined {
+  return displayRegistry.get(name)?.iconOverride;
+}
+
+/**
+ * Look up the `tooltipOverride` function registered for a display, if any.
+ *
+ * Returns `undefined` when the display is unregistered or when the
+ * registration did not supply a `tooltipOverride` option.
+ */
+export function getDisplayTooltipOverride(
+  name: string,
+): ((value: unknown) => string | null) | undefined {
+  return displayRegistry.get(name)?.tooltipOverride;
 }
 
 // ---------------------------------------------------------------------------

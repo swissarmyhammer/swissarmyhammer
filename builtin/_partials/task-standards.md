@@ -16,7 +16,7 @@ Task descriptions MUST include:
 - [ ] <observable outcome that proves the work is done>
 
 ## Tests
-- [ ] <specific test to write or update, with file path>
+- [ ] <specific automated test to write or update, with file path>
 - [ ] <test command to run and expected result>
 
 ## Workflow
@@ -24,6 +24,26 @@ Task descriptions MUST include:
 ```
 
 A task without acceptance criteria and tests is not a valid task. Include enough context that someone reading only the task (not the spec) can implement it.
+
+### Tests must be automated — never ask the user to verify
+
+Every task's `Tests` section MUST specify **automated tests** (unit, integration, or end-to-end) that run in CI or via a test command. Do not write tasks that ask the user — or any human — to perform manual verification, smoke tests, click-throughs, or "try it out in the UI."
+
+**Forbidden in task descriptions:**
+- "Manually verify that…"
+- "Smoke test by…"
+- "User confirms…"
+- "Open the app and check…"
+- "Try it in the browser and make sure…"
+- Any acceptance criterion whose only check is human observation.
+
+**Required instead:**
+- For backend/library code: unit tests and integration tests that exercise the real behavior.
+- For APIs/services: integration tests against the real server (or a realistic harness).
+- For UI: end-to-end tests (Playwright, Cypress, or equivalent) that drive the UI and assert on observable state.
+- For bug fixes: a regression test that fails before the fix and passes after.
+
+If the work is genuinely not testable automatically, that is a red flag — rescope the task or add a preceding task to make it testable. Our job is to do work for users, not to make work for them.
 
 ### Task sizing limits
 

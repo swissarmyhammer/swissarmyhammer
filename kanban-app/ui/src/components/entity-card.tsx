@@ -1,7 +1,11 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info } from "lucide-react";
+import { GripVertical, Info, type LucideIcon } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
-import { Field } from "@/components/fields/field";
+import {
+  Field,
+  getDisplayIconOverride,
+  getDisplayTooltipOverride,
+} from "@/components/fields/field";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
@@ -200,10 +204,29 @@ function CardField({
   onDone,
   onCancel,
 }: CardFieldProps) {
-  const hasIcon = !!fieldIcon(field);
+  // Resolve the icon: prefer a value-dependent override from the display,
+  // then fall back to the static YAML icon resolved by fieldIcon().
+  const overrideFn = getDisplayIconOverride(field.display ?? "");
+  const overrideResult = overrideFn
+    ? overrideFn(entity.fields[field.name])
+    : null;
+  const resolvedIcon = overrideResult ?? fieldIcon(field);
+
+  // Resolve the tooltip: prefer a value-dependent override from the display,
+  // then fall back to the static YAML description or humanised field name.
+  const tooltipOverrideFn = getDisplayTooltipOverride(field.display ?? "");
+  const tooltipOverrideResult = tooltipOverrideFn
+    ? tooltipOverrideFn(entity.fields[field.name])
+    : null;
+
+  const hasIcon = !!resolvedIcon;
   return (
     <div className={hasIcon ? "flex items-start gap-1.5" : ""}>
-      <CardFieldIcon field={field} />
+      <CardFieldIcon
+        field={field}
+        icon={resolvedIcon}
+        tooltipOverride={tooltipOverrideResult}
+      />
       <div className="flex-1 min-w-0">
         <Field
           fieldDef={field}
@@ -220,17 +243,36 @@ function CardField({
   );
 }
 
-/** Tooltip-wrapped icon badge for a header field on the card. */
-function CardFieldIcon({ field }: { field: FieldDef }) {
-  const Icon = fieldIcon(field);
+/**
+ * Tooltip-wrapped icon badge for a field on the card.
+ *
+ * Accepts a pre-resolved `icon` from the parent — this may be a
+ * value-dependent override from the display's `iconOverride` registration,
+ * or the static icon from the field's YAML definition. If null, nothing
+ * renders.
+ *
+ * When a `tooltipOverride` string is provided it replaces the static YAML
+ * description in the tooltip so the card shows dynamic, value-dependent text
+ * (e.g. "Completed 3 days ago").
+ */
+function CardFieldIcon({
+  field,
+  icon: Icon,
+  tooltipOverride,
+}: {
+  field: FieldDef;
+  icon: LucideIcon | null;
+  tooltipOverride?: string | null;
+}) {
   if (!Icon) return null;
-  const tip = field.description || field.name.replace(/_/g, " ");
+  const staticTip = field.description || field.name.replace(/_/g, " ");
+  const tip = tooltipOverride ?? staticTip;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
           aria-label={tip}
-          className="mt-0.5 shrink-0 text-muted-foreground/50"
+          className="h-4 inline-flex items-center shrink-0 text-muted-foreground/50"
         >
           <Icon className="h-3 w-3" />
         </span>

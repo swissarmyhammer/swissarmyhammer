@@ -1,5 +1,5 @@
 export type { DisplayProps } from "./text-display";
-export { TextDisplay } from "./text-display";
+export { DisplayText, TextDisplay } from "./text-display";
 export { BadgeListDisplay } from "./badge-list-display";
 export { BadgeDisplay } from "./badge-display";
 export { ColorSwatchDisplay } from "./color-swatch-display";

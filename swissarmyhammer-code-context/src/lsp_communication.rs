@@ -20,7 +20,8 @@ use tracing::{debug, trace, warn};
 const LSP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 use crate::error::CodeContextError;
-use crate::lsp_indexer::{flatten_symbols, mark_lsp_indexed, write_edges, write_symbols, CallEdge};
+use crate::invalidation::{reextract_symbols, InvalidationAction};
+use crate::lsp_indexer::{flatten_symbols, mark_lsp_indexed, write_edges, CallEdge};
 use lsp_types::{
     CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol, DocumentSymbolResponse,
     SymbolInformation,
@@ -35,12 +36,27 @@ pub struct LspCollectionResult {
     pub symbol_count: usize,
     /// Any error that occurred
     pub error: Option<String>,
+    /// Invalidation actions the caller should apply after this collection.
+    ///
+    /// When a file's symbol set shrinks (deletions, renames), every file that
+    /// previously called into a now-gone symbol needs its outgoing edges
+    /// refreshed. These actions describe that propagation — the caller is
+    /// responsible for applying them (typically by marking the affected files
+    /// as `lsp_indexed = 0` so the worker picks them up on its next pass).
+    pub pending_actions: Vec<InvalidationAction>,
 }
 
-/// Collect and persist LSP symbols for a file.
+/// Collect and persist LSP symbols for a file, tracking which dependent
+/// files need their outgoing edges refreshed.
 ///
-/// This is a simplified version that takes a list of DocumentSymbols
-/// (e.g., from an LSP server response) and persists them to the database.
+/// Uses [`reextract_symbols`] so that:
+/// - The file's own symbol rows are replaced atomically (delete-then-insert).
+/// - Files that had outgoing edges pointing at now-deleted symbol IDs are
+///   captured in the returned actions for follow-up invalidation.
+///
+/// The file's own outgoing call edges are preserved; they are owned by a
+/// separate call-hierarchy pass. Rows whose `caller_id` maps to a deleted
+/// symbol are cleaned up by the `lsp_symbols` CASCADE.
 ///
 /// # Arguments
 /// * `conn` - Database connection
@@ -48,29 +64,30 @@ pub struct LspCollectionResult {
 /// * `symbols` - DocumentSymbols from LSP server
 ///
 /// # Returns
-/// Number of symbols written to database
+/// A pair of (number of symbols written, invalidation actions for dependents).
 pub fn collect_and_persist_symbols(
     conn: &Connection,
     file_path: &str,
     symbols: &[DocumentSymbol],
-) -> Result<usize, CodeContextError> {
+) -> Result<(usize, Vec<InvalidationAction>), CodeContextError> {
     // Flatten nested DocumentSymbols into FlatSymbol format
     let flat_symbols = flatten_symbols(file_path, symbols);
     let symbol_count = flat_symbols.len();
 
-    // Write symbols to database
-    if symbol_count > 0 {
-        write_symbols(conn, file_path, &flat_symbols)?;
-    }
+    // Run the invalidation-aware symbol re-extract. This always runs (even
+    // for zero symbols) so deletions propagate correctly.
+    let actions = reextract_symbols(conn, file_path, &flat_symbols)?;
 
     // Mark file as lsp_indexed
     mark_lsp_indexed(conn, file_path)?;
 
     debug!(
-        "Collected and persisted {} symbols for {}",
-        symbol_count, file_path
+        "Collected and persisted {} symbols for {} ({} dependent files affected)",
+        symbol_count,
+        file_path,
+        actions.len()
     );
-    Ok(symbol_count)
+    Ok((symbol_count, actions))
 }
 
 /// Parse a JSON-RPC response body into DocumentSymbol array.
@@ -356,25 +373,31 @@ impl LspJsonRpcClient {
                         file_path: file_path_str,
                         symbol_count,
                         error: None,
+                        pending_actions: Vec::new(),
                     })
                 }
                 Err(e) => Ok(LspCollectionResult {
                     file_path: file_path_str,
                     symbol_count: 0,
                     error: Some(e.to_string()),
+                    pending_actions: Vec::new(),
                 }),
             },
             Err(e) => Ok(LspCollectionResult {
                 file_path: file_path_str,
                 symbol_count: 0,
                 error: Some(e.to_string()),
+                pending_actions: Vec::new(),
             }),
         }
     }
 
     /// Collect symbols and persist them to the database.
     ///
-    /// Combines `collect_file_symbols` with database writes.
+    /// Combines `collect_file_symbols` with database writes. The returned
+    /// [`LspCollectionResult::pending_actions`] lists files that had edges
+    /// to symbols that no longer exist in `relative_path` and therefore need
+    /// their outgoing edges refreshed.
     pub fn collect_and_persist_file_symbols(
         &mut self,
         conn: &Connection,
@@ -393,23 +416,27 @@ impl LspJsonRpcClient {
         match self.send_request("textDocument/documentSymbol", params) {
             Ok(response) => match parse_document_symbols(&response) {
                 Ok(symbols) => {
-                    let count = collect_and_persist_symbols(conn, relative_path, &symbols)?;
+                    let (count, pending_actions) =
+                        collect_and_persist_symbols(conn, relative_path, &symbols)?;
                     Ok(LspCollectionResult {
                         file_path: file_path_str,
                         symbol_count: count,
                         error: None,
+                        pending_actions,
                     })
                 }
                 Err(e) => Ok(LspCollectionResult {
                     file_path: file_path_str,
                     symbol_count: 0,
                     error: Some(e.to_string()),
+                    pending_actions: Vec::new(),
                 }),
             },
             Err(e) => Ok(LspCollectionResult {
                 file_path: file_path_str,
                 symbol_count: 0,
                 error: Some(e.to_string()),
+                pending_actions: Vec::new(),
             }),
         }
     }
@@ -871,10 +898,12 @@ mod tests {
             file_path: "src/main.rs".to_string(),
             symbol_count: 5,
             error: None,
+            pending_actions: Vec::new(),
         };
         assert_eq!(result.file_path, "src/main.rs");
         assert_eq!(result.symbol_count, 5);
         assert!(result.error.is_none());
+        assert!(result.pending_actions.is_empty());
     }
 
     #[test]
@@ -883,6 +912,7 @@ mod tests {
             file_path: "src/bad.rs".to_string(),
             symbol_count: 0,
             error: Some("timeout".to_string()),
+            pending_actions: Vec::new(),
         };
         assert_eq!(result.file_path, "src/bad.rs");
         assert!(result.error.is_some());
@@ -1364,8 +1394,12 @@ mod tests {
             },
         ];
 
-        let count = collect_and_persist_symbols(&conn, file_path, &symbols).unwrap();
+        let (count, actions) = collect_and_persist_symbols(&conn, file_path, &symbols).unwrap();
         assert_eq!(count, 2, "should have written 2 symbols");
+        assert!(
+            actions.is_empty(),
+            "no prior symbols -> no dependent files to refresh"
+        );
 
         // Verify lsp_indexed flag was set
         let lsp_indexed: i32 = conn
@@ -1386,8 +1420,9 @@ mod tests {
         let file_path = "src/empty.rs";
         seed_indexed_file(&conn, file_path);
 
-        let count = collect_and_persist_symbols(&conn, file_path, &[]).unwrap();
+        let (count, actions) = collect_and_persist_symbols(&conn, file_path, &[]).unwrap();
         assert_eq!(count, 0);
+        assert!(actions.is_empty(), "empty-in, empty-dependents-out");
 
         let lsp_indexed: i32 = conn
             .query_row(
@@ -2276,6 +2311,7 @@ send_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": {}}})
             file_path: "src/test.rs".to_string(),
             symbol_count: 3,
             error: None,
+            pending_actions: Vec::new(),
         };
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("src/test.rs"));

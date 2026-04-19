@@ -416,7 +416,7 @@ function useGridViewState(view: ViewDef) {
 /** Grid (spreadsheet-style) view for entities. */
 export function GridView({ view }: GridViewProps) {
   const {
-    entityType, entities, columns, grouping, activePerspective,
+    entities, columns, grouping, activePerspective,
     setVisibleRowCount, grid, cellMonikers, gridCommands,
     handleCellClick, buildRowEntityCommands, renderEditor,
   } = useGridViewState(view);

@@ -34,33 +34,20 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 afterEach(cleanup);
 
-const noop = () => {};
-
 // ---------------------------------------------------------------------------
-// Smoke tests — these catch missing props, bad imports, and render crashes
+// Smoke tests — the stripped-down TextEditor accepts only string-editing
+// primitives: value, onChange, extensions, languageExtension, placeholder,
+// singleLine, autoFocus. All commit/cancel/submit/blur policy lives in
+// callers (see filter-editor.tsx, markdown.tsx, perspective-tab-bar.tsx,
+// quick-capture.tsx).
 // ---------------------------------------------------------------------------
 
 describe("TextEditor smoke tests", () => {
-  it("renders with minimal props (value, onCommit, onCancel)", () => {
+  it("renders with minimal props (value)", () => {
     expect(() =>
       render(
         <Wrapper>
-          <TextEditor value="hello" onCommit={noop} onCancel={noop} />
-        </Wrapper>,
-      ),
-    ).not.toThrow();
-  });
-
-  it("renders with onSubmit (compact/board card mode)", () => {
-    expect(() =>
-      render(
-        <Wrapper>
-          <TextEditor
-            value="hello"
-            onCommit={noop}
-            onCancel={noop}
-            onSubmit={noop}
-          />
+          <TextEditor value="hello" />
         </Wrapper>,
       ),
     ).not.toThrow();
@@ -72,11 +59,19 @@ describe("TextEditor smoke tests", () => {
         <Wrapper>
           <TextEditor
             value=""
-            onCommit={noop}
-            onCancel={noop}
             placeholder="Type here..."
-            onChange={noop}
+            onChange={() => {}}
           />
+        </Wrapper>,
+      ),
+    ).not.toThrow();
+  });
+
+  it("renders with singleLine flag", () => {
+    expect(() =>
+      render(
+        <Wrapper>
+          <TextEditor value="" singleLine />
         </Wrapper>,
       ),
     ).not.toThrow();
@@ -91,7 +86,7 @@ describe("TextEditor behavior", () => {
   it("mounts a CodeMirror editor in the DOM", () => {
     const { container } = render(
       <Wrapper>
-        <TextEditor value="hello world" onCommit={noop} onCancel={noop} />
+        <TextEditor value="hello world" />
       </Wrapper>,
     );
     const cmEditor = container.querySelector(".cm-editor");
@@ -101,125 +96,59 @@ describe("TextEditor behavior", () => {
   it("displays the initial value in the editor", () => {
     const { container } = render(
       <Wrapper>
-        <TextEditor value="test content" onCommit={noop} onCancel={noop} />
+        <TextEditor value="test content" />
       </Wrapper>,
     );
     const cmContent = container.querySelector(".cm-content");
     expect(cmContent?.textContent).toContain("test content");
   });
 
-  it("calls onChange on blur", async () => {
+  it("fires onChange when the document changes", async () => {
     const onChange = vi.fn();
-    render(
+    const { container } = render(
       <Wrapper>
-        <TextEditor
-          value="blur test"
-          onCommit={noop}
-          onCancel={noop}
-          onChange={onChange}
-        />
+        <TextEditor value="" onChange={onChange} />
       </Wrapper>,
     );
-    // CM6 manages focus internally. Call blur() on the contenteditable
-    // element so CM6's DOMObserver detects the focus loss.
-    const cmContent = document.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    const { EditorView } = await import("@codemirror/view");
+    const view = EditorView.findFromDOM(cmEditor);
+    expect(view).toBeTruthy();
+
     await act(async () => {
-      cmContent.blur();
-      // CM6's DOMObserver polls focus state — give it a tick
-      await new Promise((r) => setTimeout(r, 50));
+      view!.dispatch({
+        changes: { from: 0, to: 0, insert: "hi" },
+      });
+      await new Promise((r) => setTimeout(r, 20));
     });
-    expect(onChange).toHaveBeenCalledWith("blur test");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// singleLine mode
-// ---------------------------------------------------------------------------
-
-describe("TextEditor singleLine mode", () => {
-  it("renders without error", () => {
-    expect(() =>
-      render(
-        <Wrapper>
-          <TextEditor
-            value="hello"
-            onCommit={noop}
-            onCancel={noop}
-            singleLine
-          />
-        </Wrapper>,
-      ),
-    ).not.toThrow();
+    expect(onChange).toHaveBeenCalledWith("hi");
   });
 
-  it("non-singleLine blur calls onChange, not onCommit", async () => {
-    const onCommit = vi.fn();
-    const onChange = vi.fn();
-    render(
+  it("does not reset the document when parent passes new value prop", async () => {
+    // Core invariant: once mounted, the CM6 buffer is the source of truth.
+    // Parent re-renders with a different `value` must NOT clobber typed text.
+    const { container, rerender } = render(
       <Wrapper>
-        <TextEditor
-          value="keep editing"
-          onCommit={onCommit}
-          onCancel={noop}
-          onChange={onChange}
-        />
+        <TextEditor value="initial" />
       </Wrapper>,
     );
-    const cmContent = document.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
-    await act(async () => {
-      cmContent.blur();
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    // Non-singleLine: blur fires onChange, NOT onCommit
-    expect(onChange).toHaveBeenCalledWith("keep editing");
-    expect(onCommit).not.toHaveBeenCalled();
-  });
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    const { EditorView } = await import("@codemirror/view");
+    const view = EditorView.findFromDOM(cmEditor)!;
 
-  it("singleLine CUA: Enter commits", async () => {
-    const onCommit = vi.fn();
-    render(
+    await act(async () => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "typed text" },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    rerender(
       <Wrapper>
-        <TextEditor
-          value="tab name"
-          onCommit={onCommit}
-          onCancel={noop}
-          singleLine
-        />
+        <TextEditor value="totally different parent value" />
       </Wrapper>,
     );
-    const cmContent = document.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
-    await act(async () => {
-      cmContent.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    expect(onCommit).toHaveBeenCalledWith("tab name");
-  });
 
-  it("singleLine CUA: Escape cancels", async () => {
-    const onCancel = vi.fn();
-    render(
-      <Wrapper>
-        <TextEditor
-          value="tab name"
-          onCommit={noop}
-          onCancel={onCancel}
-          singleLine
-        />
-      </Wrapper>,
-    );
-    const cmContent = document.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
-    await act(async () => {
-      cmContent.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    expect(onCancel).toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("typed text");
   });
 });

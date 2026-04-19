@@ -254,12 +254,6 @@ async function flush() {
   });
 }
 
-/** Reads the focused moniker from the focus store and renders it as text. */
-function FocusMonitor() {
-  const focusedMoniker = useFocusedMoniker();
-  return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
-}
-
 // ---------------------------------------------------------------------------
 // broadcastNavCommand tests — verifies spatial_navigate delegation
 // ---------------------------------------------------------------------------
@@ -316,23 +310,6 @@ describe("broadcastNavCommand", () => {
     expect(dispatched).toBe(false);
   });
 });
-
-/** Helper button to set focus imperatively. */
-function SetFocusButton({ moniker }: { moniker: string }) {
-  const { setFocus } = useEntityFocus();
-  return <button data-testid="set-focus" onClick={() => setFocus(moniker)} />;
-}
-
-/** Helper button to call broadcastNavCommand. */
-function BroadcastButton({ commandId }: { commandId: string }) {
-  const { broadcastNavCommand } = useEntityFocus();
-  return (
-    <button
-      data-testid="broadcast"
-      onClick={() => broadcastNavCommand(commandId)}
-    />
-  );
-}
 
 /* ---------- window moniker in scope chain ---------- */
 

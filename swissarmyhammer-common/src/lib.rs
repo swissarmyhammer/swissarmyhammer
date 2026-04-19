@@ -41,6 +41,7 @@ pub mod parameters;
 pub mod prompt_visibility;
 pub mod rate_limiter;
 pub mod reporter;
+pub mod slug;
 pub mod test_organization;
 pub mod test_utils;
 pub mod traits;
@@ -98,6 +99,11 @@ pub use prompt_visibility::{is_prompt_partial, is_prompt_visible};
 
 // Re-export reporter types for convenience
 pub use reporter::{CliReporter, InitEvent, InitReporter, NullReporter};
+
+// Re-export the canonical slug function — mirrored by
+// `kanban-app/ui/src/lib/slugify.ts` and kept in lockstep via the parity
+// corpus in `swissarmyhammer-common/tests/slug_parity_corpus.txt`.
+pub use slug::slug;
 
 // Re-export logging utilities for convenience
 pub use logging::FileWriterGuard;

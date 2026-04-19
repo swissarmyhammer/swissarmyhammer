@@ -1716,7 +1716,7 @@ fn test_collect_lsp_symbols_and_persist() {
     .unwrap();
 
     // Collect and persist symbols
-    let symbol_count = collect_and_persist_symbols(conn, test_file, &symbols).unwrap();
+    let (symbol_count, _pending) = collect_and_persist_symbols(conn, test_file, &symbols).unwrap();
 
     // Verify symbols were persisted
     assert_eq!(

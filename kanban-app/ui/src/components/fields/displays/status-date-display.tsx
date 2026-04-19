@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { DateTime } from "luxon";
 import { formatRelativeMagnitude } from "@/lib/format-date";
-import type { DisplayProps } from "./text-display";
+import { DisplayText, type DisplayProps } from "./text-display";
 
 /**
  * Tagged shape produced by the backend `derive-status-date` derivation.
@@ -24,6 +24,12 @@ export type StatusKind =
   | "scheduled"
   | "created";
 
+/**
+ * Tagged payload produced by the backend `derive-status-date` derivation.
+ *
+ * `kind` identifies which lifecycle stage was selected and `timestamp` is the
+ * underlying ISO 8601 date or datetime string chosen for that stage.
+ */
 export interface StatusDateValue {
   kind: StatusKind;
   timestamp: string;
@@ -156,14 +162,62 @@ function composeStatusPhrase(
 }
 
 /**
- * Smart status-date display — renders the single most salient date from the
- * task's lifecycle, tagged by `kind` so an appropriate icon + phrasing is
- * chosen. Returns null for any input that is not a well-formed tagged value
- * so the inspector row (and compact card cell) collapse away.
+ * Return the kind-specific icon for a status_date value, or null if the
+ * value is not a well-formed `{ kind, timestamp }` payload.
  *
- * - `compact`: icon + short phrase, truncates.
- * - `full`: icon + phrase with the absolute ISO timestamp exposed via a
- *   native `title` tooltip.
+ * Registered as the `iconOverride` on the status-date display so the parent
+ * layout (inspector row, card field) renders the kind's icon in the tooltip
+ * position instead of the static YAML icon. This eliminates the duplicate
+ * icon that previously appeared (one from the layout, one inside the display).
+ *
+ * @param value - Raw field value as delivered by the backend (JSON-ish).
+ * @returns The kind-specific LucideIcon, or null for invalid input.
+ */
+export function statusDateIconOverride(value: unknown): LucideIcon | null {
+  const parsed = parseStatusDateValue(value);
+  if (!parsed) return null;
+  return KIND_DESCRIPTORS[parsed.kind].Icon;
+}
+
+/**
+ * Return a value-dependent tooltip phrase for a status_date value, or null
+ * if the value is not a well-formed `{ kind, timestamp }` payload.
+ *
+ * Registered as the `tooltipOverride` on the status-date display so the
+ * parent layout (inspector row, card field) shows a dynamic phrase like
+ * "Completed 3 days ago" instead of the static YAML field description.
+ * Falls back to the kind's label when the timestamp is unparseable.
+ *
+ * @param value - Raw field value as delivered by the backend (JSON-ish).
+ * @returns A human-readable status phrase, or null for invalid input.
+ */
+export function statusDateTooltipOverride(value: unknown): string | null {
+  const parsed = parseStatusDateValue(value);
+  if (!parsed) return null;
+  const descriptor = KIND_DESCRIPTORS[parsed.kind];
+  const timestampDate = parseDateOrDatetime(parsed.timestamp);
+  if (timestampDate == null) return descriptor.label;
+  return composeStatusPhrase(
+    parsed.kind,
+    parsed.timestamp,
+    timestampDate,
+    new Date(),
+  );
+}
+
+/**
+ * Smart status-date display — renders the single most salient date from the
+ * task's lifecycle, tagged by `kind` so an appropriate phrasing is chosen.
+ * Returns null for any input that is not a well-formed tagged value so the
+ * inspector row (and compact card cell) collapse away.
+ *
+ * The kind-specific icon is provided to the parent layout via
+ * {@link statusDateIconOverride} registered on the display — the display
+ * itself renders only the text phrase, avoiding the duplicate-icon problem.
+ *
+ * - `compact`: short phrase, truncates.
+ * - `full`: phrase with the absolute ISO timestamp exposed via a native
+ *   `title` tooltip.
  */
 export function StatusDateDisplay({ value, mode }: DisplayProps) {
   const parsed = parseStatusDateValue(value);
@@ -181,27 +235,5 @@ export function StatusDateDisplay({ value, mode }: DisplayProps) {
           new Date(),
         );
 
-  const { Icon } = descriptor;
-
-  if (mode === "compact") {
-    return (
-      <span
-        className="inline-flex items-center gap-1 text-xs text-muted-foreground truncate"
-        title={parsed.timestamp}
-      >
-        <Icon className="w-3 h-3 shrink-0" aria-hidden="true" />
-        <span className="truncate">{phrase}</span>
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 text-sm"
-      title={parsed.timestamp}
-    >
-      <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-      <span>{phrase}</span>
-    </span>
-  );
+  return <DisplayText text={phrase} mode={mode} title={parsed.timestamp} />;
 }

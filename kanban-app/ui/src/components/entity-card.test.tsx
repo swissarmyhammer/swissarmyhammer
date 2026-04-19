@@ -356,6 +356,25 @@ describe("EntityCard", () => {
       // labelled "title" should exist.
       expect(container.querySelector('span[aria-label="title"]')).toBeNull();
     });
+
+    it("CardFieldIcon renders icon wrapper with h-4 and items-center for line-height alignment", async () => {
+      // The tags field has icon + description "Task tags". The icon wrapper
+      // span should use h-4 (matching text-xs's 16px line-height) and
+      // items-center to vertically center the 12px icon, rather than a
+      // fragile mt-0.5 offset.
+      currentEntity = makeEntity();
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+      const trigger = container.querySelector(
+        'span[aria-label="Task tags"]',
+      ) as HTMLElement | null;
+      expect(trigger).toBeTruthy();
+      expect(trigger!.className).toContain("h-4");
+      expect(trigger!.className).toContain("items-center");
+      // The old mt-0.5 hack should be gone
+      expect(trigger!.className).not.toContain("mt-0.5");
+    });
   });
 
   describe("declarative on_card sections", () => {

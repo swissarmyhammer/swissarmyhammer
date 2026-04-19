@@ -30,6 +30,8 @@ import {
 } from "@/components/filter-editor";
 import { GroupSelector } from "@/components/group-selector";
 import { TextEditor } from "@/components/fields/text-editor";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
+import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import type { FieldDef } from "@/types/kanban";
 
@@ -38,7 +40,10 @@ import type { FieldDef } from "@/types/kanban";
 // PerspectiveTabBar component that owns the rename state.
 // ---------------------------------------------------------------------------
 
+/** Subscriber callback invoked when a "start rename" signal is broadcast. */
 type StartRenameCallback = () => void;
+
+/** Module-level subscriber set broadcasting rename signals to all mounted PerspectiveTabBar instances. */
 const startRenameCallbacks = new Set<StartRenameCallback>();
 
 /**
@@ -505,14 +510,60 @@ function useRenameGuards(
 }
 
 /**
- * Inline CM6 rename editor — uses TextEditor with singleLine mode.
+ * Builds the extensions, refs, and callbacks for the inline rename editor.
  *
- * Blur-commit is handled here via a wrapper div's onBlur, not inside
- * TextEditor. This keeps TextEditor's blur behavior identical regardless
- * of singleLine — the wrapper is responsible for committing when focus
- * leaves the rename editor entirely.
+ * Vim semantics: Escape from normal mode routes to COMMIT, not cancel — the
+ * vim idiom treats Escape as "done editing, save what I have." CUA/emacs treat
+ * Escape as the explicit cancel/discard shortcut.
  */
-function InlineRenameEditor({
+function useInlineRenamePolicy(
+  name: string,
+  onCommit: (newName: string) => void,
+  onCancel: () => void,
+) {
+  const latestTextRef = useRef(name);
+  const { guardedCommit, guardedCancel } = useRenameGuards(onCommit, onCancel);
+  const { keymap_mode: keymapMode } = useUIState();
+
+  const trackText = useCallback((text: string) => {
+    latestTextRef.current = text;
+  }, []);
+
+  const submitRef = useRef<(() => void) | null>(() => {});
+  submitRef.current = () => guardedCommit(latestTextRef.current);
+  const cancelRef = useRef<(() => void) | null>(() => {});
+  cancelRef.current =
+    keymapMode === "vim"
+      ? () => guardedCommit(latestTextRef.current)
+      : () => guardedCancel();
+
+  const extensions = useMemo(
+    () =>
+      buildSubmitCancelExtensions({
+        mode: keymapMode,
+        onSubmitRef: submitRef,
+        onCancelRef: cancelRef,
+        singleLine: true,
+        alwaysSubmitOnEnter: true,
+      }),
+    [keymapMode],
+  );
+
+  return { trackText, extensions, guardedCommit, latestTextRef };
+}
+
+/**
+ * Inline CM6 rename editor — uses the pure {@link TextEditor} primitive and
+ * wires its own Enter-commit, Escape-cancel, and blur-commit policy.
+ *
+ * Enter is bound via a keymap extension (`alwaysSubmitOnEnter: true`, so it
+ * fires even in vim insert mode). Escape cancels. Blur commits via the
+ * wrapper div's `onBlur`. The `committedRef` guard prevents double-fire from
+ * concurrent Enter + blur events.
+ *
+ * Exported for integration testing; production usage is internal to the tab bar.
+ */
+export function InlineRenameEditor({
   name,
   onCommit,
   onCancel,
@@ -521,11 +572,8 @@ function InlineRenameEditor({
   onCommit: (newName: string) => void;
   onCancel: () => void;
 }) {
-  const latestTextRef = useRef(name);
-  const { guardedCommit, guardedCancel } = useRenameGuards(onCommit, onCancel);
-  const trackText = useCallback((text: string) => {
-    latestTextRef.current = text;
-  }, []);
+  const { trackText, extensions, guardedCommit, latestTextRef } =
+    useInlineRenamePolicy(name, onCommit, onCancel);
 
   return (
     <div
@@ -539,9 +587,8 @@ function InlineRenameEditor({
     >
       <TextEditor
         value={name}
-        onCommit={guardedCommit}
-        onCancel={guardedCancel}
         onChange={trackText}
+        extensions={extensions}
         singleLine
       />
     </div>
@@ -612,12 +659,15 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
   function FilterFormulaBar({ filter, perspectiveId }, ref) {
     const editorRef = useRef<FilterEditorHandle>(null);
 
-    // Forward focus to the inner editor handle so parents can call focus().
+    // Forward the inner editor handle so parents can call focus() / setValue().
     useImperativeHandle(
       ref,
       () => ({
         focus() {
           editorRef.current?.focus();
+        },
+        setValue(text: string) {
+          editorRef.current?.setValue(text);
         },
       }),
       [],
@@ -642,10 +692,6 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
     );
   },
 );
-
-// ---------------------------------------------------------------------------
-// Group popover button — unchanged from original
-// ---------------------------------------------------------------------------
 
 /**
  * Group-by icon button with popover for the active perspective.

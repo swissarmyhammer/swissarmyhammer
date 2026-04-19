@@ -1,4 +1,4 @@
 id: 01KNAGBM78EMM4ZWK5EDTRNPRF
 name: Ready
 view: board
-filter: '#READY'
+filter: '#READY !$spatial-focus-navigation'

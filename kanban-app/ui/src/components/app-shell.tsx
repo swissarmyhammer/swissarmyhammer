@@ -5,6 +5,7 @@ import {
   CommandScopeProvider,
   useDispatchCommand,
   type CommandDef,
+  type DispatchOptions,
 } from "@/lib/command-scope";
 import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
@@ -32,8 +33,9 @@ function useMenuCommandListener(
 }
 
 /** Route native context-menu commands through useDispatchCommand. */
+type AdHocDispatch = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
 function useContextMenuCommandListener(
-  dispatchRef: React.RefObject<ReturnType<typeof useDispatchCommand>>,
+  dispatchRef: React.RefObject<AdHocDispatch>,
 ) {
   useEffect(() => {
     const unlisten = listen<{
@@ -61,10 +63,10 @@ function useContextMenuCommandListener(
  * first, falling back to the root scope (current context) if not found.
  */
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
-  const dispatch = useDispatchCommand();
+  const dispatch: AdHocDispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
 
-  const dispatchRef = useRef(dispatch);
+  const dispatchRef = useRef<AdHocDispatch>(dispatch);
   dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;

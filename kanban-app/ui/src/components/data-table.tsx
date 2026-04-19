@@ -12,6 +12,7 @@ import {
   type GroupingState,
   type Row,
   type Header,
+  type HeaderContext,
   type Table as TanTable,
 } from "@tanstack/react-table";
 import {
@@ -255,8 +256,8 @@ interface SortIndicatorProps {
   isSorted: false | "asc" | "desc";
   sortPriority: number | undefined;
   showPriority: boolean;
-  headerDef: unknown;
-  headerContext: unknown;
+  headerDef: ColumnDef<Entity>["header"];
+  headerContext: HeaderContext<Entity, unknown>;
 }
 
 /** Render the column label with sort direction and priority badge. */

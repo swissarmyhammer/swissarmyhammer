@@ -258,9 +258,9 @@ impl BoardHandle {
         register_perspective_store(&ctx, &store_context, &kanban_path).await;
 
         // Ensure the entity context is initialized — this also constructs
-        // and attaches the `EntityCache` and spawns the filesystem watcher
-        // inside the entity crate. After this call, `ctx.entity_cache()`
-        // returns the same `Arc<EntityCache>` that owns the live state.
+        // and attaches the `EntityCache`. After this call,
+        // `ctx.entity_cache()` returns the same `Arc<EntityCache>` that
+        // owns the live state.
         let ectx = ctx
             .entity_context()
             .await
@@ -271,6 +271,14 @@ impl BoardHandle {
         let entity_cache = ctx
             .entity_cache()
             .expect("entity_cache must be populated after entity_context() returns Ok");
+
+        // Spawn the filesystem watcher explicitly — long-running processes
+        // want to see external edits propagate through the cache. One-shot
+        // callers (MCP, CLI, tests) intentionally skip this because
+        // building an FSEvents watcher on macOS costs hundreds of ms.
+        if let Err(e) = ctx.start_watcher() {
+            tracing::warn!(error = %e, "failed to spawn kanban filesystem watcher");
+        }
 
         let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
@@ -338,13 +346,25 @@ impl BoardHandle {
         let search_index = Arc::clone(&self.search_index);
         let board_path_str = kanban_root.display().to_string();
 
-        tracing::info!(path = %kanban_root.display(), "entity-cache bridge starting for board");
+        // Subscribe to the perspective-store broadcast if the store is
+        // ready. `try_read()` keeps this synchronous since `start_watcher`
+        // is not async; the guard is dropped immediately after subscribe().
+        let perspective_rx = ctx
+            .perspective_context_if_ready()
+            .and_then(|pctx| pctx.try_read().ok().map(|guard| guard.subscribe()));
+
+        tracing::info!(
+            path = %kanban_root.display(),
+            has_perspective_rx = perspective_rx.is_some(),
+            "entity-cache bridge starting for board"
+        );
         let handle = tokio::spawn(watcher::run_bridge(
             ctx,
             cache,
             app_handle,
             board_path_str,
             search_index,
+            perspective_rx,
         ));
         self.bridge_task = Some(handle);
     }

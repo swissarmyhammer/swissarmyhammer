@@ -1,80 +1,101 @@
+/**
+ * Pure CodeMirror 6 string-editing primitive.
+ *
+ * {@link TextEditor} owns exactly four things:
+ *
+ *   1. The CodeMirror buffer.
+ *   2. Emitting `onChange(text)` on every doc change.
+ *   3. Exposing `focus()` via forwardRef.
+ *   4. Accepting caller-provided `extensions` (language, decorations, keymaps).
+ *
+ * It does NOT own commit/cancel/submit/blur policy, debounced autosave,
+ * repeated-commit guards, or any "close the editor" callback. Those concerns
+ * belong in the caller (see {@link InlineRenameEditor}, {@link FilterEditor},
+ * {@link QuickCapture}, {@link MarkdownEditorAdapter}).
+ *
+ * Why a pure primitive: previous iterations bundled commit machinery tuned for
+ * popover field editors into `TextEditor` itself. The formula bar — an always-
+ * open, always-live input with no close and no draft — kept hitting sharp edges
+ * because the primitive kept re-running "commit and close" logic. Callers have
+ * very different policies (popover vs. formula bar vs. rename vs. command
+ * palette); keeping the primitive dumb lets each caller wire the policy it
+ * actually needs via CM6 extensions.
+ *
+ * Keymap mode (vim/cua/emacs) is still applied here because it is part of the
+ * editing primitive — the mode controls *character input*, not commit policy.
+ * Callers that want Enter to submit add their own Prec.highest keymap binding
+ * via the `extensions` prop.
+ */
+
 import {
   forwardRef,
   memo,
-  useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
 } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
-import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
-import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import type { FieldDef } from "@/types/kanban";
 
-/** Handle exposed by TextEditor via forwardRef so parents can programmatically focus it. */
+/** Handle exposed by TextEditor via forwardRef so callers can move focus. */
 export interface TextEditorHandle {
   /** Move keyboard focus into the CM6 editor. */
   focus(): void;
+  /**
+   * Imperatively replace the buffer contents.
+   *
+   * Prop `value` is captured at mount and never re-applied (see the file-level
+   * docstring for why). Callers that need to force-reset the buffer after
+   * mount (e.g. the × clear button in the formula bar) call this instead.
+   */
+  setValue(text: string): void;
 }
 
-interface FieldPlaceholderProps {
-  field: FieldDef;
-  value: unknown;
-  editing: boolean;
-  onEdit: () => void;
-  onCommit: (value: unknown) => void;
-  onCancel: () => void;
+/** Props for the pure {@link TextEditor} primitive. */
+export interface TextEditorProps {
+  /**
+   * Initial buffer value. Subsequent changes to this prop do NOT reset the
+   * document — the CM6 buffer is the source of truth after mount. Callers
+   * that need to replace the contents should unmount/remount via `key`.
+   */
+  value: string;
+  /** Called on every doc change with the new text. */
+  onChange?: (text: string) => void;
+  /** Caller-supplied CM6 extensions (keymaps, decorations, autocomplete). */
+  extensions?: Extension[];
+  /**
+   * Language extension to use. Defaults to
+   * `markdown({ base: markdownLanguage })` when omitted.
+   */
+  languageExtension?: Extension;
+  /** Placeholder text shown when the editor is empty. */
+  placeholder?: string;
+  /**
+   * Single-line mode. Suppresses newline insertion from Enter (so Enter can be
+   * used for caller-defined semantics like commit or flush). Does NOT bind any
+   * commit/submit action — callers own that via their own keymap extension.
+   *
+   * Defaults to false (multiline).
+   */
+  singleLine?: boolean;
+  /**
+   * Whether to auto-focus the editor on mount. Defaults to true.
+   *
+   * Set to false for always-visible editors (e.g. formula bar) that should
+   * only focus on explicit user interaction, not on render.
+   */
+  autoFocus?: boolean;
+  /** Optional class applied to the outer CM6 element. */
+  className?: string;
 }
 
-/**
- * Fallback presenter/editor for field types without a dedicated component.
- *
- * - Display: ReactMarkdown with GFM (prose styling)
- * - Edit: CodeMirror 6 with vim/emacs/CUA keymaps
- */
-export function FieldPlaceholder({
-  field,
-  value,
-  editing,
-  onEdit,
-  onCommit,
-  onCancel,
-}: FieldPlaceholderProps) {
-  const text = toText(value);
-
-  if (editing) {
-    return (
-      <TextEditor
-        value={text}
-        onCommit={(v) => onCommit(v)}
-        onCancel={onCancel}
-      />
-    );
-  }
-
-  return (
-    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      {text ? (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-        </div>
-      ) : (
-        <span className="text-muted-foreground/50 italic">
-          {field.name.replace(/_/g, " ")}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** Static basicSetup config — hoisted to module level to avoid recreating on each render. */
+/** Static basicSetup config — hoisted to module level to avoid recreation. */
 const BASIC_SETUP = {
   lineNumbers: false,
   foldGutter: false,
@@ -85,84 +106,39 @@ const BASIC_SETUP = {
   autocompletion: false,
 } as const;
 
-/** Props for the TextEditor component — the single CM6 editor used across the field system. */
-interface EditorProps {
-  value: string;
-  /** Called with the final value when the editor commits. */
-  onCommit: (value: string) => void;
-  onCancel: () => void;
-  /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
-  onSubmit?: (text: string) => void;
-  /** Placeholder text shown when the editor is empty. */
-  placeholder?: string;
-  /** Called on every content change with the current text. */
-  onChange?: (text: string) => void;
-  /**
-   * Single-line mode for inline rename and similar short inputs.
-   *
-   * Enter always commits (no newlines), even in vim insert mode.
-   * All other behavior (Escape, blur, vim keybindings) is identical
-   * to regular multiline field editing.
-   */
-  singleLine?: boolean;
-  /** Additional CM6 extensions (e.g. mention decorations, autocomplete). */
-  extraExtensions?: import("@codemirror/state").Extension[];
-  /**
-   * Language extension to use instead of the default markdown.
-   *
-   * Pass e.g. `filterLanguage()` for the filter formula bar. Defaults to
-   * `markdown({ base: markdownLanguage })` when omitted.
-   */
-  languageExtension?: import("@codemirror/state").Extension;
-  /**
-   * Whether to auto-focus the editor on mount. Defaults to true.
-   *
-   * Set to false for always-visible editors (e.g. formula bar) that should
-   * only focus on explicit user interaction, not on render.
-   */
-  autoFocus?: boolean;
-  /**
-   * Allow repeated commits without the editor closing.
-   *
-   * When true, the committed guard resets after each commit so the user can
-   * submit multiple times. Use this for formula bars and other persistent
-   * editors. Defaults to false (single-shot, like field editors).
-   */
-  repeatable?: boolean;
-}
-
 /**
- * Memoized CodeMirror wrapper that prevents re-renders from parent context changes.
+ * Memoized CodeMirror wrapper that prevents re-renders from parent context
+ * churn.
  *
- * `@uiw/react-codemirror` is not wrapped in React.memo, so every parent re-render
- * runs all its internal hooks — including an O(n) doc.toString() comparison.
- * This wrapper ensures CodeMirror only re-renders when its props actually change.
+ * `@uiw/react-codemirror` is not wrapped in React.memo, so every parent
+ * re-render runs all its internal hooks — including an `O(n)` doc.toString()
+ * comparison inside its `value` useEffect, which (when run with an out-of-date
+ * `value` prop after the user has typed) can force the doc back to the mount-
+ * time initial value. Stable identity on this boundary keeps the editor's
+ * internal state intact across parent re-renders.
  */
 const StableCodeMirror = memo(function StableCodeMirror({
   editorRef,
   initialValue,
-  onBlur,
   onCreateEditor,
   extensions,
   placeholder,
   className,
-  autoFocus = true,
+  autoFocus,
 }: {
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
   initialValue: string;
-  onBlur: () => void;
   onCreateEditor: (view: EditorView) => void;
-  extensions: import("@codemirror/state").Extension[];
+  extensions: Extension[];
   placeholder?: string;
   className?: string;
-  autoFocus?: boolean;
+  autoFocus: boolean;
 }) {
   return (
     <CodeMirror
       ref={editorRef}
       autoFocus={autoFocus}
       value={initialValue}
-      onBlur={onBlur}
       onCreateEditor={onCreateEditor}
       extensions={extensions}
       theme={shadcnTheme}
@@ -173,206 +149,120 @@ const StableCodeMirror = memo(function StableCodeMirror({
   );
 });
 
-/** Keep prop callbacks in stable refs so CM6 extensions see latest values without reconfig. */
-function useStableRefs(
-  props: Pick<
-    EditorProps,
-    "value" | "onCommit" | "onCancel" | "onSubmit" | "onChange"
-  >,
-) {
-  const valueRef = useRef(props.value);
-  valueRef.current = props.value;
-  const onCommitRef = useRef(props.onCommit);
-  onCommitRef.current = props.onCommit;
-  const onCancelRef = useRef(props.onCancel);
-  onCancelRef.current = props.onCancel;
-  const onSubmitRef = useRef(props.onSubmit);
-  onSubmitRef.current = props.onSubmit;
-  const onChangeRef = useRef(props.onChange);
-  onChangeRef.current = props.onChange;
-  return { valueRef, onCommitRef, onCancelRef, onSubmitRef, onChangeRef };
-}
-
-/**
- * Stable blur handler that saves the current draft via onChange.
- *
- * Extracted from useExitActions so the blur concern is separate from the
- * commit/cancel/saveInPlace guards. Only fires when no commit has occurred.
- */
-function useBlurHandler(
-  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
-  refs: ReturnType<typeof useStableRefs>,
-  committedRef: React.RefObject<boolean>,
-) {
-  return useCallback(() => {
-    if (!committedRef.current && editorRef.current?.view) {
-      const text = editorRef.current.view.state.doc.toString();
-      refs.onChangeRef.current?.(text);
-    }
-  }, [editorRef, refs, committedRef]);
-}
-
-/** Guarded commit/cancel/save-in-place actions backed by a single committedRef. */
-function useExitActions(
-  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
-  refs: ReturnType<typeof useStableRefs>,
-  repeatable: boolean,
-) {
-  const committedRef = useRef(false);
-
-  const commitAndExit = useCallback(() => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    const text = editorRef.current?.view
-      ? editorRef.current.view.state.doc.toString()
-      : refs.valueRef.current;
-    refs.onCommitRef.current(text);
-    if (repeatable) committedRef.current = false;
-  }, [editorRef, refs, repeatable]);
-
-  const cancelAndExit = useCallback(() => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    refs.onCancelRef.current();
-  }, [refs]);
-
-  const commitAndExitRef = useRef(commitAndExit);
-  commitAndExitRef.current = commitAndExit;
-  const cancelAndExitRef = useRef(cancelAndExit);
-  cancelAndExitRef.current = cancelAndExit;
-
-  const saveInPlace = useCallback(() => {
-    if (!editorRef.current?.view) return;
-    const text = editorRef.current.view.state.doc.toString();
-    if (repeatable) {
-      refs.onCommitRef.current(text);
-    } else {
-      if (text !== refs.valueRef.current) refs.onChangeRef.current?.(text);
-    }
-  }, [editorRef, refs, repeatable]);
-  const saveInPlaceRef = useRef(saveInPlace);
-  saveInPlaceRef.current = saveInPlace;
-
-  const handleBlur = useBlurHandler(editorRef, refs, committedRef);
-
-  return { commitAndExitRef, cancelAndExitRef, saveInPlaceRef, handleBlur };
-}
-
-/**
- * Semantic submit/cancel refs that route to the correct exit action.
- *
- * Submit: onSubmit provided → call it with text; otherwise commit-and-exit.
- * Cancel: vim → commit (edits must never be lost); CUA/emacs → cancel.
- */
-function useSemanticActions(
-  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
-  refs: ReturnType<typeof useStableRefs>,
-  exits: ReturnType<typeof useExitActions>,
-  mode: string,
-) {
-  const semanticSubmitRef = useRef<(() => void) | null>(null);
-  semanticSubmitRef.current = refs.onSubmitRef.current
-    ? () => {
-        const text = editorRef.current?.view
-          ? editorRef.current.view.state.doc.toString()
-          : refs.valueRef.current;
-        if (text.length > 0) refs.onSubmitRef.current!(text);
-      }
-    : () => exits.commitAndExitRef.current();
-
-  const semanticCancelRef = useRef<(() => void) | null>(null);
-  semanticCancelRef.current =
-    mode === "vim"
-      ? () => exits.commitAndExitRef.current()
-      : () => exits.cancelAndExitRef.current();
-
-  return { semanticSubmitRef, semanticCancelRef };
-}
-
-/**
- * Builds the CM6 updateListener extension that fires `onChange` on doc changes.
- *
- * Returns an empty array when no `onChange` handler is provided, so callers can
- * spread the result unconditionally.
- */
+/** Builds a CM6 updateListener that forwards doc changes via a ref. */
 function useChangeExtension(
-  onChange: ((text: string) => void) | undefined,
   onChangeRef: React.RefObject<((text: string) => void) | undefined>,
 ) {
-  return useMemo(() => {
-    if (!onChange) return [];
-    return [
+  return useMemo(
+    () =>
       EditorView.updateListener.of((update) => {
-        if (update.docChanged)
-          onChangeRef.current?.(update.state.doc.toString());
+        if (!update.docChanged) return;
+        const text = update.state.doc.toString();
+        console.warn("[filter-diag] TextEditor onChange updateListener", {
+          text,
+          hasCallback: !!onChangeRef.current,
+        });
+        onChangeRef.current?.(text);
       }),
-    ];
-  }, [onChange, onChangeRef]);
+    [onChangeRef],
+  );
+}
+
+/** Builds a CM6 transactionFilter that rejects edits introducing newlines. */
+function useSingleLineGuard(singleLine: boolean): Extension {
+  return useMemo(
+    () =>
+      singleLine
+        ? EditorState.transactionFilter.of((tr) => {
+            if (!tr.docChanged) return tr;
+            const hasNewline = tr.newDoc.toString().includes("\n");
+            return hasNewline ? [] : tr;
+          })
+        : [],
+    [singleLine],
+  );
 }
 
 /**
- * Build the CM6 extension array for TextEditor.
+ * Build a stable-identity extension array backed by Compartments so the pieces
+ * that change over time (keymap mode, caller extensions) can be reconfigured
+ * imperatively without triggering `@uiw/react-codemirror`'s blanket reconfigure
+ * useEffect (which fires on *any* extensions-prop identity change and replaces
+ * the entire config — including our updateListeners — mid-typing).
  *
- * Composes keymap, language, submit/cancel bindings, onChange listener,
- * and any caller-provided extra extensions. The `languageExtension` param
- * replaces the default markdown; pass `filterLanguage()` for the filter bar.
+ * Returns the mount-time extension array (stable identity forever) plus the
+ * compartments needed to update the pieces. The caller wires effects that
+ * dispatch `compartment.reconfigure(...)` when mode / extra extensions change.
  */
-function useEditorExtensions(
+function useCompartmentalExtensions(
   mode: string,
-  singleLine: boolean | undefined,
-  onChange: ((text: string) => void) | undefined,
+  singleLine: boolean,
   onChangeRef: React.RefObject<((text: string) => void) | undefined>,
-  semanticSubmitRef: React.RefObject<(() => void) | null>,
-  semanticCancelRef: React.RefObject<(() => void) | null>,
-  saveInPlaceRef: React.RefObject<(() => void) | null>,
-  extraExtensions: import("@codemirror/state").Extension[] | undefined,
-  languageExtension: import("@codemirror/state").Extension | undefined,
-) {
-  const keymapCompartment = useRef(new Compartment());
+  extraExtensions: Extension[] | undefined,
+  languageExtension: Extension | undefined,
+): {
+  extensions: Extension[];
+  keymapCompartment: Compartment;
+  extrasCompartment: Compartment;
+} {
   const defaultLanguage = useMemo(
     () => markdown({ base: markdownLanguage }),
     [],
   );
-  const changeExtension = useChangeExtension(onChange, onChangeRef);
+  const changeExtension = useChangeExtension(onChangeRef);
+  const singleLineGuard = useSingleLineGuard(singleLine);
+  const keymapCompartment = useRef(new Compartment()).current;
+  const extrasCompartment = useRef(new Compartment()).current;
 
-  return useMemo(
-    () => [
-      keymapCompartment.current.of(keymapExtension(mode)),
+  // Captured at mount — IDENTITY NEVER CHANGES. All dynamic updates flow
+  // through the two compartments via imperative view.dispatch effects.
+  const extensionsRef = useRef<Extension[] | null>(null);
+  if (extensionsRef.current === null) {
+    extensionsRef.current = [
+      keymapCompartment.of(keymapExtension(mode)),
       EditorView.lineWrapping,
       languageExtension ?? defaultLanguage,
-      ...buildSubmitCancelExtensions({
-        mode,
-        onSubmitRef: semanticSubmitRef,
-        onCancelRef: semanticCancelRef,
-        saveInPlaceRef,
-        alwaysSubmitOnEnter: singleLine,
-      }),
-      ...changeExtension,
-      ...(extraExtensions ?? []),
-    ],
-    [
-      mode,
-      singleLine,
-      semanticSubmitRef,
-      semanticCancelRef,
-      saveInPlaceRef,
+      singleLineGuard,
       changeExtension,
-      extraExtensions,
-      languageExtension,
-      defaultLanguage,
-    ],
-  );
+      extrasCompartment.of(extraExtensions ?? []),
+    ];
+  }
+
+  return {
+    extensions: extensionsRef.current,
+    keymapCompartment,
+    extrasCompartment,
+  };
+}
+
+/**
+ * Imperatively reconfigure a compartment when its content changes. Reads the
+ * EditorView via the editorRef rather than storing it in React state, so the
+ * reconfigure happens outside the React render cycle.
+ */
+function useCompartmentReconfigure(
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+  compartment: Compartment,
+  content: Extension | Extension[],
+) {
+  useEffect(() => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    console.warn("[filter-diag] TextEditor compartment RECONFIGURE");
+    view.dispatch({ effects: compartment.reconfigure(content) });
+  }, [editorRef, compartment, content]);
 }
 
 /**
  * Returns an `onCreateEditor` callback that exits vim insert mode on mount.
  *
- * In vim mode, CM6 opens in insert mode by default. This exits to normal mode
- * so the editor starts in the expected state for vim users.
+ * CM6 + vim defaults to insert mode. This exits to normal mode so vim users
+ * start in the expected state. Stable across re-renders — no closures over
+ * prop callbacks.
  */
 function useVimExitInsertOnCreate(mode: string) {
-  return useCallback(
-    (view: EditorView) => {
+  return useMemo(
+    () => (view: EditorView) => {
       if (mode !== "vim") return;
       const cm = getCM(view);
       if (!cm) return;
@@ -386,102 +276,91 @@ function useVimExitInsertOnCreate(mode: string) {
 }
 
 /**
- * Composes all CM6 hook state for TextEditor.
+ * Exposes `focus()` on the parent-supplied ref.
  *
- * Bundles stable-refs, exit actions, semantic actions, extensions, and the
- * vim-insert-exit onCreate callback so the TextEditor render function stays
- * focused on the imperative handle and StableCodeMirror layout.
+ * Kept in a hook so the main TextEditor body stays compact.
  */
-function useTextEditorState(
+function useTextEditorHandle(
+  ref: React.ForwardedRef<TextEditorHandle>,
   editorRef: React.RefObject<ReactCodeMirrorRef | null>,
-  props: EditorProps,
 ) {
-  const {
-    value,
-    onCommit,
-    onCancel,
-    onSubmit,
-    onChange,
-    singleLine,
-    extraExtensions,
-    languageExtension,
-    repeatable = false,
-  } = props;
-  const { keymap_mode: mode } = useUIState();
-  const refs = useStableRefs({ value, onCommit, onCancel, onSubmit, onChange });
-  const exits = useExitActions(editorRef, refs, repeatable);
-  const { semanticSubmitRef, semanticCancelRef } = useSemanticActions(
-    editorRef,
-    refs,
-    exits,
-    mode,
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        editorRef.current?.view?.focus();
+      },
+      setValue(text: string) {
+        const view = editorRef.current?.view;
+        if (!view) return;
+        if (view.state.doc.toString() === text) return;
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+        });
+      },
+    }),
+    [editorRef],
   );
-  const extensions = useEditorExtensions(
-    mode,
-    singleLine,
-    onChange,
-    refs.onChangeRef,
-    semanticSubmitRef,
-    semanticCancelRef,
-    exits.saveInPlaceRef,
-    extraExtensions,
-    languageExtension,
+}
+
+/** Bundle the CM6 plumbing (refs, extensions, compartment reconfigures). */
+function useTextEditorSetup(
+  props: TextEditorProps,
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+) {
+  const { keymap_mode: mode } = useUIState();
+  const onChangeRef = useRef(props.onChange);
+  onChangeRef.current = props.onChange;
+  const initialValueRef = useRef(props.value);
+  const { extensions, keymapCompartment, extrasCompartment } =
+    useCompartmentalExtensions(
+      mode,
+      props.singleLine ?? false,
+      onChangeRef,
+      props.extensions,
+      props.languageExtension,
+    );
+  useCompartmentReconfigure(
+    editorRef,
+    keymapCompartment,
+    keymapExtension(mode),
+  );
+  useCompartmentReconfigure(
+    editorRef,
+    extrasCompartment,
+    props.extensions ?? [],
   );
   const handleCreateEditor = useVimExitInsertOnCreate(mode);
-  return { exits, extensions, handleCreateEditor };
+  return {
+    initialValue: initialValueRef.current,
+    extensions,
+    handleCreateEditor,
+  };
 }
 
 /**
- * Single-purpose CM6 text/markdown editor used across the field system.
- *
- * Runs in uncontrolled mode — CodeMirror owns the document, React never
- * re-renders during typing. The value prop is only used for initialization.
- * Commit reads from `view.state.doc.toString()` at exit time.
- *
- * Exposes `focus()` via forwardRef so parents (e.g. formula bars) can move
- * keyboard focus into the editor programmatically without managing internal refs.
+ * Pure CM6 editor primitive. See the file-level docstring for the full
+ * contract. Accepts only what's needed to host a string buffer; all policy
+ * (commit, cancel, submit, blur-save) lives in callers.
  */
-export const TextEditor = forwardRef<TextEditorHandle, EditorProps>(
+export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
   function TextEditor(props, ref) {
-    const { placeholder, autoFocus = true } = props;
     const editorRef = useRef<ReactCodeMirrorRef>(null);
-    const initialValueRef = useRef(props.value);
-    const { exits, extensions, handleCreateEditor } = useTextEditorState(
-      editorRef,
+    const { initialValue, extensions, handleCreateEditor } = useTextEditorSetup(
       props,
+      editorRef,
     );
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        focus() {
-          editorRef.current?.view?.focus();
-        },
-      }),
-      [],
-    );
-
+    useTextEditorHandle(ref, editorRef);
     return (
       <StableCodeMirror
         editorRef={editorRef}
-        initialValue={initialValueRef.current}
-        onBlur={exits.handleBlur}
+        initialValue={initialValue}
         onCreateEditor={handleCreateEditor}
         extensions={extensions}
-        placeholder={placeholder}
-        className="text-sm"
-        autoFocus={autoFocus}
+        placeholder={props.placeholder}
+        className={props.className ?? "text-sm"}
+        autoFocus={props.autoFocus ?? true}
       />
     );
   },
 );
-
-/** Coerce any field value to a string for display/editing. */
-function toText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.join(", ");
-  return JSON.stringify(value);
-}

@@ -235,7 +235,7 @@ export const ColumnView = memo(function ColumnView({
     <FocusScope
       moniker={column.moniker}
       commands={commands}
-      className="flex flex-col min-h-0 min-w-[20em] max-w-[40em] flex-1"
+      className="flex flex-col min-h-0 min-w-[24em] max-w-[48em] shrink-0 flex-1"
     >
       <ColumnHeader
         column={column}

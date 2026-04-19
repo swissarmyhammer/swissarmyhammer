@@ -18,6 +18,50 @@ import { useViews } from "./views-context";
 /** This window's label — stable for the lifetime of the window. */
 const WINDOW_LABEL = getCurrentWindow().label;
 
+/** Payload for `entity-field-changed` — carries the exact field delta. */
+interface EntityFieldChangedEvent {
+  entity_type: string;
+  id: string;
+  fields?: Record<string, unknown>;
+}
+
+/**
+ * Apply a field delta to the perspective with matching id, preserving object
+ * identity for every other perspective in the list.
+ *
+ * This is how a field change should propagate: the backend tells us exactly
+ * which entity changed and which fields changed, so we mutate only that one
+ * perspective's object and leave the rest untouched. React consumers that
+ * depend on unchanged perspectives never see new references, so they don't
+ * re-render.
+ */
+function applyFieldDelta(
+  prev: PerspectiveDef[],
+  id: string,
+  fields: Record<string, unknown>,
+): PerspectiveDef[] {
+  const idx = prev.findIndex((p) => p.id === id);
+  if (idx < 0) {
+    console.warn("[filter-diag] perspective applyFieldDelta MISS", {
+      id,
+      knownIds: prev.map((p) => p.id),
+    });
+    return prev;
+  }
+  const beforeFilter = (prev[idx] as { filter?: unknown }).filter;
+  const updated = { ...prev[idx], ...fields } as PerspectiveDef;
+  const afterFilter = (updated as { filter?: unknown }).filter;
+  console.warn("[filter-diag] perspective applyFieldDelta", {
+    id,
+    changedFields: Object.keys(fields),
+    beforeFilter,
+    afterFilter,
+  });
+  const next = prev.slice();
+  next[idx] = updated;
+  return next;
+}
+
 interface PerspectivesContextValue {
   perspectives: PerspectiveDef[];
   activePerspective: PerspectiveDef | null;
@@ -35,46 +79,39 @@ const PerspectivesContext = createContext<PerspectivesContextValue | null>(
  * via `perspective.list` command, event-driven refresh, and active perspective
  * selection from UIState.
  */
-export function PerspectiveProvider({ children }: { children: ReactNode }) {
+/** Fetches perspectives on mount and exposes a refresh callback + loaded flag. */
+function usePerspectivesFetch(
+  dispatch: (
+    cmd: string,
+    opts?: { args?: Record<string, unknown> },
+  ) => Promise<unknown>,
+): {
+  perspectives: PerspectiveDef[];
+  setPerspectives: React.Dispatch<React.SetStateAction<PerspectiveDef[]>>;
+  loaded: boolean;
+  refresh: () => Promise<void>;
+} {
   const [perspectives, setPerspectives] = useState<PerspectiveDef[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // active_perspective_id comes from UIState per-window data — it is the single
-  // source of truth. UIStateProvider keeps it in sync via the "ui-state-changed"
-  // event.
-  const uiState = useUIState();
-  const active_perspective_id =
-    uiState.windows?.[WINDOW_LABEL]?.active_perspective_id ?? "";
-
-  const { activeView } = useViews();
-  const viewKind = activeView?.kind ?? "board";
-
-  const dispatch = useDispatchCommand();
-
-  /** Dispatch a perspective switch through the command system so UIState owns
-   *  the change. */
-  const setActivePerspectiveId = useCallback(
-    (id: string) => {
-      dispatch("ui.perspective.set", {
-        args: { perspective_id: id },
-      }).catch(console.error);
-    },
-    [dispatch],
-  );
-
   const refresh = useCallback(async () => {
+    console.warn("[filter-diag] perspective REFRESH (full refetch)");
     try {
       const wrapped = (await dispatch("perspective.list")) as {
         result?: { perspectives?: PerspectiveDef[] };
       };
-      setPerspectives(wrapped?.result?.perspectives ?? []);
+      const list = wrapped?.result?.perspectives ?? [];
+      console.warn("[filter-diag] perspective REFRESH complete", {
+        count: list.length,
+        ids: list.map((p) => p.id),
+      });
+      setPerspectives(list);
       setLoaded(true);
     } catch (error) {
       console.error("Failed to load perspectives:", error);
     }
   }, [dispatch]);
 
-  // On mount: load perspectives. UIState already provides active_perspective_id.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -86,45 +123,115 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  // Auto-create a "Default" perspective when none exist for the current view kind.
-  // Uses a ref to avoid repeated creation attempts per view kind.
+  return { perspectives, setPerspectives, loaded, refresh };
+}
+
+/**
+ * Auto-create a "Default" perspective when none exist for the current view
+ * kind. Uses a ref to avoid repeated creation attempts per kind.
+ */
+function useAutoCreateDefaultPerspective(
+  loaded: boolean,
+  perspectives: PerspectiveDef[],
+  viewKind: string,
+  dispatch: (
+    cmd: string,
+    opts?: { args?: Record<string, unknown> },
+  ) => Promise<unknown>,
+) {
   const autoCreatedForKindRef = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded) return;
     if (autoCreatedForKindRef.current === viewKind) return;
-    const hasForKind = perspectives.some((p) => p.view === viewKind);
-    if (!hasForKind) {
-      autoCreatedForKindRef.current = viewKind;
-      dispatch("perspective.save", {
-        args: { name: "Default", view: viewKind },
-      }).catch(console.error);
-    }
-  }, [loaded, perspectives, viewKind]);
+    if (perspectives.some((p) => p.view === viewKind)) return;
+    autoCreatedForKindRef.current = viewKind;
+    dispatch("perspective.save", {
+      args: { name: "Default", view: viewKind },
+    }).catch(console.error);
+  }, [loaded, perspectives, viewKind, dispatch]);
+}
 
-  // Re-fetch perspectives when perspective entities change (file watcher or
-  // commands). The "perspective" check is an entity-type filter — this context
-  // only cares about perspective entities, so we ignore events for tasks, tags,
-  // etc.
+/**
+ * Wire event listeners for perspective entity updates.
+ *
+ * - entity-field-changed: apply the delta in place, preserving identity for
+ *   unchanged perspectives. Crucial during active editing — a full refetch
+ *   here would churn every downstream consumer on every keystroke's save.
+ * - entity-created/removed, board-changed: full refetch because list shape
+ *   changed.
+ */
+function usePerspectiveEventListeners(
+  setPerspectives: React.Dispatch<React.SetStateAction<PerspectiveDef[]>>,
+  refresh: () => Promise<void>,
+) {
   useEffect(() => {
     const unlisteners = [
-      listen<{ entity_type: string }>("entity-field-changed", (event) => {
-        if (event.payload.entity_type === "perspective") refresh();
+      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
+        console.warn("[filter-diag] event entity-field-changed", {
+          entity_type: event.payload.entity_type,
+          id: event.payload.id,
+          fieldKeys: event.payload.fields
+            ? Object.keys(event.payload.fields)
+            : null,
+        });
+        if (event.payload.entity_type !== "perspective") return;
+        if (!event.payload.fields) {
+          console.warn(
+            "[filter-diag] event entity-field-changed perspective WITHOUT fields — falling back to refetch",
+            { id: event.payload.id },
+          );
+          refresh();
+          return;
+        }
+        setPerspectives((prev) =>
+          applyFieldDelta(prev, event.payload.id, event.payload.fields!),
+        );
       }),
       listen<{ entity_type: string }>("entity-created", (event) => {
-        if (event.payload.entity_type === "perspective") refresh();
+        if (event.payload.entity_type === "perspective") {
+          console.warn("[filter-diag] event entity-created → refresh");
+          refresh();
+        }
       }),
       listen<{ entity_type: string }>("entity-removed", (event) => {
-        if (event.payload.entity_type === "perspective") refresh();
+        if (event.payload.entity_type === "perspective") {
+          console.warn("[filter-diag] event entity-removed → refresh");
+          refresh();
+        }
       }),
-      listen("board-changed", () => refresh()),
+      listen("board-changed", () => {
+        console.warn("[filter-diag] event board-changed → refresh");
+        refresh();
+      }),
     ];
     return () => {
       for (const p of unlisteners) p.then((fn) => fn());
     };
-  }, [refresh]);
+  }, [setPerspectives, refresh]);
+}
 
-  // Derive the active perspective object from UIState's active_perspective_id.
-  // Falls back to the first perspective if the ID is empty or not found.
+export function PerspectiveProvider({ children }: { children: ReactNode }) {
+  const uiState = useUIState();
+  const active_perspective_id =
+    uiState.windows?.[WINDOW_LABEL]?.active_perspective_id ?? "";
+  const { activeView } = useViews();
+  const viewKind = activeView?.kind ?? "board";
+  const dispatch = useDispatchCommand();
+
+  const { perspectives, setPerspectives, loaded, refresh } =
+    usePerspectivesFetch(dispatch);
+  useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatch);
+  usePerspectiveEventListeners(setPerspectives, refresh);
+
+  const setActivePerspectiveId = useCallback(
+    (id: string) => {
+      dispatch("ui.perspective.set", {
+        args: { perspective_id: id },
+      }).catch(console.error);
+    },
+    [dispatch],
+  );
+
   const activePerspective = useMemo(
     () =>
       perspectives.find((p) => p.id === active_perspective_id) ??
