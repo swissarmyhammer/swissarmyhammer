@@ -1149,20 +1149,31 @@ impl RequestQueue {
             model_manager.get_batch_size(),
             None, // No template offset - session state caching handles this
         );
-        match result {
-            Ok(()) => debug!(
-                "Worker {} completed streaming inference for request {} using GenerationHelper",
-                worker_id, request_id
-            ),
-            Err(e) => {
-                error!(
-                    "GenerationHelper streaming failed for worker {} request {}: {}",
-                    worker_id, request_id, e
-                );
-                report_stream_error(&stream_sender, "Generation failed", &e);
-            }
-        }
+        log_streaming_result(worker_id, &request_id, &stream_sender, result);
         Ok(())
+    }
+}
+
+/// Log the outcome of a streaming generation and, on error, relay the failure
+/// onto the client's stream channel.
+fn log_streaming_result(
+    worker_id: usize,
+    request_id: &str,
+    stream_sender: &mpsc::Sender<Result<StreamChunk, QueueError>>,
+    result: Result<(), impl std::fmt::Display + std::fmt::Debug>,
+) {
+    match result {
+        Ok(()) => debug!(
+            "Worker {} completed streaming inference for request {} using GenerationHelper",
+            worker_id, request_id
+        ),
+        Err(e) => {
+            error!(
+                "GenerationHelper streaming failed for worker {} request {}: {}",
+                worker_id, request_id, e
+            );
+            report_stream_error(stream_sender, "Generation failed", &e);
+        }
     }
 }
 
