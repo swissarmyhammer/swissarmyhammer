@@ -2,6 +2,7 @@ use crate::model::entity::{build_entity_id, SemanticEntity};
 use crate::parser::plugin::SemanticParserPlugin;
 use crate::utils::hash::content_hash;
 
+/// JSON parser plugin that extracts top-level properties from JSON objects as semantic entities.
 pub struct JsonParserPlugin;
 
 impl SemanticParserPlugin for JsonParserPlugin {
@@ -74,100 +75,10 @@ struct JsonEntry {
 /// Returns entries with accurate start_line positions.
 fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
     let mut entries = Vec::new();
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut line_num: usize = 1;
-
-    // State for tracking when we find a key at depth 1
-    let mut current_key: Option<String> = None;
-    let mut key_start = false;
-    let mut key_buf = String::new();
-    let mut reading_key = false;
+    let mut state = ParseState::new();
 
     for ch in content.chars() {
-        if ch == '\n' {
-            line_num += 1;
-            continue;
-        }
-
-        if escape_next {
-            if reading_key {
-                key_buf.push(ch);
-            }
-            escape_next = false;
-            continue;
-        }
-
-        if ch == '\\' && in_string {
-            if reading_key {
-                key_buf.push(ch);
-            }
-            escape_next = true;
-            continue;
-        }
-
-        if in_string {
-            if ch == '"' {
-                in_string = false;
-                if reading_key {
-                    reading_key = false;
-                    current_key = Some(key_buf.clone());
-                    key_buf.clear();
-                }
-            } else if reading_key {
-                key_buf.push(ch);
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => {
-                in_string = true;
-                // At depth 1, a string could be a key (before ':') or value (after ':')
-                if depth == 1 && current_key.is_none() && !key_start {
-                    reading_key = true;
-                    key_buf.clear();
-                }
-            }
-            ':' if depth == 1 => {
-                if let Some(ref key) = current_key {
-                    // Found a key: value pair at depth 1
-                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
-                    let pointer = format!("/{escaped_key}");
-                    entries.push(JsonEntry {
-                        key: key.clone(),
-                        pointer,
-                        entity_type: String::new(), // filled in below
-                        start_line: line_num,
-                    });
-                    key_start = true;
-                }
-            }
-            '{' | '[' => {
-                depth += 1;
-                if depth == 2 && key_start {
-                    // The value for this key is an object/array
-                    if let Some(entry) = entries.last_mut() {
-                        entry.entity_type = "object".to_string();
-                    }
-                }
-            }
-            '}' | ']' => {
-                depth -= 1;
-            }
-            ',' if depth == 1 => {
-                // End of a top-level entry
-                if let Some(entry) = entries.last_mut() {
-                    if entry.entity_type.is_empty() {
-                        entry.entity_type = "property".to_string();
-                    }
-                }
-                current_key = None;
-                key_start = false;
-            }
-            _ => {}
-        }
+        state.process_char(ch, &mut entries);
     }
 
     // Handle last entry (no trailing comma)
@@ -178,6 +89,113 @@ fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
     }
 
     entries
+}
+
+struct ParseState {
+    depth: usize,
+    in_string: bool,
+    escape_next: bool,
+    line_num: usize,
+    current_key: Option<String>,
+    key_start: bool,
+    key_buf: String,
+    reading_key: bool,
+}
+
+impl ParseState {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            in_string: false,
+            escape_next: false,
+            line_num: 1,
+            current_key: None,
+            key_start: false,
+            key_buf: String::new(),
+            reading_key: false,
+        }
+    }
+
+    fn process_char(&mut self, ch: char, entries: &mut Vec<JsonEntry>) {
+        if ch == '\n' {
+            self.line_num += 1;
+            return;
+        }
+
+        if self.escape_next {
+            if self.reading_key {
+                self.key_buf.push(ch);
+            }
+            self.escape_next = false;
+            return;
+        }
+
+        if ch == '\\' && self.in_string {
+            if self.reading_key {
+                self.key_buf.push(ch);
+            }
+            self.escape_next = true;
+            return;
+        }
+
+        if self.in_string {
+            if ch == '"' {
+                self.in_string = false;
+                if self.reading_key {
+                    self.reading_key = false;
+                    self.current_key = Some(self.key_buf.clone());
+                    self.key_buf.clear();
+                }
+            } else if self.reading_key {
+                self.key_buf.push(ch);
+            }
+            return;
+        }
+
+        match ch {
+            '"' => {
+                self.in_string = true;
+                if self.depth == 1 && self.current_key.is_none() && !self.key_start {
+                    self.reading_key = true;
+                    self.key_buf.clear();
+                }
+            }
+            ':' if self.depth == 1 => {
+                if let Some(ref key) = self.current_key {
+                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
+                    let pointer = format!("/{escaped_key}");
+                    entries.push(JsonEntry {
+                        key: key.clone(),
+                        pointer,
+                        entity_type: String::new(),
+                        start_line: self.line_num,
+                    });
+                    self.key_start = true;
+                }
+            }
+            '{' | '[' => {
+                self.depth += 1;
+                if self.depth == 2 && self.key_start {
+                    if let Some(entry) = entries.last_mut() {
+                        entry.entity_type = "object".to_string();
+                    }
+                }
+            }
+            '}' | ']' => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            ',' if self.depth == 1 => {
+                if let Some(entry) = entries.last_mut() {
+                    if entry.entity_type.is_empty() {
+                        entry.entity_type = "property".to_string();
+                    }
+                }
+                self.current_key = None;
+                self.key_start = false;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Extract just the value portion of a `"key": value` entity content string,

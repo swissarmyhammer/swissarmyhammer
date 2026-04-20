@@ -620,42 +620,16 @@ impl RequestQueue {
         // Track the actual KV cache position after state restoration
         let kv_cache_position: i32;
 
-        // Restore session state from memory cache if available
-        if can_use_cache {
-            info!(
-                "Worker {} restoring session state from memory for session {}",
-                worker_id, session.id
-            );
-
-            let state_bytes = {
-                let cache = session_state_cache.lock().unwrap();
-                cache.get(&session.id.to_string()).cloned()
-            };
-
-            if let Some(bytes) = state_bytes {
-                let bytes_len = bytes.len();
-                let bytes_read = unsafe { ctx.set_state_data(&bytes) };
-
-                // Query the actual KV cache position for sequence 0
-                kv_cache_position = ctx.kv_cache_seq_pos_max(0);
-
-                info!(
-                    "Worker {} restored state: {} bytes available, {} bytes read, {} cached messages, KV cache position: {}",
-                    worker_id, bytes_len, bytes_read, session.cached_message_count, kv_cache_position
-                );
-            } else {
-                warn!(
-                    "Worker {} expected cached state but not found in memory - will process all messages",
-                    worker_id
-                );
-                return Err(QueueError::WorkerError(
-                    "Expected state cache missing from memory".to_string(),
-                ));
-            }
+        kv_cache_position = if can_use_cache {
+            Self::restore_session_state(
+                worker_id,
+                session,
+                &mut ctx,
+                session_state_cache,
+            )?
         } else {
-            // No cached state, start from position 0
-            kv_cache_position = -1; // -1 means no tokens in KV cache
-        }
+            -1
+        };
 
         // Use GenerationHelper to consolidate generation logic
         let batch_size = model_manager.get_batch_size();
@@ -755,8 +729,61 @@ impl RequestQueue {
             worker_id, request_id, generation_time, tokens_generated, final_finish_reason
         );
 
-        // Save session state to memory for future turns
-        // This captures the complete context state including KV cache
+        Self::save_session_state(worker_id, session, &mut ctx, request_id.as_str(), session_state_cache);
+
+        Ok(GenerationResponse {
+            generated_text,
+            tokens_generated,
+            generation_time,
+            finish_reason: final_finish_reason,
+            complete_token_sequence: generation_result.complete_token_sequence, // Pass through from generation
+        })
+    }
+
+    fn restore_session_state(
+        worker_id: usize,
+        session: &Session,
+        ctx: &mut llama_cpp_2::context::LlamaContext,
+        session_state_cache: &SessionStateCache,
+    ) -> Result<i32, QueueError> {
+        info!(
+            "Worker {} restoring session state from memory for session {}",
+            worker_id, session.id
+        );
+
+        let state_bytes = {
+            let cache = session_state_cache.lock().unwrap();
+            cache.get(&session.id.to_string()).cloned()
+        };
+
+        if let Some(bytes) = state_bytes {
+            let bytes_len = bytes.len();
+            let bytes_read = unsafe { ctx.set_state_data(&bytes) };
+            let kv_cache_position = ctx.kv_cache_seq_pos_max(0);
+
+            info!(
+                "Worker {} restored state: {} bytes available, {} bytes read, {} cached messages, KV cache position: {}",
+                worker_id, bytes_len, bytes_read, session.cached_message_count, kv_cache_position
+            );
+            Ok(kv_cache_position)
+        } else {
+            warn!(
+                "Worker {} expected cached state but not found in memory - will process all messages",
+                worker_id
+            );
+            Err(QueueError::WorkerError(
+                "Expected state cache missing from memory".to_string(),
+            ))
+        }
+    }
+
+    fn save_session_state(
+        worker_id: usize,
+        session: &Session,
+        ctx: &mut llama_cpp_2::context::LlamaContext,
+        request_id: &str,
+        session_state_cache: &SessionStateCache,
+    ) {
         let state_size = ctx.get_state_size();
         info!(
             "Worker {} saving session state to memory: {} bytes for {} messages",
@@ -769,10 +796,7 @@ impl RequestQueue {
         let bytes_written = unsafe { ctx.copy_state_data(state_bytes.as_mut_ptr()) };
 
         if bytes_written > 0 {
-            // Truncate to actual size written
             state_bytes.truncate(bytes_written);
-
-            // Store in memory cache
             let mut cache = session_state_cache.lock().unwrap();
             cache.insert(session.id.to_string(), state_bytes);
             info!(
@@ -783,43 +807,36 @@ impl RequestQueue {
                 session.messages.len()
             );
 
-            // Apply LRU eviction if needed (keep cpu_cores / 2 most recent, minimum 1)
-            let cache_limit = std::thread::available_parallelism()
-                .map(|n| (n.get() / 2).max(1))
-                .unwrap_or(4); // Default to 4 if detection fails
-
-            if cache.len() > cache_limit {
-                // Simple approach: remove entries until we're at limit
-                // In production, would track access time for proper LRU
-                let to_remove: Vec<String> = cache
-                    .keys()
-                    .take(cache.len() - cache_limit)
-                    .cloned()
-                    .collect();
-                for key in to_remove {
-                    cache.remove(&key);
-                }
-                info!(
-                    "Worker {} evicted old session states (limit: {}), now have {} cached",
-                    worker_id,
-                    cache_limit,
-                    cache.len()
-                );
-            }
+            Self::apply_lru_eviction(worker_id, &mut cache);
         } else {
             warn!(
                 "Worker {} failed to copy state data (wrote 0 bytes) for request {}",
                 worker_id, request_id
             );
         }
+    }
 
-        Ok(GenerationResponse {
-            generated_text,
-            tokens_generated,
-            generation_time,
-            finish_reason: final_finish_reason,
-            complete_token_sequence: generation_result.complete_token_sequence, // Pass through from generation
-        })
+    fn apply_lru_eviction(worker_id: usize, cache: &mut HashMap<String, Vec<u8>>) {
+        let cache_limit = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(1))
+            .unwrap_or(4);
+
+        if cache.len() > cache_limit {
+            let to_remove: Vec<String> = cache
+                .keys()
+                .take(cache.len() - cache_limit)
+                .cloned()
+                .collect();
+            for key in to_remove {
+                cache.remove(&key);
+            }
+            info!(
+                "Worker {} evicted old session states (limit: {}), now have {} cached",
+                worker_id,
+                cache_limit,
+                cache.len()
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

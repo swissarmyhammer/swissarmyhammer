@@ -132,7 +132,6 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
             &error_msg,
         )?;
 
-        // Adaptive debounce: longer for short queries (more ambiguous)
         let debounce = if query.len() <= 3 {
             Duration::from_millis(250)
         } else {
@@ -153,48 +152,26 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
 
         if event::poll(poll_timeout)? {
             if let Event::Key(key) = event::read()? {
-                // Only handle key press events (ignore release/repeat)
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
 
-                match key.code {
-                    KeyCode::Esc => break None,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        break None;
-                    }
-                    KeyCode::Enter => {
-                        if let Some(result) = results.get(selected) {
-                            break Some(result.name.clone());
-                        }
-                    }
-                    KeyCode::Backspace => {
-                        query.pop();
-                        last_keypress = Instant::now();
-                        if query.len() < MIN_QUERY_LEN {
-                            results.clear();
-                            total = 0;
-                            selected = 0;
-                            last_sent_query.clear();
-                        }
-                        error_msg = None;
-                    }
-                    KeyCode::Char(c) => {
-                        query.push(c);
-                        last_keypress = Instant::now();
-                        error_msg = None;
-                    }
-                    KeyCode::Up => {
-                        selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down if !results.is_empty() && selected < results.len() - 1 => {
-                        selected += 1;
-                    }
-                    _ => {}
+                let should_break = handle_key_event(
+                    key,
+                    &mut query,
+                    &mut selected,
+                    &mut results,
+                    &mut total,
+                    &mut last_sent_query,
+                    &mut error_msg,
+                    &mut last_keypress,
+                )?;
+
+                if let Some(action) = should_break {
+                    break action;
                 }
             }
         } else if needs_query {
-            // Debounce expired — fire API call
             loading = true;
             render(
                 &mut stdout,
@@ -231,10 +208,59 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
         }
     };
 
-    // Guard handles cleanup via Drop
     drop(_guard);
 
     Ok(action)
+}
+
+fn handle_key_event(
+    key: event::KeyEvent,
+    query: &mut String,
+    selected: &mut usize,
+    results: &mut Vec<FuzzySearchResult>,
+    total: &mut usize,
+    last_sent_query: &mut String,
+    error_msg: &mut Option<String>,
+    last_keypress: &mut Instant,
+) -> Result<Option<Option<String>>, RegistryError> {
+    match key.code {
+        KeyCode::Esc => Ok(Some(None)),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Ok(Some(None)),
+        KeyCode::Enter => {
+            if let Some(result) = results.get(*selected) {
+                Ok(Some(Some(result.name.clone())))
+            } else {
+                Ok(None)
+            }
+        }
+        KeyCode::Backspace => {
+            query.pop();
+            *last_keypress = Instant::now();
+            if query.len() < MIN_QUERY_LEN {
+                results.clear();
+                *total = 0;
+                *selected = 0;
+                last_sent_query.clear();
+            }
+            *error_msg = None;
+            Ok(None)
+        }
+        KeyCode::Char(c) => {
+            query.push(c);
+            *last_keypress = Instant::now();
+            *error_msg = None;
+            Ok(None)
+        }
+        KeyCode::Up => {
+            *selected = selected.saturating_sub(1);
+            Ok(None)
+        }
+        KeyCode::Down if !results.is_empty() && *selected < results.len() - 1 => {
+            *selected += 1;
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
 }
 
 fn render(
@@ -277,67 +303,7 @@ fn render(
     raw_line(stdout, "")?;
 
     // Body
-    if let Some(err) = error_msg {
-        execute!(stdout, SetForegroundColor(Color::Red))?;
-        raw_line(stdout, &format!("  {}", tui_truncate(err, content_w)))?;
-        execute!(stdout, ResetColor)?;
-    } else if query.len() < MIN_QUERY_LEN {
-        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-        raw_line(stdout, "  Type at least 2 characters to search...")?;
-        execute!(stdout, ResetColor)?;
-    } else if results.is_empty() && !loading {
-        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-        raw_line(stdout, "  No results found.")?;
-        execute!(stdout, ResetColor)?;
-    } else {
-        for (i, result) in results.iter().enumerate() {
-            let is_sel = i == selected;
-            let marker = if is_sel { "▸" } else { " " };
-            let dl = format_downloads(result.downloads);
-            let pkg_type = result.package_type.as_deref().unwrap_or("package");
-
-            // --- Line 1: marker + name (bold) ... downloads right-aligned ---
-            if is_sel {
-                execute!(
-                    stdout,
-                    SetForegroundColor(Color::Cyan),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            } else {
-                execute!(
-                    stdout,
-                    SetForegroundColor(Color::White),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            }
-            // "  ▸ name" on the left, "1.2k ↓" on the right
-            let dl_display = format!("{} dl", dl);
-            let name_budget = content_w.saturating_sub(dl_display.len() + 2);
-            let name = tui_truncate(&result.name, name_budget);
-            let pad = content_w.saturating_sub(name.len() + dl_display.len());
-            raw_line(
-                stdout,
-                &format!("  {} {}{:>pad$}", marker, name, dl_display, pad = pad),
-            )?;
-            execute!(stdout, SetAttribute(Attribute::Reset))?;
-
-            // --- Line 2: description (full width, wraps naturally via truncation) ---
-            if is_sel {
-                execute!(stdout, SetForegroundColor(Color::Cyan))?;
-            }
-            let desc = tui_truncate(&result.description, content_w);
-            raw_line(stdout, &format!("    {}", desc))?;
-
-            // --- Line 3: author · type ---
-            execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
-            let meta = format!("by {} · {}", result.author, pkg_type);
-            raw_line(stdout, &format!("    {}", tui_truncate(&meta, content_w)))?;
-            execute!(stdout, SetAttribute(Attribute::Reset))?;
-
-            // --- Blank separator between cards ---
-            raw_line(stdout, "")?;
-        }
-    }
+    render_body(stdout, query, results, selected, loading, error_msg, content_w)?;
 
     // Footer
     execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
@@ -359,6 +325,83 @@ fn render(
     execute!(stdout, ResetColor)?;
 
     stdout.flush()?;
+    Ok(())
+}
+
+fn render_body(
+    stdout: &mut io::Stdout,
+    query: &str,
+    results: &[FuzzySearchResult],
+    selected: usize,
+    loading: bool,
+    error_msg: &Option<String>,
+    content_w: usize,
+) -> Result<(), RegistryError> {
+    if let Some(err) = error_msg {
+        execute!(stdout, SetForegroundColor(Color::Red))?;
+        raw_line(stdout, &format!("  {}", tui_truncate(err, content_w)))?;
+        execute!(stdout, ResetColor)?;
+    } else if query.len() < MIN_QUERY_LEN {
+        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+        raw_line(stdout, "  Type at least 2 characters to search...")?;
+        execute!(stdout, ResetColor)?;
+    } else if results.is_empty() && !loading {
+        execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+        raw_line(stdout, "  No results found.")?;
+        execute!(stdout, ResetColor)?;
+    } else {
+        for (i, result) in results.iter().enumerate() {
+            render_result_card(stdout, result, i == selected, content_w)?;
+        }
+    }
+    Ok(())
+}
+
+fn render_result_card(
+    stdout: &mut io::Stdout,
+    result: &FuzzySearchResult,
+    is_selected: bool,
+    content_w: usize,
+) -> Result<(), RegistryError> {
+    let marker = if is_selected { "▸" } else { " " };
+    let dl = format_downloads(result.downloads);
+    let pkg_type = result.package_type.as_deref().unwrap_or("package");
+
+    if is_selected {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Cyan),
+            SetAttribute(Attribute::Bold)
+        )?;
+    } else {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::White),
+            SetAttribute(Attribute::Bold)
+        )?;
+    }
+    let dl_display = format!("{} dl", dl);
+    let name_budget = content_w.saturating_sub(dl_display.len() + 2);
+    let name = tui_truncate(&result.name, name_budget);
+    let pad = content_w.saturating_sub(name.len() + dl_display.len());
+    raw_line(
+        stdout,
+        &format!("  {} {}{:>pad$}", marker, name, dl_display, pad = pad),
+    )?;
+    execute!(stdout, SetAttribute(Attribute::Reset))?;
+
+    if is_selected {
+        execute!(stdout, SetForegroundColor(Color::Cyan))?;
+    }
+    let desc = tui_truncate(&result.description, content_w);
+    raw_line(stdout, &format!("    {}", desc))?;
+
+    execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+    let meta = format!("by {} · {}", result.author, pkg_type);
+    raw_line(stdout, &format!("    {}", tui_truncate(&meta, content_w)))?;
+    execute!(stdout, SetAttribute(Attribute::Reset))?;
+
+    raw_line(stdout, "")?;
     Ok(())
 }
 
