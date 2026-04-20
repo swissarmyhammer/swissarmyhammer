@@ -37,6 +37,7 @@ pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
 mod tests {
     use super::*;
     use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
     #[test]
     fn test_register_all_populates_registry() {
@@ -56,12 +57,20 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_register_all_includes_skill_deployment() {
         // `commands/skill::SkillDeployment` must be registered by `register_all`
         // so that `sah init` deploys builtin skills. Verify by running init and
         // inspecting the result names — every registered component emits at
         // least one InitResult (even if it's a Skipped result for non-applicable
         // scopes).
+        //
+        // Run inside an isolated HOME + CWD so init components do not touch the
+        // host repo (previously this deleted CLAUDE.md and wrote `.sah/` etc.
+        // into the live workspace).
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
         let reporter = NullReporter;
@@ -77,11 +86,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_init_runs_without_panic() {
+        // Isolate HOME + CWD — init components otherwise mutate the host repo
+        // (create `.sah/`, `.prompts/`, rewrite CLAUDE.md, etc.).
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
         let reporter = NullReporter;
-        // Just verify no panic; results depend on environment
         let _results = registry.run_all_init(
             &swissarmyhammer_common::lifecycle::InitScope::Project,
             &reporter,
@@ -89,11 +103,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_deinit_runs_without_panic() {
+        // Isolate HOME + CWD — deinit would otherwise call
+        // `ClaudeMd::deinit` against the host repo, deleting the real
+        // CLAUDE.md when the preamble is all that remains.
+        let env = IsolatedTestEnvironment::new().expect("isolated env");
+        let _cwd = CurrentDirGuard::new(env.temp_dir()).expect("cwd guard");
+
         let mut registry = InitRegistry::new();
         register_all(&mut registry, false);
         let reporter = NullReporter;
-        // Just verify no panic; results depend on environment
         let _results = registry.run_all_deinit(
             &swissarmyhammer_common::lifecycle::InitScope::Project,
             &reporter,

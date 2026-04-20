@@ -11,9 +11,14 @@ use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode
 #[tokio::test]
 #[test_log::test]
 async fn test_http_mcp_server_rmcp_client_final() {
-    // Start HTTP MCP server
+    // Start HTTP MCP server against an isolated temp dir so that
+    // `initialize_code_context` short-circuits (no enclosing git repo) and we
+    // don't walk/hash the host monorepo during startup.
+    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
     let mode = McpServerMode::Http { port: None };
-    let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+    let mut server = start_mcp_server(mode, None, None, Some(temp.path().to_path_buf()))
+        .await
+        .unwrap();
 
     let server_url = server.url();
 

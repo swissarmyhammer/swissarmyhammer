@@ -17,12 +17,22 @@ use swissarmyhammer_tools::mcp::{
 /// - Fast execution (<1s instead of 20-30s)
 #[tokio::test]
 async fn test_rmcp_client_lists_tools_and_prompts() {
-    // Start in-process HTTP MCP server
-    // Use agent_mode=true since this test checks for agent tools (files)
-    let mut server =
-        start_mcp_server_with_options(McpServerMode::Http { port: None }, None, None, None, true)
-            .await
-            .expect("Failed to start in-process MCP server");
+    // Start in-process HTTP MCP server.
+    // Use agent_mode=true since this test checks for agent tools (files).
+    // Pass an isolated temp dir as working_dir so that `initialize_code_context`
+    // sees no enclosing git repository and skips the synchronous
+    // startup_cleanup walk — which would otherwise hash every file in the
+    // host workspace on first connection.
+    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let mut server = start_mcp_server_with_options(
+        McpServerMode::Http { port: None },
+        None,
+        None,
+        Some(temp.path().to_path_buf()),
+        true,
+    )
+    .await
+    .expect("Failed to start in-process MCP server");
 
     // Create RMCP client
     let client = create_test_client(server.url()).await;
@@ -42,14 +52,12 @@ async fn test_rmcp_client_lists_tools_and_prompts() {
         "Should have files tool"
     );
 
-    // List prompts
-    let prompts = client
+    // List prompts — the `expect` above already verifies the call succeeds;
+    // prompt contents depend on host configuration so we don't assert on them.
+    let _prompts = client
         .list_prompts(Default::default())
         .await
         .expect("Failed to list prompts");
-
-    // Prompts may be empty or not depending on configuration, just verify call succeeds
-    assert!(prompts.prompts.is_empty() || !prompts.prompts.is_empty());
 
     // Test a tool call to verify full functionality
     let tool_result = client
