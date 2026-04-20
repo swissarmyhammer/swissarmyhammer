@@ -7,26 +7,144 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
+/// Where a drag originates from.
+///
+/// A drag's source is either an entity in the app's focus chain (the
+/// typical drag-from-card case) or an external file dragged in from the
+/// host operating system. The `File` variant is reserved for future
+/// drag-in-from-desktop support; only `FocusChain` is constructed today.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragSource {
+    /// Source is an entity from the app's focus chain.
+    FocusChain {
+        /// The entity type being dragged (e.g. `"task"`, `"tag"`).
+        entity_type: String,
+        /// The entity ID (ULID).
+        entity_id: String,
+        /// Serialized entity field snapshot for ghost preview in target
+        /// windows.
+        fields: serde_json::Value,
+        /// Filesystem path of the board the source entity belongs to.
+        source_board_path: String,
+        /// Tauri window label of the source window.
+        source_window_label: String,
+    },
+    /// Source is an external file dragged in from the OS.
+    ///
+    /// Reserved for future drag-from-desktop support — not yet emitted
+    /// by the frontend. When implemented, this case dispatches via the
+    /// `PasteMatrix` (an external file is treated as if it were on the
+    /// clipboard).
+    File {
+        /// Absolute path of the dragged file on the host filesystem.
+        path: String,
+    },
+}
+
+/// Where a drag is dropped.
+///
+/// A drag's destination is either an entity in the app's focus chain
+/// (drop-on-target) or an external file path (drag-out-to-desktop). The
+/// destination is not stored on the [`DragSession`] — it is computed
+/// from the drop-time arguments passed to `drag.complete`. The enum
+/// exists so the dispatcher can reason about the same set of targets a
+/// paste would handle.
+///
+/// Reserved for the broader from/to drag model; only `FocusChain` is
+/// produced today.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragDestination {
+    /// Drop target is an entity in the focus chain.
+    FocusChain {
+        /// The destination entity type (e.g. `"column"`, `"task"`).
+        entity_type: String,
+        /// The destination entity ID.
+        entity_id: String,
+        /// Filesystem path of the destination board.
+        target_board_path: String,
+    },
+    /// Drop target is an external file path on the OS.
+    File {
+        /// Absolute destination path on the host filesystem.
+        path: String,
+    },
+}
+
 /// Active drag session for cross-window drag coordination.
 ///
 /// Transient — carried in UIState but never persisted to the YAML config.
+///
+/// The session captures only the drag's *source*: the destination is
+/// computed at drop time from the args passed to `drag.complete`. This
+/// mirrors the way the OS drag-and-drop primitives work (the source is
+/// committed when the drag starts; the target is whatever the cursor is
+/// over when the user releases the mouse).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DragSession {
     /// Unique session ID (ULID).
     pub session_id: String,
-    /// Board path the task originates from.
-    pub source_board_path: String,
-    /// Tauri window label of the source window.
-    pub source_window_label: String,
-    /// The task ID being dragged.
-    pub task_id: String,
-    /// Serialized task fields for ghost preview in target windows.
-    pub task_fields: serde_json::Value,
+    /// Where the drag originated from.
+    pub from: DragSource,
     /// Whether Alt/Option was held (copy mode).
     pub copy_mode: bool,
     /// When the session was started (epoch millis).
     #[serde(default)]
     pub started_at_ms: u64,
+}
+
+impl DragSession {
+    /// Convenience accessor for the source board path when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_board_path(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_board_path, ..
+            } => Some(source_board_path.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source window label when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn source_window_label(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain {
+                source_window_label,
+                ..
+            } => Some(source_window_label.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity id when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_id(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_id, .. } => Some(entity_id.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity type when the drag is
+    /// from a focus-chain entity. Returns `None` for `File` sources.
+    pub fn entity_type(&self) -> Option<&str> {
+        match &self.from {
+            DragSource::FocusChain { entity_type, .. } => Some(entity_type.as_str()),
+            DragSource::File { .. } => None,
+        }
+    }
+
+    /// Convenience accessor for the source entity field snapshot when
+    /// the drag is from a focus-chain entity. Returns `None` for `File`
+    /// sources.
+    pub fn fields(&self) -> Option<&serde_json::Value> {
+        match &self.from {
+            DragSource::FocusChain { fields, .. } => Some(fields),
+            DragSource::File { .. } => None,
+        }
+    }
 }
 
 /// Persisted per-window state: board path, inspector stack, active view, and window geometry.
@@ -1424,10 +1542,13 @@ mod tests {
     fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
         DragSession {
             session_id: format!("sess-{task_id}"),
-            source_board_path: board_path.to_string(),
-            source_window_label: "main".to_string(),
-            task_id: task_id.to_string(),
-            task_fields: serde_json::json!({}),
+            from: DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: task_id.to_string(),
+                fields: serde_json::json!({}),
+                source_board_path: board_path.to_string(),
+                source_window_label: "main".to_string(),
+            },
             copy_mode: false,
             started_at_ms: 0,
         }
@@ -1439,7 +1560,7 @@ mod tests {
         state.start_drag(make_drag_session("task-1", "/board/a"));
         let current = state.drag_session();
         assert!(current.is_some());
-        assert_eq!(current.unwrap().task_id, "task-1");
+        assert_eq!(current.unwrap().entity_id(), Some("task-1"));
     }
 
     #[test]
@@ -1449,7 +1570,7 @@ mod tests {
 
         let taken = state.take_drag();
         assert!(taken.is_some());
-        assert_eq!(taken.unwrap().task_id, "task-1");
+        assert_eq!(taken.unwrap().entity_id(), Some("task-1"));
 
         assert!(state.take_drag().is_none());
     }
@@ -1469,8 +1590,8 @@ mod tests {
         state.start_drag(make_drag_session("task-2", "/board/b"));
 
         let current = state.drag_session().unwrap();
-        assert_eq!(current.task_id, "task-2");
-        assert_eq!(current.source_board_path, "/board/b");
+        assert_eq!(current.entity_id(), Some("task-2"));
+        assert_eq!(current.source_board_path(), Some("/board/b"));
     }
 
     #[test]

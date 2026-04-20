@@ -9,8 +9,8 @@ depends_on:
 - 01KPG6H74Z24N48DQR75CT7HP7
 - 01KPG6HF1ZHWZ981PS3BEPP1HE
 - 01KPG6HQYRRWCP52VH1KNKR35B
-position_column: todo
-position_ordinal: ec80
+position_column: done
+position_ordinal: fffffffffffffffffffffffc80
 title: 'Commands: cut transactional safety — source deleted only after successful paste'
 ---
 ## What
@@ -40,29 +40,47 @@ Fail modes to cover:
 
 ### Subtasks
 
-- [ ] Audit each cut-enabled handler for create-then-delete ordering; refactor any that delete-first.
-- [ ] Add per-handler test `{name}_cut_preserves_source_when_create_fails`.
-- [ ] Add per-handler test `{name}_cut_succeeds_normally_deletes_source`.
+- [x] Audit each cut-enabled handler for create-then-delete ordering; refactor any that delete-first.
+- [x] Add per-handler test `{name}_cut_preserves_source_when_create_fails`.
+- [x] Add per-handler test `{name}_cut_succeeds_normally_deletes_source`.
 
 ## Acceptance Criteria
 
-- [ ] Every cut-enabled handler creates first, then deletes.
-- [ ] A simulated create failure (invalid field, nonexistent column, etc.) leaves the source entity intact.
-- [ ] Successful paste-cut deletes the source exactly once.
-- [ ] Delete failure after successful create does NOT roll back the create.
+- [x] Every cut-enabled handler creates first, then deletes.
+- [x] A simulated create failure (invalid field, nonexistent column, etc.) leaves the source entity intact.
+- [x] Successful paste-cut deletes the source exactly once.
+- [x] Delete failure after successful create does NOT roll back the create.
 
 ## Tests
 
-- [ ] `task_into_column_cut_preserves_source_when_create_fails` — force create error (nonexistent column id), assert source task still present.
-- [ ] `task_into_board_cut_preserves_source_when_create_fails` — board with no columns raises create error; source stays.
-- [ ] `task_into_project_cut_preserves_source_when_create_fails`.
-- [ ] `column_into_board_cut_preserves_source_when_create_fails`.
-- [ ] One test per handler confirming the happy path deletes the source exactly once.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers` — all green.
+- [x] `task_into_column_cut_preserves_source_when_create_fails` — force create error (nonexistent column id), assert source task still present.
+- [x] `task_into_board_cut_preserves_source_when_create_fails` — board with no columns raises create error; source stays.
+- [x] `task_into_project_cut_preserves_source_when_create_fails`.
+- [x] `column_into_board_cut_preserves_source_when_create_fails`.
+- [x] One test per handler confirming the happy path deletes the source exactly once.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban paste_handlers` — all green.
 
 ## Workflow
 
 - Use `/tdd` — write the failure-path test for one handler first; confirm it fails on naive implementations; fix; repeat.
+
+## Implementation Notes
+
+**Audit result**: All 4 cut-enabled handlers already implement create-then-delete ordering correctly. The `?` operator after `run_op(&create_op, ...)` returns early on create failure, ensuring the source `DeleteTask` / `DeleteColumn` is only reached after a successful create. No refactor needed.
+
+**Existing happy-path delete tests** already cover the "source deleted exactly once" requirement:
+- `task_into_column.rs::paste_cut_task_deletes_source`
+- `task_into_board.rs::paste_cut_task_into_board_deletes_source`
+- `task_into_project.rs::paste_cut_task_into_project_deletes_source`
+- `column_into_board.rs::paste_cut_column_deletes_source`
+
+**Delete-error behavior**: The card text suggested "log a warning; don't roll back the create", but the existing handler code intentionally propagates delete errors via `?` (the in-source comments explicitly justify this: "the caller asked us to move the task and the move is incomplete"). Both behaviors satisfy the strict AC ("does NOT roll back the create"). Preserving the existing propagation behavior to avoid regressing the documented design decision.
+
+**Failure-path test technique by handler**:
+- `task_into_column`: cut + nonexistent target column → handler's destination pre-check returns `DestinationInvalid` before AddEntity is called.
+- `task_into_board`: cut + board with no columns → leftmost-column resolution returns `None`, surfacing `DestinationInvalid` before any AddEntity / DeleteTask call. Source created on default board, then all columns stripped.
+- `task_into_project`: cut + nonexistent project → handler's destination pre-check returns `DestinationInvalid`.
+- `column_into_board`: cut + read-only columns directory (chmod 0o555) → AddEntity's atomic temp-file rename fails inside `run_op`, propagating `ExecutionFailed` before the source DeleteColumn runs. Unix-only (POSIX mode bits are the cleanest portable way to induce a real write failure mid-execute without monkey-patching internals; the invariant is platform-independent).
 
 #commands
 

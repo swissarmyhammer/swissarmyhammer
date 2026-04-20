@@ -192,74 +192,13 @@ fn filtered_overrides(snapshot: &Map<String, Value>) -> HashMap<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::{
-        deserialize_from_clipboard, serialize_to_clipboard, ClipboardData, ClipboardPayload,
-    };
     use crate::column::AddColumn;
-    use crate::commands::paste_handlers::PasteMatrix;
+    use crate::commands::paste_handlers::test_support::{
+        clipboard_payload, list_columns, make_ctx, matrix_with, setup, snapshot_column,
+    };
     use crate::task::AddTask;
     use serde_json::json;
-    use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
-
-    /// Build a fresh `KanbanContext` on a tempdir with the default board
-    /// columns (todo / doing / done) seeded.
-    async fn setup() -> (tempfile::TempDir, Arc<KanbanContext>) {
-        let temp = tempfile::TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
-
-    /// Produce a `CommandContext` carrying the supplied `KanbanContext`
-    /// extension. The scope chain is empty — `target` is passed in to the
-    /// handler call directly, mirroring how `PasteEntityCmd` invokes a
-    /// handler.
-    fn make_ctx(kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new("entity.paste", vec![], None, HashMap::new());
-        ctx.set_extension(Arc::clone(kanban));
-        ctx
-    }
-
-    /// Snapshot a column's fields into a `ClipboardPayload` with the given
-    /// `mode` ("copy" or "cut").
-    async fn snapshot_column(
-        kanban: &KanbanContext,
-        column_id: &str,
-        mode: &str,
-    ) -> ClipboardPayload {
-        let ectx = kanban.entity_context().await.unwrap();
-        let entity = ectx.read("column", column_id).await.unwrap();
-        let fields = serde_json::to_value(&entity.fields).unwrap();
-        let json = serialize_to_clipboard("column", column_id, mode, fields);
-        deserialize_from_clipboard(&json).expect("snapshot must round-trip")
-    }
-
-    /// Read every column currently on the board.
-    async fn list_columns(kanban: &KanbanContext) -> Vec<swissarmyhammer_entity::Entity> {
-        kanban
-            .entity_context()
-            .await
-            .unwrap()
-            .list("column")
-            .await
-            .unwrap()
-    }
-
-    /// Build a populated PasteMatrix for tests — registers only the
-    /// handler under test so the tests don't depend on the production
-    /// `register_paste_handlers()` (which is wired by the orchestrator
-    /// in a separate batch step).
-    fn test_matrix() -> PasteMatrix {
-        let mut m = PasteMatrix::default();
-        m.register(ColumnIntoBoardHandler);
-        m
-    }
 
     // =========================================================================
     // matches() / find()
@@ -272,7 +211,7 @@ mod tests {
 
     #[test]
     fn local_matrix_finds_column_into_board_handler() {
-        let m = test_matrix();
+        let m = matrix_with(ColumnIntoBoardHandler);
         assert!(
             m.find("column", "board").is_some(),
             "matrix should resolve (column, board) to ColumnIntoBoardHandler"
@@ -288,14 +227,7 @@ mod tests {
     /// override does not silently disable the pairing.
     #[test]
     fn handler_available_defaults_to_true() {
-        let payload = ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "column".into(),
-                entity_id: "doing".into(),
-                mode: "copy".into(),
-                fields: json!({}),
-            },
-        };
+        let payload = clipboard_payload("column", "doing", "copy", json!({}));
         let ctx = CommandContext::new("entity.paste", vec![], None, HashMap::new());
         assert!(
             ColumnIntoBoardHandler.available(&payload, "board:my-board", &ctx),
@@ -499,6 +431,73 @@ mod tests {
         assert!(
             ectx.read("column", &new_id).await.is_ok(),
             "newly-pasted column must remain after cut paste"
+        );
+    }
+
+    /// Cut-mode transactional safety: when destination create fails the
+    /// source column must remain untouched.
+    ///
+    /// The handler creates the new column first via [`AddEntity`] and only
+    /// invokes [`DeleteColumn`] on the source after the create succeeds.
+    /// We force a real create failure by stripping write permission from
+    /// the columns directory — `AddEntity::write` then fails when it tries
+    /// to atomically rename the temp file into place. The source column
+    /// must still exist after the failed paste; otherwise a partial paste
+    /// would silently destroy the user's data with no replacement.
+    ///
+    /// Unix-only because POSIX mode bits are the cleanest portable way to
+    /// induce a write failure mid-execute without monkey-patching the
+    /// entity-context internals. The invariant is platform-independent —
+    /// running this test on one OS is sufficient regression coverage.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn column_into_board_cut_preserves_source_when_create_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, kanban) = setup().await;
+
+        // Use a fresh empty column as the source so the cut path's
+        // DeleteColumn would not be blocked by `ColumnNotEmpty` if it ever
+        // ran — the test asserts it does NOT run, but we want the failure
+        // to come from the create step, not from a delete-side guard.
+        AddColumn::new("staging", "Staging")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let payload = snapshot_column(kanban.as_ref(), "staging", "cut").await;
+        let ctx = make_ctx(&kanban);
+
+        // Strip write permission from the columns directory so AddEntity's
+        // atomic temp-file rename fails inside `run_op`, propagating an
+        // ExecutionFailed error before the source DeleteColumn can run.
+        let columns_dir = kanban.columns_dir();
+        let original_perms = std::fs::metadata(&columns_dir).unwrap().permissions();
+        std::fs::set_permissions(&columns_dir, std::fs::Permissions::from_mode(0o555))
+            .expect("test setup: must be able to chmod the columns dir");
+
+        let result = ColumnIntoBoardHandler
+            .execute(&payload, "board:my-board", &ctx)
+            .await;
+
+        // Restore permissions before any further filesystem reads or the
+        // tempdir cleanup so a failure here doesn't leak a read-only
+        // directory and mask the assertion below.
+        std::fs::set_permissions(&columns_dir, original_perms)
+            .expect("test teardown: must be able to restore columns dir perms");
+
+        assert!(
+            result.is_err(),
+            "create must fail when the columns directory is read-only; got {result:?}"
+        );
+
+        // Source column survives — create-then-delete ordering means a
+        // failed AddEntity never reaches the DeleteColumn step.
+        let ectx = kanban.entity_context().await.unwrap();
+        assert!(
+            ectx.read("column", "staging").await.is_ok(),
+            "source column must remain when destination create fails"
         );
     }
 }

@@ -1222,10 +1222,13 @@ mod tests {
     fn make_drag_session(task_id: &str, board_path: &str) -> swissarmyhammer_commands::DragSession {
         swissarmyhammer_commands::DragSession {
             session_id: ulid::Ulid::new().to_string(),
-            source_board_path: board_path.to_string(),
-            source_window_label: "main".to_string(),
-            task_id: task_id.to_string(),
-            task_fields: serde_json::json!({"title": "Test task"}),
+            from: swissarmyhammer_commands::DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: task_id.to_string(),
+                fields: serde_json::json!({"title": "Test task"}),
+                source_board_path: board_path.to_string(),
+                source_window_label: "main".to_string(),
+            },
             copy_mode: false,
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1247,7 +1250,7 @@ mod tests {
         // Cancel session
         let taken = state.ui_state.take_drag();
         assert!(taken.is_some());
-        assert_eq!(taken.unwrap().task_id, "task-1");
+        assert_eq!(taken.unwrap().entity_id(), Some("task-1"));
         assert!(state.ui_state.drag_session().is_none());
     }
 
@@ -1282,7 +1285,7 @@ mod tests {
         let current = state.ui_state.drag_session();
         assert_eq!(current.as_ref().unwrap().session_id, id2);
         assert_ne!(id1, id2);
-        assert_eq!(current.as_ref().unwrap().task_id, "task-2");
+        assert_eq!(current.as_ref().unwrap().entity_id(), Some("task-2"));
     }
 
     #[test]
@@ -1306,9 +1309,16 @@ mod tests {
     fn test_drag_session_serialization() {
         let session = make_drag_session("task-1", "/board/a");
         let json = serde_json::to_value(&session).unwrap();
-        assert_eq!(json["task_id"], "task-1");
-        assert_eq!(json["source_board_path"], "/board/a");
-        assert_eq!(json["source_window_label"], "main");
+        // The session's source is now nested under `from` as a tagged enum
+        // (`kind: "focus_chain"`). The frontend's `drag-session-active`
+        // wire payload still ships the legacy flat shape; that wire payload
+        // is built by `DragStartCmd` directly and is exercised by the
+        // drag_start_cmd_returns_drag_start_result test in mod.rs.
+        assert_eq!(json["from"]["kind"], "focus_chain");
+        assert_eq!(json["from"]["entity_type"], "task");
+        assert_eq!(json["from"]["entity_id"], "task-1");
+        assert_eq!(json["from"]["source_board_path"], "/board/a");
+        assert_eq!(json["from"]["source_window_label"], "main");
         assert_eq!(json["copy_mode"], false);
         assert!(json["started_at_ms"].as_u64().unwrap() > 0);
     }

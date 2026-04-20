@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use swissarmyhammer_commands::{Command, CommandContext, CommandError, DragSession};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, DragSession, DragSource};
 
 /// Start a cross-window drag session.
 ///
@@ -38,81 +38,115 @@ impl Command for DragStartCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        // Frontend sends camelCase arg names
-        let task_id = ctx
-            .args
-            .get("taskId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("taskId".into()))?
-            .to_string();
-
-        // Derive board path from scope chain's store:{path} moniker.
-        // Falls back to explicit boardPath arg for backwards compatibility.
-        let source_board_path = ctx
-            .resolve_store_path()
-            .map(|s| s.to_string())
-            .or_else(|| {
-                ctx.args
-                    .get("boardPath")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .ok_or_else(|| {
-                CommandError::ExecutionFailed(
-                    "No store path in scope chain and no boardPath arg".into(),
-                )
-            })?;
-
-        let source_window_label = ctx
-            .args
-            .get("sourceWindowLabel")
-            .and_then(|v| v.as_str())
-            .unwrap_or("main")
-            .to_string();
-
-        let task_fields = ctx.args.get("taskFields").cloned().unwrap_or(Value::Null);
-
-        let copy_mode = ctx
-            .args
-            .get("copyMode")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let session_id = ulid::Ulid::new().to_string();
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let params = resolve_drag_start_params(ctx)?;
 
         // Cancel any existing session before starting a new one
         ui.cancel_drag();
 
         let session = DragSession {
-            session_id: session_id.clone(),
-            source_board_path: source_board_path.clone(),
-            source_window_label: source_window_label.clone(),
-            task_id: task_id.clone(),
-            task_fields: task_fields.clone(),
-            copy_mode,
-            started_at_ms: now_ms,
+            session_id: params.session_id.clone(),
+            from: DragSource::FocusChain {
+                entity_type: "task".to_string(),
+                entity_id: params.task_id.clone(),
+                fields: params.task_fields.clone(),
+                source_board_path: params.source_board_path.clone(),
+                source_window_label: params.source_window_label.clone(),
+            },
+            copy_mode: params.copy_mode,
+            started_at_ms: params.started_at_ms,
         };
 
         ui.start_drag(session);
 
-        // Return DragStart result — dispatch_command_internal emits drag-session-active
+        // Return DragStart result — dispatch_command_internal emits drag-session-active.
+        //
+        // The wire payload preserves the legacy flat shape (`task_id`,
+        // `source_board_path`, …) for the frontend's `drag-session-active`
+        // event listener, even though the in-memory session now uses the
+        // generalized `DragSource::FocusChain` enum. Future cards that add
+        // non-task drag sources will extend the wire payload accordingly.
         Ok(json!({
             "DragStart": {
-                "session_id": session_id,
-                "source_board_path": source_board_path,
-                "source_window_label": source_window_label,
-                "task_id": task_id,
-                "task_fields": task_fields,
-                "copy_mode": copy_mode,
-                "started_at_ms": now_ms,
+                "session_id": params.session_id,
+                "source_board_path": params.source_board_path,
+                "source_window_label": params.source_window_label,
+                "task_id": params.task_id,
+                "task_fields": params.task_fields,
+                "copy_mode": params.copy_mode,
+                "started_at_ms": params.started_at_ms,
             }
         }))
     }
+}
+
+/// Parameters for a drag-start invocation.
+struct DragStartParams {
+    session_id: String,
+    task_id: String,
+    source_board_path: String,
+    source_window_label: String,
+    task_fields: Value,
+    copy_mode: bool,
+    started_at_ms: u64,
+}
+
+/// Validate the command context and extract drag-start parameters.
+fn resolve_drag_start_params(
+    ctx: &CommandContext,
+) -> swissarmyhammer_commands::Result<DragStartParams> {
+    let task_id = ctx
+        .args
+        .get("taskId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CommandError::MissingArg("taskId".into()))?
+        .to_string();
+
+    let source_board_path = ctx
+        .resolve_store_path()
+        .map(|s| s.to_string())
+        .or_else(|| {
+            ctx.args
+                .get("boardPath")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| {
+            CommandError::ExecutionFailed(
+                "No store path in scope chain and no boardPath arg".into(),
+            )
+        })?;
+
+    let source_window_label = ctx
+        .args
+        .get("sourceWindowLabel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_string();
+
+    let task_fields = ctx.args.get("taskFields").cloned().unwrap_or(Value::Null);
+
+    let copy_mode = ctx
+        .args
+        .get("copyMode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let session_id = ulid::Ulid::new().to_string();
+
+    let started_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    Ok(DragStartParams {
+        session_id,
+        task_id,
+        source_board_path,
+        source_window_label,
+        task_fields,
+        copy_mode,
+        started_at_ms,
+    })
 }
 
 /// Complete an active drag session by dropping in a target column.
@@ -148,7 +182,17 @@ impl Command for DragCompleteCmd {
     /// performs the operation, and returns a `DragComplete` result payload.
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let params = resolve_drag_complete_params(ctx)?;
-        if params.session.source_board_path == params.target_board_path {
+        // Same-board test compares the source board path captured on the
+        // session against the resolved target board path. For non-focus-chain
+        // sources (e.g. external files), there is no source board, so the
+        // drag is treated as cross-board (or, in the future, dispatched via
+        // the PasteMatrix as an "external paste").
+        let same_board = params
+            .session
+            .source_board_path()
+            .map(|src| src == params.target_board_path)
+            .unwrap_or(false);
+        if same_board {
             complete_same_board(ctx, params).await
         } else {
             Ok(build_cross_board_payload(params))
@@ -266,16 +310,38 @@ fn read_drop_target_args(
 /// `before_id` / `after_id` placement is delegated to `MoveTask::execute`
 /// (the canonical ordinal computation path). Only `drop_index` is resolved
 /// locally because `MoveTask` does not have a `drop_index` field.
+///
+/// This path is task-on-board specific: it preserves the dragged task's
+/// identity (same id, same dependencies). The dispatcher only routes here
+/// when the source is a `DragSource::FocusChain` whose `entity_type` is
+/// `"task"` and the source/target board paths match — otherwise the drop
+/// is cross-board (or, in the future, an external-source drag dispatched
+/// via the `PasteMatrix`).
 async fn complete_same_board(
     ctx: &CommandContext,
     params: DragCompleteParams,
 ) -> swissarmyhammer_commands::Result<Value> {
     let kanban = ctx.require_extension::<crate::context::KanbanContext>()?;
 
-    let mut op = crate::task::MoveTask::to_column(
-        params.session.task_id.clone(),
-        params.target_column.clone(),
-    );
+    let task_id = params.session.entity_id().ok_or_else(|| {
+        CommandError::ExecutionFailed(
+            "drag.complete same-board path requires a focus-chain source".into(),
+        )
+    })?;
+    // Defensive guard — DragStartCmd only constructs `entity_type = "task"`
+    // sources today, but the FocusChain enum allows other types. Surface
+    // a clear error rather than silently moving a non-task entity through
+    // the task.move op.
+    if let Some(t) = params.session.entity_type() {
+        if t != "task" {
+            return Err(CommandError::ExecutionFailed(format!(
+                "drag.complete same-board path only handles tasks, got '{t}'"
+            )));
+        }
+    }
+
+    let mut op =
+        crate::task::MoveTask::to_column(task_id.to_string(), params.target_column.clone());
 
     // Ordinal resolution: before_id/after_id > drop_index > append at end
     // Delegate before/after placement to MoveTask::execute (single canonical path).
@@ -284,13 +350,9 @@ async fn complete_same_board(
     } else if let Some(ref after_id) = params.after_id {
         op = op.with_after(after_id.as_str());
     } else if let Some(idx) = params.drop_index {
-        let ordinal = resolve_ordinal_from_drop_index(
-            &kanban,
-            &params.session.task_id,
-            &params.target_column,
-            idx as usize,
-        )
-        .await?;
+        let ordinal =
+            resolve_ordinal_from_drop_index(&kanban, task_id, &params.target_column, idx as usize)
+                .await?;
         op = op.with_ordinal(ordinal.as_str());
     }
 
@@ -300,7 +362,7 @@ async fn complete_same_board(
         "DragComplete": {
             "session_id": params.session.session_id,
             "same_board": true,
-            "task_id": params.session.task_id,
+            "task_id": task_id,
             "target_column": params.target_column,
             "move_result": move_result,
         }
@@ -346,15 +408,22 @@ async fn resolve_ordinal_from_drop_index(
 /// Cross-board transfers are executed by the Tauri dispatch handler (which
 /// has both board handles). This helper just packages the parameters the
 /// handler needs.
+///
+/// External-source drags (`DragSource::File`) are not yet wired into
+/// cross-board transfer; this helper writes empty strings for the source
+/// path and id in that case so the Tauri handler's `transfer_task` produces
+/// a clear validation error rather than panicking on a `None` extraction.
 fn build_cross_board_payload(params: DragCompleteParams) -> Value {
+    let source_board_path = params.session.source_board_path().unwrap_or("").to_string();
+    let task_id = params.session.entity_id().unwrap_or("").to_string();
     json!({
         "DragComplete": {
             "session_id": params.session.session_id,
             "same_board": false,
             "cross_board": true,
-            "source_board_path": params.session.source_board_path,
+            "source_board_path": source_board_path,
             "target_board_path": params.target_board_path,
-            "task_id": params.session.task_id,
+            "task_id": task_id,
             "target_column": params.target_column,
             "drop_index": params.drop_index,
             "before_id": params.before_id,
@@ -426,6 +495,33 @@ mod tests {
         let mut ctx = CommandContext::new("test", vec![], None, args);
         ctx.ui_state = Some(ui);
         ctx
+    }
+
+    /// Build a focus-chain `DragSession` for tests.
+    ///
+    /// All callers in this module construct task-source sessions; this
+    /// helper wraps the boilerplate of the new `DragSource::FocusChain`
+    /// variant so the assertions stay focused on the behavior under test.
+    fn task_drag_session(
+        session_id: &str,
+        source_board_path: &str,
+        task_id: &str,
+        task_fields: Value,
+        copy_mode: bool,
+        started_at_ms: u64,
+    ) -> DragSession {
+        DragSession {
+            session_id: session_id.into(),
+            from: DragSource::FocusChain {
+                entity_type: "task".into(),
+                entity_id: task_id.into(),
+                fields: task_fields,
+                source_board_path: source_board_path.into(),
+                source_window_label: "main".into(),
+            },
+            copy_mode,
+            started_at_ms,
+        }
     }
 
     // =========================================================================
@@ -510,7 +606,7 @@ mod tests {
         assert_eq!(ds["source_window_label"].as_str().unwrap(), "secondary");
 
         let session = ui.drag_session().unwrap();
-        assert_eq!(session.source_window_label, "secondary");
+        assert_eq!(session.source_window_label(), Some("secondary"));
     }
 
     #[tokio::test]
@@ -623,15 +719,7 @@ mod tests {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
         // Start a session first
-        let session = DragSession {
-            session_id: "s1".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-1".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 0);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -646,15 +734,7 @@ mod tests {
     async fn drag_complete_fails_without_target_column() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s1".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-1".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 0);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -669,15 +749,7 @@ mod tests {
     async fn drag_complete_cross_board_returns_transfer_params() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s1".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-1".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 100,
-        };
+        let session = task_drag_session("s1", "/boards/a", "task-1", Value::Null, false, 100);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -700,15 +772,7 @@ mod tests {
     async fn drag_complete_cross_board_with_copy_mode_from_session() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s2".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-2".into(),
-            task_fields: Value::Null,
-            copy_mode: true,
-            started_at_ms: 200,
-        };
+        let session = task_drag_session("s2", "/boards/a", "task-2", Value::Null, true, 200);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -729,15 +793,7 @@ mod tests {
     async fn drag_complete_cross_board_with_copy_mode_from_args() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s3".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-3".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 300,
-        };
+        let session = task_drag_session("s3", "/boards/a", "task-3", Value::Null, false, 300);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -758,15 +814,7 @@ mod tests {
     async fn drag_complete_cross_board_with_before_after_ids() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s4".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-4".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 400,
-        };
+        let session = task_drag_session("s4", "/boards/a", "task-4", Value::Null, false, 400);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -788,15 +836,7 @@ mod tests {
     async fn drag_complete_consumes_session() {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "s5".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-5".into(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 500,
-        };
+        let session = task_drag_session("s5", "/boards/a", "task-5", Value::Null, false, 500);
         ui.start_drag(session);
         assert!(ui.drag_session().is_some());
 
@@ -826,15 +866,14 @@ mod tests {
     async fn drag_cancel_returns_drag_cancel_result_when_session_active() {
         let cmd = DragCancelCmd;
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "cancel-s1".into(),
-            source_board_path: "/boards/a".into(),
-            source_window_label: "main".into(),
-            task_id: "task-x".into(),
-            task_fields: serde_json::Value::Null,
-            copy_mode: false,
-            started_at_ms: 999,
-        };
+        let session = task_drag_session(
+            "cancel-s1",
+            "/boards/a",
+            "task-x",
+            serde_json::Value::Null,
+            false,
+            999,
+        );
         ui.start_drag(session);
 
         let ctx = ctx_with_args_and_ui(HashMap::new(), ui.clone());
@@ -893,7 +932,7 @@ mod tests {
             first_id, new_session.session_id,
             "new session should replace the old one"
         );
-        assert_eq!(new_session.task_id, "task-2");
+        assert_eq!(new_session.entity_id(), Some("task-2"));
     }
 
     // =========================================================================
@@ -924,15 +963,14 @@ mod tests {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
         let board_path = kanban_dir.display().to_string();
-        let session = DragSession {
-            session_id: "same-board-s1".into(),
-            source_board_path: board_path.clone(),
-            source_window_label: "main".into(),
-            task_id: task_id.clone(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session(
+            "same-board-s1",
+            &board_path,
+            &task_id,
+            Value::Null,
+            false,
+            0,
+        );
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -980,15 +1018,8 @@ mod tests {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
         let board_path = kanban_dir.display().to_string();
-        let session = DragSession {
-            session_id: "drop-idx-s1".into(),
-            source_board_path: board_path.clone(),
-            source_window_label: "main".into(),
-            task_id: task_id.clone(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session =
+            task_drag_session("drop-idx-s1", &board_path, &task_id, Value::Null, false, 0);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -1033,15 +1064,7 @@ mod tests {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
         let board_path = kanban_dir.display().to_string();
-        let session = DragSession {
-            session_id: "before-s1".into(),
-            source_board_path: board_path.clone(),
-            source_window_label: "main".into(),
-            task_id: task_id.clone(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session("before-s1", &board_path, &task_id, Value::Null, false, 0);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -1086,15 +1109,7 @@ mod tests {
         let cmd = DragCompleteCmd;
         let ui = Arc::new(UIState::new());
         let board_path = kanban_dir.display().to_string();
-        let session = DragSession {
-            session_id: "after-s1".into(),
-            source_board_path: board_path.clone(),
-            source_window_label: "main".into(),
-            task_id: task_id.clone(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session("after-s1", &board_path, &task_id, Value::Null, false, 0);
         ui.start_drag(session);
 
         let mut args = HashMap::new();
@@ -1155,8 +1170,154 @@ mod tests {
         let session = ui
             .drag_session()
             .expect("session should be set after execute");
-        assert_eq!(session.task_id, "task-1");
-        assert_eq!(session.source_board_path, "/boards/a");
+        assert_eq!(session.entity_id(), Some("task-1"));
+        assert_eq!(session.source_board_path(), Some("/boards/a"));
+    }
+
+    // =========================================================================
+    // Generalized DragSource shape — verifies the from/to refactor preserves
+    // the legacy behavior while exposing the entity-type field that future
+    // non-task drag sources will populate.
+    // =========================================================================
+
+    /// `DragStartCmd` always constructs a `DragSource::FocusChain` whose
+    /// `entity_type` is `"task"` today. This test pins that contract so a
+    /// future "DragSource::File" addition cannot accidentally relabel
+    /// existing task drags.
+    #[tokio::test]
+    async fn drag_start_constructs_focus_chain_task_source() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-7"));
+        args.insert("taskFields".into(), json!({"title": "Hello"}));
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        cmd.execute(&ctx).await.unwrap();
+        let session = ui.drag_session().unwrap();
+        // Match on the `from` enum directly to lock the variant shape.
+        match session.from {
+            DragSource::FocusChain {
+                entity_type,
+                entity_id,
+                fields,
+                source_board_path,
+                source_window_label,
+            } => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(entity_id, "task-7");
+                assert_eq!(fields["title"].as_str().unwrap(), "Hello");
+                assert_eq!(source_board_path, "/boards/a");
+                assert_eq!(source_window_label, "main");
+            }
+            DragSource::File { .. } => panic!("expected FocusChain, got File"),
+        }
+    }
+
+    /// The accessor methods on `DragSession` round-trip through the new
+    /// enum-shaped `from` field. Callers (DragCompleteCmd, the cross-board
+    /// payload builder) rely on these accessors instead of touching the
+    /// enum directly.
+    #[tokio::test]
+    async fn drag_session_accessors_round_trip_focus_chain_fields() {
+        let session =
+            task_drag_session("s-acc", "/boards/x", "task-acc", json!({"a": 1}), true, 42);
+        assert_eq!(session.entity_type(), Some("task"));
+        assert_eq!(session.entity_id(), Some("task-acc"));
+        assert_eq!(session.source_board_path(), Some("/boards/x"));
+        assert_eq!(session.source_window_label(), Some("main"));
+        let fields = session.fields().unwrap();
+        assert_eq!(fields["a"].as_i64().unwrap(), 1);
+        assert!(session.copy_mode);
+        assert_eq!(session.started_at_ms, 42);
+    }
+
+    /// External-source drags (`DragSource::File`) are not yet emitted by
+    /// `DragStartCmd`, but the enum shape must still flow through
+    /// `DragCompleteCmd`'s same-board guard cleanly. Without a focus-chain
+    /// source, the same-board path is a no-go and the dispatcher falls
+    /// through to the cross-board payload (which carries empty source
+    /// fields so the Tauri handler can surface a clear validation error).
+    #[tokio::test]
+    async fn drag_complete_external_source_falls_through_to_cross_board() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "ext-s1".into(),
+            from: DragSource::File {
+                path: "/tmp/dragged.png".into(),
+            },
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/b"));
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        // No focus-chain source means same-board comparison fails — the
+        // result is a cross-board payload with empty source fields.
+        assert!(!dc["same_board"].as_bool().unwrap());
+        assert!(dc["cross_board"].as_bool().unwrap());
+        assert_eq!(dc["source_board_path"].as_str().unwrap(), "");
+        assert_eq!(dc["task_id"].as_str().unwrap(), "");
+        assert_eq!(dc["target_board_path"].as_str().unwrap(), "/boards/b");
+    }
+
+    /// Future-proofing: a non-`task` `DragSource::FocusChain` must NOT
+    /// silently flow through `complete_same_board`'s `task.move` op.
+    /// `DragStartCmd` only constructs `entity_type = "task"` today, but
+    /// the enum allows other types — guard against that quietly succeeding.
+    #[tokio::test]
+    async fn drag_complete_same_board_rejects_non_task_focus_chain() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let kctx = crate::context::KanbanContext::new(kanban_dir.clone());
+        crate::board::InitBoard::new("Test")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let board_path = kanban_dir.display().to_string();
+        let session = DragSession {
+            session_id: "non-task-s1".into(),
+            from: DragSource::FocusChain {
+                entity_type: "tag".into(),
+                entity_id: "tag-1".into(),
+                fields: Value::Null,
+                source_board_path: board_path.clone(),
+                source_window_label: "main".into(),
+            },
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path));
+        args.insert("targetColumn".into(), json!("doing"));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui);
+        cmd_ctx.set_extension(Arc::new(kctx));
+
+        let result = cmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_err(),
+            "non-task focus-chain source must error rather than running task.move"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("only handles tasks"),
+            "expected 'only handles tasks' guard message, got: {err_msg}"
+        );
     }
 
     /// Drag-complete with `beforeId = first_task` produces the same ordinal
@@ -1238,15 +1399,14 @@ mod tests {
 
         let board_path_b = kanban_dir_b.display().to_string();
         let ui = Arc::new(UIState::new());
-        let session = DragSession {
-            session_id: "parity-s1".into(),
-            source_board_path: board_path_b.clone(),
-            source_window_label: "main".into(),
-            task_id: target_b_id.clone(),
-            task_fields: Value::Null,
-            copy_mode: false,
-            started_at_ms: 0,
-        };
+        let session = task_drag_session(
+            "parity-s1",
+            &board_path_b,
+            &target_b_id,
+            Value::Null,
+            false,
+            0,
+        );
         ui.start_drag(session);
 
         let mut args = HashMap::new();

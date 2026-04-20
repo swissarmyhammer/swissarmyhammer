@@ -110,63 +110,11 @@ impl PasteHandler for ActorOntoTaskHandler {
 mod tests {
     use super::*;
     use crate::actor::AddActor;
-    use crate::board::InitBoard;
-    use crate::clipboard::ClipboardData;
-    use crate::commands::paste_handlers::PasteMatrix;
+    use crate::commands::paste_handlers::test_support::{
+        actor_clipboard, make_ctx_with_ui, matrix_with, setup,
+    };
     use crate::task::AddTask;
     use crate::Execute;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
-
-    /// Bring up a temp KanbanContext with an initialised board, plus a
-    /// CommandContext whose extension map carries the kanban handle.
-    async fn setup() -> (tempfile::TempDir, Arc<KanbanContext>) {
-        let temp = tempfile::TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
-
-    fn make_ctx(target: &str, kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new(
-            "entity.paste",
-            Vec::new(),
-            Some(target.to_string()),
-            HashMap::new(),
-        );
-        ctx.set_extension(Arc::clone(kanban));
-        ctx.ui_state = Some(Arc::new(UIState::new()));
-        ctx
-    }
-
-    /// Build a `ClipboardPayload` describing an actor on the clipboard.
-    /// `mode` is one of `"copy"` / `"cut"` — the handler ignores it, but
-    /// our tests cover both branches to lock that behaviour in.
-    fn payload_for_actor(actor_id: &str, mode: &str) -> ClipboardPayload {
-        ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "actor".to_string(),
-                entity_id: actor_id.to_string(),
-                mode: mode.to_string(),
-                fields: serde_json::json!({}),
-            },
-        }
-    }
-
-    /// Build a local matrix wired up with just our handler. Mirrors how
-    /// the orchestrator will register the handler in production, but
-    /// without depending on the global `register_paste_handlers()` call
-    /// (which is filled in by sibling cards).
-    fn local_matrix() -> PasteMatrix {
-        let mut m = PasteMatrix::default();
-        m.register(ActorOntoTaskHandler);
-        m
-    }
 
     /// Hygiene: the handler's dispatch key is `(actor, task)` and the
     /// matrix can resolve it.
@@ -175,7 +123,7 @@ mod tests {
         let h = ActorOntoTaskHandler;
         assert_eq!(h.matches(), ("actor", "task"));
 
-        let m = local_matrix();
+        let m = matrix_with(ActorOntoTaskHandler);
         assert!(m.find("actor", "task").is_some());
         assert!(m.find("task", "actor").is_none());
     }
@@ -204,10 +152,10 @@ mod tests {
         assert!(before.get_string_list("assignees").is_empty());
 
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
-        let payload = payload_for_actor("alice", "copy");
+        let ctx = make_ctx_with_ui(&target, &kanban);
+        let payload = actor_clipboard("alice", "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(ActorOntoTaskHandler);
         let handler = matrix.find("actor", "task").expect("handler registered");
         let result = handler.execute(&payload, &target, &ctx).await.unwrap();
 
@@ -242,10 +190,10 @@ mod tests {
         let task_id = task["id"].as_str().unwrap();
 
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
-        let payload = payload_for_actor("alice", "cut");
+        let ctx = make_ctx_with_ui(&target, &kanban);
+        let payload = actor_clipboard("alice", "cut");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(ActorOntoTaskHandler);
         let handler = matrix.find("actor", "task").expect("handler registered");
         let result = handler.execute(&payload, &target, &ctx).await.unwrap();
 
@@ -286,10 +234,10 @@ mod tests {
         let task_id = task["id"].as_str().unwrap();
 
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
-        let payload = payload_for_actor("alice", "copy");
+        let ctx = make_ctx_with_ui(&target, &kanban);
+        let payload = actor_clipboard("alice", "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(ActorOntoTaskHandler);
         let handler = matrix.find("actor", "task").expect("handler registered");
 
         handler.execute(&payload, &target, &ctx).await.unwrap();
@@ -321,10 +269,10 @@ mod tests {
             .unwrap();
 
         let target = "column:doing";
-        let ctx = make_ctx(target, &kanban);
-        let payload = payload_for_actor("alice", "copy");
+        let ctx = make_ctx_with_ui(target, &kanban);
+        let payload = actor_clipboard("alice", "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(ActorOntoTaskHandler);
         let handler = matrix.find("actor", "task").expect("handler registered");
         let err = handler
             .execute(&payload, target, &ctx)

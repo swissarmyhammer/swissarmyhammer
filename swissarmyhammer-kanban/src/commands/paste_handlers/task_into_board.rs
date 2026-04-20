@@ -177,103 +177,49 @@ impl PasteHandler for TaskIntoBoardHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::{
-        deserialize_from_clipboard, serialize_to_clipboard, ClipboardProviderExt, InMemoryClipboard,
+    use crate::commands::paste_handlers::test_support::{
+        in_memory_clipboard_ext, install_columns, make_ctx_with_clipboard, matrix_with, setup,
+        setup_uninitialized, task_clipboard_from_fields,
     };
-    use crate::commands::paste_handlers::PasteMatrix;
     use crate::task::AddTask;
     use crate::Execute;
     use std::sync::Arc;
     use swissarmyhammer_commands::UIState;
-    use swissarmyhammer_entity::Entity;
 
-    /// Build a kanban context, in-memory clipboard provider, and UI state
-    /// for the handler tests. The board is *not* initialised here so each
-    /// test can opt into the column shape it needs (default columns,
-    /// custom positions, or empty).
-    async fn setup() -> (
+    /// Bring up the default-board set of fixtures shared by most
+    /// `task_into_board` tests. Wraps the shared `setup()` helper so each
+    /// test's body still sees a flat `(temp, kanban, clipboard, ui)`
+    /// destructure without re-stating the extension assembly.
+    async fn fixtures() -> (
         tempfile::TempDir,
         Arc<KanbanContext>,
-        Arc<ClipboardProviderExt>,
+        Arc<crate::clipboard::ClipboardProviderExt>,
         Arc<UIState>,
     ) {
-        let temp = tempfile::TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
-        let ui = Arc::new(UIState::new());
-        (temp, kanban, clipboard, ui)
+        let (temp, kanban) = setup().await;
+        (
+            temp,
+            kanban,
+            in_memory_clipboard_ext(),
+            Arc::new(UIState::new()),
+        )
     }
 
-    /// Initialise the default todo/doing/done columns via the standard
-    /// board init path. Used by tests that just need "a board with
-    /// columns".
-    async fn init_default_board(kanban: &Arc<KanbanContext>) {
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-    }
-
-    /// Replace whatever columns exist on the board with `columns`,
-    /// expressed as `(id, order)` pairs. Used by tests that need
-    /// non-default column orderings (e.g. positions 0/100/200 to make
-    /// "leftmost" unambiguous).
-    async fn install_columns(kanban: &Arc<KanbanContext>, columns: &[(&str, u64)]) {
-        let ectx = kanban.entity_context().await.unwrap();
-        // Drop any pre-existing columns first so the test starts from a
-        // known state. The default board may or may not have been
-        // initialised by the caller — both paths must converge on the
-        // shape the test asked for.
-        for col in ectx.list("column").await.unwrap() {
-            ectx.delete("column", col.id.as_str()).await.unwrap();
-        }
-        for (id, order) in columns {
-            let mut entity = Entity::new("column", *id);
-            entity.set("name", serde_json::json!(id));
-            entity.set("order", serde_json::json!(*order));
-            ectx.write(&entity).await.unwrap();
-        }
-    }
-
-    /// Build a CommandContext wired with the kanban context, clipboard
-    /// provider, and UI state extensions needed by the handler.
-    fn make_ctx(
-        scope: &[&str],
-        kanban: &Arc<KanbanContext>,
-        clipboard: &Arc<ClipboardProviderExt>,
-        ui: &Arc<UIState>,
-    ) -> CommandContext {
-        let mut ctx = CommandContext::new(
-            "entity.paste",
-            scope.iter().map(|s| s.to_string()).collect(),
-            None,
-            HashMap::new(),
-        );
-        ctx.set_extension(Arc::clone(kanban));
-        ctx.set_extension(Arc::clone(clipboard));
-        ctx.ui_state = Some(Arc::clone(ui));
-        ctx
-    }
-
-    /// Copy a task and return the resulting `ClipboardPayload`. Mirrors
-    /// what `CopyCmd` would write to the system clipboard, but skips the
-    /// extension-roundtrip so tests can build payloads without driving
-    /// the full copy command.
-    fn payload_from_task(task_id: &str, fields: serde_json::Value, mode: &str) -> ClipboardPayload {
-        let json = serialize_to_clipboard("task", task_id, mode, fields);
-        deserialize_from_clipboard(&json).expect("payload roundtrip must succeed")
-    }
-
-    /// Build a populated PasteMatrix for tests — registers only the
-    /// handler under test so the tests don't depend on the production
-    /// `register_paste_handlers()` (which is wired by the orchestrator
-    /// in a separate batch step).
-    fn test_matrix() -> PasteMatrix {
-        let mut m = PasteMatrix::default();
-        m.register(TaskIntoBoardHandler);
-        m
+    /// Like [`fixtures`] but skips `InitBoard` — used by tests that
+    /// install a custom column shape via [`install_columns`].
+    async fn fixtures_uninitialized() -> (
+        tempfile::TempDir,
+        Arc<KanbanContext>,
+        Arc<crate::clipboard::ClipboardProviderExt>,
+        Arc<UIState>,
+    ) {
+        let (temp, kanban) = setup_uninitialized().await;
+        (
+            temp,
+            kanban,
+            in_memory_clipboard_ext(),
+            Arc::new(UIState::new()),
+        )
     }
 
     // =========================================================================
@@ -287,7 +233,7 @@ mod tests {
 
     #[test]
     fn matrix_dispatch_resolves_handler_by_pair() {
-        let m = test_matrix();
+        let m = matrix_with(TaskIntoBoardHandler);
         assert!(m.find("task", "board").is_some());
         assert!(m.find("task", "column").is_none());
         assert!(m.find("tag", "board").is_none());
@@ -302,11 +248,12 @@ mod tests {
         // Acceptance criterion: when the board has zero columns,
         // `available()` returns false so the dispatcher can fall through
         // to the next scope frame instead of failing the paste.
-        let (_temp, kanban, clipboard, ui) = setup().await;
+        let (_temp, kanban, clipboard, ui) = fixtures_uninitialized().await;
         install_columns(&kanban, &[]).await;
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
 
-        let payload = payload_from_task("01SOURCE", serde_json::json!({"title": "t"}), "copy");
+        let payload =
+            task_clipboard_from_fields("01SOURCE", serde_json::json!({"title": "t"}), "copy");
 
         assert!(
             !TaskIntoBoardHandler.available(&payload, "board:my-board", &ctx),
@@ -316,11 +263,11 @@ mod tests {
 
     #[tokio::test]
     async fn paste_task_into_populated_board_available() {
-        let (_temp, kanban, clipboard, ui) = setup().await;
-        init_default_board(&kanban).await;
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
+        let (_temp, kanban, clipboard, ui) = fixtures().await;
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
 
-        let payload = payload_from_task("01SOURCE", serde_json::json!({"title": "t"}), "copy");
+        let payload =
+            task_clipboard_from_fields("01SOURCE", serde_json::json!({"title": "t"}), "copy");
 
         assert!(
             TaskIntoBoardHandler.available(&payload, "board:my-board", &ctx),
@@ -339,11 +286,11 @@ mod tests {
         // "lowest order wins" semantics so a future column-creation
         // change that re-numbers positions doesn't accidentally drop
         // pasted tasks elsewhere.
-        let (_temp, kanban, clipboard, ui) = setup().await;
+        let (_temp, kanban, clipboard, ui) = fixtures_uninitialized().await;
         install_columns(&kanban, &[("first", 0), ("middle", 100), ("last", 200)]).await;
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
 
-        let payload = payload_from_task(
+        let payload = task_clipboard_from_fields(
             "01SOURCE",
             serde_json::json!({"title": "Pasted task"}),
             "copy",
@@ -365,8 +312,7 @@ mod tests {
     async fn paste_copy_task_into_board_does_not_delete_source() {
         // Copy mode is non-destructive — the source task must remain on
         // the board after the paste creates the new one.
-        let (_temp, kanban, clipboard, ui) = setup().await;
-        init_default_board(&kanban).await;
+        let (_temp, kanban, clipboard, ui) = fixtures().await;
 
         let source = AddTask::new("Source")
             .execute(kanban.as_ref())
@@ -375,8 +321,9 @@ mod tests {
             .unwrap();
         let source_id = source["id"].as_str().unwrap().to_string();
 
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
-        let payload = payload_from_task(&source_id, serde_json::json!({"title": "Source"}), "copy");
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
+        let payload =
+            task_clipboard_from_fields(&source_id, serde_json::json!({"title": "Source"}), "copy");
 
         TaskIntoBoardHandler
             .execute(&payload, "board:my-board", &ctx)
@@ -401,8 +348,7 @@ mod tests {
         // the new task is created. Create-before-delete ordering is
         // verified implicitly: if the new task didn't exist, we'd see
         // 0 tasks instead of 1.
-        let (_temp, kanban, clipboard, ui) = setup().await;
-        init_default_board(&kanban).await;
+        let (_temp, kanban, clipboard, ui) = fixtures().await;
 
         let source = AddTask::new("Source to cut")
             .execute(kanban.as_ref())
@@ -411,8 +357,8 @@ mod tests {
             .unwrap();
         let source_id = source["id"].as_str().unwrap().to_string();
 
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
-        let payload = payload_from_task(
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
+        let payload = task_clipboard_from_fields(
             &source_id,
             serde_json::json!({"title": "Source to cut"}),
             "cut",
@@ -440,6 +386,59 @@ mod tests {
         assert_eq!(remaining[0].id, new_id, "remaining task must be the paste");
     }
 
+    /// Cut-mode transactional safety: when destination create fails the
+    /// source task must remain untouched.
+    ///
+    /// The handler resolves the leftmost column up front and bails with
+    /// `DestinationInvalid` if the board has none — that path runs *before*
+    /// AddEntity is invoked. The source `DeleteTask` only fires after a
+    /// successful create, so a failed leftmost-column resolution must
+    /// leave the source intact.
+    ///
+    /// We seed a real source task on a default board, then strip every
+    /// column off the board so the handler hits the no-column path. The
+    /// source — created earlier with a now-orphaned `position_column` —
+    /// must still be readable.
+    #[tokio::test]
+    async fn task_into_board_cut_preserves_source_when_create_fails() {
+        let (_temp, kanban, clipboard, ui) = fixtures().await;
+
+        let source = AddTask::new("Source to cut")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = source["id"].as_str().unwrap().to_string();
+
+        // Strip every column off the board so the handler's leftmost-
+        // column resolution returns None and execute() exits with
+        // DestinationInvalid before any AddEntity / DeleteTask call.
+        install_columns(&kanban, &[]).await;
+
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
+        let payload = task_clipboard_from_fields(
+            &source_id,
+            serde_json::json!({"title": "Source to cut"}),
+            "cut",
+        );
+
+        let result = TaskIntoBoardHandler
+            .execute(&payload, "board:my-board", &ctx)
+            .await;
+        assert!(
+            matches!(result, Err(CommandError::DestinationInvalid(_))),
+            "cut paste onto a column-less board must surface DestinationInvalid; got {result:?}"
+        );
+
+        // Source must still exist — create-then-delete ordering guarantees
+        // a failed destination resolution never touches the source.
+        let ectx = kanban.entity_context().await.unwrap();
+        assert!(
+            ectx.read("task", &source_id).await.is_ok(),
+            "source task must remain when destination create fails"
+        );
+    }
+
     #[tokio::test]
     async fn paste_drops_stale_ordinal_from_clipboard() {
         // The clipboard snapshot carries the source task's ordinal. If
@@ -448,8 +447,7 @@ mod tests {
         // arbitrarily on cut. Force the override bag to drop the
         // ordinal so AddEntity recomputes "after the last existing
         // task" in the destination column.
-        let (_temp, kanban, clipboard, ui) = setup().await;
-        init_default_board(&kanban).await;
+        let (_temp, kanban, clipboard, ui) = fixtures().await;
 
         // Pre-existing task in the destination column to make the
         // recomputed ordinal visibly different from a stale one.
@@ -459,8 +457,8 @@ mod tests {
             .into_result()
             .unwrap();
 
-        let ctx = make_ctx(&["board:my-board"], &kanban, &clipboard, &ui);
-        let payload = payload_from_task(
+        let ctx = make_ctx_with_clipboard(&["board:my-board"], &kanban, &clipboard, &ui);
+        let payload = task_clipboard_from_fields(
             "01SOURCE",
             serde_json::json!({
                 "title": "Pasted",

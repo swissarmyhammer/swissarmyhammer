@@ -12,7 +12,6 @@ pub mod entity_commands;
 pub mod file_commands;
 pub mod paste_handlers;
 pub mod perspective_commands;
-pub mod project_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
@@ -103,16 +102,15 @@ fn register_attachment(map: &mut CmdMap) {
     );
 }
 
-fn register_column_and_project(map: &mut CmdMap) {
+fn register_column(map: &mut CmdMap) {
     map.insert(
         "column.reorder".into(),
         Arc::new(column_commands::ColumnReorderCmd),
     );
-    // project.add removed: unified into dynamic `entity.add:project`.
-    map.insert(
-        "project.delete".into(),
-        Arc::new(project_commands::DeleteProjectCmd),
-    );
+    // project.add and project.delete are both retired: project creation goes
+    // through dynamic `entity.add:project`, and project deletion is served by
+    // the cross-cutting `entity.delete` auto-emit. No project-specific
+    // commands remain.
 }
 
 fn register_ui(map: &mut CmdMap) {
@@ -281,7 +279,7 @@ pub fn register_commands() -> CmdMap {
     register_clipboard(&mut map);
     register_entity_and_tag(&mut map);
     register_attachment(&mut map);
-    register_column_and_project(&mut map);
+    register_column(&mut map);
     register_ui(&mut map);
     register_drag(&mut map);
     register_file(&mut map);
@@ -331,10 +329,11 @@ mod tests {
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
         // + 3 attachment (open, reveal, delete)
-        // + 1 project (delete) — project.add retired in favour of dynamic
-        // `entity.add:project`.
-        // + 1 ui.mode.set = 63
-        assert_eq!(cmds.len(), 63);
+        // + 0 project — project.add retired in favour of dynamic
+        // `entity.add:project`; project.delete retired in favour of the
+        // cross-cutting `entity.delete` auto-emit.
+        // + 1 ui.mode.set = 62
+        assert_eq!(cmds.len(), 62);
     }
 
     // =========================================================================
@@ -1011,9 +1010,9 @@ mod tests {
         assert!(result.is_ok(), "drag.start should succeed: {:?}", result);
 
         let session = ui.drag_session().expect("session should be stored");
-        assert_eq!(session.task_id, "task-123");
-        assert_eq!(session.source_board_path, "/boards/a/.kanban");
-        assert_eq!(session.source_window_label, "main");
+        assert_eq!(session.entity_id(), Some("task-123"));
+        assert_eq!(session.source_board_path(), Some("/boards/a/.kanban"));
+        assert_eq!(session.source_window_label(), Some("main"));
         assert!(!session.copy_mode);
     }
 
@@ -1065,8 +1064,8 @@ mod tests {
         cmd.execute(&ctx2).await.unwrap();
 
         let session = ui.drag_session().unwrap();
-        assert_eq!(session.task_id, "task-2");
-        assert_eq!(session.source_board_path, "/boards/b");
+        assert_eq!(session.entity_id(), Some("task-2"));
+        assert_eq!(session.source_board_path(), Some("/boards/b"));
     }
 
     #[tokio::test]

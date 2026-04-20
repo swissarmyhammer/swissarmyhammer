@@ -92,56 +92,13 @@ impl PasteHandler for TagOntoTaskHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::{ClipboardData, ClipboardPayload};
-    use crate::commands::paste_handlers::PasteMatrix;
+    use crate::commands::paste_handlers::test_support::{
+        make_ctx, matrix_with, setup, tag_clipboard,
+    };
     use crate::tag::AddTag;
     use crate::task::AddTask;
     use crate::task_helpers::task_tags;
-    use serde_json::json;
-    use std::collections::HashMap;
-    use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
-    use tempfile::TempDir;
-
-    /// Spin up a fresh kanban context with a board initialized.
-    async fn setup() -> (TempDir, Arc<KanbanContext>) {
-        let temp = TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
-
-    /// Build a `ClipboardPayload` representing a copied tag.
-    ///
-    /// `tag_id` lands in `entity_id`; the `fields` snapshot mirrors what
-    /// the real copy path produces, but the handler currently only needs
-    /// the id — the fields are included for fidelity.
-    fn tag_clipboard(tag_id: &str, tag_name: &str, mode: &str) -> ClipboardPayload {
-        ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "tag".into(),
-                entity_id: tag_id.into(),
-                mode: mode.into(),
-                fields: json!({"tag_name": tag_name}),
-            },
-        }
-    }
-
-    /// Build a `CommandContext` carrying the kanban extension.
-    ///
-    /// The dispatcher would normally populate `target` from the matched
-    /// scope moniker; tests here pass it through `execute` directly so
-    /// they don't need to spin up the full chain walker.
-    fn make_ctx(kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new("entity.paste", vec![], None, HashMap::new());
-        ctx.set_extension(Arc::clone(kanban));
-        ctx
-    }
 
     /// Sanity check: the local test matrix accepts the handler and finds
     /// it under the `(tag, task)` key. This mirrors what the production
@@ -150,8 +107,7 @@ mod tests {
     /// local matrix without the global registry being populated.
     #[test]
     fn handler_registers_on_local_matrix_under_tag_task_key() {
-        let mut matrix = PasteMatrix::default();
-        matrix.register(TagOntoTaskHandler);
+        let matrix = matrix_with(TagOntoTaskHandler);
         assert!(
             matrix.find("tag", "task").is_some(),
             "TagOntoTaskHandler should be findable under ('tag', 'task') after registration"

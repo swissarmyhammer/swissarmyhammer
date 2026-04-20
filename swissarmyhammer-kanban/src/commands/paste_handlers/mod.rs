@@ -26,6 +26,9 @@ pub mod task_into_board;
 pub mod task_into_column;
 pub mod task_into_project;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use crate::clipboard::ClipboardPayload;
 use async_trait::async_trait;
 use serde_json::Value;

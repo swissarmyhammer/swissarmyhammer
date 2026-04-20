@@ -487,6 +487,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_entity_deletes_project() {
+        let (_temp, ctx) = setup().await;
+        let add_result = crate::project::AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let project_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("project:{}", project_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_ok(),
+            "delete project should succeed: {:?}",
+            result
+        );
+
+        // Verify the project is gone
+        let ectx = kanban.entity_context().await.unwrap();
+        let projects = ectx.list("project").await.unwrap();
+        assert!(
+            projects.iter().all(|p| p.id.as_str() != project_id),
+            "project {} should be removed from entity context",
+            project_id
+        );
+    }
+
+    #[tokio::test]
     async fn delete_entity_deletes_actor() {
         let (_temp, ctx) = setup().await;
         let add_result = crate::actor::AddActor::new("alice", "Alice")

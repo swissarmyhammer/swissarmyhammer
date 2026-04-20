@@ -184,29 +184,15 @@ fn filtered_overrides(snapshot: &Map<String, Value>) -> HashMap<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::{
-        deserialize_from_clipboard, serialize_to_clipboard, ClipboardData, ClipboardPayload,
+    use crate::commands::paste_handlers::test_support::{
+        clipboard_payload, list_tasks, make_ctx, matrix_with, setup, snapshot_task,
+        task_clipboard_from_fields,
     };
-    use crate::commands::paste_handlers::PasteMatrix;
     use crate::project::AddProject;
     use crate::task::AddTask;
     use serde_json::json;
     use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
-
-    /// Build a fresh `KanbanContext` on a tempdir with the default board
-    /// columns (todo / doing / done) seeded.
-    async fn setup() -> (tempfile::TempDir, Arc<KanbanContext>) {
-        let temp = tempfile::TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
 
     /// Create a project entity for paste targets.
     async fn add_project(kanban: &Arc<KanbanContext>, id: &str) -> String {
@@ -216,42 +202,6 @@ mod tests {
             .into_result()
             .unwrap();
         result["id"].as_str().unwrap().to_string()
-    }
-
-    /// Produce a `CommandContext` carrying the supplied `KanbanContext`
-    /// extension. The scope chain is empty — `target` carries the
-    /// pasted-onto moniker directly, mirroring how `PasteEntityCmd`
-    /// invokes a handler.
-    fn make_ctx(kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new(
-            "entity.paste",
-            vec![],
-            None,
-            std::collections::HashMap::new(),
-        );
-        ctx.set_extension(Arc::clone(kanban));
-        ctx
-    }
-
-    /// Snapshot a task's fields into a `ClipboardPayload` with the given
-    /// `mode` ("copy" or "cut").
-    async fn snapshot_task(kanban: &KanbanContext, task_id: &str, mode: &str) -> ClipboardPayload {
-        let ectx = kanban.entity_context().await.unwrap();
-        let entity = ectx.read("task", task_id).await.unwrap();
-        let fields = serde_json::to_value(&entity.fields).unwrap();
-        let json = serialize_to_clipboard("task", task_id, mode, fields);
-        deserialize_from_clipboard(&json).expect("snapshot must round-trip")
-    }
-
-    /// Read every task currently on the board.
-    async fn list_tasks(kanban: &KanbanContext) -> Vec<swissarmyhammer_entity::Entity> {
-        kanban
-            .entity_context()
-            .await
-            .unwrap()
-            .list("task")
-            .await
-            .unwrap()
     }
 
     // =========================================================================
@@ -265,8 +215,7 @@ mod tests {
     /// per the parallel-safety note in the implementing card.
     #[test]
     fn local_matrix_finds_task_into_project_handler() {
-        let mut matrix = PasteMatrix::default();
-        matrix.register(TaskIntoProjectHandler);
+        let matrix = matrix_with(TaskIntoProjectHandler);
         assert!(
             matrix.find("task", "project").is_some(),
             "matrix should resolve (task, project) to TaskIntoProjectHandler"
@@ -461,9 +410,8 @@ mod tests {
         let project_id = add_project(&kanban, "backend").await;
 
         // Build a snapshot by hand that lacks any column information.
-        let snapshot_fields = json!({"title": "Headless task"});
-        let json = serialize_to_clipboard("task", "01OLDSOURCE", "copy", snapshot_fields);
-        let payload = deserialize_from_clipboard(&json).unwrap();
+        let payload =
+            task_clipboard_from_fields("01OLDSOURCE", json!({"title": "Headless task"}), "copy");
 
         let ctx = make_ctx(&kanban);
         let result = TaskIntoProjectHandler
@@ -497,13 +445,15 @@ mod tests {
             .unwrap();
 
         // Hand-built snapshot with a deliberately-low ordinal.
-        let snapshot_fields = json!({
-            "title": "Pasted",
-            "position_column": "todo",
-            "position_ordinal": "00",
-        });
-        let json = serialize_to_clipboard("task", "01SOURCE", "copy", snapshot_fields);
-        let payload = deserialize_from_clipboard(&json).unwrap();
+        let payload = task_clipboard_from_fields(
+            "01SOURCE",
+            json!({
+                "title": "Pasted",
+                "position_column": "todo",
+                "position_ordinal": "00",
+            }),
+            "copy",
+        );
 
         let ctx = make_ctx(&kanban);
         let result = TaskIntoProjectHandler
@@ -529,13 +479,15 @@ mod tests {
         let target_project = add_project(&kanban, "backend").await;
         let _other_project = add_project(&kanban, "frontend").await;
 
-        let snapshot_fields = json!({
-            "title": "Mislabelled",
-            "project": "frontend",
-            "position_column": "todo",
-        });
-        let json = serialize_to_clipboard("task", "01SOURCE", "copy", snapshot_fields);
-        let payload = deserialize_from_clipboard(&json).unwrap();
+        let payload = task_clipboard_from_fields(
+            "01SOURCE",
+            json!({
+                "title": "Mislabelled",
+                "project": "frontend",
+                "position_column": "todo",
+            }),
+            "copy",
+        );
 
         let ctx = make_ctx(&kanban);
         let result = TaskIntoProjectHandler
@@ -549,20 +501,58 @@ mod tests {
         );
     }
 
+    /// Cut-mode transactional safety: when the destination project does
+    /// not exist the source task must remain on the board.
+    ///
+    /// The handler validates the destination project up front and surfaces
+    /// `DestinationInvalid` before any AddEntity call. The source
+    /// `DeleteTask` only fires after a successful create, so this failure
+    /// path must leave the source untouched. Pinned here so a future
+    /// refactor that drops the pre-check (or moves the delete before the
+    /// create) trips the test.
+    #[tokio::test]
+    async fn task_into_project_cut_preserves_source_when_create_fails() {
+        let (_temp, kanban) = setup().await;
+        let add = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = add["id"].as_str().unwrap().to_string();
+
+        let payload = snapshot_task(kanban.as_ref(), &source_id, "cut").await;
+        let ctx = make_ctx(&kanban);
+
+        // Target a project that was never created on this board.
+        let result = TaskIntoProjectHandler
+            .execute(&payload, "project:ghost-project", &ctx)
+            .await;
+        assert!(
+            matches!(result, Err(CommandError::DestinationInvalid(_))),
+            "cut paste onto missing project must surface DestinationInvalid; got {result:?}"
+        );
+
+        // Source must remain. Create-then-delete ordering means a failed
+        // destination resolution never touches the source.
+        let tasks = list_tasks(kanban.as_ref()).await;
+        assert_eq!(
+            tasks.len(),
+            1,
+            "source task must remain when destination project does not exist"
+        );
+        assert_eq!(
+            tasks[0].id, source_id,
+            "the surviving task must be the source we tried to cut"
+        );
+    }
+
     /// `available()` defaults to `true` — paste availability is gated
     /// upstream by the matrix lookup. This is a regression guard so a
     /// future override does not silently disable all `(task, project)`
     /// pastes.
     #[test]
     fn handler_available_defaults_to_true() {
-        let payload = ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "task".into(),
-                entity_id: "01SRC".into(),
-                mode: "copy".into(),
-                fields: json!({}),
-            },
-        };
+        let payload = clipboard_payload("task", "01SRC", "copy", json!({}));
         let ctx = CommandContext::new(
             "entity.paste",
             vec![],

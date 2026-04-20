@@ -38,6 +38,29 @@ use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError, Resu
 pub struct AttachmentOntoTaskHandler;
 
 impl AttachmentOntoTaskHandler {
+    /// Validate that the target task exists and the source file is readable.
+    async fn validate_task_and_file(
+        kanban: &KanbanContext,
+        task_id: &str,
+        path: &str,
+    ) -> Result<()> {
+        let ectx = kanban
+            .entity_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        if ectx.read("task", task_id).await.is_err() {
+            return Err(CommandError::SourceEntityMissing(format!(
+                "Task '{task_id}' no longer exists"
+            )));
+        }
+        if !std::path::Path::new(path).exists() {
+            return Err(CommandError::SourceEntityMissing(format!(
+                "Attachment file '{path}' is not readable"
+            )));
+        }
+        Ok(())
+    }
+
     /// Derive the display name for the attachment.
     ///
     /// Prefers the `name` field carried by the clipboard snapshot (the
@@ -150,44 +173,13 @@ impl PasteHandler for AttachmentOntoTaskHandler {
                 "Clipboard attachment has no source path".into(),
             ));
         }
-        // Path safety is enforced by the entity layer: AddAttachment copies
-        // the source file into the board's `.attachments/` directory via
-        // EntityContext::resolve_attachment_value → io::copy_attachment.
-        // The destination (where the bytes land) is always sandboxed under
-        // the board's storage root. The source path is intentionally allowed
-        // to be absolute or relative — that's how a user attaches files
-        // from anywhere on disk (e.g. `/tmp/screenshot.png`). Rejecting
-        // traversal sequences here would break legitimate uses without
-        // adding security: the entity layer never *writes* to the source
-        // path, only reads from it, and read access is already governed
-        // by filesystem permissions.
-
-        let fields = &clipboard.swissarmyhammer_clipboard.fields;
-        let name = Self::resolve_name(fields, path);
 
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        // Validate the target task and the source file before
-        // delegating to AddAttachment. Without these guards a missing
-        // task surfaces as a generic ExecutionFailed wrapping the
-        // entity-layer's "entity not found" string, and an unreadable
-        // source path surfaces as a generic IO error — both rendered
-        // identically in the toast. Splitting them lets the toast name
-        // the specific failure mode.
-        let ectx = kanban
-            .entity_context()
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-        if ectx.read("task", task_id).await.is_err() {
-            return Err(CommandError::SourceEntityMissing(format!(
-                "Task '{task_id}' no longer exists"
-            )));
-        }
-        if !std::path::Path::new(path).exists() {
-            return Err(CommandError::SourceEntityMissing(format!(
-                "Attachment file '{path}' is not readable"
-            )));
-        }
+        Self::validate_task_and_file(&kanban, task_id, path).await?;
+
+        let fields = &clipboard.swissarmyhammer_clipboard.fields;
+        let name = Self::resolve_name(fields, path);
 
         let mut op = AddAttachment::new(task_id, name, path);
         if let Some(mime) = Self::resolve_mime_type(fields) {
@@ -204,80 +196,12 @@ impl PasteHandler for AttachmentOntoTaskHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::ClipboardData;
-    use crate::commands::paste_handlers::PasteMatrix;
+    use crate::commands::paste_handlers::test_support::{
+        attachment_clipboard, make_ctx_with_ui, matrix_with, setup,
+    };
     use crate::task::AddTask;
     use crate::Execute;
     use serde_json::json;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use swissarmyhammer_commands::UIState;
-    use tempfile::TempDir;
-
-    /// Bring up a temp KanbanContext with an initialised board.
-    async fn setup() -> (TempDir, Arc<KanbanContext>) {
-        let temp = TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
-
-    /// Build a CommandContext carrying the kanban extension and a UI state.
-    fn make_ctx(target: &str, kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new(
-            "entity.paste",
-            Vec::new(),
-            Some(target.to_string()),
-            HashMap::new(),
-        );
-        ctx.set_extension(Arc::clone(kanban));
-        ctx.ui_state = Some(Arc::new(UIState::new()));
-        ctx
-    }
-
-    /// Build a `ClipboardPayload` describing an attachment on the
-    /// clipboard. The attachment moniker uses the file path as its id;
-    /// `fields` mirrors what the real copy path produces (display name,
-    /// MIME type, size).
-    fn payload_for_attachment(
-        path: &str,
-        name: &str,
-        mime_type: Option<&str>,
-        size: Option<u64>,
-        mode: &str,
-    ) -> ClipboardPayload {
-        let mut fields = serde_json::Map::new();
-        fields.insert("name".into(), json!(name));
-        if let Some(mime) = mime_type {
-            fields.insert("mime_type".into(), json!(mime));
-        }
-        if let Some(s) = size {
-            fields.insert("size".into(), json!(s));
-        }
-        ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "attachment".into(),
-                entity_id: path.into(),
-                mode: mode.into(),
-                fields: Value::Object(fields),
-            },
-        }
-    }
-
-    /// Build a local matrix wired up with just our handler. Mirrors how
-    /// the orchestrator will register the handler in production but
-    /// keeps the tests independent of the global `register_paste_handlers()`
-    /// call, which is filled in by sibling cards.
-    fn local_matrix() -> PasteMatrix {
-        let mut m = PasteMatrix::default();
-        m.register(AttachmentOntoTaskHandler);
-        m
-    }
 
     /// Create a temp file with content and return its absolute path as a
     /// `String`. The handler is exercised against real files because
@@ -296,7 +220,7 @@ mod tests {
         let h = AttachmentOntoTaskHandler;
         assert_eq!(h.matches(), ("attachment", "task"));
 
-        let m = local_matrix();
+        let m = matrix_with(AttachmentOntoTaskHandler);
         assert!(m.find("attachment", "task").is_some());
         assert!(m.find("task", "attachment").is_none());
     }
@@ -328,11 +252,11 @@ mod tests {
 
         let path = write_temp_file(temp.path(), "screenshot.png", b"fake png data");
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
+        let ctx = make_ctx_with_ui(&target, &kanban);
         let payload =
-            payload_for_attachment(&path, "screenshot.png", Some("image/png"), Some(13), "copy");
+            attachment_clipboard(&path, "screenshot.png", Some("image/png"), Some(13), "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");
@@ -403,11 +327,11 @@ mod tests {
 
         // Paste onto the destination task.
         let target = format!("task:{dest_id}");
-        let ctx = make_ctx(&target, &kanban);
+        let ctx = make_ctx_with_ui(&target, &kanban);
         let payload =
-            payload_for_attachment(&path, "spec.pdf", Some("application/pdf"), Some(16), "copy");
+            attachment_clipboard(&path, "spec.pdf", Some("application/pdf"), Some(16), "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");
@@ -466,11 +390,11 @@ mod tests {
         // Paste with mode == "cut" — handler must not mutate the source's
         // attachment list and must still add the file to the destination.
         let target = format!("task:{dest_id}");
-        let ctx = make_ctx(&target, &kanban);
+        let ctx = make_ctx_with_ui(&target, &kanban);
         let payload =
-            payload_for_attachment(&path, "diagram.png", Some("image/png"), Some(13), "cut");
+            attachment_clipboard(&path, "diagram.png", Some("image/png"), Some(13), "cut");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");
@@ -508,10 +432,10 @@ mod tests {
         let path = write_temp_file(temp.path(), "x.txt", b"x");
 
         let target = "column:doing";
-        let ctx = make_ctx(target, &kanban);
-        let payload = payload_for_attachment(&path, "x.txt", None, None, "copy");
+        let ctx = make_ctx_with_ui(target, &kanban);
+        let payload = attachment_clipboard(&path, "x.txt", None, None, "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");
@@ -540,10 +464,10 @@ mod tests {
         let task_id = task["id"].as_str().unwrap().to_string();
 
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
-        let payload = payload_for_attachment("", "x", None, None, "copy");
+        let ctx = make_ctx_with_ui(&target, &kanban);
+        let payload = attachment_clipboard("", "x", None, None, "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");
@@ -577,15 +501,15 @@ mod tests {
         let task_id = task["id"].as_str().unwrap().to_string();
 
         let target = format!("task:{task_id}");
-        let ctx = make_ctx(&target, &kanban);
+        let ctx = make_ctx_with_ui(&target, &kanban);
 
         // Path that was never written — equivalent to a file that the
         // user's clipboard snapshot referenced but has since been
         // removed from disk.
         let missing_path = "/tmp/nonexistent/attachment-from-paste-test.png";
-        let payload = payload_for_attachment(missing_path, "missing.png", None, None, "copy");
+        let payload = attachment_clipboard(missing_path, "missing.png", None, None, "copy");
 
-        let matrix = local_matrix();
+        let matrix = matrix_with(AttachmentOntoTaskHandler);
         let handler = matrix
             .find("attachment", "task")
             .expect("handler registered");

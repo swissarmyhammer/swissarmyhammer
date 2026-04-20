@@ -17,7 +17,19 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useDispatchCommand } from "@/lib/command-scope";
 
-/** Payload emitted by `drag-session-active`. */
+/**
+ * Payload emitted by `drag-session-active`.
+ *
+ * The wire payload preserves the legacy flat shape for backward
+ * compatibility with existing listeners (`task_id`, `source_board_path`,
+ * `source_window_label`). The Rust-side `DragSession` is now structured
+ * as `{ from: DragSource, ... }` where `DragSource` is a tagged enum of
+ * `FocusChain` (the typical drag-from-card source) and `File` (reserved
+ * for drag-in-from-desktop). Future cards adding non-task drag sources
+ * will extend the wire payload with the source's entity type/id; for now
+ * `task_id` is always populated because every drag originates from a
+ * `(task, ...)` focus-chain source.
+ */
 export interface DragSession {
   session_id: string;
   source_board_path: string;
@@ -60,10 +72,12 @@ const DragSessionContext = createContext<DragSessionContextValue>({
   isSource: false,
 });
 
+/** Returns the current drag session state and control methods. Must be used within DragSessionProvider. */
 export function useDragSession() {
   return useContext(DragSessionContext);
 }
 
+/** Provides drag session state to component tree. Manages cross-window drag sessions via Tauri events. */
 export function DragSessionProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatchCommand();
 

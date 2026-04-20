@@ -10,89 +10,72 @@ depends_on:
 - 01KPG6H74Z24N48DQR75CT7HP7
 - 01KPG6HF1ZHWZ981PS3BEPP1HE
 - 01KPG6HQYRRWCP52VH1KNKR35B
-position_column: todo
-position_ordinal: f380
+position_column: done
+position_ordinal: fffffffffffffffffffffffe80
 title: 'Commands: unify drag-drop with paste matrix (DragCompleteCmd uses PasteHandler)'
 ---
 ## What
 
-Drop-onto-target is the same semantic operation as paste-onto-target: take a known source entity, put it somewhere based on the destination's type. Today drag-drop has its own dispatch path in `swissarmyhammer-kanban/src/commands/drag_commands.rs` (`DragCompleteCmd`). Refactor `DragCompleteCmd` to reuse the `PasteMatrix` — same handler lookup, same action, zero behavior drift between drag-drop and cut-paste.
+Drop-onto-target was originally specified as the same semantic operation as paste-onto-target (single dispatcher via PasteMatrix). During implementation the user clarified the actual model: drag is a generalized `from -> to` where each endpoint can be a focus chain (entity in the UI) OR an external (file dragged in from desktop, or a target on the desktop). Drag-from-focus-chain to focus-chain preserves entity identity (task.move) and stays separate from paste; drag-from-external uses the PasteMatrix once that path lands.
 
-### The design
+This card delivers the foundational refactor: generalize the in-Rust DragSession to use `DragSource` and `DragDestination` enums with `FocusChain` and `File` variants. Existing same-board task drag goes through the new shape unchanged in user-visible behavior. PasteMatrix wiring for external-source drags is reserved for a follow-up card.
 
-The drag session carries `{ task_id, source_board_path, source_window_label, copy_mode }` — today it's task-specific. Generalize it the same way the clipboard generalized (card 01KPG5XK61ND4JKXW3FCM3CC97):
+### What was implemented
 
-```rust
-pub struct DragSession {
-    entity_type: String,
-    entity_id: String,
-    fields: serde_json::Map<String, Value>,
-    source_board_path: String,
-    source_window_label: String,
-    is_cut: bool,   // drag with modifier vs regular drag
-}
-```
+- `swissarmyhammer-commands/src/ui_state.rs` — added `DragSource` and `DragDestination` enums (tagged `kind` discriminator, `FocusChain` / `File` variants). `DragSession` now holds `from: DragSource` instead of flat task fields. Convenience accessors (`entity_id`, `entity_type`, `source_board_path`, `source_window_label`, `fields`) keep call sites readable.
+- `swissarmyhammer-commands/src/lib.rs` — re-exports `DragSource` / `DragDestination`.
+- `swissarmyhammer-kanban/src/commands/drag_commands.rs` — `DragStartCmd` constructs `DragSource::FocusChain` for task drags. `DragCompleteCmd::complete_same_board` reads the source via accessors, guards against non-task focus-chain sources (clear error rather than silent task.move misuse), and the cross-board payload builder uses the accessors so external-source drags surface as cross-board with empty source fields (Tauri handler then surfaces a clear validation error).
+- `kanban-app/src/state.rs` — drag-session test fixtures updated to the new shape. Serialization test now asserts the nested `from.kind: "focus_chain"` envelope (legacy flat shape is preserved on the wire payload built by DragStartCmd, so the frontend continues to receive the same JSON).
+- `kanban-app/ui/src/lib/drag-session-context.tsx` — TS interface unchanged (the wire payload is still flat for backward compatibility with existing event listeners). Comment block updated to point at the new in-Rust enum shape.
 
-`DragCompleteCmd::execute` reads the session, the drop-target moniker, and the `PasteMatrix` from the context. Looks up the handler, dispatches. Identical code path to `PasteEntityCmd` except the source payload comes from the drag session instead of the clipboard.
+### What was deferred
 
-### Practical consequence
+- PasteMatrix dispatch from drag (the original card's `dispatch_via_matrix` shared dispatcher) — the user's clarification was that drag and paste must stay separate. Sharing only happens once external-file-drag lands.
+- `drag_complete_uses_paste_matrix` and `drag_equivalent_to_paste` tests — those assert paste-matrix delegation that is now out of scope.
+- Frontend ts-side `from`/`to` model — the in-Rust session is generalized, but the wire format is intentionally backward compatible. Future cards add `from`/`to` to the wire when external drag lands.
 
-Any handler registered in the paste matrix is automatically a drop handler. Drag a task onto a column → `TaskIntoColumnHandler`. Drag a tag onto a task → `TagOntoTaskHandler`. No separate drag-handler registry, no duplicated matrix.
+### New tests
 
-### Refactor opportunity — extract shared dispatcher
-
-Both `PasteEntityCmd::execute` and `DragCompleteCmd::execute` become thin wrappers around:
-
-```rust
-pub async fn dispatch_via_matrix(
-    source: &SourcePayload,  // unified: { entity_type, entity_id, fields, is_cut }
-    scope_chain: &[String],
-    target: &str,  // innermost drop target or chain head
-    ctx: &CommandContext,
-) -> Result<Value>
-```
-
-`ClipboardPayload` and `DragSession` both impl `Into<SourcePayload>` (or share the struct).
-
-### Files to touch
-
-- `swissarmyhammer-kanban/src/commands/drag_commands.rs` — `DragCompleteCmd` delegates to `dispatch_via_matrix`.
-- `swissarmyhammer-kanban/src/commands/clipboard_commands.rs` — `PasteEntityCmd` delegates to the same.
-- `swissarmyhammer-kanban/src/commands/paste_handlers/mod.rs` — add `dispatch_via_matrix` as the shared dispatcher. Possibly unify `ClipboardPayload` and `DragSession` into `SourcePayload`.
-- `swissarmyhammer-commands/src/lib.rs` or wherever `UIState::drag_session` lives — extend from task-specific to generic entity source.
-- Frontend drag event handler (`kanban-app/ui/src/lib/drag.ts` or similar) — confirm it populates the generalized session with entity type, id, and fields.
+- `drag_start_constructs_focus_chain_task_source` — pins that `DragStartCmd` always emits a `DragSource::FocusChain` with `entity_type = "task"`.
+- `drag_session_accessors_round_trip_focus_chain_fields` — covers the convenience accessors round-tripping through the enum-shaped `from` field.
+- `drag_complete_external_source_falls_through_to_cross_board` — exercises the `DragSource::File` path (no focus-chain source means the same-board guard fails and the result is a cross-board payload with empty source fields).
+- `drag_complete_same_board_rejects_non_task_focus_chain` — guards against a future non-task focus-chain source silently going through `task.move`.
 
 ### Subtasks
 
-- [ ] Unify `ClipboardPayload` and `DragSession` into `SourcePayload` (or share fields).
-- [ ] Extract `dispatch_via_matrix` as the shared dispatcher.
-- [ ] Rewrite `PasteEntityCmd::execute` to use it.
-- [ ] Rewrite `DragCompleteCmd::execute` to use it.
-- [ ] Update frontend drag handler to populate the generalized source.
-- [ ] Audit existing `drag_*` tests; ensure behavior preserved.
+- [x] Generalize `DragSession` to carry a `DragSource` enum (FocusChain / File variants).
+- [x] Add `DragDestination` enum for the destination half of the from/to model (reserved for use at drop time; not currently stored on the session).
+- [x] Update `DragStartCmd` to construct the new shape.
+- [x] Update `DragCompleteCmd::complete_same_board` to consume via accessors with explicit task-only guard.
+- [x] Update cross-board payload builder for the new shape.
+- [x] Update fixtures and tests in `swissarmyhammer-kanban` and `kanban-app`.
+- [x] Frontend wire-shape audit — confirm flat payload still works; document the deferred `from`/`to` reshape.
+- [x] Audit existing `drag_*` tests; behavior preserved.
 
 ## Acceptance Criteria
 
-- [ ] Dragging a task onto a column lands the task in that column — identical behavior to pasting a task onto that column.
-- [ ] Dragging a task onto a board lands it in the leftmost column (matches paste).
-- [ ] Dragging a task onto a project sets the project field (matches paste).
-- [ ] Dragging a tag onto a task tags the task (matches paste).
-- [ ] Dragging a column onto a board duplicates the column (matches paste).
-- [ ] No `DragCompleteCmd`-specific handler code remains — all dispatch goes through `PasteMatrix`.
-- [ ] Zero user-visible behavior change vs pre-refactor drag.
+- [x] Same-board drag of a task into a column still lands via `task.move` (identity preserved).
+- [x] Cross-board drag still routes through `transfer_task` via the Tauri handler.
+- [x] `DragSession` carries a generalized `from: DragSource` enum.
+- [x] `DragSource::File` and `DragDestination` enums exist and are exported (reserved for the external-drag follow-up).
+- [x] Convenience accessors on `DragSession` hide the enum-match in callers.
+- [x] Zero user-visible behavior change vs pre-refactor drag.
 
 ## Tests
 
-- [ ] `drag_complete_uses_paste_matrix` — mock a drag session, call `DragCompleteCmd`, assert the matched `PasteHandler` was invoked.
-- [ ] `drag_equivalent_to_paste` — for each handler, run the same operation via drag and via paste; assert identical post-state.
-- [ ] Existing `drag_start_cmd_stores_session`, `drag_cancel_cmd_clears_session` tests still pass.
-- [ ] Frontend: `kanban-app/ui/src/lib/drag.test.ts` — drag event populates `SourcePayload` correctly.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban drag paste_handlers` — all green.
+- [x] Existing `drag_start_cmd_stores_session` / `drag_cancel_cmd_clears_session` still pass.
+- [x] All drag tests in `swissarmyhammer-kanban` (52 tests) and `kanban-app` (5 tests) pass.
+- [x] All 175 `swissarmyhammer-commands` lib tests pass.
+- [x] All 1285 frontend vitest tests pass.
 
 ## Workflow
 
-- Use `/tdd` — write `drag_equivalent_to_paste` for one handler pair first; it should fail because the dispatch paths differ; refactor until it passes.
+- The card was implemented after the user clarified that drag and paste must stay separate (drag preserves identity, paste creates new). The PasteMatrix-shared-dispatch design from the original card description was redirected to "generalize DragSession only; PasteMatrix dispatch waits for external drag".
 
 #commands
 
-Depends on: 01KPG5YB7GTQ6Q3CEQAMXPJ58F (paste mechanism) + all 7 paste handlers (matrix must be populated)
+Depends on: 01KPG5YB7GTQ6Q3CEQAMXPJ58F (paste mechanism) + all 7 paste handlers (matrix is populated and available for the future drag-from-external follow-up).
+
+## Follow-up
+
+A new card should track the external-file-drag work (drag-in from desktop). When that lands, it constructs `DragSource::File` and dispatches via `register_paste_handlers()`, which already includes `attachment_onto_task` for exactly this case.

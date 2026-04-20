@@ -146,65 +146,13 @@ fn filtered_overrides(snapshot: &Map<String, Value>) -> HashMap<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::InitBoard;
-    use crate::clipboard::{
-        deserialize_from_clipboard, serialize_to_clipboard, ClipboardData, ClipboardPayload,
+    use crate::commands::paste_handlers::test_support::{
+        list_tasks, make_ctx, matrix_with, setup, snapshot_task, task_clipboard_from_fields,
     };
-    use crate::commands::paste_handlers::PasteMatrix;
     use crate::task::AddTask;
     use crate::types::TaskId;
     use serde_json::json;
-    use std::sync::Arc;
     use swissarmyhammer_operations::Execute;
-
-    /// Build a fresh `KanbanContext` on a tempdir with the default board
-    /// columns (todo / doing / done) seeded.
-    async fn setup() -> (tempfile::TempDir, Arc<KanbanContext>) {
-        let temp = tempfile::TempDir::new().unwrap();
-        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
-        InitBoard::new("Test")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
-        (temp, kanban)
-    }
-
-    /// Produce a `CommandContext` carrying the supplied `KanbanContext`
-    /// extension. The scope chain is empty — `target` carries the
-    /// pasted-onto moniker directly, mirroring how `PasteEntityCmd`
-    /// invokes a handler.
-    fn make_ctx(kanban: &Arc<KanbanContext>) -> CommandContext {
-        let mut ctx = CommandContext::new(
-            "entity.paste",
-            vec![],
-            None,
-            std::collections::HashMap::new(),
-        );
-        ctx.set_extension(Arc::clone(kanban));
-        ctx
-    }
-
-    /// Snapshot a task's fields into a `ClipboardPayload` with the given
-    /// `mode` ("copy" or "cut").
-    async fn snapshot_task(kanban: &KanbanContext, task_id: &str, mode: &str) -> ClipboardPayload {
-        let ectx = kanban.entity_context().await.unwrap();
-        let entity = ectx.read("task", task_id).await.unwrap();
-        let fields = serde_json::to_value(&entity.fields).unwrap();
-        let json = serialize_to_clipboard("task", task_id, mode, fields);
-        deserialize_from_clipboard(&json).expect("snapshot must round-trip")
-    }
-
-    /// Read every task currently on the board.
-    async fn list_tasks(kanban: &KanbanContext) -> Vec<swissarmyhammer_entity::Entity> {
-        kanban
-            .entity_context()
-            .await
-            .unwrap()
-            .list("task")
-            .await
-            .unwrap()
-    }
 
     // =========================================================================
     // Local matrix registration — verifies dispatch wiring works in isolation.
@@ -217,8 +165,7 @@ mod tests {
     /// per the parallel-safety note in the implementing card.
     #[test]
     fn local_matrix_finds_task_into_column_handler() {
-        let mut matrix = PasteMatrix::default();
-        matrix.register(TaskIntoColumnHandler);
+        let matrix = matrix_with(TaskIntoColumnHandler);
         assert!(
             matrix.find("task", "column").is_some(),
             "matrix should resolve (task, column) to TaskIntoColumnHandler"
@@ -296,18 +243,20 @@ mod tests {
         // Synthesize a clipboard payload as if `entity.copy` had snapshotted
         // a task that carried these fields. Position fields are deliberately
         // included to verify the handler's drop logic.
-        let snapshot_fields = json!({
-            "title": "Rich source",
-            "body": "Reproduce #bug",
-            "assignees": ["alice"],
-            "project": "proj-x",
-            "tags": ["bug"],
-            // Stale position from the source — must be ignored.
-            "position_column": "todo",
-            "position_ordinal": "80",
-        });
-        let clipboard_json = serialize_to_clipboard("task", "01OLDSOURCE", "copy", snapshot_fields);
-        let payload = deserialize_from_clipboard(&clipboard_json).unwrap();
+        let payload = task_clipboard_from_fields(
+            "01OLDSOURCE",
+            json!({
+                "title": "Rich source",
+                "body": "Reproduce #bug",
+                "assignees": ["alice"],
+                "project": "proj-x",
+                "tags": ["bug"],
+                // Stale position from the source — must be ignored.
+                "position_column": "todo",
+                "position_ordinal": "80",
+            }),
+            "copy",
+        );
         let ctx = make_ctx(&kanban);
 
         let result = TaskIntoColumnHandler
@@ -521,14 +470,12 @@ mod tests {
     /// pastes.
     #[test]
     fn handler_available_defaults_to_true() {
-        let payload = ClipboardPayload {
-            swissarmyhammer_clipboard: ClipboardData {
-                entity_type: "task".into(),
-                entity_id: "01SRC".into(),
-                mode: "copy".into(),
-                fields: json!({}),
-            },
-        };
+        let payload = crate::commands::paste_handlers::test_support::clipboard_payload(
+            "task",
+            "01SRC",
+            "copy",
+            json!({}),
+        );
         let ctx = CommandContext::new(
             "entity.paste",
             vec![],
@@ -549,5 +496,57 @@ mod tests {
     fn task_id_round_trips_through_delete_op_constructor() {
         let id = TaskId::from_string("01SRC");
         let _op = DeleteTask::new(id);
+    }
+
+    /// Cut-mode transactional safety: when destination create fails the
+    /// source must remain on the board untouched.
+    ///
+    /// The handler creates the destination task first and only deletes the
+    /// source after the create succeeds. Forcing a create failure (here,
+    /// via a non-existent target column id) must therefore leave the source
+    /// intact — otherwise a paste error would silently destroy the user's
+    /// data with no replacement.
+    ///
+    /// This pins the create-then-delete invariant for `(task, column)` and
+    /// guards against a future refactor that flips the order to
+    /// delete-then-create.
+    #[tokio::test]
+    async fn task_into_column_cut_preserves_source_when_create_fails() {
+        let (_temp, kanban) = setup().await;
+        let add = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = add["id"].as_str().unwrap().to_string();
+
+        // Build a cut payload from the real source so the handler reaches
+        // its create path with a well-formed clipboard snapshot.
+        let payload = snapshot_task(kanban.as_ref(), &source_id, "cut").await;
+        let ctx = make_ctx(&kanban);
+
+        // Target a column that does not exist — the handler's destination
+        // pre-check fires before AddEntity is called, surfacing
+        // `DestinationInvalid`. The source must still be present.
+        let result = TaskIntoColumnHandler
+            .execute(&payload, "column:ghost-column", &ctx)
+            .await;
+        assert!(
+            matches!(result, Err(CommandError::DestinationInvalid(_))),
+            "cut paste onto missing column must surface DestinationInvalid; got {result:?}"
+        );
+
+        // Source survives — create-then-delete ordering means a failed
+        // create never destroys the original.
+        let tasks = list_tasks(kanban.as_ref()).await;
+        assert_eq!(
+            tasks.len(),
+            1,
+            "source task must remain when destination create fails"
+        );
+        assert_eq!(
+            tasks[0].id, source_id,
+            "the surviving task must be the source we tried to cut"
+        );
     }
 }

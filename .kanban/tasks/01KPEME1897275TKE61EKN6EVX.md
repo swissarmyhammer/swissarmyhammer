@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPG6XZ9GKP2VJPA6XWNE8WN4
-position_column: todo
-position_ordinal: d580
+position_column: done
+position_ordinal: fffffffffffffffffffffffb80
 title: 'Commands: retire DeleteProjectCmd and project.delete registration (superseded by entity.delete auto-emit)'
 ---
 ## What
@@ -30,25 +30,25 @@ Once the auto-emit migration lands (card 01KPEN0JMTVSCW8PZW6RRD0NC3), `entity.de
 
 ### Subtasks
 
-- [ ] Delete `DeleteProjectCmd` struct, `impl Command`, and tests.
-- [ ] Remove `project.delete` registration from `register_commands`.
-- [ ] Audit `AddProjectCmd` — delete if unreferenced.
-- [ ] Update `register_commands_returns_expected_count` total.
-- [ ] Grep frontend for `"project.delete"`; migrate dispatches.
+- [x] Delete `DeleteProjectCmd` struct, `impl Command`, and tests. (Whole `project_commands.rs` deleted — `AddProjectCmd` was also dead.)
+- [x] Remove `project.delete` registration from `register_commands`.
+- [x] Audit `AddProjectCmd` — delete if unreferenced. (Deleted; entire file removed.)
+- [x] Update `register_commands_returns_expected_count` total. (63 → 62.)
+- [x] Grep frontend for `"project.delete"`; migrate dispatches. (None found.)
 
 ## Acceptance Criteria
 
-- [ ] Right-click on a project card shows **Delete Project** and deletes the project (verified by matrix test in card 01KPEMFBBFRE1JWRJ9AXQFVSEB).
-- [ ] `DeleteProjectCmd` no longer exists.
-- [ ] `register_commands()` does not register `project.delete`.
-- [ ] `grep -r '"project.delete"' kanban-app/` returns no dispatch sites.
-- [ ] `test_all_yaml_commands_have_rust_implementations` still passes.
+- [x] Right-click on a project card shows **Delete Project** and deletes the project (verified by matrix test in card 01KPEMFBBFRE1JWRJ9AXQFVSEB). (Backed by `entity.delete` auto-emit, locked in by `entity_delete_surfaces_on_project_via_autoemit` and the new `delete_entity_deletes_project`.)
+- [x] `DeleteProjectCmd` no longer exists.
+- [x] `register_commands()` does not register `project.delete`.
+- [x] `grep -r '"project.delete"' kanban-app/` returns no dispatch sites.
+- [x] `test_all_yaml_commands_have_rust_implementations` still passes.
 
 ## Tests
 
-- [ ] Add `delete_entity_deletes_project` in `swissarmyhammer-kanban/src/commands/entity_commands.rs` tests (mirror `delete_entity_deletes_tag`): create a project, call `DeleteEntityCmd::execute` with `target = "project:<id>"`, assert the project is gone.
-- [ ] Remove the `DeleteProjectCmd` test block from `project_commands.rs`.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban` — all green.
+- [x] Add `delete_entity_deletes_project` in `swissarmyhammer-kanban/src/commands/entity_commands.rs` tests (mirror `delete_entity_deletes_tag`): create a project, call `DeleteEntityCmd::execute` with `target = "project:<id>"`, assert the project is gone.
+- [x] Remove the `DeleteProjectCmd` test block from `project_commands.rs`. (File removed entirely.)
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban` — all green. (All commands tests pass; one pre-existing unrelated failure remains in `yaml_hygiene_no_cross_cutting_in_entity_schemas` flagging `tag.yaml` and `task.yaml` cleanup work being done in sibling cards — confirmed pre-existing by running on a clean checkout of the failing test before these edits.)
 
 ## Workflow
 
