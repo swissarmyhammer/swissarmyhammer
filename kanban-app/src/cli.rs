@@ -1,7 +1,5 @@
 //! CLI subcommands for the kanban app binary.
 
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
 use swissarmyhammer_kanban::{
     board::{GetBoard, InitBoard},
@@ -17,14 +15,6 @@ use swissarmyhammer_kanban::{
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
-
-    /// Hermetic-launch mode: open exactly the given board in exactly one
-    /// window and disable UIState persistence. Skips session restore and
-    /// auto-open of recent boards so the developer's real configuration is
-    /// untouched. Primarily intended for scripted launches that need a
-    /// deterministic starting state.
-    #[arg(long, value_name = "BOARD_PATH", global = true)]
-    pub only: Option<PathBuf>,
 }
 
 /// CLI subcommands exposed by `kanban-app`. Most produce JSON on stdout and
@@ -128,39 +118,5 @@ async fn handle_list(column: Option<&str>) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    /// `--only <path>` parses into `Cli::only` and leaves `command` empty
-    /// so the binary falls through to GUI startup. This is the contract
-    /// scripted/hermetic launches rely on.
-    #[test]
-    fn parse_only_flag_without_subcommand() {
-        let cli = Cli::parse_from(["kanban-app", "--only", "/tmp/fixture.kanban"]);
-        assert_eq!(cli.only, Some(PathBuf::from("/tmp/fixture.kanban")));
-        assert!(cli.command.is_none());
-    }
-
-    /// Absence of `--only` leaves `Cli::only` as `None`, so `AppState::new()`
-    /// runs and the normal auto-open + session-restore sequence fires.
-    #[test]
-    fn parse_without_only_flag() {
-        let cli = Cli::parse_from(["kanban-app"]);
-        assert_eq!(cli.only, None);
-    }
-
-    /// `--only` is declared `global = true` so it works alongside any
-    /// subcommand — e.g. hypothetical future `kanban-app gui --only <path>`.
-    /// Verify the parser accepts it after a subcommand too.
-    #[test]
-    fn parse_only_flag_with_gui_subcommand() {
-        let cli = Cli::parse_from(["kanban-app", "gui", "--only", "/tmp/fixture.kanban"]);
-        assert_eq!(cli.only, Some(PathBuf::from("/tmp/fixture.kanban")));
-        assert!(matches!(cli.command, Some(Command::Gui)));
     }
 }

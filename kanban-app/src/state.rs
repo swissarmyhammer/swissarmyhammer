@@ -425,13 +425,6 @@ pub(crate) struct AppState {
     /// resurrecting previous-session windows on top of the one the deep-link
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
-    /// Hermetic-launch override set by the `--only <board-path>` CLI flag.
-    /// When `Some`, `setup_app` skips `auto_open_board` and
-    /// `restore_session_windows`, opens exactly this board in a single
-    /// window, and the ExitRequested handler skips `UIState::save()` so the
-    /// developer's real config file is never written. Used by integration
-    /// tests that need a deterministic starting state.
-    pub(crate) only: Option<PathBuf>,
 }
 
 impl AppState {
@@ -440,23 +433,7 @@ impl AppState {
     /// Restores the inspector stack from the persisted config into UIState
     /// so the backend is the single source of truth from startup.
     pub fn new() -> Self {
-        Self::with_ui_state_path(ui_state_file_path(), None)
-    }
-
-    /// Create a new AppState for a hermetic launch driven by `--only`.
-    ///
-    /// Loads UIState from a throwaway in-tempdir path so the developer's real
-    /// config file is never read or written, and records `only` so
-    /// `setup_app` can branch its startup sequence. See the `only` field
-    /// docstring for the full contract.
-    pub fn with_only(only_path: PathBuf) -> Self {
-        // Route UIState to a unique tempfile so even an accidental save()
-        // call can never touch the developer's real config. The file is
-        // never read (no prior contents to restore from a fresh path) and
-        // ExitRequested skips save(), so this is belt-and-braces isolation.
-        let scratch_ui_state =
-            std::env::temp_dir().join(format!("kanban-only-{}.yaml", ulid::Ulid::new()));
-        Self::with_ui_state_path(scratch_ui_state, Some(only_path))
+        Self::with_ui_state_path(ui_state_file_path())
     }
 
     /// Create AppState with a specific UIState persistence path.
@@ -466,13 +443,11 @@ impl AppState {
     pub fn new_for_test() -> Self {
         Self::with_ui_state_path(
             std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new())),
-            None,
         )
     }
 
-    /// Internal constructor with an explicit UIState persistence path and
-    /// optional `--only` hermetic-launch target.
-    fn with_ui_state_path(ui_state_path: PathBuf, only: Option<PathBuf>) -> Self {
+    /// Internal constructor with an explicit UIState persistence path.
+    fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
         let sources = builtin_yaml_sources();
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         let ui_state = Arc::new(UIState::load(ui_state_path));
@@ -486,7 +461,6 @@ impl AppState {
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
-            only,
         }
     }
 
@@ -697,19 +671,8 @@ impl AppState {
         }
         tracing::info!("auto_open_board: no .kanban found walking up from CWD");
 
-        if let Some(home) = dirs::home_dir() {
-            let walked_through_home = cwd.starts_with(&home);
-            tracing::info!(
-                home = %home.display(),
-                walked_through_home,
-                "auto_open_board: checking home dir backstop"
-            );
-            if !walked_through_home {
-                if let Some(dir) = discover_board(&home) {
-                    tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
-                    return Some(dir);
-                }
-            }
+        if let Some(dir) = home_backstop(cwd) {
+            return Some(dir);
         }
 
         let recent_boards = self.ui_state.recent_boards();
@@ -818,6 +781,25 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Check the home directory for a `.kanban` — but only if the CWD walk
+/// didn't already pass through home (in which case the absence is
+/// authoritative).
+fn home_backstop(cwd: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let walked_through_home = cwd.starts_with(&home);
+    tracing::info!(
+        home = %home.display(),
+        walked_through_home,
+        "auto_open_board: checking home dir backstop"
+    );
+    if walked_through_home {
+        return None;
+    }
+    let dir = discover_board(&home)?;
+    tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
+    Some(dir)
 }
 
 /// Walk up from `start_dir` looking for a `.kanban` subdirectory.
@@ -1340,100 +1322,5 @@ mod tests {
         assert!(label.starts_with("board-"));
         // ULID is 26 chars, so label is "board-" (6) + 26 = 32
         assert_eq!(label.len(), 32);
-    }
-
-    // =========================================================================
-    // --only hermetic-launch tests
-    // =========================================================================
-
-    /// `AppState::with_only` must record the path so `setup_app` can branch
-    /// on it. This is the wire that connects the CLI flag to the startup
-    /// sequence — if this regresses, the whole hermetic-launch contract
-    /// silently falls back to normal behavior.
-    #[test]
-    fn test_with_only_sets_only_field() {
-        let board = PathBuf::from("/tmp/fixture-board.kanban");
-        let state = AppState::with_only(board.clone());
-        assert_eq!(state.only.as_deref(), Some(board.as_path()));
-    }
-
-    /// A `--only` launch must never read or write the developer's real
-    /// UIState. Constructing ten `with_only` states back-to-back and
-    /// checking no two share a UIState config path approximates that the
-    /// path is a fresh unique tempfile each time, not the shared global
-    /// XDG path. (Reading `config_path` directly would require exposing
-    /// internal UIState details; observing uniqueness is sufficient proof
-    /// that the config is not the global one.)
-    #[test]
-    fn test_with_only_uses_unique_ui_state_paths() {
-        let board = PathBuf::from("/tmp/fixture-board.kanban");
-        let a = AppState::with_only(board.clone());
-        let b = AppState::with_only(board.clone());
-        // Each state gets its own scratch UIState. Mutating one must not
-        // leak into the other — they're independent instances, not a
-        // shared-file setup.
-        a.ui_state.set_most_recent_board("/only/a");
-        b.ui_state.set_most_recent_board("/only/b");
-        assert_eq!(
-            a.ui_state.most_recent_board().as_deref(),
-            Some("/only/a"),
-            "a should keep its own MRU setting"
-        );
-        assert_eq!(
-            b.ui_state.most_recent_board().as_deref(),
-            Some("/only/b"),
-            "b should keep its own MRU setting"
-        );
-    }
-
-    /// Default construction paths (`new`, `new_for_test`) must leave `only`
-    /// cleared so `setup_app` runs the normal auto-open + restore sequence.
-    #[test]
-    fn test_default_constructors_leave_only_unset() {
-        let state = AppState::new_for_test();
-        assert!(
-            state.only.is_none(),
-            "new_for_test must not set only; got {:?}",
-            state.only
-        );
-    }
-
-    /// `--only` works end-to-end at the AppState layer: the caller opens
-    /// the given board and AppState lists exactly that board, no others.
-    /// This is the Rust-side mirror of the acceptance criterion
-    /// "`kanban-app --only /tmp/test.kanban` opens exactly that board".
-    /// The Tauri window-creation step inside `setup_app` is not reachable
-    /// without a running Tauri event loop, so it is not asserted here.
-    #[tokio::test]
-    async fn test_with_only_opens_exactly_one_board() {
-        let tmp = TempDir::new().unwrap();
-        create_board_at(tmp.path(), "Only Board");
-
-        let state = AppState::with_only(tmp.path().to_path_buf());
-        // Nothing should be open yet — `setup_app` does the open.
-        assert_eq!(state.boards.read().await.len(), 0);
-
-        // Simulate the `open_only_board` step from `setup_app`.
-        let canonical = state.open_board(tmp.path(), None).await.unwrap();
-
-        let boards = state.boards.read().await;
-        assert_eq!(boards.len(), 1, "only mode must open exactly one board");
-        assert!(boards.contains_key(&canonical));
-    }
-
-    /// A second invocation of `with_only` on the same path and a quit
-    /// cycle (via the ExitRequested skip path, which we verify by never
-    /// calling `save()`) must not leak anything to the developer's real
-    /// UIState. We can't exercise `handle_run_event` directly without a
-    /// Tauri `AppHandle`, so we verify the precondition it checks: the
-    /// `only` field is set. This locks in the guard that prevents the
-    /// save call.
-    #[test]
-    fn test_with_only_flag_gates_save_on_exit() {
-        let state = AppState::with_only(PathBuf::from("/tmp/fixture.kanban"));
-        assert!(
-            state.only.is_some(),
-            "handle_run_event gates save on this flag; it must be set"
-        );
     }
 }

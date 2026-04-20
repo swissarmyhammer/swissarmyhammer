@@ -2,20 +2,12 @@
 //!
 //! This module is intentionally **backend-only** — everything here writes
 //! content to disk and returns a handle that downstream test code can feed
-//! to [`AppState::open_board`] or the `--only` launch path. The factory
-//! never invokes React and never talks to a window.
+//! to [`AppState::open_board`]. The factory never invokes React and never
+//! talks to a window.
 //!
 //! The `mod test_support;` declaration in `main.rs` is `#[cfg(test)]`, so
 //! the whole module compiles only for test builds — the `tempfile`
 //! dev-dependency stays out of the production binary.
-//!
-//! # Example
-//!
-//! ```ignore
-//! let (_tempdir, fixture) = write_3x3_board().await;
-//! let state = AppState::with_only(fixture.path.clone());
-//! // ... launch Tauri against `state`, drive it, assert, drop tempdir.
-//! ```
 
 use std::path::PathBuf;
 
