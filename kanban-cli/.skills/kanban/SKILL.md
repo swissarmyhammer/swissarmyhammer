@@ -2,8 +2,8 @@
 name: kanban
 description: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item.
 metadata:
-  version: 0.12.11
   author: swissarmyhammer
+  version: 0.12.11
 ---
 
 {% include "_partials/review-column" %}
