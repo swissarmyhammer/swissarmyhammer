@@ -270,39 +270,9 @@ fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> Hea
 ///
 /// Denying Bash forces agents through the shell tool's security pipeline.
 fn check_bash_denied(cat: &str) -> HealthCheck {
-    let path = std::path::PathBuf::from(".claude").join("settings.json");
-    if !path.exists() {
-        return HealthCheck::warning(
-            "Bash denied",
-            "No .claude/settings.json found — Bash may not be denied for agents",
-            Some("Create .claude/settings.json with {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce shell tool security policies".to_string()),
-            cat,
-        );
-    }
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            return HealthCheck::warning(
-                "Bash denied",
-                format!(".claude/settings.json could not be read: {}", e),
-                Some("Check file permissions on .claude/settings.json".to_string()),
-                cat,
-            );
-        }
-    };
-    let settings: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            return HealthCheck::warning(
-                "Bash denied",
-                format!(".claude/settings.json could not be parsed as JSON: {}", e),
-                Some(
-                    "Ensure .claude/settings.json is valid JSON with a permissions.deny array"
-                        .to_string(),
-                ),
-                cat,
-            );
-        }
+    let settings = match load_claude_settings_for_bash_check(cat) {
+        Ok(s) => s,
+        Err(warning) => return warning,
     };
     if settings_denies_bash(&settings) {
         HealthCheck::ok(
@@ -318,6 +288,42 @@ fn check_bash_denied(cat: &str) -> HealthCheck {
             cat,
         )
     }
+}
+
+/// Load `.claude/settings.json` for the Bash-denied health check.
+///
+/// On failure (missing file, read error, or JSON parse error), returns a
+/// warning-level `HealthCheck` in the `"Bash denied"` namespace suitable for
+/// the caller to return directly.
+fn load_claude_settings_for_bash_check(cat: &str) -> Result<serde_json::Value, HealthCheck> {
+    let path = std::path::PathBuf::from(".claude").join("settings.json");
+    if !path.exists() {
+        return Err(HealthCheck::warning(
+            "Bash denied",
+            "No .claude/settings.json found — Bash may not be denied for agents",
+            Some("Create .claude/settings.json with {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce shell tool security policies".to_string()),
+            cat,
+        ));
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        HealthCheck::warning(
+            "Bash denied",
+            format!(".claude/settings.json could not be read: {}", e),
+            Some("Check file permissions on .claude/settings.json".to_string()),
+            cat,
+        )
+    })?;
+    serde_json::from_str(&content).map_err(|e| {
+        HealthCheck::warning(
+            "Bash denied",
+            format!(".claude/settings.json could not be parsed as JSON: {}", e),
+            Some(
+                "Ensure .claude/settings.json is valid JSON with a permissions.deny array"
+                    .to_string(),
+            ),
+            cat,
+        )
+    })
 }
 
 /// Return `true` when the Claude settings object lists `"Bash"` under
