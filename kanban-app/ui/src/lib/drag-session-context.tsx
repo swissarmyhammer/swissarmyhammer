@@ -163,12 +163,12 @@ function useDragSessionEvents(
   }, []);
 }
 
-/** Drag-start / drag-cancel dispatch callbacks. */
-function useDragStartCallbacks(
+/** Callback for starting a focus-chain (task) drag session. */
+function useStartSession(
   dispatch: DispatchFn,
   setIsSource: (b: boolean) => void,
 ) {
-  const startSession = useCallback(
+  return useCallback(
     async (
       taskId: string,
       taskFields: Record<string, unknown>,
@@ -192,8 +192,14 @@ function useDragStartCallbacks(
     },
     [dispatch, setIsSource],
   );
+}
 
-  const startFileSession = useCallback(
+/** Callback for starting a file-drop drag session. */
+function useStartFileSession(
+  dispatch: DispatchFn,
+  setIsSource: (b: boolean) => void,
+) {
+  return useCallback(
     async (filePath: string, copyMode = false) => {
       try {
         // sourceKind="file" flips DragStartCmd onto the file-drag construction
@@ -214,16 +220,17 @@ function useDragStartCallbacks(
     },
     [dispatch, setIsSource],
   );
+}
 
-  const cancelSession = useCallback(async () => {
+/** Callback for cancelling the active drag session. */
+function useCancelSession(dispatch: DispatchFn) {
+  return useCallback(async () => {
     try {
       await dispatch("drag.cancel");
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }
   }, [dispatch]);
-
-  return { startSession, startFileSession, cancelSession };
 }
 
 /** Drag-complete dispatch callbacks for focus-chain and file drags. */
@@ -282,8 +289,9 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
   const [isSource, setIsSource] = useState(false);
 
   useDragSessionEvents(setSession, setIsSource);
-  const { startSession, startFileSession, cancelSession } =
-    useDragStartCallbacks(dispatch, setIsSource);
+  const startSession = useStartSession(dispatch, setIsSource);
+  const startFileSession = useStartFileSession(dispatch, setIsSource);
+  const cancelSession = useCancelSession(dispatch);
   const { completeSession, completeFileSession } =
     useDragCompleteCallbacks(dispatch);
 
