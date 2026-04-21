@@ -402,7 +402,7 @@ impl ChatTemplateEngine {
         }
 
         // Deduplicate and return
-        all_tool_calls.sort_by(|a, b| a.id.to_string().cmp(&b.id.to_string()));
+        all_tool_calls.sort_by_key(|a| a.id.to_string());
         all_tool_calls.dedup_by(|a, b| a.id == b.id);
 
         debug!("Extracted {} unique tool calls", all_tool_calls.len());
