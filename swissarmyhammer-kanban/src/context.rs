@@ -467,27 +467,16 @@ impl KanbanContext {
                 // out the same Arc. `set` is infallible on an empty cell.
                 let _ = self.entity_cache.set(Arc::clone(&cache));
 
-                // Spawn a file-system watcher against the kanban root. Every
-                // external file change (entity or attachment) routes through
-                // the cache — entity edits via `refresh_from_disk`/`evict`,
-                // attachments via `send_attachment_event` — so subscribers
-                // observe a single unified stream regardless of whether the
-                // write came from a command or an outside editor.
-                //
-                // Failure is logged but not fatal: the cache is still usable
-                // for read/write, the app simply won't observe external edits.
-                match EntityWatcher::start(self.root.clone(), Arc::clone(&cache)) {
-                    Ok(watcher) => {
-                        let _ = self.entity_watcher.set(watcher);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            root = %self.root.display(),
-                            error = %e,
-                            "failed to start entity watcher — external file changes will not propagate"
-                        );
-                    }
-                }
+                // NOTE: the file-system watcher is **not** started here. On
+                // macOS, creating an FSEvents-based `RecommendedWatcher`
+                // takes several hundred milliseconds, and the watcher is
+                // only useful for callers that subscribe to the cache's
+                // broadcast channel (e.g. the kanban-app). Short-lived
+                // one-shot callers (MCP tool invocations, CLI commands,
+                // tests) neither subscribe nor observe external edits, so
+                // they must not pay that cost. Callers that need live
+                // external-change propagation must call `start_watcher()`
+                // explicitly — it is idempotent.
 
                 Ok::<Arc<EntityContext>, KanbanError>(entities)
             })
@@ -503,6 +492,50 @@ impl KanbanContext {
     /// broadcasts without going through the full `EntityContext` facade.
     pub fn entity_cache(&self) -> Option<Arc<EntityCache>> {
         self.entity_cache.get().map(Arc::clone)
+    }
+
+    /// Spawn a file-system watcher that routes external `.kanban/` edits
+    /// through the [`EntityCache`]. Idempotent — a second call is a no-op.
+    ///
+    /// Long-running processes that want to observe external edits (the
+    /// kanban-app is the only current caller) must invoke this explicitly.
+    /// One-shot callers (MCP tool invocations, CLI commands, tests) should
+    /// skip it: on macOS, constructing an FSEvents-based watcher costs
+    /// several hundred milliseconds and is wasted work when the context is
+    /// dropped right after a single operation.
+    ///
+    /// Requires `entity_context()` to have been called first so the cache
+    /// exists. Returns `Ok(false)` (with a warning logged) if called before
+    /// the cache is ready; returns `Ok(true)` when the watcher is running
+    /// (either newly spawned or already present from a prior call).
+    pub fn start_watcher(&self) -> Result<bool> {
+        if self.entity_watcher.get().is_some() {
+            return Ok(true);
+        }
+        let cache = match self.entity_cache.get() {
+            Some(c) => Arc::clone(c),
+            None => {
+                tracing::warn!(
+                    root = %self.root.display(),
+                    "start_watcher called before entity_context() — no cache to route events through"
+                );
+                return Ok(false);
+            }
+        };
+        match EntityWatcher::start(self.root.clone(), cache) {
+            Ok(watcher) => {
+                let _ = self.entity_watcher.set(watcher);
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    root = %self.root.display(),
+                    error = %e,
+                    "failed to start entity watcher — external file changes will not propagate"
+                );
+                Ok(false)
+            }
+        }
     }
 
     /// Register an `EntityTypeStore`-backed `StoreHandle` for every entity

@@ -119,8 +119,28 @@ impl ShellState {
         Self::with_dir(shell_dir)
     }
 
+    /// Create a new ShellState rooted at the given directory, using an
+    /// injected embedder rather than lazy-loading the production default.
+    ///
+    /// Tests pass a [`model_embedding::mock::MockEmbedder`] to avoid the
+    /// multi-second cost of loading `qwen-embedding` on every test that
+    /// exercises the shell tool.
+    pub fn with_dir_and_embedder(
+        shell_dir: PathBuf,
+        embedder: Arc<dyn TextEmbedder>,
+    ) -> anyhow::Result<Self> {
+        Self::build(shell_dir, Some(embedder))
+    }
+
     /// Create a new ShellState rooted at the given directory.
     pub fn with_dir(shell_dir: PathBuf) -> anyhow::Result<Self> {
+        Self::build(shell_dir, None)
+    }
+
+    fn build(
+        shell_dir: PathBuf,
+        injected_embedder: Option<Arc<dyn TextEmbedder>>,
+    ) -> anyhow::Result<Self> {
         let session_id = ulid::Ulid::new().to_string();
         fs::create_dir_all(&shell_dir)?;
 
@@ -159,7 +179,7 @@ impl ShellState {
         // Spawn background embedding worker (handles both INSERT and embedding)
         let db_clone = Arc::clone(&db);
         let worker_handle = tokio::spawn(async move {
-            embedding_worker(chunk_rx, db_clone).await;
+            embedding_worker(chunk_rx, db_clone, injected_embedder).await;
         });
 
         Ok(Self {
@@ -581,9 +601,17 @@ pub struct SearchResult {
 
 /// Background embedding worker — receives chunks via channel, inserts into DB,
 /// then computes and stores embeddings. Processes every chunk — never drops work.
-async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
+///
+/// When `injected` is `Some`, that embedder is used directly (tests pass a
+/// `MockEmbedder` to avoid paying real model-load cost). When `None`, the
+/// default production `Embedder` is lazy-built on the first chunk.
+async fn embedding_worker(
+    mut rx: mpsc::Receiver<ChunkJob>,
+    db: Arc<Mutex<Connection>>,
+    injected: Option<Arc<dyn TextEmbedder>>,
+) {
     // Lazy-init the model on first chunk
-    let mut model: Option<Embedder> = None;
+    let mut model: Option<Arc<dyn TextEmbedder>> = None;
 
     while let Some(job) = rx.recv().await {
         match job {
@@ -610,34 +638,21 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
                     }
                 }
 
-                // Step 2: Initialize embedding model on first use
+                // Step 2: Resolve the embedding model on first use.
                 if model.is_none() {
-                    match Embedder::default().await {
-                        Ok(m) => {
-                            if let Err(e) = m.load().await {
-                                tracing::warn!(
-                                    "Failed to load embedding model: {}. Embeddings disabled.",
-                                    e
-                                );
-                                // Continue draining jobs (INSERT only, no embedding)
-                                drain_inserts_only(&mut rx, &db).await;
-                                return;
-                            }
-                            model = Some(m);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to create embedding model: {}. Embeddings disabled.",
-                                e
-                            );
+                    model = match build_embedder(injected.clone()).await {
+                        Ok(m) => Some(m),
+                        Err(()) => {
+                            // Model failed to build or load — drain the queue
+                            // as INSERT-only and stop embedding further work.
                             drain_inserts_only(&mut rx, &db).await;
                             return;
                         }
-                    }
+                    };
                 }
 
                 // Step 3: Compute embedding and UPDATE the row
-                if let Some(ref mut m) = model {
+                if let Some(m) = &model {
                     match m.embed_text(&text).await {
                         Ok(mut result) => {
                             result.normalize();
@@ -656,6 +671,47 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
                     }
                 }
             }
+        }
+    }
+}
+
+/// Resolve and load the embedder the worker will use.
+///
+/// If `injected` is `Some`, that embedder is loaded and returned directly.
+/// Otherwise the production default (`Embedder::default()`) is built and loaded.
+/// Returns `Err(())` when construction or load fails — the worker logs the
+/// cause and falls back to INSERT-only behavior.
+async fn build_embedder(
+    injected: Option<Arc<dyn TextEmbedder>>,
+) -> Result<Arc<dyn TextEmbedder>, ()> {
+    if let Some(m) = injected {
+        if let Err(e) = m.load().await {
+            tracing::warn!(
+                "Failed to load injected embedder: {}. Embeddings disabled.",
+                e
+            );
+            return Err(());
+        }
+        return Ok(m);
+    }
+
+    match Embedder::default().await {
+        Ok(m) => {
+            if let Err(e) = m.load().await {
+                tracing::warn!(
+                    "Failed to load embedding model: {}. Embeddings disabled.",
+                    e
+                );
+                return Err(());
+            }
+            Ok(Arc::new(m) as Arc<dyn TextEmbedder>)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to create embedding model: {}. Embeddings disabled.",
+                e
+            );
+            Err(())
         }
     }
 }

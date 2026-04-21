@@ -58,14 +58,17 @@ mod tests {
     use rmcp::model::CallToolRequestParams;
 
     #[tokio::test]
-    #[serial_test::serial(cwd)]
     async fn test_client_list_tools() {
-        // Use agent_mode=true since this test checks for agent tools (files)
+        // Use agent_mode=true since this test checks for agent tools (files).
+        // Pass a tempdir as working_dir so the server doesn't bind to the host
+        // monorepo — prevents `startup_cleanup` from walking/hashing it and lets
+        // multiple server tests run in parallel without a CWD serial guard.
+        let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
-            None,
+            Some(temp.path().to_path_buf()),
             true,
         )
         .await
@@ -84,13 +87,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(cwd)]
     async fn test_client_list_prompts() {
+        let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
-            None,
+            Some(temp.path().to_path_buf()),
             false,
         )
         .await
@@ -105,14 +108,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(cwd)]
     async fn test_client_call_tool() {
-        // Use agent_mode=true since this test calls files (an agent tool)
+        // Use agent_mode=true since this test calls files (an agent tool).
+        let temp = tempfile::TempDir::new().unwrap();
         let mut server = start_mcp_server_with_options(
             McpServerMode::Http { port: None },
             None,
             None,
-            None,
+            Some(temp.path().to_path_buf()),
             true,
         )
         .await

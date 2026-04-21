@@ -2,6 +2,11 @@ use crate::model::entity::{build_entity_id, SemanticEntity};
 use crate::parser::plugin::SemanticParserPlugin;
 use crate::utils::hash::content_hash;
 
+/// Semantic parser plugin for JSON documents.
+///
+/// Extracts each top-level key of the root object as a separate entity whose
+/// `entity_type` is `"object"` if the value is an object/array and `"property"`
+/// otherwise. Entity IDs are JSON Pointer paths rooted at `/`.
 pub struct JsonParserPlugin;
 
 impl SemanticParserPlugin for JsonParserPlugin {
@@ -70,114 +75,170 @@ struct JsonEntry {
     start_line: usize, // 1-based
 }
 
-/// Scan the source text to find each top-level key in the root JSON object.
-/// Returns entries with accurate start_line positions.
-fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
-    let mut entries = Vec::new();
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut line_num: usize = 1;
+/// Default `entity_type` for a JSON entry whose value is a scalar/leaf — set
+/// when we close the entry (at a top-level comma or end of object) and no
+/// nested object/array bumped it up to `"object"`.
+fn finalize_scalar_entity_type(entries: &mut [JsonEntry]) {
+    let Some(entry) = entries.last_mut() else {
+        return;
+    };
+    if entry.entity_type.is_empty() {
+        entry.entity_type = "property".to_string();
+    }
+}
 
-    // State for tracking when we find a key at depth 1
-    let mut current_key: Option<String> = None;
-    let mut key_start = false;
-    let mut key_buf = String::new();
-    let mut reading_key = false;
+/// Mark the most-recently-opened top-level entry as holding an object/array.
+fn mark_last_entry_as_object(entries: &mut [JsonEntry]) {
+    if let Some(entry) = entries.last_mut() {
+        entry.entity_type = "object".to_string();
+    }
+}
 
-    for ch in content.chars() {
+/// Push a new `JsonEntry` for the `key: …` pair we just finished reading.
+fn push_key_entry(entries: &mut Vec<JsonEntry>, key: &str, start_line: usize) {
+    let escaped_key = key.replace('~', "~0").replace('/', "~1");
+    entries.push(JsonEntry {
+        key: key.to_string(),
+        pointer: format!("/{escaped_key}"),
+        entity_type: String::new(),
+        start_line,
+    });
+}
+
+/// State machine for scanning the JSON document and collecting top-level
+/// entries. Held privately inside [`find_top_level_entries`].
+struct ScanState {
+    entries: Vec<JsonEntry>,
+    depth: i32,
+    in_string: bool,
+    escape_next: bool,
+    line_num: usize,
+    current_key: Option<String>,
+    key_start: bool,
+    key_buf: String,
+    reading_key: bool,
+}
+
+impl ScanState {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            depth: 0,
+            in_string: false,
+            escape_next: false,
+            line_num: 1,
+            current_key: None,
+            key_start: false,
+            key_buf: String::new(),
+            reading_key: false,
+        }
+    }
+
+    /// Advance the state machine by one character. The early returns keep the
+    /// dispatch flat (no more than one level of nesting in any branch).
+    fn process(&mut self, ch: char) {
         if ch == '\n' {
-            line_num += 1;
-            continue;
+            self.line_num += 1;
+            return;
         }
+        if self.escape_next {
+            self.on_escaped_char(ch);
+            return;
+        }
+        if ch == '\\' && self.in_string {
+            self.on_backslash();
+            return;
+        }
+        if self.in_string {
+            self.on_in_string_char(ch);
+            return;
+        }
+        self.on_structural_char(ch);
+    }
 
-        if escape_next {
-            if reading_key {
-                key_buf.push(ch);
+    fn on_escaped_char(&mut self, ch: char) {
+        if self.reading_key {
+            self.key_buf.push(ch);
+        }
+        self.escape_next = false;
+    }
+
+    fn on_backslash(&mut self) {
+        if self.reading_key {
+            self.key_buf.push('\\');
+        }
+        self.escape_next = true;
+    }
+
+    fn on_in_string_char(&mut self, ch: char) {
+        if ch == '"' {
+            self.in_string = false;
+            if self.reading_key {
+                self.reading_key = false;
+                self.current_key = Some(std::mem::take(&mut self.key_buf));
             }
-            escape_next = false;
-            continue;
+            return;
         }
-
-        if ch == '\\' && in_string {
-            if reading_key {
-                key_buf.push(ch);
-            }
-            escape_next = true;
-            continue;
+        if self.reading_key {
+            self.key_buf.push(ch);
         }
+    }
 
-        if in_string {
-            if ch == '"' {
-                in_string = false;
-                if reading_key {
-                    reading_key = false;
-                    current_key = Some(key_buf.clone());
-                    key_buf.clear();
-                }
-            } else if reading_key {
-                key_buf.push(ch);
-            }
-            continue;
-        }
-
+    fn on_structural_char(&mut self, ch: char) {
         match ch {
-            '"' => {
-                in_string = true;
-                // At depth 1, a string could be a key (before ':') or value (after ':')
-                if depth == 1 && current_key.is_none() && !key_start {
-                    reading_key = true;
-                    key_buf.clear();
-                }
-            }
-            ':' if depth == 1 => {
-                if let Some(ref key) = current_key {
-                    // Found a key: value pair at depth 1
-                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
-                    let pointer = format!("/{escaped_key}");
-                    entries.push(JsonEntry {
-                        key: key.clone(),
-                        pointer,
-                        entity_type: String::new(), // filled in below
-                        start_line: line_num,
-                    });
-                    key_start = true;
-                }
-            }
-            '{' | '[' => {
-                depth += 1;
-                if depth == 2 && key_start {
-                    // The value for this key is an object/array
-                    if let Some(entry) = entries.last_mut() {
-                        entry.entity_type = "object".to_string();
-                    }
-                }
-            }
-            '}' | ']' => {
-                depth -= 1;
-            }
-            ',' if depth == 1 => {
-                // End of a top-level entry
-                if let Some(entry) = entries.last_mut() {
-                    if entry.entity_type.is_empty() {
-                        entry.entity_type = "property".to_string();
-                    }
-                }
-                current_key = None;
-                key_start = false;
-            }
+            '"' => self.on_open_quote(),
+            ':' if self.depth == 1 => self.on_depth1_colon(),
+            '{' | '[' => self.on_open_container(),
+            '}' | ']' => self.depth -= 1,
+            ',' if self.depth == 1 => self.on_depth1_comma(),
             _ => {}
         }
     }
 
-    // Handle last entry (no trailing comma)
-    if let Some(entry) = entries.last_mut() {
-        if entry.entity_type.is_empty() {
-            entry.entity_type = "property".to_string();
+    fn on_open_quote(&mut self) {
+        self.in_string = true;
+        // At depth 1, a string could be a key (before ':') or value (after ':').
+        if self.depth == 1 && self.current_key.is_none() && !self.key_start {
+            self.reading_key = true;
+            self.key_buf.clear();
         }
     }
 
-    entries
+    fn on_depth1_colon(&mut self) {
+        if let Some(ref key) = self.current_key {
+            push_key_entry(&mut self.entries, key, self.line_num);
+            self.key_start = true;
+        }
+    }
+
+    fn on_open_container(&mut self) {
+        self.depth += 1;
+        if self.depth == 2 && self.key_start {
+            mark_last_entry_as_object(&mut self.entries);
+        }
+    }
+
+    fn on_depth1_comma(&mut self) {
+        finalize_scalar_entity_type(&mut self.entries);
+        self.current_key = None;
+        self.key_start = false;
+    }
+
+    fn finish(mut self) -> Vec<JsonEntry> {
+        // Handle last entry (no trailing comma).
+        finalize_scalar_entity_type(&mut self.entries);
+        self.entries
+    }
+}
+
+/// Scan the source text to find each top-level key in the root JSON object.
+/// Returns entries with accurate start_line positions.
+fn find_top_level_entries(content: &str) -> Vec<JsonEntry> {
+    let mut state = ScanState::new();
+    for ch in content.chars() {
+        state.process(ch);
+    }
+    state.finish()
 }
 
 /// Extract just the value portion of a `"key": value` entity content string,

@@ -306,6 +306,35 @@ mod tests {
         assert_eq!(call_result.is_error, Some(false));
     }
 
+    /// A `ShellExecuteTool` built with an injected `TextEmbedder` must route
+    /// chunk embeddings through that embedder instead of lazily constructing
+    /// the default production model. Tests rely on this to skip real ML loads.
+    #[tokio::test]
+    async fn test_execute_uses_injected_embedder() {
+        use model_embedding::mock::MockEmbedder;
+        use std::sync::Arc;
+
+        let mock = Arc::new(MockEmbedder::new(384));
+        let tool = ShellExecuteTool::with_embedder(mock.clone());
+        let context = create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("command".to_string(), json!("echo hi"));
+
+        let result = <ShellExecuteTool as McpTool>::execute(&tool, args, &context).await;
+        assert!(
+            result.is_ok(),
+            "execute with injected embedder should succeed: {:?}",
+            result.err()
+        );
+
+        assert!(
+            mock.call_count() >= 1,
+            "injected MockEmbedder should receive at least one embed_text call, got {}",
+            mock.call_count()
+        );
+    }
+
     #[tokio::test]
     async fn test_execute_with_all_parameters() {
         let env_json = r#"{"TEST_VAR":"test_value"}"#;

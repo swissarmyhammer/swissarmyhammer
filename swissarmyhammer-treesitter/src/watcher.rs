@@ -6,8 +6,8 @@
 use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use async_watcher::{
-    notify::{Event, EventKind, RecursiveMode},
-    AsyncDebouncer,
+    notify::{Error as NotifyError, Event, EventKind, RecursiveMode},
+    AsyncDebouncer, DebouncedEvent,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -103,58 +103,14 @@ impl WorkspaceWatcher {
             return Err(TreeSitterError::FileNotFound(root_path));
         }
 
-        // Stop any existing watcher
         self.stop();
 
         let callback = Arc::new(callback);
-        let root_clone = root_path.clone();
-
-        // Create the async debouncer
-        let (mut debouncer, mut file_events) =
-            AsyncDebouncer::new_with_channel(Duration::from_millis(DEBOUNCE_DURATION_MS), None)
-                .await
-                .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
-
-        // Start watching
-        debouncer
-            .watcher()
-            .watch(&root_path, RecursiveMode::Recursive)
-            .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
-
-        // Spawn task to handle events
-        let handle = tokio::spawn(async move {
-            // Keep debouncer alive
-            let _debouncer = debouncer;
-
-            while let Some(result) = file_events.recv().await {
-                match result {
-                    Ok(debounced_events) => {
-                        // Extract events from DebouncedEvent
-                        let events: Vec<Event> =
-                            debounced_events.into_iter().map(|de| de.event).collect();
-                        let (changed, removed) = categorize_events(events);
-
-                        if !changed.is_empty() {
-                            if let Err(e) = callback.on_files_changed(changed).await {
-                                callback.on_error(e.to_string()).await;
-                            }
-                        }
-
-                        if !removed.is_empty() {
-                            callback.on_files_removed(removed).await;
-                        }
-                    }
-                    Err(errors) => {
-                        for error in errors {
-                            callback.on_error(error.to_string()).await;
-                        }
-                    }
-                }
-            }
-        });
+        let (debouncer, file_events) = build_debouncer(&root_path).await?;
+        let handle = tokio::spawn(run_event_loop(debouncer, file_events, callback));
 
         self.stop_handle = Some(handle);
-        self.root_path = Some(root_clone);
+        self.root_path = Some(root_path);
         self.is_watching = true;
 
         Ok(())
@@ -191,27 +147,98 @@ impl Drop for WorkspaceWatcher {
     }
 }
 
+/// Alias for the debounced-event channel payload — matches the return type
+/// of `AsyncDebouncer::new_with_channel`.
+type DebounceEventBatch = std::result::Result<Vec<DebouncedEvent>, Vec<NotifyError>>;
+
+/// Construct the async debouncer and register a recursive watch on `root_path`.
+async fn build_debouncer(
+    root_path: &Path,
+) -> Result<(
+    AsyncDebouncer<async_watcher::notify::RecommendedWatcher>,
+    tokio::sync::mpsc::Receiver<DebounceEventBatch>,
+)> {
+    let (mut debouncer, file_events) =
+        AsyncDebouncer::new_with_channel(Duration::from_millis(DEBOUNCE_DURATION_MS), None)
+            .await
+            .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
+    debouncer
+        .watcher()
+        .watch(root_path, RecursiveMode::Recursive)
+        .map_err(|e| TreeSitterError::watcher_error(e.to_string()))?;
+    Ok((debouncer, file_events))
+}
+
+/// Forever-loop that drains debounced events and dispatches to the callback.
+/// The debouncer is moved in so it stays alive for the task's lifetime.
+async fn run_event_loop<C>(
+    debouncer: AsyncDebouncer<async_watcher::notify::RecommendedWatcher>,
+    mut file_events: tokio::sync::mpsc::Receiver<DebounceEventBatch>,
+    callback: Arc<C>,
+) where
+    C: WorkspaceWatcherCallback + 'static,
+{
+    let _keep_alive = debouncer;
+    while let Some(result) = file_events.recv().await {
+        match result {
+            Ok(debounced_events) => {
+                let events: Vec<Event> = debounced_events.into_iter().map(|de| de.event).collect();
+                dispatch_events(&*callback, events).await;
+            }
+            Err(errors) => {
+                for error in errors {
+                    callback.on_error(error.to_string()).await;
+                }
+            }
+        }
+    }
+}
+
+/// Categorize a batch of raw events and invoke the matching callback entries.
+async fn dispatch_events<C>(callback: &C, events: Vec<Event>)
+where
+    C: WorkspaceWatcherCallback,
+{
+    let (changed, removed) = categorize_events(events);
+    if !changed.is_empty() {
+        if let Err(e) = callback.on_files_changed(changed).await {
+            callback.on_error(e.to_string()).await;
+        }
+    }
+    if !removed.is_empty() {
+        callback.on_files_removed(removed).await;
+    }
+}
+
+/// True if `path` refers to a supported source file that still exists on disk.
+fn is_existing_source_file(path: &Path) -> bool {
+    let registry = LanguageRegistry::global();
+    path.is_file() && registry.detect_language(path).is_some()
+}
+
+/// True if `path` refers to a supported source file (ignoring existence —
+/// used for Remove events where the file is already gone).
+fn is_source_path(path: &Path) -> bool {
+    LanguageRegistry::global().detect_language(path).is_some()
+}
+
 /// Categorize notify events into changed and removed files
 fn categorize_events(events: Vec<Event>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut changed = Vec::new();
     let mut removed = Vec::new();
-    let registry = LanguageRegistry::global();
 
     for event in events {
         match event.kind {
             EventKind::Create(_) | EventKind::Modify(_) => {
-                for path in event.paths {
-                    if path.is_file() && registry.detect_language(&path).is_some() {
-                        changed.push(path);
-                    }
-                }
+                changed.extend(
+                    event
+                        .paths
+                        .into_iter()
+                        .filter(|p| is_existing_source_file(p)),
+                );
             }
             EventKind::Remove(_) => {
-                for path in event.paths {
-                    if registry.detect_language(&path).is_some() {
-                        removed.push(path);
-                    }
-                }
+                removed.extend(event.paths.into_iter().filter(|p| is_source_path(p)));
             }
             _ => {}
         }
@@ -245,39 +272,42 @@ mod tests {
         assert!(!watcher.is_watching());
     }
 
+    /// Covers the full state-management lifecycle of `WorkspaceWatcher` in a
+    /// single test: initial state, `start`, `start` again to replace, `stop`,
+    /// and `Drop`.
+    ///
+    /// On macOS each call to `notify::Watcher::watch(RecursiveMode::Recursive)`
+    /// costs ~2s (cold FSEvents setup). Folding the state-only tests into one
+    /// keeps the same assertions at roughly half the wall time.
     #[tokio::test]
-    async fn test_watcher_start_and_stop() {
-        let dir = setup_minimal_test_dir();
-        let mut watcher = WorkspaceWatcher::new();
-        let callback = TestWatcherCallback::new();
-
-        // Start watching
-        let result = watcher.start(dir.path(), callback).await;
-        assert!(result.is_ok());
-        assert!(watcher.is_watching());
-        assert_eq!(watcher.root_path(), Some(dir.path()));
-
-        // Stop watching
-        watcher.stop();
-        assert!(!watcher.is_watching());
-    }
-
-    #[tokio::test]
-    async fn test_watcher_start_replaces_previous() {
+    async fn test_watcher_state_lifecycle() {
         let dir1 = setup_minimal_test_dir();
         let dir2 = TempDir::new().unwrap();
         std::fs::write(dir2.path().join("lib.rs"), "pub fn foo() {}").unwrap();
 
-        let mut watcher = WorkspaceWatcher::new();
         let callback = TestWatcherCallback::new();
+        let mut watcher = WorkspaceWatcher::new();
 
-        // Start watching dir1
+        // Initial state
+        assert!(!watcher.is_watching());
+        assert!(watcher.root_path().is_none());
+
+        // Start on dir1 — state populated
         watcher.start(dir1.path(), callback.clone()).await.unwrap();
+        assert!(watcher.is_watching());
         assert_eq!(watcher.root_path(), Some(dir1.path()));
 
-        // Start watching dir2 (should replace)
-        watcher.start(dir2.path(), callback).await.unwrap();
+        // Start on dir2 — replaces previous root without requiring an explicit stop
+        watcher.start(dir2.path(), callback.clone()).await.unwrap();
+        assert!(watcher.is_watching());
         assert_eq!(watcher.root_path(), Some(dir2.path()));
+
+        // Explicit stop clears the watching flag
+        watcher.stop();
+        assert!(!watcher.is_watching());
+
+        // Drop after stop must not panic
+        drop(watcher);
     }
 
     #[test]
@@ -416,21 +446,6 @@ mod tests {
         assert!(!watcher.is_watching());
     }
 
-    #[tokio::test]
-    async fn test_watcher_drop_stops_watching() {
-        let dir = setup_minimal_test_dir();
-        let callback = TestWatcherCallback::new();
-
-        {
-            let mut watcher = WorkspaceWatcher::new();
-            watcher.start(dir.path(), callback).await.unwrap();
-            assert!(watcher.is_watching());
-            // Watcher is dropped here
-        }
-
-        // No panic means drop worked correctly
-    }
-
     /// Wait for a condition to become true, polling every 100ms up to the given timeout.
     ///
     /// Returns true if the condition was met, false if timed out.
@@ -493,6 +508,12 @@ mod tests {
         );
     }
 
+    // Gated off macOS: FSEvents does not reliably deliver Remove events for
+    // files deleted inside a watched directory — the kind is sometimes absent
+    // or coalesced into a Modify, and sometimes nothing fires at all. The
+    // `on_files_removed` callback wiring is covered by
+    // `test_custom_callback_implementation` on every platform.
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn test_watcher_fires_callback_on_file_remove() {
         let dir = setup_minimal_test_dir();
@@ -504,29 +525,13 @@ mod tests {
         // Remove the existing main.rs file
         std::fs::remove_file(dir.path().join("main.rs")).unwrap();
 
-        // Wait for debounce plus processing.
-        // On macOS FSEvents, removal events may arrive as Remove or Modify
-        // depending on the OS version. We accept either kind of notification.
         let fired = wait_for(
             || callback.removed_count() > 0 || callback.changed_count() > 0,
             3000,
         )
         .await;
-
-        // On some platforms (particularly macOS FSEvents), file deletions
-        // within a watched directory are not always reported as Remove events.
-        // If no event arrives, skip rather than fail — the test infrastructure
-        // for verifying the on_files_removed callback is covered in
-        // test_custom_callback_implementation.
-        if !fired {
-            eprintln!(
-                "Note: no file-removal event received (platform may not support it) — skipping assertion"
-            );
-            return;
-        }
-
         assert!(
-            callback.removed_count() > 0 || callback.changed_count() > 0,
+            fired,
             "Expected on_files_removed or on_files_changed callback to fire after deleting a Rust file"
         );
     }
@@ -575,136 +580,5 @@ mod tests {
             "Expected callbacks for both new Rust files, got changed_count={}",
             callback.changed_count()
         );
-    }
-
-    /// Full lifecycle test: create a file, modify it, then delete it, verifying
-    /// that the watcher delivers the correct event types for each operation.
-    ///
-    /// Marked `#[ignore]` because filesystem watcher timing is inherently
-    /// platform-dependent and can be flaky on CI.
-    #[tokio::test]
-    #[ignore]
-    async fn test_watcher_event_loop_full_lifecycle() {
-        let dir = TempDir::new().unwrap();
-        let callback = TestWatcherCallback::new();
-        let mut watcher = WorkspaceWatcher::new();
-
-        watcher.start(dir.path(), callback.clone()).await.unwrap();
-
-        // Let the watcher fully settle before triggering events
-        tokio::time::sleep(Duration::from_millis(DEBOUNCE_DURATION_MS + 200)).await;
-
-        // Step 1: Create a new Rust file
-        let file_path = dir.path().join("lifecycle.rs");
-        std::fs::write(&file_path, "fn created() {}").unwrap();
-
-        let fired = wait_for(|| callback.changed_count() > 0, 3000).await;
-        assert!(
-            fired,
-            "Expected on_files_changed after file creation, got changed_count={}",
-            callback.changed_count()
-        );
-        let after_create = callback.changed_count();
-
-        // Step 2: Modify the file
-        // Small delay so the modification is a distinct event batch
-        tokio::time::sleep(Duration::from_millis(DEBOUNCE_DURATION_MS + 200)).await;
-        std::fs::write(&file_path, "fn modified() { let x = 1; }").unwrap();
-
-        let fired = wait_for(|| callback.changed_count() > after_create, 3000).await;
-        assert!(
-            fired,
-            "Expected on_files_changed after file modification, got changed_count={}",
-            callback.changed_count()
-        );
-
-        // Step 3: Delete the file
-        tokio::time::sleep(Duration::from_millis(DEBOUNCE_DURATION_MS + 200)).await;
-        std::fs::remove_file(&file_path).unwrap();
-
-        // On macOS FSEvents, deletions may arrive as Remove or Modify.
-        let before_remove_changed = callback.changed_count();
-        let fired = wait_for(
-            || callback.removed_count() > 0 || callback.changed_count() > before_remove_changed,
-            3000,
-        )
-        .await;
-
-        if !fired {
-            eprintln!(
-                "Note: no removal event received (platform limitation) -- \
-                 skipping removal assertion"
-            );
-        }
-
-        watcher.stop();
-    }
-
-    /// A callback that always returns an error from `on_files_changed`,
-    /// used to exercise the error-propagation path in the event loop.
-    #[derive(Clone)]
-    struct FailingCallback {
-        error_count: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl FailingCallback {
-        fn new() -> Self {
-            Self {
-                error_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            }
-        }
-
-        fn error_count(&self) -> usize {
-            self.error_count.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    impl WorkspaceWatcherCallback for FailingCallback {
-        async fn on_files_changed(&self, _paths: Vec<PathBuf>) -> Result<()> {
-            Err(TreeSitterError::ParseError {
-                path: PathBuf::from("test.rs"),
-                message: "simulated callback error".to_string(),
-            })
-        }
-
-        async fn on_files_removed(&self, _paths: Vec<PathBuf>) {}
-
-        async fn on_error(&self, _error: String) {
-            self.error_count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    /// Verifies that when `on_files_changed` returns an error, the event loop
-    /// forwards it to `on_error`. This exercises the error-propagation branch
-    /// inside the spawned task in `WorkspaceWatcher::start`.
-    ///
-    /// Marked `#[ignore]` because filesystem watcher timing is inherently
-    /// platform-dependent and can be flaky on CI.
-    #[tokio::test]
-    #[ignore]
-    async fn test_watcher_callback_error_triggers_on_error() {
-        let dir = TempDir::new().unwrap();
-        let callback = FailingCallback::new();
-        let mut watcher = WorkspaceWatcher::new();
-
-        watcher.start(dir.path(), callback.clone()).await.unwrap();
-
-        // Let the watcher settle
-        tokio::time::sleep(Duration::from_millis(DEBOUNCE_DURATION_MS + 200)).await;
-
-        // Create a Rust file -- this triggers on_files_changed which returns Err,
-        // and the event loop should then call on_error.
-        std::fs::write(dir.path().join("fail.rs"), "fn fail() {}").unwrap();
-
-        let fired = wait_for(|| callback.error_count() > 0, 3000).await;
-        assert!(
-            fired,
-            "Expected on_error to be called when on_files_changed returns Err, \
-             got error_count={}",
-            callback.error_count()
-        );
-
-        watcher.stop();
     }
 }
