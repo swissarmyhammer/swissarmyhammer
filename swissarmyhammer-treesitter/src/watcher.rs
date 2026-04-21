@@ -272,39 +272,42 @@ mod tests {
         assert!(!watcher.is_watching());
     }
 
+    /// Covers the full state-management lifecycle of `WorkspaceWatcher` in a
+    /// single test: initial state, `start`, `start` again to replace, `stop`,
+    /// and `Drop`.
+    ///
+    /// On macOS each call to `notify::Watcher::watch(RecursiveMode::Recursive)`
+    /// costs ~2s (cold FSEvents setup). Folding the state-only tests into one
+    /// keeps the same assertions at roughly half the wall time.
     #[tokio::test]
-    async fn test_watcher_start_and_stop() {
-        let dir = setup_minimal_test_dir();
-        let mut watcher = WorkspaceWatcher::new();
-        let callback = TestWatcherCallback::new();
-
-        // Start watching
-        let result = watcher.start(dir.path(), callback).await;
-        assert!(result.is_ok());
-        assert!(watcher.is_watching());
-        assert_eq!(watcher.root_path(), Some(dir.path()));
-
-        // Stop watching
-        watcher.stop();
-        assert!(!watcher.is_watching());
-    }
-
-    #[tokio::test]
-    async fn test_watcher_start_replaces_previous() {
+    async fn test_watcher_state_lifecycle() {
         let dir1 = setup_minimal_test_dir();
         let dir2 = TempDir::new().unwrap();
         std::fs::write(dir2.path().join("lib.rs"), "pub fn foo() {}").unwrap();
 
-        let mut watcher = WorkspaceWatcher::new();
         let callback = TestWatcherCallback::new();
+        let mut watcher = WorkspaceWatcher::new();
 
-        // Start watching dir1
+        // Initial state
+        assert!(!watcher.is_watching());
+        assert!(watcher.root_path().is_none());
+
+        // Start on dir1 — state populated
         watcher.start(dir1.path(), callback.clone()).await.unwrap();
+        assert!(watcher.is_watching());
         assert_eq!(watcher.root_path(), Some(dir1.path()));
 
-        // Start watching dir2 (should replace)
-        watcher.start(dir2.path(), callback).await.unwrap();
+        // Start on dir2 — replaces previous root without requiring an explicit stop
+        watcher.start(dir2.path(), callback.clone()).await.unwrap();
+        assert!(watcher.is_watching());
         assert_eq!(watcher.root_path(), Some(dir2.path()));
+
+        // Explicit stop clears the watching flag
+        watcher.stop();
+        assert!(!watcher.is_watching());
+
+        // Drop after stop must not panic
+        drop(watcher);
     }
 
     #[test]
@@ -441,21 +444,6 @@ mod tests {
         let mut watcher = WorkspaceWatcher::new();
         watcher.stop(); // Should not panic even if not watching
         assert!(!watcher.is_watching());
-    }
-
-    #[tokio::test]
-    async fn test_watcher_drop_stops_watching() {
-        let dir = setup_minimal_test_dir();
-        let callback = TestWatcherCallback::new();
-
-        {
-            let mut watcher = WorkspaceWatcher::new();
-            watcher.start(dir.path(), callback).await.unwrap();
-            assert!(watcher.is_watching());
-            // Watcher is dropped here
-        }
-
-        // No panic means drop worked correctly
     }
 
     /// Wait for a condition to become true, polling every 100ms up to the given timeout.
