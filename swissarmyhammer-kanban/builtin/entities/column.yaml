@@ -3,11 +3,6 @@ icon: columns
 mention_prefix: "%"
 mention_display_field: name
 search_display_field: name
-commands:
-  - id: column.reorder
-    name: Reorder Columns
-    undoable: true
-    visible: false
 fields:
   - name
   - order

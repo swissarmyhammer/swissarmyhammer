@@ -79,16 +79,47 @@ impl Command for UpdateEntityFieldCmd {
     }
 }
 
+/// Entity types that opt out of the cross-cutting `entity.delete` command.
+///
+/// Boards are singletons managed by `file.closeBoard` / `file.newBoard` /
+/// `file.openBoard` — deleting a board through a cross-cutting row-level
+/// command would leave the app in an undefined state. The cross-cutting
+/// emitter still creates a `ResolvedCommand` for every known entity, but
+/// `DeleteEntityCmd::available()` returns false for these types so the
+/// final `retain(|c| c.available)` pass in `commands_for_scope` drops
+/// them from the surface.
+const DELETE_OPT_OUT_TYPES: &[&str] = &["board"];
+
+/// Entity types that opt out of the cross-cutting `entity.archive` command.
+///
+/// Same rationale as [`DELETE_OPT_OUT_TYPES`]: archiving a board moves the
+/// board file into `.archive/` with no code path that treats the result as
+/// meaningful. Dispatch would silently succeed and leave the app in an
+/// undefined state, which is worse than a loud error.
+const ARCHIVE_OPT_OUT_TYPES: &[&str] = &["board"];
+
+/// Return true when the given target moniker belongs to one of the listed
+/// entity types. Invalid monikers (missing colon, empty parts) return false
+/// — availability is not the right place to surface parse errors; execute
+/// handles that with `CommandError::InvalidMoniker`.
+fn target_matches_entity_type(target: Option<&str>, types: &[&str]) -> bool {
+    target
+        .and_then(parse_moniker)
+        .is_some_and(|(entity_type, _)| types.contains(&entity_type))
+}
+
 /// Delete any entity by its target moniker.
 ///
-/// Available when a target moniker is set. Dispatches to the correct
-/// delete operation based on the entity type parsed from the moniker.
+/// Available when a target moniker is set and the entity type is not in
+/// [`DELETE_OPT_OUT_TYPES`]. Dispatches to the correct delete operation
+/// based on the entity type parsed from the moniker.
 pub struct DeleteEntityCmd;
 
 #[async_trait]
 impl Command for DeleteEntityCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
         ctx.target.is_some()
+            && !target_matches_entity_type(ctx.target.as_deref(), DELETE_OPT_OUT_TYPES)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -117,7 +148,9 @@ impl Command for DeleteEntityCmd {
 
 /// Archive any entity by its target moniker.
 ///
-/// Available when a target moniker is set. Dispatches to EntityContext::archive()
+/// Available when a target moniker is set, does not already carry an
+/// `:archive` suffix, and the entity type is not in
+/// [`ARCHIVE_OPT_OUT_TYPES`]. Dispatches to `EntityContext::archive()`
 /// based on the entity type parsed from the moniker.
 pub struct ArchiveEntityCmd;
 
@@ -127,6 +160,7 @@ impl Command for ArchiveEntityCmd {
         ctx.target
             .as_deref()
             .is_some_and(|t| !t.ends_with(":archive"))
+            && !target_matches_entity_type(ctx.target.as_deref(), ARCHIVE_OPT_OUT_TYPES)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -421,6 +455,19 @@ mod tests {
         assert!(!cmd.available(&ctx));
     }
 
+    #[test]
+    fn delete_entity_not_available_for_board() {
+        // Boards opt out of the cross-cutting delete — see DELETE_OPT_OUT_TYPES.
+        let ctx = CommandContext::new(
+            "entity.delete",
+            vec![],
+            Some("board:main".into()),
+            HashMap::new(),
+        );
+        let cmd = DeleteEntityCmd;
+        assert!(!cmd.available(&ctx));
+    }
+
     // =========================================================================
     // DeleteEntityCmd execute — task, tag, column, actor, unknown
     // =========================================================================
@@ -618,6 +665,18 @@ mod tests {
             "entity.archive",
             vec![],
             Some("task:01ABC:archive".into()),
+            HashMap::new(),
+        );
+        assert!(!ArchiveEntityCmd.available(&ctx));
+    }
+
+    #[test]
+    fn archive_entity_not_available_for_board() {
+        // Boards opt out of the cross-cutting archive — see ARCHIVE_OPT_OUT_TYPES.
+        let ctx = CommandContext::new(
+            "entity.archive",
+            vec![],
+            Some("board:main".into()),
             HashMap::new(),
         );
         assert!(!ArchiveEntityCmd.available(&ctx));

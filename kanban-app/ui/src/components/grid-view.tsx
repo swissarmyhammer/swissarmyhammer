@@ -8,7 +8,6 @@ import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
-import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
@@ -203,10 +202,9 @@ function useGridData(view: ViewDef) {
   const rawEntityType = view.entity_type ?? "";
   const entityType = VALID_ENTITY_TYPE.test(rawEntityType) ? rawEntityType : "";
   const rawEntities = getEntities(entityType);
-  const { getSchema, getEntityCommands } = useSchema();
+  const { getSchema } = useSchema();
   const schema = getSchema(entityType);
   const fields = schema?.fields ?? [];
-  const schemaCommands = getEntityCommands(entityType);
 
   const { activePerspective, applySort, groupField } = useActivePerspective();
   const entities = useMemo(
@@ -251,7 +249,6 @@ function useGridData(view: ViewDef) {
     entities,
     columns,
     grouping,
-    schemaCommands,
     activePerspective,
   };
 }
@@ -517,8 +514,6 @@ function renderGridCellEditor(
 function useGridCallbacks(
   cellMonikers: string[][],
   setFocus: (mk: string) => void,
-  schemaCommands: ReturnType<ReturnType<typeof useSchema>["getEntityCommands"]>,
-  entityType: string,
 ) {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
@@ -528,22 +523,8 @@ function useGridCallbacks(
     [cellMonikers, setFocus],
   );
 
-  /**
-   * Build entity-specific context menu commands for a given row.
-   *
-   * Called by DataTable to wrap each row's selector cell in its own
-   * CommandScopeProvider so right-clicking row N always resolves commands for
-   * row N's entity, regardless of the grid cursor position at right-click time.
-   */
-  const buildRowEntityCommands = useCallback(
-    (entity: Entity): CommandDef[] =>
-      buildEntityCommandDefs(schemaCommands, entityType, entity.id, entity),
-    [schemaCommands, entityType],
-  );
-
   return {
     handleCellClick,
-    buildRowEntityCommands,
     renderEditor: renderGridCellEditor,
   };
 }
@@ -654,7 +635,6 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
         renderEditor={callbacks.renderEditor}
         grouping={data.grouping}
         onVisibleRowCount={nav.setVisibleRowCount}
-        rowEntityCommands={callbacks.buildRowEntityCommands}
         perspectiveSort={data.activePerspective?.sort}
         perspectiveId={data.activePerspective?.id}
       />
@@ -674,12 +654,7 @@ export function GridView({ view }: GridViewProps) {
     data.entityType,
     dispatch,
   );
-  const callbacks = useGridCallbacks(
-    nav.cellMonikers,
-    nav.setFocus,
-    data.schemaCommands,
-    data.entityType,
-  );
+  const callbacks = useGridCallbacks(nav.cellMonikers, nav.setFocus);
 
   // Guard on the sanitized `entityType`, not raw `view.entity_type`.
   // `useGridData` reduces invalid values to the empty string via

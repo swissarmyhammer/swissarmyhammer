@@ -44,7 +44,6 @@ import { DataTable, type DataTableColumn } from "./data-table";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import type { CommandDef } from "@/lib/command-scope";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -108,18 +107,6 @@ function makeGrid(cursor = { row: 0, col: 0 }): UseGridReturn {
   };
 }
 
-/** Stub entity commands factory — returns one inspect command per entity. */
-function stubRowCommands(entity: Entity): CommandDef[] {
-  return [
-    {
-      id: "ui.inspect",
-      name: `Inspect ${entity.entity_type}`,
-      target: entity.moniker,
-      contextMenu: true,
-    },
-  ];
-}
-
 function renderTable(
   props: Partial<React.ComponentProps<typeof DataTable>> = {},
 ) {
@@ -130,7 +117,6 @@ function renderTable(
         rows={ENTITIES}
         grid={makeGrid()}
         showRowSelector={true}
-        rowEntityCommands={stubRowCommands}
         {...props}
       />
     </EntityFocusProvider>,
@@ -193,15 +179,6 @@ describe("DataTable row structure", () => {
     }
   });
 
-  it("column count matches without rowEntityCommands", () => {
-    const { container } = renderTable({ rowEntityCommands: undefined });
-    const tbody = container.querySelector("tbody")!;
-    const rows = tbody.querySelectorAll("tr");
-    for (const row of rows) {
-      const cells = row.querySelectorAll("td");
-      expect(cells.length).toBe(1 + COLUMNS.length);
-    }
-  });
 });
 
 describe("DataTable grouping sync", () => {
@@ -214,7 +191,6 @@ describe("DataTable grouping sync", () => {
           rows={ENTITIES}
           grid={makeGrid()}
           showRowSelector={true}
-          rowEntityCommands={stubRowCommands}
           grouping={["status"]}
         />
       </EntityFocusProvider>,
@@ -229,7 +205,6 @@ describe("DataTable grouping sync", () => {
           rows={ENTITIES}
           grid={makeGrid()}
           showRowSelector={true}
-          rowEntityCommands={stubRowCommands}
           grouping={undefined}
         />
       </EntityFocusProvider>,

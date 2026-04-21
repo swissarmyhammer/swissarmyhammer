@@ -192,7 +192,6 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
   return (
     <FocusScope
       moniker={`attachment:${attachment.path}`}
-      commands={[]}
       className="min-w-0"
     >
       <AttachmentItemInner attachment={attachment} Icon={Icon} />

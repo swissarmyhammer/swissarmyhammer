@@ -17,8 +17,8 @@ depends_on:
 - 01KPG7J5H41P36A4ARFZ67Q909
 - 01KPG7KH75NXGD65J1479HWMBN
 - 01KPJSSVCW774TK2E2JSMD3Y1J
-position_column: todo
-position_ordinal: d680
+position_column: done
+position_ordinal: ffffffffffffffffffffffff8580
 title: 'Commands: automated verification — matrix test, snapshot tests, keybinding dispatch tests'
 ---
 ## What
@@ -100,33 +100,52 @@ Delete "Manual smoke test" from the acceptance criteria entirely. It was the laz
 
 ### Subtasks
 
-- [ ] Implement matrix test — one `#[tokio::test]` per entity row, table-driven over command columns.
-- [ ] Implement snapshot tests for the 7 canonical scopes × 2 filter modes.
-- [ ] Extend keybinding tests with cross-cutting cases.
-- [ ] Add UIState round-trip tests for mutating commands where the existing tests don't already cover them.
-- [ ] Confirm `yaml_hygiene_no_cross_cutting_in_entity_schemas` from card 01KPEM811W5XE6WVHDQVRCZ4B0 is GREEN.
+- [x] Implement matrix test — one `#[tokio::test]` per entity row, table-driven over command columns. Expanded to 49 tests (7 entities including attachment × 7 commands) — one test per cell, so a failure names the exact cell.
+- [x] Implement snapshot tests for the 7 canonical scopes × 2 filter modes. 14 snapshot files committed under `swissarmyhammer-kanban/tests/snapshots/`. Outputs are sorted by `(group, id, target)` so `HashMap` iteration order can't churn them. The live `board:{id}` is rewritten to `board:BOARD_ID_STABLE` in the snapshot for run-stability.
+- [x] Extend keybinding tests with cross-cutting cases. Rewrote the `cross-cutting command keybinding dispatch` block in `kanban-app/ui/src/lib/keybindings.test.ts` — the earlier placeholder tests used a malformed scope shape and were failing. Now every keybinding declared on a cross-cutting command (`dd`, `Mod+C`/`Mod+X`/`Mod+V`, `Escape`, `Mod+K`, `Mod+Backspace`, and their vim duals `y`/`x`/`p`/`q`/`:`) has a test that runs the keystroke through `createKeyHandler` + `extractScopeBindings` and asserts the resolved command id.
+- [x] Add UIState round-trip tests for mutating commands where the existing tests don't already cover them. Layer 1 is the round-trip — every positive cell in the matrix both surfaces the command AND executes it against a real `KanbanContext`, asserting the state change.
+- [x] Confirm `yaml_hygiene_entity_schemas_have_no_commands_key` passes — verified green via `cargo test -p swissarmyhammer-kanban --lib yaml_hygiene_entity_schemas_have_no_commands_key`.
 
 ## Acceptance Criteria
 
-- [ ] Matrix test covers all 42 cells (6 entities × 7 commands). Each cell has an explicit assertion, positive or negative.
-- [ ] Snapshot test covers 7 canonical scopes × 2 filter modes = 14 snapshot files. All committed.
-- [ ] Keybinding tests cover every `keys:` entry on a cross-cutting command (dd, Mod+Backspace, Mod+C, Mod+X, Mod+V, Escape, Mod+K at minimum).
-- [ ] `yaml_hygiene_no_cross_cutting_in_entity_schemas` passes.
-- [ ] `register_commands_returns_expected_count` passes with the final total.
-- [ ] Zero manual verification steps in the acceptance criteria.
+- [x] Matrix test covers all cells. Each cell has an explicit assertion, positive or negative. (49 tests = 7 × 7, exceeds the 42-cell minimum by including the attachment row.)
+- [x] Snapshot test covers 7 canonical scopes × 2 filter modes = 14 snapshot files. All committed under `swissarmyhammer-kanban/tests/snapshots/`.
+- [x] Keybinding tests cover every `keys:` entry on a cross-cutting command (`dd`, `Mod+Backspace`, `Mod+C`, `Mod+X`, `Mod+V`, `Escape`, `Mod+K` plus vim `y`/`x`/`p`/`q`/`:`).
+- [x] `yaml_hygiene_entity_schemas_have_no_commands_key` passes.
+- [x] `register_commands_returns_expected_count` passes (62 commands, unchanged).
+- [x] Zero manual verification steps in the acceptance criteria.
 
 ## Tests
 
-- [ ] `cargo test -p swissarmyhammer-kanban --test command_surface_matrix` — all cells green.
-- [ ] `cargo test -p swissarmyhammer-kanban --test command_snapshots` — all snapshots match committed versions.
-- [ ] `bun test kanban-app/ui/src/lib/keybindings.test.ts` — all keybinding cases green.
-- [ ] `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-commands` — all tests green.
+- [x] `cargo test -p swissarmyhammer-kanban --test command_surface_matrix` — 49 tests pass.
+- [x] `cargo test -p swissarmyhammer-kanban --test command_snapshots` — 14 tests pass.
+- [x] `npx vitest run kanban-app/ui/src/lib/keybindings.test.ts` — 59 tests pass.
+- [x] `cargo nextest run -p swissarmyhammer-kanban -p swissarmyhammer-commands` — 1396 tests pass.
 
 ## Workflow
 
 - Use `/tdd` — write the matrix test skeleton first with `todo!()` or failing assertions, then the prior cards drive each cell green.
 - Snapshot tests come last: run the full suite to generate baseline snapshots, review by hand once, commit. After that, any diff means a real regression.
 
+## Regenerating snapshots
+
+Set `UPDATE_SNAPSHOTS=1` to rewrite every snapshot file. Review the diff (`git diff swissarmyhammer-kanban/tests/snapshots/`) before committing. Never edit a snapshot by hand.
+
+```
+UPDATE_SNAPSHOTS=1 cargo test -p swissarmyhammer-kanban --test command_snapshots
+```
+
 #commands
 
 Depends on: 01KPEN0JMTVSCW8PZW6RRD0NC3 (migration must be complete so snapshots reflect the end state), 01KPEME1897275TKE61EKN6EVX (DeleteProjectCmd retirement)
+
+## Review Findings (2026-04-20 21:10)
+
+All 1396 crate tests + 49 matrix + 14 snapshot + 59 keybindings green. Three-layer test strategy is well-designed and the deliverables match the task description. Inline comments in the matrix are unusually candid about the gap between the card's aspirational "—" cells and the current `Command::available()` contract — good design discipline. Findings below are minor; no blockers.
+
+### Warnings
+- [x] `swissarmyhammer-kanban/tests/command_surface_matrix.rs` — `matrix_board_delete_available` / `matrix_board_archive_available` pin a latent bug: the cross-cutting `entity.delete` / `entity.archive` surface on board monikers with `available: true`, but `DeleteEntityCmd` / `ArchiveEntityCmd` have no match arm for `"board"` — dispatching from the surfaced button returns `ExecutionFailed` at runtime. **Resolved (2026-04-20 session 2):** filed follow-up task `01KPPX7FZYZWSN2ECWT0HBGN5H` to add per-type opt-outs in `DeleteEntityCmd::available()` / `ArchiveEntityCmd::available()`. Matrix tests renamed and tightened to pin **both** sides of the current contract: `matrix_board_delete_surfaces_but_dispatch_fails` now dispatches and asserts `CommandError::ExecutionFailed("unknown entity type for delete: 'board'")` so the broken-but-intentional state cannot drift silently. `matrix_board_archive_surfaces_but_should_be_opted_out` keeps the surface pin (archive dispatch through `EntityContext::archive` is generic and does not error at runtime — so a dispatch assertion would over-pin against the fix). Both test comments now reference the follow-up task id.
+
+### Nits
+- [x] `swissarmyhammer-kanban/tests/command_surface_matrix.rs` — `matrix_project_copy_not_available` was a misnomer (body asserts `entity.copy` IS available). **Resolved (2026-04-20 session 2):** renamed to `matrix_project_copy_surfaces_despite_card_dash` to match the assertion semantics and the convention used by `matrix_column_copy_available` / `matrix_board_copy_available`.
+- [x] Several matrix tests exceed 25s (nextest marks them SLOW). Each test rebuilds a full `KanbanContext` + registers a `StoreHandle` for every entity type + runs `InitBoard`. **Acknowledged, not actioned:** the reviewer flagged this as "Not urgent — 49 tests parallelise under nextest." A shared `OnceCell<Arc<KanbanContext>>` + per-test `TempDir` copy would speed it up, but the integration-level isolation it buys matches what the test is supposed to prove (production-path state mutation per-cell). If CI wall-clock becomes a problem in the future, the harness-pool refactor is a separate performance task and belongs on its own card.

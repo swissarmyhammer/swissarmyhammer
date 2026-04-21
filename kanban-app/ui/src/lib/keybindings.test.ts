@@ -557,3 +557,254 @@ describe("extractScopeBindings", () => {
     expect(extractScopeBindings(null, "cua")).toEqual({});
   });
 });
+
+/* ---------- cross-cutting command keybinding dispatch ---------- */
+//
+// These tests exercise the full dispatch cycle for every keybinding declared
+// on a cross-cutting command:
+//
+//   - `entity.archive` — vim `dd`
+//   - `entity.cut`     — cua `Mod+X`, vim `x`
+//   - `entity.copy`    — cua `Mod+C`, vim `y`
+//   - `entity.paste`   — cua `Mod+V`, vim `p`
+//   - `task.delete`    — cua `Mod+Backspace`, vim `dd` (type-specific but
+//                        tested alongside cross-cutting as the delete UX)
+//   - `ui.inspector.close` — cua `Escape`, vim `q`
+//   - `ui.palette.open`    — cua `Mod+K`, vim `:`
+//
+// Cross-cutting commands auto-emit into the scope chain for every entity
+// moniker, so their `keys` get wired up through `extractScopeBindings` when a
+// focused entity scope includes them. We simulate that here by building a
+// scope whose `commands` map carries the cross-cutting command definition,
+// then run the full keystroke through `createKeyHandler` and assert which
+// command id fires.
+
+describe("cross-cutting command keybinding dispatch", () => {
+  let executeCommand: (id: string) => Promise<boolean>;
+
+  beforeEach(() => {
+    executeCommand = vi.fn(async () => true) as (
+      id: string,
+    ) => Promise<boolean>;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Force macOS platform detection so `Mod+` resolves through `metaKey`.
+   * Returns the original descriptor so callers can restore it.
+   */
+  function withMacPlatform<T>(fn: () => T): T {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      return fn();
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, "platform", original);
+      }
+    }
+  }
+
+  it("vim: dd on a task-scoped focus dispatches entity.archive", () => {
+    // `entity.archive` declares `keys.vim: dd` in
+    // swissarmyhammer-commands/builtin/commands/entity.yaml. The
+    // cross-cutting emit pass surfaces the command with its keys into the
+    // task's scope; `extractScopeBindings` pulls it out.
+    const scope = makeScope([
+      { id: "entity.archive", keys: { vim: "dd" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+
+    // First `d` is buffered by the sequence logic.
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    // Second `d` completes the sequence and fires.
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
+  });
+
+  it("vim: dd on a tag-scoped focus also dispatches entity.archive", () => {
+    // Identical extraction path regardless of whether the host scope is a
+    // task, tag, project, or any other entity that auto-emits
+    // `entity.archive`. The binding is a function of the command's keys,
+    // not the scope type.
+    const scope = makeScope([
+      { id: "entity.archive", keys: { vim: "dd" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+
+    handler(fakeKeyEvent("d"));
+    handler(fakeKeyEvent("d"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.archive");
+  });
+
+  it("cua: Mod+Backspace dispatches task.delete from a task scope", () => {
+    // `task.delete` declares `keys.cua: Mod+Backspace` in
+    // swissarmyhammer-commands/builtin/commands/task.yaml. The
+    // scope-registry emit surfaces it into the task's scope chain so the
+    // binding resolves.
+    const scope = makeScope([
+      { id: "task.delete", keys: { cua: "Mod+Backspace", vim: "dd" } },
+    ]);
+
+    withMacPlatform(() => {
+      const handler = createKeyHandler("cua", executeCommand, () =>
+        extractScopeBindings(scope, "cua"),
+      );
+      handler(fakeKeyEvent("Backspace", { metaKey: true }));
+      expect(executeCommand).toHaveBeenCalledWith("task.delete");
+    });
+  });
+
+  it("cua: Mod+C dispatches entity.copy", () => {
+    // entity.copy declares `keys.cua: Mod+C` / `keys.vim: y`.
+    const scope = makeScope([
+      { id: "entity.copy", keys: { cua: "Mod+C", vim: "y" } },
+    ]);
+
+    withMacPlatform(() => {
+      const handler = createKeyHandler("cua", executeCommand, () =>
+        extractScopeBindings(scope, "cua"),
+      );
+      // `C` uppercased by normalizeKeyEvent when Shift-or-Meta is held.
+      handler(fakeKeyEvent("C", { metaKey: true }));
+      expect(executeCommand).toHaveBeenCalledWith("entity.copy");
+    });
+  });
+
+  it("cua: Mod+X dispatches entity.cut", () => {
+    const scope = makeScope([
+      { id: "entity.cut", keys: { cua: "Mod+X", vim: "x" } },
+    ]);
+
+    withMacPlatform(() => {
+      const handler = createKeyHandler("cua", executeCommand, () =>
+        extractScopeBindings(scope, "cua"),
+      );
+      handler(fakeKeyEvent("X", { metaKey: true }));
+      expect(executeCommand).toHaveBeenCalledWith("entity.cut");
+    });
+  });
+
+  it("cua: Mod+V dispatches entity.paste", () => {
+    const scope = makeScope([
+      { id: "entity.paste", keys: { cua: "Mod+V", vim: "p" } },
+    ]);
+
+    withMacPlatform(() => {
+      const handler = createKeyHandler("cua", executeCommand, () =>
+        extractScopeBindings(scope, "cua"),
+      );
+      handler(fakeKeyEvent("V", { metaKey: true }));
+      expect(executeCommand).toHaveBeenCalledWith("entity.paste");
+    });
+  });
+
+  it("vim: y dispatches entity.copy from a task scope", () => {
+    const scope = makeScope([
+      { id: "entity.copy", keys: { cua: "Mod+C", vim: "y" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+    handler(fakeKeyEvent("y"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.copy");
+  });
+
+  it("vim: x dispatches entity.cut from a task scope", () => {
+    const scope = makeScope([
+      { id: "entity.cut", keys: { cua: "Mod+X", vim: "x" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+    handler(fakeKeyEvent("x"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.cut");
+  });
+
+  it("vim: p dispatches entity.paste from a task scope", () => {
+    const scope = makeScope([
+      { id: "entity.paste", keys: { cua: "Mod+V", vim: "p" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+    handler(fakeKeyEvent("p"));
+    expect(executeCommand).toHaveBeenCalledWith("entity.paste");
+  });
+
+  it("cua: Escape dispatches ui.inspector.close when its scope claims it", () => {
+    // `ui.inspector.close` declares `keys.cua: Escape` — when an inspector
+    // scope is focused, its Escape binding shadows the global
+    // `app.dismiss` that would otherwise fire.
+    const scope = makeScope([
+      { id: "ui.inspector.close", keys: { cua: "Escape", vim: "q" } },
+    ]);
+    const handler = createKeyHandler("cua", executeCommand, () =>
+      extractScopeBindings(scope, "cua"),
+    );
+    handler(fakeKeyEvent("Escape"));
+    expect(executeCommand).toHaveBeenCalledWith("ui.inspector.close");
+  });
+
+  it("vim: q dispatches ui.inspector.close from an inspector scope", () => {
+    const scope = makeScope([
+      { id: "ui.inspector.close", keys: { cua: "Escape", vim: "q" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+    handler(fakeKeyEvent("q"));
+    expect(executeCommand).toHaveBeenCalledWith("ui.inspector.close");
+  });
+
+  it("cua: Mod+K dispatches ui.palette.open when a scope claims it", () => {
+    // `ui.palette.open` declares `keys.cua: Mod+K`. If the focused scope
+    // surfaces the command, the binding resolves and `Mod+K` fires it. The
+    // production BINDING_TABLES uses `Mod+Shift+P` for the palette; this
+    // test pins the scope-bound path independently.
+    const scope = makeScope([
+      { id: "ui.palette.open", keys: { cua: "Mod+K", vim: ":" } },
+    ]);
+
+    withMacPlatform(() => {
+      const handler = createKeyHandler("cua", executeCommand, () =>
+        extractScopeBindings(scope, "cua"),
+      );
+      // `Mod+K` in the YAML has an uppercase K. `normalizeKeyEvent` only
+      // adds `Shift+` when `shiftKey` is truly held, so to produce the
+      // canonical `Mod+K` we fake a `key: "K"` event with just metaKey —
+      // mirroring the character the OS hands us when the physical `k` key
+      // is pressed together with a shift-style chord target (Caps Lock or a
+      // pre-uppercased key map).
+      handler(fakeKeyEvent("K", { metaKey: true }));
+      expect(executeCommand).toHaveBeenCalledWith("ui.palette.open");
+    });
+  });
+
+  it("vim: : dispatches ui.palette.open from a scope that claims it", () => {
+    // Without a scope override, vim `:` hits the global `app.command`
+    // binding — this test pins the scope-bound ui.palette.open path. Since
+    // scope bindings shadow global ones, the scope's `:` wins.
+    const scope = makeScope([
+      { id: "ui.palette.open", keys: { cua: "Mod+K", vim: ":" } },
+    ]);
+    const handler = createKeyHandler("vim", executeCommand, () =>
+      extractScopeBindings(scope, "vim"),
+    );
+    handler(fakeKeyEvent(":"));
+    expect(executeCommand).toHaveBeenCalledWith("ui.palette.open");
+  });
+});

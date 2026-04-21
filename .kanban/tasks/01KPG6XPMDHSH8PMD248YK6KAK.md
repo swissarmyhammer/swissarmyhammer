@@ -7,8 +7,8 @@ depends_on:
 - 01KPG5XK61ND4JKXW3FCM3CC97
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6GYSNGTEJ42XA2QNB3VE0
-position_column: todo
-position_ordinal: f580
+position_column: done
+position_ordinal: ffffffffffffffffffffffff8180
 title: 'Commands: tag.yaml cleanup — move tag.update declaration in, purge cross-cutting opt-ins'
 ---
 ## What
@@ -35,24 +35,24 @@ Delete the `tag.update` entry.
 
 ### Subtasks
 
-- [ ] Create `tag.yaml` command file with `tag.update`.
-- [ ] Delete `tag.update` from `entity.yaml`.
-- [ ] Delete `commands:` list from `tag.yaml` entity schema.
-- [ ] Hygiene test green for tag.yaml.
+- [x] Create `tag.yaml` command file with `tag.update`. (already existed from prior commit)
+- [x] Delete `tag.update` from `entity.yaml`. (already absent — verified)
+- [x] Delete `commands:` list from `tag.yaml` entity schema.
+- [x] Hygiene test green for tag.yaml.
 
 ## Acceptance Criteria
 
-- [ ] `tag.yaml`'s entity schema has no `commands:` key.
-- [ ] `entity.yaml` no longer contains `tag.update`.
-- [ ] `builtin/commands/tag.yaml` exists and declares `tag.update`.
-- [ ] Right-click on a tag shows Inspect Tag, Delete Tag (via auto-emit entity.delete), Archive Tag, Copy Tag, Cut Tag.
-- [ ] Hygiene test green for tag.yaml.
+- [x] `tag.yaml`'s entity schema has no `commands:` key.
+- [x] `entity.yaml` no longer contains `tag.update`.
+- [x] `builtin/commands/tag.yaml` exists and declares `tag.update`.
+- [x] Right-click on a tag shows Inspect Tag, Delete Tag (via auto-emit entity.delete), Archive Tag, Copy Tag, Cut Tag.
+- [x] Hygiene test green for tag.yaml.
 
 ## Tests
 
-- [ ] Existing tag-scope emission tests still pass.
-- [ ] `test_all_yaml_commands_have_rust_implementations` passes.
-- [ ] Run command: `cargo nextest run -p swissarmyhammer-kanban scope_commands tag` — all green.
+- [x] Existing tag-scope emission tests still pass.
+- [x] `test_all_yaml_commands_have_rust_implementations` passes.
+- [x] Run command: `cargo nextest run -p swissarmyhammer-kanban scope_commands tag` — all green.
 
 ## Workflow
 

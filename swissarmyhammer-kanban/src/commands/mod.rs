@@ -54,15 +54,15 @@ fn register_task(map: &mut CmdMap) {
 fn register_clipboard(map: &mut CmdMap) {
     map.insert(
         "entity.copy".into(),
-        Arc::new(clipboard_commands::CopyTaskCmd),
+        Arc::new(clipboard_commands::CopyEntityCmd),
     );
     map.insert(
         "entity.cut".into(),
-        Arc::new(clipboard_commands::CutTaskCmd),
+        Arc::new(clipboard_commands::CutEntityCmd),
     );
     map.insert(
         "entity.paste".into(),
-        Arc::new(clipboard_commands::PasteTaskCmd),
+        Arc::new(clipboard_commands::PasteEntityCmd::new()),
     );
 }
 
@@ -431,15 +431,15 @@ mod tests {
     }
 
     #[test]
-    fn copy_available_with_task_in_scope() {
+    fn copy_available_with_task_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.copy").unwrap();
-        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn copy_not_available_without_task() {
+    fn copy_not_available_without_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.copy").unwrap();
         let ctx = ctx_scope(&["column:todo"]);
@@ -447,15 +447,15 @@ mod tests {
     }
 
     #[test]
-    fn cut_available_with_task_in_scope() {
+    fn cut_available_with_task_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.cut").unwrap();
-        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn cut_not_available_without_task() {
+    fn cut_not_available_without_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.cut").unwrap();
         let ctx = ctx_scope(&["column:todo"]);
@@ -518,39 +518,45 @@ mod tests {
         ui
     }
 
+    // `entity.paste` is target-driven (`from: target`) and dispatches via
+    // `PasteEntityCmd`'s matrix keyed by `(clipboard_type, target_type)`.
+    // The auto-emit pass fires the command once per entity moniker in the
+    // scope chain, with that moniker passed as `target` — these tests pin
+    // the underlying `available()` contract that gates each emission.
+
     #[test]
-    fn paste_task_available_with_column() {
+    fn paste_task_available_with_column_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = ui_with_task_clipboard();
-        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        let ctx = ctx_with(&[], Some("column:todo"), Some(ui));
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn paste_task_available_with_board() {
+    fn paste_task_available_with_board_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = ui_with_task_clipboard();
-        let ctx = ctx_with(&["board:my-board"], None, Some(ui));
+        let ctx = ctx_with(&[], Some("board:my-board"), Some(ui));
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn paste_tag_available_with_task() {
+    fn paste_tag_available_with_task_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = ui_with_tag_clipboard();
-        let ctx = ctx_with(&["task:01X", "column:todo"], None, Some(ui));
+        let ctx = ctx_with(&[], Some("task:01X"), Some(ui));
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn paste_tag_not_available_on_column() {
+    fn paste_tag_not_available_on_column_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = ui_with_tag_clipboard();
-        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        let ctx = ctx_with(&[], Some("column:todo"), Some(ui));
         assert!(!cmd.available(&ctx));
     }
 
@@ -559,12 +565,12 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = Arc::new(UIState::new());
-        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        let ctx = ctx_with(&[], Some("column:todo"), Some(ui));
         assert!(!cmd.available(&ctx));
     }
 
     #[test]
-    fn paste_not_available_without_scope() {
+    fn paste_not_available_without_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
         let ui = ui_with_task_clipboard();
@@ -1188,23 +1194,28 @@ mod tests {
     // YAML ↔ Rust completeness check
     // =========================================================================
 
+    /// Collect every command id declared in `builtin/commands/*.yaml`.
+    fn all_yaml_ids() -> Vec<String> {
+        swissarmyhammer_commands::builtin_yaml_sources()
+            .iter()
+            .flat_map(|(_name, yaml_content)| {
+                serde_yaml_ng::from_str::<Vec<swissarmyhammer_commands::CommandDef>>(yaml_content)
+                    .unwrap_or_default()
+            })
+            .map(|def| def.id)
+            .collect()
+    }
+
     #[test]
     fn test_all_yaml_commands_have_rust_implementations() {
         let rust_map = register_commands();
-        let yaml_sources = swissarmyhammer_commands::builtin_yaml_sources();
+        let yaml_ids = all_yaml_ids();
 
-        let mut missing: Vec<String> = Vec::new();
-
-        for (_name, yaml_content) in &yaml_sources {
-            let defs: Vec<swissarmyhammer_commands::CommandDef> =
-                serde_yaml_ng::from_str(yaml_content).unwrap_or_default();
-
-            for def in &defs {
-                if !rust_map.contains_key(&def.id) {
-                    missing.push(def.id.clone());
-                }
-            }
-        }
+        let missing: Vec<String> = yaml_ids
+            .iter()
+            .filter(|id| !rust_map.contains_key(*id))
+            .cloned()
+            .collect();
 
         assert!(
             missing.is_empty(),
@@ -1212,6 +1223,29 @@ mod tests {
              Every command in builtin/commands/*.yaml must have a corresponding \
              entry in register_commands()",
             missing,
+        );
+    }
+
+    /// Reverse of `test_all_yaml_commands_have_rust_implementations` — guards
+    /// against a `register_commands()` entry that no YAML file declares. The
+    /// registry is the source of truth for the palette, context menus, and
+    /// keybindings; a Rust-only command would be unreachable from every
+    /// surface but still billed as an undoable side-effect.
+    #[test]
+    fn test_no_orphan_rust_commands_without_yaml() {
+        let rust_map = register_commands();
+        let yaml_ids: std::collections::HashSet<String> = all_yaml_ids().into_iter().collect();
+
+        let orphans: Vec<&String> = rust_map
+            .keys()
+            .filter(|id| !yaml_ids.contains(*id))
+            .collect();
+
+        assert!(
+            orphans.is_empty(),
+            "Rust commands registered without a matching YAML definition: {:?}\n\
+             Every entry in register_commands() must be declared in builtin/commands/*.yaml",
+            orphans,
         );
     }
 }

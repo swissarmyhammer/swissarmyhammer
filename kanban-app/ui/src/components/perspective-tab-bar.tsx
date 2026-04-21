@@ -275,10 +275,7 @@ function ScopedPerspectiveTab({
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
   return (
-    <CommandScopeProvider
-      commands={[]}
-      moniker={moniker("perspective", perspective.id)}
-    >
+    <CommandScopeProvider moniker={moniker("perspective", perspective.id)}>
       <PerspectiveTab
         id={perspective.id}
         name={perspective.name}

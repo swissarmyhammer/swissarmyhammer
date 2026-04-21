@@ -14,7 +14,6 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
@@ -59,8 +58,6 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const sizeClass = SIZES[size];
   const scopeMoniker = actor?.moniker ?? moniker("actor", actorId);
 
-  const commands = useEntityCommands("actor", actorId, actor ?? undefined);
-
   const element = avatar ? (
     <img
       src={avatar}
@@ -89,11 +86,7 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   );
 
   return (
-    <FocusScope
-      moniker={scopeMoniker}
-      commands={commands}
-      className="inline-block"
-    >
+    <FocusScope moniker={scopeMoniker} className="inline-block">
       {inner}
     </FocusScope>
   );

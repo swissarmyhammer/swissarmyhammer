@@ -85,7 +85,6 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => ({ entity: { name: "task", fields: [] }, fields: [] }),
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),

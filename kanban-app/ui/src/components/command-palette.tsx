@@ -11,7 +11,6 @@ import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { moniker } from "@/lib/moniker";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
 import { EntityIcon } from "@/components/entity-icon";
 
@@ -477,12 +476,6 @@ function SearchResults({
   );
 }
 
-/**
- * Single search result row wrapped in a FocusScope.
- *
- * Extracted as a component so the `useEntityCommands` hook can be called
- * at the top level of a component (hooks cannot be called inside `.map()`).
- */
 /** Props for the SearchResultItem component. */
 interface ResultRowProps {
   result: SearchResult;
@@ -492,6 +485,15 @@ interface ResultRowProps {
   onHoverIndex: (index: number) => void;
 }
 
+/**
+ * Single search result row wrapped in a FocusScope.
+ *
+ * Extracted as a top-level component so per-row scope registration (which
+ * relies on `useEffect` inside `FocusScope`) is not called from within
+ * `.map()`. The row's click handler dispatches `entity.inspect` against
+ * the result's moniker; `useDispatchCommand` is a hook and therefore must
+ * live at the top level of this component.
+ */
 function SearchResultItem({
   result,
   index,
@@ -500,57 +502,28 @@ function SearchResultItem({
   onHoverIndex,
 }: ResultRowProps) {
   const entityMoniker = moniker(result.entity_type, result.entity_id);
-  const commands = useEntityCommands(result.entity_type, result.entity_id);
-
-  return (
-    <FocusScope moniker={entityMoniker} commands={commands}>
-      <SearchResultRow
-        entityMoniker={entityMoniker}
-        result={result}
-        index={index}
-        selectedIndex={selectedIndex}
-        onClose={onClose}
-        onHoverIndex={onHoverIndex}
-      />
-    </FocusScope>
-  );
-}
-
-/** Inner row that can access the FocusScope's CommandScopeContext. */
-function SearchResultRow({
-  entityMoniker,
-  result,
-  index,
-  selectedIndex,
-  onClose,
-  onHoverIndex,
-}: {
-  entityMoniker: string;
-  result: ResultRowProps["result"];
-  index: number;
-  selectedIndex: number;
-  onClose: () => void;
-  onHoverIndex: (index: number) => void;
-}) {
   const dispatch = useDispatchCommand("entity.inspect");
+
   return (
-    <div
-      role="option"
-      aria-selected={index === selectedIndex}
-      data-testid={`search-result-${entityMoniker}`}
-      className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
-        ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-      onClick={() => {
-        onClose();
-        dispatch({ target: entityMoniker }).catch(console.error);
-      }}
-      onMouseEnter={() => onHoverIndex(index)}
-    >
-      <EntityIcon
-        entityType={result.entity_type}
-        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-      />
-      <span className="min-w-0 truncate">{result.display_name}</span>
-    </div>
+    <FocusScope moniker={entityMoniker}>
+      <div
+        role="option"
+        aria-selected={index === selectedIndex}
+        data-testid={`search-result-${entityMoniker}`}
+        className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+          ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+        onClick={() => {
+          onClose();
+          dispatch({ target: entityMoniker }).catch(console.error);
+        }}
+        onMouseEnter={() => onHoverIndex(index)}
+      >
+        <EntityIcon
+          entityType={result.entity_type}
+          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 truncate">{result.display_name}</span>
+      </div>
+    </FocusScope>
   );
 }

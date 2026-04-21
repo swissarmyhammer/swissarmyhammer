@@ -11,8 +11,7 @@ const MAX_RECENT_BOARDS: usize = 20;
 ///
 /// A drag's source is either an entity in the app's focus chain (the
 /// typical drag-from-card case) or an external file dragged in from the
-/// host operating system. The `File` variant is reserved for future
-/// drag-in-from-desktop support; only `FocusChain` is constructed today.
+/// host operating system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DragSource {
@@ -32,10 +31,12 @@ pub enum DragSource {
     },
     /// Source is an external file dragged in from the OS.
     ///
-    /// Reserved for future drag-from-desktop support — not yet emitted
-    /// by the frontend. When implemented, this case dispatches via the
-    /// `PasteMatrix` (an external file is treated as if it were on the
-    /// clipboard).
+    /// Emitted by the frontend's `startFileSession` hook when the user
+    /// drops a file from the desktop onto the app. `DragCompleteCmd`
+    /// dispatches this variant through the `PasteMatrix` keyed on
+    /// `(attachment, <target_type>)` — typically `attachment_onto_task`
+    /// for file-onto-task drops — treating the external file as if it
+    /// were on the clipboard.
     File {
         /// Absolute path of the dragged file on the host filesystem.
         path: String,

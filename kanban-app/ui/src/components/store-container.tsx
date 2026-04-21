@@ -38,7 +38,6 @@ export function StoreContainer({ path, children }: StoreContainerProps) {
   return (
     <FocusScope
       moniker={moniker}
-      commands={[]}
       renderContainer={false}
       showFocusBar={false}
     >

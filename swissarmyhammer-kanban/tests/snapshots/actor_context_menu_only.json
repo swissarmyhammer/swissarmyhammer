@@ -1,0 +1,54 @@
+{
+  "command_count": 4,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor",
+      "id": "entity.delete",
+      "keys": null,
+      "menu_name": null,
+      "name": "Delete Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Actor",
+      "target": "actor:alice"
+    }
+  ],
+  "context_menu_only": true,
+  "scope": [
+    "actor:alice"
+  ]
+}

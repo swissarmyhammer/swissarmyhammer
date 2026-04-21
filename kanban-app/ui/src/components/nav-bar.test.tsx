@@ -79,7 +79,6 @@ vi.mock("@/lib/schema-context", () => ({
     getSchema: () => undefined,
     getFieldDef: (_entityType: string, fieldName: string) =>
       fieldName === "percent_complete" ? mockPercentFieldDef : undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),

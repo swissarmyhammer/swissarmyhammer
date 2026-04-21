@@ -122,7 +122,7 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
   );
 
   return (
-    <CommandScopeProvider commands={[]} moniker={scopeMoniker}>
+    <CommandScopeProvider moniker={scopeMoniker}>
       <ActivePerspectiveContext.Provider value={value}>
         {children}
       </ActivePerspectiveContext.Provider>

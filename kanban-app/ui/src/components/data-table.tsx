@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
@@ -66,12 +66,6 @@ interface DataTableProps {
   /** Show a leading selector column before field columns (default true). */
   showRowSelector?: boolean;
   /**
-   * Optional factory that returns entity-specific commands for a given row.
-   * When provided, each row is wrapped in a FocusScope with these commands
-   * so right-click, inspect, and palette resolve for that row's entity.
-   */
-  rowEntityCommands?: (entity: Entity) => CommandDef[];
-  /**
    * Active perspective sort entries. When provided, column headers show
    * sort indicators and dispatch `perspective.sort.toggle` on click.
    */
@@ -92,7 +86,6 @@ export function DataTable({
   grouping: groupingProp,
   onVisibleRowCount,
   showRowSelector = true,
-  rowEntityCommands,
   perspectiveSort,
   perspectiveId,
 }: DataTableProps) {
@@ -380,12 +373,10 @@ export function DataTable({
             const di = dataRowIndices[ri];
             const entity = row.original;
             const entityMk = entity.moniker;
-            const rowCommands = rowEntityCommands?.(entity) ?? [];
             return (
               <FocusScope
                 key={row.id}
                 moniker={entityMk}
-                commands={rowCommands}
                 renderContainer={false}
               >
                 <EntityRow
@@ -534,7 +525,6 @@ function GridCellScope({
     >
       <FocusScope
         moniker={moniker}
-        commands={[]}
         claimWhen={claimWhen}
         showFocusBar={false}
       >

@@ -447,7 +447,7 @@ function EngineProviderStack({
   children,
 }: EngineProviderStackProps) {
   return (
-    <CommandScopeProvider commands={[]} moniker="engine">
+    <CommandScopeProvider moniker="engine">
       <RefreshEntitiesContext.Provider value={refreshEntities}>
         <SetEntitiesByTypeContext.Provider value={setEntitiesByType}>
           <EngineActiveBoardPathContext.Provider value={setActiveBoardPath}>

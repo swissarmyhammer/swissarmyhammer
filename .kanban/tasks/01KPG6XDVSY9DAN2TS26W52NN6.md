@@ -10,8 +10,8 @@ depends_on:
 - 01KPG6GD34NMPQE1DZD0MHWE0N
 - 01KPG6GN9JQSCZKFER5ZJ5JC62
 - 01KPG6GYSNGTEJ42XA2QNB3VE0
-position_column: todo
-position_ordinal: e680
+position_column: done
+position_ordinal: ffffffffffffffffffffffff8280
 title: 'Commands: task.yaml cleanup — move task/attachment declarations in, purge cross-cutting opt-ins'
 ---
 ## What

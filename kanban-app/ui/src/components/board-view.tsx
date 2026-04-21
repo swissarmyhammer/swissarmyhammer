@@ -26,7 +26,6 @@ import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -1053,7 +1052,6 @@ function useBoardCommandRefs(
  * focus. No push-based cursor state is needed.
  */
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
-  const boardCommands = useEntityCommands("board", "board");
   const dispatchInspect = useDispatchCommand("ui.inspect");
   const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
   const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
@@ -1088,7 +1086,6 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   return (
     <FocusScope
       moniker={board.board.moniker}
-      commands={boardCommands}
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardActionCommands}>

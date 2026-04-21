@@ -3996,13 +3996,11 @@ name = "kanban-app"
 version = "0.12.11"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "clap",
  "dirs",
  "objc2",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-directory",
@@ -4013,7 +4011,6 @@ dependencies = [
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
- "swissarmyhammer-views",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4022,10 +4019,8 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-log",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-log",
  "tracing-oslog",
  "tracing-subscriber",
  "ulid",
@@ -8174,6 +8169,7 @@ name = "swissarmyhammer-commands"
 version = "0.12.11"
 dependencies = [
  "async-trait",
+ "include_dir",
  "serde",
  "serde_json",
  "serde_yaml_ng",

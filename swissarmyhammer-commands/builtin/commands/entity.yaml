@@ -46,59 +46,6 @@
 #       yaml_hygiene_no_cross_cutting_in_entity_schemas`
 # =============================================================================
 
-- id: task.move
-  name: Move Task
-  scope: "entity:task"
-  undoable: true
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-    - name: column
-      from: target
-      entity_type: column
-    - name: drop_index
-      from: args
-
-- id: task.delete
-  name: Delete Task
-  scope: "entity:task"
-  undoable: true
-  context_menu: true
-  keys:
-    vim: dd
-    cua: Mod+Backspace
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-
-- id: task.untag
-  name: Remove Tag
-  scope: "entity:tag,entity:task"
-  undoable: true
-  context_menu: true
-  keys:
-    vim: x
-    cua: Delete
-  params:
-    - name: tag
-      from: scope_chain
-      entity_type: tag
-    - name: task
-      from: scope_chain
-      entity_type: task
-
-- id: task.doThisNext
-  name: Do This Next
-  scope: "entity:task"
-  undoable: true
-  context_menu: true
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-
 - id: entity.add
   name: New Entity
   undoable: true
@@ -130,7 +77,7 @@
       from: target
 
 - id: entity.archive
-  name: Archive
+  name: "Archive {{entity.type}}"
   undoable: true
   context_menu: true
   keys:
@@ -140,7 +87,7 @@
       from: target
 
 - id: entity.unarchive
-  name: Unarchive
+  name: "Unarchive {{entity.type}}"
   undoable: true
   context_menu: true
   params:
@@ -159,9 +106,8 @@
     group: 1
     order: 0
   params:
-    - name: task
-      from: scope_chain
-      entity_type: task
+    - name: moniker
+      from: target
 
 - id: entity.copy
   name: "Copy {{entity.type}}"
@@ -175,9 +121,8 @@
     group: 1
     order: 1
   params:
-    - name: task
-      from: scope_chain
-      entity_type: task
+    - name: moniker
+      from: target
 
 - id: entity.paste
   name: "Paste {{entity.type}}"
@@ -191,17 +136,6 @@
     group: 1
     order: 2
   params:
-    - name: column
-      from: scope_chain
-      entity_type: column
+    - name: moniker
+      from: target
 
-- id: attachment.delete
-  name: Delete Attachment
-  scope: "entity:task"
-  undoable: true
-  visible: false
-  params:
-    - name: task_id
-      from: args
-    - name: id
-      from: args

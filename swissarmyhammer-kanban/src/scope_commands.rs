@@ -2,7 +2,7 @@
 //!
 //! `commands_for_scope` is the single source of truth for what commands
 //! are available in a given focus context. It walks the scope chain,
-//! looks up entity schemas for their declared commands, merges with
+//! merges per-moniker cross-cutting and scoped-registry commands with
 //! global registry commands, checks availability, and resolves all
 //! template names (e.g. `{{entity.type}}` → "Task").
 //!
@@ -11,10 +11,7 @@
 //! For every entity moniker in the scope chain (innermost first), the
 //! dispatcher emits commands in this order:
 //!
-//!   1. **entity-schema** — commands declared on the entity type in
-//!      `swissarmyhammer-kanban/builtin/entities/*.yaml` (type-specific overlays
-//!      like `entity.copy` with vim/cua keys, or `task.delete`).
-//!   2. **cross-cutting** — registry commands whose primary param declares
+//!   1. **cross-cutting** — registry commands whose primary param declares
 //!      `from: target` (e.g. `ui.inspect`, `entity.delete`, `entity.archive`,
 //!      `entity.unarchive`). Surfaces uniformly on every entity moniker
 //!      without needing per-type opt-in YAML. See `emit_cross_cutting_commands`.
@@ -24,14 +21,14 @@
 //!      can be diagnosed from logs alone — see the task
 //!      `Commands: tracing for emit_cross_cutting_commands` for the
 //!      capture protocol via `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'`.
-//!   3. **scoped-registry** — registry commands with `scope:` pinned to this
+//!   2. **scoped-registry** — registry commands with `scope:` pinned to this
 //!      entity type (e.g. `task.untag` with `scope: "entity:tag,entity:task"`).
 //!
 //! After all monikers are processed:
 //!
-//!   4. **global-registry** — registry commands with no `scope:` pin
+//!   3. **global-registry** — registry commands with no `scope:` pin
 //!      (e.g. `app.quit`, `app.undo`).
-//!   5. **dynamic** — runtime-generated commands like `view.switch:{id}`,
+//!   4. **dynamic** — runtime-generated commands like `view.switch:{id}`,
 //!      `board.switch:{path}`, `entity.add:{type}`.
 //!
 //! Within each phase, the shared `(id, target)` seen-set guarantees a command
@@ -537,23 +534,19 @@ pub fn commands_for_scope(
     result
 }
 
-/// Emit entity-schema, cross-cutting, and scoped-registry commands for each
-/// moniker in the scope chain.
+/// Emit cross-cutting and scoped-registry commands for each moniker in the
+/// scope chain.
 ///
 /// Walks each moniker in `scope_chain` in order (innermost first), skipping
-/// `field:*` monikers. For each entity moniker, runs three passes in order:
+/// `field:*` monikers. For each entity moniker, runs two passes in order:
 ///
-///   1. `emit_entity_schema_commands` — type-specific commands declared in the
-///      entity YAML (only when `fields` is supplied).
-///   2. `emit_cross_cutting_commands` — registry commands whose primary param
+///   1. `emit_cross_cutting_commands` — registry commands whose primary param
 ///      is `from: target` (e.g. `ui.inspect`, `entity.delete`, `entity.archive`).
-///   3. `emit_scoped_registry_commands` — registry commands with a `scope:`
+///   2. `emit_scoped_registry_commands` — registry commands with a `scope:`
 ///      pin that matches this entity type.
 ///
 /// This ensures commands appear in scope order (attachment before task before
-/// global) and that the cross-cutting pass slots between the per-type overlays
-/// and the scope-pinned registry entries — the documented ordering at the top
-/// of this module.
+/// global) — the documented ordering at the top of this module.
 #[allow(clippy::too_many_arguments)]
 fn emit_scoped_commands(
     scope_chain: &[String],
@@ -577,26 +570,11 @@ fn emit_scoped_commands(
         }
         let entity_moniker = format!("{entity_type}:{entity_id}");
 
-        if let Some(fields) = fields {
-            emit_entity_schema_commands(
-                fields,
-                entity_type,
-                &entity_moniker,
-                moniker,
-                scope_chain,
-                command_impls,
-                ui_state,
-                clipboard_type,
-                seen,
-                result,
-            );
-        }
         // Cross-cutting commands are gated on the entity type being a real
         // declared entity (`fields.get_entity(entity_type).is_some()`). This
         // prevents synthetic monikers like `"foo:bar"` from sprouting
         // `entity.delete`/`entity.archive`/`ui.inspect` against an unknown
-        // entity type. The entity-schema pass uses the same implicit gate
-        // (an unknown type yields no schema lookup); cross-cutting matches it.
+        // entity type.
         let is_known_entity = fields
             .map(|f| f.get_entity(entity_type).is_some())
             .unwrap_or(false);
@@ -649,7 +627,7 @@ fn emit_scoped_commands(
 ///    archive impl can reject attachments by returning `false`). Commands
 ///    that fail availability are still emitted with `available: false` —
 ///    `commands_for_scope` filters them out at the end. This matches the
-///    behaviour of the entity-schema and scoped-registry passes.
+///    behaviour of the scoped-registry pass.
 ///
 /// Dedup via the shared `(id, target)` seen-set in `push_dedup` ensures a
 /// command never double-emits for the same target moniker, even when the
@@ -780,76 +758,6 @@ fn emit_cross_cutting_commands(
         matched,
         "emit_cross_cutting_commands: pass complete"
     );
-}
-
-/// Collect direct + transitively-scoped entity-declared commands for a type.
-fn collect_entity_schema_cmds<'a>(
-    fields: &'a FieldsContext,
-    entity_type: &str,
-) -> Vec<&'a swissarmyhammer_fields::types::EntityCommand> {
-    let scope_prefixed_et = format!("entity:{entity_type}");
-    let direct_cmds = fields
-        .get_entity(entity_type)
-        .map(|e| e.commands.iter().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let scoped_cmds: Vec<_> = fields
-        .all_entities()
-        .iter()
-        .flat_map(|e| e.commands.iter())
-        .filter(|cmd| scope_matches(cmd.scope.as_deref(), entity_type, &scope_prefixed_et))
-        .collect();
-    direct_cmds.into_iter().chain(scoped_cmds).collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn emit_entity_schema_commands(
-    fields: &FieldsContext,
-    entity_type: &str,
-    entity_moniker: &str,
-    moniker: &str,
-    scope_chain: &[String],
-    command_impls: &HashMap<String, Arc<dyn Command>>,
-    ui_state: &Arc<UIState>,
-    clipboard_type: Option<&str>,
-    seen: &mut HashSet<(String, Option<String>)>,
-    result: &mut Vec<ResolvedCommand>,
-) {
-    for cmd in collect_entity_schema_cmds(fields, entity_type) {
-        if cmd.visible == Some(false) {
-            continue;
-        }
-        let key = (cmd.id.clone(), Some(entity_moniker.to_string()));
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.insert(key);
-
-        let tpl = paste_aware_tpl(&cmd.id, entity_type, clipboard_type);
-        let keys = cmd.keys.as_ref().map(|k| KeysDef {
-            vim: k.vim.clone(),
-            cua: k.cua.clone(),
-            emacs: k.emacs.clone(),
-        });
-        result.push(ResolvedCommand {
-            id: cmd.id.clone(),
-            name: resolve_name_template(&cmd.name, &tpl),
-            menu_name: cmd
-                .menu_name
-                .as_ref()
-                .map(|mn| resolve_name_template(mn, &tpl)),
-            target: Some(entity_moniker.to_string()),
-            group: entity_type.to_string(),
-            context_menu: cmd.context_menu,
-            keys,
-            available: check_available(
-                &cmd.id,
-                scope_chain,
-                Some(moniker),
-                command_impls,
-                ui_state,
-            ),
-        });
-    }
 }
 
 /// Emit registry commands whose `scope` names the current entity type.
@@ -1083,15 +991,15 @@ mod tests {
     }
 
     /// With a task on the clipboard and a board in scope, `entity.paste` must
-    /// surface as an available command — `PasteCmd::available()` returns true
-    /// because task-on-clipboard + board-in-scope is a valid paste target
+    /// surface as an available command — `PasteEntityCmd::available()` returns
+    /// true because task-on-clipboard + board-in-scope is a valid paste target
     /// (paste creates a task in the board's first column).
     ///
     /// This test pins the behavior that drives "right-click on a board
     /// background shows Paste" without `board.yaml` opting into
     /// `entity.paste` directly: the command must come from the registry's
-    /// global emission pass alone, gated by `PasteCmd::available()` against
-    /// the scope and clipboard state.
+    /// global emission pass alone, gated by `PasteEntityCmd::available()`
+    /// against the target moniker and clipboard state.
     #[test]
     fn entity_paste_surfaces_on_board_when_task_clipboard() {
         let (registry, impls, fields, ui) = setup();
@@ -1426,18 +1334,20 @@ mod tests {
 
     #[test]
     fn cut_tag_not_available_without_task_parent() {
-        // Hypothetical: tag focused without a task parent
+        // A tag is in scope but no task — `entity.cut` with a tag target
+        // requires a task in scope to untag from. `CutEntityCmd::available()`
+        // gates this and the auto-emitted command must be filtered out.
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["tag:bug".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let cut_tag = cmds.iter().find(|c| c.name == "Cut Tag");
-        // CutCmd.available() checks has_in_scope("tag") — true. But the actual
-        // execute would fail without task. available() doesn't check for task
-        // on cut when tag is present. This test documents current behavior.
-        // If cut tag should require task, fix CutCmd.available().
+        let cut_tag = cmds
+            .iter()
+            .find(|c| c.id == "entity.cut" && c.target.as_deref() == Some("tag:bug"));
         assert!(
-            cut_tag.is_some() || cut_tag.is_none(),
-            "documenting: cut tag availability without task parent"
+            cut_tag.is_none(),
+            "entity.cut on a tag target must NOT surface without a task in \
+             scope (no destructive op is defined); got: {:?}",
+            cut_tag,
         );
     }
 
@@ -1556,14 +1466,13 @@ mod tests {
     /// `from: target` registry commands and emitting them per-moniker.
     ///
     /// This is the GREEN-step companion to the YAML hygiene guard
-    /// (`yaml_hygiene_no_cross_cutting_in_entity_schemas`): that test forbids
-    /// re-listing `ui.inspect` in `actor.yaml`, this test proves the command
-    /// still appears once the opt-in is gone. Together they pin the
-    /// "declare once, auto-emit per moniker" contract for actors.
+    /// (`yaml_hygiene_entity_schemas_have_no_commands_key`): that test forbids
+    /// entity YAML files from declaring any `commands:` key at all, this test
+    /// proves the command still appears without any per-entity opt-in.
+    /// Together they pin the "declare once, auto-emit per moniker" contract
+    /// for actors.
     #[test]
     fn ui_inspect_auto_emits_on_actor_without_opt_in() {
-        use swissarmyhammer_fields::EntityDef;
-
         // Guard: if a future change re-introduces a `commands:` block on
         // actor.yaml (or otherwise re-lists `ui.inspect` there), this test's
         // premise — that auto-emit alone is responsible for the surfaced
@@ -1573,14 +1482,13 @@ mod tests {
             .into_iter()
             .find_map(|(name, yaml)| (name == "actor").then_some(yaml))
             .expect("builtin entity definitions must include actor");
-        let actor_def: EntityDef = serde_yaml_ng::from_str(actor_yaml)
-            .expect("builtin actor.yaml must parse as EntityDef");
+        let actor_raw: serde_yaml_ng::Value = serde_yaml_ng::from_str(actor_yaml)
+            .expect("builtin actor.yaml must parse as generic YAML");
         assert!(
-            actor_def.commands.is_empty(),
-            "actor.yaml must not opt into any commands — `ui.inspect` is \
+            actor_raw.get("commands").is_none(),
+            "actor.yaml must not carry a `commands:` key — `ui.inspect` is \
              expected to come from the cross-cutting auto-emit pass, not a \
-             per-entity opt-in. Found: {:?}",
-            actor_def.commands.iter().map(|c| &c.id).collect::<Vec<_>>()
+             per-entity opt-in"
         );
 
         let (registry, impls, fields, ui) = setup();
@@ -2757,35 +2665,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn task_untag_from_entity_schema_has_target() {
-        // task.untag is declared on the task entity with scope
-        // "entity:tag,entity:task". When both tag and task are in scope,
-        // it should appear via the entity schema path with a target
-        // pointing to the tag moniker (innermost match).
-        let (registry, impls, fields, ui) = setup();
-        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let untag = cmds
-            .iter()
-            .find(|c| c.id == "task.untag")
-            .expect("task.untag should be in resolved commands");
-        assert!(
-            untag.target.is_some(),
-            "task.untag should have a target from entity schema path"
-        );
-    }
-
     /// `entity.archive` is a cross-cutting command and must surface on any
     /// non-task entity scope. With the registry scope pin (`scope: "entity:task"`)
     /// stripped from `entity.yaml`, archive should appear with `available: true`
     /// when a tag moniker is in scope — proving the cross-cutting contract holds
     /// independent of any per-entity schema duplication.
     ///
-    /// Today the entity-schema path (tag.yaml lists `entity.archive`) supplies
-    /// the resolved command with `target: Some("tag:01X")`. After follow-up
-    /// cards strip those duplicates, this test still passes via the registry
-    /// path — locking in the cross-cutting behaviour.
+    /// The cross-cutting pass supplies the resolved command with
+    /// `target: Some("tag:01X")` — locking in that cross-cutting commands
+    /// reach every entity moniker without needing a per-entity YAML opt-in.
     #[test]
     fn entity_archive_surfaces_on_non_task_entity() {
         let (registry, impls, fields, ui) = setup();
@@ -2851,29 +2739,6 @@ mod tests {
             delete.available,
             "entity.delete must be available on a project scope"
         );
-    }
-
-    #[test]
-    fn entity_schema_commands_carry_menu_name() {
-        // Commands resolved via the entity schema block should carry
-        // menu_name from EntityCommand.menu_name, not hardcode None.
-        let (registry, impls, fields, ui) = setup();
-        let scope = vec![
-            "task:01X".into(),
-            "column:todo".into(),
-            "board:board".into(),
-        ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-
-        // entity.archive has no explicit menu_name in YAML so should be None
-        let archive = cmds.iter().find(|c| c.id == "entity.archive");
-        if let Some(a) = archive {
-            assert!(
-                a.menu_name.is_none(),
-                "entity.archive should have no menu_name: {:?}",
-                a.menu_name
-            );
-        }
     }
 
     // =========================================================================
@@ -3419,64 +3284,38 @@ mod tests {
     /// See the rule-comment header at the top of
     /// `swissarmyhammer-commands/builtin/commands/entity.yaml` and
     /// `feedback_command_organization.md` in the project memory.
-    const CROSS_CUTTING_COMMAND_IDS: &[&str] = &[
-        "ui.inspect",
-        "entity.add",
-        "entity.delete",
-        "entity.archive",
-        "entity.unarchive",
-        "entity.copy",
-        "entity.cut",
-        "entity.paste",
-        "entity.update_field",
-    ];
-
-    /// Hygiene guard for the cross-cutting command organization rule.
+    /// Hygiene guard: entity schemas must not carry a `commands:` key at all.
     ///
-    /// Cross-cutting commands (those listed in `CROSS_CUTTING_COMMAND_IDS`)
-    /// are declared once in the commands registry and auto-emitted per entity
-    /// moniker. Re-listing them inside an entity schema causes duplicate
-    /// emissions, drift between the canonical declaration and the entity
-    /// overlay, and ambiguity about which file owns the command's contract.
+    /// Post-retirement of `EntityDef.commands`, the type-specific command
+    /// declarations live in `swissarmyhammer-commands/builtin/commands/*.yaml`
+    /// and cross-cutting ones auto-emit from the registry per entity moniker.
+    /// Entity schemas under `swissarmyhammer-kanban/builtin/entities/*.yaml`
+    /// describe fields only. Re-introducing a `commands:` key would bring
+    /// back the duplicate-overlay pattern we deleted.
     ///
-    /// This test scans every builtin entity YAML, parses it as `EntityDef`,
-    /// and fails listing every `(entity, command_id)` pair where the entity
-    /// schema names a cross-cutting command.
-    ///
-    /// **Expected to FAIL on the foundation branch** — the failing list drives
-    /// the rest of the plan that strips cross-cutting commands from entity
-    /// schemas. Once that work lands, the test turns green and prevents
-    /// regression.
+    /// This test scans every builtin entity YAML and fails if any of them
+    /// carries a `commands:` key — stricter than the original which only
+    /// flagged cross-cutting ids.
     #[test]
-    fn yaml_hygiene_no_cross_cutting_in_entity_schemas() {
-        use swissarmyhammer_fields::EntityDef;
-
-        let mut violations: Vec<(String, String)> = Vec::new();
+    fn yaml_hygiene_entity_schemas_have_no_commands_key() {
+        let mut violations: Vec<String> = Vec::new();
 
         for (entity_name, yaml) in builtin_entity_definitions() {
-            let entity: EntityDef = serde_yaml_ng::from_str(yaml)
+            let raw: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml)
                 .unwrap_or_else(|e| panic!("failed to parse builtin entity '{entity_name}': {e}"));
-            for cmd in &entity.commands {
-                if CROSS_CUTTING_COMMAND_IDS.contains(&cmd.id.as_str()) {
-                    violations.push((entity_name.to_string(), cmd.id.clone()));
-                }
+            if raw.get("commands").is_some() {
+                violations.push(entity_name.to_string());
             }
         }
 
         assert!(
             violations.is_empty(),
-            "Per-entity schemas must not list cross-cutting commands — those \
-             auto-emit from the registry. Remove the following entries from \
-             their entity YAML(s) under `swissarmyhammer-kanban/builtin/entities/`:\n\
-             {}\n\
-             See the rule-comment header at the top of \
-             `swissarmyhammer-commands/builtin/commands/entity.yaml` and \
-             `feedback_command_organization.md` in the project memory.",
-            violations
-                .iter()
-                .map(|(e, c)| format!("  - {e}.yaml: {c}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+            "Entity schemas must not carry a `commands:` key — type-specific \
+             commands live in `swissarmyhammer-commands/builtin/commands/<noun>.yaml` \
+             and cross-cutting commands auto-emit from the registry. \
+             Found `commands:` on: {}. \
+             See `feedback_command_organization.md` in project memory.",
+            violations.join(", ")
         );
     }
 

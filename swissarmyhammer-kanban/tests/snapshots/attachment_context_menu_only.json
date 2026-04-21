@@ -1,0 +1,109 @@
+{
+  "command_count": 9,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "attachment.open",
+      "keys": null,
+      "menu_name": null,
+      "name": "Open",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "attachment.reveal",
+      "keys": null,
+      "menu_name": null,
+      "name": "Show in Finder",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Attachment",
+      "target": "attachment:/tmp/x.png"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Attachment",
+      "target": "attachment:/tmp/x.png"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "entity.delete",
+      "keys": null,
+      "menu_name": null,
+      "name": "Delete Attachment",
+      "target": "attachment:/tmp/x.png"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "attachment",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Attachment",
+      "target": "attachment:/tmp/x.png"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "task",
+      "id": "attachment.delete",
+      "keys": null,
+      "menu_name": null,
+      "name": "Delete Attachment",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "task",
+      "id": "task.delete",
+      "keys": {
+        "cua": "Mod+Backspace",
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Delete Task",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "task",
+      "id": "task.doThisNext",
+      "keys": null,
+      "menu_name": null,
+      "name": "Do This Next",
+      "target": null
+    }
+  ],
+  "context_menu_only": true,
+  "scope": [
+    "attachment:/tmp/x.png",
+    "task:TASK",
+    "column:todo"
+  ]
+}

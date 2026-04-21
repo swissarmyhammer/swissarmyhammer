@@ -443,10 +443,7 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
 export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
   function FilterEditor(props, ref) {
     return (
-      <CommandScopeProvider
-        commands={[]}
-        moniker={`perspective:${props.perspectiveId}`}
-      >
+      <CommandScopeProvider moniker={`perspective:${props.perspectiveId}`}>
         <FilterEditorBody ref={ref} {...props} />
       </CommandScopeProvider>
     );

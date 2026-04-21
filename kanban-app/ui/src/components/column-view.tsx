@@ -12,7 +12,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
 import {
   useEntityFocus,
@@ -486,14 +485,12 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
   const { setFocus } = useEntityFocus();
-  const commands = useEntityCommands("column", column.id, column);
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 
   return (
     <FocusScope
       moniker={columnMoniker}
-      commands={commands}
       className="flex flex-col min-h-0 min-w-[24em] max-w-[48em] flex-1 shrink-0"
     >
       <ColumnBody
@@ -582,7 +579,6 @@ function ColumnHeader({
     >
       <FocusScope
         moniker={columnNameMoniker}
-        commands={[]}
         claimWhen={nameFieldClaimWhen}
         className="inline"
       >

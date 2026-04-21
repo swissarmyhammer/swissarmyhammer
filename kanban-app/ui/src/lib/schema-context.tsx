@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { EntityCommand, EntitySchema, FieldDef } from "@/types/kanban";
+import type { EntitySchema, FieldDef } from "@/types/kanban";
 
 /** Describes an entity type that supports prefix-based mentions (e.g. #tag, @actor). */
 export interface MentionableType {
@@ -31,8 +31,6 @@ export interface MentionableType {
 interface SchemaContextValue {
   getSchema: (entityType: string) => EntitySchema | undefined;
   getFieldDef: (entityType: string, fieldName: string) => FieldDef | undefined;
-  /** Return the commands array for an entity type, or [] if schema not loaded yet. */
-  getEntityCommands: (entityType: string) => readonly EntityCommand[];
   /** Entity types that have mention_prefix defined — for CM6 decorations/autocomplete. */
   mentionableTypes: MentionableType[];
   loading: boolean;
@@ -108,15 +106,6 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     [schemas],
   );
 
-  /** Return the commands for the given entity type, or [] if schema not loaded. */
-  const getEntityCommands = useCallback(
-    (entityType: string): readonly EntityCommand[] => {
-      const schema = schemas.get(entityType);
-      return schema?.entity.commands ?? [];
-    },
-    [schemas],
-  );
-
   const mentionableTypes = useMemo(() => {
     const result: MentionableType[] = [];
     for (const schema of schemas.values()) {
@@ -139,7 +128,6 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
       value={{
         getSchema,
         getFieldDef,
-        getEntityCommands,
         mentionableTypes,
         loading,
       }}
@@ -162,18 +150,17 @@ export function useSchema() {
 }
 
 /**
- * Returns schema context if available, or a stub that always returns undefined/[].
+ * Returns schema context if available, or a stub that always returns undefined.
  * Use in components optionally rendered outside a SchemaProvider.
  */
 export function useSchemaOptional(): Pick<
   SchemaContextValue,
-  "getSchema" | "getFieldDef" | "getEntityCommands"
+  "getSchema" | "getFieldDef"
 > {
   const ctx = useContext(SchemaContext);
   if (ctx) return ctx;
   return {
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   };
 }

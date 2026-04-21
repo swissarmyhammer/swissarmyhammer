@@ -1,0 +1,59 @@
+# Type-specific commands for the `task` entity.
+#
+# See the rule-comment header at the top of `entity.yaml` for the
+# command organization rule. Cross-cutting commands (those that
+# operate on any entity via `from: target`) live in `entity.yaml`
+# and `ui.yaml`; task-specific commands belong here.
+
+- id: task.move
+  name: Move Task
+  scope: "entity:task"
+  undoable: true
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+    - name: column
+      from: target
+      entity_type: column
+    - name: drop_index
+      from: args
+
+- id: task.delete
+  name: Delete Task
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    vim: dd
+    cua: Mod+Backspace
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: task.untag
+  name: Remove Tag
+  scope: "entity:tag,entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    vim: x
+    cua: Delete
+  params:
+    - name: tag
+      from: scope_chain
+      entity_type: tag
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: task.doThisNext
+  name: Do This Next
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task

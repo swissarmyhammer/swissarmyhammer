@@ -50,7 +50,7 @@ export function ViewContainer({ children }: ViewContainerProps) {
   const moniker = useMemo(() => `view:${viewId}`, [viewId]);
 
   return (
-    <CommandScopeProvider commands={[]} moniker={moniker}>
+    <CommandScopeProvider moniker={moniker}>
       <ActiveViewRenderer
         activeView={activeView}
         board={board!}

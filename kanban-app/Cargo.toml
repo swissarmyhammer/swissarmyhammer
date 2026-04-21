@@ -20,7 +20,6 @@ swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
-swissarmyhammer-views = { workspace = true }
 swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
@@ -32,13 +31,9 @@ tauri-plugin-log = { version = "2", features = ["tracing"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-oslog = "0.3"
 tauri-plugin-clipboard-manager = "2"

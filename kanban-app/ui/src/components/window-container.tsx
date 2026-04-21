@@ -142,7 +142,7 @@ interface WindowContainerProps {
  */
 export function WindowContainer({ children }: WindowContainerProps) {
   return (
-    <CommandScopeProvider commands={[]} moniker={`window:${WINDOW_LABEL}`}>
+    <CommandScopeProvider moniker={`window:${WINDOW_LABEL}`}>
       <WindowContainerInner>{children}</WindowContainerInner>
     </CommandScopeProvider>
   );

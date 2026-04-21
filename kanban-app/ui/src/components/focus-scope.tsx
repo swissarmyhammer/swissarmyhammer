@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   CommandScopeContext,
+  EMPTY_COMMANDS,
   useDispatchCommand,
   type CommandDef,
   type CommandScope,
@@ -30,8 +31,15 @@ const FocusScopeContext = createContext<string | null>(null);
 type FocusScopeOwnProps = {
   /** The moniker ("type:id") for the entity this scope represents. */
   moniker: string;
-  /** Commands to register in this scope. */
-  commands: CommandDef[];
+  /**
+   * Commands to register in this scope. Optional — defaults to the shared
+   * `EMPTY_COMMANDS` constant from command-scope. Most FocusScopes exist
+   * purely to register an entity moniker in the focus/scope chain and have
+   * no per-scope commands of their own; those callers should simply omit
+   * the prop. Only pass an array when the scope genuinely contributes
+   * commands (e.g. `extraCommands` forwarded from a parent card).
+   */
+  commands?: readonly CommandDef[];
   children: ReactNode;
   /**
    * Predicates that let this scope claim focus when a nav command is broadcast.
@@ -67,7 +75,7 @@ type FocusScopeProps = FocusScopeOwnProps &
  */
 export function FocusScope({
   moniker,
-  commands,
+  commands = EMPTY_COMMANDS,
   children,
   claimWhen,
   showFocusBar = true,

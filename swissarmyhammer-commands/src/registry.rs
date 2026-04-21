@@ -1,8 +1,18 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use include_dir::{include_dir, Dir};
+
 use crate::context::parse_moniker;
 use crate::types::CommandDef;
+
+/// Builtin command YAML files, embedded at compile time.
+///
+/// Each file in `builtin/commands/` is picked up automatically — adding a new
+/// YAML file requires no Rust changes. The source name is the file stem
+/// (e.g. `app.yaml` → `"app"`), matching the convention used by
+/// `load_yaml_dir` for on-disk overrides.
+static BUILTIN_COMMANDS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
 
 /// Registry of command definitions loaded from YAML sources.
 ///
@@ -175,28 +185,28 @@ fn scope_matches(scope: Option<&str>, scope_chain: &[String]) -> bool {
 }
 
 /// Returns the builtin command YAML sources embedded at compile time.
+///
+/// Enumerates every `*.yaml` file directly under `builtin/commands/` via
+/// `include_dir!` — adding a new builtin command file requires no Rust
+/// changes. The source name is the file stem (e.g. `app.yaml` → `"app"`).
+///
+/// The loader enforces a flat layout: only files whose parent path is the
+/// root of the embedded directory are returned. `include_dir!` walks
+/// recursively, but keys here are basenames only, so a nested
+/// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
+/// `HashMap` insert downstream. Filtering to the root prevents that
+/// class of bug at the loader.
 pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("app", include_str!("../builtin/commands/app.yaml")),
-        ("entity", include_str!("../builtin/commands/entity.yaml")),
-        ("ui", include_str!("../builtin/commands/ui.yaml")),
-        (
-            "settings",
-            include_str!("../builtin/commands/settings.yaml"),
-        ),
-        ("file", include_str!("../builtin/commands/file.yaml")),
-        ("drag", include_str!("../builtin/commands/drag.yaml")),
-        (
-            "perspective",
-            include_str!("../builtin/commands/perspective.yaml"),
-        ),
-        (
-            "attachment",
-            include_str!("../builtin/commands/attachment.yaml"),
-        ),
-        ("column", include_str!("../builtin/commands/column.yaml")),
-        ("tag", include_str!("../builtin/commands/tag.yaml")),
-    ]
+    BUILTIN_COMMANDS
+        .files()
+        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("yaml"))
+        .filter(|file| file.path().parent() == Some(Path::new("")))
+        .filter_map(|file| {
+            let name = file.path().file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
 }
 
 /// Load YAML files from a directory as `(name, content)` pairs.
@@ -412,10 +422,8 @@ mod tests {
         let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
-        // entity: task.move, task.delete, task.untag, task.doThisNext,
-        //         entity.add, entity.update_field, entity.delete, entity.archive,
-        //         entity.unarchive, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 13
+        // entity: entity.add, entity.update_field, entity.delete, entity.archive,
+        //         entity.unarchive, entity.copy, entity.cut, entity.paste = 8
         // (task.add and project.add were retired in favor of the dynamic
         // entity.add:{type} pipeline — see commit 8973cf694.)
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
@@ -426,9 +434,10 @@ mod tests {
         // drag: start, cancel, complete = 3
         // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
-        // attachment: open, reveal = 2
+        // attachment: open, reveal, delete = 3
         // column: reorder = 1
         // tag: tag.update = 1
+        // task: task.move, task.delete, task.untag, task.doThisNext = 4
         // +1 for ui.mode.set
         assert_eq!(registry.all_commands().len(), 62);
 

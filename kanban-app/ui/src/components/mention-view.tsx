@@ -24,7 +24,6 @@ import { FocusScope, useParentFocusScope } from "@/components/focus-scope";
 import { TextViewer } from "@/components/text-viewer";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useSchema, type MentionableType } from "@/lib/schema-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
 import { buildMentionMetaMap } from "@/hooks/use-mention-extensions";
 import type { MentionMeta } from "@/lib/mention-meta";
@@ -237,19 +236,12 @@ function SingleMention({
   showFocusBar,
   extraCommands,
 }: SingleMentionProps) {
-  const commands = useEntityCommands(
-    resolved.entityType,
-    resolved.monikerId,
-    resolved.entity,
-    extraCommands,
-  );
-
   const doc = `${resolved.prefix}${resolved.slug}`;
 
   return (
     <FocusScope
       moniker={scopeMoniker}
-      commands={commands}
+      commands={extraCommands}
       className="inline mention-pill-focus"
       claimWhen={claimWhen}
       showFocusBar={showFocusBar}

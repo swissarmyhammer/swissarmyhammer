@@ -58,14 +58,12 @@ vi.mock("@/lib/schema-context", () => ({
         { name: "due", type: "date", section: "dates", display: "text" },
       ],
     }),
-    getEntityCommands: () => [],
     schemas: {},
     loading: false,
   }),
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
 }));
 

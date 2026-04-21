@@ -177,6 +177,21 @@ function warnOnceNoopSetter(_value: number | ((prev: number) => number)): void {
   }
 }
 
+/**
+ * Shared empty-array reference for command lists.
+ *
+ * Callers that never register commands in a given scope (and therefore
+ * would otherwise pass `commands={[]}`) should omit the prop — both
+ * `FocusScope` and `CommandScopeProvider` default to this constant.
+ *
+ * When a caller needs to pass an array explicitly (e.g. because a
+ * conditional would otherwise produce `undefined`), use this constant
+ * rather than a fresh `[]` literal. A stable reference keeps the
+ * downstream `useMemo`/`useEffect` dependencies stable across renders,
+ * so scope registration does not churn when nothing has actually changed.
+ */
+export const EMPTY_COMMANDS: readonly CommandDef[] = Object.freeze([]);
+
 /** Definition of a single command that can be registered in a scope. */
 export interface CommandDef {
   /** Unique identifier used to resolve the command through the scope chain. */
@@ -259,8 +274,12 @@ export function scopeChainFromScope(scope: CommandScope | null): string[] {
 }
 
 interface CommandScopeProviderProps {
-  /** Commands to register in this scope. */
-  commands: CommandDef[];
+  /**
+   * Commands to register in this scope. Optional — defaults to the shared
+   * `EMPTY_COMMANDS` constant. Most scopes exist purely to carry a moniker
+   * into the scope chain and have no commands of their own.
+   */
+  commands?: readonly CommandDef[];
   children: ReactNode;
   /** Optional moniker identifying which FocusScope created this scope. */
   moniker?: string;
@@ -272,7 +291,7 @@ interface CommandScopeProviderProps {
  * resolve commands upward through the chain.
  */
 export function CommandScopeProvider({
-  commands,
+  commands = EMPTY_COMMANDS,
   children,
   moniker,
 }: CommandScopeProviderProps) {

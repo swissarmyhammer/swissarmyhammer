@@ -61,14 +61,12 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: mockMentionableTypes,
     loading: false,
   }),
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
 }));
 

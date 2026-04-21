@@ -1,0 +1,54 @@
+{
+  "command_count": 4,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "project",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Project",
+      "target": "project:backend"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "project",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Project",
+      "target": "project:backend"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "project",
+      "id": "entity.delete",
+      "keys": null,
+      "menu_name": null,
+      "name": "Delete Project",
+      "target": "project:backend"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "project",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Project",
+      "target": "project:backend"
+    }
+  ],
+  "context_menu_only": true,
+  "scope": [
+    "project:backend"
+  ]
+}

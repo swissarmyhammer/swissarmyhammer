@@ -1643,9 +1643,11 @@ async fn entity_copy_copies_task_to_clipboard() {
         .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Dispatch entity.copy with task in scope
+    // Dispatch entity.copy with task as target (cross-cutting command:
+    // params: [{name: moniker, from: target}])
+    let target = format!("task:{}", task_id);
     let result = engine
-        .dispatch_simple("entity.copy", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple("entity.copy", &[], Some(&target))
         .await
         .expect("entity.copy should succeed");
 

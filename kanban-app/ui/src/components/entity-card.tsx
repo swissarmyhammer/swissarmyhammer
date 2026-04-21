@@ -8,7 +8,6 @@ import {
 } from "@/components/fields/field";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
   Tooltip,
@@ -62,17 +61,11 @@ export const EntityCard = memo(
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
-    const commands = useEntityCommands(
-      entity.entity_type,
-      entity.id,
-      entity,
-      extraCommands,
-    );
 
     return (
       <FocusScope
         moniker={entity.moniker}
-        commands={commands}
+        commands={extraCommands}
         claimWhen={claimWhen}
         className="entity-card-focus"
       >

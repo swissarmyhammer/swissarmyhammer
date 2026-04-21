@@ -404,7 +404,6 @@ function FieldRow({
   return (
     <FocusScope
       moniker={scopeMoniker}
-      commands={[]}
       claimWhen={claimWhen}
       data-testid={`field-row-${field.name}`}
       className={bare ? undefined : "flex items-start gap-2"}
