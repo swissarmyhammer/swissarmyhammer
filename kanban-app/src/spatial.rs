@@ -103,8 +103,13 @@ pub async fn spatial_register<R: Runtime>(
 
 /// Unregister a spatial entry (FocusScope unmount).
 ///
-/// If the unregistered entry was the focused key, focus is cleared and a
-/// `focus-changed` event is emitted scoped to the invoking window.
+/// If the unregistered entry was the focused key, the spatial state picks a
+/// successor (layer memory → sibling in the same parent scope → top-left
+/// entry in the active layer) and a `focus-changed` event is emitted scoped
+/// to the invoking window. Focus clears to `None` only when the removed
+/// entry was the last registered candidate on its layer. This preserves the
+/// "something is always focused" invariant so nav keys in the successor
+/// view have a valid target.
 #[tauri::command]
 pub async fn spatial_unregister<R: Runtime>(
     key: String,
@@ -160,9 +165,15 @@ pub async fn spatial_clear_focus<R: Runtime>(
 /// window if focus moves. Returns the moniker of the newly focused entry,
 /// or `None` if no target was found. Candidates from other windows are
 /// invisible because each window has its own registry.
+///
+/// `key` is optional. React passes `null` when no moniker is focused or
+/// when it has a moniker but no spatial key mapping for it. In that case
+/// Rust's [`SpatialState::navigate`] falls through to the top-left entry
+/// of the active layer — the safety net that makes the "something is
+/// always focused" invariant recoverable from a null/stale JS state.
 #[tauri::command]
 pub async fn spatial_navigate<R: Runtime>(
-    key: String,
+    key: Option<String>,
     direction: String,
     window: WebviewWindow<R>,
     state: State<'_, AppState>,
@@ -171,7 +182,7 @@ pub async fn spatial_navigate<R: Runtime>(
         .parse()
         .map_err(|e: swissarmyhammer_spatial_nav::ParseDirectionError| e.to_string())?;
     let spatial_state = state.spatial_state_for(window.label()).await;
-    match spatial_state.navigate(&key, dir)? {
+    match spatial_state.navigate(key.as_deref(), dir)? {
         Some(event) => {
             let next = event.next_key.clone();
             emit_focus_changed(&window, &event);

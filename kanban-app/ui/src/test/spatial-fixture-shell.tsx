@@ -35,8 +35,9 @@
  *   those inside `children`.
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useRef, type ReactNode } from "react";
 import {
+  CommandScopeContext,
   CommandScopeProvider,
   type CommandDef,
   useDispatchCommand,
@@ -155,15 +156,23 @@ export function useFixtureNavCommands(
  * `h`/`j`/`k`/`l` (defined on `CommandDef.keys.vim`) resolve through the
  * focused scope chain — same wiring as `AppShell`'s `KeybindingHandler` in
  * production. Without this, `j` has no global binding and would do nothing.
+ *
+ * Falls back to the tree (ambient) `CommandScopeContext` when no scope is
+ * focused, mirroring `AppShell`'s `focusedScope ?? treeScope` pattern so the
+ * "something is always focused" invariant can recover from a null focus via
+ * a nav key (the key must resolve to `nav.*` even without a focused scope).
  */
 export function FixtureKeybindingHandler({ mode }: { mode: KeymapMode }) {
   const dispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
+  const treeScope = useContext(CommandScopeContext);
 
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
+  const treeScopeRef = useRef(treeScope);
+  treeScopeRef.current = treeScope;
 
   useEffect(() => {
     const handler = createKeyHandler(
@@ -172,7 +181,11 @@ export function FixtureKeybindingHandler({ mode }: { mode: KeymapMode }) {
         await dispatchRef.current(id);
         return true;
       },
-      () => extractScopeBindings(focusedScopeRef.current, mode),
+      () =>
+        extractScopeBindings(
+          focusedScopeRef.current ?? treeScopeRef.current,
+          mode,
+        ),
     );
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);

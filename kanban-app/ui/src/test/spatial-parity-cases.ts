@@ -53,7 +53,7 @@ export type ParityOp =
   | { op: "unregister"; key: string }
   | { op: "focus"; key: string }
   | { op: "clear_focus" }
-  | { op: "navigate"; from_key: string; direction: ShimDirection }
+  | { op: "navigate"; from_key: string | null; direction: ShimDirection }
   | { op: "focus_first_in_layer"; layer_key: string };
 
 /** Event (or no-op) we expect the implementation to emit after an op. */

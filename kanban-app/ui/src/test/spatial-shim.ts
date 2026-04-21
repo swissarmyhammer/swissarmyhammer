@@ -350,17 +350,86 @@ export class SpatialStateShim {
   }
 
   /**
-   * Unregister by key. Clears focus (and emits) if the removed entry was
-   * focused.
+   * Unregister by key.
+   *
+   * If the removed entry was focused, the "something is always focused"
+   * invariant requires picking a successor before clearing focus.
+   * Mirrors `SpatialState::unregister` in Rust exactly:
+   *
+   * 1. **Layer focus memory** — if the removed entry's owning layer has
+   *    a `lastFocused` still registered (and not the key being removed),
+   *    reuse it.
+   * 2. **Sibling in same `parentScope`** — otherwise, the top-left
+   *    registered sibling in the same parent and layer.
+   * 3. **First-in-layer** — else, the top-left registered entry in the
+   *    owning layer.
+   * 4. `null` — only when the layer has no other entries.
    */
   unregister(key: string): FocusChangedPayload | null {
+    const removed = this.entries.get(key);
     this.entries.delete(key);
-    if (this.focusedKey === key) {
-      const prev = this.focusedKey;
-      this.focusedKey = null;
-      return { prev_key: prev, next_key: null };
+    if (this.focusedKey !== key) return null;
+    const prev = this.focusedKey;
+    const successor = removed ? this.pickSuccessor(key, removed) : null;
+    this.focusedKey = successor;
+    return { prev_key: prev, next_key: successor };
+  }
+
+  /**
+   * Pick a replacement focus key when `removingKey` (the currently
+   * focused key) is being unregistered. See `unregister()` rustdoc for
+   * the priority order. Must stay in sync with
+   * `SpatialStateInner::pick_successor` in Rust.
+   */
+  private pickSuccessor(
+    removingKey: string,
+    entry: ShimSpatialEntry,
+  ): string | null {
+    // 1. Layer focus memory.
+    const layer = this.layers.find((l) => l.key === entry.layerKey);
+    if (layer && layer.lastFocused) {
+      const last = layer.lastFocused;
+      if (last !== removingKey && this.entries.has(last)) {
+        return last;
+      }
     }
-    return null;
+    // 2. Sibling in same parent_scope (same layer).
+    if (entry.parentScope !== null) {
+      const sibling = this.findTopLeft(
+        (e) =>
+          e.key !== removingKey &&
+          e.layerKey === entry.layerKey &&
+          e.parentScope === entry.parentScope,
+      );
+      if (sibling !== null) return sibling;
+    }
+    // 3. First-in-layer by position.
+    return this.findTopLeft(
+      (e) => e.key !== removingKey && e.layerKey === entry.layerKey,
+    );
+  }
+
+  /**
+   * Upper-left registered entry key (smallest y, then smallest x) that
+   * matches the predicate. Shared between `pickSuccessor`,
+   * `fallbackToFirst`, and `focusFirstInLayer` so they all agree with
+   * `Direction::First`.
+   */
+  private findTopLeft(
+    predicate: (e: ShimSpatialEntry) => boolean,
+  ): string | null {
+    let best: ShimSpatialEntry | null = null;
+    for (const e of this.entries.values()) {
+      if (!predicate(e)) continue;
+      if (
+        !best ||
+        e.rect.y < best.rect.y ||
+        (e.rect.y === best.rect.y && e.rect.x < best.rect.x)
+      ) {
+        best = e;
+      }
+    }
+    return best?.key ?? null;
   }
 
   /**
@@ -472,24 +541,13 @@ export class SpatialStateShim {
       }
     }
 
-    // Find the (y, x)-minimal entry whose layerKey matches.
-    let best: ShimSpatialEntry | null = null;
-    for (const entry of this.entries.values()) {
-      if (entry.layerKey !== layerKey) continue;
-      if (
-        !best ||
-        entry.rect.y < best.rect.y ||
-        (entry.rect.y === best.rect.y && entry.rect.x < best.rect.x)
-      ) {
-        best = entry;
-      }
-    }
-    if (!best) return null;
+    const targetKey = this.findTopLeft((e) => e.layerKey === layerKey);
+    if (!targetKey) return null;
 
     const prev = this.focusedKey;
     if (prev) this.saveFocusMemory(prev);
-    this.focusedKey = best.key;
-    return { prev_key: prev, next_key: best.key };
+    this.focusedKey = targetKey;
+    return { prev_key: prev, next_key: targetKey };
   }
 
   /** Number of layers in the stack. */
@@ -511,23 +569,46 @@ export class SpatialStateShim {
    * Navigate from a key in a direction. Applies override → container-first
    * → spatial beam test. Matches `SpatialState::navigate` in Rust exactly.
    *
-   * When `fromKey` is not registered, returns `null` (no focus change, no
-   * event). This mirrors the Rust-side no-op introduced to fix the
-   * "jumps to first cell and sticks" bug where a stale React source key
-   * would otherwise yank focus to the top-left entry — see the rustdoc on
-   * `SpatialState::navigate` for the full rationale.
+   * `fromKey` is optional: `null` or an unregistered key triggers the
+   * [`fallbackToFirst`] safety net, picking the top-left entry of the
+   * active layer. This keeps the "something is always focused" invariant
+   * recoverable when React fires a nav key with null/stale focus (e.g.
+   * after a view swap or before React consumes a `focus-changed`).
    */
   navigate(
-    fromKey: string,
+    fromKey: string | null,
     direction: ShimDirection,
   ): FocusChangedPayload | null {
-    const source = this.entries.get(fromKey);
-    if (!source) return null;
+    const source = fromKey !== null ? this.entries.get(fromKey) : undefined;
+    if (!source) {
+      // Null or unregistered source: recover by picking top-left.
+      return this.fallbackToFirst();
+    }
     const overrideVal = source.overrides[direction];
     if (overrideVal !== undefined) {
-      return this.applyOverride(fromKey, overrideVal);
+      return this.applyOverride(source.key, overrideVal);
     }
-    return this.spatialSearch(fromKey, source, direction);
+    return this.spatialSearch(source.key, source, direction);
+  }
+
+  /**
+   * Pick the top-left entry in the active layer and focus it. Returns
+   * `null` (no event) when there is no active layer, no entries in it,
+   * or the top-left is already focused.
+   *
+   * Mirrors `SpatialState::fallback_to_first` in Rust and shares the
+   * save-focus-memory contract with {@link focus}.
+   */
+  private fallbackToFirst(): FocusChangedPayload | null {
+    const activeLayerKey = this.activeLayer()?.key;
+    if (!activeLayerKey) return null;
+    const targetKey = this.findTopLeft((e) => e.layerKey === activeLayerKey);
+    if (!targetKey) return null;
+    if (this.focusedKey === targetKey) return null;
+    const prev = this.focusedKey;
+    if (prev) this.saveFocusMemory(prev);
+    this.focusedKey = targetKey;
+    return { prev_key: prev, next_key: targetKey };
   }
 
   /**

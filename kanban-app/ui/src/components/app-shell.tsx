@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  CommandScopeContext,
   CommandScopeProvider,
   useDispatchCommand,
   type CommandDef,
@@ -64,16 +72,24 @@ function useContextMenuCommandListener(
  * resolves commands from the scope AppShell just created.
  *
  * When a FocusScope is focused, commands resolve from the focused scope
- * first, falling back to the root scope (current context) if not found.
+ * first, falling back to the tree (ambient) scope when nothing is focused.
+ * This matches the `focusedScope ?? treeScope` pattern in `useDispatchCommand`
+ * and keeps global bindings like `h`/`j`/`k`/`l` (`nav.*`) alive even when
+ * spatial focus is momentarily null — without it, the "something is always
+ * focused" invariant can never recover via a nav key because the key never
+ * resolves to a command.
  */
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   const dispatch: AdHocDispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
+  const treeScope = useContext(CommandScopeContext);
 
   const dispatchRef = useRef<AdHocDispatch>(dispatch);
   dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
+  const treeScopeRef = useRef(treeScope);
+  treeScopeRef.current = treeScope;
 
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
     if (
@@ -88,7 +104,10 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 
   useEffect(() => {
     const handler = createKeyHandler(mode, executeCommand, () =>
-      extractScopeBindings(focusedScopeRef.current, mode),
+      extractScopeBindings(
+        focusedScopeRef.current ?? treeScopeRef.current,
+        mode,
+      ),
     );
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);

@@ -219,10 +219,13 @@ function dispatchSpatial(cmd: SpatialCommand, rawArgs: unknown): unknown {
     }
     case "spatial_navigate": {
       const { key, direction } = rawArgs as {
-        key: string;
+        // `key` is optional — React sends `null` when no moniker is
+        // focused, so the shim's `navigate()` can fall back to
+        // first-in-layer (same as the Rust command signature).
+        key: string | null;
         direction: ShimDirection;
       };
-      const event = currentShim.navigate(key, direction);
+      const event = currentShim.navigate(key ?? null, direction);
       if (event) {
         emitFocusChangedEvent(event);
         const nextKey = event.next_key;

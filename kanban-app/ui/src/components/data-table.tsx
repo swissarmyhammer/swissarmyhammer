@@ -582,6 +582,24 @@ function cellEditorNeedsPadding(col: DataTableColumn, isEditing: boolean) {
   );
 }
 
+function buildCellClasses(
+  col: DataTableColumn,
+  colIndex: number,
+  isSel: boolean,
+  isEditing: boolean,
+) {
+  // `cell-focus` pulls the global `[data-focused]::before` bar inside the
+  // cell so overflow on the <tr>/view container doesn't clip it. `isSel`
+  // paints multi-select (visual mode); the cursor is painted by the
+  // spatial-focus data-focused bar, not a background.
+  return cn(
+    "cell-focus px-3 py-1.5 align-middle max-w-[300px]",
+    colIndex === 0 && "pl-4",
+    isSel && "bg-primary/10",
+    cellEditorNeedsPadding(col, isEditing) && "p-0",
+  );
+}
+
 function DataTableCell({
   col,
   colIndex,
@@ -600,18 +618,12 @@ function DataTableCell({
     entity.id,
     col.field.name,
   );
-  // Focus bar is painted globally by `[data-focused]::before` in
-  // `index.css` — the enclosing `FocusScope`'s `useFocusDecoration`
-  // writes the attribute onto the same `<td>`. `cell-focus` pulls the
-  // bar inside the cell so it isn't clipped by the enclosing `<tr>`
-  // and view container overflow; see the `.cell-focus[data-focused]`
-  // override in `index.css`.
-  const cellClasses = cn(
-    "cell-focus px-3 py-1.5 align-middle max-w-[300px]",
-    colIndex === 0 && "pl-4",
-    isSel && !isCursor && "bg-primary/10",
-    cellEditorNeedsPadding(col, isEditing) && "p-0",
-  );
+  const cellClasses = buildCellClasses(col, colIndex, isSel, isEditing);
+  const handleClick = () => onCellClick(dataRowIndex, colIndex);
+  const handleDoubleClick = () => {
+    onCellClick(dataRowIndex, colIndex);
+    grid.enterEdit();
+  };
 
   return (
     <FocusScope
@@ -624,11 +636,8 @@ function DataTableCell({
         cellMoniker={cellMoniker}
         cursorRef={isCursor ? cursorRef : undefined}
         className={cellClasses}
-        onClick={() => onCellClick(dataRowIndex, colIndex)}
-        onDoubleClick={() => {
-          onCellClick(dataRowIndex, colIndex);
-          grid.enterEdit();
-        }}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
       >
         {renderCellContent(entity, col, isEditing, renderEditor, grid)}
       </DataTableCellTd>
@@ -735,7 +744,12 @@ function renderRowCells({
   handleCellClick: (row: number, col: number) => void;
 }) {
   return columns.map((col, ci) => {
-    const isCursor = dataRowIndex === grid.cursor.row && ci === grid.cursor.col;
+    // `grid.cursor` is a derived view of spatial focus — null when focus
+    // is on a non-cell target (header, selector, perspective tab). Treat
+    // null as "no cell is the cursor" so no ghost highlight appears.
+    const cursor = grid.cursor;
+    const isCursor =
+      cursor !== null && dataRowIndex === cursor.row && ci === cursor.col;
     return (
       <DataTableCell
         key={col.field.id}
@@ -770,7 +784,6 @@ function DataTableRow({
   const entity = row.original;
   const entityMk = entity.moniker;
   const rowCommands = rowEntityCommands?.(entity) ?? [];
-  const isCursorRow = dataRowIndex === grid.cursor.row;
 
   return (
     <FocusScope
@@ -780,19 +793,8 @@ function DataTableRow({
       renderContainer={false}
       spatial={false}
     >
-      <EntityRow
-        entityMk={entityMk}
-        isCursorRow={isCursorRow}
-        isEditing={grid.mode === "edit"}
-      >
-        {showRowSelector && (
-          <RowSelector
-            entity={entity}
-            di={dataRowIndex}
-            isCursorRow={isCursorRow}
-            onClick={() => handleCellClick(dataRowIndex, grid.cursor.col)}
-          />
-        )}
+      <EntityRow entityMk={entityMk}>
+        {showRowSelector && <RowSelector entity={entity} di={dataRowIndex} />}
         {renderRowCells({
           columns,
           entity,
@@ -886,10 +888,12 @@ function useIsSelected(grid: UseGridReturn) {
 
 function useCursorScroll(
   cursorRef: React.RefObject<HTMLTableCellElement | null>,
-  row: number,
-  col: number,
+  cursor: { row: number; col: number } | null,
 ) {
+  const row = cursor?.row ?? null;
+  const col = cursor?.col ?? null;
   useEffect(() => {
+    if (row === null || col === null) return;
     cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [cursorRef, row, col]);
 }
@@ -920,6 +924,62 @@ function DataTableEmpty() {
   );
 }
 
+function DataTableContents({
+  table,
+  flatRows,
+  dataRowIndices,
+  columns,
+  grid,
+  cursorRef,
+  showRowSelector,
+  rowEntityCommands,
+  renderEditor,
+  isSelected,
+  handleCellClick,
+  perspectiveSortMap,
+  perspectiveId,
+  dispatchSortToggle,
+}: {
+  table: TanTable<Entity>;
+  flatRows: Row<Entity>[];
+  dataRowIndices: number[];
+  columns: DataTableColumn[];
+  grid: UseGridReturn;
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+  showRowSelector: boolean;
+  rowEntityCommands: DataTableProps["rowEntityCommands"];
+  renderEditor: DataTableProps["renderEditor"];
+  isSelected: (row: number, col: number) => boolean;
+  handleCellClick: (row: number, col: number) => void;
+  perspectiveSortMap: SortMap;
+  perspectiveId: string | undefined;
+  dispatchSortToggle: ReturnType<typeof useDispatchCommand>;
+}) {
+  return (
+    <Table className="border-collapse text-sm">
+      <DataTableHeader
+        table={table}
+        showRowSelector={showRowSelector}
+        perspectiveSortMap={perspectiveSortMap}
+        perspectiveId={perspectiveId}
+        dispatchSortToggle={dispatchSortToggle}
+      />
+      <DataTableBody
+        flatRows={flatRows}
+        dataRowIndices={dataRowIndices}
+        columns={columns}
+        grid={grid}
+        cursorRef={cursorRef}
+        showRowSelector={showRowSelector}
+        rowEntityCommands={rowEntityCommands}
+        renderEditor={renderEditor}
+        isSelected={isSelected}
+        handleCellClick={handleCellClick}
+      />
+    </Table>
+  );
+}
+
 /** TanStack react-table wrapper with sorting, grouping, and grid navigation integration. */
 export function DataTable({
   columns,
@@ -946,35 +1006,28 @@ export function DataTable({
   const handleCellClick = useHandleCellClick(onCellClick);
 
   useVisibleRowCountEffect(visibleDataRowCount, onVisibleRowCount);
-  useCursorScroll(cursorRef, grid.cursor.row, grid.cursor.col);
+  useCursorScroll(cursorRef, grid.cursor);
 
-  if (flatRows.length === 0) {
-    return <DataTableEmpty />;
-  }
+  if (flatRows.length === 0) return <DataTableEmpty />;
 
   return (
     <div ref={tableContainerRef} className="flex-1 overflow-auto min-h-0">
-      <Table className="border-collapse text-sm">
-        <DataTableHeader
-          table={table}
-          showRowSelector={showRowSelector}
-          perspectiveSortMap={perspectiveSortMap}
-          perspectiveId={perspectiveId}
-          dispatchSortToggle={dispatchSortToggle}
-        />
-        <DataTableBody
-          flatRows={flatRows}
-          dataRowIndices={dataRowIndices}
-          columns={columns}
-          grid={grid}
-          cursorRef={cursorRef}
-          showRowSelector={showRowSelector}
-          rowEntityCommands={rowEntityCommands}
-          renderEditor={renderEditor}
-          isSelected={isSelected}
-          handleCellClick={handleCellClick}
-        />
-      </Table>
+      <DataTableContents
+        table={table}
+        flatRows={flatRows}
+        dataRowIndices={dataRowIndices}
+        columns={columns}
+        grid={grid}
+        cursorRef={cursorRef}
+        showRowSelector={showRowSelector}
+        rowEntityCommands={rowEntityCommands}
+        renderEditor={renderEditor}
+        isSelected={isSelected}
+        handleCellClick={handleCellClick}
+        perspectiveSortMap={perspectiveSortMap}
+        perspectiveId={perspectiveId}
+        dispatchSortToggle={dispatchSortToggle}
+      />
     </div>
   );
 }
@@ -985,8 +1038,6 @@ export function DataTable({
 
 interface EntityRowProps {
   entityMk: string;
-  isCursorRow: boolean;
-  isEditing: boolean;
   children: React.ReactNode;
 }
 
@@ -996,23 +1047,21 @@ interface EntityRowProps {
  * Mirrors FocusScopeInner behavior on a <tr>: click sets entity focus,
  * double-click dispatches ui.inspect, right-click opens context menu.
  * All hooks read from the per-row FocusScope that wraps this component.
+ *
+ * The row no longer paints a cursor-row background: spatial focus's
+ * `data-focused` attribute on the focused cell is the single visual
+ * source of truth for "where the user is," and a row-level background
+ * would produce a second, competing highlight that disagrees with the
+ * actual focused element.
  */
-function EntityRow({
-  entityMk,
-  isCursorRow,
-  isEditing,
-  children,
-}: EntityRowProps) {
+function EntityRow({ entityMk, children }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
 
   return (
     <TableRow
       data-moniker={entityMk}
-      className={cn(
-        "border-b border-border/50 transition-colors",
-        isCursorRow && !isEditing && "bg-accent/30",
-      )}
+      className="border-b border-border/50 transition-colors"
       onContextMenu={(e) => {
         setFocus(entityMk);
         contextMenuHandler(e);
@@ -1026,8 +1075,6 @@ function EntityRow({
 interface RowSelectorProps {
   entity: Entity;
   di: number;
-  isCursorRow: boolean;
-  onClick: () => void;
 }
 
 /**
@@ -1039,32 +1086,59 @@ interface RowSelectorProps {
  * the first data cell. The reserved field name `__rowselector` keeps
  * the moniker distinct from any schema field.
  *
- * The `onClick` prop is the grid-cursor side-effect from the parent row
- * (it advances the cursor row so the row's data cells keep their
- * `isCursorRow` highlight). This component composes that callback with
- * `setFocus(selectorMoniker)` so both mouse and keyboard navigation
- * converge on the selector as the focused target — without the
- * composition, clicking the selector would hand focus to whatever cell
- * the grid cursor happens to point at and the selector's focus ring
- * would never paint.
+ * Clicking the selector sets spatial focus to the selector's moniker —
+ * the `data-focused` bar from the enclosing `FocusScope` is the sole
+ * visual indicator. No row-background highlight is painted, since that
+ * would duplicate the bar and disagree with spatial focus whenever the
+ * user navigates elsewhere.
+ *
+ * The scope binds `Enter` (both vim and CUA modes) to `ui.inspect` with
+ * an explicit `target` of this row's entity moniker. This shadows the
+ * grid-level `grid.editEnter` / `grid.edit` bindings that live on the
+ * parent scope (`grid-view.tsx`): without this shadow, pressing Enter
+ * on a row selector would fall through to `grid.enterEdit()` and drop
+ * the grid into edit mode on the current cursor cell (default (0, 0))
+ * — never opening the inspector. The row selector is a per-row
+ * affordance, so Enter here must open the inspector for this row's
+ * entity, matching the `InspectButton` precedent in `entity-card.tsx`.
  */
-function RowSelector({ entity, di, isCursorRow, onClick }: RowSelectorProps) {
+function RowSelector({ entity, di }: RowSelectorProps) {
   const { setFocus } = useEntityFocus();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
   const selectorMoniker = fieldMoniker(
     entity.entity_type,
     entity.id,
     ROW_SELECTOR_FIELD,
   );
   const handleClick = useCallback(() => {
-    onClick();
     setFocus(selectorMoniker);
-  }, [onClick, setFocus, selectorMoniker]);
+  }, [setFocus, selectorMoniker]);
+  // Pass `target` explicitly so the backend uses `ctx.target` rather
+  // than walking the scope chain — the chain might resolve to a
+  // previously-focused entity, not this row. Matches the
+  // `InspectButton` pattern in `entity-card.tsx`.
+  const commands = useMemo<CommandDef[]>(
+    () => [
+      {
+        id: "ui.inspect",
+        name: "Inspect",
+        keys: { vim: "Enter", cua: "Enter" },
+        execute: () => {
+          dispatchInspect({ target: entity.moniker }).catch(console.error);
+        },
+      },
+    ],
+    [dispatchInspect, entity.moniker],
+  );
   return (
-    <FocusScope moniker={selectorMoniker} commands={[]} renderContainer={false}>
+    <FocusScope
+      moniker={selectorMoniker}
+      commands={commands}
+      renderContainer={false}
+    >
       <RowSelectorTd
         selectorMoniker={selectorMoniker}
         di={di}
-        isCursorRow={isCursorRow}
         onClick={handleClick}
       />
     </FocusScope>
@@ -1074,7 +1148,6 @@ function RowSelector({ entity, di, isCursorRow, onClick }: RowSelectorProps) {
 interface RowSelectorTdProps {
   selectorMoniker: string;
   di: number;
-  isCursorRow: boolean;
   onClick: () => void;
 }
 
@@ -1088,17 +1161,14 @@ interface RowSelectorTdProps {
  * claimed (see `useFocusDecoration` in `focus-scope.tsx`). The global
  * `[data-focused]::before` rule in `index.css` paints the bar, and
  * `cell-focus` pulls it inside the cell so the enclosing `<tr>` /
- * view container overflow doesn't clip it. The row selector is
- * intentionally excluded from the grid's `cellMonikerMap` (the grid
- * cursor is a 2-D coord over data columns only), but the scope-level
- * decoration runs independent of the cursor machinery.
+ * view container overflow doesn't clip it.
+ *
+ * No cursor-driven background or `data-active` attribute: the grid
+ * cursor is itself a derivation of spatial focus (see `useGrid`), so
+ * any state driven off the cursor would redundantly paint the same
+ * element that `data-focused` already marks.
  */
-function RowSelectorTd({
-  selectorMoniker,
-  di,
-  isCursorRow,
-  onClick,
-}: RowSelectorTdProps) {
+function RowSelectorTd({ selectorMoniker, di, onClick }: RowSelectorTdProps) {
   const scopeElementRef = useFocusScopeElementRef();
   const refCallback = useCallback(
     (node: HTMLTableCellElement | null) => {
@@ -1112,11 +1182,7 @@ function RowSelectorTd({
       ref={refCallback}
       data-testid="row-selector"
       data-moniker={selectorMoniker}
-      data-active={isCursorRow ? "true" : "false"}
-      className={cn(
-        "cell-focus w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-        isCursorRow && "bg-muted text-foreground",
-      )}
+      className="cell-focus w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50"
       style={{ width: ROW_SELECTOR_WIDTH }}
       onClick={onClick}
     >

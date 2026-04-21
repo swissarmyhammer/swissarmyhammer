@@ -88,14 +88,14 @@ vi.mock("@/lib/entity-focus-context", () => ({
 
 vi.mock("@/hooks/use-grid", () => ({
   useGrid: () => ({
-    cursor: { row: 0, col: 0 },
+    cursor: null,
     mode: "normal",
-    setCursor: vi.fn(),
-    moveCursor: vi.fn(),
-    startEdit: vi.fn(),
-    endEdit: vi.fn(),
-    toggleVisual: vi.fn(),
-    clearVisual: vi.fn(),
+    selection: null,
+    enterEdit: vi.fn(),
+    exitEdit: vi.fn(),
+    enterVisual: vi.fn(),
+    exitVisual: vi.fn(),
+    expandSelection: vi.fn(),
     getSelectedRange: () => null,
   }),
 }));

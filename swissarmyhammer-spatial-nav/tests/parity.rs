@@ -70,8 +70,13 @@ enum ParityOp {
     Focus { key: String },
     #[serde(rename = "clear_focus")]
     ClearFocus,
+    /// `from_key` is optional so cases can exercise the null-source safety
+    /// net (`"from_key": null`) alongside normal and stale-source nav.
     #[serde(rename = "navigate")]
-    Navigate { from_key: String, direction: String },
+    Navigate {
+        from_key: Option<String>,
+        direction: String,
+    },
     #[serde(rename = "focus_first_in_layer")]
     FocusFirstInLayer { layer_key: String },
 }
@@ -135,12 +140,14 @@ fn apply_op(state: &SpatialState, op: &ParityOp) -> Option<FocusChanged> {
                 .parse()
                 .unwrap_or_else(|e| panic!("invalid direction {direction}: {e}"));
             // Unwrap the Result; every parity case is expected to provide a
-            // valid `from_key` + direction pair. The inner Option distinguishes
-            // "no navigation target" (blocked / nothing to move to) from a
-            // move, matching the shim's `navigate()` contract.
+            // valid direction. The inner Option distinguishes "no navigation
+            // target" (blocked / nothing to move to) from a move, matching
+            // the shim's `navigate()` contract. `from_key` may be `None` or
+            // an unregistered string to exercise the null/stale-source
+            // fallback.
             state
-                .navigate(from_key, dir)
-                .unwrap_or_else(|e| panic!("navigate {from_key} {direction} errored: {e}"))
+                .navigate(from_key.as_deref(), dir)
+                .unwrap_or_else(|e| panic!("navigate {from_key:?} {direction} errored: {e}"))
         }
         ParityOp::FocusFirstInLayer { layer_key } => state.focus_first_in_layer(layer_key),
     }

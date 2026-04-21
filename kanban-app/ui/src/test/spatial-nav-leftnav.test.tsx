@@ -297,3 +297,115 @@ describe("LeftNav reachable from all views", () => {
       .toBe(FIXTURE_VIEW_MONIKERS[1]);
   });
 });
+
+/**
+ * Focus-invariant regression tests (kanban `01KPRGGCB5NYPW28AJZNM3D0QT`).
+ *
+ * The "something is always focused" invariant says: while at least one
+ * scope is registered in the active layer, `focused_moniker` is never
+ * null after any sequence of register/unregister/navigate. The
+ * LeftNav-triggered view swap is the reproduction the user reported —
+ * clicking a view-switcher button unmounts the old view, which would
+ * previously clear `focused_key` to `None` and wedge the user.
+ *
+ * These tests simulate the critical half of that flow — the focused
+ * body scope going away without the view actually swapping — and
+ * assert that focus is always recoverable by a nav key.
+ */
+describe("LeftNav focus invariant", () => {
+  beforeEach(() => {
+    handles = setupSpatialShim();
+  });
+
+  /**
+   * Silently delete an entry from the shim without emitting
+   * `focus-changed`. Modeling a React/Rust desync where Rust has
+   * forgotten the focused key but React hasn't caught up yet — the
+   * exact state a user can fall into during a view swap if any of the
+   * emission paths race with the next keypress.
+   *
+   * Lives inline in this test (rather than being imported) because
+   * reaching into the shim's internals is something that must not leak
+   * into production helpers.
+   */
+  function silentlyDropEntry(h: SpatialShimHandles, key: string): void {
+    const internals = h.shim as unknown as { entries: Map<string, unknown> };
+    internals.entries.delete(key);
+  }
+
+  it("nav key after focused body scope disappears recovers onto a registered moniker", async () => {
+    const screen = await render(<AppWithBoardAndLeftNavFixture />);
+
+    // 1) Click a card in the leftmost column. React thinks the card is
+    //    focused; Rust agrees. This is the body-cell start state.
+    const card = screen
+      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[0][0]}`)
+      .element() as HTMLElement;
+    await userEvent.click(card);
+    await expectDataFocused(card, "true");
+
+    // 2) Silently drop Rust's entry for the card, simulating what a
+    //    view swap would do (unmount → unregister) but without the
+    //    `focus-changed` emission. The old behavior: Rust's
+    //    `focused_key` stays pointing at a gone entry, the next nav
+    //    key sends a stale key, Rust returns `Ok(None)`, JS's
+    //    short-circuit on null moniker also returns false, and the
+    //    user is wedged. The new behavior: even though Rust is
+    //    silently desynced, the fallback-to-first safety net picks a
+    //    real entry and emits `focus-changed`, so React recovers.
+    const focusedMk = handles.focusedMoniker();
+    expect(focusedMk).toBeTruthy();
+    // Find the spatial key for the focused moniker by looking it up
+    // in the shim's entries (parallels `keyForMoniker` in the
+    // stale-key repro test).
+    const staleKey = handles.shim
+      .entriesSnapshot()
+      .find((e) => e.moniker === focusedMk)?.key;
+    expect(staleKey).toBeTruthy();
+    silentlyDropEntry(handles, staleKey!);
+
+    // 3) Press `j`. Rust sees the unknown source key, falls back to
+    //    first-in-layer, emits `focus-changed` with a real successor.
+    //    The safety net MUST restore a non-null focused moniker.
+    await userEvent.keyboard("j");
+
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
+      .toBeTruthy();
+  });
+
+  it("nav key always produces a focused moniker, even after focus goes null", async () => {
+    const screen = await render(<AppWithBoardAndLeftNavFixture />);
+
+    // The fixture auto-focuses the active view button on mount. Clear
+    // focus by dispatching `spatial_clear_focus` through the shim so
+    // React's `focusedMoniker` returns to null — this is the exact
+    // state that short-circuited `broadcastNavCommand` before the
+    // fix, leaving the user wedged on "nothing focused, nav keys do
+    // nothing."
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("spatial_clear_focus", {});
+
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
+      .toBeNull();
+
+    // Re-focus the fixture root so the keyboard event is routed to
+    // the correct window — clearing focus unfocused the DOM element
+    // that was previously receiving keystrokes.
+    (
+      screen
+        .getByTestId("board-and-leftnav-fixture-root")
+        .element() as HTMLElement
+    ).focus();
+
+    await userEvent.keyboard("j");
+
+    // The invariant: a nav key must always produce a non-null focused
+    // moniker when the active layer has any registered scope, even
+    // when React's pre-nav moniker was null.
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
+      .toBeTruthy();
+  });
+});

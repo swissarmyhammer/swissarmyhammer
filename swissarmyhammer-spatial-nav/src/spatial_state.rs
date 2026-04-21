@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 /// Event payload emitted when the focused spatial key changes.
 ///
 /// Both fields are optional: `prev_key` is `None` when nothing was focused,
-/// `next_key` is `None` when focus is cleared (e.g. the focused entry was
-/// unregistered).
+/// `next_key` is `None` when focus is cleared (e.g. via `clear_focus`, or
+/// when the focused entry was unregistered and no successor exists in its
+/// layer).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FocusChanged {
     /// The spatial key that lost focus, or `None` if nothing was focused.
@@ -159,6 +160,11 @@ impl LayerStack {
         self.layers.iter_mut().find(|l| l.key == key)
     }
 
+    /// Find a layer by key and return an immutable reference.
+    pub fn find(&self, key: &str) -> Option<&LayerEntry> {
+        self.layers.iter().find(|l| l.key == key)
+    }
+
     /// Returns `true` if the stack is empty.
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
@@ -200,6 +206,75 @@ impl SpatialStateInner {
                 layer.last_focused = Some(prev_key.to_string());
             }
         }
+    }
+
+    /// Pick the upper-left entry (lowest `y`, then lowest `x`) that matches
+    /// the predicate. Shared between `fallback_to_first`, `pick_successor`,
+    /// and `focus_first_in_layer` so they all use the same tie-break rule
+    /// as `Direction::First`.
+    fn find_top_left<F>(&self, predicate: F) -> Option<String>
+    where
+        F: Fn(&SpatialEntry) -> bool,
+    {
+        self.entries
+            .values()
+            .filter(|e| predicate(e))
+            .min_by(|a, b| {
+                a.rect
+                    .y
+                    .partial_cmp(&b.rect.y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        a.rect
+                            .x
+                            .partial_cmp(&b.rect.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            })
+            .map(|e| e.key.clone())
+    }
+
+    /// Pick a successor focus key when `removing_key` — which IS the
+    /// currently focused key — is being unregistered.
+    ///
+    /// The priority order preserves the user's intent as closely as
+    /// possible so navigation never ends up wedged on `None` while any
+    /// other entry exists in the same layer:
+    ///
+    /// 1. **Layer focus memory** — if the removed entry's owning layer has
+    ///    a `last_focused` that is still registered and is not the key
+    ///    being removed, reuse it. This matches `remove_layer`'s restore
+    ///    behavior: the layer remembers who held focus just before.
+    /// 2. **Sibling in same `parent_scope`** — if the removed entry had a
+    ///    parent scope (e.g. siblings inside a card), fall back to the
+    ///    top-left registered sibling in the same parent and layer. This
+    ///    keeps focus "inside the same container" on typical unmounts
+    ///    like tag pills or row cells.
+    /// 3. **First-in-layer** — the top-left (y, then x) registered entry
+    ///    in the removed entry's owning layer. This is the broadest safety
+    ///    net and matches `Direction::First` / `fallback_to_first`.
+    /// 4. `None` — only when no other entries remain on that layer.
+    fn pick_successor(&self, removing_key: &str, entry: &SpatialEntry) -> Option<String> {
+        // 1. Layer focus memory.
+        if let Some(layer) = self.layer_stack.find(&entry.layer_key) {
+            if let Some(ref last) = layer.last_focused {
+                if last.as_str() != removing_key && self.entries.contains_key(last.as_str()) {
+                    return Some(last.clone());
+                }
+            }
+        }
+        // 2. Sibling in same parent_scope (same layer).
+        if let Some(ref parent) = entry.parent_scope {
+            if let Some(sibling) = self.find_top_left(|e| {
+                e.key.as_str() != removing_key
+                    && e.layer_key == entry.layer_key
+                    && e.parent_scope.as_deref() == Some(parent.as_str())
+            }) {
+                return Some(sibling);
+            }
+        }
+        // 3. First-in-layer by position.
+        self.find_top_left(|e| e.key.as_str() != removing_key && e.layer_key == entry.layer_key)
     }
 }
 
@@ -298,20 +373,41 @@ impl SpatialState {
 
     /// Unregister a spatial entry by key.
     ///
-    /// If the removed entry was the focused key, focus is cleared and a
-    /// `FocusChanged` event is returned. Otherwise returns `None`.
+    /// If the removed entry was the focused key, [`pick_successor`] selects
+    /// a replacement focus target (layer memory → sibling → first-in-layer)
+    /// and a `FocusChanged` event is returned reflecting the transition.
+    /// Focus clears to `None` only when the removed entry was the last
+    /// candidate on its layer. If the removed entry was not focused, returns
+    /// `None` without emitting an event.
+    ///
+    /// This preserves the "something is always focused" invariant: whenever
+    /// at least one entry remains registered in the focused entry's layer,
+    /// `focused_key` moves to a valid successor rather than clearing to
+    /// `None`. The successor choice matches what the user would expect —
+    /// layer memory first, then an in-container sibling, then the top-left
+    /// entry — so the UI does not appear to teleport focus arbitrarily.
+    ///
+    /// [`pick_successor`]: SpatialStateInner::pick_successor
     pub fn unregister(&self, key: &str) -> Option<FocusChanged> {
         let mut inner = self.inner.write().unwrap();
-        inner.entries.remove(key);
-        if inner.focused_key.as_deref() == Some(key) {
-            let prev = inner.focused_key.take();
-            Some(FocusChanged {
-                prev_key: prev,
-                next_key: None,
-            })
-        } else {
-            None
+        // Capture the entry before removal so pick_successor can read its
+        // parent_scope / layer_key to choose a replacement.
+        let removed_entry = inner.entries.remove(key);
+        if inner.focused_key.as_deref() != Some(key) {
+            return None;
         }
+        let prev = inner.focused_key.take();
+        // Only the focused entry has a successor to pick. If removed_entry
+        // is None we had a ghost focused_key with no matching entry (should
+        // not happen in practice), so fall back to clearing focus.
+        let successor = removed_entry
+            .as_ref()
+            .and_then(|e| inner.pick_successor(key, e));
+        inner.focused_key = successor.clone();
+        Some(FocusChanged {
+            prev_key: prev,
+            next_key: successor,
+        })
     }
 
     /// Set focus to a spatial key. Returns `Some(FocusChanged)` if focus
@@ -443,28 +539,10 @@ impl SpatialState {
             }
         }
 
-        // Collect references to entries in the target layer and pick the
-        // top-left one using the same sort order as `Direction::First`
-        // (by y, then x) — shared through `find_edge_first` would require
-        // an `&[&SpatialEntry]` pool with a source that doesn't exist
-        // here, so we inline the equivalent two-key sort.
-        let target_key = inner
-            .entries
-            .values()
-            .filter(|e| e.layer_key == layer_key)
-            .min_by(|a, b| {
-                a.rect
-                    .y
-                    .partial_cmp(&b.rect.y)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| {
-                        a.rect
-                            .x
-                            .partial_cmp(&b.rect.x)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-            })
-            .map(|e| e.key.clone())?;
+        // Use the shared `find_top_left` helper so this, `pick_successor`,
+        // and `fallback_to_first` all agree on the tie-break rule that
+        // mirrors `Direction::First`.
+        let target_key = inner.find_top_left(|e| e.layer_key == layer_key)?;
 
         let prev = inner.focused_key.take();
         if let Some(ref pk) = prev {
@@ -512,7 +590,12 @@ impl SpatialState {
 
     /// Navigate from the focused entry in a direction.
     ///
-    /// Checks the source entry's override map first:
+    /// `from_key` is optional: `None` (or an unregistered key) means
+    /// "there is no source" and triggers the [`fallback_to_first`] safety
+    /// net so a nav key fired with stale/null focus still lands on a
+    /// sensible entry instead of silently doing nothing.
+    ///
+    /// For a registered source, checks the override map first:
     /// - `Some(Some(moniker))` — redirect to the entry with that moniker
     /// - `Some(None)` — block navigation (return `Ok(None)`)
     /// - `None` — fall through to spatial beam test
@@ -521,37 +604,74 @@ impl SpatialState {
     /// container-first search (same parent_scope siblings first, then full
     /// layer), and updates `focused_key` if a target is found.
     ///
-    /// When `from_key` is not registered (e.g. the focused entry was
-    /// unregistered during a virtualized scroll, or the React and Rust
-    /// registries briefly desynced after a race), returns `Ok(None)`
-    /// without touching focus. An earlier revision fell back to
-    /// `Direction::First` here, but that caused the
-    /// "jumps to first cell and sticks" bug: when React's stored key was
-    /// stale, navigation silently jumped to the top-left entry whose key
-    /// React often had no moniker mapping for, clearing React's focused
-    /// moniker and leaving subsequent nav keys as no-ops. A no-op on an
-    /// unknown source is the only outcome the frontend can recover from
-    /// gracefully — the next `focus-changed` event or a user click will
-    /// restore a consistent focus target.
+    /// # Why fall through to first-in-layer on unknown source
+    ///
+    /// This replaces the previous no-op behavior, which was the fix for
+    /// an earlier "jumps to first cell and sticks" bug. That bug only
+    /// manifested because `unregister()` silently cleared `focused_key`
+    /// to `None` when the focused entry unmounted, leaving React with a
+    /// stale moniker. Now [`unregister`] picks a successor automatically,
+    /// so Rust and React stay in sync on which entry is focused. The only
+    /// remaining stale-source scenario is a brief window between Rust
+    /// emitting `focus-changed` and React consuming it — in that window a
+    /// nav key fires with a stale or null source and the user deserves
+    /// recovery, not a silent no-op. First-in-layer is both deterministic
+    /// and the same rule `Direction::First` uses.
+    ///
+    /// [`fallback_to_first`]: Self::fallback_to_first
+    /// [`unregister`]: Self::unregister
     pub fn navigate(
         &self,
-        from_key: &str,
+        from_key: Option<&str>,
         direction: crate::spatial_nav::Direction,
     ) -> Result<Option<FocusChanged>, String> {
         let mut inner = self.inner.write().unwrap();
-        let source = match inner.entries.get(from_key) {
-            Some(e) => e.clone(),
-            // Unknown source key: no-op. See rustdoc above for rationale.
-            None => return Ok(None),
+        let source = match from_key.and_then(|k| inner.entries.get(k).cloned()) {
+            Some(e) => e,
+            // Null or unregistered source: recover by picking the
+            // top-left entry in the active layer. See rustdoc above.
+            None => return Ok(Self::fallback_to_first(&mut inner)),
         };
+
+        let from_key_str = source.key.as_str();
 
         // Check override map before spatial search.
         let dir_str = direction.to_string();
         if let Some(override_val) = source.overrides.get(&dir_str) {
-            return Self::apply_override(&mut inner, from_key, override_val);
+            return Self::apply_override(&mut inner, from_key_str, override_val);
         }
 
-        Self::spatial_search(&mut inner, from_key, &source, direction)
+        Self::spatial_search(&mut inner, from_key_str, &source, direction)
+    }
+
+    /// Pick the top-left registered entry in the active layer and make it
+    /// the focused key. Shared by [`navigate`]'s null/stale-source safety
+    /// net and tests.
+    ///
+    /// Returns `None` when the active layer is empty (or there is no
+    /// active layer), which is the only case where navigation has no
+    /// valid target regardless of source. Saves the outgoing focused key
+    /// as `last_focused` on its owning layer, same focus-memory contract
+    /// as [`focus`].
+    ///
+    /// [`navigate`]: Self::navigate
+    /// [`focus`]: Self::focus
+    fn fallback_to_first(inner: &mut SpatialStateInner) -> Option<FocusChanged> {
+        let active_layer_key = inner.layer_stack.active().map(|l| l.key.clone())?;
+        let target_key = inner.find_top_left(|e| e.layer_key == active_layer_key)?;
+        if inner.focused_key.as_deref() == Some(target_key.as_str()) {
+            // Already focused — nothing to do, no event.
+            return None;
+        }
+        let prev = inner.focused_key.take();
+        if let Some(ref pk) = prev {
+            inner.save_focus_memory(pk);
+        }
+        inner.focused_key = Some(target_key.clone());
+        Some(FocusChanged {
+            prev_key: prev,
+            next_key: Some(target_key),
+        })
     }
 
     /// Apply a navigation override: redirect to a moniker or block.
@@ -1092,7 +1212,7 @@ mod tests {
         state.focus("field-0");
 
         // nav.right should NOT see the card (different layer)
-        let result = state.navigate("field-0", crate::spatial_nav::Direction::Right);
+        let result = state.navigate(Some("field-0"), crate::spatial_nav::Direction::Right);
         assert!(
             result.unwrap().is_none(),
             "card is in window layer, invisible to inspector"
@@ -1100,14 +1220,14 @@ mod tests {
 
         // nav.down should find field-1
         let event = state
-            .navigate("field-0", crate::spatial_nav::Direction::Down)
+            .navigate(Some("field-0"), crate::spatial_nav::Direction::Down)
             .unwrap()
             .unwrap();
         assert_eq!(event.next_key, Some("field-1".to_string()));
     }
 
     #[test]
-    fn navigate_with_unknown_key_is_noop() {
+    fn navigate_with_unknown_key_falls_back_to_first_in_layer() {
         let state = SpatialState::new();
         state.push_layer("layer".into(), "window".into());
         reg(
@@ -1119,13 +1239,65 @@ mod tests {
             None,
         );
 
-        // Unknown source key: navigate is a no-op, no focus change, no event.
-        // Replaces the earlier "falls back to First" behavior which caused
-        // the "jumps to first cell and sticks" intermittent bug when React
-        // and Rust briefly diverged on which keys were registered.
-        let result = state.navigate("nonexistent", crate::spatial_nav::Direction::Right);
-        assert!(result.unwrap().is_none(), "unknown source key is a no-op");
-        assert_eq!(state.focused_key(), None, "focus unchanged");
+        // Unknown source key: navigate now falls through to first-in-layer
+        // so nav keys fired with a stale React focus recover onto a real
+        // entry instead of silently doing nothing. The unregister-side
+        // successor-pick closes the original "jumps to first cell and
+        // sticks" regression window — see `SpatialState::navigate`
+        // rustdoc for the full rationale.
+        let event = state
+            .navigate(Some("nonexistent"), crate::spatial_nav::Direction::Right)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.prev_key, None);
+        assert_eq!(event.next_key, Some("key-1".to_string()));
+        assert_eq!(state.focused_key(), Some("key-1".to_string()));
+    }
+
+    #[test]
+    fn navigate_with_null_key_falls_back_to_first_in_layer() {
+        let state = SpatialState::new();
+        state.push_layer("layer".into(), "window".into());
+        reg(
+            &state,
+            "b",
+            "task:B",
+            rect(100.0, 50.0, 100.0, 50.0),
+            "layer",
+            None,
+        );
+        reg(
+            &state,
+            "a",
+            "task:A",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "layer",
+            None,
+        );
+
+        // `None` source mirrors the JS side sending `null` when no
+        // moniker is focused. Rust must pick the top-left entry so the
+        // user is never wedged on "nothing focused, nav key does
+        // nothing."
+        let event = state
+            .navigate(None, crate::spatial_nav::Direction::Down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.prev_key, None);
+        assert_eq!(event.next_key, Some("a".to_string()));
+        assert_eq!(state.focused_key(), Some("a".to_string()));
+    }
+
+    #[test]
+    fn navigate_with_null_key_empty_active_layer_is_noop() {
+        let state = SpatialState::new();
+        state.push_layer("layer".into(), "window".into());
+        // No entries: nothing to fall back to, no crash, no loop.
+        let result = state
+            .navigate(None, crate::spatial_nav::Direction::Down)
+            .unwrap();
+        assert!(result.is_none(), "empty active layer yields a true no-op");
+        assert_eq!(state.focused_key(), None);
     }
 
     #[test]
@@ -1142,7 +1314,7 @@ mod tests {
         );
         state.focus("only");
 
-        let result = state.navigate("only", crate::spatial_nav::Direction::Right);
+        let result = state.navigate(Some("only"), crate::spatial_nav::Direction::Right);
         assert!(result.unwrap().is_none(), "single entry has no candidates");
         assert_eq!(
             state.focused_key(),
@@ -1228,7 +1400,7 @@ mod tests {
         state.focus("key-1");
 
         let event = state
-            .navigate("key-1", crate::spatial_nav::Direction::Right)
+            .navigate(Some("key-1"), crate::spatial_nav::Direction::Right)
             .unwrap()
             .unwrap();
         assert_eq!(event.next_key, Some("key-2".to_string()));
@@ -1260,7 +1432,7 @@ mod tests {
         state.focus("key-1");
 
         // Left is blocked (null override) even though key-2 is to the left
-        let result = state.navigate("key-1", crate::spatial_nav::Direction::Left);
+        let result = state.navigate(Some("key-1"), crate::spatial_nav::Direction::Left);
         assert!(
             result.unwrap().is_none(),
             "null override should block navigation"
@@ -1300,7 +1472,7 @@ mod tests {
 
         // Down has no override — falls through to spatial nav, finds key-2 below
         let event = state
-            .navigate("key-1", crate::spatial_nav::Direction::Down)
+            .navigate(Some("key-1"), crate::spatial_nav::Direction::Down)
             .unwrap()
             .unwrap();
         assert_eq!(event.next_key, Some("key-2".to_string()));
@@ -1309,7 +1481,7 @@ mod tests {
     // --- Navigate fallback tests ---
 
     #[test]
-    fn navigate_missing_key_is_noop_preserves_focus() {
+    fn navigate_missing_key_falls_back_to_first_in_layer() {
         let state = SpatialState::new();
         state.push_layer("layer".into(), "window".into());
         reg(
@@ -1338,30 +1510,242 @@ mod tests {
         );
         state.focus("key-A");
 
-        // "gone" is not registered — navigate must be a no-op so the
-        // frontend can recover on the next focus-changed event or user
-        // click. Fallback to First is the bug this test pins down:
-        // without this assertion, a stale React key silently yanks focus
-        // to key-B (top-left) and leaves the UI stuck.
-        let result = state.navigate("gone", crate::spatial_nav::Direction::Down);
-        assert!(
-            result.unwrap().is_none(),
-            "unknown source key must be a no-op"
-        );
-        assert_eq!(
-            state.focused_key(),
-            Some("key-A".to_string()),
-            "focus preserved on unknown-key navigate"
-        );
+        // `gone` is not registered — under the new invariant the stale
+        // source falls through to first-in-layer so the user can always
+        // recover with a single nav key. key-B is top-left (0, 0).
+        let event = state
+            .navigate(Some("gone"), crate::spatial_nav::Direction::Down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.prev_key, Some("key-A".to_string()));
+        assert_eq!(event.next_key, Some("key-B".to_string()));
+        assert_eq!(state.focused_key(), Some("key-B".to_string()));
     }
 
     #[test]
     fn navigate_missing_key_empty_layer_is_noop() {
         let state = SpatialState::new();
         state.push_layer("layer".into(), "window".into());
-        // No entries at all.
-        let result = state.navigate("gone", crate::spatial_nav::Direction::Right);
-        assert!(result.unwrap().is_none());
+        // No entries at all — fallback has nothing to pick, so navigate
+        // remains a no-op (empty-layer edge case of the invariant).
+        let result = state
+            .navigate(Some("gone"), crate::spatial_nav::Direction::Right)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    // --- Unregister successor-pick tests (focus invariant) ---
+
+    /// When the focused entry is unregistered and the owning layer's
+    /// `last_focused` points at a still-registered sibling, that sibling
+    /// wins over later fallbacks. Layer memory captures where the user
+    /// was most recently focused and is the closest match to intent.
+    #[test]
+    fn unregister_focused_picks_layer_memory_first() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        // memory-holder sits far from top-left, so first-in-layer would
+        // NOT select it by position.
+        reg(
+            &state,
+            "memory",
+            "task:mem",
+            rect(500.0, 500.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        reg(
+            &state,
+            "top-left",
+            "task:TL",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        reg(
+            &state,
+            "victim",
+            "task:vic",
+            rect(200.0, 200.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+
+        // Focus memory → victim, so L1's last_focused = memory.
+        state.focus("memory");
+        state.focus("victim");
+
+        // Unregister the focused victim. Layer memory points at "memory"
+        // which is still registered — that wins over the top-left
+        // "top-left" fallback.
+        let event = state.unregister("victim").unwrap();
+        assert_eq!(event.prev_key, Some("victim".to_string()));
+        assert_eq!(
+            event.next_key,
+            Some("memory".to_string()),
+            "layer memory must win over first-in-layer"
+        );
+        assert_eq!(state.focused_key(), Some("memory".to_string()));
+    }
+
+    /// When layer memory is unavailable (unset or pointing at a now-gone
+    /// key), a sibling in the same `parent_scope` wins over
+    /// first-in-layer. Keeps focus "inside the card" on a pill unmount.
+    #[test]
+    fn unregister_focused_picks_sibling_when_no_memory() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        // Card body elsewhere in the layer, no parent scope.
+        reg(
+            &state,
+            "card-body",
+            "task:card",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        // Two pills inside the card, sharing parent_scope "card".
+        reg(
+            &state,
+            "pill-A",
+            "tag:a",
+            rect(200.0, 0.0, 50.0, 20.0),
+            "L1",
+            Some("card".into()),
+        );
+        reg(
+            &state,
+            "pill-B",
+            "tag:b",
+            rect(260.0, 0.0, 50.0, 20.0),
+            "L1",
+            Some("card".into()),
+        );
+
+        // Focus pill-A directly — no `focus()` call before it, so layer
+        // memory never captures a useful prior.
+        state.focus("pill-A");
+
+        // Unregister pill-A. Layer memory is None (only pill-A was ever
+        // focused in this layer, which is the victim itself). Sibling
+        // pill-B shares the "card" parent scope → it wins.
+        let event = state.unregister("pill-A").unwrap();
+        assert_eq!(event.prev_key, Some("pill-A".to_string()));
+        assert_eq!(
+            event.next_key,
+            Some("pill-B".to_string()),
+            "sibling in same parent_scope must beat first-in-layer fallback"
+        );
+        assert_eq!(state.focused_key(), Some("pill-B".to_string()));
+    }
+
+    /// Last resort: no layer memory, no sibling, just other entries in
+    /// the layer. Pick the top-left by `(y, x)` — same rule as
+    /// `Direction::First`.
+    #[test]
+    fn unregister_focused_picks_first_in_layer_as_last_resort() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        // Top-left candidate.
+        reg(
+            &state,
+            "origin",
+            "task:origin",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        // Middle candidate at (100, 100) — will lose on both y and x.
+        reg(
+            &state,
+            "middle",
+            "task:middle",
+            rect(100.0, 100.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        // Victim at (500, 500), no parent scope.
+        reg(
+            &state,
+            "victim",
+            "task:vic",
+            rect(500.0, 500.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        state.focus("victim");
+
+        let event = state.unregister("victim").unwrap();
+        assert_eq!(event.prev_key, Some("victim".to_string()));
+        assert_eq!(
+            event.next_key,
+            Some("origin".to_string()),
+            "first-in-layer = (0, 0) wins as last-resort successor"
+        );
+        assert_eq!(state.focused_key(), Some("origin".to_string()));
+    }
+
+    /// Empty-layer edge case: unregistering the only entry on its layer
+    /// truly clears focus. The invariant only requires a successor when
+    /// one exists.
+    #[test]
+    fn unregister_focused_last_entry_clears_focus() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        reg(
+            &state,
+            "only",
+            "task:only",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        state.focus("only");
+
+        let event = state.unregister("only").unwrap();
+        assert_eq!(event.prev_key, Some("only".to_string()));
+        assert_eq!(
+            event.next_key, None,
+            "no other entry on layer → focus truly clears"
+        );
+        assert_eq!(state.focused_key(), None);
+    }
+
+    /// Successor-pick scopes to the victim's owning layer. Other layers'
+    /// entries never leak in as fallback candidates, matching the
+    /// single-layer-at-a-time mental model used by `navigate`.
+    #[test]
+    fn unregister_successor_pick_does_not_cross_layers() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        state.push_layer("L2".into(), "inspector".into());
+        // Victim sits on L2.
+        reg(
+            &state,
+            "victim",
+            "field:v",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L2",
+            None,
+        );
+        // A tempting candidate on L1 (the wrong layer).
+        reg(
+            &state,
+            "wrong-layer",
+            "task:w",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        state.focus("victim");
+
+        let event = state.unregister("victim").unwrap();
+        assert_eq!(event.prev_key, Some("victim".to_string()));
+        assert_eq!(
+            event.next_key, None,
+            "L2 had no other entries; must not cross into L1"
+        );
+        assert_eq!(state.focused_key(), None);
     }
 
     // --- Batch registration tests ---
@@ -1518,7 +1902,7 @@ mod tests {
 
         // Case 1: Some(Some("task:03")) → redirect to key-3 (the moniker holder).
         let event = state
-            .navigate("key-1", crate::spatial_nav::Direction::Right)
+            .navigate(Some("key-1"), crate::spatial_nav::Direction::Right)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1532,7 +1916,7 @@ mod tests {
 
         // Case 2: Some(None) → block — no event, focus unchanged.
         let result = state
-            .navigate("key-1", crate::spatial_nav::Direction::Left)
+            .navigate(Some("key-1"), crate::spatial_nav::Direction::Left)
             .unwrap();
         assert!(
             result.is_none(),
@@ -1546,7 +1930,7 @@ mod tests {
 
         // Case 3: missing key → fall through to spatial beam test, finds key-4 below.
         let event = state
-            .navigate("key-1", crate::spatial_nav::Direction::Down)
+            .navigate(Some("key-1"), crate::spatial_nav::Direction::Down)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1589,7 +1973,7 @@ mod tests {
         // No candidates on the active layer in that direction — must return
         // None, never select the layer-A entry.
         let result = state
-            .navigate("b-source", crate::spatial_nav::Direction::Right)
+            .navigate(Some("b-source"), crate::spatial_nav::Direction::Right)
             .unwrap();
         assert!(
             result.is_none(),

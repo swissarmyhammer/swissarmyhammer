@@ -308,14 +308,52 @@ describe("broadcastNavCommand", () => {
     expect(dispatched).toBe(false);
   });
 
-  it("returns false when no moniker is focused", () => {
+  it("invokes spatial_navigate with null key when no moniker is focused", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
 
+    // No focus set — `broadcastNavCommand` must still dispatch so Rust's
+    // fallback-to-first safety net can pick a sensible entry, preserving
+    // the "something is always focused" invariant across null/stale JS
+    // state. The old short-circuit (`if (!focusedMk) return false`) left
+    // the user wedged on "nav key does nothing" after a view swap.
     let dispatched = false;
     act(() => {
       dispatched = result.current.broadcastNavCommand("nav.right");
     });
-    expect(dispatched).toBe(false);
+    expect(dispatched).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
+      key: null,
+      direction: "Right",
+    });
+  });
+
+  it("invokes spatial_navigate with null key when focused moniker has no registered keys", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+
+    // setFocus without any registerClaim → `monikerToKeysRef` has no
+    // entry for the moniker. React still dispatches; Rust sees a null
+    // source and falls through to first-in-layer.
+    act(() => {
+      result.current.setFocus("task:99");
+    });
+    await flush();
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+
+    let dispatched = false;
+    act(() => {
+      dispatched = result.current.broadcastNavCommand("nav.down");
+    });
+    expect(dispatched).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
+      key: null,
+      direction: "Down",
+    });
   });
 });
 

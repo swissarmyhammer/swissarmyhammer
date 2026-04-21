@@ -147,7 +147,7 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const grid = useGrid({
     rowCount: visibleRowCount,
     colCount: columns.length,
-    cursor: derivedCursor ?? undefined,
+    cursor: derivedCursor,
   });
 
   useGridInitialFocus(cellMonikers[0]?.[0] ?? null, derivedCursor, setFocus);
@@ -247,7 +247,12 @@ function gridEditExecutor(
       };
     case "grid.deleteRow":
       return () => {
-        const row = g().cursor.row;
+        // Cursor is derived from spatial focus — null when focus is on
+        // a non-cell target. Delete-row is meaningless without a target
+        // row, so silently no-op instead of picking an arbitrary cell.
+        const cursor = g().cursor;
+        if (!cursor) return;
+        const row = cursor.row;
         if (row >= 0 && row < entities.length)
           dispatch(`${entityType}.archive`, {
             args: { id: entities[row].id },
@@ -384,7 +389,15 @@ function useGridCallbacks(
  * keyboard command definitions to useGridCommands, callback construction
  * to useGridCallbacks, and rendering to DataTable.
  */
-/** Status bar showing row count, grid mode, and cursor position. */
+/**
+ * Status bar showing row count, grid mode, and cursor position.
+ *
+ * `cursor` is derived from spatial focus; it is `null` when focus is
+ * on a non-cell target (header, selector, perspective tab) or nothing
+ * is focused yet. In that case the R/C readout is suppressed — we
+ * never fabricate coordinates that disagree with what's actually
+ * focused on screen.
+ */
 function GridStatusBar({
   rowCount,
   mode,
@@ -392,7 +405,7 @@ function GridStatusBar({
 }: {
   rowCount: number;
   mode: string;
-  cursor: { row: number; col: number };
+  cursor: { row: number; col: number } | null;
 }) {
   const label =
     mode === "edit" ? "EDIT" : mode === "visual" ? "VISUAL" : "NORMAL";
@@ -401,7 +414,7 @@ function GridStatusBar({
       <span>{rowCount} rows</span>
       <span className="text-muted-foreground/50">|</span>
       <span>{label}</span>
-      {rowCount > 0 && (
+      {rowCount > 0 && cursor && (
         <>
           <span className="text-muted-foreground/50">|</span>
           <span>

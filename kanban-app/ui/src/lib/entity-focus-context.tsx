@@ -198,6 +198,21 @@ function useClaimRegistry() {
  * for the Rust `focus-changed` round trip. Rust remains the authoritative
  * owner — its event can override or confirm this local update.
  */
+function syncSpatialFocus(
+  moniker: string | null,
+  monikerToKeys: Map<string, Set<string>>,
+) {
+  if (!moniker) {
+    invoke("spatial_clear_focus").catch(() => {});
+    return;
+  }
+  const keys = monikerToKeys.get(moniker);
+  if (keys && keys.size > 0) {
+    const key = keys.values().next().value;
+    invoke("spatial_focus", { key }).catch(() => {});
+  }
+}
+
 function useFocusSetter(
   getFocusedMoniker: () => string | null,
   setFocusedMoniker: (m: string | null) => void,
@@ -213,11 +228,10 @@ function useFocusSetter(
       if (import.meta.env.DEV) {
         console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
       }
-      // Optimistic claim update — fire the un-focus callback for the previous
-      // moniker and the focus callback for the new one so the highlight flips
-      // without waiting for the Rust `focus-changed` event. Both transitions
-      // are idempotent: the event handler does the same lookups and is safe
-      // to re-run.
+      // Optimistic claim update — flip the un-focus callback for the previous
+      // moniker and the focus callback for the new one so the highlight
+      // responds immediately. Both transitions are idempotent with the later
+      // Rust `focus-changed` event.
       notifyClaim(
         prev,
         false,
@@ -236,16 +250,7 @@ function useFocusSetter(
       dispatch({ args: { scope_chain: chain } }).catch((error) =>
         console.error("ui.setFocus failed:", error),
       );
-      // Sync with Rust spatial state via fire-and-forget invoke.
-      if (moniker) {
-        const keys = monikerToKeysRef.current.get(moniker);
-        if (keys && keys.size > 0) {
-          const key = keys.values().next().value;
-          invoke("spatial_focus", { key }).catch(() => {});
-        }
-      } else {
-        invoke("spatial_clear_focus").catch(() => {});
-      }
+      syncSpatialFocus(moniker, monikerToKeysRef.current);
     },
     [
       getFocusedMoniker,
@@ -355,7 +360,15 @@ const NAV_DIRECTION_MAP: Record<string, string> = {
  * spatial navigation engine via `spatial_navigate`.
  *
  * Maps the command id to a direction, looks up the focused moniker's
- * spatial key, and fires an async invoke. Returns `true` if dispatched.
+ * spatial key (if any), and fires an async invoke. Returns `true` if
+ * dispatched.
+ *
+ * When no moniker is focused or no spatial key is registered for it,
+ * `key` is `null`. Rust's `spatial_navigate` treats a null/unknown key
+ * as "no source" and falls back to the top-left entry in the active
+ * layer — the safety net that keeps the "something is always focused"
+ * invariant recoverable after a view swap or a React/Rust desync. Do
+ * NOT short-circuit here on a null moniker; let Rust pick a successor.
  */
 function useBroadcastNav(
   getFocusedMoniker: () => string | null,
@@ -366,10 +379,16 @@ function useBroadcastNav(
       const direction = NAV_DIRECTION_MAP[commandId];
       if (!direction) return false;
       const focusedMk = getFocusedMoniker();
-      if (!focusedMk) return false;
-      const keys = monikerToKeysRef.current.get(focusedMk);
-      if (!keys || keys.size === 0) return false;
-      const key = keys.values().next().value;
+      // Pick the first registered spatial key for the focused moniker,
+      // or `null` when the moniker is missing or has no keys. Both cases
+      // tell Rust "no source" and trigger the fallback-to-first path.
+      let key: string | null = null;
+      if (focusedMk) {
+        const keys = monikerToKeysRef.current.get(focusedMk);
+        if (keys && keys.size > 0) {
+          key = keys.values().next().value ?? null;
+        }
+      }
       invoke("spatial_navigate", { key, direction }).catch(() => {});
       return true;
     },
@@ -415,6 +434,54 @@ function useWindowFocusEffect(
  * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
  * that re-render via `useSyncExternalStore` when focus changes.
  */
+function useFocusContextValue(deps: {
+  setFocus: EntityFocusContextValue["setFocus"];
+  registerScope: EntityFocusContextValue["registerScope"];
+  unregisterScope: EntityFocusContextValue["unregisterScope"];
+  getScope: EntityFocusContextValue["getScope"];
+  broadcastNavCommand: EntityFocusContextValue["broadcastNavCommand"];
+  registerClaim: EntityFocusContextValue["registerClaim"];
+  unregisterClaim: EntityFocusContextValue["unregisterClaim"];
+  getFocusedMoniker: EntityFocusContextValue["getFocusedMoniker"];
+  subscribeFocus: EntityFocusContextValue["subscribeFocus"];
+}) {
+  const {
+    setFocus,
+    registerScope,
+    unregisterScope,
+    getScope,
+    broadcastNavCommand,
+    registerClaim,
+    unregisterClaim,
+    getFocusedMoniker,
+    subscribeFocus,
+  } = deps;
+  return useMemo<EntityFocusContextValue>(
+    () => ({
+      setFocus,
+      registerScope,
+      unregisterScope,
+      getScope,
+      broadcastNavCommand,
+      registerClaim,
+      unregisterClaim,
+      getFocusedMoniker,
+      subscribeFocus,
+    }),
+    [
+      setFocus,
+      registerScope,
+      unregisterScope,
+      getScope,
+      broadcastNavCommand,
+      registerClaim,
+      unregisterClaim,
+      getFocusedMoniker,
+      subscribeFocus,
+    ],
+  );
+}
+
 export function EntityFocusProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatchCommand("ui.setFocus");
   const dispatchRef = useRef(dispatch);
@@ -453,30 +520,17 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   );
   useWindowFocusEffect(getFocusedMoniker, registryRef, dispatchRef);
 
-  const value = useMemo<EntityFocusContextValue>(
-    () => ({
-      setFocus,
-      registerScope,
-      unregisterScope,
-      getScope,
-      broadcastNavCommand,
-      registerClaim,
-      unregisterClaim,
-      getFocusedMoniker,
-      subscribeFocus,
-    }),
-    [
-      setFocus,
-      registerScope,
-      unregisterScope,
-      getScope,
-      broadcastNavCommand,
-      registerClaim,
-      unregisterClaim,
-      getFocusedMoniker,
-      subscribeFocus,
-    ],
-  );
+  const value = useFocusContextValue({
+    setFocus,
+    registerScope,
+    unregisterScope,
+    getScope,
+    broadcastNavCommand,
+    registerClaim,
+    unregisterClaim,
+    getFocusedMoniker,
+    subscribeFocus,
+  });
 
   // Subscribe the provider itself so FocusedScopeContext re-renders when focus
   // changes — useDispatchCommand depends on this context to compute scope chains.
