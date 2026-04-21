@@ -84,6 +84,21 @@ impl DefaultShellConfig {
     }
 }
 
+/// Initial capacity for the stdout/stderr staging buffers inside `OutputBuffer`.
+///
+/// 8 KiB is enough to absorb typical command output bursts without incurring
+/// small-allocation overhead, while still being small relative to the 10 MiB
+/// default output cap. Larger outputs grow the buffer on demand.
+const OUTPUT_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024;
+
+/// Window scanned by [`is_binary_content`] when deciding whether captured
+/// output should be treated as binary.
+///
+/// 8 KiB is large enough to catch a null byte in the prefix of real binary
+/// files (images, archives, executables) without paying O(n) cost on very
+/// large text outputs.
+const BINARY_DETECTION_SAMPLE_BYTES: usize = 8 * 1024;
+
 /// Deserialize an `Option<u64>` that tolerates string-encoded integers.
 ///
 /// MCP clients (including Claude Code) sometimes send integer parameters as
@@ -211,8 +226,8 @@ pub struct OutputLimits {
 impl Default for OutputLimits {
     fn default() -> Self {
         Self {
-            max_output_size: 10 * 1024 * 1024, // 10MB
-            max_line_length: 2000,
+            max_output_size: DefaultShellConfig::max_output_size(),
+            max_line_length: DefaultShellConfig::max_line_length(),
             enable_streaming: false,
         }
     }
@@ -370,8 +385,8 @@ impl OutputBuffer {
     pub fn new(max_size: usize) -> Self {
         Self {
             max_size,
-            stdout_buffer: Vec::with_capacity(8192),
-            stderr_buffer: Vec::with_capacity(8192),
+            stdout_buffer: Vec::with_capacity(OUTPUT_BUFFER_INITIAL_CAPACITY),
+            stderr_buffer: Vec::with_capacity(OUTPUT_BUFFER_INITIAL_CAPACITY),
             truncated: false,
             binary_detected: false,
             total_bytes_processed: 0,
@@ -531,8 +546,8 @@ pub fn is_binary_content(data: &[u8]) -> bool {
         return false;
     }
 
-    // Check first 8KB for binary markers to avoid scanning huge text files
-    let sample = &data[..std::cmp::min(data.len(), 8192)];
+    // Check a bounded prefix for binary markers to avoid scanning huge text files
+    let sample = &data[..std::cmp::min(data.len(), BINARY_DETECTION_SAMPLE_BYTES)];
 
     for &byte in sample {
         // Early exit if we find definitive binary content

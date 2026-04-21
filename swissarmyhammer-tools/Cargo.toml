@@ -132,3 +132,6 @@ git2 = { workspace = true }
 rmcp = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+# MockEmbedder for tests that exercise the shell embedding worker without
+# loading a real ML model.
+model-embedding = { workspace = true, features = ["test-support"] }
