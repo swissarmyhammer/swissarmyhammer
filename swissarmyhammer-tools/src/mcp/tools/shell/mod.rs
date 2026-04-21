@@ -566,99 +566,101 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
-        use swissarmyhammer_common::reporter::InitEvent;
         let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
         let mut results = Vec::new();
 
-        // Step 1: Remove "Bash" from permissions.deny (scope-aware path)
-        let claude_settings_path = scope.claude_settings_path();
-        if claude_settings_path.exists() {
-            match std::fs::read_to_string(&claude_settings_path) {
-                Ok(content) if !content.trim().is_empty() => {
-                    match serde_json::from_str::<serde_json::Value>(&content) {
-                        Ok(mut settings) => {
-                            // Remove "Bash" from deny list
-                            let changed = if let Some(deny) = settings
-                                .pointer_mut("/permissions/deny")
-                                .and_then(|v| v.as_array_mut())
-                            {
-                                let before = deny.len();
-                                deny.retain(|v| v.as_str() != Some("Bash"));
-                                deny.len() != before
-                            } else {
-                                false
-                            };
-                            if changed {
-                                match serde_json::to_string_pretty(&settings) {
-                                    Ok(c) => {
-                                        if let Err(e) = std::fs::write(&claude_settings_path, c) {
-                                            results.push(InitResult::error(
-                                                component_name,
-                                                format!(
-                                                    "Failed to write {}: {}",
-                                                    claude_settings_path.display(),
-                                                    e
-                                                ),
-                                            ));
-                                        } else {
-                                            reporter.emit(&InitEvent::Action {
-                                                verb: "Removed".to_string(),
-                                                message: format!(
-                                                    "Bash deny rule from {}",
-                                                    claude_settings_path.display()
-                                                ),
-                                            });
-                                        }
-                                    }
-                                    Err(e) => {
-                                        results.push(InitResult::error(
-                                            component_name,
-                                            format!(
-                                                "Failed to serialize {}: {}",
-                                                claude_settings_path.display(),
-                                                e
-                                            ),
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            reporter.emit(&InitEvent::Warning {
-                                message: format!(
-                                    "Could not parse {}: {}",
-                                    claude_settings_path.display(),
-                                    e
-                                ),
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
+        if let Some(err) = remove_bash_deny_rule(&scope.claude_settings_path(), reporter) {
+            results.push(InitResult::error(component_name, err));
         }
-
-        // Step 2: Remove .shell/ config directory if it exists
-        let shell_dir = std::path::PathBuf::from(".shell");
-        if shell_dir.exists() {
-            match std::fs::remove_dir_all(&shell_dir) {
-                Ok(()) => {
-                    reporter.emit(&InitEvent::Action {
-                        verb: "Removed".to_string(),
-                        message: format!("{}", shell_dir.display()),
-                    });
-                }
-                Err(e) => {
-                    results.push(InitResult::error(
-                        component_name,
-                        format!("Failed to remove .shell/ directory: {}", e),
-                    ));
-                }
-            }
+        if let Some(err) = remove_shell_dir(reporter) {
+            results.push(InitResult::error(component_name, err));
         }
 
         results.push(InitResult::ok(component_name, "Shell tool deinitialized"));
         results
+    }
+}
+
+/// Remove the `"Bash"` entry from `permissions.deny` in the Claude settings
+/// file at `path`, writing the result back when changed.
+///
+/// Returns `Some(message)` when an error occurred (read failure, serialize
+/// failure, or write failure). Parse failures and a missing/empty file are
+/// reported through `reporter` as warnings and produce no error.
+fn remove_bash_deny_rule(
+    path: &std::path::Path,
+    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+) -> Option<String> {
+    use swissarmyhammer_common::reporter::InitEvent;
+    if !path.exists() {
+        return None;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) if !c.trim().is_empty() => c,
+        Ok(_) => return None,
+        Err(e) => return Some(format!("Failed to read {}: {}", path.display(), e)),
+    };
+    let mut settings = match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            reporter.emit(&InitEvent::Warning {
+                message: format!("Could not parse {}: {}", path.display(), e),
+            });
+            return None;
+        }
+    };
+    if !strip_bash_from_deny(&mut settings) {
+        return None;
+    }
+    let serialized = match serde_json::to_string_pretty(&settings) {
+        Ok(s) => s,
+        Err(e) => return Some(format!("Failed to serialize {}: {}", path.display(), e)),
+    };
+    if let Err(e) = std::fs::write(path, serialized) {
+        return Some(format!("Failed to write {}: {}", path.display(), e));
+    }
+    reporter.emit(&InitEvent::Action {
+        verb: "Removed".to_string(),
+        message: format!("Bash deny rule from {}", path.display()),
+    });
+    None
+}
+
+/// Remove the `"Bash"` string from the `permissions.deny` array in `settings`
+/// in place. Returns `true` when an entry was actually removed.
+fn strip_bash_from_deny(settings: &mut serde_json::Value) -> bool {
+    let Some(deny) = settings
+        .pointer_mut("/permissions/deny")
+        .and_then(|v| v.as_array_mut())
+    else {
+        return false;
+    };
+    let before = deny.len();
+    deny.retain(|v| v.as_str() != Some("Bash"));
+    deny.len() != before
+}
+
+/// Remove the local `.shell/` directory if it exists.
+///
+/// Returns `Some(message)` when removal failed; otherwise emits a success
+/// action to `reporter` and returns `None`.
+fn remove_shell_dir(
+    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+) -> Option<String> {
+    use swissarmyhammer_common::reporter::InitEvent;
+    let shell_dir = std::path::PathBuf::from(".shell");
+    if !shell_dir.exists() {
+        return None;
+    }
+    match std::fs::remove_dir_all(&shell_dir) {
+        Ok(()) => {
+            reporter.emit(&InitEvent::Action {
+                verb: "Removed".to_string(),
+                message: format!("{}", shell_dir.display()),
+            });
+            None
+        }
+        Err(e) => Some(format!("Failed to remove .shell/ directory: {}", e)),
     }
 }
 

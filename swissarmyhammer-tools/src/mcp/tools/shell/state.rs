@@ -599,6 +599,17 @@ pub struct SearchResult {
     pub similarity: f32,
 }
 
+/// A chunk job payload, unpacked into a flat struct so helper fns don't need
+/// to carry six positional arguments around.
+struct ChunkRow {
+    session_id: String,
+    command_id: usize,
+    chunk_index: usize,
+    start_line: usize,
+    end_line: usize,
+    text: String,
+}
+
 /// Background embedding worker — receives chunks via channel, inserts into DB,
 /// then computes and stores embeddings. Processes every chunk — never drops work.
 ///
@@ -610,68 +621,124 @@ async fn embedding_worker(
     db: Arc<Mutex<Connection>>,
     injected: Option<Arc<dyn TextEmbedder>>,
 ) {
-    // Lazy-init the model on first chunk
     let mut model: Option<Arc<dyn TextEmbedder>> = None;
 
     while let Some(job) = rx.recv().await {
-        match job {
-            ChunkJob::Flush(done) => {
-                // All prior chunks have been processed (channel is FIFO).
-                let _ = done.send(());
-            }
-            ChunkJob::Chunk {
-                session_id,
-                command_id,
-                chunk_index,
-                start_line,
-                end_line,
-                text,
-            } => {
-                // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
-                {
-                    let conn = db.lock().await;
-                    if let Err(e) = conn.execute(
-                        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        rusqlite::params![session_id, command_id as i64, chunk_index as i64, start_line as i64, end_line as i64, text],
-                    ) {
-                        tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
-                    }
-                }
+        let chunk = match unpack_chunk_job(job) {
+            Some(c) => c,
+            None => continue, // Flush signal — already acked inside unpack_chunk_job.
+        };
 
-                // Step 2: Resolve the embedding model on first use.
-                if model.is_none() {
-                    model = match build_embedder(injected.clone()).await {
-                        Ok(m) => Some(m),
-                        Err(()) => {
-                            // Model failed to build or load — drain the queue
-                            // as INSERT-only and stop embedding further work.
-                            drain_inserts_only(&mut rx, &db).await;
-                            return;
-                        }
-                    };
-                }
+        insert_chunk_row(&db, &chunk).await;
 
-                // Step 3: Compute embedding and UPDATE the row
-                if let Some(m) = &model {
-                    match m.embed_text(&text).await {
-                        Ok(mut result) => {
-                            result.normalize();
-                            let embedding_bytes = encode_embedding(result.embedding());
-                            let conn = db.lock().await;
-                            if let Err(e) = conn.execute(
-                                "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
-                                rusqlite::params![embedding_bytes, session_id, command_id as i64, chunk_index as i64],
-                            ) {
-                                tracing::warn!("Failed to store embedding in DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::debug!("Failed to embed chunk: {}", e);
-                        }
-                    }
+        if model.is_none() {
+            model = match build_embedder(injected.clone()).await {
+                Ok(m) => Some(m),
+                Err(()) => {
+                    // Model failed to build or load — drain the queue as
+                    // INSERT-only and stop embedding further work.
+                    drain_inserts_only(&mut rx, &db).await;
+                    return;
                 }
-            }
+            };
         }
+
+        if let Some(m) = &model {
+            update_chunk_embedding(m.as_ref(), &db, &chunk).await;
+        }
+    }
+}
+
+/// Convert a [`ChunkJob`] into the flat row struct processed by the worker.
+///
+/// Flush signals are handled here (acked via their `oneshot`) and reported
+/// as `None` so the worker loop can simply `continue`.
+fn unpack_chunk_job(job: ChunkJob) -> Option<ChunkRow> {
+    match job {
+        ChunkJob::Flush(done) => {
+            // Channel is FIFO, so acking here means every earlier Chunk
+            // message has already been processed.
+            let _ = done.send(());
+            None
+        }
+        ChunkJob::Chunk {
+            session_id,
+            command_id,
+            chunk_index,
+            start_line,
+            end_line,
+            text,
+        } => Some(ChunkRow {
+            session_id,
+            command_id,
+            chunk_index,
+            start_line,
+            end_line,
+            text,
+        }),
+    }
+}
+
+/// INSERT the chunk text into the DB. The text is stored even when embedding
+/// later fails, so grep-style search over history still works.
+async fn insert_chunk_row(db: &Arc<Mutex<Connection>>, chunk: &ChunkRow) {
+    let conn = db.lock().await;
+    let result = conn.execute(
+        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            chunk.session_id,
+            chunk.command_id as i64,
+            chunk.chunk_index as i64,
+            chunk.start_line as i64,
+            chunk.end_line as i64,
+            chunk.text,
+        ],
+    );
+    if let Err(e) = result {
+        tracing::warn!(
+            "Failed to insert chunk into DB (cmd {}, chunk {}): {}",
+            chunk.command_id,
+            chunk.chunk_index,
+            e,
+        );
+    }
+}
+
+/// Compute the embedding for `chunk.text` and UPDATE the row.
+///
+/// Embedding failures are logged at debug level — the chunk text remains in
+/// the DB so semantic search simply won't match it.
+async fn update_chunk_embedding(
+    model: &dyn TextEmbedder,
+    db: &Arc<Mutex<Connection>>,
+    chunk: &ChunkRow,
+) {
+    let mut result = match model.embed_text(&chunk.text).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!("Failed to embed chunk: {}", e);
+            return;
+        }
+    };
+    result.normalize();
+    let embedding_bytes = encode_embedding(result.embedding());
+    let conn = db.lock().await;
+    let update = conn.execute(
+        "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
+        rusqlite::params![
+            embedding_bytes,
+            chunk.session_id,
+            chunk.command_id as i64,
+            chunk.chunk_index as i64,
+        ],
+    );
+    if let Err(e) = update {
+        tracing::warn!(
+            "Failed to store embedding in DB (cmd {}, chunk {}): {}",
+            chunk.command_id,
+            chunk.chunk_index,
+            e,
+        );
     }
 }
 
@@ -685,32 +752,28 @@ async fn build_embedder(
     injected: Option<Arc<dyn TextEmbedder>>,
 ) -> Result<Arc<dyn TextEmbedder>, ()> {
     if let Some(m) = injected {
-        if let Err(e) = m.load().await {
-            tracing::warn!(
-                "Failed to load injected embedder: {}. Embeddings disabled.",
-                e
-            );
-            return Err(());
-        }
-        return Ok(m);
+        return load_or_warn(m, "injected embedder").await;
     }
+    let default = Embedder::default().await.map_err(|e| {
+        tracing::warn!(
+            "Failed to create embedding model: {}. Embeddings disabled.",
+            e
+        );
+    })?;
+    load_or_warn(
+        Arc::new(default) as Arc<dyn TextEmbedder>,
+        "embedding model",
+    )
+    .await
+}
 
-    match Embedder::default().await {
-        Ok(m) => {
-            if let Err(e) = m.load().await {
-                tracing::warn!(
-                    "Failed to load embedding model: {}. Embeddings disabled.",
-                    e
-                );
-                return Err(());
-            }
-            Ok(Arc::new(m) as Arc<dyn TextEmbedder>)
-        }
+/// Call `load()` on `m`, returning it on success or logging and returning
+/// `Err(())` on failure.
+async fn load_or_warn(m: Arc<dyn TextEmbedder>, label: &str) -> Result<Arc<dyn TextEmbedder>, ()> {
+    match m.load().await {
+        Ok(()) => Ok(m),
         Err(e) => {
-            tracing::warn!(
-                "Failed to create embedding model: {}. Embeddings disabled.",
-                e
-            );
+            tracing::warn!("Failed to load {}: {}. Embeddings disabled.", label, e);
             Err(())
         }
     }
