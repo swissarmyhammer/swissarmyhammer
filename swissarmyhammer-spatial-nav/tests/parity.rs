@@ -72,6 +72,8 @@ enum ParityOp {
     ClearFocus,
     #[serde(rename = "navigate")]
     Navigate { from_key: String, direction: String },
+    #[serde(rename = "focus_first_in_layer")]
+    FocusFirstInLayer { layer_key: String },
 }
 
 /// Expected event payload shape. `None` means the op must not emit.
@@ -140,6 +142,7 @@ fn apply_op(state: &SpatialState, op: &ParityOp) -> Option<FocusChanged> {
                 .navigate(from_key, dir)
                 .unwrap_or_else(|e| panic!("navigate {from_key} {direction} errored: {e}"))
         }
+        ParityOp::FocusFirstInLayer { layer_key } => state.focus_first_in_layer(layer_key),
     }
 }
 

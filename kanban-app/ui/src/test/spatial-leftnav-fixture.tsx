@@ -164,7 +164,7 @@ export function AppWithGridAndLeftNavFixture() {
 // ---------------------------------------------------------------------------
 
 import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
-import { useEntityFocus, useFocusedMoniker } from "@/lib/entity-focus-context";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { fieldMoniker, moniker as mk, ROW_SELECTOR_FIELD } from "@/lib/moniker";
 import type { ReactNode } from "react";
 
@@ -296,15 +296,17 @@ function FixtureCellDiv({
 }) {
   const elementRef = useFocusScopeElementRef();
   const { setFocus } = useEntityFocus();
-  const focusedMoniker = useFocusedMoniker();
-  const isFocused = focusedMoniker === dataMoniker;
 
+  // `data-focused` is written by the enclosing `FocusScope`'s
+  // `useFocusDecoration` hook onto this same element (via the forwarded
+  // `elementRef`). The fixture no longer re-implements the
+  // `useFocusedMoniker` compare dance — it mirrors production's
+  // centralized decoration exactly.
   return (
     <div
       ref={elementRef as React.RefObject<HTMLDivElement>}
       data-moniker={dataMoniker}
       data-testid={`data-moniker:${dataMoniker}`}
-      data-focused={isFocused || undefined}
       style={style}
       onClick={(e) => {
         e.stopPropagation();

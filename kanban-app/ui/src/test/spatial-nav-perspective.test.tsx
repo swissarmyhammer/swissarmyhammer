@@ -257,7 +257,18 @@ describe("perspective bar reachable from all views", () => {
     // `k` is the vim binding for nav.up; the fixture shell runs in vim
     // mode so vim keys drive navigation.
     await userEvent.keyboard("k");
-    await expectPerspectiveFocused();
+    const focusedMoniker = await expectPerspectiveFocused();
+
+    // Visual indicator: the focused tab's root <div> must carry
+    // `data-focused="true"` so the user can see where spatial nav
+    // landed. Without this the user sees no change and concludes `k`
+    // did nothing (the original bug report). The ring is painted by
+    // the global `[data-focused]` CSS rule in `index.css` — see the
+    // centralized `useFocusDecoration` in `focus-scope.tsx`.
+    const tabEl = screen
+      .getByTestId(`data-moniker:${focusedMoniker}`)
+      .element() as HTMLElement;
+    expect(tabEl.getAttribute("data-focused")).toBe("true");
   });
 
   it("k from top-row cell in a grid moves focus to the active perspective tab", async () => {
@@ -279,7 +290,18 @@ describe("perspective bar reachable from all views", () => {
 
     // `k` is the vim binding for nav.up.
     await userEvent.keyboard("k");
-    await expectPerspectiveFocused();
+    const focusedMoniker = await expectPerspectiveFocused();
+
+    // Visual indicator: the focused tab's root <div> must carry
+    // `data-focused="true"` so the user can see where spatial nav
+    // landed. Without this the user sees no change and concludes `k`
+    // did nothing (the original bug report). The ring is painted by
+    // the global `[data-focused]` CSS rule in `index.css` — see the
+    // centralized `useFocusDecoration` in `focus-scope.tsx`.
+    const tabEl = screen
+      .getByTestId(`data-moniker:${focusedMoniker}`)
+      .element() as HTMLElement;
+    expect(tabEl.getAttribute("data-focused")).toBe("true");
   });
 
   it("h/l between perspective tabs in the same bar", async () => {
@@ -302,11 +324,34 @@ describe("perspective bar reachable from all views", () => {
       .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
       .toBe(FIXTURE_PERSPECTIVE_MONIKERS[0]);
 
+    const defaultTabEl = screen
+      .getByTestId(`data-moniker:${FIXTURE_PERSPECTIVE_MONIKERS[0]}`)
+      .element() as HTMLElement;
+    // First tab has the focus ring right after clicking it.
+    await expect
+      .poll(() => defaultTabEl.getAttribute("data-focused"), {
+        timeout: FOCUS_POLL_TIMEOUT_MS,
+      })
+      .toBe("true");
+
     // `l` is the vim binding for nav.right; the fixture shell runs in
     // vim mode.
     await userEvent.keyboard("l");
     const focusedAfterRight = await expectPerspectiveFocused();
     expect(focusedAfterRight).not.toBe(FIXTURE_PERSPECTIVE_MONIKERS[0]);
+
+    // Visual indicator must move with focus: the new tab gains
+    // `data-focused="true"`, the previous tab loses it. Guards against
+    // a "stuck" ring that would mislead the user about where focus is.
+    const newTabEl = screen
+      .getByTestId(`data-moniker:${focusedAfterRight}`)
+      .element() as HTMLElement;
+    await expect
+      .poll(() => newTabEl.getAttribute("data-focused"), {
+        timeout: FOCUS_POLL_TIMEOUT_MS,
+      })
+      .toBe("true");
+    expect(defaultTabEl.getAttribute("data-focused")).toBeNull();
   });
 
   it("j from an active perspective tab moves into the active view", async () => {

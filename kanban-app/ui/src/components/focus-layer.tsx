@@ -21,11 +21,36 @@ function useLayerKey(): string {
   return keyRef.current;
 }
 
-/** Register/unregister the layer with the Rust spatial layer stack. */
+/**
+ * Register/unregister the layer with the Rust spatial layer stack.
+ *
+ * After pushing, schedule a `requestAnimationFrame` to invoke
+ * `spatial_focus_first_in_layer` so the layer's upper-left entry claims
+ * focus on mount. The RAF delay is essential: descendant `FocusScope`
+ * effects run bottom-up during the same commit, so this parent effect
+ * fires before any child has registered its rect. The RAF gives React
+ * one frame to flush the child registrations before the First-selector
+ * runs; without it the layer is always empty at the moment the focus
+ * command fires and the call is a silent no-op.
+ *
+ * Cleanup cancels a still-pending RAF — otherwise a layer that mounts
+ * and unmounts inside one frame could call `focus_first_in_layer` after
+ * the layer was already popped, racing with `spatial_remove_layer`.
+ *
+ * The method short-circuits when the focused key is already inside the
+ * target layer (see `SpatialState::focus_first_in_layer`), so this is
+ * also safe against a user who clicks between the push and the RAF.
+ */
 function useLayerRegistration(layerKey: string, name: string) {
   useEffect(() => {
     invoke("spatial_push_layer", { key: layerKey, name }).catch(() => {});
+    const raf = requestAnimationFrame(() => {
+      invoke("spatial_focus_first_in_layer", {
+        args: { layerKey },
+      }).catch(() => {});
+    });
     return () => {
+      cancelAnimationFrame(raf);
       invoke("spatial_remove_layer", { key: layerKey }).catch(() => {});
     };
   }, [layerKey, name]);

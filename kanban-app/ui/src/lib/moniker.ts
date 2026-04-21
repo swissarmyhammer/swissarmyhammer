@@ -31,6 +31,25 @@ export function fieldMoniker(type: string, id: string, field: string): string {
 }
 
 /**
+ * Build a column-header moniker: "column-header:<fieldName>".
+ *
+ * Used by `DataTable` to register each grid column header as its own
+ * spatial focus target, so `k` (up) from a body cell lands on the header
+ * directly above rather than skipping past to the perspective bar.
+ *
+ * The dedicated `column-header:` namespace — rather than reusing
+ * `fieldMoniker` with a synthetic entity id — mirrors `moniker("view", …)`
+ * used by LeftNav and keeps header rects from masquerading as body-cell
+ * field entries in the scope chain.
+ *
+ * Future extension: if multiple grids ever coexist on screen, scope this
+ * to `column-header:<perspectiveId>.<fieldName>` to keep monikers unique.
+ */
+export function columnHeaderMoniker(fieldName: string): string {
+  return moniker("column-header", fieldName);
+}
+
+/**
  * Parse a moniker string into { type, id, field? }.
  * The id may contain colons (split only on the first).
  * If the id portion contains a dot, the part after the last dot is the field.

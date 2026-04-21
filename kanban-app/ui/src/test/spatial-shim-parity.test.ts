@@ -61,6 +61,8 @@ function applyOp(
       return shim.clearFocus();
     case "navigate":
       return shim.navigate(op.from_key, op.direction as ShimDirection);
+    case "focus_first_in_layer":
+      return shim.focusFirstInLayer(op.layer_key);
   }
 }
 

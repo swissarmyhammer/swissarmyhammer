@@ -70,6 +70,23 @@ let currentShim: SpatialStateShim = new SpatialStateShim();
 
 let focusListeners = new Set<(evt: { payload: FocusChangedPayload }) => void>();
 
+/**
+ * Record of every `dispatch_command` invocation observed by the shim's
+ * `invoke` mock. Tests that care about which command fired (e.g. "Enter
+ * on a focused LeftNav button dispatches `view.switch:<id>`") read
+ * this log via [`SpatialShimHandles.dispatchedCommands`] instead of
+ * trying to assert against the mocked `invoke` function directly —
+ * the shim owns the module-level mock so there is no external `vi.fn`
+ * handle to `toHaveBeenCalledWith`.
+ */
+let dispatchedCommands: Array<{
+  cmd: string;
+  target?: string;
+  args?: Record<string, unknown>;
+  scopeChain?: string[];
+  boardPath?: string;
+}> = [];
+
 /** Argument shape for `spatial_register`. */
 interface SpatialRegisterArgs {
   args: {
@@ -137,6 +154,7 @@ type SpatialCommand =
   | "spatial_navigate"
   | "spatial_push_layer"
   | "spatial_remove_layer"
+  | "spatial_focus_first_in_layer"
   | "__spatial_dump";
 
 /** Narrow a command name to the spatial set. */
@@ -151,6 +169,7 @@ function isSpatialCommand(cmd: string): cmd is SpatialCommand {
     cmd === "spatial_navigate" ||
     cmd === "spatial_push_layer" ||
     cmd === "spatial_remove_layer" ||
+    cmd === "spatial_focus_first_in_layer" ||
     cmd === "__spatial_dump"
   );
 }
@@ -225,6 +244,22 @@ function dispatchSpatial(cmd: SpatialCommand, rawArgs: unknown): unknown {
       if (event) emitFocusChangedEvent(event);
       return null;
     }
+    case "spatial_focus_first_in_layer": {
+      // Mirrors the Rust `SpatialFocusFirstInLayerArgs` struct: the outer
+      // invoke payload is `{ args: { layerKey | layer_key } }`.
+      const a = rawArgs as {
+        args: { layerKey?: string; layer_key?: string };
+      };
+      const layerKey = a.args.layerKey ?? a.args.layer_key;
+      if (typeof layerKey !== "string") {
+        throw new Error(
+          `spatial_focus_first_in_layer: missing layerKey/layer_key (got ${JSON.stringify(rawArgs)})`,
+        );
+      }
+      const event = currentShim.focusFirstInLayer(layerKey);
+      if (event) emitFocusChangedEvent(event);
+      return null;
+    }
     case "__spatial_dump": {
       const entries = currentShim.entriesSnapshot();
       const layers = currentShim.layersSnapshot();
@@ -258,14 +293,28 @@ function dispatchSpatial(cmd: SpatialCommand, rawArgs: unknown): unknown {
 /**
  * Mock module for `@tauri-apps/api/core`.
  *
- * `invoke` routes `spatial_*` calls into the shim dispatcher and resolves
- * every other command to `null`. Extend via `mockInvokeOverride` in a
- * sibling test if you need additional commands.
+ * `invoke` routes `spatial_*` calls into the shim dispatcher, records every
+ * `dispatch_command` invocation into the module-level `dispatchedCommands`
+ * log (exposed via [`SpatialShimHandles.dispatchedCommands`]), and
+ * resolves every other command to `null`. Extend via `mockInvokeOverride`
+ * in a sibling test if you need additional commands.
  */
 export function tauriCoreMock() {
   return {
     invoke: async (cmd: string, args?: unknown) => {
       if (isSpatialCommand(cmd)) return dispatchSpatial(cmd, args ?? {});
+      if (cmd === "dispatch_command") {
+        dispatchedCommands.push(
+          (args ?? {}) as {
+            cmd: string;
+            target?: string;
+            args?: Record<string, unknown>;
+            scopeChain?: string[];
+            boardPath?: string;
+          },
+        );
+        return null;
+      }
       return null;
     },
     transformCallback: vi.fn(),
@@ -359,6 +408,25 @@ export interface SpatialShimHandles {
   emitFocusChanged: (payload: FocusChangedPayload) => void;
   /** Moniker of the currently focused key, or null. */
   focusedMoniker: () => string | null;
+  /**
+   * Snapshot of every `dispatch_command` invocation captured since
+   * `setupSpatialShim()` was last called.
+   *
+   * Each entry mirrors the payload passed to
+   * `invoke("dispatch_command", …)` by the frontend dispatch pipeline —
+   * `cmd` is the command id (e.g. `"view.switch:board"`), and the
+   * remaining fields are the dispatch options Rust would receive.
+   *
+   * Returns a fresh array each call so test assertions (`toContainEqual`,
+   * `[0].cmd`) can iterate safely without worrying about later mutations.
+   */
+  dispatchedCommands: () => Array<{
+    cmd: string;
+    target?: string;
+    args?: Record<string, unknown>;
+    scopeChain?: string[];
+    boardPath?: string;
+  }>;
 }
 
 /**
@@ -372,6 +440,7 @@ export interface SpatialShimHandles {
 export function setupSpatialShim(): SpatialShimHandles {
   currentShim = new SpatialStateShim();
   focusListeners = new Set();
+  dispatchedCommands = [];
   return {
     shim: currentShim,
     emitFocusChanged: emitFocusChangedEvent,
@@ -381,5 +450,6 @@ export function setupSpatialShim(): SpatialShimHandles {
       const e = currentShim.get(fk);
       return e?.moniker ?? null;
     },
+    dispatchedCommands: () => dispatchedCommands.slice(),
   };
 }

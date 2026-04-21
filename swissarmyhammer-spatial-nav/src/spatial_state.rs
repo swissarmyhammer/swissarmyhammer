@@ -406,6 +406,77 @@ impl SpatialState {
         self.inner.read().unwrap().layer_stack.active().cloned()
     }
 
+    /// Focus the first (upper-left, `y`-then-`x` sorted) registered entry in
+    /// the given layer, to make layer push symmetric with layer removal.
+    ///
+    /// Intended to be called by the Tauri layer immediately after
+    /// `push_layer` (via a `requestAnimationFrame` so descendant
+    /// `FocusScope` effects have time to register their rects). Returns
+    /// `Some(FocusChanged)` when focus actually moved so the caller can
+    /// emit a `focus-changed` event.
+    ///
+    /// Returns `None` in three cases:
+    /// - The layer has no registered entries (the RAF-deferred caller must
+    ///   tolerate this — entries may not yet have mounted).
+    /// - The focused key already belongs to the given layer, so a user
+    ///   click or a programmatic `focus()` that landed inside the layer
+    ///   first is not overridden (see the "User clicks before RAF fires"
+    ///   edge case in the card).
+    /// - A remount: `push_layer` on a layer whose focus memory is already
+    ///   pointing inside it (handled by the "already focused in layer"
+    ///   early-exit).
+    ///
+    /// Saves the outgoing focused key as `last_focused` on its owning
+    /// layer, just like [`focus`], so `remove_layer` can restore it.
+    ///
+    /// [`focus`]: Self::focus
+    pub fn focus_first_in_layer(&self, layer_key: &str) -> Option<FocusChanged> {
+        let mut inner = self.inner.write().unwrap();
+
+        // Don't override manual focus that already landed in this layer —
+        // e.g. a user click between the push and the RAF-deferred invoke.
+        if let Some(ref fk) = inner.focused_key {
+            if let Some(entry) = inner.entries.get(fk) {
+                if entry.layer_key == layer_key {
+                    return None;
+                }
+            }
+        }
+
+        // Collect references to entries in the target layer and pick the
+        // top-left one using the same sort order as `Direction::First`
+        // (by y, then x) — shared through `find_edge_first` would require
+        // an `&[&SpatialEntry]` pool with a source that doesn't exist
+        // here, so we inline the equivalent two-key sort.
+        let target_key = inner
+            .entries
+            .values()
+            .filter(|e| e.layer_key == layer_key)
+            .min_by(|a, b| {
+                a.rect
+                    .y
+                    .partial_cmp(&b.rect.y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        a.rect
+                            .x
+                            .partial_cmp(&b.rect.x)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            })
+            .map(|e| e.key.clone())?;
+
+        let prev = inner.focused_key.take();
+        if let Some(ref pk) = prev {
+            inner.save_focus_memory(pk);
+        }
+        inner.focused_key = Some(target_key.clone());
+        Some(FocusChanged {
+            prev_key: prev,
+            next_key: Some(target_key),
+        })
+    }
+
     /// Returns the number of layers in the stack.
     pub fn layer_count(&self) -> usize {
         self.inner.read().unwrap().layer_stack.len()
@@ -1583,6 +1654,181 @@ mod tests {
              focus moved to layer-B), not b-entry"
         );
         assert_eq!(state.focused_key(), Some("a-entry".to_string()));
+    }
+
+    // --- focus_first_in_layer tests (this card) ---
+
+    /// Three entries in one layer at (100,50), (0,0), (50,0). The `First`
+    /// sort order (y then x) picks (0,0) — `focus_first_in_layer` must
+    /// return an event with that entry as `next_key`.
+    #[test]
+    fn focus_first_in_layer_returns_first_entry_by_y_then_x() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        reg(
+            &state,
+            "a",
+            "task:A",
+            rect(100.0, 50.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        reg(
+            &state,
+            "b",
+            "task:B",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        reg(
+            &state,
+            "c",
+            "task:C",
+            rect(50.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+
+        let event = state.focus_first_in_layer("L1").unwrap();
+
+        // (0,0) beats (50,0) by x tie-break after equal y; (100,50) loses
+        // on y — so "b" is the winner.
+        assert_eq!(event.prev_key, None);
+        assert_eq!(event.next_key, Some("b".to_string()));
+        assert_eq!(state.focused_key(), Some("b".to_string()));
+    }
+
+    /// If the focused key already belongs to the target layer, the method
+    /// must short-circuit with `None` and leave `focused_key` unchanged.
+    /// This is the "user clicked before the RAF fired" guard — we should
+    /// not override a manual focus that already landed inside the layer.
+    #[test]
+    fn focus_first_in_layer_noop_when_already_focused_in_layer() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+        reg(
+            &state,
+            "a",
+            "task:A",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        reg(
+            &state,
+            "b",
+            "task:B",
+            rect(200.0, 0.0, 100.0, 50.0),
+            "L1",
+            None,
+        );
+        state.focus("b");
+
+        let event = state.focus_first_in_layer("L1");
+
+        assert!(
+            event.is_none(),
+            "already focused inside the target layer — must be a no-op"
+        );
+        assert_eq!(state.focused_key(), Some("b".to_string()));
+    }
+
+    /// Entries on other layers must never be considered. Layer A has one
+    /// entry at (0,0); layer B has two entries at (50,0) and (100,0).
+    /// Calling `focus_first_in_layer("A")` must pick A's sole entry.
+    #[test]
+    fn focus_first_in_layer_skips_entries_in_other_layers() {
+        let state = SpatialState::new();
+        state.push_layer("A".into(), "window".into());
+        state.push_layer("B".into(), "inspector".into());
+        reg(
+            &state,
+            "a1",
+            "task:A1",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "A",
+            None,
+        );
+        reg(
+            &state,
+            "b1",
+            "field:B1",
+            rect(50.0, 0.0, 100.0, 50.0),
+            "B",
+            None,
+        );
+        reg(
+            &state,
+            "b2",
+            "field:B2",
+            rect(100.0, 0.0, 100.0, 50.0),
+            "B",
+            None,
+        );
+
+        let event = state.focus_first_in_layer("A").unwrap();
+
+        assert_eq!(event.next_key, Some("a1".to_string()));
+        assert_eq!(state.focused_key(), Some("a1".to_string()));
+    }
+
+    /// Push a layer but register no entries. `focus_first_in_layer` must
+    /// return `None` without touching `focused_key` (the RAF-deferred
+    /// caller has to tolerate the "layer mounted, children not yet
+    /// registered" case).
+    #[test]
+    fn focus_first_in_layer_empty_layer_returns_none() {
+        let state = SpatialState::new();
+        state.push_layer("L1".into(), "window".into());
+
+        let event = state.focus_first_in_layer("L1");
+
+        assert!(event.is_none(), "empty layer must be a no-op");
+        assert_eq!(state.focused_key(), None);
+    }
+
+    /// Focus memory integration: register and focus in layer A, then push
+    /// layer B, register in B, and call `focus_first_in_layer("B")`.
+    /// Layer A's `last_focused` must hold the outgoing A-entry so that a
+    /// subsequent `remove_layer("B")` restores focus to that entry —
+    /// exactly like a manual `focus()` would.
+    #[test]
+    fn focus_first_in_layer_saves_prior_focus_memory() {
+        let state = SpatialState::new();
+        state.push_layer("A".into(), "window".into());
+        reg(
+            &state,
+            "a1",
+            "task:A1",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "A",
+            None,
+        );
+        state.focus("a1");
+
+        state.push_layer("B".into(), "inspector".into());
+        reg(
+            &state,
+            "b1",
+            "field:B1",
+            rect(300.0, 0.0, 100.0, 50.0),
+            "B",
+            None,
+        );
+
+        let event = state.focus_first_in_layer("B").unwrap();
+        assert_eq!(event.prev_key, Some("a1".to_string()));
+        assert_eq!(event.next_key, Some("b1".to_string()));
+
+        // Remove B — A's `last_focused` must have captured "a1" so focus
+        // restores to it. If `focus_first_in_layer` skipped the
+        // `save_focus_memory` call, this assertion would fail because
+        // layer A's `last_focused` would still be `None`.
+        let restore = state.remove_layer("B").unwrap();
+        assert_eq!(restore.prev_key, Some("b1".to_string()));
+        assert_eq!(restore.next_key, Some("a1".to_string()));
+        assert_eq!(state.focused_key(), Some("a1".to_string()));
     }
 
     /// `unregister_batch` that includes the focused key emits `focus-changed`

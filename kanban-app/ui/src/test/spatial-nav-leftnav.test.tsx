@@ -146,6 +146,18 @@ describe("LeftNav reachable from all views", () => {
     // the `view:` prefix so a future re-ordering of LeftNav entries
     // doesn't make this test brittle.
     await expectFocusedMonikerMatches(handles, /^view:/);
+
+    // The focused LeftNav button must render a visible focus indicator
+    // — spatial focus is correct only when the user can *see* which
+    // button carries it. `data-focused="true"` is written by
+    // `FocusScope`'s centralized `useFocusDecoration` hook; the global
+    // `[data-focused]` CSS rule in `index.css` paints the ring.
+    const focusedMk = handles.focusedMoniker();
+    expect(focusedMk).toBeTruthy();
+    const focusedButton = screen
+      .getByTestId(`data-moniker:${focusedMk}`)
+      .element() as HTMLElement;
+    await expectDataFocused(focusedButton, "true");
   });
 
   it("h from a grid row selector moves focus to a LeftNav button", async () => {
@@ -164,6 +176,17 @@ describe("LeftNav reachable from all views", () => {
     await userEvent.keyboard("h");
 
     await expectFocusedMonikerMatches(handles, /^view:/);
+
+    // Same visual-indicator contract as the board counterpart — the
+    // focused LeftNav button must carry `data-focused="true"`. The
+    // ring is painted by the global `[data-focused]` CSS rule in
+    // `index.css`.
+    const focusedMk = handles.focusedMoniker();
+    expect(focusedMk).toBeTruthy();
+    const focusedButton = screen
+      .getByTestId(`data-moniker:${focusedMk}`)
+      .element() as HTMLElement;
+    await expectDataFocused(focusedButton, "true");
   });
 
   it("j moves focus between LeftNav view buttons", async () => {
@@ -173,12 +196,10 @@ describe("LeftNav reachable from all views", () => {
     // topmost. Click it, then `j` should land on the next view's
     // button below it.
     //
-    // LeftNav buttons use `showFocusBar={false}` because the strip's
-    // own `data-active` styling is already the primary visual —
-    // duplicating it with the `FocusScope` focus bar would be
-    // redundant. Consequently, the `<button>`'s `data-focused`
-    // attribute never flips to `"true"`, and assertions here read
-    // from the shim's focused-moniker snapshot instead.
+    // Assertions here read from the shim's `focusedMoniker()`
+    // snapshot rather than resolving the button element first —
+    // polling the moniker directly avoids a stale-node race between
+    // the `j` keypress and the next render.
     const topButton = screen
       .getByTestId(`data-moniker:${FIXTURE_VIEW_MONIKERS[0]}`)
       .element() as HTMLElement;
@@ -223,5 +244,56 @@ describe("LeftNav reachable from all views", () => {
     await expect
       .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
       .not.toMatch(/^view:/);
+  });
+
+  it("Enter on a focused LeftNav button dispatches view.switch", async () => {
+    const screen = await render(<AppWithBoardAndLeftNavFixture />);
+
+    // Focus the second view's button by clicking it — the click path
+    // and the Enter path must dispatch the exact same command
+    // (`view.switch:<id>` for the focused button's view), so we assert
+    // on the dispatch that happens *after* the click. Focus stays on
+    // the button because `handleClick` calls `setFocus(mk)` before
+    // dispatching.
+    const gridButton = screen
+      .getByTestId(`data-moniker:${FIXTURE_VIEW_MONIKERS[1]}`)
+      .element() as HTMLElement;
+
+    await userEvent.click(gridButton);
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
+      .toBe(FIXTURE_VIEW_MONIKERS[1]);
+
+    // The click itself already fired `view.switch:grid` through the
+    // backend; clear the log so the Enter-press dispatch is the only
+    // one the subsequent assertion sees.
+    const afterClickCount = handles.dispatchedCommands().length;
+    expect(
+      handles.dispatchedCommands().some((d) => d.cmd === "view.switch:grid"),
+    ).toBe(true);
+
+    // Enter must resolve to the LeftNav button's scope-local
+    // `view.activate.<id>` command, which reuses `handleClick` → so
+    // another `view.switch:grid` lands on the backend. Assert the new
+    // dispatch observed after the Enter press, and that focus remains
+    // on the same button (identical to the click path).
+    await userEvent.keyboard("{Enter}");
+
+    await expect
+      .poll(() => handles.dispatchedCommands().length, {
+        timeout: FOCUS_POLL_TIMEOUT_MS,
+      })
+      .toBeGreaterThan(afterClickCount);
+
+    const enterDispatches = handles.dispatchedCommands().slice(afterClickCount);
+    expect(enterDispatches.some((d) => d.cmd === "view.switch:grid")).toBe(
+      true,
+    );
+
+    // Focus has not moved — the Enter path lands focus on the same
+    // button, matching the click path's `setFocus(mk)` side-effect.
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: FOCUS_POLL_TIMEOUT_MS })
+      .toBe(FIXTURE_VIEW_MONIKERS[1]);
   });
 });

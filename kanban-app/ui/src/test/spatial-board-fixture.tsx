@@ -46,7 +46,6 @@
 import {
   EntityFocusProvider,
   useEntityFocus,
-  useFocusedMoniker,
 } from "@/lib/entity-focus-context";
 import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
 import { moniker } from "@/lib/moniker";
@@ -283,14 +282,16 @@ function FixtureCardWithPills({
 function FixtureCardBody({ moniker: cardMoniker }: { moniker: string }) {
   const elementRef = useFocusScopeElementRef();
   const { setFocus } = useEntityFocus();
-  const focusedMoniker = useFocusedMoniker();
-  const isFocused = focusedMoniker === cardMoniker;
+  // `data-focused` is written by the enclosing `FocusScope`'s
+  // `useFocusDecoration` hook onto this same element (via the forwarded
+  // `elementRef`). The fixture no longer re-implements the
+  // `useFocusedMoniker` compare dance — it mirrors production's
+  // centralized decoration exactly.
   return (
     <div
       ref={elementRef as React.RefObject<HTMLDivElement>}
       data-testid={`data-moniker:${cardMoniker}`}
       data-moniker={cardMoniker}
-      data-focused={isFocused || undefined}
       onClick={(e) => {
         e.stopPropagation();
         setFocus(cardMoniker);

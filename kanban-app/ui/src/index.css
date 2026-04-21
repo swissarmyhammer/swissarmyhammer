@@ -130,9 +130,23 @@
   }
 }
 
-/* Entity focus — target bar on the left edge.
- * FocusScope is the single decorator that owns focus rendering.
- * Only one FocusScope is ever focused at a time (via focusedMoniker). */
+/* Entity focus — centralized visual for the single spatially-focused scope.
+ *
+ * `FocusScope` writes `data-focused="true"` on its attached element
+ * (via `useFocusDecoration`) whenever the scope is claimed and
+ * `showFocusBar` is true. Only one scope is ever focused at a time
+ * (via focusedMoniker), so exactly one element in the tree carries
+ * the attribute at any moment.
+ *
+ * The global rule paints a single visual — a left-edge target bar
+ * anchored via `::before`. Card-like surfaces (board cards, inspector
+ * rows, column content) get the default `left: -0.5rem` which sits
+ * just outside the element. Consumers whose parent clips horizontal
+ * overflow (data-table cells, LeftNav buttons, perspective tabs,
+ * column headers, mention pills) add a per-consumer class with a
+ * `left` override so the bar lands inside the clipping parent — see
+ * the `.*-focus[data-focused]::before` rules below.
+ */
 [data-focused] {
   position: relative;
 }
@@ -156,6 +170,40 @@
 /* Mention pill focus — tighter bar positioning for inline pills in flex layouts */
 .mention-pill-focus[data-focused]::before {
   left: -0.25rem;
+}
+
+/* Data-table cell / row-selector focus — cells sit inside a `<tr>` whose
+ * enclosing `<table>` and view container clip horizontal overflow, so
+ * the default negative-left bar never shows. Render it flush to the
+ * cell's left edge instead. Covers both the per-field `<td>` and the
+ * row-selector `<td>` (whose `px-0` gives the bar a zero-padding edge). */
+.cell-focus[data-focused]::before {
+  left: 0;
+}
+
+/* Data-table column header focus — `<th>` cells share the same clipping
+ * constraint as body `<td>` cells (enclosing `<table>` / view container
+ * clips horizontal overflow). Anchor the bar inside the header at the
+ * same inset used by board column headers so header and body focus
+ * indicators align visually. */
+.data-table-header-focus[data-focused]::before {
+  left: 0.25rem;
+}
+
+/* LeftNav view-switcher focus — the nav strip is `w-10` (2.5rem) with
+ * `overflow: visible` on the flex parent but the button itself is
+ * narrow enough that a negative-left bar would overlap the window edge
+ * and bleed outside the strip. Anchor the bar on the button's left
+ * edge. */
+.nav-button-focus[data-focused]::before {
+  left: 0;
+}
+
+/* Perspective tab focus — tabs live in a horizontal flex row with
+ * `overflow-x-auto`; the scrolling parent clips the default negative
+ * offset. Anchor the bar inside the tab's root `<div>`. */
+.tab-focus[data-focused]::before {
+  left: 0;
 }
 
 /* Indeterminate progress bar — slides a bar left-to-right continuously */

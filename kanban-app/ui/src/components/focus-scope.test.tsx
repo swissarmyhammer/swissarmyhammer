@@ -1296,8 +1296,8 @@ describe("useFocusScopeElementRef", () => {
   });
 
   it("returns null inside a FocusScope rendered with renderContainer=true (default)", () => {
-    // Default FocusScope owns its own FocusHighlight container and binds
-    // the ref internally. Descendants must NOT see a ref — there is
+    // Default FocusScope owns its own wrapping `<div>` and binds the
+    // ref internally. Descendants must NOT see a ref — there is
     // nothing for them to attach to.
     const { getByTestId } = render(
       <EntityFocusProvider>
@@ -1368,5 +1368,177 @@ describe("useFocusScopeElementRef", () => {
         }),
       );
     });
+  });
+});
+
+/* ---------- renderContainer=false data-focused propagation ---------- */
+
+describe("renderContainer=false data-focused propagation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  /**
+   * Consumer helper that binds the enclosing `FocusScope`'s elementRef
+   * to a leaf `<div>` via `useFocusScopeElementRef`. Mirrors production
+   * consumers (row selector, LeftNav button, perspective tab).
+   */
+  function RefConsumer({ testId }: { testId: string }) {
+    const ref = useFocusScopeElementRef();
+    return (
+      <div
+        ref={ref as React.RefObject<HTMLDivElement>}
+        data-testid={testId}
+        style={{ width: "100px", height: "50px" }}
+      >
+        content
+      </div>
+    );
+  }
+
+  it("claimed renderContainer=false scope sets data-focused on its attached element", async () => {
+    // The scope has no wrapping container, so the only DOM node it can
+    // mark is the consumer element. This is the central guarantee of
+    // the centralized focus decoration: one attribute write, one place.
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button
+            data-testid="focus-btn"
+            onClick={() => setFocus("task:abc")}
+          />
+          <FocusScope moniker="task:abc" commands={[]} renderContainer={false}>
+            <RefConsumer testId="leaf" />
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { getByTestId } = renderWithFocus(<Harness />);
+    const leaf = getByTestId("leaf");
+
+    // Initially unfocused — no attribute.
+    expect(leaf.hasAttribute("data-focused")).toBe(false);
+
+    // Click the focus trigger — setFocus flips the claim, which FocusScope
+    // mirrors onto leaf.
+    fireEvent.click(getByTestId("focus-btn"));
+
+    await waitFor(() => {
+      expect(leaf.getAttribute("data-focused")).toBe("true");
+    });
+  });
+
+  it("unclaimed renderContainer=false scope clears data-focused on its attached element", async () => {
+    // Round-trip: focus A, then focus B. A's leaf must lose the
+    // attribute (not just stay stale at "true").
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button data-testid="focus-a" onClick={() => setFocus("task:a")} />
+          <button data-testid="focus-b" onClick={() => setFocus("task:b")} />
+          <FocusScope moniker="task:a" commands={[]} renderContainer={false}>
+            <RefConsumer testId="leaf-a" />
+          </FocusScope>
+          <FocusScope moniker="task:b" commands={[]} renderContainer={false}>
+            <RefConsumer testId="leaf-b" />
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { getByTestId } = renderWithFocus(<Harness />);
+    const leafA = getByTestId("leaf-a");
+    const leafB = getByTestId("leaf-b");
+
+    fireEvent.click(getByTestId("focus-a"));
+    await waitFor(() => {
+      expect(leafA.getAttribute("data-focused")).toBe("true");
+    });
+
+    fireEvent.click(getByTestId("focus-b"));
+    await waitFor(() => {
+      expect(leafB.getAttribute("data-focused")).toBe("true");
+    });
+    // Critical regression guard — A must be cleared.
+    expect(leafA.hasAttribute("data-focused")).toBe(false);
+  });
+
+  it("showFocusBar=false skips the data-focused write on renderContainer=false scopes", async () => {
+    // `showFocusBar` is the opt-out for non-decorated scopes (e.g.
+    // the structural `store:` scope in `store-container.tsx`). When
+    // set, FocusScope must not mark its attached element.
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button
+            data-testid="focus-btn"
+            onClick={() => setFocus("task:abc")}
+          />
+          <FocusScope
+            moniker="task:abc"
+            commands={[]}
+            renderContainer={false}
+            showFocusBar={false}
+          >
+            <RefConsumer testId="leaf" />
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { getByTestId } = renderWithFocus(<Harness />);
+    const leaf = getByTestId("leaf");
+
+    fireEvent.click(getByTestId("focus-btn"));
+
+    // Give claim propagation time to settle — the attribute must never appear.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leaf.hasAttribute("data-focused")).toBe(false);
+  });
+
+  it("claimed scope scrolls its attached element into view", async () => {
+    // Regression guard for the scrollIntoView behavior migrating out of
+    // FocusHighlight into FocusScope. Covers the renderContainer=false
+    // path specifically because renderContainer=true previously had
+    // scrollIntoView via FocusHighlight.
+    const scrollSpy = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView =
+      scrollSpy as unknown as typeof HTMLElement.prototype.scrollIntoView;
+
+    try {
+      function Harness() {
+        const { setFocus } = useEntityFocus();
+        return (
+          <>
+            <button
+              data-testid="focus-btn"
+              onClick={() => setFocus("task:abc")}
+            />
+            <FocusScope
+              moniker="task:abc"
+              commands={[]}
+              renderContainer={false}
+            >
+              <RefConsumer testId="leaf" />
+            </FocusScope>
+          </>
+        );
+      }
+
+      const { getByTestId } = renderWithFocus(<Harness />);
+      fireEvent.click(getByTestId("focus-btn"));
+
+      await waitFor(() => {
+        expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+      });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 });

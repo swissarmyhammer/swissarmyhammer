@@ -252,3 +252,74 @@ describe("DataTable grouping sync", () => {
     expect(rows.length).toBe(ENTITIES.length);
   });
 });
+
+describe("DataTable header focus wiring", () => {
+  // Regression guards for the column-header spatial-nav target.
+  //
+  // Each `<th>` is wrapped in a `FocusScope` with moniker
+  // `column-header:<fieldName>` so pressing `k` (up) from a body cell
+  // lands on the header above instead of skipping past to the
+  // perspective bar. The `data-table-header-focus` class repositions
+  // the left-edge focus bar inside the `<th>` — cells sit inside a
+  // `<tr>` whose enclosing `<table>` clips the default negative-left
+  // offset.
+
+  it("each <th> carries data-moniker=`column-header:<fieldName>`", () => {
+    const { container } = renderTable();
+    const thead = container.querySelector("thead")!;
+    const headers = thead.querySelectorAll("th[data-moniker]");
+    // One header per field column; the row-selector <th> is unmonikered.
+    expect(headers.length).toBe(COLUMNS.length);
+    const monikers = Array.from(headers).map((th) =>
+      th.getAttribute("data-moniker"),
+    );
+    expect(monikers).toEqual(["column-header:title", "column-header:status"]);
+  });
+
+  it("each data column <th> carries `data-table-header-focus`", () => {
+    const { container } = renderTable();
+    const headers = container.querySelectorAll("thead th[data-moniker]");
+    expect(headers.length).toBe(COLUMNS.length);
+    for (const th of headers) {
+      expect(th.className).toContain("data-table-header-focus");
+    }
+  });
+});
+
+describe("DataTable focus class wiring", () => {
+  // Regression guards for the focus-bar override classes.
+  //
+  // With the global `[data-focused]` ring removed, the left-edge bar
+  // is the only focus indicator — and it lives on `::before` at
+  // `left: -0.5rem` by default. A `<td>` sits inside a `<tr>` whose
+  // parent `<table>` and view container clip horizontal overflow, so
+  // the negative-left bar never shows. The `cell-focus` class
+  // repositions the bar inside the cell via a CSS override (see
+  // `index.css`). These tests lock the class in on both `<td>` types
+  // that participate in the grid cursor's focus.
+
+  it("data cells carry `cell-focus` so the focus bar renders inside the <td>", () => {
+    const { container } = renderTable();
+    // Skip the row selector <td> (data-testid='row-selector') and
+    // look at the field cells — they carry the data-moniker for the
+    // (entity, field) pair produced by `fieldMoniker`.
+    const fieldCells = container.querySelectorAll(
+      "tbody td[data-moniker]:not([data-testid='row-selector'])",
+    );
+    expect(fieldCells.length).toBeGreaterThan(0);
+    for (const cell of fieldCells) {
+      expect(cell.className).toContain("cell-focus");
+    }
+  });
+
+  it("row selector <td> carries `cell-focus` for the same reason", () => {
+    const { container } = renderTable();
+    const selectors = container.querySelectorAll(
+      "[data-testid='row-selector']",
+    );
+    expect(selectors.length).toBe(ENTITIES.length);
+    for (const sel of selectors) {
+      expect(sel.className).toContain("cell-focus");
+    }
+  });
+});

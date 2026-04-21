@@ -30,7 +30,11 @@ import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import { useEntityFocus } from "@/lib/entity-focus-context";
-import { fieldMoniker, ROW_SELECTOR_FIELD } from "@/lib/moniker";
+import {
+  columnHeaderMoniker,
+  fieldMoniker,
+  ROW_SELECTOR_FIELD,
+} from "@/lib/moniker";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
 const ROW_SELECTOR_WIDTH = 40;
@@ -109,6 +113,52 @@ function usePerspectiveSortMap(
   }, [perspectiveSort]);
 }
 
+function buildColumnDef(col: DataTableColumn): ColumnDef<Entity> {
+  return {
+    id: col.field.name,
+    accessorFn: (row: Entity) => row.fields[col.field.name],
+    header: col.field.name.replace(/_/g, " "),
+    size: col.width,
+    cell: ({ row: tanRow }) => {
+      const entity = tanRow.original;
+      return (
+        <Field
+          fieldDef={col.field}
+          entityType={entity.entity_type}
+          entityId={entity.id}
+          mode="compact"
+          editing={false}
+        />
+      );
+    },
+    sortingFn: (rowA: Row<Entity>, rowB: Row<Entity>, columnId: string) => {
+      return compareValues(
+        rowA.original.fields[columnId],
+        rowB.original.fields[columnId],
+        col.field,
+      );
+    },
+    aggregationFn: "count" as const,
+  };
+}
+
+function useTanstackColumns(columns: DataTableColumn[]) {
+  return useMemo<ColumnDef<Entity>[]>(
+    () => columns.map(buildColumnDef),
+    [columns],
+  );
+}
+
+function useGroupingState(groupingProp: string[] | undefined) {
+  const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
+  // Sync external grouping prop — reset to [] when cleared so the grid
+  // reverts to a flat layout instead of retaining stale grouping state.
+  useEffect(() => {
+    setGrouping(groupingProp ?? []);
+  }, [groupingProp]);
+  return [grouping, setGrouping] as const;
+}
+
 /**
  * Build TanStack column definitions and instantiate the table.
  *
@@ -121,43 +171,8 @@ function useDataTableConfig(
   groupingProp: string[] | undefined,
 ) {
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
-  // Sync external grouping prop — reset to [] when cleared so the grid
-  // reverts to a flat layout instead of retaining stale grouping state.
-  useEffect(() => {
-    setGrouping(groupingProp ?? []);
-  }, [groupingProp]);
-
-  const tanstackColumns = useMemo<ColumnDef<Entity>[]>(
-    () =>
-      columns.map((col) => ({
-        id: col.field.name,
-        accessorFn: (row: Entity) => row.fields[col.field.name],
-        header: col.field.name.replace(/_/g, " "),
-        size: col.width,
-        cell: ({ row: tanRow }) => {
-          const entity = tanRow.original;
-          return (
-            <Field
-              fieldDef={col.field}
-              entityType={entity.entity_type}
-              entityId={entity.id}
-              mode="compact"
-              editing={false}
-            />
-          );
-        },
-        sortingFn: (rowA: Row<Entity>, rowB: Row<Entity>, columnId: string) => {
-          return compareValues(
-            rowA.original.fields[columnId],
-            rowB.original.fields[columnId],
-            col.field,
-          );
-        },
-        aggregationFn: "count" as const,
-      })),
-    [columns],
-  );
+  const [grouping, setGrouping] = useGroupingState(groupingProp);
+  const tanstackColumns = useTanstackColumns(columns);
 
   return useReactTable({
     data: rows,
@@ -218,9 +233,49 @@ interface HeaderCellProps {
 /**
  * Render a single column header cell with sort indicators and click handlers.
  *
+ * Wraps the `<TableHead>` in a per-header `FocusScope` (with
+ * `renderContainer={false}`) so each column header registers as its own
+ * spatial-nav target. Without this scope, pressing `k` (up) from a body
+ * cell would skip past the header row to whatever sat above the grid
+ * (e.g. the perspective bar), because the engine had no intermediate
+ * rect to beam-test against.
+ *
+ * The inner `HeaderCellTh` consumes the scope's `elementRef` via
+ * `useFocusScopeElementRef()` and attaches it to the `<TableHead>` —
+ * mirroring the `DataTableCellTd` / `RowSelectorTd` pattern. This keeps
+ * the table HTML structure valid (no wrapper `<div>` inside `<tr>`) and
+ * lets `ResizeObserver` measure the rect for spatial navigation.
+ *
  * Supports both perspective-driven and TanStack-native sort toggling,
  * and right-click grouping toggle.
  */
+function resolveSortState(
+  header: Header<Entity, unknown>,
+  perspectiveSortMap: SortMap,
+) {
+  const columnId = header.column.id;
+  const pSort = perspectiveSortMap.get(columnId);
+  const isSorted = pSort ? pSort.direction : header.column.getIsSorted();
+  const sortPriority = pSort?.priority;
+  const showPriority =
+    sortPriority !== undefined && perspectiveSortMap.size > 1;
+  return { isSorted, sortPriority, showPriority };
+}
+
+function buildSortClickHandler(
+  header: Header<Entity, unknown>,
+  perspectiveId: string | undefined,
+  dispatchSortToggle: ReturnType<typeof useDispatchCommand>,
+) {
+  if (!perspectiveId) return header.column.getToggleSortingHandler();
+  const columnId = header.column.id;
+  return () => {
+    dispatchSortToggle({
+      args: { field: columnId, perspective_id: perspectiveId },
+    }).catch(console.error);
+  };
+}
+
 function HeaderCell({
   header,
   colIndex,
@@ -229,49 +284,108 @@ function HeaderCell({
   dispatchSortToggle,
 }: HeaderCellProps) {
   const columnId = header.column.id;
-  const isGrouped = header.column.getIsGrouped();
-  const pSort = perspectiveSortMap.get(columnId);
-  const isSorted = pSort ? pSort.direction : header.column.getIsSorted();
-  const sortPriority = pSort?.priority;
-  const showPriority =
-    sortPriority !== undefined && perspectiveSortMap.size > 1;
-
-  const handleClick = perspectiveId
-    ? () => {
-        dispatchSortToggle({
-          args: { field: columnId, perspective_id: perspectiveId },
-        }).catch(console.error);
-      }
-    : header.column.getToggleSortingHandler();
-
+  const headerMoniker = columnHeaderMoniker(columnId);
+  const { isSorted, sortPriority, showPriority } = resolveSortState(
+    header,
+    perspectiveSortMap,
+  );
+  const handleClick = buildSortClickHandler(
+    header,
+    perspectiveId,
+    dispatchSortToggle,
+  );
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     header.column.toggleGrouping();
   };
 
   return (
+    <FocusScope moniker={headerMoniker} commands={[]} renderContainer={false}>
+      <HeaderCellTh
+        columnId={columnId}
+        headerMoniker={headerMoniker}
+        colIndex={colIndex}
+        width={header.column.getSize() || undefined}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+      >
+        <SortIndicator
+          columnId={columnId}
+          isGrouped={header.column.getIsGrouped()}
+          isSorted={isSorted}
+          sortPriority={sortPriority}
+          showPriority={showPriority}
+          headerDef={header.column.columnDef.header}
+          headerContext={header.getContext()}
+        />
+      </HeaderCellTh>
+    </FocusScope>
+  );
+}
+
+interface HeaderCellThProps {
+  columnId: string;
+  headerMoniker: string;
+  colIndex: number;
+  width: number | undefined;
+  onClick: ((e: React.MouseEvent) => void) | undefined;
+  onContextMenu: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}
+
+/**
+ * Render the `<th>` for a column header, wiring the enclosing
+ * `FocusScope`'s `elementRef` to the `<TableHead>` and focusing the
+ * scope on mouse click.
+ *
+ * Reads `elementRef` from `FocusScopeElementRefContext` (populated by
+ * the enclosing `FocusScope` with `renderContainer={false}`) and
+ * assigns it to the `<th>` via a ref callback. Attaches
+ * `setFocus(headerMoniker)` to `onClickCapture` so spatial focus lands
+ * on the header before the sort/group `onClick` handler fires — the
+ * capture phase runs first and updates focus state, while the bubble
+ * phase still toggles the column's sort order.
+ *
+ * The `data-table-header-focus` class pulls the left-edge focus bar
+ * inside the `<th>` (same rationale as `cell-focus` on data cells —
+ * the enclosing `<table>` / view container clips horizontal overflow,
+ * so a negative-left bar would never render). See the matching rule
+ * in `index.css`.
+ */
+function HeaderCellTh({
+  columnId,
+  headerMoniker,
+  colIndex,
+  width,
+  onClick,
+  onContextMenu,
+  children,
+}: HeaderCellThProps) {
+  const scopeElementRef = useFocusScopeElementRef();
+  const { setFocus } = useEntityFocus();
+
+  const refCallback = useCallback(
+    (node: HTMLTableCellElement | null) => {
+      if (scopeElementRef) scopeElementRef.current = node;
+    },
+    [scopeElementRef],
+  );
+
+  return (
     <TableHead
-      key={header.id}
+      ref={refCallback}
       data-testid={`column-header-${columnId}`}
+      data-moniker={headerMoniker}
       className={cn(
-        "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
+        "data-table-header-focus text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
         colIndex === 0 && "pl-4",
       )}
-      style={
-        header.column.getSize() ? { width: header.column.getSize() } : undefined
-      }
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
+      style={width !== undefined ? { width } : undefined}
+      onClickCapture={() => setFocus(headerMoniker)}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
     >
-      <SortIndicator
-        columnId={columnId}
-        isGrouped={isGrouped}
-        isSorted={isSorted}
-        sortPriority={sortPriority}
-        showPriority={showPriority}
-        headerDef={header.column.columnDef.header}
-        headerContext={header.getContext()}
-      />
+      {children}
     </TableHead>
   );
 }
@@ -347,6 +461,15 @@ function DataTableHeader({
           key={headerGroup.id}
           className="border-b border-border hover:bg-transparent"
         >
+          {/* Row-selector header is intentionally not wrapped in a
+              `FocusScope`: it is an empty spacer cell (no sort, no group,
+              no label) whose only job is to align the row-selector
+              column width with the body rows. Registering it as a
+              spatial target would add a keyboard stop with nothing to
+              act on — `h` from the leftmost data header cleanly stays
+              put, matching what happens today with `h` from the
+              leftmost body cell of the first column when no selector
+              exists. */}
           {showRowSelector && (
             <TableHead
               data-testid="row-selector-header"
@@ -428,6 +551,37 @@ interface DataTableCellProps {
  * state track each cell as an independent navigation target (and what
  * makes cell-to-cell `h`/`j`/`k`/`l` navigation work).
  */
+function renderCellContent(
+  entity: Entity,
+  col: DataTableColumn,
+  isEditing: boolean,
+  renderEditor: DataTableProps["renderEditor"],
+  grid: UseGridReturn,
+): React.ReactNode {
+  if (isEditing && renderEditor) {
+    const exit = () => grid.exitEdit();
+    return renderEditor(entity, col.field, exit, exit);
+  }
+  return (
+    <Field
+      fieldDef={col.field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={false}
+    />
+  );
+}
+
+function cellEditorNeedsPadding(col: DataTableColumn, isEditing: boolean) {
+  return (
+    isEditing &&
+    col.field.editor !== "color-palette" &&
+    col.field.editor !== "select" &&
+    col.field.editor !== "multi-select"
+  );
+}
+
 function DataTableCell({
   col,
   colIndex,
@@ -446,35 +600,17 @@ function DataTableCell({
     entity.id,
     col.field.name,
   );
-
-  const cellContent =
-    isEditing && renderEditor ? (
-      renderEditor(
-        entity,
-        col.field,
-        () => grid.exitEdit(),
-        () => grid.exitEdit(),
-      )
-    ) : (
-      <Field
-        fieldDef={col.field}
-        entityType={entity.entity_type}
-        entityId={entity.id}
-        mode="compact"
-        editing={false}
-      />
-    );
-
+  // Focus bar is painted globally by `[data-focused]::before` in
+  // `index.css` — the enclosing `FocusScope`'s `useFocusDecoration`
+  // writes the attribute onto the same `<td>`. `cell-focus` pulls the
+  // bar inside the cell so it isn't clipped by the enclosing `<tr>`
+  // and view container overflow; see the `.cell-focus[data-focused]`
+  // override in `index.css`.
   const cellClasses = cn(
-    "px-3 py-1.5 align-middle max-w-[300px]",
+    "cell-focus px-3 py-1.5 align-middle max-w-[300px]",
     colIndex === 0 && "pl-4",
-    isCursor && "ring-2 ring-primary ring-inset",
     isSel && !isCursor && "bg-primary/10",
-    isEditing &&
-      col.field.editor !== "color-palette" &&
-      col.field.editor !== "select" &&
-      col.field.editor !== "multi-select" &&
-      "p-0",
+    cellEditorNeedsPadding(col, isEditing) && "p-0",
   );
 
   return (
@@ -494,7 +630,7 @@ function DataTableCell({
           grid.enterEdit();
         }}
       >
-        {cellContent}
+        {renderCellContent(entity, col, isEditing, renderEditor, grid)}
       </DataTableCellTd>
     </FocusScope>
   );
@@ -579,6 +715,46 @@ interface DataTableRowProps {
  * as individual spatial entries. Those entries are the only grid-level
  * navigation targets.
  */
+function renderRowCells({
+  columns,
+  entity,
+  dataRowIndex,
+  grid,
+  cursorRef,
+  renderEditor,
+  isSelected,
+  handleCellClick,
+}: {
+  columns: DataTableColumn[];
+  entity: Entity;
+  dataRowIndex: number;
+  grid: UseGridReturn;
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+  renderEditor: DataTableProps["renderEditor"];
+  isSelected: (row: number, col: number) => boolean;
+  handleCellClick: (row: number, col: number) => void;
+}) {
+  return columns.map((col, ci) => {
+    const isCursor = dataRowIndex === grid.cursor.row && ci === grid.cursor.col;
+    return (
+      <DataTableCell
+        key={col.field.id}
+        col={col}
+        colIndex={ci}
+        entity={entity}
+        isCursor={isCursor}
+        isSel={isSelected(dataRowIndex, ci)}
+        isEditing={isCursor && grid.mode === "edit" && !!renderEditor}
+        cursorRef={cursorRef}
+        renderEditor={renderEditor}
+        grid={grid}
+        onCellClick={handleCellClick}
+        dataRowIndex={dataRowIndex}
+      />
+    );
+  });
+}
+
 function DataTableRow({
   row,
   dataRowIndex,
@@ -617,29 +793,16 @@ function DataTableRow({
             onClick={() => handleCellClick(dataRowIndex, grid.cursor.col)}
           />
         )}
-        {columns.map((col, ci) => (
-          <DataTableCell
-            key={col.field.id}
-            col={col}
-            colIndex={ci}
-            entity={entity}
-            isCursor={
-              dataRowIndex === grid.cursor.row && ci === grid.cursor.col
-            }
-            isSel={isSelected(dataRowIndex, ci)}
-            isEditing={
-              dataRowIndex === grid.cursor.row &&
-              ci === grid.cursor.col &&
-              grid.mode === "edit" &&
-              !!renderEditor
-            }
-            cursorRef={cursorRef}
-            renderEditor={renderEditor}
-            grid={grid}
-            onCellClick={handleCellClick}
-            dataRowIndex={dataRowIndex}
-          />
-        ))}
+        {renderRowCells({
+          columns,
+          entity,
+          dataRowIndex,
+          grid,
+          cursorRef,
+          renderEditor,
+          isSelected,
+          handleCellClick,
+        })}
       </EntityRow>
     </FocusScope>
   );
@@ -705,6 +868,58 @@ function DataTableBody({
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
+function useIsSelected(grid: UseGridReturn) {
+  const selectedRange = grid.getSelectedRange();
+  return useCallback(
+    (r: number, c: number) => {
+      if (!selectedRange) return false;
+      return (
+        r >= selectedRange.startRow &&
+        r <= selectedRange.endRow &&
+        c >= selectedRange.startCol &&
+        c <= selectedRange.endCol
+      );
+    },
+    [selectedRange],
+  );
+}
+
+function useCursorScroll(
+  cursorRef: React.RefObject<HTMLTableCellElement | null>,
+  row: number,
+  col: number,
+) {
+  useEffect(() => {
+    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [cursorRef, row, col]);
+}
+
+function useHandleCellClick(onCellClick: DataTableProps["onCellClick"]) {
+  return useCallback(
+    (r: number, c: number) => {
+      onCellClick?.(r, c);
+    },
+    [onCellClick],
+  );
+}
+
+function useVisibleRowCountEffect(
+  visibleDataRowCount: number,
+  onVisibleRowCount: DataTableProps["onVisibleRowCount"],
+) {
+  useEffect(() => {
+    onVisibleRowCount?.(visibleDataRowCount);
+  }, [visibleDataRowCount, onVisibleRowCount]);
+}
+
+function DataTableEmpty() {
+  return (
+    <div className="flex-1 flex items-center justify-center text-muted-foreground">
+      No rows to display
+    </div>
+  );
+}
+
 /** TanStack react-table wrapper with sorting, grouping, and grid navigation integration. */
 export function DataTable({
   columns,
@@ -727,38 +942,14 @@ export function DataTable({
   const table = useDataTableConfig(columns, rows, groupingProp);
   const flatRows = table.getRowModel().rows;
   const { dataRowIndices, visibleDataRowCount } = useDataRowIndices(flatRows);
+  const isSelected = useIsSelected(grid);
+  const handleCellClick = useHandleCellClick(onCellClick);
 
-  useEffect(() => {
-    onVisibleRowCount?.(visibleDataRowCount);
-  }, [visibleDataRowCount, onVisibleRowCount]);
-  useEffect(() => {
-    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [grid.cursor.row, grid.cursor.col]);
-
-  const handleCellClick = useCallback(
-    (r: number, c: number) => {
-      onCellClick?.(r, c);
-    },
-    [onCellClick],
-  );
-
-  const selectedRange = grid.getSelectedRange();
-  const isSelected = (r: number, c: number) => {
-    if (!selectedRange) return false;
-    return (
-      r >= selectedRange.startRow &&
-      r <= selectedRange.endRow &&
-      c >= selectedRange.startCol &&
-      c <= selectedRange.endCol
-    );
-  };
+  useVisibleRowCountEffect(visibleDataRowCount, onVisibleRowCount);
+  useCursorScroll(cursorRef, grid.cursor.row, grid.cursor.col);
 
   if (flatRows.length === 0) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
-        No rows to display
-      </div>
-    );
+    return <DataTableEmpty />;
   }
 
   return (
@@ -847,20 +1038,34 @@ interface RowSelectorProps {
  * navigates into this cell, and `l` from here navigates back into
  * the first data cell. The reserved field name `__rowselector` keeps
  * the moniker distinct from any schema field.
+ *
+ * The `onClick` prop is the grid-cursor side-effect from the parent row
+ * (it advances the cursor row so the row's data cells keep their
+ * `isCursorRow` highlight). This component composes that callback with
+ * `setFocus(selectorMoniker)` so both mouse and keyboard navigation
+ * converge on the selector as the focused target — without the
+ * composition, clicking the selector would hand focus to whatever cell
+ * the grid cursor happens to point at and the selector's focus ring
+ * would never paint.
  */
 function RowSelector({ entity, di, isCursorRow, onClick }: RowSelectorProps) {
+  const { setFocus } = useEntityFocus();
   const selectorMoniker = fieldMoniker(
     entity.entity_type,
     entity.id,
     ROW_SELECTOR_FIELD,
   );
+  const handleClick = useCallback(() => {
+    onClick();
+    setFocus(selectorMoniker);
+  }, [onClick, setFocus, selectorMoniker]);
   return (
     <FocusScope moniker={selectorMoniker} commands={[]} renderContainer={false}>
       <RowSelectorTd
         selectorMoniker={selectorMoniker}
         di={di}
         isCursorRow={isCursorRow}
-        onClick={onClick}
+        onClick={handleClick}
       />
     </FocusScope>
   );
@@ -877,6 +1082,16 @@ interface RowSelectorTdProps {
  * Render the `<td>` for the row selector, wiring the enclosing
  * `FocusScope`'s `elementRef` to the `<td>` so `ResizeObserver` can
  * measure its rect for spatial navigation.
+ *
+ * The focus bar comes from the enclosing `FocusScope` — it sets
+ * `data-focused="true"` on this `<td>` when the selector's moniker is
+ * claimed (see `useFocusDecoration` in `focus-scope.tsx`). The global
+ * `[data-focused]::before` rule in `index.css` paints the bar, and
+ * `cell-focus` pulls it inside the cell so the enclosing `<tr>` /
+ * view container overflow doesn't clip it. The row selector is
+ * intentionally excluded from the grid's `cellMonikerMap` (the grid
+ * cursor is a 2-D coord over data columns only), but the scope-level
+ * decoration runs independent of the cursor machinery.
  */
 function RowSelectorTd({
   selectorMoniker,
@@ -899,7 +1114,7 @@ function RowSelectorTd({
       data-moniker={selectorMoniker}
       data-active={isCursorRow ? "true" : "false"}
       className={cn(
-        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+        "cell-focus w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
         isCursorRow && "bg-muted text-foreground",
       )}
       style={{ width: ROW_SELECTOR_WIDTH }}

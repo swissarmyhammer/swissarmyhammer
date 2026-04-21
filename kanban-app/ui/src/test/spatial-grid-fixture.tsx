@@ -36,10 +36,14 @@ import { type ReactNode } from "react";
 import {
   EntityFocusProvider,
   useEntityFocus,
-  useFocusedMoniker,
 } from "@/lib/entity-focus-context";
 import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
-import { fieldMoniker, moniker, ROW_SELECTOR_FIELD } from "@/lib/moniker";
+import {
+  columnHeaderMoniker,
+  fieldMoniker,
+  moniker,
+  ROW_SELECTOR_FIELD,
+} from "@/lib/moniker";
 import { FixtureShell } from "./spatial-fixture-shell";
 
 /** Number of rows and columns in the canonical 3x3 fixture. */
@@ -77,6 +81,22 @@ export const FIXTURE_ROW_SELECTOR_MONIKERS: readonly string[] =
   FIXTURE_ROW_MONIKERS.map((_, r) =>
     fieldMoniker("tag", `tag-${r}`, ROW_SELECTOR_FIELD),
   );
+
+/**
+ * Pre-computed column-header monikers, one per data column.
+ *
+ * Shape: `column-header:<fieldName>`. Mirrors production's
+ * `DataTable.HeaderCell`, which wraps each `<TableHead>` in a
+ * `FocusScope` with this moniker so `k` (up) from a body cell lands on
+ * the header directly above instead of skipping past to the
+ * perspective bar.
+ *
+ * The `columnHeaderMoniker` helper is shared with production — both
+ * sides of the fixture/prod split cannot drift.
+ */
+export const FIXTURE_COLUMN_HEADER_MONIKERS: readonly string[] = COLUMNS.map(
+  (c) => columnHeaderMoniker(c),
+);
 
 /**
  * One row in the tag grid. Wrapped in a `FocusScope` so the row itself
@@ -162,15 +182,97 @@ interface FixtureCellDivProps {
 function FixtureCellDiv({ dataMoniker, style, children }: FixtureCellDivProps) {
   const elementRef = useFocusScopeElementRef();
   const { setFocus } = useEntityFocus();
-  const focusedMoniker = useFocusedMoniker();
-  const isFocused = focusedMoniker === dataMoniker;
+
+  // `data-focused` is written by the enclosing `FocusScope`'s
+  // `useFocusDecoration` hook onto this same element (via the forwarded
+  // `elementRef`). The fixture no longer re-implements the
+  // `useFocusedMoniker` compare dance — it mirrors production's
+  // centralized decoration exactly.
 
   return (
     <div
       ref={elementRef as React.RefObject<HTMLDivElement>}
       data-moniker={dataMoniker}
       data-testid={`data-moniker:${dataMoniker}`}
-      data-focused={isFocused || undefined}
+      style={style}
+      onClick={(e) => {
+        e.stopPropagation();
+        setFocus(dataMoniker);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Header row wrapper — mirrors production's `DataTableHeader` in shape:
+ * one outer flex row containing a non-navigable selector-column spacer
+ * (no `FocusScope`, matches production which leaves its row-selector
+ * header empty) and one per-column `FocusScope` per data column.
+ *
+ * Each header cell is its own spatial entry so `k` from the body cells
+ * directly below can beam-test onto it.
+ */
+export function FixtureHeaderRow() {
+  return (
+    <div
+      data-testid="grid-fixture-header"
+      style={{
+        display: "flex",
+        height: "30px",
+        borderBottom: "1px solid #888",
+        fontWeight: "bold",
+      }}
+    >
+      {/* Spacer matching the row-selector column width so header cells
+          align with the body-cell columns beneath. Not a FocusScope —
+          production's row-selector `<TableHead>` is also empty and
+          non-navigable. */}
+      <div style={{ width: "40px" }} />
+      {FIXTURE_COLUMN_HEADER_MONIKERS.map((headerMk, col) => (
+        <FocusScope
+          key={headerMk}
+          moniker={headerMk}
+          commands={[]}
+          renderContainer={false}
+        >
+          <FixtureHeaderDiv
+            dataMoniker={headerMk}
+            style={{ flex: 1, padding: "8px" }}
+          >
+            {COLUMNS[col]}
+          </FixtureHeaderDiv>
+        </FocusScope>
+      ))}
+    </div>
+  );
+}
+
+interface FixtureHeaderDivProps {
+  dataMoniker: string;
+  style: React.CSSProperties;
+  children: ReactNode;
+}
+
+/**
+ * A `<div>` that plays the role of a `<th>` in the fixture. Same wiring
+ * as `FixtureCellDiv` — reads the scope's `elementRef`, forwards
+ * `data-moniker`, and focuses the scope on click.
+ */
+function FixtureHeaderDiv({
+  dataMoniker,
+  style,
+  children,
+}: FixtureHeaderDivProps) {
+  const elementRef = useFocusScopeElementRef();
+  const { setFocus } = useEntityFocus();
+
+  return (
+    <div
+      ref={elementRef as React.RefObject<HTMLDivElement>}
+      data-moniker={dataMoniker}
+      data-testid={`data-moniker:${dataMoniker}`}
       style={style}
       onClick={(e) => {
         e.stopPropagation();
@@ -206,6 +308,7 @@ export function AppWithGridFixture() {
             flexDirection: "column",
           }}
         >
+          <FixtureHeaderRow />
           {Array.from({ length: ROWS }, (_, r) => (
             <FixtureRow key={r} rowIndex={r} />
           ))}

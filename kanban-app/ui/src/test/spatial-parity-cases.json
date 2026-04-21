@@ -553,6 +553,65 @@
     ]
   },
   {
+    "name": "focus_first_in_layer focuses upper-left on layer push and no-ops when already focused in layer",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "L1" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "first",
+            "moniker": "task:F",
+            "rect": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "second",
+            "moniker": "task:S",
+            "rect": { "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "L1" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "first" },
+          "focused": "first"
+        }
+      },
+      {
+        "op": { "op": "focus", "key": "second" },
+        "expect": {
+          "event": { "prev_key": "first", "next_key": "second" },
+          "focused": "second"
+        }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "L1" },
+        "expect": { "event": null, "focused": "second" }
+      }
+    ]
+  },
+  {
     "name": "card-interior container-first: pill stays within card siblings before falling through",
     "steps": [
       {
@@ -653,6 +712,111 @@
         "expect": {
           "event": { "prev_key": "card-A-pill-1", "next_key": "card-A-body" },
           "focused": "card-A-body"
+        }
+      }
+    ]
+  },
+  {
+    "name": "grid header row: Up from body cell lands on header above, Right walks header row, Down re-enters body",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "hdr-title",
+            "moniker": "column-header:title",
+            "rect": { "x": 40.0, "y": 0.0, "w": 180.0, "h": 30.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "hdr-status",
+            "moniker": "column-header:status",
+            "rect": { "x": 220.0, "y": 0.0, "w": 180.0, "h": 30.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "cell-r0-title",
+            "moniker": "field:task:t0.title",
+            "rect": { "x": 40.0, "y": 30.0, "w": 180.0, "h": 40.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "cell-r0-status",
+            "moniker": "field:task:t0.status",
+            "rect": { "x": 220.0, "y": 30.0, "w": 180.0, "h": 40.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "cell-r0-title" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "cell-r0-title" },
+          "focused": "cell-r0-title"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "cell-r0-title",
+          "direction": "Up"
+        },
+        "expect": {
+          "event": { "prev_key": "cell-r0-title", "next_key": "hdr-title" },
+          "focused": "hdr-title"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "hdr-title",
+          "direction": "Right"
+        },
+        "expect": {
+          "event": { "prev_key": "hdr-title", "next_key": "hdr-status" },
+          "focused": "hdr-status"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "hdr-status",
+          "direction": "Down"
+        },
+        "expect": {
+          "event": { "prev_key": "hdr-status", "next_key": "cell-r0-status" },
+          "focused": "cell-r0-status"
         }
       }
     ]

@@ -269,9 +269,11 @@ interface ScopedPerspectiveTabProps {
  * Uses `renderContainer={false}` so the enclosing tab bar owns the DOM
  * element — the inner `PerspectiveTab` attaches the scope's `elementRef`
  * to its root `<div>` via `useFocusScopeElementRef()`, mirroring the
- * `DataTableCell` / `DataTableRow` pattern. `showFocusBar={false}`
- * suppresses the focus indicator bar because the tab's existing active
- * underline already conveys focus visually.
+ * `DataTableCell` / `DataTableRow` pattern. The scope opts in to the
+ * default focus decoration, so `FocusScope.useFocusDecoration` writes
+ * `data-focused="true"` on the tab's root `<div>` when spatial nav lands
+ * on this perspective — and the single global `[data-focused]` CSS rule
+ * in `index.css` paints the ring.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  */
@@ -290,7 +292,6 @@ function ScopedPerspectiveTab({
       commands={[]}
       moniker={moniker("perspective", perspective.id)}
       renderContainer={false}
-      showFocusBar={false}
     >
       <PerspectiveTab
         id={perspective.id}
@@ -435,6 +436,13 @@ function PerspectiveTab({
   const [groupOpen, setGroupOpen] = useState(false);
   const schemaFields = useActiveViewSchemaFields();
   const { tabMoniker, refCallback, handleScopeClick } = useSpatialTabWiring(id);
+  // `data-focused` is written by the enclosing `FocusScope`'s
+  // `useFocusDecoration` hook — the attribute lands on this same
+  // `<div>` via the `refCallback` that forwards the scope's elementRef.
+  // The global `[data-focused]` CSS rule paints the ring; focused and
+  // active remain independent signals (the active tab's underline and
+  // the focus ring overlap cleanly when the user navigates back to the
+  // already-open tab).
 
   return (
     <div
@@ -442,7 +450,11 @@ function PerspectiveTab({
       data-moniker={tabMoniker}
       data-testid={`data-moniker:${tabMoniker}`}
       onClickCapture={handleScopeClick}
-      className="inline-flex items-center"
+      // `tab-focus` anchors the `[data-focused]::before` bar on the
+      // tab's left edge. Tabs live in a flex row with `overflow-x-auto`,
+      // so the default negative-left bar would be clipped by the
+      // scrolling parent. See the override rule in `index.css`.
+      className="tab-focus inline-flex items-center rounded-t-md"
     >
       <TabButton
         name={name}

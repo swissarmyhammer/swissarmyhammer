@@ -63,6 +63,7 @@ import { setupSpatialShim } from "./setup-spatial-shim";
 import {
   AppWithGridFixture,
   FIXTURE_CELL_MONIKERS,
+  FIXTURE_COLUMN_HEADER_MONIKERS,
   FIXTURE_ROW_SELECTOR_MONIKERS,
 } from "./spatial-grid-fixture";
 
@@ -162,6 +163,40 @@ describe("grid cell-to-cell spatial navigation", () => {
     await userEvent.keyboard("h");
     await expectFocused(selectorRow2, "true");
     await expectFocused(cellRow2Col0, null);
+
+    // The focused selector must carry `data-focused="true"` so the
+    // focus ring (painted by the global `[data-focused]` CSS rule in
+    // `index.css`) appears. The attribute is written by the enclosing
+    // `FocusScope`'s centralized `useFocusDecoration` hook — the
+    // selector `<td>` and fixture `<div>` no longer emit ring utility
+    // classes themselves.
+    const selectorEl = selectorRow2.element() as HTMLElement;
+    expect(selectorEl.getAttribute("data-focused")).toBe("true");
+  });
+
+  it("clicking the row selector focuses the selector, not a data cell", async () => {
+    const screen = await render(<AppWithGridFixture />);
+
+    // Same row 2 used by the `h`-nav test above — any row works since
+    // the test asserts that mouse clicks converge on the selector's own
+    // moniker instead of a sibling data cell.
+    const selectorRow2 = screen.getByTestId(
+      `data-moniker:${FIXTURE_ROW_SELECTOR_MONIKERS[2]}`,
+    );
+    const cellRow2Col0 = screen.getByTestId(
+      `data-moniker:${FIXTURE_CELL_MONIKERS[2][0]}`,
+    );
+
+    // Prime focus on a data cell so the click on the selector has to
+    // move focus off that cell. Without this, a no-op handler could let
+    // `data-focused` stay blank on the selector and the assertion would
+    // pass vacuously.
+    await userEvent.click(cellRow2Col0);
+    await expectFocused(cellRow2Col0, "true");
+
+    await userEvent.click(selectorRow2);
+    await expectFocused(selectorRow2, "true");
+    await expectFocused(cellRow2Col0, null);
   });
 
   it("l from the row selector moves focus to the first data cell in the same row", async () => {
@@ -180,6 +215,71 @@ describe("grid cell-to-cell spatial navigation", () => {
     await userEvent.keyboard("l");
     await expectFocused(cellRow2Col0, "true");
     await expectFocused(selectorRow2, null);
+  });
+
+  it("k from a top-row cell lands on that column's header (not above)", async () => {
+    const screen = await render(<AppWithGridFixture />);
+
+    // Top-row, col-1 cell (tag_name column, row 0).
+    const cellTopRowCol0 = screen.getByTestId(
+      `data-moniker:${FIXTURE_CELL_MONIKERS[0][0]}`,
+    );
+    const headerCol0 = screen.getByTestId(
+      `data-moniker:${FIXTURE_COLUMN_HEADER_MONIKERS[0]}`,
+    );
+
+    await userEvent.click(cellTopRowCol0);
+    await expectFocused(cellTopRowCol0, "true");
+
+    // k → up — the column header must be the first spatial target above
+    // the body cell. Before this task, no header FocusScope existed and
+    // focus would skip past to whatever sat above the grid (e.g. the
+    // perspective bar), breaking column-aligned up-nav.
+    await userEvent.keyboard("k");
+    await expectFocused(headerCol0, "true");
+    await expectFocused(cellTopRowCol0, null);
+  });
+
+  it("j from a column header returns focus to a body cell in that column", async () => {
+    const screen = await render(<AppWithGridFixture />);
+
+    const headerCol1 = screen.getByTestId(
+      `data-moniker:${FIXTURE_COLUMN_HEADER_MONIKERS[1]}`,
+    );
+    const cellTopRowCol1 = screen.getByTestId(
+      `data-moniker:${FIXTURE_CELL_MONIKERS[0][1]}`,
+    );
+
+    await userEvent.click(headerCol1);
+    await expectFocused(headerCol1, "true");
+
+    // j → down — the first body cell in the same column is directly
+    // below the header; the spatial engine must find it via the beam
+    // test rather than skipping into a sibling column.
+    await userEvent.keyboard("j");
+    await expectFocused(cellTopRowCol1, "true");
+    await expectFocused(headerCol1, null);
+  });
+
+  it("l from a column header moves focus to the next column header", async () => {
+    const screen = await render(<AppWithGridFixture />);
+
+    const headerCol0 = screen.getByTestId(
+      `data-moniker:${FIXTURE_COLUMN_HEADER_MONIKERS[0]}`,
+    );
+    const headerCol1 = screen.getByTestId(
+      `data-moniker:${FIXTURE_COLUMN_HEADER_MONIKERS[1]}`,
+    );
+
+    await userEvent.click(headerCol0);
+    await expectFocused(headerCol0, "true");
+
+    // l → right — sibling header cells sit on the same horizontal beam,
+    // so `l` must pick the next header rather than diving into a body
+    // cell.
+    await userEvent.keyboard("l");
+    await expectFocused(headerCol1, "true");
+    await expectFocused(headerCol0, null);
   });
 
   it("j from the last row of cells stays put (does not wrap)", async () => {

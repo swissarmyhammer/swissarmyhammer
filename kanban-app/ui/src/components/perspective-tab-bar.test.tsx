@@ -179,6 +179,33 @@ describe("PerspectiveTabBar", () => {
     expect(screen.queryByText("Grid Thing")).toBeNull();
   });
 
+  it("tab root carries `tab-focus` so the focus bar renders inside the tab", () => {
+    // The perspective-tab strip is a horizontal flex container with its own
+    // `overflow-x-auto`, so the default negative-left focus bar would be
+    // clipped by the scrolling parent. `tab-focus` repositions the bar
+    // inside the tab's root <div>. See `index.css` for the override rule.
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "First", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    // Each tab's root <div> carries `data-moniker="perspective:<id>"` —
+    // the same element the FocusScope's elementRef attaches to.
+    const tabRoots = container.querySelectorAll(
+      "[data-moniker^='perspective:']",
+    );
+    expect(tabRoots.length).toBe(2);
+    for (const root of tabRoots) {
+      expect(root.className).toContain("tab-focus");
+    }
+  });
+
   it("highlights the active perspective tab", () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,

@@ -217,6 +217,48 @@ pub async fn spatial_remove_layer<R: Runtime>(
     Ok(())
 }
 
+/// Wire format for `spatial_focus_first_in_layer`.
+///
+/// A struct wrapper with `rename_all = "camelCase"` + `#[serde(alias)]`
+/// so the command accepts both `layerKey` (canonical camelCase) and
+/// `layer_key` (snake_case) on the wire — same convention as
+/// [`SpatialRegisterArgs`].
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpatialFocusFirstInLayerArgs {
+    /// Spatial key of the layer whose first (upper-left) entry should
+    /// claim focus. Accepted as either `layerKey` (default) or
+    /// `layer_key` (serde alias).
+    #[serde(alias = "layer_key")]
+    pub layer_key: String,
+}
+
+/// Focus the upper-left (first) registered entry in the given layer.
+///
+/// Called by `FocusLayer` on a `requestAnimationFrame` after
+/// `spatial_push_layer`, so descendant `FocusScope`s have had a tick to
+/// register their rects. A no-op when the layer is empty or the focused
+/// key already belongs to the given layer (see
+/// [`SpatialState::focus_first_in_layer`] for the full rationale).
+///
+/// Emits `focus-changed` scoped to the invoking window if focus moved.
+///
+/// Accepts either `layerKey` (default) or `layer_key` (serde alias) on
+/// the wire — matches the forgiving arg-name convention used by
+/// `spatial_register`.
+#[tauri::command]
+pub async fn spatial_focus_first_in_layer<R: Runtime>(
+    args: SpatialFocusFirstInLayerArgs,
+    window: WebviewWindow<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.focus_first_in_layer(&args.layer_key) {
+        emit_focus_changed(&window, &event);
+    }
+    Ok(())
+}
+
 /// Wire format for a single entry in a batch registration call.
 ///
 /// Mirrors the fields of `spatial_register` but packed into a struct so the
@@ -695,6 +737,7 @@ mod tauri_integration_tests {
                 spatial_navigate,
                 spatial_push_layer,
                 spatial_remove_layer,
+                spatial_focus_first_in_layer,
             ])
             .build(tauri::test::mock_context(noop_assets()))
             .expect("failed to build mock Tauri app");
@@ -1843,6 +1886,98 @@ mod tauri_integration_tests {
             right,
             json!("task:a2"),
             "intra-window right navigation must still work"
+        );
+    }
+
+    /// `spatial_focus_first_in_layer` scopes its `focus-changed` emission
+    /// to the invoking window — window A's listener sees the event,
+    /// window B's does not. Exercises the full wire contract:
+    ///
+    /// - camelCase (`layerKey`) is honoured on the wire.
+    /// - The command emits `focus-changed` with `prev_key: null`,
+    ///   `next_key: <first entry's key>` when focus moves into the layer.
+    /// - The emission goes to the invoking window only (`emit_to(label)`).
+    #[test]
+    fn spatial_focus_first_in_layer_emits_focus_changed_scoped_to_window() {
+        let app = build_test_app_with_windows(&["A", "B"]);
+        let events_a = capture_focus_events_on_window(&app, "A");
+        let events_b = capture_focus_events_on_window(&app, "B");
+
+        // Window A: push a layer and register two entries — left at (0,0)
+        // and right at (200,0). The First sort order (y then x) picks the
+        // left entry.
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_push_layer",
+            json!({"key": "LA", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a-left",
+                    "moniker": "task:left",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a-right",
+                    "moniker": "task:right",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Window B: also push a layer so it has a listener target but is
+        // otherwise untouched by window A's focus_first_in_layer call.
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_push_layer",
+            json!({"key": "LB", "name": "window"}),
+        );
+
+        // Invoke the new command on window A with the camelCase wire form.
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_focus_first_in_layer",
+            json!({"args": {"layerKey": "LA"}}),
+        );
+
+        let events_a = events_a.lock().unwrap();
+        assert_eq!(
+            events_a.len(),
+            1,
+            "window A should see exactly one focus-changed emission",
+        );
+        assert_eq!(events_a[0].prev_key, None);
+        assert_eq!(
+            events_a[0].next_key.as_deref(),
+            Some("a-left"),
+            "first entry by (y, x) should win",
+        );
+
+        let events_b = events_b.lock().unwrap();
+        assert_eq!(
+            events_b.len(),
+            0,
+            "window B must not see window A's focus-changed: {events_b:?}",
         );
     }
 }

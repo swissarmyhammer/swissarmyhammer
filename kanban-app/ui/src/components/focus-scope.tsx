@@ -16,7 +16,6 @@ import {
 } from "@/lib/command-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
-import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { useFocusLayerKey } from "@/components/focus-layer";
 import { ulid } from "ulid";
 import { invoke } from "@tauri-apps/api/core";
@@ -185,6 +184,48 @@ function useSpatialClaim(
 }
 
 /**
+ * Imperatively mirror the scope's focus state onto its attached DOM
+ * element. When `active` is `true` (the scope is claimed AND opts in
+ * via `showFocusBar`), sets `data-focused="true"` on `elementRef.current`
+ * and scrolls it into view. When `active` flips to `false`, removes the
+ * attribute.
+ *
+ * This is the single canonical driver of the focus decoration — consumers
+ * of `renderContainer={false}` no longer need to subscribe to
+ * `useFocusedMoniker()` and manage the attribute themselves. The attribute
+ * is written directly to the DOM (not via React state) so the element
+ * owns exactly one focus signal, regardless of whether the scope renders
+ * its own container or shares a DOM node with a consumer.
+ *
+ * The `scrollIntoView({ block: "nearest" })` effect was previously in
+ * `FocusHighlight` and only applied to `renderContainer={true}` scopes;
+ * moving it here gives all decorated scopes the same scroll behavior.
+ *
+ * When `active` is always `false` (e.g. `showFocusBar={false}`), the
+ * effect is a no-op from first render — the attribute never appears.
+ */
+function useFocusDecoration(
+  elementRef: React.RefObject<HTMLElement | null>,
+  active: boolean,
+) {
+  useEffect(() => {
+    const el = elementRef.current;
+    if (!el) return;
+    if (active) {
+      el.setAttribute("data-focused", "true");
+      el.scrollIntoView?.({ block: "nearest" });
+      return () => {
+        el.removeAttribute("data-focused");
+      };
+    }
+    // `active === false` on first effect pass — ensure no stale
+    // attribute lingers (defensive: covers remounts where the DOM node
+    // was reused by React but the cleanup never ran).
+    el.removeAttribute("data-focused");
+  }, [elementRef, active]);
+}
+
+/**
  * Build a `CommandScope` and register it in the EntityFocus scope registry.
  * Returns the built scope.
  */
@@ -295,7 +336,7 @@ type FocusScopeOwnProps = {
    *  Independent of showFocusBar — a scope can handle events without showing the focus bar.
    *  Defaults to true. */
   handleEvents?: boolean;
-  /** When false, omits the wrapping FocusHighlight div — children render directly.
+  /** When false, omits the wrapping `<div>` — children render directly.
    *  Use for table rows where a wrapping div breaks HTML structure.
    *  The scope, moniker registration, and context still work; the caller
    *  must attach onContextMenu etc. to their own element. */
@@ -355,6 +396,12 @@ export function FocusScope({
     parentScope,
     navOverride,
   );
+  // Central, unconditional focus decoration: when claimed and opted in,
+  // write `data-focused` and scrollIntoView on the attached element —
+  // regardless of `renderContainer`. This is what lets consumers that
+  // own their own DOM node (rows, cells, buttons, tabs) share the same
+  // visual without re-implementing the `useFocusedMoniker` compare dance.
+  useFocusDecoration(elementRef, showFocusBar && isClaimed);
   const scope = useScopeRegistration(moniker, commands);
   const handleClick = useScopeClickHandler(moniker, handleEvents);
   // elementRefForContext: only populated for renderContainer={false} — then a
@@ -368,7 +415,6 @@ export function FocusScope({
         <CommandScopeContext.Provider value={scope}>
           <FocusScopeBody
             moniker={moniker}
-            isDirectFocus={showFocusBar && isClaimed}
             handleEvents={handleEvents}
             renderContainer={renderContainer}
             onClick={handleClick}
@@ -385,7 +431,6 @@ export function FocusScope({
 
 interface FocusScopeBodyProps {
   moniker: string;
-  isDirectFocus: boolean;
   handleEvents: boolean;
   renderContainer: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
@@ -418,18 +463,26 @@ interface FocusScopeInnerProps extends Omit<
   "onClick" | "children"
 > {
   moniker: string;
-  isDirectFocus: boolean;
   handleEvents: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
-  /** Ref for the DOM element — used by ResizeObserver for rect measurement. */
+  /** Ref for the DOM element — used by ResizeObserver for rect measurement
+   *  and by `useFocusDecoration` for the `data-focused` attribute write. */
   elementRef: React.RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
-/** Inner component rendered inside CommandScopeContext so useContextMenu sees the scope. */
+/**
+ * Inner component rendered inside CommandScopeContext so `useContextMenu`
+ * sees the scope.
+ *
+ * Renders a plain `<div>` container — `data-focused` and scroll-into-view
+ * are written imperatively by `useFocusDecoration` in the parent scope,
+ * not via a prop on this element. Keeping the JSX free of focus state
+ * means the `renderContainer={true}` and `renderContainer={false}` paths
+ * share a single decoration mechanism.
+ */
 function FocusScopeInner({
   moniker,
-  isDirectFocus,
   handleEvents,
   onClick,
   elementRef,
@@ -442,9 +495,8 @@ function FocusScopeInner({
   );
 
   return (
-    <FocusHighlight
-      ref={elementRef}
-      focused={isDirectFocus}
+    <div
+      ref={elementRef as React.RefObject<HTMLDivElement>}
       data-moniker={moniker}
       onClick={onClick}
       onDoubleClick={handleDoubleClick}
@@ -452,7 +504,7 @@ function FocusScopeInner({
       {...htmlProps}
     >
       {children}
-    </FocusHighlight>
+    </div>
   );
 }
 

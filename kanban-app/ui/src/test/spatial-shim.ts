@@ -452,6 +452,46 @@ export class SpatialStateShim {
     return this.layers[this.layers.length - 1] ?? null;
   }
 
+  /**
+   * Focus the upper-left (first) entry in the given layer. Mirrors the
+   * Rust `SpatialState::focus_first_in_layer` behaviour exactly:
+   *
+   * - No-op (returns `null`) when the layer has no registered entries.
+   * - No-op when the focused key already belongs to the given layer —
+   *   don't override manual focus that landed inside the layer first.
+   * - Otherwise picks the entry with the smallest `(y, x)` and focuses
+   *   it, saving the outgoing focused key as `lastFocused` on its
+   *   owning layer (same focus-memory contract as `focus()`).
+   */
+  focusFirstInLayer(layerKey: string): FocusChangedPayload | null {
+    // Don't override manual focus already inside the target layer.
+    if (this.focusedKey !== null) {
+      const focusedEntry = this.entries.get(this.focusedKey);
+      if (focusedEntry && focusedEntry.layerKey === layerKey) {
+        return null;
+      }
+    }
+
+    // Find the (y, x)-minimal entry whose layerKey matches.
+    let best: ShimSpatialEntry | null = null;
+    for (const entry of this.entries.values()) {
+      if (entry.layerKey !== layerKey) continue;
+      if (
+        !best ||
+        entry.rect.y < best.rect.y ||
+        (entry.rect.y === best.rect.y && entry.rect.x < best.rect.x)
+      ) {
+        best = entry;
+      }
+    }
+    if (!best) return null;
+
+    const prev = this.focusedKey;
+    if (prev) this.saveFocusMemory(prev);
+    this.focusedKey = best.key;
+    return { prev_key: prev, next_key: best.key };
+  }
+
   /** Number of layers in the stack. */
   layerCount(): number {
     return this.layers.length;

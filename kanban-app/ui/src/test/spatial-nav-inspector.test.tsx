@@ -188,6 +188,46 @@ describe("inspector field navigation", () => {
     await waitForFocusedMoniker(handles, (m) => m === FIXTURE_CARD_MONIKER);
   });
 
+  it("opening the inspector auto-focuses the first field", async () => {
+    // Regression guard for the FocusLayer-push → focus-first-in-layer
+    // contract: when a layer mounts, spatial_focus_first_in_layer is
+    // scheduled on a requestAnimationFrame, and the first (upper-left)
+    // registered entry in the new layer must claim focus without any
+    // keystroke. Before this wiring, `focused_key` stayed on the card
+    // after the inspector opened, so `j` was a no-op in `navigate()`
+    // (source key in window layer, filtered out by active-layer scope).
+    const screen = await render(<AppWithInspectorFixture />);
+    const card = screen.getByTestId("fixture-card");
+
+    // Focus the card (window layer), then open the inspector.
+    await userEvent.click(card);
+    await expect
+      .poll(() => handles.focusedMoniker(), { timeout: POLL_TIMEOUT })
+      .toBe(FIXTURE_CARD_MONIKER);
+
+    await userEvent.dblClick(card);
+
+    // Wait for the inspector layer to be on the stack.
+    await waitForLayerCount(handles, 2);
+
+    // Assert the first field is focused — no keystroke, no extra
+    // interaction. The DOM assertion mirrors the task's acceptance
+    // criterion: `data-focused="true"` lands on the first field's
+    // FocusScope element.
+    const firstFieldRow = screen.getByTestId(
+      `field-row-${FIXTURE_FIELD_NAMES[0]}`,
+    );
+    await expect
+      .poll(() => firstFieldRow.element().getAttribute("data-focused"), {
+        timeout: POLL_TIMEOUT,
+      })
+      .toBe("true");
+
+    // And confirm the shim's focused moniker agrees — a sanity check
+    // that the DOM attribute isn't stale.
+    expect(handles.focusedMoniker()).toBe(FIXTURE_FIELD_MONIKERS[0]);
+  });
+
   it("inspector nav is trapped — k at the top field does NOT escape to the card", async () => {
     await openInspector();
 

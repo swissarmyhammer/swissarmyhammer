@@ -96,6 +96,7 @@ fn run_app(app_state: AppState) {
             spatial::spatial_navigate,
             spatial::spatial_push_layer,
             spatial::spatial_remove_layer,
+            spatial::spatial_focus_first_in_layer,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)

@@ -93,8 +93,9 @@ describe("StoreContainer", () => {
       </EntityFocusProvider>,
     );
 
-    // FocusScope with renderContainer=false should not add a FocusHighlight wrapper
-    // The child should be directly inside the provider, not wrapped in a focus-highlight div
+    // FocusScope with renderContainer=false should not add a wrapping `<div>`.
+    // The child should be directly inside the provider, not wrapped in an
+    // extra div.
     expect(container.querySelector("[data-moniker]")).toBeNull();
   });
 });
