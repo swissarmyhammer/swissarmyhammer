@@ -124,6 +124,24 @@ impl ShellExecuteTool {
             state: Arc::new(Mutex::new(state)),
         }
     }
+
+    /// Create an instance that routes every chunk through a caller-supplied
+    /// embedder instead of lazily loading the production default.
+    ///
+    /// Tests pass a `MockEmbedder` from `model-embedding`'s `test-support`
+    /// feature to avoid paying the multi-second cost of initializing the
+    /// real embedding model for every shell test.
+    ///
+    /// The shell state is rooted in an isolated temp directory so concurrent
+    /// tests do not interfere with each other.
+    pub fn with_embedder(embedder: Arc<dyn model_embedding::TextEmbedder>) -> Self {
+        let dir = std::env::temp_dir().join(format!(".shell-test-{}", ulid::Ulid::new()));
+        let state = ShellState::with_dir_and_embedder(dir, embedder)
+            .expect("Failed to initialize shell state with injected embedder");
+        Self {
+            state: Arc::new(Mutex::new(state)),
+        }
+    }
 }
 
 /// Build the pair of "Builtin config" + "Regex patterns" health checks.

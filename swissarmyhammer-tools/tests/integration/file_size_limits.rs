@@ -382,15 +382,25 @@ async fn test_edit_tool_replace_all_on_large_file() {
 // Shell Execute Tool Size Limit Tests
 // ============================================================================
 
+/// Register a `ShellExecuteTool` whose embedding worker is driven by a
+/// `MockEmbedder` instead of the real production model.
+///
+/// The shell tool normally loads `qwen-embedding` on first chunk and blocks
+/// `flush_chunks()` on the load, turning an `echo` into a ~20s test. These
+/// size-limit tests only care about response shape, not semantic search, so
+/// we short-circuit the real embedder.
+fn register_shell_with_mock_embedder(registry: &mut ToolRegistry) {
+    use model_embedding::mock::MockEmbedder;
+    use swissarmyhammer_tools::mcp::tools::shell::ShellExecuteTool;
+    let embedder = Arc::new(MockEmbedder::new(384));
+    registry.register(ShellExecuteTool::with_embedder(embedder));
+}
+
 #[tokio::test]
 async fn test_shell_execute_output_size_limit() {
-    let registry = create_test_registry().await;
+    let mut registry = create_test_registry().await;
     let context = create_test_context().await;
-
-    // Register shell tools
-    use swissarmyhammer_tools::mcp::tools::shell;
-    let mut registry = registry;
-    shell::register_shell_tools(&mut registry);
+    register_shell_with_mock_embedder(&mut registry);
 
     let tool = registry.get_tool("shell").unwrap();
 
@@ -410,13 +420,9 @@ async fn test_shell_execute_output_size_limit() {
 
 #[tokio::test]
 async fn test_shell_execute_handles_large_output() {
-    let registry = create_test_registry().await;
+    let mut registry = create_test_registry().await;
     let context = create_test_context().await;
-
-    // Register shell tools
-    use swissarmyhammer_tools::mcp::tools::shell;
-    let mut registry = registry;
-    shell::register_shell_tools(&mut registry);
+    register_shell_with_mock_embedder(&mut registry);
 
     let tool = registry.get_tool("shell").unwrap();
 

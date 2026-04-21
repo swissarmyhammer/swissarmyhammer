@@ -56,6 +56,14 @@ impl MockEmbedder {
             ..Self::new(dimension)
         }
     }
+
+    /// Number of times `embed_text` has been called on this mock.
+    ///
+    /// Tests can clone the mock through an `Arc` and check this counter after
+    /// exercising code that should have driven the embedder.
+    pub fn call_count(&self) -> usize {
+        *self.call_count.lock().unwrap()
+    }
 }
 
 impl Sealed for MockEmbedder {}
