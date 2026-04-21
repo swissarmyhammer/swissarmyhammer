@@ -15,7 +15,9 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useDispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
+
+type DispatchFn = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
 
 /**
  * Discriminated union mirroring the Rust-side `DragSource` enum.
@@ -163,7 +165,7 @@ function useDragSessionEvents(
 
 /** Drag-start / drag-cancel dispatch callbacks. */
 function useDragStartCallbacks(
-  dispatch: ReturnType<typeof useDispatchCommand>,
+  dispatch: DispatchFn,
   setIsSource: (b: boolean) => void,
 ) {
   const startSession = useCallback(
@@ -225,9 +227,7 @@ function useDragStartCallbacks(
 }
 
 /** Drag-complete dispatch callbacks for focus-chain and file drags. */
-function useDragCompleteCallbacks(
-  dispatch: ReturnType<typeof useDispatchCommand>,
-) {
+function useDragCompleteCallbacks(dispatch: DispatchFn) {
   const completeSession = useCallback(
     async (
       targetColumn: string,
