@@ -205,48 +205,85 @@ pub fn get_symbol(
     let symbols = load_merged_rows(conn)?;
     let max = options.max_results.unwrap_or(usize::MAX);
 
-    // Tier 1: Exact match
-    let exact: Vec<&MergedRow> = symbols.iter().filter(|s| s.symbol_path == query).collect();
-    if !exact.is_empty() {
-        return Ok(make_result(query, &exact, MatchTier::Exact, 1000, max));
+    if let Some(result) = match_exact(&symbols, query, max) {
+        return Ok(result);
+    }
+    if let Some(result) = match_suffix(&symbols, query, max) {
+        return Ok(result);
+    }
+    if let Some(result) = match_case_insensitive(&symbols, query, max) {
+        return Ok(result);
+    }
+    if let Some(result) = match_fuzzy(&symbols, query, max) {
+        return Ok(result);
     }
 
-    // Tier 2: Suffix match -- symbol_path ends with `::<query>`
+    Ok(GetSymbolResult {
+        query: query.to_string(),
+        symbols: Vec::new(),
+    })
+}
+
+/// Base score for an exact symbol-path match (tier 1).
+const SCORE_EXACT: i64 = 1000;
+/// Base score for a `::foo` suffix match (tier 2); always scored below exact.
+const SCORE_SUFFIX: i64 = 900;
+/// Base score for a case-insensitive substring match (tier 3).
+const SCORE_CASE_INSENSITIVE: i64 = 800;
+/// Upper bound of `shorter_path_bonus`; paths longer than this value receive
+/// no bonus. Chosen so the bonus can never lift a lower tier into a higher
+/// one (tier gap is 100).
+const PATH_LENGTH_BONUS_CAP: i64 = 100;
+
+/// Tier 1: exact string match on the symbol path.
+fn match_exact(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymbolResult> {
+    let exact: Vec<&MergedRow> = symbols.iter().filter(|s| s.symbol_path == query).collect();
+    if exact.is_empty() {
+        return None;
+    }
+    Some(make_result(query, &exact, MatchTier::Exact, SCORE_EXACT, max))
+}
+
+/// Tier 2: suffix match — `foo` matches any `<prefix>::foo`.
+fn match_suffix(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymbolResult> {
     let suffix_pattern = format!("::{query}");
     let mut suffix: Vec<(&MergedRow, i64)> = symbols
         .iter()
         .filter(|s| s.symbol_path.ends_with(&suffix_pattern) || s.symbol_path == query)
-        .map(|s| {
-            // Shorter paths are more specific, so give them a bonus.
-            let bonus = 100_i64.saturating_sub(s.symbol_path.len() as i64);
-            (s, 900 + bonus.max(0))
-        })
+        .map(|s| (s, SCORE_SUFFIX + shorter_path_bonus(s)))
         .collect();
-    if !suffix.is_empty() {
-        suffix.sort_by_key(|b| std::cmp::Reverse(b.1));
-        return Ok(make_result_scored(query, &suffix, MatchTier::Suffix, max));
+    if suffix.is_empty() {
+        return None;
     }
+    suffix.sort_by_key(|b| std::cmp::Reverse(b.1));
+    Some(make_result_scored(query, &suffix, MatchTier::Suffix, max))
+}
 
-    // Tier 3: Case-insensitive substring
+/// Tier 3: case-insensitive substring match.
+fn match_case_insensitive(
+    symbols: &[MergedRow],
+    query: &str,
+    max: usize,
+) -> Option<GetSymbolResult> {
     let query_lower = query.to_lowercase();
     let ci: Vec<(&MergedRow, i64)> = symbols
         .iter()
         .filter(|s| s.symbol_path.to_lowercase().contains(&query_lower))
-        .map(|s| {
-            let bonus = 100_i64.saturating_sub(s.symbol_path.len() as i64);
-            (s, 800 + bonus.max(0))
-        })
+        .map(|s| (s, SCORE_CASE_INSENSITIVE + shorter_path_bonus(s)))
         .collect();
-    if !ci.is_empty() {
-        return Ok(make_result_scored(
-            query,
-            &ci,
-            MatchTier::CaseInsensitive,
-            max,
-        ));
+    if ci.is_empty() {
+        return None;
     }
+    Some(make_result_scored(
+        query,
+        &ci,
+        MatchTier::CaseInsensitive,
+        max,
+    ))
+}
 
-    // Tier 4: Fuzzy subsequence matching
+/// Tier 4: skim fuzzy-subsequence match, ranked by skim score.
+fn match_fuzzy(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymbolResult> {
     let matcher = SkimMatcherV2::default();
     let mut fuzzy: Vec<(&MergedRow, i64)> = symbols
         .iter()
@@ -256,16 +293,18 @@ pub fn get_symbol(
                 .map(|score| (s, score))
         })
         .collect();
-    fuzzy.sort_by_key(|b| std::cmp::Reverse(b.1));
-    if !fuzzy.is_empty() {
-        return Ok(make_result_scored(query, &fuzzy, MatchTier::Fuzzy, max));
+    if fuzzy.is_empty() {
+        return None;
     }
+    fuzzy.sort_by_key(|b| std::cmp::Reverse(b.1));
+    Some(make_result_scored(query, &fuzzy, MatchTier::Fuzzy, max))
+}
 
-    // No matches at any tier.
-    Ok(GetSymbolResult {
-        query: query.to_string(),
-        symbols: Vec::new(),
-    })
+/// Small bonus that prefers shorter (more specific) symbol paths.
+fn shorter_path_bonus(row: &MergedRow) -> i64 {
+    PATH_LENGTH_BONUS_CAP
+        .saturating_sub(row.symbol_path.len() as i64)
+        .max(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,65 +384,66 @@ fn load_merged_rows(conn: &Connection) -> Result<Vec<MergedRow>, CodeContextErro
     let ts_rows = load_ts_rows(conn)?;
     let lsp_rows = load_lsp_rows(conn)?;
 
-    // Key: (file_path, start_line) -> MergedRow
     let mut seen: HashMap<(String, u32), MergedRow> = HashMap::new();
-
-    // Insert TS rows first (they have source text)
     for ts in ts_rows {
-        let key = (ts.file_path.clone(), ts.start_line);
-        seen.insert(
-            key,
-            MergedRow {
-                name: leaf_name(&ts.symbol_path).to_string(),
-                symbol_path: ts.symbol_path,
-                file_path: ts.file_path,
-                start_line: ts.start_line,
-                end_line: ts.end_line,
-                start_char: 0,
-                end_char: 0,
-                text: ts.text,
-                kind: None,
-                detail: None,
-                source: "treesitter".to_string(),
-            },
-        );
+        seen.insert((ts.file_path.clone(), ts.start_line), merged_from_ts(ts));
     }
-
-    // Merge LSP rows on top -- add metadata, or insert if no TS entry exists
     for lsp in lsp_rows {
         let key = (lsp.file_path.clone(), lsp.start_line);
-        if let Some(existing) = seen.get_mut(&key) {
-            // Merge: keep TS text, add LSP metadata
-            existing.kind = lsp.kind;
-            existing.detail = lsp.detail;
-            existing.start_char = lsp.start_char;
-            existing.end_char = lsp.end_char;
-            // Prefer LSP qualified path and name (more accurate)
-            existing.symbol_path = lsp.symbol_path;
-            existing.name = lsp.name;
-            existing.source = "merged".to_string();
-        } else {
-            // LSP-only symbol (no source text)
-            seen.insert(
-                key,
-                MergedRow {
-                    name: lsp.name,
-                    symbol_path: lsp.symbol_path,
-                    file_path: lsp.file_path,
-                    start_line: lsp.start_line,
-                    end_line: lsp.end_line,
-                    start_char: lsp.start_char,
-                    end_char: lsp.end_char,
-                    text: String::new(),
-                    kind: lsp.kind,
-                    detail: lsp.detail,
-                    source: "lsp".to_string(),
-                },
-            );
+        match seen.get_mut(&key) {
+            Some(existing) => merge_lsp_into(existing, lsp),
+            None => {
+                seen.insert(key, merged_from_lsp(lsp));
+            }
         }
     }
-
     Ok(seen.into_values().collect())
+}
+
+/// Build a `MergedRow` from a tree-sitter-only row (has source text, no LSP metadata).
+fn merged_from_ts(ts: TsRow) -> MergedRow {
+    MergedRow {
+        name: leaf_name(&ts.symbol_path).to_string(),
+        symbol_path: ts.symbol_path,
+        file_path: ts.file_path,
+        start_line: ts.start_line,
+        end_line: ts.end_line,
+        start_char: 0,
+        end_char: 0,
+        text: ts.text,
+        kind: None,
+        detail: None,
+        source: "treesitter".to_string(),
+    }
+}
+
+/// Build a `MergedRow` from an LSP-only row (has metadata, no source text).
+fn merged_from_lsp(lsp: LspRow) -> MergedRow {
+    MergedRow {
+        name: lsp.name,
+        symbol_path: lsp.symbol_path,
+        file_path: lsp.file_path,
+        start_line: lsp.start_line,
+        end_line: lsp.end_line,
+        start_char: lsp.start_char,
+        end_char: lsp.end_char,
+        text: String::new(),
+        kind: lsp.kind,
+        detail: lsp.detail,
+        source: "lsp".to_string(),
+    }
+}
+
+/// Merge an LSP row into an existing tree-sitter row: keep the TS source text
+/// but prefer LSP's metadata and qualified path/name (more accurate).
+fn merge_lsp_into(existing: &mut MergedRow, lsp: LspRow) {
+    existing.kind = lsp.kind;
+    existing.detail = lsp.detail;
+    existing.start_char = lsp.start_char;
+    existing.end_char = lsp.end_char;
+    existing.symbol_path = lsp.symbol_path;
+    existing.name = lsp.name;
+    existing.source = "merged".to_string();
 }
 
 /// Extract the leaf name from a qualified path (e.g. `MyStruct::new` -> `new`).
@@ -575,8 +615,11 @@ mod tests {
     fn seed_merged_fixtures(conn: &Connection) {
         insert_file(conn, "src/lib.rs");
         insert_file(conn, "src/auth.rs");
+        seed_merged_ts_chunks(conn);
+        seed_merged_lsp_symbols(conn);
+    }
 
-        // TS chunks
+    fn seed_merged_ts_chunks(conn: &Connection) {
         insert_chunk(
             conn,
             "src/lib.rs",
@@ -601,57 +644,45 @@ mod tests {
             "AuthService",
             "pub struct AuthService { secret: String }",
         );
+    }
 
-        // LSP symbols at same locations
-        insert_lsp_symbol(
+    fn seed_merged_lsp_symbols(conn: &Connection) {
+        // Struct/method at same locations as the TS chunks above.
+        seed_lsp_row(conn, "MyStruct", 23, "src/lib.rs", (0, 0, 20, 1), None);
+        seed_lsp_row(
             conn,
-            "lsp:src/lib.rs:MyStruct",
-            "MyStruct",
-            23, // struct
+            "MyStruct::new",
+            12,
             "src/lib.rs",
-            0,
-            0,
-            20,
-            1,
-            None,
-        );
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/lib.rs:MyStruct::new",
-            "new",
-            12, // function
-            "src/lib.rs",
-            5,
-            4,
-            8,
-            5,
+            (5, 4, 8, 5),
             Some("fn() -> MyStruct"),
         );
-        insert_lsp_symbol(
+        seed_lsp_row(conn, "AuthService", 5, "src/auth.rs", (0, 0, 30, 1), None);
+        // LSP-only symbol (no TS chunk at this location).
+        seed_lsp_row(
             conn,
-            "lsp:src/auth.rs:AuthService",
-            "AuthService",
-            5, // class
+            "AuthService::validate",
+            6,
             "src/auth.rs",
-            0,
-            0,
-            30,
-            1,
-            None,
-        );
-
-        // LSP-only symbol (no TS chunk at this location)
-        insert_lsp_symbol(
-            conn,
-            "lsp:src/auth.rs:AuthService::validate",
-            "validate",
-            6, // method
-            "src/auth.rs",
-            15,
-            4,
-            20,
-            5,
+            (15, 4, 20, 5),
             Some("fn(&self, token: &str) -> bool"),
+        );
+    }
+
+    /// Insert one LSP symbol with a derived `lsp:<file>:<qpath>` id and the
+    /// leaf name taken from the qualified path.
+    fn seed_lsp_row(
+        conn: &Connection,
+        qpath: &str,
+        kind: i32,
+        file_path: &str,
+        (start_line, start_char, end_line, end_char): (i32, i32, i32, i32),
+        detail: Option<&str>,
+    ) {
+        let id = format!("lsp:{file_path}:{qpath}");
+        let name = qpath.rsplit("::").next().unwrap_or(qpath);
+        insert_lsp_symbol(
+            conn, &id, name, kind, file_path, start_line, start_char, end_line, end_char, detail,
         );
     }
 

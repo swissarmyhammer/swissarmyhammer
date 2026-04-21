@@ -44,6 +44,15 @@ test-group = "llama-embedding-serial"
 # Warn every 30s, kill after 10 periods (5 minutes)
 slow-timeout = { period = "30s", terminate-after = 10 }
 
+# llama-agent shares the same global-backend constraint as llama-embedding:
+# only one ModelManager::new can initialize the llama.cpp backend per process.
+# Running these tests serially prevents "Backend already initialized" races and
+# lets each test assert real behavior instead of returning early on a race.
+[[profile.default.overrides]]
+filter = "package(llama-agent)"
+test-group = "llama-embedding-serial"
+slow-timeout = { period = "30s", terminate-after = 10 }
+
 [[profile.default.overrides]]
 filter = "package(swissarmyhammer-treesitter) & test(duplicate)"
 test-group = "treesitter-embedding"

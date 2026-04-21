@@ -587,27 +587,32 @@ impl Session {
         Fut: std::future::Future<Output = Result<String, SessionError>>,
     {
         let config = config.unwrap_or_default();
-
-        // Validate compaction readiness
         if self.messages.len() < 3 {
             return Err(SessionError::InvalidState(
                 "Session must have at least 3 messages to compact".to_string(),
             ));
         }
 
-        // Generate summary
         let summary = generate_summary(self.messages.clone()).await?;
+        self.replace_with_summary(&summary, config.preserve_recent);
 
-        // Replace messages with summary, preserving recent ones
-        let preserve_count = config.preserve_recent.min(self.messages.len());
+        if let Some(ref mut context_state) = self.context_state {
+            context_state.reset();
+        }
+        self.updated_at = SystemTime::now();
+        Ok(())
+    }
+
+    /// Replace the message history with `[summary, ...preserved_tail]`, keeping
+    /// `preserve_recent` messages at the end of the conversation intact.
+    fn replace_with_summary(&mut self, summary: &str, preserve_recent: usize) {
+        let preserve_count = preserve_recent.min(self.messages.len());
         let preserved_messages = if preserve_count > 0 {
             self.messages
                 .split_off(self.messages.len() - preserve_count)
         } else {
             Vec::new()
         };
-
-        // Clear old messages and add summary
         self.messages.clear();
         self.messages.push(Message {
             role: MessageRole::System,
@@ -616,17 +621,7 @@ impl Session {
             tool_name: None,
             timestamp: SystemTime::now(),
         });
-
-        // Add back preserved messages
         self.messages.extend(preserved_messages);
-
-        // Reset context state since the conversation structure has changed
-        if let Some(ref mut context_state) = self.context_state {
-            context_state.reset();
-        }
-
-        self.updated_at = SystemTime::now();
-        Ok(())
     }
 
     /// Format conversation history for summarization.
