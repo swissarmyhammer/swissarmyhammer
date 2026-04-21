@@ -255,26 +255,38 @@ impl SpatialStateInner {
     ///    net and matches `Direction::First` / `fallback_to_first`.
     /// 4. `None` — only when no other entries remain on that layer.
     fn pick_successor(&self, removing_key: &str, entry: &SpatialEntry) -> Option<String> {
-        // 1. Layer focus memory.
-        if let Some(layer) = self.layer_stack.find(&entry.layer_key) {
-            if let Some(ref last) = layer.last_focused {
-                if last.as_str() != removing_key && self.entries.contains_key(last.as_str()) {
-                    return Some(last.clone());
-                }
-            }
+        if let Some(memory) = self.successor_from_layer_memory(removing_key, &entry.layer_key) {
+            return Some(memory);
         }
-        // 2. Sibling in same parent_scope (same layer).
-        if let Some(ref parent) = entry.parent_scope {
-            if let Some(sibling) = self.find_top_left(|e| {
-                e.key.as_str() != removing_key
-                    && e.layer_key == entry.layer_key
-                    && e.parent_scope.as_deref() == Some(parent.as_str())
-            }) {
-                return Some(sibling);
-            }
+        if let Some(sibling) = self.successor_from_parent_scope(removing_key, entry) {
+            return Some(sibling);
         }
-        // 3. First-in-layer by position.
         self.find_top_left(|e| e.key.as_str() != removing_key && e.layer_key == entry.layer_key)
+    }
+
+    /// Priority 1: reuse the layer's `last_focused` key if it is still
+    /// registered and is not the key being removed.
+    fn successor_from_layer_memory(&self, removing_key: &str, layer_key: &str) -> Option<String> {
+        let layer = self.layer_stack.find(layer_key)?;
+        let last = layer.last_focused.as_ref()?;
+        if last.as_str() == removing_key || !self.entries.contains_key(last.as_str()) {
+            return None;
+        }
+        Some(last.clone())
+    }
+
+    /// Priority 2: top-left registered sibling in the same parent scope and layer.
+    fn successor_from_parent_scope(
+        &self,
+        removing_key: &str,
+        entry: &SpatialEntry,
+    ) -> Option<String> {
+        let parent = entry.parent_scope.as_deref()?;
+        self.find_top_left(|e| {
+            e.key.as_str() != removing_key
+                && e.layer_key == entry.layer_key
+                && e.parent_scope.as_deref() == Some(parent)
+        })
     }
 }
 

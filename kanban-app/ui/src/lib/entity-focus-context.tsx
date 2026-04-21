@@ -426,13 +426,11 @@ function useWindowFocusEffect(
 // ---------------------------------------------------------------------------
 
 /**
- * Provides entity focus state and a scope registry to the component tree.
- * Should be provided once at the App level.
+ * Memoize the `EntityFocusContextValue` exposed by `EntityFocusProvider`.
  *
- * Focus state is owned by Rust — this provider holds no `useState` mirror of
- * the focused moniker. Instead, it exposes a subscribe/getSnapshot pair and
- * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
- * that re-render via `useSyncExternalStore` when focus changes.
+ * All deps are stable identities from the hooks above; this hook just
+ * packages them into a single context value and stabilizes it across
+ * re-renders so consumers don't thrash.
  */
 function useFocusContextValue(deps: {
   setFocus: EntityFocusContextValue["setFocus"];
@@ -482,6 +480,15 @@ function useFocusContextValue(deps: {
   );
 }
 
+/**
+ * Provides entity focus state and a scope registry to the component tree.
+ * Should be provided once at the App level.
+ *
+ * Focus state is owned by Rust — this provider holds no `useState` mirror of
+ * the focused moniker. Instead, it exposes a subscribe/getSnapshot pair and
+ * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
+ * that re-render via `useSyncExternalStore` when focus changes.
+ */
 export function EntityFocusProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatchCommand("ui.setFocus");
   const dispatchRef = useRef(dispatch);

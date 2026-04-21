@@ -6,13 +6,19 @@ import {
   type SetStateAction,
 } from "react";
 
+/** The grid's interaction mode: normal navigation, edit a cell, or visual selection. */
 export type GridMode = "normal" | "edit" | "visual";
 
+/** A cursor position in the grid, referencing a single cell by row and column. */
 export interface GridCursor {
   row: number;
   col: number;
 }
 
+/**
+ * A rectangular visual-mode selection: an `anchor` (where selection started)
+ * and a `head` (the cursor end that expands with `expandSelection`).
+ */
 export interface GridSelection {
   anchor: GridCursor;
   head: GridCursor;

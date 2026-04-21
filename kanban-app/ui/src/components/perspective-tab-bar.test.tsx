@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { userEvent } from "vitest/browser";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { FixtureShell } from "@/test/spatial-fixture-shell";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -239,6 +241,50 @@ describe("PerspectiveTabBar", () => {
     renderTabBar();
 
     fireEvent.click(screen.getByText("Second"));
+    expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
+  });
+
+  it("pressing Enter on a focused tab switches to that perspective", async () => {
+    // Gap 1 of 01KPRS0WVK7YMS20PEY12ZY70W: each `ScopedPerspectiveTab`
+    // registers a per-instance `perspective.activate.<id>` command bound to
+    // Enter across all keymaps, so pressing Enter while a tab is focused
+    // dispatches the same `setActivePerspectiveId` callback as a mouse click.
+    //
+    // We wrap `PerspectiveTabBar` in `FixtureShell`, which installs the same
+    // production `createKeyHandler` → `extractScopeBindings` pipeline the real
+    // `AppShell` uses — so this exercises the end-to-end binding path, not
+    // just the command definition.
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "First", view: "board" },
+    };
+
+    render(
+      <EntityFocusProvider>
+        <TooltipProvider delayDuration={100}>
+          <FixtureShell>
+            <PerspectiveTabBar />
+          </FixtureShell>
+        </TooltipProvider>
+      </EntityFocusProvider>,
+    );
+
+    // Clicking the tab triggers both `onSelect` (which calls
+    // `setActivePerspectiveId`) and `setFocus` via `onClickCapture`.
+    // Clear the mock after the click so we can assert Enter alone drives the
+    // second call.
+    const secondTab = screen.getByText("Second");
+    await userEvent.click(secondTab);
+    mockSetActivePerspectiveId.mockClear();
+
+    // Enter on the focused tab should dispatch `perspective.activate.p2` →
+    // `execute` → `onSelect` → `setActivePerspectiveId("p2")`.
+    await userEvent.keyboard("{Enter}");
+
     expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
   });
 

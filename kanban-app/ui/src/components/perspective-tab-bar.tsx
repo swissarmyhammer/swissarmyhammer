@@ -11,7 +11,7 @@ import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
-import { useDispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
@@ -287,9 +287,27 @@ function ScopedPerspectiveTab({
   onRenameCancel,
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
+  // Per-tab Enter binding — mirrors the `ViewButton` pattern in `left-nav.tsx`.
+  // The command id is namespaced with the perspective id
+  // (`perspective.activate.<id>`) so sibling tabs' commands don't shadow each
+  // other through the scope chain — each tab's scope contains only its own
+  // activate command. `contextMenu: false` keeps it out of the right-click
+  // menu (users already click the tab itself for the same effect).
+  const commands = useMemo<CommandDef[]>(
+    () => [
+      {
+        id: `perspective.activate.${perspective.id}`,
+        name: `Activate ${perspective.name}`,
+        keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
+        execute: onSelect,
+        contextMenu: false,
+      },
+    ],
+    [perspective.id, perspective.name, onSelect],
+  );
   return (
     <FocusScope
-      commands={[]}
+      commands={commands}
       moniker={moniker("perspective", perspective.id)}
       renderContainer={false}
     >
