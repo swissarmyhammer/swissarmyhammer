@@ -332,7 +332,6 @@ fn fetch_and_apply_results(
     Ok(())
 }
 
-
 fn render(
     stdout: &mut io::Stdout,
     query: &str,

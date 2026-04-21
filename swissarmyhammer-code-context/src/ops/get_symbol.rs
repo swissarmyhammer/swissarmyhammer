@@ -241,7 +241,13 @@ fn match_exact(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymb
     if exact.is_empty() {
         return None;
     }
-    Some(make_result(query, &exact, MatchTier::Exact, SCORE_EXACT, max))
+    Some(make_result(
+        query,
+        &exact,
+        MatchTier::Exact,
+        SCORE_EXACT,
+        max,
+    ))
 }
 
 /// Tier 2: suffix match — `foo` matches any `<prefix>::foo`.
