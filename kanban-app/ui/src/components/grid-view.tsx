@@ -80,7 +80,11 @@ function useCellMonikers(entities: Entity[], columns: DataTableColumn[]) {
     for (let r = 0; r < entities.length; r++) {
       for (let c = 0; c < columns.length; c++) {
         map.set(
-          fieldMoniker(entities[r].entity_type, entities[r].id, columns[c].field.name),
+          fieldMoniker(
+            entities[r].entity_type,
+            entities[r].id,
+            columns[c].field.name,
+          ),
           { row: r, col: c },
         );
       }
@@ -89,9 +93,10 @@ function useCellMonikers(entities: Entity[], columns: DataTableColumn[]) {
   }, [entities, columns]);
 
   const cellMonikers = useMemo(
-    () => entities.map((e) =>
-      columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name)),
-    ),
+    () =>
+      entities.map((e) =>
+        columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name)),
+      ),
     [entities, columns],
   );
 
@@ -126,7 +131,9 @@ function useGridInitialFocus(
  */
 function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
-  useEffect(() => { setVisibleRowCount(entities.length); }, [entities.length]);
+  useEffect(() => {
+    setVisibleRowCount(entities.length);
+  }, [entities.length]);
 
   const { setFocus, broadcastNavCommand } = useEntityFocus();
   const focusedMoniker = useFocusedMoniker();
@@ -145,7 +152,13 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
 
   useGridInitialFocus(cellMonikers[0]?.[0] ?? null, derivedCursor, setFocus);
 
-  return { setVisibleRowCount, grid, cellMonikers, setFocus, broadcastNavCommand };
+  return {
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    setFocus,
+    broadcastNavCommand,
+  };
 }
 
 /** Build a navigation command that broadcasts a nav event. */
@@ -215,22 +228,30 @@ function gridEditExecutor(
 ): () => void {
   const g = () => gridRef.current;
   const addRow = () =>
-    dispatch(`${entityType}.add`, { args: { title: `New ${entityType}` } })
-      .catch((err) => console.error("Failed to add row:", err));
+    dispatch(`${entityType}.add`, {
+      args: { title: `New ${entityType}` },
+    }).catch((err) => console.error("Failed to add row:", err));
   switch (id) {
     case "grid.edit":
     case "grid.editEnter":
       return () => g().enterEdit();
     case "grid.exitEdit":
-      return () => { if (g().mode === "edit") g().exitEdit(); else if (g().mode === "visual") g().exitVisual(); };
+      return () => {
+        if (g().mode === "edit") g().exitEdit();
+        else if (g().mode === "visual") g().exitVisual();
+      };
     case "grid.toggleVisual":
-      return () => { if (g().mode === "visual") g().exitVisual(); else g().enterVisual(); };
+      return () => {
+        if (g().mode === "visual") g().exitVisual();
+        else g().enterVisual();
+      };
     case "grid.deleteRow":
       return () => {
         const row = g().cursor.row;
         if (row >= 0 && row < entities.length)
-          dispatch(`${entityType}.archive`, { args: { id: entities[row].id } })
-            .catch((err) => console.error("Failed to delete row:", err));
+          dispatch(`${entityType}.archive`, {
+            args: { id: entities[row].id },
+          }).catch((err) => console.error("Failed to delete row:", err));
       };
     case "grid.newBelow":
     case "grid.newAbove":
@@ -242,13 +263,13 @@ function gridEditExecutor(
 
 /** Descriptor table for grid editing commands: id, name, optional key bindings. */
 const GRID_EDIT_DESCRIPTORS: [string, string, CommandDef["keys"]?][] = [
-  ["grid.edit",         "Edit Cell",           { vim: "i", cua: "Enter" }],
-  ["grid.editEnter",    "Edit Cell (Enter)",   { vim: "Enter" }],
-  ["grid.exitEdit",     "Exit Edit"],
-  ["grid.toggleVisual", "Toggle Visual Mode",  { vim: "v" }],
-  ["grid.deleteRow",    "Delete Row"],
-  ["grid.newBelow",     "New Row Below",       { vim: "o", cua: "Mod+Enter" }],
-  ["grid.newAbove",     "New Row Above",       { vim: "O", cua: "Mod+Shift+Enter" }],
+  ["grid.edit", "Edit Cell", { vim: "i", cua: "Enter" }],
+  ["grid.editEnter", "Edit Cell (Enter)", { vim: "Enter" }],
+  ["grid.exitEdit", "Exit Edit"],
+  ["grid.toggleVisual", "Toggle Visual Mode", { vim: "v" }],
+  ["grid.deleteRow", "Delete Row"],
+  ["grid.newBelow", "New Row Below", { vim: "o", cua: "Mod+Enter" }],
+  ["grid.newAbove", "New Row Above", { vim: "O", cua: "Mod+Shift+Enter" }],
 ];
 
 /** Build editing and row-mutation CommandDefs for the grid. */
@@ -259,7 +280,9 @@ function buildGridEditCommands(
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
   return GRID_EDIT_DESCRIPTORS.map(([id, name, keys]) => ({
-    id, name, keys,
+    id,
+    name,
+    keys,
     execute: gridEditExecutor(id, gridRef, entities, entityType, dispatch),
   }));
 }
@@ -398,31 +421,67 @@ function GridStatusBar({
  */
 function useGridViewState(view: ViewDef) {
   const dispatch = useDispatchCommand();
-  const { entityType, entities, columns, grouping, schemaCommands, activePerspective } =
-    useGridData(view);
-  const { setVisibleRowCount, grid, cellMonikers, setFocus, broadcastNavCommand } =
-    useGridNavigation(entities, columns);
-  const gridCommands = useGridCommands(broadcastNavCommand, grid, entities, entityType, dispatch);
+  const {
+    entityType,
+    entities,
+    columns,
+    grouping,
+    schemaCommands,
+    activePerspective,
+  } = useGridData(view);
+  const {
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    setFocus,
+    broadcastNavCommand,
+  } = useGridNavigation(entities, columns);
+  const gridCommands = useGridCommands(
+    broadcastNavCommand,
+    grid,
+    entities,
+    entityType,
+    dispatch,
+  );
   const { handleCellClick, buildRowEntityCommands, renderEditor } =
     useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
 
   return {
-    entityType, entities, columns, grouping, activePerspective,
-    setVisibleRowCount, grid, cellMonikers, gridCommands,
-    handleCellClick, buildRowEntityCommands, renderEditor,
+    entityType,
+    entities,
+    columns,
+    grouping,
+    activePerspective,
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    gridCommands,
+    handleCellClick,
+    buildRowEntityCommands,
+    renderEditor,
   };
 }
 
 /** Grid (spreadsheet-style) view for entities. */
 export function GridView({ view }: GridViewProps) {
   const {
-    entities, columns, grouping, activePerspective,
-    setVisibleRowCount, grid, cellMonikers, gridCommands,
-    handleCellClick, buildRowEntityCommands, renderEditor,
+    entities,
+    columns,
+    grouping,
+    activePerspective,
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    gridCommands,
+    handleCellClick,
+    buildRowEntityCommands,
+    renderEditor,
   } = useGridViewState(view);
 
   if (!view.entity_type) {
-    console.warn(`[GridView] view "${view.name ?? view.id}" has no entity_type`);
+    console.warn(
+      `[GridView] view "${view.name ?? view.id}" has no entity_type`,
+    );
     return (
       <main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
         View is missing an entity_type definition.
@@ -433,7 +492,11 @@ export function GridView({ view }: GridViewProps) {
   return (
     <CommandScopeProvider commands={gridCommands}>
       <main className="flex-1 flex flex-col min-h-0">
-        <GridStatusBar rowCount={entities.length} mode={grid.mode} cursor={grid.cursor} />
+        <GridStatusBar
+          rowCount={entities.length}
+          mode={grid.mode}
+          cursor={grid.cursor}
+        />
         <DataTable
           columns={columns}
           rows={entities}

@@ -7,7 +7,11 @@ import {
   useFocusedMoniker,
   useIsFocused,
 } from "@/lib/entity-focus-context";
-import { FocusScope, useParentFocusScope } from "./focus-scope";
+import {
+  FocusScope,
+  useFocusScopeElementRef,
+  useParentFocusScope,
+} from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
 import { CommandScopeProvider } from "@/lib/command-scope";
 
@@ -22,6 +26,20 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+// A single shared mock so tests can rewire behavior with `mockImplementation`
+// after import — exposing a stable `listen` fn is what lets the navOverride
+// test capture the production `focus-changed` handler via the webview listen
+// path introduced when entity-focus-context moved from app-wide listen to
+// `getCurrentWebviewWindow().listen()`.
+const { webviewWindowListen } = vi.hoisted(() => ({
+  webviewWindowListen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: webviewWindowListen,
+  }),
 }));
 
 vi.mock("ulid", () => {
@@ -829,7 +847,7 @@ describe("spatial focus integration", () => {
     });
   });
 
-  it("FocusScope mount invokes spatial_register with key, moniker, and layer_key", async () => {
+  it("FocusScope mount invokes spatial_register with key, moniker, and layerKey", async () => {
     render(
       <EntityFocusProvider>
         <FocusLayer name="test">
@@ -844,13 +862,15 @@ describe("spatial focus integration", () => {
       expect(invoke).toHaveBeenCalledWith(
         "spatial_register",
         expect.objectContaining({
-          key: expect.any(String),
-          moniker: "task:xyz",
-          layer_key: expect.any(String),
-          x: expect.any(Number),
-          y: expect.any(Number),
-          w: expect.any(Number),
-          h: expect.any(Number),
+          args: expect.objectContaining({
+            key: expect.any(String),
+            moniker: "task:xyz",
+            layerKey: expect.any(String),
+            x: expect.any(Number),
+            y: expect.any(Number),
+            w: expect.any(Number),
+            h: expect.any(Number),
+          }),
         }),
       );
     });
@@ -887,14 +907,17 @@ describe("spatial focus integration", () => {
   });
 
   it("FocusScope unmount removes from claim registry", async () => {
-    const { listen } = await import("@tauri-apps/api/event");
+    // Production `entity-focus-context` subscribes to `focus-changed` on the
+    // current webview window — capture the handler via the shared webview
+    // listen mock so this test can simulate a late event after unmount.
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
-    (listen as ReturnType<typeof vi.fn>).mockImplementation(
-      (_event: string, cb: (evt: { payload: unknown }) => void) => {
-        eventCallback = cb;
-        return Promise.resolve(() => {});
-      },
-    );
+    webviewWindowListen.mockImplementation(((
+      _event: string,
+      cb: (evt: { payload: unknown }) => void,
+    ) => {
+      eventCallback = cb;
+      return Promise.resolve(() => {});
+    }) as unknown as () => Promise<() => void>);
 
     let capturedKey: string | null = null;
 
@@ -921,7 +944,7 @@ describe("spatial focus integration", () => {
         (c: unknown[]) => c[0] === "spatial_register",
       );
       expect(registerCall).toBeTruthy();
-      capturedKey = (registerCall![1] as { key: string }).key;
+      capturedKey = (registerCall![1] as { args: { key: string } }).args.key;
     });
 
     // Unmount the FocusScope
@@ -956,8 +979,56 @@ describe("spatial focus integration", () => {
       expect(invoke).toHaveBeenCalledWith(
         "spatial_register",
         expect.objectContaining({
-          moniker: "task:01",
-          overrides: { Right: "task:02", Left: null },
+          args: expect.objectContaining({
+            moniker: "task:01",
+            overrides: { Right: "task:02", Left: null },
+          }),
+        }),
+      );
+    });
+  });
+
+  it("nested FocusScope threads parent_scope moniker through spatial_register", async () => {
+    // Locks down the wiring that lets the Rust engine's container-first
+    // search keep `h/j/k/l` inside a card's sub-parts. Child scopes read
+    // the ancestor moniker from `FocusScopeContext`; without this thread,
+    // every `spatial_register` call would pass `parent_scope: null` and
+    // the engine would have no way to scope cardinal-direction searches to
+    // the siblings of the source scope.
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:card-1" commands={[]}>
+            <FocusScope moniker="tag:pill-1" commands={[]}>
+              <span>pill</span>
+            </FocusScope>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    // The outer card has no ancestor scope — parentScope is null.
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          args: expect.objectContaining({
+            moniker: "task:card-1",
+            parentScope: null,
+          }),
+        }),
+      );
+    });
+
+    // The inner pill's parentScope is the enclosing card's moniker.
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          args: expect.objectContaining({
+            moniker: "tag:pill-1",
+            parentScope: "task:card-1",
+          }),
         }),
       );
     });
@@ -979,14 +1050,17 @@ describe("spatial focus integration", () => {
     // this test proves React is wired such that if Rust returns the override
     // target, the UI picks it up on both the focus-state and the claim
     // highlight path.
-    const { listen } = await import("@tauri-apps/api/event");
+    // Production `entity-focus-context` listens for `focus-changed` via
+    // `getCurrentWebviewWindow().listen()` so listeners are scoped to this
+    // window. Capture the handler via the shared webviewWindow mock.
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
-    (listen as ReturnType<typeof vi.fn>).mockImplementation(
-      (event: string, cb: (evt: { payload: unknown }) => void) => {
-        if (event === "focus-changed") eventCallback = cb;
-        return Promise.resolve(() => {});
-      },
-    );
+    webviewWindowListen.mockImplementation(((
+      event: string,
+      cb: (evt: { payload: unknown }) => void,
+    ) => {
+      if (event === "focus-changed") eventCallback = cb;
+      return Promise.resolve(() => {});
+    }) as unknown as () => Promise<() => void>);
 
     // Helper that exposes broadcastNavCommand so the test can drive it.
     function NavBroadcaster() {
@@ -1027,26 +1101,28 @@ describe("spatial focus integration", () => {
       const sourceCall = calls.find(
         (c: unknown[]) =>
           c[0] === "spatial_register" &&
-          (c[1] as { moniker: string }).moniker === "task:01",
+          (c[1] as { args: { moniker: string } }).args.moniker === "task:01",
       );
       const targetCall = calls.find(
         (c: unknown[]) =>
           c[0] === "spatial_register" &&
-          (c[1] as { moniker: string }).moniker === "task:02",
+          (c[1] as { args: { moniker: string } }).args.moniker === "task:02",
       );
       expect(sourceCall).toBeTruthy();
       expect(targetCall).toBeTruthy();
-      sourceKey = (sourceCall![1] as { key: string }).key;
-      targetKey = (targetCall![1] as { key: string }).key;
+      sourceKey = (sourceCall![1] as { args: { key: string } }).args.key;
+      targetKey = (targetCall![1] as { args: { key: string } }).args.key;
     });
 
     // Confirm the override payload reached Rust exactly as declared.
     expect(invoke).toHaveBeenCalledWith(
       "spatial_register",
       expect.objectContaining({
-        key: sourceKey,
-        moniker: "task:01",
-        overrides: { Right: "task:02" },
+        args: expect.objectContaining({
+          key: sourceKey,
+          moniker: "task:01",
+          overrides: { Right: "task:02" },
+        }),
       }),
     );
 
@@ -1083,5 +1159,214 @@ describe("spatial focus integration", () => {
     // The React side picked up the override target: focused moniker is now
     // task:02, proving the full loop closed.
     expect(getByTestId("focus-reader").textContent).toBe("task:02");
+  });
+});
+
+/* ---------- spatial={false} opt-out ---------- */
+
+describe("FocusScope spatial prop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  it("spatial=false skips spatial_register (no rect in the beam-test graph)", async () => {
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="row:1" commands={[]} spatial={false}>
+            <span>row</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    // Give effects a chance to flush — if spatial_register were going to be
+    // called, it would have been called synchronously on mount.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(invoke).not.toHaveBeenCalledWith(
+      "spatial_register",
+      expect.anything(),
+    );
+  });
+
+  it("spatial=false skips spatial_unregister on unmount", async () => {
+    function Harness({ show }: { show: boolean }) {
+      return (
+        <EntityFocusProvider>
+          <FocusLayer name="test">
+            {show && (
+              <FocusScope moniker="row:tmp" commands={[]} spatial={false}>
+                <span>temp</span>
+              </FocusScope>
+            )}
+          </FocusLayer>
+        </EntityFocusProvider>
+      );
+    }
+
+    const { rerender } = render(<Harness show={true} />);
+    vi.clearAllMocks();
+    rerender(<Harness show={false} />);
+
+    // Give effects a tick; spatial_unregister must NOT be called because
+    // the scope never registered in the first place.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(invoke).not.toHaveBeenCalledWith(
+      "spatial_unregister",
+      expect.anything(),
+    );
+  });
+
+  it("spatial=true (default) still invokes spatial_register", async () => {
+    // Sanity check the inverse: omitting `spatial` yields the usual
+    // registration. Guards against the spatial={false} case silently
+    // becoming the default.
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="cell:1" commands={[]}>
+            <span>cell</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          args: expect.objectContaining({ moniker: "cell:1" }),
+        }),
+      );
+    });
+  });
+
+  it("spatial=false scope still registers in the entity-focus scope registry", () => {
+    // Opting out of spatial registration must not break the focus/command
+    // scope registration — non-spatial container scopes (rows) still own
+    // their commands and must resolve in the scope chain.
+    let probeGetScope: ((m: string) => unknown) | null = null;
+    function ScopeProbe() {
+      const { getScope } = useEntityFocus();
+      probeGetScope = getScope;
+      return null;
+    }
+
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <ScopeProbe />
+          <FocusScope moniker="row:1" commands={[]} spatial={false}>
+            <span>row</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    expect(probeGetScope!("row:1")).not.toBeNull();
+  });
+});
+
+/* ---------- useFocusScopeElementRef hook ---------- */
+
+describe("useFocusScopeElementRef", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  /**
+   * Probe that renders its hook result into the DOM so tests can assert
+   * whether the ref was populated. A non-null ref renders "has-ref",
+   * a null context renders "no-ref".
+   */
+  function ElementRefProbe({ testId }: { testId: string }) {
+    const ref = useFocusScopeElementRef();
+    return <span data-testid={testId}>{ref ? "has-ref" : "no-ref"}</span>;
+  }
+
+  it("returns null outside any FocusScope", () => {
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <ElementRefProbe testId="probe" />
+      </EntityFocusProvider>,
+    );
+    expect(getByTestId("probe").textContent).toBe("no-ref");
+  });
+
+  it("returns null inside a FocusScope rendered with renderContainer=true (default)", () => {
+    // Default FocusScope owns its own FocusHighlight container and binds
+    // the ref internally. Descendants must NOT see a ref — there is
+    // nothing for them to attach to.
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:abc" commands={[]}>
+            <ElementRefProbe testId="probe" />
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+    expect(getByTestId("probe").textContent).toBe("no-ref");
+  });
+
+  it("returns a non-null ref inside a FocusScope with renderContainer=false", () => {
+    // When the scope suppresses its container, a descendant must attach
+    // the ref to its own DOM element so `ResizeObserver` can measure it.
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:abc" commands={[]} renderContainer={false}>
+            <ElementRefProbe testId="probe" />
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+    expect(getByTestId("probe").textContent).toBe("has-ref");
+  });
+
+  it("attaching the ref causes spatial_register to report a real DOM rect", async () => {
+    // Full contract: the consumer attaches the ref to its element, and
+    // `ResizeObserver` + `getBoundingClientRect` produce the rect that
+    // flows into spatial_register. Proves `useFocusScopeElementRef` is
+    // not just returning a ref — it's the ref the scope observes.
+    function Consumer() {
+      const ref = useFocusScopeElementRef();
+      return (
+        <div
+          ref={ref as React.RefObject<HTMLDivElement>}
+          data-testid="consumer"
+          style={{ width: "100px", height: "50px" }}
+        >
+          content
+        </div>
+      );
+    }
+
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="cell:abc" commands={[]} renderContainer={false}>
+            <Consumer />
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "spatial_register",
+        expect.objectContaining({
+          args: expect.objectContaining({
+            moniker: "cell:abc",
+            x: expect.any(Number),
+            y: expect.any(Number),
+            w: expect.any(Number),
+            h: expect.any(Number),
+          }),
+        }),
+      );
+    });
   });
 });

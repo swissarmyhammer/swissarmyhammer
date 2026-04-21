@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -12,6 +13,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -112,12 +119,21 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 
-/** Renders PerspectiveTabBar inside the required TooltipProvider. */
+/** Renders PerspectiveTabBar inside the required providers.
+ *
+ * `EntityFocusProvider` is required because each perspective tab is a
+ * `FocusScope` (see `ScopedPerspectiveTab`), and `FocusScope` calls
+ * `useEntityFocus()` to register its scope/claim — throws if rendered
+ * outside a provider. Tests that don't care about focus state still need
+ * the provider just to let the tree mount.
+ */
 function renderTabBar(delayDuration = 100) {
   return render(
-    <TooltipProvider delayDuration={delayDuration}>
-      <PerspectiveTabBar />
-    </TooltipProvider>,
+    <EntityFocusProvider>
+      <TooltipProvider delayDuration={delayDuration}>
+        <PerspectiveTabBar />
+      </TooltipProvider>
+    </EntityFocusProvider>,
   );
 }
 

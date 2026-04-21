@@ -621,12 +621,7 @@ impl RequestQueue {
         let kv_cache_position: i32;
 
         kv_cache_position = if can_use_cache {
-            Self::restore_session_state(
-                worker_id,
-                session,
-                &mut ctx,
-                session_state_cache,
-            )?
+            Self::restore_session_state(worker_id, session, &mut ctx, session_state_cache)?
         } else {
             -1
         };
@@ -729,7 +724,13 @@ impl RequestQueue {
             worker_id, request_id, generation_time, tokens_generated, final_finish_reason
         );
 
-        Self::save_session_state(worker_id, session, &mut ctx, request_id.as_str(), session_state_cache);
+        Self::save_session_state(
+            worker_id,
+            session,
+            &mut ctx,
+            request_id.as_str(),
+            session_state_cache,
+        );
 
         Ok(GenerationResponse {
             generated_text,

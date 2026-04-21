@@ -303,7 +303,9 @@ fn render(
     raw_line(stdout, "")?;
 
     // Body
-    render_body(stdout, query, results, selected, loading, error_msg, content_w)?;
+    render_body(
+        stdout, query, results, selected, loading, error_msg, content_w,
+    )?;
 
     // Footer
     execute!(stdout, SetForegroundColor(Color::DarkGrey))?;

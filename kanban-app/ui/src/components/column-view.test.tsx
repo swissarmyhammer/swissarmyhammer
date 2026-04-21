@@ -12,6 +12,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
   emit: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
@@ -133,6 +139,72 @@ describe("ColumnView drop zones", () => {
     );
 
     expect(screen.getByText("2")).toBeTruthy();
+  });
+});
+
+describe("ColumnView layout", () => {
+  /**
+   * Regression test for "columns don't fill the available vertical space".
+   *
+   * The column scope (`data-moniker="column:<id>"`) is a `flex flex-col`
+   * container whose children must be: (1) a content-sized header and (2) a
+   * `flex-1` card list that consumes all remaining vertical space.
+   *
+   * If the header is ALSO given `flex-1` (as it was before this fix), the
+   * two `flex-1` siblings split the space 50/50 and the card list visually
+   * occupies only the bottom half of the column.
+   *
+   * jsdom does not lay out flexbox, so we assert on class structure instead
+   * of measured rects: the card list must carry `flex-1`, and no
+   * non-card-list direct child of the column scope may carry `flex-1`.
+   */
+  it("card list is the only flex-1 child of the column scope", () => {
+    const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
+    renderColumn(
+      <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
+    );
+
+    const scope = document.querySelector(
+      '[data-moniker="column:col-1"]',
+    ) as HTMLElement | null;
+    expect(scope).toBeTruthy();
+
+    // Find the card list — it's the one with overflow-y-auto.
+    const cardList = scope!.querySelector(
+      "div.overflow-y-auto",
+    ) as HTMLElement | null;
+    expect(cardList).toBeTruthy();
+    expect(cardList!.className).toContain("flex-1");
+
+    // No direct child of the column scope other than the card list may
+    // claim `flex-1` — otherwise it competes with the card list for space.
+    for (const child of Array.from(scope!.children) as HTMLElement[]) {
+      if (child === cardList) continue;
+      // `flex-1` is a whole token; reject it as a class but allow substrings
+      // like `flex-col` that merely start with "flex-".
+      const classes = child.className.split(/\s+/);
+      expect(classes).not.toContain("flex-1");
+    }
+  });
+
+  it("column header row is a direct child of the column scope", () => {
+    // After removing the redundant `flex-col flex-1` wrapper, the
+    // `.column-header-focus` row (the actual header content) should be a
+    // direct child of the column scope so it sizes to its content height.
+    renderColumn(
+      <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
+    );
+
+    const scope = document.querySelector(
+      '[data-moniker="column:col-1"]',
+    ) as HTMLElement | null;
+    expect(scope).toBeTruthy();
+
+    const header = scope!.querySelector(
+      ".column-header-focus",
+    ) as HTMLElement | null;
+    expect(header).toBeTruthy();
+    expect(header!.parentElement).toBe(scope);
   });
 });
 

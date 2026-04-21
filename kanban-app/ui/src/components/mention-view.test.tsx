@@ -29,6 +29,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
@@ -311,9 +317,7 @@ describe("MentionView — list mode", () => {
       testId: string;
     }) {
       const { setFocus } = useEntityFocus();
-      return (
-        <button data-testid={testId} onClick={() => setFocus(moniker)} />
-      );
+      return <button data-testid={testId} onClick={() => setFocus(moniker)} />;
     }
     /** Reads the focused moniker from the focus store. */
     function FocusReader() {

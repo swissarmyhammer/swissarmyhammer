@@ -8657,6 +8657,7 @@ name = "swissarmyhammer-spatial-nav"
 version = "0.12.11"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

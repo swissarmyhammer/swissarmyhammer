@@ -451,10 +451,17 @@ impl SpatialState {
     /// layer), and updates `focused_key` if a target is found.
     ///
     /// When `from_key` is not registered (e.g. the focused entry was
-    /// unregistered during a virtualized scroll), falls back to the
-    /// `First` direction (top-left-most entry in the active layer) instead
-    /// of returning an error. Returns `Ok(None)` only when no entries
-    /// exist at all.
+    /// unregistered during a virtualized scroll, or the React and Rust
+    /// registries briefly desynced after a race), returns `Ok(None)`
+    /// without touching focus. An earlier revision fell back to
+    /// `Direction::First` here, but that caused the
+    /// "jumps to first cell and sticks" bug: when React's stored key was
+    /// stale, navigation silently jumped to the top-left entry whose key
+    /// React often had no moniker mapping for, clearing React's focused
+    /// moniker and leaving subsequent nav keys as no-ops. A no-op on an
+    /// unknown source is the only outcome the frontend can recover from
+    /// gracefully — the next `focus-changed` event or a user click will
+    /// restore a consistent focus target.
     pub fn navigate(
         &self,
         from_key: &str,
@@ -463,7 +470,8 @@ impl SpatialState {
         let mut inner = self.inner.write().unwrap();
         let source = match inner.entries.get(from_key) {
             Some(e) => e.clone(),
-            None => return Self::fallback_to_first(&mut inner, from_key),
+            // Unknown source key: no-op. See rustdoc above for rationale.
+            None => return Ok(None),
         };
 
         // Check override map before spatial search.
@@ -508,48 +516,6 @@ impl SpatialState {
                     inner.save_focus_memory(pk);
                 }
                 inner.focused_key = Some(key.clone());
-                Ok(Some(FocusChanged {
-                    prev_key: prev,
-                    next_key: Some(key),
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Fallback when `from_key` is not registered: find the top-left-most
-    /// entry in the active layer via `Direction::First` and set focus to it.
-    ///
-    /// Returns `Ok(None)` when the active layer has no entries.
-    fn fallback_to_first(
-        inner: &mut SpatialStateInner,
-        _from_key: &str,
-    ) -> Result<Option<FocusChanged>, String> {
-        let active_layer_key = inner.layer_stack.active().map(|l| l.key.clone());
-        let candidates: Vec<&SpatialEntry> = inner
-            .entries
-            .values()
-            .filter(|e| {
-                active_layer_key
-                    .as_deref()
-                    .is_none_or(|lk| e.layer_key == lk)
-            })
-            .collect();
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-        // Reuse find_target with a dummy source — First ignores the source entry.
-        let winner = crate::spatial_nav::find_target(
-            candidates[0],
-            &candidates,
-            crate::spatial_nav::Direction::First,
-        );
-        match winner {
-            Some(key) => {
-                let prev = inner.focused_key.replace(key.clone());
-                if let Some(ref pk) = prev {
-                    inner.save_focus_memory(pk);
-                }
                 Ok(Some(FocusChanged {
                     prev_key: prev,
                     next_key: Some(key),
@@ -1070,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    fn navigate_with_unknown_key_falls_back() {
+    fn navigate_with_unknown_key_is_noop() {
         let state = SpatialState::new();
         state.push_layer("layer".into(), "window".into());
         reg(
@@ -1082,10 +1048,13 @@ mod tests {
             None,
         );
 
-        // Unknown key falls back to First in active layer instead of Err.
+        // Unknown source key: navigate is a no-op, no focus change, no event.
+        // Replaces the earlier "falls back to First" behavior which caused
+        // the "jumps to first cell and sticks" intermittent bug when React
+        // and Rust briefly diverged on which keys were registered.
         let result = state.navigate("nonexistent", crate::spatial_nav::Direction::Right);
-        let event = result.unwrap().unwrap();
-        assert_eq!(event.next_key, Some("key-1".to_string()));
+        assert!(result.unwrap().is_none(), "unknown source key is a no-op");
+        assert_eq!(state.focused_key(), None, "focus unchanged");
     }
 
     #[test]
@@ -1269,7 +1238,7 @@ mod tests {
     // --- Navigate fallback tests ---
 
     #[test]
-    fn navigate_missing_key_falls_back_to_first() {
+    fn navigate_missing_key_is_noop_preserves_focus() {
         let state = SpatialState::new();
         state.push_layer("layer".into(), "window".into());
         reg(
@@ -1296,12 +1265,23 @@ mod tests {
             "layer",
             None,
         );
+        state.focus("key-A");
 
-        // "gone" is not registered — should fall back to top-left (key-B at 0,0).
+        // "gone" is not registered — navigate must be a no-op so the
+        // frontend can recover on the next focus-changed event or user
+        // click. Fallback to First is the bug this test pins down:
+        // without this assertion, a stale React key silently yanks focus
+        // to key-B (top-left) and leaves the UI stuck.
         let result = state.navigate("gone", crate::spatial_nav::Direction::Down);
-        let event = result.unwrap().unwrap();
-        assert_eq!(event.next_key, Some("key-B".to_string()));
-        assert_eq!(state.focused_key(), Some("key-B".to_string()));
+        assert!(
+            result.unwrap().is_none(),
+            "unknown source key must be a no-op"
+        );
+        assert_eq!(
+            state.focused_key(),
+            Some("key-A".to_string()),
+            "focus preserved on unknown-key navigate"
+        );
     }
 
     #[test]

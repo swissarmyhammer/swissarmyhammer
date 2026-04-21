@@ -23,15 +23,61 @@ function buildInspectorCommands(
   navRef: React.MutableRefObject<UseInspectorNavReturn | null>,
 ): CommandDef[] {
   return [
-    { id: "inspector.moveUp", name: "Move Up", keys: { vim: "k", cua: "ArrowUp" }, execute: () => broadcastRef.current("nav.up") },
-    { id: "inspector.moveDown", name: "Move Down", keys: { vim: "j", cua: "ArrowDown" }, execute: () => broadcastRef.current("nav.down") },
-    { id: "inspector.edit", name: "Edit Field", keys: { vim: "i", cua: "Enter" }, execute: () => navRef.current?.enterEdit() },
-    { id: "inspector.editEnter", name: "Edit Field (Enter)", keys: { vim: "Enter" }, execute: () => navRef.current?.enterEdit() },
-    { id: "inspector.exitEdit", name: "Exit Edit", execute: () => { if (navRef.current?.mode === "edit") navRef.current.exitEdit(); } },
-    { id: "inspector.moveToFirst", name: "Move to First", keys: { vim: "g g", cua: "Home" }, execute: () => broadcastRef.current("nav.first") },
-    { id: "inspector.moveToLast", name: "Move to Last", keys: { vim: "G", cua: "End" }, execute: () => broadcastRef.current("nav.last") },
-    { id: "inspector.nextField", name: "Next Field", keys: { cua: "Tab" }, execute: () => broadcastRef.current("nav.down") },
-    { id: "inspector.prevField", name: "Previous Field", keys: { cua: "Shift+Tab" }, execute: () => broadcastRef.current("nav.up") },
+    {
+      id: "inspector.moveUp",
+      name: "Move Up",
+      keys: { vim: "k", cua: "ArrowUp" },
+      execute: () => broadcastRef.current("nav.up"),
+    },
+    {
+      id: "inspector.moveDown",
+      name: "Move Down",
+      keys: { vim: "j", cua: "ArrowDown" },
+      execute: () => broadcastRef.current("nav.down"),
+    },
+    {
+      id: "inspector.edit",
+      name: "Edit Field",
+      keys: { vim: "i", cua: "Enter" },
+      execute: () => navRef.current?.enterEdit(),
+    },
+    {
+      id: "inspector.editEnter",
+      name: "Edit Field (Enter)",
+      keys: { vim: "Enter" },
+      execute: () => navRef.current?.enterEdit(),
+    },
+    {
+      id: "inspector.exitEdit",
+      name: "Exit Edit",
+      execute: () => {
+        if (navRef.current?.mode === "edit") navRef.current.exitEdit();
+      },
+    },
+    {
+      id: "inspector.moveToFirst",
+      name: "Move to First",
+      keys: { vim: "g g", cua: "Home" },
+      execute: () => broadcastRef.current("nav.first"),
+    },
+    {
+      id: "inspector.moveToLast",
+      name: "Move to Last",
+      keys: { vim: "G", cua: "End" },
+      execute: () => broadcastRef.current("nav.last"),
+    },
+    {
+      id: "inspector.nextField",
+      name: "Next Field",
+      keys: { cua: "Tab" },
+      execute: () => broadcastRef.current("nav.down"),
+    },
+    {
+      id: "inspector.prevField",
+      name: "Previous Field",
+      keys: { cua: "Shift+Tab" },
+      execute: () => broadcastRef.current("nav.up"),
+    },
   ];
 }
 
@@ -49,12 +95,23 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  const entityCommands = useEntityCommands(entity.entity_type, entity.id, entity);
-  const commands = useMemo(() => buildInspectorCommands(broadcastRef, navRef), []);
+  const entityCommands = useEntityCommands(
+    entity.entity_type,
+    entity.id,
+    entity,
+  );
+  const commands = useMemo(
+    () => buildInspectorCommands(broadcastRef, navRef),
+    [],
+  );
 
   return (
     <FocusLayer name="inspector">
-      <FocusScope moniker={entity.moniker} commands={entityCommands} showFocusBar={false}>
+      <FocusScope
+        moniker={entity.moniker}
+        commands={entityCommands}
+        showFocusBar={false}
+      >
         <CommandScopeProvider commands={commands}>
           <EntityInspector entity={entity} navRef={navRef} />
         </CommandScopeProvider>

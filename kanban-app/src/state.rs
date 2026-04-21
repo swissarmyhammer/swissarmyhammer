@@ -401,10 +401,20 @@ pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
-    /// Spatial focus state: entry registry and focused key tracking.
-    /// Transient — not persisted. Entries are registered/unregistered by
-    /// React FocusScope mount/unmount via Tauri commands.
-    pub(crate) spatial_state: SpatialState,
+    /// Per-window spatial focus state.
+    ///
+    /// Each webview window gets its own `SpatialState` keyed by its Tauri
+    /// window label, so FocusScope registrations, the layer stack, and the
+    /// focused key are all scoped to the window that owns them. Without this
+    /// scoping, spatial navigation in one window would leak into another:
+    /// every window's `FocusLayer name="window"` pushes onto a single stack
+    /// and beam-test candidates pool across windows.
+    ///
+    /// `Arc<SpatialState>` lets command handlers clone the state out and
+    /// drop the outer lock quickly. Entries are created lazily in
+    /// [`AppState::spatial_state_for`] on first access for a window label.
+    /// Transient — never persisted.
+    pub(crate) spatial_states: RwLock<HashMap<String, Arc<SpatialState>>>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
@@ -455,13 +465,53 @@ impl AppState {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state,
-            spatial_state: SpatialState::new(),
+            spatial_states: RwLock::new(HashMap::new()),
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
         }
+    }
+
+    /// Get or create the `SpatialState` for the given window label.
+    ///
+    /// Each webview window owns a distinct `SpatialState` so that FocusScope
+    /// registrations, layer stacks, and focused-key tracking don't leak
+    /// between windows. Called on every spatial Tauri command to resolve the
+    /// right state for the invoking window. Insertion on miss is the common
+    /// path — the first `spatial_push_layer` or `spatial_register` from a
+    /// newly-created window hits this code before any other access.
+    ///
+    /// Returns an `Arc<SpatialState>` so the caller can drop the outer lock
+    /// before doing work — the state itself owns an internal `RwLock`.
+    pub(crate) async fn spatial_state_for(&self, label: &str) -> Arc<SpatialState> {
+        // Fast path: state already exists — take the read lock only.
+        {
+            let states = self.spatial_states.read().await;
+            if let Some(state) = states.get(label) {
+                return Arc::clone(state);
+            }
+        }
+        // Slow path: upgrade to write lock and insert. A concurrent writer
+        // may have inserted in the meantime — re-check inside the write
+        // guard to keep insertion idempotent.
+        let mut states = self.spatial_states.write().await;
+        Arc::clone(
+            states
+                .entry(label.to_string())
+                .or_insert_with(|| Arc::new(SpatialState::new())),
+        )
+    }
+
+    /// Remove the `SpatialState` for a window that has been destroyed.
+    ///
+    /// Called from the window-destroyed handler so long-lived processes with
+    /// many transient windows don't leak `SpatialState` instances. Safe to
+    /// call even when no state exists for the label — it's a no-op.
+    pub(crate) async fn remove_spatial_state(&self, label: &str) {
+        let mut states = self.spatial_states.write().await;
+        states.remove(label);
     }
 
     /// Open a board at the given path, resolving to its .kanban directory.

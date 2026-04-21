@@ -28,7 +28,9 @@ function useMenuCommandListener(
       const executed = await executeCommand(event.payload);
       if (!executed) console.warn(`Menu command not found: ${event.payload}`);
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [executeCommand]);
 }
 
@@ -47,9 +49,11 @@ function useContextMenuCommandListener(
       if (!cmd) return;
       await dispatchRef.current(cmd, { target, scopeChain: scope_chain });
     });
-    return () => { unlisten.then((fn) => fn()); };
-  // dispatchRef is stable.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+    // dispatchRef is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
 

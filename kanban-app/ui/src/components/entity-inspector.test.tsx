@@ -199,6 +199,12 @@ vi.mock("@tauri-apps/api/event", async () => {
     listen: vi.fn(() => Promise.resolve(() => {})),
   };
 });
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 // `window-container.tsx` calls `getCurrentWindow()` at module-load time;
 // stub it so tests can import components that pull in window-container
 // without a real Tauri runtime.

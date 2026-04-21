@@ -9,7 +9,60 @@ use std::collections::HashMap;
 use crate::state::AppState;
 use serde::Deserialize;
 use swissarmyhammer_spatial_nav::{BatchEntry, Direction, Rect};
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{Emitter, Runtime, State, WebviewWindow};
+
+/// Wire format for `spatial_register`.
+///
+/// Wrapping the full arg list in a `Deserialize` struct lets us attach
+/// serde aliases per field so callers may use either camelCase or
+/// snake_case — Tauri's built-in `rename_all` picks exactly one naming
+/// convention at the command level and silently drops fields in the other,
+/// which is a footgun for a command this central to keyboard focus. A
+/// struct wrapper deserialized by serde applies `rename_all = "camelCase"`
+/// as the canonical wire form and `#[serde(alias = "...")]` to accept the
+/// snake_case form too.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpatialRegisterArgs {
+    /// Unique spatial key (ULID generated client-side).
+    pub key: String,
+    /// Entity moniker (e.g. `"task:01ABC"`).
+    pub moniker: String,
+    /// Left edge x-coordinate.
+    pub x: f64,
+    /// Top edge y-coordinate.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub w: f64,
+    /// Height in logical pixels.
+    pub h: f64,
+    /// Spatial key of the FocusLayer this scope lives in. Accepted as
+    /// either `layerKey` (default) or `layer_key` (serde alias) on the
+    /// wire — see the struct-level doc comment for the rationale.
+    #[serde(alias = "layer_key")]
+    pub layer_key: String,
+    /// Optional parent scope key for container-first navigation.
+    /// Accepts both `parentScope` and `parent_scope`.
+    #[serde(alias = "parent_scope", default)]
+    pub parent_scope: Option<String>,
+    /// Directional navigation overrides.
+    #[serde(default)]
+    pub overrides: Option<HashMap<String, Option<String>>>,
+}
+
+/// Emit a `focus-changed` event scoped to a single window.
+///
+/// Uses `emit_to` with the window label (which matches `EventTarget::AnyLabel`)
+/// so only listeners registered on this specific window fire. Using the
+/// app-wide `app.emit` would broadcast to every open window, causing window
+/// B's focus-claim handlers to run in response to focus moving inside
+/// window A.
+fn emit_focus_changed<R: Runtime>(
+    window: &WebviewWindow<R>,
+    event: &swissarmyhammer_spatial_nav::FocusChanged,
+) {
+    let _ = window.emit_to(window.label(), "focus-changed", event);
+}
 
 /// Register a spatial entry (FocusScope mount or ResizeObserver update).
 ///
@@ -17,35 +70,33 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 /// spatial key is a ULID generated client-side, stable across re-renders,
 /// unique per mount. The optional `overrides` map allows per-entry
 /// navigation redirection or blocking by direction string.
-// Tauri command signatures are the frontend API contract — each JS-side
-// arg is one parameter here. Refactoring to a struct would require changes
-// on the React side that aren't in scope.
-#[allow(clippy::too_many_arguments)]
+///
+/// The entry is written into the `SpatialState` owned by the invoking
+/// window — resolved via the `WebviewWindow` parameter's label. Entries
+/// registered from window A are invisible to navigation in window B.
+///
+/// Accepts both camelCase (`layerKey`, `parentScope`) and snake_case
+/// (`layer_key`, `parent_scope`) field names on the wire — see
+/// [`SpatialRegisterArgs`] for why.
 #[tauri::command]
-pub async fn spatial_register(
-    key: String,
-    moniker: String,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    layer_key: String,
-    parent_scope: Option<String>,
-    overrides: Option<HashMap<String, Option<String>>>,
+pub async fn spatial_register<R: Runtime>(
+    args: SpatialRegisterArgs,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.spatial_state.register(
-        key,
-        moniker,
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    spatial_state.register(
+        args.key,
+        args.moniker,
         Rect {
-            x,
-            y,
-            width: w,
-            height: h,
+            x: args.x,
+            y: args.y,
+            width: args.w,
+            height: args.h,
         },
-        layer_key,
-        parent_scope,
-        overrides.unwrap_or_default(),
+        args.layer_key,
+        args.parent_scope,
+        args.overrides.unwrap_or_default(),
     );
     Ok(())
 }
@@ -53,31 +104,34 @@ pub async fn spatial_register(
 /// Unregister a spatial entry (FocusScope unmount).
 ///
 /// If the unregistered entry was the focused key, focus is cleared and a
-/// `focus-changed` event is emitted.
+/// `focus-changed` event is emitted scoped to the invoking window.
 #[tauri::command]
 pub async fn spatial_unregister<R: Runtime>(
     key: String,
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(event) = state.spatial_state.unregister(&key) {
-        let _ = app.emit("focus-changed", &event);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.unregister(&key) {
+        emit_focus_changed(&window, &event);
     }
     Ok(())
 }
 
 /// Set focus to a spatial key (click or programmatic).
 ///
-/// Updates the focused key and emits a `focus-changed` event if the focus
-/// actually changed. No-op if the key is already focused.
+/// Updates the focused key for the invoking window and emits a
+/// `focus-changed` event scoped to that window if the focus actually
+/// changed. No-op if the key is already focused.
 #[tauri::command]
 pub async fn spatial_focus<R: Runtime>(
     key: String,
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(event) = state.spatial_state.focus(&key) {
-        let _ = app.emit("focus-changed", &event);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.focus(&key) {
+        emit_focus_changed(&window, &event);
     }
     Ok(())
 }
@@ -85,38 +139,43 @@ pub async fn spatial_focus<R: Runtime>(
 /// Clear focus without removing any entry.
 ///
 /// Called when React clears focus (e.g. `setFocus(null)`). Emits a
-/// `focus-changed` event if something was previously focused.
+/// `focus-changed` event scoped to the invoking window if something was
+/// previously focused.
 #[tauri::command]
 pub async fn spatial_clear_focus<R: Runtime>(
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(event) = state.spatial_state.clear_focus() {
-        let _ = app.emit("focus-changed", &event);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.clear_focus() {
+        emit_focus_changed(&window, &event);
     }
     Ok(())
 }
 
 /// Navigate from a key in a direction using beam test + scoring.
 ///
-/// Filters to the active layer, applies container-first search, and
-/// emits a `focus-changed` event if focus moves. Returns the moniker
-/// of the newly focused entry, or `None` if no target was found.
+/// Filters to the active layer within this window's `SpatialState`, applies
+/// container-first search, and emits a `focus-changed` event scoped to this
+/// window if focus moves. Returns the moniker of the newly focused entry,
+/// or `None` if no target was found. Candidates from other windows are
+/// invisible because each window has its own registry.
 #[tauri::command]
 pub async fn spatial_navigate<R: Runtime>(
     key: String,
     direction: String,
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let dir: Direction = direction
         .parse()
         .map_err(|e: swissarmyhammer_spatial_nav::ParseDirectionError| e.to_string())?;
-    match state.spatial_state.navigate(&key, dir)? {
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    match spatial_state.navigate(&key, dir)? {
         Some(event) => {
             let next = event.next_key.clone();
-            let _ = app.emit("focus-changed", &event);
-            Ok(next.and_then(|k| state.spatial_state.get(&k).map(|e| e.moniker)))
+            emit_focus_changed(&window, &event);
+            Ok(next.and_then(|k| spatial_state.get(&k).map(|e| e.moniker)))
         }
         None => Ok(None),
     }
@@ -125,30 +184,35 @@ pub async fn spatial_navigate<R: Runtime>(
 /// Push a focus layer onto the layer stack (FocusLayer mount).
 ///
 /// The active (topmost) layer determines which entries are visible to
-/// `spatial_navigate`.
+/// `spatial_navigate`. Pushes onto the invoking window's layer stack —
+/// another window's stack is not touched.
 #[tauri::command]
-pub async fn spatial_push_layer(
+pub async fn spatial_push_layer<R: Runtime>(
     key: String,
     name: String,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.spatial_state.push_layer(key, name);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    spatial_state.push_layer(key, name);
     Ok(())
 }
 
 /// Remove a focus layer from the layer stack by key (FocusLayer unmount).
 ///
-/// Removal is by key, not pop — supports out-of-order unmount. If the
-/// layer below has a `last_focused` key, focus is restored and a
-/// `focus-changed` event is emitted.
+/// Removal is by key, not pop — supports out-of-order unmount. Operates on
+/// the invoking window's layer stack. If the layer below has a
+/// `last_focused` key, focus is restored and a `focus-changed` event is
+/// emitted scoped to that window.
 #[tauri::command]
 pub async fn spatial_remove_layer<R: Runtime>(
     key: String,
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(event) = state.spatial_state.remove_layer(&key) {
-        let _ = app.emit("focus-changed", &event);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.remove_layer(&key) {
+        emit_focus_changed(&window, &event);
     }
     Ok(())
 }
@@ -157,7 +221,13 @@ pub async fn spatial_remove_layer<R: Runtime>(
 ///
 /// Mirrors the fields of `spatial_register` but packed into a struct so the
 /// frontend can send an array in one invoke.
+///
+/// Like [`SpatialRegisterArgs`], this struct accepts both camelCase
+/// (`layerKey`, `parentScope`) and snake_case (`layer_key`, `parent_scope`)
+/// field names on the wire via `rename_all = "camelCase"` plus
+/// `#[serde(alias)]`.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchEntryPayload {
     /// Unique spatial key (ULID generated client-side).
     pub key: String,
@@ -171,21 +241,28 @@ pub struct BatchEntryPayload {
     pub w: f64,
     /// Height in logical pixels.
     pub h: f64,
-    /// Spatial key of the FocusLayer this scope lives in.
+    /// Spatial key of the FocusLayer this scope lives in. Accepts either
+    /// `layerKey` (default) or `layer_key` (serde alias).
+    #[serde(alias = "layer_key")]
     pub layer_key: String,
-    /// Optional parent scope key for container-first navigation.
+    /// Optional parent scope key for container-first navigation. Accepts
+    /// either `parentScope` or `parent_scope`.
+    #[serde(alias = "parent_scope", default)]
     pub parent_scope: Option<String>,
     /// Directional navigation overrides.
+    #[serde(default)]
     pub overrides: Option<HashMap<String, Option<String>>>,
 }
 
 /// Register multiple spatial entries in a single Tauri invoke.
 ///
 /// Used by the virtualizer to register estimated rects for off-screen items.
-/// Each entry is an upsert — overwrites any existing entry with the same key.
+/// Each entry is an upsert — overwrites any existing entry with the same
+/// key in the invoking window's `SpatialState`.
 #[tauri::command]
-pub async fn spatial_register_batch(
+pub async fn spatial_register_batch<R: Runtime>(
     entries: Vec<BatchEntryPayload>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let batch: Vec<BatchEntry> = entries
@@ -204,23 +281,25 @@ pub async fn spatial_register_batch(
             overrides: e.overrides.unwrap_or_default(),
         })
         .collect();
-    state.spatial_state.register_batch(batch);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    spatial_state.register_batch(batch);
     Ok(())
 }
 
 /// Unregister multiple spatial entries in a single Tauri invoke.
 ///
-/// Used by the virtualizer on unmount to clean up placeholder entries.
-/// If the focused key was among those removed, a `focus-changed` event
-/// is emitted.
+/// Used by the virtualizer on unmount to clean up placeholder entries in
+/// the invoking window's `SpatialState`. If the focused key was among those
+/// removed, a `focus-changed` event is emitted scoped to the window.
 #[tauri::command]
 pub async fn spatial_unregister_batch<R: Runtime>(
     keys: Vec<String>,
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(event) = state.spatial_state.unregister_batch(&keys) {
-        let _ = app.emit("focus-changed", &event);
+    let spatial_state = state.spatial_state_for(window.label()).await;
+    if let Some(event) = spatial_state.unregister_batch(&keys) {
+        emit_focus_changed(&window, &event);
     }
     Ok(())
 }
@@ -290,18 +369,25 @@ pub mod debug_commands {
         pub entry_count_in_layer: usize,
     }
 
-    /// Dump the full spatial state for test assertions.
+    /// Dump the spatial state for the invoking window, for test assertions.
     ///
-    /// Only compiled into debug builds (this entire module is gated by
+    /// Per-window: returns only the entries, layers, and focused key tracked
+    /// by the `SpatialState` owned by this window, so a test can assert that
+    /// window A's registry never contains window B's entries. Only compiled
+    /// into debug builds (this entire module is gated by
     /// `#[cfg(debug_assertions)]`). Registered via `kanban_invoke_handler!`
     /// in `main.rs`, which drops the identifier from the handler list in
     /// release builds — so there is no way to invoke this command from a
     /// production binary.
     #[tauri::command]
-    pub async fn __spatial_dump(state: State<'_, AppState>) -> Result<SpatialDump, String> {
-        let entries = state.spatial_state.entries_snapshot();
-        let layers = state.spatial_state.layers_snapshot();
-        let focused_key = state.spatial_state.focused_key();
+    pub async fn __spatial_dump<R: Runtime>(
+        window: WebviewWindow<R>,
+        state: State<'_, AppState>,
+    ) -> Result<SpatialDump, String> {
+        let spatial_state = state.spatial_state_for(window.label()).await;
+        let entries = spatial_state.entries_snapshot();
+        let layers = spatial_state.layers_snapshot();
+        let focused_key = spatial_state.focused_key();
 
         // Resolve focused moniker by walking the entries snapshot rather than
         // round-tripping back through `SpatialState::get` — cheaper, and keeps
@@ -579,12 +665,27 @@ mod tauri_integration_tests {
     ///
     /// The resulting app exposes a `"main"` webview window so
     /// `get_ipc_response` has a target to dispatch into. Event listening works
-    /// through the `AppHandle`'s `Listener` impl and does not require a
-    /// running event loop — emissions land synchronously in the listener's
-    /// closure before `emit()` returns.
+    /// through the webview's `Listener` impl (per-window scope — matches the
+    /// production emission path) and does not require a running event loop —
+    /// emissions land synchronously in the listener's closure before
+    /// `emit()` returns.
+    ///
+    /// Uses [`kanban_invoke_handler!`] so the debug-only `__spatial_dump`
+    /// command is available to tests just as it is in development binaries.
     fn build_test_app() -> tauri::App<MockRuntime> {
+        build_test_app_with_windows(&["main"])
+    }
+
+    /// Build a mock app with the given webview windows all registered and
+    /// ready to dispatch IPC.
+    ///
+    /// Used by the multi-window tests to exercise the invariant that each
+    /// window owns a distinct `SpatialState` and that `focus-changed` events
+    /// never cross window boundaries.
+    fn build_test_app_with_windows(labels: &[&str]) -> tauri::App<MockRuntime> {
+        assert!(!labels.is_empty(), "at least one window label required");
         let app = mock_builder()
-            .invoke_handler(tauri::generate_handler![
+            .invoke_handler(crate::kanban_invoke_handler![
                 spatial_register,
                 spatial_register_batch,
                 spatial_unregister,
@@ -600,16 +701,17 @@ mod tauri_integration_tests {
 
         app.manage(AppState::new_for_test());
 
-        // Ensure a webview exists — `get_ipc_response` dispatches through it.
-        WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
-            .build()
-            .expect("failed to build mock webview");
+        for label in labels {
+            WebviewWindowBuilder::new(&app, *label, tauri::WebviewUrl::default())
+                .build()
+                .unwrap_or_else(|e| panic!("failed to build mock webview {label}: {e}"));
+        }
 
         app
     }
 
-    /// Invoke a `#[tauri::command]` by name and return the parsed JSON
-    /// response.
+    /// Invoke a `#[tauri::command]` through the `"main"` webview and return
+    /// the parsed JSON response.
     ///
     /// Panics with a loud message on IPC failure, because a failing command
     /// in one of these tests means the serde wire format broke — and we want
@@ -619,9 +721,23 @@ mod tauri_integration_tests {
         cmd: &str,
         payload: serde_json::Value,
     ) -> serde_json::Value {
+        invoke_in_window(app, "main", cmd, payload)
+    }
+
+    /// Invoke a `#[tauri::command]` through the webview with the given label.
+    ///
+    /// The command sees that webview's `WebviewWindow<R>` as its `window`
+    /// parameter — which is how per-window state routing (the whole point of
+    /// this refactor) gets exercised end-to-end.
+    fn invoke_in_window(
+        app: &tauri::App<MockRuntime>,
+        label: &str,
+        cmd: &str,
+        payload: serde_json::Value,
+    ) -> serde_json::Value {
         let webview = app
-            .get_webview_window("main")
-            .expect("main webview present");
+            .get_webview_window(label)
+            .unwrap_or_else(|| panic!("webview {label} not present"));
         let res = tauri::test::get_ipc_response(
             &webview,
             tauri::webview::InvokeRequest {
@@ -638,30 +754,48 @@ mod tauri_integration_tests {
             Ok(body) => body
                 .deserialize::<serde_json::Value>()
                 .expect("response body is valid JSON"),
-            Err(e) => panic!("IPC call to {cmd} failed: {e}"),
+            Err(e) => panic!("IPC call to {cmd} via window {label} failed: {e}"),
         }
     }
 
-    /// Subscribe to `focus-changed` events before any command is invoked.
+    /// Subscribe to `focus-changed` events on a specific window before any
+    /// command is invoked.
+    ///
+    /// `focus-changed` emissions are scoped per-window via `emit_to(label, ...)`
+    /// so each window's listener must be registered on its own
+    /// `WebviewWindow`, not the `AppHandle`. This mirrors the frontend, which
+    /// uses `getCurrentWebviewWindow().listen(...)` for the same reason.
     ///
     /// Returns an `Arc<Mutex<Vec<FocusChanged>>>` that accumulates one entry
     /// per emission, in order. The listener decodes each event payload from
     /// JSON — that is the core assertion target for these tests, since a
     /// field rename in the `FocusChanged` struct would break deserialisation
     /// and surface as a panic here.
-    fn capture_focus_events(
+    fn capture_focus_events_on_window(
         app: &tauri::App<MockRuntime>,
+        label: &str,
     ) -> Arc<Mutex<Vec<swissarmyhammer_spatial_nav::FocusChanged>>> {
+        let webview = app
+            .get_webview_window(label)
+            .unwrap_or_else(|| panic!("webview window {label} not present"));
         let events: Arc<Mutex<Vec<swissarmyhammer_spatial_nav::FocusChanged>>> =
             Arc::new(Mutex::new(Vec::new()));
         let events_cl = Arc::clone(&events);
-        app.listen("focus-changed", move |ev| {
+        webview.listen("focus-changed", move |ev| {
             let parsed: swissarmyhammer_spatial_nav::FocusChanged =
                 serde_json::from_str(ev.payload())
                     .expect("focus-changed payload deserializes as FocusChanged");
             events_cl.lock().unwrap().push(parsed);
         });
         events
+    }
+
+    /// Shorthand for `capture_focus_events_on_window(app, "main")` — the
+    /// single-window tests all register the "main" webview and listen on it.
+    fn capture_focus_events(
+        app: &tauri::App<MockRuntime>,
+    ) -> Arc<Mutex<Vec<swissarmyhammer_spatial_nav::FocusChanged>>> {
+        capture_focus_events_on_window(app, "main")
     }
 
     /// Register → focus → navigate, end-to-end: the happy path that every
@@ -689,24 +823,28 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "k1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(
             &app,
             "spatial_register",
             json!({
-                "key": "k2",
-                "moniker": "task:B",
-                "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k2",
+                    "moniker": "task:B",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
 
@@ -758,39 +896,45 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "k1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": {
-                    "Right": "task:C",
-                    "Down": null,
-                },
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": {
+                        "Right": "task:C",
+                        "Down": null,
+                    },
+                }
             }),
         );
         invoke(
             &app,
             "spatial_register",
             json!({
-                "key": "k2",
-                "moniker": "task:B",
-                "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k2",
+                    "moniker": "task:B",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(
             &app,
             "spatial_register",
             json!({
-                "key": "k3",
-                "moniker": "task:C",
-                "x": 0.0, "y": 200.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k3",
+                    "moniker": "task:C",
+                    "x": 0.0, "y": 200.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "k1"}));
@@ -922,24 +1066,28 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "b1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "b1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(
             &app,
             "spatial_register",
             json!({
-                "key": "b2",
-                "moniker": "task:B",
-                "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "b2",
+                    "moniker": "task:B",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "b1"}));
@@ -957,24 +1105,28 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "f1",
-                "moniker": "field:title",
-                "x": 500.0, "y": 0.0, "w": 100.0, "h": 30.0,
-                "layerKey": "L2",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "f1",
+                    "moniker": "field:title",
+                    "x": 500.0, "y": 0.0, "w": 100.0, "h": 30.0,
+                    "layerKey": "L2",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(
             &app,
             "spatial_register",
             json!({
-                "key": "f2",
-                "moniker": "field:desc",
-                "x": 500.0, "y": 40.0, "w": 100.0, "h": 30.0,
-                "layerKey": "L2",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "f2",
+                    "moniker": "field:desc",
+                    "x": 500.0, "y": 40.0, "w": 100.0, "h": 30.0,
+                    "layerKey": "L2",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "f1"}));
@@ -1027,8 +1179,9 @@ mod tauri_integration_tests {
         );
 
         let state = app.state::<AppState>();
+        let spatial_state = tauri::async_runtime::block_on(state.spatial_state_for("main"));
         assert_eq!(
-            state.spatial_state.focused_key().as_deref(),
+            spatial_state.focused_key().as_deref(),
             Some("b2"),
             "focus should restore to layer 1's last_focused after remove"
         );
@@ -1052,12 +1205,14 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "k1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "k1"}));
@@ -1096,12 +1251,14 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "k1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "k1"}));
@@ -1123,9 +1280,15 @@ mod tauri_integration_tests {
     fn focus_changed_payload_uses_snake_case_field_names() {
         let app = build_test_app();
 
+        // Listen on the webview window, not the AppHandle — focus-changed is
+        // emitted via `window.emit_to(label, …)` and app-wide listeners don't
+        // see those targeted emissions.
+        let webview = app
+            .get_webview_window("main")
+            .expect("main webview present");
         let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let captured_cl = Arc::clone(&captured);
-        app.listen("focus-changed", move |ev| {
+        webview.listen("focus-changed", move |ev| {
             captured_cl.lock().unwrap().push(ev.payload().to_string());
         });
 
@@ -1138,12 +1301,14 @@ mod tauri_integration_tests {
             &app,
             "spatial_register",
             json!({
-                "key": "k1",
-                "moniker": "task:A",
-                "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
-                "layerKey": "L1",
-                "parentScope": null,
-                "overrides": null,
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
             }),
         );
         invoke(&app, "spatial_focus", json!({"key": "k1"}));
@@ -1161,5 +1326,523 @@ mod tauri_integration_tests {
             "payload missing next_key: {parsed}"
         );
         assert_eq!(parsed["next_key"], json!("k1"));
+    }
+
+    // ---- Forgiving arg-name deserialization -------------------------------
+    //
+    // The four tests below lock down the invariant that every spatial command
+    // whose payload carries multi-word field names (`layer_key`, `parent_scope`)
+    // must accept both snake_case AND camelCase forms on the wire. Tauri v2
+    // defaults to camelCase arg names, which silently drops snake_case fields
+    // sent by naive callers — serde aliases on the argument struct close that
+    // gap without forcing every caller to pick one naming convention.
+
+    /// After `spatial_register` fires, the entry is present in the registry
+    /// with the supplied `layer_key` attached — if the field was silently
+    /// dropped during deserialization, this readback would show a stale or
+    /// missing layer_key and the subsequent focus + navigate assertions would
+    /// break. The assertion chain here is the cheapest way to verify the
+    /// full round-trip (register -> focus -> navigate) rather than just that
+    /// the command returned Ok.
+    #[test]
+    fn spatial_register_accepts_snake_case_arg_names() {
+        let app = build_test_app();
+        let _events = capture_focus_events(&app);
+
+        invoke(
+            &app,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "root"}),
+        );
+        invoke(
+            &app,
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layer_key": "L1",
+                    "parent_scope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+        invoke(
+            &app,
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "k2",
+                    "moniker": "task:B",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layer_key": "L1",
+                    "parent_scope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Both entries registered with the same layer_key? Navigate proves it —
+        // if one entry silently dropped its layer, navigate Right from k1 would
+        // never find k2 (navigation is layer-scoped).
+        invoke(&app, "spatial_focus", json!({"key": "k1"}));
+        let moved = invoke(
+            &app,
+            "spatial_navigate",
+            json!({"key": "k1", "direction": "Right"}),
+        );
+        assert_eq!(
+            moved,
+            json!("task:B"),
+            "snake_case layer_key must be accepted so navigation can find \
+             the right-neighbour on the same layer"
+        );
+    }
+
+    /// Mirror of the snake_case test, using camelCase arg names. This also
+    /// passes today with Tauri's default camelCase wire convention — keeping
+    /// it here documents that the forgiving layer does not break the existing
+    /// contract.
+    #[test]
+    fn spatial_register_accepts_camel_case_arg_names() {
+        let app = build_test_app();
+        let _events = capture_focus_events(&app);
+
+        invoke(
+            &app,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "root"}),
+        );
+        invoke(
+            &app,
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "k1",
+                    "moniker": "task:A",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+        invoke(
+            &app,
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "k2",
+                    "moniker": "task:B",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "L1",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        invoke(&app, "spatial_focus", json!({"key": "k1"}));
+        let moved = invoke(
+            &app,
+            "spatial_navigate",
+            json!({"key": "k1", "direction": "Right"}),
+        );
+        assert_eq!(moved, json!("task:B"));
+    }
+
+    /// Batch entries must accept snake_case for `layer_key` / `parent_scope`.
+    /// The entries array lives inside the payload, so each element is a
+    /// `BatchEntryPayload` — the serde aliases live on that struct.
+    #[test]
+    fn spatial_register_batch_accepts_snake_case_entry_field_names() {
+        let app = build_test_app();
+        let _events = capture_focus_events(&app);
+
+        invoke(
+            &app,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "root"}),
+        );
+        invoke(
+            &app,
+            "spatial_register_batch",
+            json!({
+                "entries": [
+                    {
+                        "key": "b1",
+                        "moniker": "task:A",
+                        "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                        "layer_key": "L1",
+                        "parent_scope": null,
+                        "overrides": null,
+                    },
+                    {
+                        "key": "b2",
+                        "moniker": "task:B",
+                        "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                        "layer_key": "L1",
+                        "parent_scope": null,
+                        "overrides": null,
+                    },
+                ],
+            }),
+        );
+
+        invoke(&app, "spatial_focus", json!({"key": "b1"}));
+        let right = invoke(
+            &app,
+            "spatial_navigate",
+            json!({"key": "b1", "direction": "Right"}),
+        );
+        assert_eq!(
+            right,
+            json!("task:B"),
+            "snake_case layer_key on a batch entry must be honoured so the \
+             two entries share a layer and are each other's neighbours"
+        );
+    }
+
+    /// Batch entries must also accept camelCase for `layerKey` / `parentScope`.
+    /// Today those field names are snake_case on the wire because serde's
+    /// default is to match Rust struct field names verbatim — adding
+    /// `#[serde(rename_all = "camelCase")]` + snake_case aliases is what
+    /// makes both forms work.
+    #[test]
+    fn spatial_register_batch_accepts_camel_case_entry_field_names() {
+        let app = build_test_app();
+        let _events = capture_focus_events(&app);
+
+        invoke(
+            &app,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "root"}),
+        );
+        invoke(
+            &app,
+            "spatial_register_batch",
+            json!({
+                "entries": [
+                    {
+                        "key": "b1",
+                        "moniker": "task:A",
+                        "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                        "layerKey": "L1",
+                        "parentScope": null,
+                        "overrides": null,
+                    },
+                    {
+                        "key": "b2",
+                        "moniker": "task:B",
+                        "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                        "layerKey": "L1",
+                        "parentScope": null,
+                        "overrides": null,
+                    },
+                ],
+            }),
+        );
+
+        invoke(&app, "spatial_focus", json!({"key": "b1"}));
+        let right = invoke(
+            &app,
+            "spatial_navigate",
+            json!({"key": "b1", "direction": "Right"}),
+        );
+        assert_eq!(right, json!("task:B"));
+    }
+
+    // ---- Multi-window isolation -----------------------------------------
+    //
+    // These tests exercise the invariant introduced by this refactor: every
+    // webview window owns a distinct `SpatialState` so entry registrations,
+    // the layer stack, focus tracking, and `focus-changed` emissions never
+    // leak across windows. Before the fix, `AppState` held a single
+    // `SpatialState` shared by every window — `h/j/k/l` in window A could
+    // jump focus to an entry registered in window B, because the beam-test
+    // pool was one global set of rects.
+
+    /// Each window owns an independent `SpatialState`: entries registered in
+    /// window A are invisible to window B's `__spatial_dump`, and vice versa.
+    ///
+    /// Against HEAD (pre-fix), both entries would land in the single shared
+    /// registry and both dumps would see `entry_count = 2`.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn two_windows_register_independently() {
+        let app = build_test_app_with_windows(&["A", "B"]);
+
+        // Window A: push a layer + register one entry at the origin.
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_push_layer",
+            json!({"key": "LA", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a1",
+                    "moniker": "task:a",
+                    "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Window B: push its own layer + register an entry 100px below.
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_push_layer",
+            json!({"key": "LB", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "b1",
+                    "moniker": "task:b",
+                    "x": 0.0, "y": 100.0, "w": 10.0, "h": 10.0,
+                    "layerKey": "LB",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        let dump_a = invoke_in_window(&app, "A", "__spatial_dump", json!({}));
+        assert_eq!(
+            dump_a["entry_count"], 1,
+            "window A sees only its own entry: {dump_a}"
+        );
+        assert_eq!(dump_a["layer_stack"].as_array().unwrap().len(), 1);
+        assert_eq!(dump_a["layer_stack"][0]["key"], "LA");
+        assert_eq!(dump_a["layer_stack"][0]["entry_count_in_layer"], 1);
+
+        let dump_b = invoke_in_window(&app, "B", "__spatial_dump", json!({}));
+        assert_eq!(
+            dump_b["entry_count"], 1,
+            "window B sees only its own entry: {dump_b}"
+        );
+        assert_eq!(dump_b["layer_stack"].as_array().unwrap().len(), 1);
+        assert_eq!(dump_b["layer_stack"][0]["key"], "LB");
+        assert_eq!(dump_b["layer_stack"][0]["entry_count_in_layer"], 1);
+    }
+
+    /// Navigating in window A only fires `focus-changed` for listeners
+    /// attached to window A. Window B's listener receives nothing, even
+    /// though both were subscribed before the navigate ran.
+    ///
+    /// Against HEAD, `app.emit("focus-changed", …)` was app-wide, so both
+    /// listeners would fire. This test fails pre-fix.
+    #[test]
+    fn navigate_in_one_window_does_not_emit_events_to_the_other() {
+        let app = build_test_app_with_windows(&["A", "B"]);
+        let events_a = capture_focus_events_on_window(&app, "A");
+        let events_b = capture_focus_events_on_window(&app, "B");
+
+        // Window A: layer + two cards so there's something to navigate to.
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_push_layer",
+            json!({"key": "LA", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a1",
+                    "moniker": "task:a1",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a2",
+                    "moniker": "task:a2",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Window B: register an entry too, so it has something in its
+        // registry. It should see zero events for navigation in window A.
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_push_layer",
+            json!({"key": "LB", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "b1",
+                    "moniker": "task:b1",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LB",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Focus + navigate in window A. Two focus-changed events fire for
+        // window A's listener — one from `spatial_focus`, one from
+        // `spatial_navigate`.
+        invoke_in_window(&app, "A", "spatial_focus", json!({"key": "a1"}));
+        let moved = invoke_in_window(
+            &app,
+            "A",
+            "spatial_navigate",
+            json!({"key": "a1", "direction": "Right"}),
+        );
+        assert_eq!(moved, json!("task:a2"), "navigate should reach a2");
+
+        let events_a = events_a.lock().unwrap();
+        assert_eq!(
+            events_a.len(),
+            2,
+            "window A's listener should see focus + navigate emissions"
+        );
+
+        let events_b = events_b.lock().unwrap();
+        assert_eq!(
+            events_b.len(),
+            0,
+            "window B's listener must not see window A's focus-changed events; got {events_b:?}"
+        );
+    }
+
+    /// Beam-test candidates are scoped to the window that originated the
+    /// navigate call: entries registered in window B are invisible to window
+    /// A's `spatial_navigate`, even if they would otherwise be the
+    /// geometrically-best target.
+    ///
+    /// Window A has two entries at (0,0) and (200,0). Window B has one at
+    /// (0,50) — which, if pooled with A's entries, would be the closest
+    /// "Down" candidate from A's focused (0,0) entry. A properly-scoped
+    /// navigate returns None (no A-local entry below) rather than window
+    /// B's (0,50).
+    #[test]
+    fn spatial_navigate_from_window_a_cannot_return_window_b_candidates() {
+        let app = build_test_app_with_windows(&["A", "B"]);
+
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_push_layer",
+            json!({"key": "LA", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a1",
+                    "moniker": "task:a1",
+                    "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+        invoke_in_window(
+            &app,
+            "A",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "a2",
+                    "moniker": "task:a2",
+                    "x": 200.0, "y": 0.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LA",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        // Window B: an entry geometrically below window A's focused entry.
+        // If the registry were shared, navigate Down from a1 would pick b1.
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_push_layer",
+            json!({"key": "LB", "name": "window"}),
+        );
+        invoke_in_window(
+            &app,
+            "B",
+            "spatial_register",
+            json!({
+                "args": {
+                    "key": "b1",
+                    "moniker": "task:b1",
+                    "x": 0.0, "y": 50.0, "w": 100.0, "h": 50.0,
+                    "layerKey": "LB",
+                    "parentScope": null,
+                    "overrides": null,
+                }
+            }),
+        );
+
+        invoke_in_window(&app, "A", "spatial_focus", json!({"key": "a1"}));
+
+        // navigate Down from a1: window A has no entry below a1, window B
+        // has b1 below — but b1 must not be a candidate. Expect null.
+        let down = invoke_in_window(
+            &app,
+            "A",
+            "spatial_navigate",
+            json!({"key": "a1", "direction": "Down"}),
+        );
+        assert_eq!(
+            down,
+            serde_json::Value::Null,
+            "spatial_navigate in window A must not reach window B's b1"
+        );
+
+        // And navigating Right from a1 should still work (a2 is in the same
+        // window) — verifies the test isn't accidentally breaking
+        // intra-window nav.
+        let right = invoke_in_window(
+            &app,
+            "A",
+            "spatial_navigate",
+            json!({"key": "a1", "direction": "Right"}),
+        );
+        assert_eq!(
+            right,
+            json!("task:a2"),
+            "intra-window right navigation must still work"
+        );
     }
 }

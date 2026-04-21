@@ -9,3 +9,6 @@ description = "Spatial (XY) focus navigation state machine and beam-test algorit
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

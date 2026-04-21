@@ -351,13 +351,24 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 
-/// Rebuild the Window menu when a secondary window is destroyed. Actual
+/// Rebuild the Window menu when a secondary window is destroyed, and drop
+/// the window's per-window `SpatialState` so its entries don't leak back
+/// into a freshly-created window that happens to reuse the label. Actual
 /// UIState cleanup already happened in `on_window_close_requested`.
 fn on_window_destroyed(window: &tauri::Window) {
     let state = window.app_handle().state::<AppState>();
     if state.shutting_down.load(Ordering::SeqCst) {
         return;
     }
+    // Spatial state cleanup has to happen here, not in CloseRequested —
+    // CloseRequested can be vetoed and the window can live on; Destroyed is
+    // the point of no return.
+    let label = window.label().to_string();
+    let app_handle = window.app_handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app_handle.state::<AppState>();
+        state.remove_spatial_state(&label).await;
+    });
     crate::menu::rebuild_menu(window.app_handle());
 }
 

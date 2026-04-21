@@ -84,13 +84,7 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
-  return (
-    <InspectorSections
-      entity={entity}
-      sections={sections}
-      nav={nav}
-    />
-  );
+  return <InspectorSections entity={entity} sections={sections} nav={nav} />;
 }
 
 /**
@@ -166,11 +160,7 @@ interface InspectorSectionsProps {
  *
  * Navigation between rows is handled by spatial nav (DOM rect resolution).
  */
-function InspectorSections({
-  entity,
-  sections,
-  nav,
-}: InspectorSectionsProps) {
+function InspectorSections({ entity, sections, nav }: InspectorSectionsProps) {
   const rowFor = (field: FieldDef, showLabel = true) => (
     <FieldRow
       key={field.name}

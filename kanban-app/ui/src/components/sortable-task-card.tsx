@@ -15,9 +15,15 @@ interface DraggableTaskCardProps {
 function setDragGhostImage(e: React.DragEvent, source: HTMLElement) {
   const clone = source.cloneNode(true) as HTMLElement;
   Object.assign(clone.style, {
-    position: "fixed", left: "-9999px", top: "-9999px",
-    width: `${source.offsetWidth}px`, height: `${source.offsetHeight}px`,
-    transform: "none", zoom: "1", opacity: "1", pointerEvents: "none",
+    position: "fixed",
+    left: "-9999px",
+    top: "-9999px",
+    width: `${source.offsetWidth}px`,
+    height: `${source.offsetHeight}px`,
+    transform: "none",
+    zoom: "1",
+    opacity: "1",
+    pointerEvents: "none",
   });
   // Strip focus indicators so the ghost doesn't show the bar.
   clone.removeAttribute("data-focused");
@@ -38,14 +44,20 @@ function setDragGhostImage(e: React.DragEvent, source: HTMLElement) {
  * skip re-rendering when the parent column re-renders.
  */
 export const DraggableTaskCard = memo(function DraggableTaskCard({
-  entity, onDragStart, onDragEnd, extraCommands,
+  entity,
+  onDragStart,
+  onDragEnd,
+  extraCommands,
 }: DraggableTaskCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragStart = useCallback(
     (e: React.DragEvent) => {
-      e.dataTransfer.setData("application/x-swissarmyhammer-task", JSON.stringify(entity));
+      e.dataTransfer.setData(
+        "application/x-swissarmyhammer-task",
+        JSON.stringify(entity),
+      );
       e.dataTransfer.effectAllowed = "move";
       if (cardRef.current) setDragGhostImage(e, cardRef.current);
       setIsDragging(true);

@@ -23,6 +23,7 @@ import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
+/** Props for {@link ColumnView} — one kanban board column plus drag/drop wiring. */
 interface ColumnViewProps {
   column: Entity;
   /** Tasks for this column, pre-sorted by the backend. */
@@ -82,7 +83,9 @@ function useAutoScroll() {
         scrollRafRef.current = null;
         return;
       }
-      containerRef.current.scrollBy({ top: scrollDirRef.current * SCROLL_SPEED });
+      containerRef.current.scrollBy({
+        top: scrollDirRef.current * SCROLL_SPEED,
+      });
       scrollRafRef.current = requestAnimationFrame(tick);
     };
     scrollRafRef.current = requestAnimationFrame(tick);
@@ -105,7 +108,11 @@ function useColumnCommands(
   dispatchTaskMove: ReturnType<typeof useDispatchCommand>,
 ) {
   const zones = useMemo(
-    () => computeDropZones(tasks.map((t) => t.id), columnId),
+    () =>
+      computeDropZones(
+        tasks.map((t) => t.id),
+        columnId,
+      ),
     [tasks, columnId],
   );
 
@@ -193,27 +200,45 @@ function useColumnViewState(
   const { containerRef, startAutoScroll, stopAutoScroll } = useAutoScroll();
   const commands = useEntityCommands("column", column.id, column);
   const { zones, taskExtraCommands } = useColumnCommands(
-    tasks, column.id, firstTodoTaskId, dispatchTaskMove,
+    tasks,
+    column.id,
+    firstTodoTaskId,
+    dispatchTaskMove,
   );
 
   const setContainerRef = useCallback(
     (el: HTMLDivElement | null) => {
-      (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      (containerRef as React.MutableRefObject<HTMLDivElement | null>).current =
+        el;
       containerRefProp?.(el);
     },
     [containerRef, containerRefProp],
   );
 
-  const handleContainerDragOver = useDragOverHandler(containerRef, startAutoScroll, stopAutoScroll);
+  const handleContainerDragOver = useDragOverHandler(
+    containerRef,
+    startAutoScroll,
+    stopAutoScroll,
+  );
 
   const handleZoneDrop = useCallback(
-    (descriptor: DropZoneDescriptor, taskData: string) => { onDropProp?.(descriptor, taskData); },
+    (descriptor: DropZoneDescriptor, taskData: string) => {
+      onDropProp?.(descriptor, taskData);
+    },
     [onDropProp],
   );
 
   return {
-    nameFieldDef, editingName, setEditingName, setFocus, commands,
-    zones, taskExtraCommands, setContainerRef, handleContainerDragOver, handleZoneDrop,
+    nameFieldDef,
+    editingName,
+    setEditingName,
+    setFocus,
+    commands,
+    zones,
+    taskExtraCommands,
+    setContainerRef,
+    handleContainerDragOver,
+    handleZoneDrop,
   };
 }
 
@@ -225,13 +250,34 @@ function useColumnViewState(
  * layer which computes focus targets from DOM rects at runtime.
  */
 export const ColumnView = memo(function ColumnView({
-  column, tasks, onAddTask, onTaskDragStart, onTaskDragEnd,
-  onDrop: onDropProp, dragTaskId, firstTodoTaskId, containerRef: containerRefProp,
+  column,
+  tasks,
+  onAddTask,
+  onTaskDragStart,
+  onTaskDragEnd,
+  onDrop: onDropProp,
+  dragTaskId,
+  firstTodoTaskId,
+  containerRef: containerRefProp,
 }: ColumnViewProps) {
   const {
-    nameFieldDef, editingName, setEditingName, setFocus, commands,
-    zones, taskExtraCommands, setContainerRef, handleContainerDragOver, handleZoneDrop,
-  } = useColumnViewState(column, tasks, firstTodoTaskId, containerRefProp, onDropProp);
+    nameFieldDef,
+    editingName,
+    setEditingName,
+    setFocus,
+    commands,
+    zones,
+    taskExtraCommands,
+    setContainerRef,
+    handleContainerDragOver,
+    handleZoneDrop,
+  } = useColumnViewState(
+    column,
+    tasks,
+    firstTodoTaskId,
+    containerRefProp,
+    onDropProp,
+  );
 
   return (
     <FocusScope
@@ -284,37 +330,54 @@ interface ColumnHeaderProps {
  * Extracted from ColumnView so the main component stays under the line limit.
  */
 function ColumnHeader({
-  column, columnMoniker, columnNameMoniker, nameFieldDef,
-  editingName, setEditingName, setFocus, taskCount, onAddTask,
+  column,
+  columnMoniker,
+  columnNameMoniker,
+  nameFieldDef,
+  editingName,
+  setEditingName,
+  setFocus,
+  taskCount,
+  onAddTask,
 }: ColumnHeaderProps) {
+  // Renders as a direct child of the column scope (a `flex flex-col` container)
+  // so it sizes to its content height. An earlier refactor left a `flex-col
+  // flex-1` wrapper here, which made the header compete with the card list for
+  // vertical space and split the column 50/50 — see column-view.test.tsx
+  // "ColumnView layout".
   return (
-    <div className="flex flex-col min-h-0 min-w-0 flex-1">
-      <div
-        className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
-        onClickCapture={() => setFocus(columnNameMoniker)}
-      >
-        <FocusScope moniker={columnNameMoniker} commands={[]} className="inline">
-          {nameFieldDef ? (
-            <Field
-              fieldDef={nameFieldDef} entityType="column" entityId={column.id}
-              mode="compact" editing={editingName}
-              onEdit={() => setEditingName(true)}
-              onDone={() => setEditingName(false)}
-              onCancel={() => setEditingName(false)}
-            />
-          ) : (
-            <span className="text-sm font-semibold text-foreground">
-              {getStr(column, "name")}
-            </span>
-          )}
-        </FocusScope>
-        <Badge variant="secondary">{taskCount}</Badge>
-        <div className="flex-1" />
-        {onAddTask && (
-          <AddTaskButton column={column} columnMoniker={columnMoniker}
-            setFocus={setFocus} onAddTask={onAddTask} />
+    <div
+      className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
+      onClickCapture={() => setFocus(columnNameMoniker)}
+    >
+      <FocusScope moniker={columnNameMoniker} commands={[]} className="inline">
+        {nameFieldDef ? (
+          <Field
+            fieldDef={nameFieldDef}
+            entityType="column"
+            entityId={column.id}
+            mode="compact"
+            editing={editingName}
+            onEdit={() => setEditingName(true)}
+            onDone={() => setEditingName(false)}
+            onCancel={() => setEditingName(false)}
+          />
+        ) : (
+          <span className="text-sm font-semibold text-foreground">
+            {getStr(column, "name")}
+          </span>
         )}
-      </div>
+      </FocusScope>
+      <Badge variant="secondary">{taskCount}</Badge>
+      <div className="flex-1" />
+      {onAddTask && (
+        <AddTaskButton
+          column={column}
+          columnMoniker={columnMoniker}
+          setFocus={setFocus}
+          onAddTask={onAddTask}
+        />
+      )}
     </div>
   );
 }
@@ -333,7 +396,12 @@ interface AddTaskButtonProps {
  * Sets focus to the column moniker before dispatching so the Rust scope
  * chain resolves the correct column entity.
  */
-function AddTaskButton({ column, columnMoniker, setFocus, onAddTask }: AddTaskButtonProps) {
+function AddTaskButton({
+  column,
+  columnMoniker,
+  setFocus,
+  onAddTask,
+}: AddTaskButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -349,9 +417,7 @@ function AddTaskButton({ column, columnMoniker, setFocus, onAddTask }: AddTaskBu
           <Plus className="h-4 w-4" />
         </button>
       </TooltipTrigger>
-      <TooltipContent>
-        {`Add task to ${getStr(column, "name")}`}
-      </TooltipContent>
+      <TooltipContent>{`Add task to ${getStr(column, "name")}`}</TooltipContent>
     </Tooltip>
   );
 }
@@ -403,7 +469,11 @@ function CardWithZone({
 }: CardItemProps & { entity: Entity; index: number }) {
   return (
     <div>
-      <DropZone descriptor={zones[index]} dragTaskId={dragTaskId} onDrop={onZoneDrop} />
+      <DropZone
+        descriptor={zones[index]}
+        dragTaskId={dragTaskId}
+        onDrop={onZoneDrop}
+      />
       <div className="rounded">
         <DraggableTaskCard
           entity={entity}
@@ -425,8 +495,15 @@ function CardWithZone({
  * items plus overscan.
  */
 const VirtualizedCardList = memo(function VirtualizedCardList({
-  tasks, zones, dragTaskId, onZoneDrop, onTaskDragStart, onTaskDragEnd,
-  taskExtraCommands, containerRef: containerRefProp, onDragOver,
+  tasks,
+  zones,
+  dragTaskId,
+  onZoneDrop,
+  onTaskDragStart,
+  onTaskDragEnd,
+  taskExtraCommands,
+  containerRef: containerRefProp,
+  onDragOver,
 }: VirtualizedCardListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const setRef = useCallback(
@@ -437,35 +514,73 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
     [containerRefProp],
   );
   const cardProps: CardItemProps = {
-    zones, dragTaskId, onZoneDrop, onTaskDragStart, onTaskDragEnd, taskExtraCommands,
+    zones,
+    dragTaskId,
+    onZoneDrop,
+    onTaskDragStart,
+    onTaskDragEnd,
+    taskExtraCommands,
   };
 
   if (tasks.length === 0) {
     return (
-      <div ref={setRef} className={CARD_LIST_CONTAINER_CLASS} onDragOver={onDragOver}>
-        <DropZone descriptor={zones[0]} dragTaskId={dragTaskId} onDrop={onZoneDrop} variant="empty-column" />
+      <div
+        ref={setRef}
+        className={CARD_LIST_CONTAINER_CLASS}
+        onDragOver={onDragOver}
+      >
+        <DropZone
+          descriptor={zones[0]}
+          dragTaskId={dragTaskId}
+          onDrop={onZoneDrop}
+          variant="empty-column"
+        />
       </div>
     );
   }
   if (tasks.length < VIRTUALIZE_THRESHOLD) {
     return (
-      <div ref={setRef} className={CARD_LIST_CONTAINER_CLASS} onDragOver={onDragOver}>
+      <div
+        ref={setRef}
+        className={CARD_LIST_CONTAINER_CLASS}
+        onDragOver={onDragOver}
+      >
         {tasks.map((entity, i) => (
-          <CardWithZone key={entity.id} entity={entity} index={i} {...cardProps} />
+          <CardWithZone
+            key={entity.id}
+            entity={entity}
+            index={i}
+            {...cardProps}
+          />
         ))}
-        <DropZone descriptor={zones[zones.length - 1]} dragTaskId={dragTaskId} onDrop={onZoneDrop} />
+        <DropZone
+          descriptor={zones[zones.length - 1]}
+          dragTaskId={dragTaskId}
+          onDrop={onZoneDrop}
+        />
       </div>
     );
   }
   return (
-    <VirtualColumn tasks={tasks} scrollRef={scrollRef} setRef={setRef}
-      onDragOver={onDragOver} {...cardProps} />
+    <VirtualColumn
+      tasks={tasks}
+      scrollRef={scrollRef}
+      setRef={setRef}
+      onDragOver={onDragOver}
+      {...cardProps}
+    />
   );
 });
 
 /** Absolute-position style for a virtualized row at the given Y offset. */
 function virtualRowStyle(startPx: number): React.CSSProperties {
-  return { position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${startPx}px)` };
+  return {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    transform: `translateY(${startPx}px)`,
+  };
 }
 
 /**
@@ -540,8 +655,16 @@ interface VirtualColumnProps extends CardItemProps {
  * navigation can target off-screen cards.
  */
 function VirtualColumn({
-  tasks, zones, dragTaskId, onZoneDrop, onTaskDragStart, onTaskDragEnd,
-  taskExtraCommands, scrollRef, setRef, onDragOver,
+  tasks,
+  zones,
+  dragTaskId,
+  onZoneDrop,
+  onTaskDragStart,
+  onTaskDragEnd,
+  taskExtraCommands,
+  scrollRef,
+  setRef,
+  onDragOver,
 }: VirtualColumnProps) {
   const layerKey = useFocusLayerKey();
   usePlaceholderRegistration(tasks, scrollRef, layerKey);
@@ -549,16 +672,31 @@ function VirtualColumn({
   const virtualizer = useVirtualizer({
     count: tasks.length + 1,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => (i < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT),
+    estimateSize: (i) =>
+      i < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT,
     overscan: VIRTUALIZER_OVERSCAN,
   });
 
   return (
-    <div ref={setRef} className={CARD_LIST_CONTAINER_CLASS} onDragOver={onDragOver}>
-      <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+    <div
+      ref={setRef}
+      className={CARD_LIST_CONTAINER_CLASS}
+      onDragOver={onDragOver}
+    >
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
         {virtualizer.getVirtualItems().map((vRow) => (
           <VirtualRowItem
-            key={vRow.index === tasks.length ? "trailing-zone" : tasks[vRow.index].id}
+            key={
+              vRow.index === tasks.length
+                ? "trailing-zone"
+                : tasks[vRow.index].id
+            }
             vRow={vRow}
             tasks={tasks}
             zones={zones}
@@ -588,20 +726,43 @@ interface VirtualRowItemProps extends CardItemProps {
  * Extracted so the virtualizer map callback stays a single JSX expression.
  */
 function VirtualRowItem({
-  vRow, tasks, zones, dragTaskId, onZoneDrop, onTaskDragStart, onTaskDragEnd,
-  taskExtraCommands, measureElement,
+  vRow,
+  tasks,
+  zones,
+  dragTaskId,
+  onZoneDrop,
+  onTaskDragStart,
+  onTaskDragEnd,
+  taskExtraCommands,
+  measureElement,
 }: VirtualRowItemProps) {
   if (vRow.index === tasks.length) {
     return (
-      <div data-index={vRow.index} ref={measureElement} style={virtualRowStyle(vRow.start)}>
-        <DropZone descriptor={zones[zones.length - 1]} dragTaskId={dragTaskId} onDrop={onZoneDrop} />
+      <div
+        data-index={vRow.index}
+        ref={measureElement}
+        style={virtualRowStyle(vRow.start)}
+      >
+        <DropZone
+          descriptor={zones[zones.length - 1]}
+          dragTaskId={dragTaskId}
+          onDrop={onZoneDrop}
+        />
       </div>
     );
   }
   const entity = tasks[vRow.index];
   return (
-    <div data-index={vRow.index} ref={measureElement} style={virtualRowStyle(vRow.start)}>
-      <DropZone descriptor={zones[vRow.index]} dragTaskId={dragTaskId} onDrop={onZoneDrop} />
+    <div
+      data-index={vRow.index}
+      ref={measureElement}
+      style={virtualRowStyle(vRow.start)}
+    >
+      <DropZone
+        descriptor={zones[vRow.index]}
+        dragTaskId={dragTaskId}
+        onDrop={onZoneDrop}
+      />
       <div className="rounded">
         <DraggableTaskCard
           entity={entity}

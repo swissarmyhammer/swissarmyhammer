@@ -14,9 +14,7 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import {
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { useFocusLayerKey } from "@/components/focus-layer";
@@ -29,6 +27,36 @@ import { invoke } from "@tauri-apps/api/core";
  * without walking the command scope chain.
  */
 const FocusScopeContext = createContext<string | null>(null);
+
+/**
+ * React context that carries the `elementRef` of a `FocusScope` rendered
+ * with `renderContainer={false}`.
+ *
+ * When the scope's wrapping element is suppressed (table rows, table
+ * cells, or any consumer that owns its own DOM element), the scope has
+ * no node to observe for `getBoundingClientRect()`. The consumer must
+ * attach `elementRef` to its own element so `ResizeObserver` inside
+ * `useSpatialClaim` can measure it and push the rect to Rust.
+ *
+ * The context is only populated when `renderContainer={false}`. The
+ * consumer wires it with `useFocusScopeElementRef()` and sets
+ * `ref={ref}` on the element that defines this scope's spatial footprint.
+ */
+const FocusScopeElementRefContext =
+  createContext<React.RefObject<HTMLElement | null> | null>(null);
+
+/**
+ * Returns the `elementRef` for the nearest ancestor `FocusScope` that
+ * uses `renderContainer={false}`, or `null` when no such scope is
+ * active.
+ *
+ * Consumers (e.g. table rows and cells) call this to attach the ref to
+ * their own DOM element so the scope can be measured and registered
+ * with the Rust spatial state.
+ */
+export function useFocusScopeElementRef(): React.RefObject<HTMLElement | null> | null {
+  return useContext(FocusScopeElementRefContext);
+}
 
 // ---------------------------------------------------------------------------
 // Custom hooks — extracted to keep FocusScope and FocusScopeInner under 50 lines
@@ -50,53 +78,109 @@ function useSpatialKey(): string {
  * The optional `navOverride` map is forwarded to Rust as `overrides` on each
  * spatial registration call, enabling per-scope navigation redirection or blocking.
  *
+ * When `spatial` is `false`, the spatial entry (rect) is never registered —
+ * the scope still participates in focus/commands/claim callbacks, but the
+ * Rust beam test does not see it as a navigation target. Used for container
+ * scopes like table rows that must not shadow their own cells during
+ * cardinal-direction searches.
+ *
+ * `parentScope` is the moniker of the nearest ancestor `FocusScope`, threaded
+ * from `FocusScopeContext`. It is forwarded to Rust so the spatial engine's
+ * container-first search can keep `h/j/k/l` within the focused card's
+ * sub-parts (tag pills, assignees, etc.) before falling through to the full
+ * layer — see `container_first_search` in `swissarmyhammer-spatial-nav`.
+ *
  * Returns `{ isClaimed, elementRef }` — attach `elementRef` to the DOM node.
  */
-function useSpatialClaim(
+function useClaimRegistration(
   spatialKey: string,
   moniker: string,
   layerKey: string | null,
-  navOverride?: Record<string, string | null>,
+  spatial: boolean,
 ) {
   const { registerClaim, unregisterClaim } = useEntityFocus();
   const [isClaimed, setIsClaimed] = useState(false);
-  const elementRef = useRef<HTMLElement | null>(null);
-
-  // Register claim callback (always — works even without FocusLayer).
   useEffect(() => {
     registerClaim(spatialKey, moniker, setIsClaimed);
     return () => {
       unregisterClaim(spatialKey);
-      if (layerKey) invoke("spatial_unregister", { key: spatialKey }).catch(() => {});
+      if (layerKey && spatial)
+        invoke("spatial_unregister", { key: spatialKey }).catch(() => {});
     };
-  }, [spatialKey, moniker, layerKey, registerClaim, unregisterClaim]);
+  }, [spatialKey, moniker, layerKey, spatial, registerClaim, unregisterClaim]);
+  return isClaimed;
+}
 
-  // ResizeObserver: measure DOM rect and report to Rust on mount + resize.
-  // Skipped when no FocusLayer is present (layerKey is null).
+function useRectObserver(
+  elementRef: React.RefObject<HTMLElement | null>,
+  spatialKey: string,
+  moniker: string,
+  layerKey: string | null,
+  spatial: boolean,
+  parentScope: string | null,
+  navOverride?: Record<string, string | null>,
+) {
   useEffect(() => {
-    if (!layerKey) return;
+    if (!layerKey || !spatial) return;
     const el = elementRef.current;
     if (!el) return;
     const report = () => {
       const r = el.getBoundingClientRect();
+      // The Rust command takes a single `args` struct so serde aliases accept
+      // both camelCase and snake_case on the wire — see `SpatialRegisterArgs`.
       invoke("spatial_register", {
-        key: spatialKey,
-        moniker,
-        x: r.x,
-        y: r.y,
-        w: r.width,
-        h: r.height,
-        layer_key: layerKey,
-        parent_scope: null,
-        overrides: navOverride ?? null,
+        args: {
+          key: spatialKey,
+          moniker,
+          x: r.x,
+          y: r.y,
+          w: r.width,
+          h: r.height,
+          layerKey,
+          parentScope,
+          overrides: navOverride ?? null,
+        },
       }).catch(() => {});
     };
     report();
     const observer = new ResizeObserver(report);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [spatialKey, moniker, layerKey, navOverride]);
+  }, [
+    elementRef,
+    spatialKey,
+    moniker,
+    layerKey,
+    spatial,
+    parentScope,
+    navOverride,
+  ]);
+}
 
+function useSpatialClaim(
+  spatialKey: string,
+  moniker: string,
+  layerKey: string | null,
+  spatial: boolean,
+  parentScope: string | null,
+  navOverride?: Record<string, string | null>,
+) {
+  const elementRef = useRef<HTMLElement | null>(null);
+  const isClaimed = useClaimRegistration(
+    spatialKey,
+    moniker,
+    layerKey,
+    spatial,
+  );
+  useRectObserver(
+    elementRef,
+    spatialKey,
+    moniker,
+    layerKey,
+    spatial,
+    parentScope,
+    navOverride,
+  );
   return { isClaimed, elementRef };
 }
 
@@ -216,6 +300,18 @@ type FocusScopeOwnProps = {
    *  The scope, moniker registration, and context still work; the caller
    *  must attach onContextMenu etc. to their own element. */
   renderContainer?: boolean;
+  /**
+   * When false, skip spatial registration (the scope has no rect in the
+   * Rust beam-test graph). Defaults to true.
+   *
+   * Use this for container scopes — table rows, list groups — that must
+   * remain focus-aware (claim callback, command scope, scope chain) but
+   * whose bounding rect would shadow their own children during
+   * cardinal-direction searches. Children that are themselves spatial
+   * entries (e.g. per-cell `FocusScope`s) become the only navigation
+   * targets inside the container.
+   */
+  spatial?: boolean;
 };
 
 type FocusScopeProps = FocusScopeOwnProps &
@@ -242,34 +338,73 @@ export function FocusScope({
   showFocusBar = true,
   handleEvents = true,
   renderContainer = true,
+  spatial = true,
   ...rest
 }: FocusScopeProps) {
   const spatialKey = useSpatialKey();
   const layerKey = useFocusLayerKey();
-  const { isClaimed, elementRef } = useSpatialClaim(spatialKey, moniker, layerKey, navOverride);
+  // parentScope: the enclosing FocusScope's moniker, used by Rust's
+  // container-first search so h/j/k/l stays within siblings before falling
+  // through to the full layer. Null means this scope is at layer root.
+  const parentScope = useContext(FocusScopeContext);
+  const { isClaimed, elementRef } = useSpatialClaim(
+    spatialKey,
+    moniker,
+    layerKey,
+    spatial,
+    parentScope,
+    navOverride,
+  );
   const scope = useScopeRegistration(moniker, commands);
   const handleClick = useScopeClickHandler(moniker, handleEvents);
-  const isDirectFocus = showFocusBar && isClaimed;
+  // elementRefForContext: only populated for renderContainer={false} — then a
+  // descendant (<tr>/<td>/consumer) attaches the ref to its own DOM node via
+  // useFocusScopeElementRef() so ResizeObserver can measure it.
+  const elementRefForContext = renderContainer ? null : elementRef;
 
   return (
     <FocusScopeContext.Provider value={moniker}>
-      <CommandScopeContext.Provider value={scope}>
-        {renderContainer ? (
-          <FocusScopeInner
+      <FocusScopeElementRefContext.Provider value={elementRefForContext}>
+        <CommandScopeContext.Provider value={scope}>
+          <FocusScopeBody
             moniker={moniker}
-            isDirectFocus={isDirectFocus}
+            isDirectFocus={showFocusBar && isClaimed}
             handleEvents={handleEvents}
+            renderContainer={renderContainer}
             onClick={handleClick}
             elementRef={elementRef}
-            {...rest}
+            htmlProps={rest}
           >
             {children}
-          </FocusScopeInner>
-        ) : (
-          children
-        )}
-      </CommandScopeContext.Provider>
+          </FocusScopeBody>
+        </CommandScopeContext.Provider>
+      </FocusScopeElementRefContext.Provider>
     </FocusScopeContext.Provider>
+  );
+}
+
+interface FocusScopeBodyProps {
+  moniker: string;
+  isDirectFocus: boolean;
+  handleEvents: boolean;
+  renderContainer: boolean;
+  onClick: React.MouseEventHandler<HTMLElement>;
+  elementRef: React.RefObject<HTMLElement | null>;
+  htmlProps: React.HTMLAttributes<HTMLElement>;
+  children: ReactNode;
+}
+
+function FocusScopeBody({
+  renderContainer,
+  children,
+  htmlProps,
+  ...inner
+}: FocusScopeBodyProps) {
+  if (!renderContainer) return <>{children}</>;
+  return (
+    <FocusScopeInner {...inner} {...htmlProps}>
+      {children}
+    </FocusScopeInner>
   );
 }
 
@@ -301,8 +436,10 @@ function FocusScopeInner({
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const { handleContextMenu, handleDoubleClick } =
-    useScopeEventHandlers(moniker, handleEvents);
+  const { handleContextMenu, handleDoubleClick } = useScopeEventHandlers(
+    moniker,
+    handleEvents,
+  );
 
   return (
     <FocusHighlight

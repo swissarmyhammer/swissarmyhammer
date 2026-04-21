@@ -11,8 +11,10 @@ import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
-import { useDispatchCommand, CommandScopeProvider } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
+import { useEntityFocus } from "@/lib/entity-focus-context";
+import { FocusScope, useFocusScopeElementRef } from "@/components/focus-scope";
 import { moniker } from "@/lib/moniker";
 import {
   Popover,
@@ -232,7 +234,7 @@ export function PerspectiveTabBar() {
 }
 
 // ---------------------------------------------------------------------------
-// Scoped perspective tab — CommandScopeProvider + PerspectiveTab together
+// Scoped perspective tab — FocusScope + PerspectiveTab together
 // ---------------------------------------------------------------------------
 
 /** Minimal perspective shape used within the tab bar render tree. */
@@ -244,7 +246,7 @@ interface Perspective {
   group?: string;
 }
 
-/** Props for a perspective tab rendered inside its own CommandScopeProvider. */
+/** Props for a perspective tab rendered inside its own FocusScope. */
 interface ScopedPerspectiveTabProps {
   perspective: Perspective;
   /** ID of the currently active perspective, used to compute `isActive`. */
@@ -260,7 +262,16 @@ interface ScopedPerspectiveTabProps {
 }
 
 /**
- * Wraps a single perspective tab in its CommandScopeProvider.
+ * Wraps a single perspective tab in a `FocusScope` so the tab is both a
+ * command-scope anchor (context menu, command dispatch) and a spatial
+ * navigation entry (reachable via `h`/`j`/`k`/`l` from adjacent views).
+ *
+ * Uses `renderContainer={false}` so the enclosing tab bar owns the DOM
+ * element — the inner `PerspectiveTab` attaches the scope's `elementRef`
+ * to its root `<div>` via `useFocusScopeElementRef()`, mirroring the
+ * `DataTableCell` / `DataTableRow` pattern. `showFocusBar={false}`
+ * suppresses the focus indicator bar because the tab's existing active
+ * underline already conveys focus visually.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  */
@@ -275,9 +286,11 @@ function ScopedPerspectiveTab({
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
   return (
-    <CommandScopeProvider
+    <FocusScope
       commands={[]}
       moniker={moniker("perspective", perspective.id)}
+      renderContainer={false}
+      showFocusBar={false}
     >
       <PerspectiveTab
         id={perspective.id}
@@ -292,7 +305,7 @@ function ScopedPerspectiveTab({
         onRenameCancel={onRenameCancel}
         onFilterFocus={onFilterFocus}
       />
-    </CommandScopeProvider>
+    </FocusScope>
   );
 }
 
@@ -338,8 +351,9 @@ function AddPerspectiveButton({
 }
 
 // ---------------------------------------------------------------------------
-// Inner tab component — rendered inside CommandScopeProvider so
-// useContextMenu sees the perspective scope and builds the correct chain.
+// Inner tab component — rendered inside a `FocusScope` (which installs
+// `CommandScopeContext.Provider`) so useContextMenu sees the perspective
+// scope and builds the correct chain.
 // ---------------------------------------------------------------------------
 
 /** Props for an individual perspective tab button and its inline action buttons. */
@@ -364,9 +378,46 @@ interface PerspectiveTabProps {
  * context menus. Renders an inline filter focus button for the active tab
  * that moves keyboard focus into the formula bar (no popover).
  *
- * Must be rendered inside a CommandScopeProvider with a perspective
- * moniker so the scope chain is correct.
+ * Must be rendered inside a `FocusScope` with a `perspective:` moniker
+ * (see `ScopedPerspectiveTab`) so the scope chain is correct and the
+ * tab is reachable via spatial navigation. The root `<div>` attaches the
+ * enclosing scope's `elementRef` via `useFocusScopeElementRef()` — this
+ * is what lets `ResizeObserver` measure the tab's rect and push it to
+ * the Rust beam-test graph.
  */
+/**
+ * Bundles the spatial-nav wiring for a `FocusScope` using `renderContainer={false}`:
+ * returns the moniker, a ref callback that forwards the enclosing scope's
+ * `elementRef` to the consumer's DOM node, and a capture-phase click handler that
+ * calls `setFocus` (capture because inner buttons may stopPropagation before
+ * bubble reaches the scope root).
+ */
+function useSpatialTabWiring(perspectiveId: string) {
+  const scopeElementRef = useFocusScopeElementRef();
+  const { setFocus } = useEntityFocus();
+  const tabMoniker = moniker("perspective", perspectiveId);
+  const handleScopeClick = useCallback(() => {
+    setFocus(tabMoniker);
+  }, [setFocus, tabMoniker]);
+  const refCallback = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (scopeElementRef) scopeElementRef.current = node;
+    },
+    [scopeElementRef],
+  );
+  return { tabMoniker, refCallback, handleScopeClick };
+}
+
+function useActiveViewSchemaFields() {
+  const { getSchema } = useSchema();
+  const { activeView } = useViews();
+  const entityType = activeView?.entity_type ?? "";
+  return useMemo(
+    () => getSchema(entityType)?.fields ?? [],
+    [getSchema, entityType],
+  );
+}
+
 function PerspectiveTab({
   id,
   name,
@@ -382,17 +433,17 @@ function PerspectiveTab({
 }: PerspectiveTabProps) {
   const handleContextMenu = useContextMenu();
   const [groupOpen, setGroupOpen] = useState(false);
-
-  const { getSchema } = useSchema();
-  const { activeView } = useViews();
-  const entityType = activeView?.entity_type ?? "";
-  const schemaFields = useMemo(
-    () => getSchema(entityType)?.fields ?? [],
-    [getSchema, entityType],
-  );
+  const schemaFields = useActiveViewSchemaFields();
+  const { tabMoniker, refCallback, handleScopeClick } = useSpatialTabWiring(id);
 
   return (
-    <div className="inline-flex items-center">
+    <div
+      ref={refCallback}
+      data-moniker={tabMoniker}
+      data-testid={`data-moniker:${tabMoniker}`}
+      onClickCapture={handleScopeClick}
+      className="inline-flex items-center"
+    >
       <TabButton
         name={name}
         isActive={isActive}

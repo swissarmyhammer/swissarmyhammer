@@ -17,6 +17,12 @@ const mockListen = vi.fn((..._args: any[]) => Promise.resolve(() => {}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (...args: any[]) => mockListen(...args),
 }));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),

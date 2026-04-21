@@ -389,11 +389,11 @@ describe("FilterEditor", () => {
     });
 
     // =======================================================================
-     // Flush-on-accept / flush-on-unmount — guards the perspective-toggle race.
-     // When the 300ms debounce is pending and the user either accepts an
-     // autocomplete completion or the editor unmounts, the pending save must
-     // fire so the user's last action is persisted.
-     // =======================================================================
+    // Flush-on-accept / flush-on-unmount — guards the perspective-toggle race.
+    // When the 300ms debounce is pending and the user either accepts an
+    // autocomplete completion or the editor unmounts, the pending save must
+    // fire so the user's last action is persisted.
+    // =======================================================================
 
     it("flushes immediately when a completion is accepted", async () => {
       const { container } = render(
@@ -465,9 +465,8 @@ describe("FilterEditor", () => {
         <FilterEditor filter="" perspectiveId="p1" />,
       );
       const view = await getEditorView(container);
-      const { startCompletion, completionStatus } = await import(
-        "@codemirror/autocomplete"
-      );
+      const { startCompletion, completionStatus } =
+        await import("@codemirror/autocomplete");
 
       await act(async () => {
         view.dispatch({
@@ -574,9 +573,8 @@ describe("FilterEditor", () => {
         <FilterEditor filter="" perspectiveId="p1" />,
       );
       const view = await getEditorView(container);
-      const { startCompletion, currentCompletions } = await import(
-        "@codemirror/autocomplete"
-      );
+      const { startCompletion, currentCompletions } =
+        await import("@codemirror/autocomplete");
 
       // Type `#blocki` into the editor so the completion source has a query
       // that narrows unambiguously to `#BLOCKING` (both virtual and real tag
@@ -1067,9 +1065,7 @@ describe("FilterEditor", () => {
                 args?: { filter?: string };
               };
               if (payload?.cmd === "perspective.filter") {
-                queueMicrotask(() =>
-                  setFilter(payload.args?.filter ?? ""),
-                );
+                queueMicrotask(() => setFilter(payload.args?.filter ?? ""));
               }
               if (payload?.cmd === "perspective.clearFilter") {
                 queueMicrotask(() => setFilter(""));

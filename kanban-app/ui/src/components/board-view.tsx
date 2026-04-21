@@ -128,9 +128,17 @@ function buildBaseLayout(
 ): ColumnLayout {
   const map: ColumnLayout = new Map();
   for (const col of columns) map.set(col.id, []);
-  for (const task of tasks) map.get(getStr(task, "position_column"))?.push(task.id);
+  for (const task of tasks)
+    map.get(getStr(task, "position_column"))?.push(task.id);
   for (const ids of map.values()) {
-    ids.sort((a, b) => compareTaskOrder(taskMap.get(a)!, taskMap.get(b)!, groupField, groupValue));
+    ids.sort((a, b) =>
+      compareTaskOrder(
+        taskMap.get(a)!,
+        taskMap.get(b)!,
+        groupField,
+        groupValue,
+      ),
+    );
   }
   return map;
 }
@@ -163,7 +171,12 @@ function useColumnTaskBuckets(
     const map = new Map<string, Entity[]>();
     for (const col of columns) {
       const ids = baseLayout.get(col.id) ?? [];
-      map.set(col.id, ids.map((id) => taskMap.get(id)).filter((t): t is Entity => t !== undefined));
+      map.set(
+        col.id,
+        ids
+          .map((id) => taskMap.get(id))
+          .filter((t): t is Entity => t !== undefined),
+      );
     }
     return map;
   }, [columns, baseLayout, taskMap]);
@@ -229,7 +242,11 @@ function useBoardLayout(
   const { columns, columnIdList, columnMap } = useColumnOrdering(board);
   const { taskMap, baseLayout, columnTasks, firstTodoTaskId } =
     useColumnTaskBuckets(columns, tasks, groupField, groupValue);
-  const columnTaskMonikers = useColumnTaskMonikers(columns, baseLayout, taskMap);
+  const columnTaskMonikers = useColumnTaskMonikers(
+    columns,
+    baseLayout,
+    taskMap,
+  );
 
   return {
     columns,
@@ -464,13 +481,19 @@ function useZoneDropHandler(
   setTaskDrag: (v: TaskDragState | null) => void,
   persistMove: (d: DropZoneDescriptor, id: string) => Promise<void>,
   cancelSession: () => void,
-  completeSession: (col: string, placement: { beforeId?: string; afterId?: string }) => void,
+  completeSession: (
+    col: string,
+    placement: { beforeId?: string; afterId?: string },
+  ) => void,
 ) {
   return useCallback(
     (descriptor: DropZoneDescriptor, taskData: string) => {
       setTaskDrag(null);
       const entity = parseTaskDropPayload(taskData);
-      if (!entity) { cancelSession(); return; }
+      if (!entity) {
+        cancelSession();
+        return;
+      }
       if (taskMap.has(entity.id)) {
         cancelSession();
         persistMove(descriptor, entity.id);
@@ -517,7 +540,11 @@ function useTaskDragHandlers(taskMap: Map<string, Entity>): TaskDragHandlers {
   );
 
   const handleZoneDrop = useZoneDropHandler(
-    taskMap, setTaskDrag, persistMove, cancelSession, completeSession,
+    taskMap,
+    setTaskDrag,
+    persistMove,
+    cancelSession,
+    completeSession,
   );
 
   return { taskDrag, handleTaskDragStart, handleTaskDragEnd, handleZoneDrop };

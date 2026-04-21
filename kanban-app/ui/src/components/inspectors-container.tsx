@@ -142,7 +142,9 @@ function useResolvedEntity(
   const resolved = localEntity ?? fetchedEntity;
   const fetchKey = `${entityType}:${entityId}`;
 
-  useEffect(() => { fetchedRef.current = null; }, [fetchKey]);
+  useEffect(() => {
+    fetchedRef.current = null;
+  }, [fetchKey]);
 
   useEffect(() => {
     if (resolved || fetchedRef.current === fetchKey) return;
@@ -151,7 +153,10 @@ function useResolvedEntity(
     invoke<Record<string, unknown>>("get_entity", { entityType, id: entityId })
       .then((bag) => setFetchedEntity(entityFromBag(bag as EntityBag)))
       .catch((err) => {
-        console.error(`[InspectorPanel] Failed to fetch entity: ${fetchKey}`, err);
+        console.error(
+          `[InspectorPanel] Failed to fetch entity: ${fetchKey}`,
+          err,
+        );
         setFetchError(String(err));
       });
   }, [resolved, fetchKey, entityType, entityId]);
@@ -168,8 +173,17 @@ interface InspectorPanelProps {
 }
 
 /** Renders a single inspector panel with entity resolution and error handling. */
-function InspectorPanel({ entry, entityStore, onClose, style }: InspectorPanelProps) {
-  const { entity, fetchError } = useResolvedEntity(entry.entityType, entry.entityId, entityStore);
+function InspectorPanel({
+  entry,
+  entityStore,
+  onClose,
+  style,
+}: InspectorPanelProps) {
+  const { entity, fetchError } = useResolvedEntity(
+    entry.entityType,
+    entry.entityId,
+    entityStore,
+  );
 
   if (!entity) {
     return (

@@ -1,4 +1,19 @@
 /**
+ * Reserved field name used as the moniker suffix for the synthetic
+ * row-selector cell in grid views.
+ *
+ * The row selector is a UI-only column — it has no schema field — so
+ * its moniker uses this reserved name that cannot collide with any
+ * user-defined field. The leading double underscore reinforces the
+ * "synthetic" nature of the name at a glance.
+ *
+ * Both the production `DataTable` (`components/data-table.tsx`) and
+ * the spatial-nav test fixture (`test/spatial-grid-fixture.tsx`)
+ * import this constant so their selector monikers can never drift.
+ */
+export const ROW_SELECTOR_FIELD = "__rowselector";
+
+/**
  * Build a moniker string from entity type and id.
  * Format: "type:id"
  */

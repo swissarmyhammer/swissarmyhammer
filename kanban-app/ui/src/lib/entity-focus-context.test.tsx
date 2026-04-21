@@ -20,6 +20,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: vi.fn(() => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  })),
+}));
 vi.mock("ulid", () => {
   let counter = 0;
   return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
@@ -34,7 +40,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <EntityFocusProvider><FocusLayer name="test">{children}</FocusLayer></EntityFocusProvider>
+  <EntityFocusProvider>
+    <FocusLayer name="test">{children}</FocusLayer>
+  </EntityFocusProvider>
 );
 
 describe("useEntityFocus", () => {
@@ -364,14 +372,19 @@ describe("window moniker in scope chain", () => {
 
 describe("spatial focus claim registry", () => {
   it("claim registry calls previous callback with false and next with true on focus-changed event", async () => {
-    const { listen } = await import("@tauri-apps/api/event");
+    const { getCurrentWebviewWindow } =
+      await import("@tauri-apps/api/webviewWindow");
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
-    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+    const webviewListen = vi.fn(
       (_event: string, cb: (evt: { payload: unknown }) => void) => {
         eventCallback = cb;
         return Promise.resolve(() => {});
       },
     );
+    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({
+      label: "main",
+      listen: webviewListen,
+    });
 
     const cbA = vi.fn();
     const cbB = vi.fn();
@@ -429,14 +442,19 @@ describe("spatial focus claim registry", () => {
   });
 
   it("unregistered key in focus-changed event is a no-op", async () => {
-    const { listen } = await import("@tauri-apps/api/event");
+    const { getCurrentWebviewWindow } =
+      await import("@tauri-apps/api/webviewWindow");
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
-    (listen as ReturnType<typeof vi.fn>).mockImplementation(
+    const webviewListen = vi.fn(
       (_event: string, cb: (evt: { payload: unknown }) => void) => {
         eventCallback = cb;
         return Promise.resolve(() => {});
       },
     );
+    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({
+      label: "main",
+      listen: webviewListen,
+    });
 
     const cbA = vi.fn();
 
@@ -471,11 +489,14 @@ describe("spatial focus claim registry", () => {
   });
 
   it("EntityFocusProvider unmount cleans up event listener", async () => {
-    const { listen } = await import("@tauri-apps/api/event");
+    const { getCurrentWebviewWindow } =
+      await import("@tauri-apps/api/webviewWindow");
     const unsub = vi.fn();
-    (listen as ReturnType<typeof vi.fn>).mockImplementation(() =>
-      Promise.resolve(unsub),
-    );
+    const webviewListen = vi.fn(() => Promise.resolve(unsub));
+    (getCurrentWebviewWindow as ReturnType<typeof vi.fn>).mockReturnValue({
+      label: "main",
+      listen: webviewListen,
+    });
 
     const { unmount } = render(
       <EntityFocusProvider>
@@ -484,8 +505,12 @@ describe("spatial focus claim registry", () => {
     );
     await flush();
 
-    // listen should have been called for "focus-changed"
-    expect(listen).toHaveBeenCalledWith("focus-changed", expect.any(Function));
+    // listen should have been called on the current webview window
+    // for "focus-changed" so the listener is scoped to this window.
+    expect(webviewListen).toHaveBeenCalledWith(
+      "focus-changed",
+      expect.any(Function),
+    );
 
     unmount();
     await flush();
