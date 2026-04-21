@@ -77,29 +77,9 @@ pub async fn run(
 ) -> Result<CallToolResult, McpError> {
     let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
     tracing::info!("Executing shell command: {}", Pretty(&request.command));
-
     validate_shell_request(&request)?;
-    let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
-    let working_directory = request.working_directory.map(PathBuf::from);
 
-    // Register command in shell state
-    let cmd_id = {
-        let mut guard = state.lock().await;
-        guard.start_command(request.command.clone())
-    };
-
-    // Spawn the process and register its PID for kill support
-    let (mut process_guard, work_dir) = spawn_shell_command(
-        &request.command,
-        working_directory,
-        parsed_environment.as_ref(),
-    )
-    .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;
-
-    if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
-        let mut guard = state.lock().await;
-        guard.register_process(cmd_id, pid);
-    }
+    let (cmd_id, mut process_guard, work_dir) = prepare_command(&request, &state).await?;
 
     let result = match run_with_optional_timeout(
         request.timeout,
@@ -112,17 +92,55 @@ pub async fn run(
     {
         RunOutcome::Completed(r) => r,
         RunOutcome::TimedOut { timeout_secs } => {
-            mark_timed_out(&state, cmd_id).await;
-            return Ok(BaseToolImpl::create_success_response(format!(
-                "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
-                cmd_id, timeout_secs, timeout_secs,
-            )));
+            return finalize_timed_out(&state, cmd_id, timeout_secs).await;
         }
     };
 
+    finalize_completed(&state, cmd_id, result).await
+}
+
+/// Parse the request's environment and working directory, register the command
+/// in shell state, spawn the child process, and track its PID.
+///
+/// Returns the newly assigned command id, the live process guard, and the
+/// resolved working directory that downstream code should attribute output to.
+async fn prepare_command(
+    request: &ShellExecuteRequest,
+    state: &Arc<Mutex<ShellState>>,
+) -> Result<(usize, super::process::AsyncProcessGuard, PathBuf), McpError> {
+    let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
+    let working_directory = request.working_directory.clone().map(PathBuf::from);
+
+    let cmd_id = {
+        let mut guard = state.lock().await;
+        guard.start_command(request.command.clone())
+    };
+
+    let (mut process_guard, work_dir) = spawn_shell_command(
+        &request.command,
+        working_directory,
+        parsed_environment.as_ref(),
+    )
+    .map_err(|e| McpError::internal_error(format!("Failed to spawn command: {}", e), None))?;
+
+    if let Some(pid) = process_guard.child_mut().and_then(|c| c.id()) {
+        let mut guard = state.lock().await;
+        guard.register_process(cmd_id, pid);
+    }
+
+    Ok((cmd_id, process_guard, work_dir))
+}
+
+/// Produce the MCP response for a completed command, recording its output in
+/// shell state and translating any inner shell error into a tool-level error.
+async fn finalize_completed(
+    state: &Arc<Mutex<ShellState>>,
+    cmd_id: usize,
+    result: Result<super::infrastructure::ShellExecutionResult, ShellError>,
+) -> Result<CallToolResult, McpError> {
     match result {
         Ok(output) => {
-            store_command_output(&state, cmd_id, &output).await;
+            store_command_output(state, cmd_id, &output).await;
             let total_lines = output.stdout.lines().count() + output.stderr.lines().count();
             Ok(BaseToolImpl::create_success_response(format!(
                 "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
@@ -130,11 +148,25 @@ pub async fn run(
             )))
         }
         Err(shell_error) => {
-            mark_command_errored(&state, cmd_id).await;
+            mark_command_errored(state, cmd_id).await;
             tracing::error!("Shell: Failed - {}", shell_error);
             format_error_result(shell_error)
         }
     }
+}
+
+/// Produce the MCP response for a command that exceeded its timeout, updating
+/// shell state so `list processes` reflects the `timed_out` status.
+async fn finalize_timed_out(
+    state: &Arc<Mutex<ShellState>>,
+    cmd_id: usize,
+    timeout_secs: u64,
+) -> Result<CallToolResult, McpError> {
+    mark_timed_out(state, cmd_id).await;
+    Ok(BaseToolImpl::create_success_response(format!(
+        "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
+        cmd_id, timeout_secs, timeout_secs,
+    )))
 }
 
 /// Result of driving the command to completion, distinguishing a real outcome
