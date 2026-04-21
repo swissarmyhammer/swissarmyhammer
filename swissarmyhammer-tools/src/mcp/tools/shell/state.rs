@@ -624,28 +624,42 @@ async fn embedding_worker(
     let mut model: Option<Arc<dyn TextEmbedder>> = None;
 
     while let Some(job) = rx.recv().await {
-        let chunk = match unpack_chunk_job(job) {
-            Some(c) => c,
-            None => continue, // Flush signal — already acked inside unpack_chunk_job.
+        let Some(chunk) = unpack_chunk_job(job) else {
+            // Flush signal — already acked inside unpack_chunk_job.
+            continue;
         };
-
         insert_chunk_row(&db, &chunk).await;
-
-        if model.is_none() {
-            model = match build_embedder(injected.clone()).await {
-                Ok(m) => Some(m),
-                Err(()) => {
-                    // Model failed to build or load — drain the queue as
-                    // INSERT-only and stop embedding further work.
-                    drain_inserts_only(&mut rx, &db).await;
-                    return;
-                }
-            };
+        if !ensure_model_loaded(&mut model, &injected).await {
+            // Model failed to build or load — drain the remaining queue
+            // as INSERT-only and stop embedding further work.
+            drain_inserts_only(&mut rx, &db).await;
+            return;
         }
+        let m = model
+            .as_ref()
+            .expect("model is Some once ensure_model_loaded returns true");
+        update_chunk_embedding(m.as_ref(), &db, &chunk).await;
+    }
+}
 
-        if let Some(m) = &model {
-            update_chunk_embedding(m.as_ref(), &db, &chunk).await;
+/// Lazy-load `*model` from `injected` (or the production default) if not
+/// already populated. Returns `true` when `*model` is populated on exit.
+///
+/// A `false` return signals that the embedder could not be built or loaded;
+/// the caller should drain remaining work as INSERT-only and stop.
+async fn ensure_model_loaded(
+    model: &mut Option<Arc<dyn TextEmbedder>>,
+    injected: &Option<Arc<dyn TextEmbedder>>,
+) -> bool {
+    if model.is_some() {
+        return true;
+    }
+    match build_embedder(injected.clone()).await {
+        Ok(m) => {
+            *model = Some(m);
+            true
         }
+        Err(()) => false,
     }
 }
 
