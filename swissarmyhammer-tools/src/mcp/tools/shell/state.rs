@@ -461,27 +461,10 @@ impl ShellState {
             &matcher,
             &self.log_path,
             UTF8(|_line_num, line| {
-                // Only match lines from this session
-                if let Some(rest) = line.strip_prefix(&session_prefix) {
-                    // Parse cmd_id:line_number:text
-                    let parts: Vec<&str> = rest.splitn(3, ':').collect();
-                    if parts.len() == 3 {
-                        if let Ok(cmd_id_parsed) = parts[0].parse::<usize>() {
-                            // Filter by command_id if specified
-                            if command_id.is_some() && command_id != Some(cmd_id_parsed) {
-                                return Ok(true); // skip, continue searching
-                            }
-                            if let Ok(line_num) = parts[1].parse::<usize>() {
-                                total_matches += 1;
-                                if results.len() < limit {
-                                    results.push(GrepResult {
-                                        command_id: cmd_id_parsed,
-                                        line_number: line_num,
-                                        text: parts[2].trim_end().to_string(),
-                                    });
-                                }
-                            }
-                        }
+                if let Some(entry) = parse_grep_log_line(line, &session_prefix, command_id) {
+                    total_matches += 1;
+                    if results.len() < limit {
+                        results.push(entry);
                     }
                 }
                 Ok(true)
@@ -510,6 +493,32 @@ impl Drop for ShellState {
     }
 }
 
+/// Parse one `session_id:cmd_id:line_num:text` log entry into a [`GrepResult`].
+///
+/// Returns `None` when the line does not belong to this session, when the
+/// command_id filter rejects it, or when any required field fails to parse.
+fn parse_grep_log_line(
+    line: &str,
+    session_prefix: &str,
+    cmd_id_filter: Option<usize>,
+) -> Option<GrepResult> {
+    let rest = line.strip_prefix(session_prefix)?;
+    let parts: Vec<&str> = rest.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let command_id = parts[0].parse::<usize>().ok()?;
+    if cmd_id_filter.is_some() && cmd_id_filter != Some(command_id) {
+        return None;
+    }
+    let line_number = parts[1].parse::<usize>().ok()?;
+    Some(GrepResult {
+        command_id,
+        line_number,
+        text: parts[2].trim_end().to_string(),
+    })
+}
+
 /// Semantic search across command output using embeddings.
 /// This is a standalone function (not a &self method) so the outer SHELL_STATE
 /// lock can be released before calling it.
@@ -523,8 +532,22 @@ pub async fn search(
     limit: Option<usize>,
 ) -> anyhow::Result<(Vec<SearchResult>, usize)> {
     let limit = limit.unwrap_or(10);
+    let query_embedding = embed_query(query).await?;
+    let mut scored = score_session_chunks(db, session_id, command_id, &query_embedding).await?;
 
-    // Create an embedding model for the query using the platform-aware Embedder
+    scored.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let total = scored.len();
+    scored.truncate(limit);
+    Ok((scored, total))
+}
+
+/// Build and load the production embedder, then embed `query` to produce the
+/// reference vector that similarity scores are computed against.
+async fn embed_query(query: &str) -> anyhow::Result<Vec<f32>> {
     let model = Embedder::default()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create embedding model: {}", e))?;
@@ -532,21 +555,27 @@ pub async fn search(
         .load()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load embedding model: {}", e))?;
-
-    let query_result = model
+    let result = model
         .embed_text(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to embed query: {}", e))?;
-    let query_embedding = query_result.embedding();
+    Ok(result.embedding().to_vec())
+}
 
-    // Load stored chunks with embeddings
+/// Load every embedded chunk for `session_id` from the DB and score each one
+/// by cosine similarity against `query_embedding`, honouring the optional
+/// `command_id` filter.
+async fn score_session_chunks(
+    db: &Arc<Mutex<Connection>>,
+    session_id: &str,
+    command_id: Option<usize>,
+    query_embedding: &[f32],
+) -> anyhow::Result<Vec<SearchResult>> {
     let conn = db.lock().await;
     let mut stmt = conn.prepare(
-        "SELECT command_id, chunk_index, start_line, end_line, text, embedding FROM chunks WHERE session_id = ?1 AND embedding IS NOT NULL"
+        "SELECT command_id, chunk_index, start_line, end_line, text, embedding FROM chunks WHERE session_id = ?1 AND embedding IS NOT NULL",
     )?;
-
-    let cmd_id_filter = command_id;
-    let mut scored: Vec<SearchResult> = stmt
+    let scored = stmt
         .query_map(rusqlite::params![session_id], |row| {
             let cmd_id: usize = row.get::<_, i64>(0)? as usize;
             let _chunk_index: usize = row.get::<_, i64>(1)? as usize;
@@ -557,7 +586,7 @@ pub async fn search(
             Ok((cmd_id, start_line, end_line, text, embedding_blob))
         })?
         .filter_map(|r| r.ok())
-        .filter(|(cmd_id, _, _, _, _)| cmd_id_filter.is_none() || cmd_id_filter == Some(*cmd_id))
+        .filter(|(cmd_id, _, _, _, _)| command_id.is_none() || command_id == Some(*cmd_id))
         .map(|(cmd_id, start_line, end_line, text, blob)| {
             let chunk_embedding = decode_embedding(&blob);
             let similarity = cosine_similarity(query_embedding, &chunk_embedding);
@@ -570,15 +599,7 @@ pub async fn search(
             }
         })
         .collect();
-
-    scored.sort_by(|a, b| {
-        b.similarity
-            .partial_cmp(&a.similarity)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let total = scored.len();
-    scored.truncate(limit);
-    Ok((scored, total))
+    Ok(scored)
 }
 
 /// Result from grep operation
@@ -599,6 +620,17 @@ pub struct SearchResult {
     pub similarity: f32,
 }
 
+/// A chunk job payload, unpacked into a flat struct so helper fns don't need
+/// to carry six positional arguments around.
+struct ChunkRow {
+    session_id: String,
+    command_id: usize,
+    chunk_index: usize,
+    start_line: usize,
+    end_line: usize,
+    text: String,
+}
+
 /// Background embedding worker — receives chunks via channel, inserts into DB,
 /// then computes and stores embeddings. Processes every chunk — never drops work.
 ///
@@ -610,68 +642,138 @@ async fn embedding_worker(
     db: Arc<Mutex<Connection>>,
     injected: Option<Arc<dyn TextEmbedder>>,
 ) {
-    // Lazy-init the model on first chunk
     let mut model: Option<Arc<dyn TextEmbedder>> = None;
 
     while let Some(job) = rx.recv().await {
-        match job {
-            ChunkJob::Flush(done) => {
-                // All prior chunks have been processed (channel is FIFO).
-                let _ = done.send(());
-            }
-            ChunkJob::Chunk {
-                session_id,
-                command_id,
-                chunk_index,
-                start_line,
-                end_line,
-                text,
-            } => {
-                // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
-                {
-                    let conn = db.lock().await;
-                    if let Err(e) = conn.execute(
-                        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        rusqlite::params![session_id, command_id as i64, chunk_index as i64, start_line as i64, end_line as i64, text],
-                    ) {
-                        tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
-                    }
-                }
-
-                // Step 2: Resolve the embedding model on first use.
-                if model.is_none() {
-                    model = match build_embedder(injected.clone()).await {
-                        Ok(m) => Some(m),
-                        Err(()) => {
-                            // Model failed to build or load — drain the queue
-                            // as INSERT-only and stop embedding further work.
-                            drain_inserts_only(&mut rx, &db).await;
-                            return;
-                        }
-                    };
-                }
-
-                // Step 3: Compute embedding and UPDATE the row
-                if let Some(m) = &model {
-                    match m.embed_text(&text).await {
-                        Ok(mut result) => {
-                            result.normalize();
-                            let embedding_bytes = encode_embedding(result.embedding());
-                            let conn = db.lock().await;
-                            if let Err(e) = conn.execute(
-                                "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
-                                rusqlite::params![embedding_bytes, session_id, command_id as i64, chunk_index as i64],
-                            ) {
-                                tracing::warn!("Failed to store embedding in DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::debug!("Failed to embed chunk: {}", e);
-                        }
-                    }
-                }
-            }
+        let Some(chunk) = unpack_chunk_job(job) else {
+            // Flush signal — already acked inside unpack_chunk_job.
+            continue;
+        };
+        insert_chunk_row(&db, &chunk).await;
+        if !ensure_model_loaded(&mut model, &injected).await {
+            // Model failed to build or load — drain the remaining queue
+            // as INSERT-only and stop embedding further work.
+            drain_inserts_only(&mut rx, &db).await;
+            return;
         }
+        let m = model
+            .as_ref()
+            .expect("model is Some once ensure_model_loaded returns true");
+        update_chunk_embedding(m.as_ref(), &db, &chunk).await;
+    }
+}
+
+/// Lazy-load `*model` from `injected` (or the production default) if not
+/// already populated. Returns `true` when `*model` is populated on exit.
+///
+/// A `false` return signals that the embedder could not be built or loaded;
+/// the caller should drain remaining work as INSERT-only and stop.
+async fn ensure_model_loaded(
+    model: &mut Option<Arc<dyn TextEmbedder>>,
+    injected: &Option<Arc<dyn TextEmbedder>>,
+) -> bool {
+    if model.is_some() {
+        return true;
+    }
+    match build_embedder(injected.clone()).await {
+        Ok(m) => {
+            *model = Some(m);
+            true
+        }
+        Err(()) => false,
+    }
+}
+
+/// Convert a [`ChunkJob`] into the flat row struct processed by the worker.
+///
+/// Flush signals are handled here (acked via their `oneshot`) and reported
+/// as `None` so the worker loop can simply `continue`.
+fn unpack_chunk_job(job: ChunkJob) -> Option<ChunkRow> {
+    match job {
+        ChunkJob::Flush(done) => {
+            // Channel is FIFO, so acking here means every earlier Chunk
+            // message has already been processed.
+            let _ = done.send(());
+            None
+        }
+        ChunkJob::Chunk {
+            session_id,
+            command_id,
+            chunk_index,
+            start_line,
+            end_line,
+            text,
+        } => Some(ChunkRow {
+            session_id,
+            command_id,
+            chunk_index,
+            start_line,
+            end_line,
+            text,
+        }),
+    }
+}
+
+/// INSERT the chunk text into the DB. The text is stored even when embedding
+/// later fails, so grep-style search over history still works.
+async fn insert_chunk_row(db: &Arc<Mutex<Connection>>, chunk: &ChunkRow) {
+    let conn = db.lock().await;
+    let result = conn.execute(
+        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            chunk.session_id,
+            chunk.command_id as i64,
+            chunk.chunk_index as i64,
+            chunk.start_line as i64,
+            chunk.end_line as i64,
+            chunk.text,
+        ],
+    );
+    if let Err(e) = result {
+        tracing::warn!(
+            "Failed to insert chunk into DB (cmd {}, chunk {}): {}",
+            chunk.command_id,
+            chunk.chunk_index,
+            e,
+        );
+    }
+}
+
+/// Compute the embedding for `chunk.text` and UPDATE the row.
+///
+/// Embedding failures are logged at debug level — the chunk text remains in
+/// the DB so semantic search simply won't match it.
+async fn update_chunk_embedding(
+    model: &dyn TextEmbedder,
+    db: &Arc<Mutex<Connection>>,
+    chunk: &ChunkRow,
+) {
+    let mut result = match model.embed_text(&chunk.text).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!("Failed to embed chunk: {}", e);
+            return;
+        }
+    };
+    result.normalize();
+    let embedding_bytes = encode_embedding(result.embedding());
+    let conn = db.lock().await;
+    let update = conn.execute(
+        "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
+        rusqlite::params![
+            embedding_bytes,
+            chunk.session_id,
+            chunk.command_id as i64,
+            chunk.chunk_index as i64,
+        ],
+    );
+    if let Err(e) = update {
+        tracing::warn!(
+            "Failed to store embedding in DB (cmd {}, chunk {}): {}",
+            chunk.command_id,
+            chunk.chunk_index,
+            e,
+        );
     }
 }
 
@@ -685,32 +787,28 @@ async fn build_embedder(
     injected: Option<Arc<dyn TextEmbedder>>,
 ) -> Result<Arc<dyn TextEmbedder>, ()> {
     if let Some(m) = injected {
-        if let Err(e) = m.load().await {
-            tracing::warn!(
-                "Failed to load injected embedder: {}. Embeddings disabled.",
-                e
-            );
-            return Err(());
-        }
-        return Ok(m);
+        return load_or_warn(m, "injected embedder").await;
     }
+    let default = Embedder::default().await.map_err(|e| {
+        tracing::warn!(
+            "Failed to create embedding model: {}. Embeddings disabled.",
+            e
+        );
+    })?;
+    load_or_warn(
+        Arc::new(default) as Arc<dyn TextEmbedder>,
+        "embedding model",
+    )
+    .await
+}
 
-    match Embedder::default().await {
-        Ok(m) => {
-            if let Err(e) = m.load().await {
-                tracing::warn!(
-                    "Failed to load embedding model: {}. Embeddings disabled.",
-                    e
-                );
-                return Err(());
-            }
-            Ok(Arc::new(m) as Arc<dyn TextEmbedder>)
-        }
+/// Call `load()` on `m`, returning it on success or logging and returning
+/// `Err(())` on failure.
+async fn load_or_warn(m: Arc<dyn TextEmbedder>, label: &str) -> Result<Arc<dyn TextEmbedder>, ()> {
+    match m.load().await {
+        Ok(()) => Ok(m),
         Err(e) => {
-            tracing::warn!(
-                "Failed to create embedding model: {}. Embeddings disabled.",
-                e
-            );
+            tracing::warn!("Failed to load {}: {}. Embeddings disabled.", label, e);
             Err(())
         }
     }

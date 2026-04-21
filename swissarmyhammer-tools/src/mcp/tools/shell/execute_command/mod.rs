@@ -77,18 +77,45 @@ pub async fn run(
 ) -> Result<CallToolResult, McpError> {
     let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
     tracing::info!("Executing shell command: {}", Pretty(&request.command));
-
     validate_shell_request(&request)?;
-    let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
-    let working_directory = request.working_directory.map(PathBuf::from);
 
-    // Register command in shell state
+    let (cmd_id, mut process_guard, work_dir) = prepare_command(&request, &state).await?;
+
+    let result = match run_with_optional_timeout(
+        request.timeout,
+        &mut process_guard,
+        cmd_id,
+        request.command.clone(),
+        work_dir,
+    )
+    .await
+    {
+        RunOutcome::Completed(r) => r,
+        RunOutcome::TimedOut { timeout_secs } => {
+            return finalize_timed_out(&state, cmd_id, timeout_secs).await;
+        }
+    };
+
+    finalize_completed(&state, cmd_id, result).await
+}
+
+/// Parse the request's environment and working directory, register the command
+/// in shell state, spawn the child process, and track its PID.
+///
+/// Returns the newly assigned command id, the live process guard, and the
+/// resolved working directory that downstream code should attribute output to.
+async fn prepare_command(
+    request: &ShellExecuteRequest,
+    state: &Arc<Mutex<ShellState>>,
+) -> Result<(usize, super::process::AsyncProcessGuard, PathBuf), McpError> {
+    let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
+    let working_directory = request.working_directory.clone().map(PathBuf::from);
+
     let cmd_id = {
         let mut guard = state.lock().await;
         guard.start_command(request.command.clone())
     };
 
-    // Spawn the process and register its PID for kill support
     let (mut process_guard, work_dir) = spawn_shell_command(
         &request.command,
         working_directory,
@@ -101,82 +128,120 @@ pub async fn run(
         guard.register_process(cmd_id, pid);
     }
 
-    let result = if let Some(timeout_secs) = request.timeout {
-        match tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            execute_with_guard(
-                &mut process_guard,
-                cmd_id,
-                request.command.clone(),
-                work_dir,
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                // Timeout: guard is dropped here, killing the process
-                {
-                    let mut guard = state.lock().await;
-                    guard.timeout_command(cmd_id).await;
-                    guard.flush_chunks().await;
-                }
-                return Ok(BaseToolImpl::create_success_response(format!(
-                    "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
-                    cmd_id, timeout_secs, timeout_secs,
-                )));
-            }
-        }
-    } else {
-        execute_with_guard(
-            &mut process_guard,
-            cmd_id,
-            request.command.clone(),
-            work_dir,
-        )
-        .await
-    };
+    Ok((cmd_id, process_guard, work_dir))
+}
 
+/// Produce the MCP response for a completed command, recording its output in
+/// shell state and translating any inner shell error into a tool-level error.
+async fn finalize_completed(
+    state: &Arc<Mutex<ShellState>>,
+    cmd_id: usize,
+    result: Result<super::infrastructure::ShellExecutionResult, ShellError>,
+) -> Result<CallToolResult, McpError> {
     match result {
-        Ok(result) => {
-            // Store output in shell state and wait for all chunks to be embedded
-            {
-                let mut guard = state.lock().await;
-                let lines: Vec<String> = result.stdout.lines().map(String::from).collect();
-                if let Err(e) = guard.append_lines(cmd_id, &lines).await {
-                    tracing::warn!("Failed to store stdout for command {}: {}", cmd_id, e);
-                }
-                if !result.stderr.is_empty() {
-                    let stderr_lines: Vec<String> =
-                        result.stderr.lines().map(String::from).collect();
-                    if let Err(e) = guard.append_lines(cmd_id, &stderr_lines).await {
-                        tracing::warn!("Failed to store stderr for command {}: {}", cmd_id, e);
-                    }
-                }
-                guard.complete_command(cmd_id, Some(result.exit_code)).await;
-                // Wait for all chunks to be inserted and embedded before returning
-                guard.flush_chunks().await;
-            }
-
-            // Status-only response — output is in shell history,
-            // use grep/search/get-lines to retrieve it
-            let total_lines = result.stdout.lines().count() + result.stderr.lines().count();
+        Ok(output) => {
+            store_command_output(state, cmd_id, &output).await;
+            let total_lines = output.stdout.lines().count() + output.stderr.lines().count();
             Ok(BaseToolImpl::create_success_response(format!(
                 "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
-                cmd_id, result.exit_code, total_lines, result.execution_time_ms,
+                cmd_id, output.exit_code, total_lines, output.execution_time_ms,
             )))
         }
         Err(shell_error) => {
-            // Mark command as completed with error in state
-            {
-                let mut guard = state.lock().await;
-                guard.complete_command(cmd_id, Some(-1)).await;
-                guard.flush_chunks().await;
-            }
+            mark_command_errored(state, cmd_id).await;
             tracing::error!("Shell: Failed - {}", shell_error);
             format_error_result(shell_error)
         }
     }
+}
+
+/// Produce the MCP response for a command that exceeded its timeout, updating
+/// shell state so `list processes` reflects the `timed_out` status.
+async fn finalize_timed_out(
+    state: &Arc<Mutex<ShellState>>,
+    cmd_id: usize,
+    timeout_secs: u64,
+) -> Result<CallToolResult, McpError> {
+    mark_timed_out(state, cmd_id).await;
+    Ok(BaseToolImpl::create_success_response(format!(
+        "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
+        cmd_id, timeout_secs, timeout_secs,
+    )))
+}
+
+/// Result of driving the command to completion, distinguishing a real outcome
+/// from a timeout the caller must translate into a user-facing status response.
+enum RunOutcome {
+    /// The command finished (successfully or with an inner shell error).
+    Completed(Result<super::infrastructure::ShellExecutionResult, ShellError>),
+    /// The command exceeded `timeout_secs` and the process guard has been dropped.
+    TimedOut { timeout_secs: u64 },
+}
+
+/// Execute the command with an optional timeout.
+///
+/// When `timeout` is `None`, the command runs to completion unbounded. When
+/// `Some`, a breach of the deadline drops the process guard (killing the
+/// child) and returns [`RunOutcome::TimedOut`].
+async fn run_with_optional_timeout(
+    timeout: Option<u64>,
+    process_guard: &mut super::process::AsyncProcessGuard,
+    cmd_id: usize,
+    command: String,
+    work_dir: PathBuf,
+) -> RunOutcome {
+    let fut = execute_with_guard(process_guard, cmd_id, command, work_dir);
+    let Some(timeout_secs) = timeout else {
+        return RunOutcome::Completed(fut.await);
+    };
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), fut).await {
+        Ok(r) => RunOutcome::Completed(r),
+        Err(_) => RunOutcome::TimedOut { timeout_secs },
+    }
+}
+
+/// Persist stdout/stderr into shell history and flush pending chunks so the
+/// embedding worker has finished by the time this returns.
+async fn store_command_output(
+    state: &Arc<Mutex<ShellState>>,
+    cmd_id: usize,
+    output: &super::infrastructure::ShellExecutionResult,
+) {
+    let mut guard = state.lock().await;
+    append_stream(&mut guard, cmd_id, &output.stdout, "stdout").await;
+    if !output.stderr.is_empty() {
+        append_stream(&mut guard, cmd_id, &output.stderr, "stderr").await;
+    }
+    guard.complete_command(cmd_id, Some(output.exit_code)).await;
+    guard.flush_chunks().await;
+}
+
+/// Split `text` into lines and append them to shell state for `cmd_id`.
+/// `stream_name` is used only for log messages ("stdout" / "stderr").
+async fn append_stream(state: &mut ShellState, cmd_id: usize, text: &str, stream_name: &str) {
+    let lines: Vec<String> = text.lines().map(String::from).collect();
+    if let Err(e) = state.append_lines(cmd_id, &lines).await {
+        tracing::warn!(
+            "Failed to store {} for command {}: {}",
+            stream_name,
+            cmd_id,
+            e,
+        );
+    }
+}
+
+/// Mark `cmd_id` as timed out in shell state and wait for pending chunks.
+async fn mark_timed_out(state: &Arc<Mutex<ShellState>>, cmd_id: usize) {
+    let mut guard = state.lock().await;
+    guard.timeout_command(cmd_id).await;
+    guard.flush_chunks().await;
+}
+
+/// Mark `cmd_id` as completed with an error exit code and drain pending chunks.
+async fn mark_command_errored(state: &Arc<Mutex<ShellState>>, cmd_id: usize) {
+    let mut guard = state.lock().await;
+    guard.complete_command(cmd_id, Some(-1)).await;
+    guard.flush_chunks().await;
 }
 
 /// Validate shell request for security and correctness.
