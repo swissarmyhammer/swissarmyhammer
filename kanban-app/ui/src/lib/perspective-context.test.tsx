@@ -412,4 +412,137 @@ describe("PerspectiveProvider", () => {
       "usePerspectives must be used within PerspectiveProvider",
     );
   });
+
+  // -----------------------------------------------------------------------
+  // useAutoSelectActivePerspective: enforce "always a selected perspective"
+  // -----------------------------------------------------------------------
+
+  /** Collect every `ui.perspective.set` dispatch recorded by the mock. */
+  function perspectiveSetCalls() {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === "ui.perspective.set",
+    );
+  }
+
+  it("auto-selects the first matching perspective when UIState active id is empty", async () => {
+    // UIState active_perspective_id empty; one board perspective exists.
+    const ps = [makePerspective("p1", "Sprint")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+
+    // Wait for effects + the dispatch to settle.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "ui.perspective.set",
+      args: { perspective_id: "p1" },
+    });
+  });
+
+  it("auto-selects the first matching perspective when active id names a deleted perspective", async () => {
+    // UIState points at "gone"; the list no longer contains it.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "gone" } },
+    };
+
+    const ps = [makePerspective("p1", "Survivor")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "ui.perspective.set",
+      args: { perspective_id: "p1" },
+    });
+  });
+
+  it("auto-selects the first matching perspective when active id is for a different view kind", async () => {
+    // UIState active points at a grid perspective; the current view is board.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "g1" } },
+    };
+
+    const ps = [
+      { ...makePerspective("g1", "Grid Only"), view: "grid" },
+      makePerspective("b1", "Board One"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "ui.perspective.set",
+      args: { perspective_id: "b1" },
+    });
+  });
+
+  it("does NOT auto-select when the active id is already a valid matching perspective", async () => {
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "p2" } },
+    };
+
+    const ps = [
+      makePerspective("p1", "First"),
+      makePerspective("p2", "Second"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Auto-selection must not fire when the stored id is already valid.
+    expect(perspectiveSetCalls().length).toBe(0);
+  });
+
+  it("does NOT auto-select when no perspectives exist for the view kind (let auto-create handle it)", async () => {
+    // No perspectives at all — useAutoCreateDefaultPerspective should fire
+    // instead; useAutoSelectActivePerspective must bail out.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // No ui.perspective.set — only perspective.save would be dispatched by
+    // the sibling hook (not asserted here; covered elsewhere).
+    expect(perspectiveSetCalls().length).toBe(0);
+  });
 });

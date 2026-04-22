@@ -41,7 +41,10 @@
 
 - id: perspective.filter
   name: Set Filter
-  scope: "entity:perspective"
+  # Available from the palette (no scope) and the context menu. The
+  # `perspective_id` is resolved at execute time from (in order) args,
+  # scope-chain moniker, UIState active perspective, first perspective
+  # for the active view kind.
   undoable: true
   context_menu: true
   params:
@@ -53,7 +56,6 @@
 
 - id: perspective.clearFilter
   name: Clear Filter
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -63,7 +65,6 @@
 
 - id: perspective.group
   name: Set Group
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -75,7 +76,6 @@
 
 - id: perspective.clearGroup
   name: Clear Group
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -85,7 +85,6 @@
 
 - id: perspective.sort.set
   name: Sort Field
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -99,7 +98,6 @@
 
 - id: perspective.sort.clear
   name: Clear Sort
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -111,7 +109,6 @@
 
 - id: perspective.sort.toggle
   name: Toggle Sort
-  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:

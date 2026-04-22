@@ -152,6 +152,51 @@ function useAutoCreateDefaultPerspective(
 }
 
 /**
+ * Keep `UIState.active_perspective_id` in sync with a real perspective for
+ * the current view kind.
+ *
+ * The invariant: whenever at least one perspective exists for the active
+ * view kind, `UIState.active_perspective_id(window_label)` refers to one
+ * of them. If the stored id is empty or names a perspective that doesn't
+ * exist (deleted, or for a different view kind), dispatch
+ * `ui.perspective.set` for the first matching perspective.
+ *
+ * Runs in tandem with [`useAutoCreateDefaultPerspective`]. When no
+ * perspectives exist for the current view kind, that hook creates a
+ * "Default"; the list update fires this hook, which then selects it.
+ *
+ * The existing `activePerspective` memo in [`PerspectiveProvider`] keeps a
+ * synchronous fallback (`perspectives[0]`) so the render happening *during*
+ * this dispatch round-trip still shows a perspective instead of flickering
+ * to "none selected".
+ */
+function useAutoSelectActivePerspective(
+  loaded: boolean,
+  perspectives: PerspectiveDef[],
+  active_perspective_id: string,
+  viewKind: string,
+  dispatch: (
+    cmd: string,
+    opts?: { args?: Record<string, unknown> },
+  ) => Promise<unknown>,
+) {
+  useEffect(() => {
+    if (!loaded) return;
+    const matching = perspectives.filter((p) => p.view === viewKind);
+    if (matching.length === 0) {
+      // No perspectives for this view kind yet; let
+      // useAutoCreateDefaultPerspective create one first.
+      return;
+    }
+    const stillValid = matching.some((p) => p.id === active_perspective_id);
+    if (stillValid) return;
+    dispatch("ui.perspective.set", {
+      args: { perspective_id: matching[0].id },
+    }).catch(console.error);
+  }, [loaded, perspectives, active_perspective_id, viewKind, dispatch]);
+}
+
+/**
  * Wire event listeners for perspective entity updates.
  *
  * - entity-field-changed: apply the delta in place, preserving identity for
@@ -221,6 +266,13 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const { perspectives, setPerspectives, loaded, refresh } =
     usePerspectivesFetch(dispatch);
   useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatch);
+  useAutoSelectActivePerspective(
+    loaded,
+    perspectives,
+    active_perspective_id,
+    viewKind,
+    dispatch,
+  );
   usePerspectiveEventListeners(setPerspectives, refresh);
 
   const setActivePerspectiveId = useCallback(

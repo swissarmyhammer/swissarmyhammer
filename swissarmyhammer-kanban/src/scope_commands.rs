@@ -2391,7 +2391,12 @@ mod tests {
     }
 
     #[test]
-    fn perspective_commands_not_available_without_perspective_in_scope() {
+    fn perspective_mutation_commands_available_from_palette_scope() {
+        // Perspective mutation commands (filter, group, sort) must be
+        // available from the palette (no perspective moniker in scope) so
+        // keybindings and command palette invocations can succeed. The
+        // `resolve_perspective_id` helper resolves the target perspective
+        // at execute time via UIState/first-perspective fallback.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
             "task:01X".into(),
@@ -2401,11 +2406,20 @@ mod tests {
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
-        assert!(
-            !ids.contains(&"perspective.filter"),
-            "perspective.filter should NOT appear without perspective in scope: {:?}",
-            ids
-        );
+        for id in [
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                ids.contains(&id),
+                "{id} should be available without perspective in scope (resolved via UIState at execute time): {ids:?}",
+            );
+        }
     }
 
     // =========================================================================
