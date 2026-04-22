@@ -100,7 +100,14 @@ function useSpatialKeyBinding(
     return () => {
       unregisterSpatialKey(spatialKey);
       if (layerKey && spatial)
-        invoke("spatial_unregister", { key: spatialKey }).catch(() => {});
+        invoke("spatial_unregister", { key: spatialKey }).catch((err) => {
+          console.warn(
+            "[FocusScope] spatial_unregister failed",
+            spatialKey,
+            moniker,
+            err,
+          );
+        });
     };
   }, [
     spatialKey,
@@ -122,6 +129,18 @@ function useRectObserver(
   navOverride?: Record<string, string | null>,
 ) {
   useEffect(() => {
+    // BREADCRUMB (temporary — remove before closing this task): logs
+    // every useRectObserver effect invocation BEFORE the guard clause
+    // runs, so we can distinguish "effect never fired" from "effect
+    // fired but skipped because layerKey was null".
+    console.warn(
+      "[FocusScope] useRectObserver effect",
+      moniker,
+      "layerKey=",
+      layerKey,
+      "spatial=",
+      spatial,
+    );
     if (!layerKey || !spatial) return;
     const el = elementRef.current;
     if (!el) return;
@@ -141,7 +160,17 @@ function useRectObserver(
           parentScope,
           overrides: navOverride ?? null,
         },
-      }).catch(() => {});
+      }).catch((err) => {
+        // Do NOT swallow — surface every failure through the OS log.
+        // Silent invoke failures are how this bug stayed invisible for
+        // three diagnostic passes.
+        console.warn(
+          "[FocusScope] spatial_register failed",
+          moniker,
+          spatialKey,
+          err,
+        );
+      });
     };
     report();
     const observer = new ResizeObserver(report);

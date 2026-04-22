@@ -130,7 +130,26 @@ pub struct LayerStack {
 
 impl LayerStack {
     /// Push a new layer onto the top of the stack.
+    ///
+    /// Idempotent by `key`: pushing a key that already exists in the
+    /// stack is a no-op. The first push wins and determines the
+    /// layer's stack position; later pushes with the same key do not
+    /// move or duplicate it. This is load-bearing for the React
+    /// FocusLayer wiring in `focus-layer.tsx`, where React 18
+    /// `<StrictMode>` double-invokes `useState` initializers (and
+    /// re-mounts components once for purity checks), causing the same
+    /// `spatial_push_layer(key, ...)` to fire multiple times for the
+    /// same logical layer. Without idempotency, each extra push
+    /// stacked a duplicate entry, the stale duplicate shadowed the
+    /// real active layer, and every `spatial_search` filtered out
+    /// every registered entry because `entry.layer_key !=
+    /// active.layer_key`. Pinned by `focus-layer.test.tsx` regression
+    /// tests in the `FocusLayer under React.StrictMode` describe
+    /// block.
     pub fn push(&mut self, key: String, name: String) {
+        if self.layers.iter().any(|l| l.key == key) {
+            return;
+        }
         self.layers.push(LayerEntry {
             key,
             name,

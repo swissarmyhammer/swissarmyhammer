@@ -32,6 +32,16 @@ console.debug = (...args: unknown[]) => {
   tauriLog.debug(args.map(String).join(" ")).catch(() => {});
 };
 
+// DIAGNOSTIC (temporary — remove before closing this task):
+// prove the JS bootstrap is executing AT ALL. If we see this in the
+// os log, the wrapper works and module-level JS is running. If we do
+// not, every JS-side trace in this task is moot because React never
+// started and focus-scope.tsx / focus-layer.tsx never got imported.
+console.warn("[main.tsx] bootstrap reached, about to render App");
+tauriLog
+  .warn("[main.tsx] direct tauriLog call — skips wrapped console")
+  .catch(() => {});
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

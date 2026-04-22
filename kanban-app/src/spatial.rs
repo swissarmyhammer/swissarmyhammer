@@ -85,6 +85,19 @@ pub async fn spatial_register<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let spatial_state = state.spatial_state_for(window.label()).await;
+    // Permanent observability: log every registration so macOS Console
+    // can show the full set of (moniker, layer_key) pairs the React tree
+    // pushed after a board loads. A mismatch between entries' `layer_key`
+    // and `layer_stack.active().key` silently empties the navigation
+    // candidate pool, so these two fields are what a diagnostic pass
+    // needs to correlate.
+    tracing::info!(
+        window = %window.label(),
+        key = %args.key,
+        moniker = %args.moniker,
+        layer_key = %args.layer_key,
+        "spatial_register",
+    );
     spatial_state.register(
         args.key,
         args.moniker,
@@ -205,6 +218,17 @@ pub async fn spatial_push_layer<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let spatial_state = state.spatial_state_for(window.label()).await;
+    // Permanent observability: `layer_stack.active().key` is the filter
+    // every navigation call passes through. Logging every push + remove
+    // makes the active layer key easy to correlate with
+    // `spatial_register` log entries that must match it.
+    tracing::info!(
+        window = %window.label(),
+        key = %key,
+        name = %name,
+        layer_count = spatial_state.layer_count() + 1,
+        "spatial_push_layer",
+    );
     spatial_state.push_layer(key, name);
     Ok(())
 }
@@ -222,6 +246,11 @@ pub async fn spatial_remove_layer<R: Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let spatial_state = state.spatial_state_for(window.label()).await;
+    tracing::info!(
+        window = %window.label(),
+        key = %key,
+        "spatial_remove_layer",
+    );
     if let Some(event) = spatial_state.remove_layer(&key) {
         emit_focus_changed(&window, &event);
     }
@@ -498,24 +527,30 @@ pub mod debug_commands {
 /// the focused key from `SpatialState` itself — React never has to pass
 /// it through. Rust is the authoritative owner of focus and can always
 /// find its own source without a round-trip.
-pub(crate) struct TauriSpatialNavigator {
-    app: tauri::AppHandle,
+pub(crate) struct TauriSpatialNavigator<R: Runtime = tauri::Wry> {
+    app: tauri::AppHandle<R>,
 }
 
-impl TauriSpatialNavigator {
+impl<R: Runtime> TauriSpatialNavigator<R> {
     /// Build a navigator bound to the given Tauri `AppHandle`.
     ///
     /// The handle resolves both the per-window `SpatialState` (via
     /// `app.state::<AppState>()`) and the per-window event emitter
     /// (`app.get_webview_window(label)`), so one handle is enough for the
     /// entire navigator surface.
-    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+    ///
+    /// Generic over the Tauri `Runtime` so production code (`Wry`) and
+    /// integration tests (`MockRuntime`) share the same implementation —
+    /// the alternative of duplicating the body into a test double would
+    /// leave the production navigate path uncovered by the very tests
+    /// designed to protect it.
+    pub(crate) fn new(app: tauri::AppHandle<R>) -> Self {
         Self { app }
     }
 }
 
 #[async_trait::async_trait]
-impl swissarmyhammer_kanban::spatial::SpatialNavigator for TauriSpatialNavigator {
+impl<R: Runtime> swissarmyhammer_kanban::spatial::SpatialNavigator for TauriSpatialNavigator<R> {
     async fn navigate(
         &self,
         window_label: &str,
@@ -796,7 +831,7 @@ mod tauri_integration_tests {
     ///
     /// Uses [`kanban_invoke_handler!`] so the debug-only `__spatial_dump`
     /// command is available to tests just as it is in development binaries.
-    fn build_test_app() -> tauri::App<MockRuntime> {
+    pub(super) fn build_test_app() -> tauri::App<MockRuntime> {
         build_test_app_with_windows(&["main"])
     }
 
@@ -806,7 +841,7 @@ mod tauri_integration_tests {
     /// Used by the multi-window tests to exercise the invariant that each
     /// window owns a distinct `SpatialState` and that `focus-changed` events
     /// never cross window boundaries.
-    fn build_test_app_with_windows(labels: &[&str]) -> tauri::App<MockRuntime> {
+    pub(super) fn build_test_app_with_windows(labels: &[&str]) -> tauri::App<MockRuntime> {
         assert!(!labels.is_empty(), "at least one window label required");
         let app = mock_builder()
             .invoke_handler(crate::kanban_invoke_handler![
@@ -841,7 +876,7 @@ mod tauri_integration_tests {
     /// Panics with a loud message on IPC failure, because a failing command
     /// in one of these tests means the serde wire format broke — and we want
     /// that to be the first failure the engineer sees, not a silent `None`.
-    fn invoke(
+    pub(super) fn invoke(
         app: &tauri::App<MockRuntime>,
         cmd: &str,
         payload: serde_json::Value,
@@ -854,7 +889,7 @@ mod tauri_integration_tests {
     /// The command sees that webview's `WebviewWindow<R>` as its `window`
     /// parameter — which is how per-window state routing (the whole point of
     /// this refactor) gets exercised end-to-end.
-    fn invoke_in_window(
+    pub(super) fn invoke_in_window(
         app: &tauri::App<MockRuntime>,
         label: &str,
         cmd: &str,
@@ -896,7 +931,7 @@ mod tauri_integration_tests {
     /// JSON — that is the core assertion target for these tests, since a
     /// field rename in the `FocusChanged` struct would break deserialisation
     /// and surface as a panic here.
-    fn capture_focus_events_on_window(
+    pub(super) fn capture_focus_events_on_window(
         app: &tauri::App<MockRuntime>,
         label: &str,
     ) -> Arc<Mutex<Vec<swissarmyhammer_spatial_nav::FocusChanged>>> {
@@ -917,7 +952,7 @@ mod tauri_integration_tests {
 
     /// Shorthand for `capture_focus_events_on_window(app, "main")` — the
     /// single-window tests all register the "main" webview and listen on it.
-    fn capture_focus_events(
+    pub(super) fn capture_focus_events(
         app: &tauri::App<MockRuntime>,
     ) -> Arc<Mutex<Vec<swissarmyhammer_spatial_nav::FocusChanged>>> {
         capture_focus_events_on_window(app, "main")
@@ -2061,5 +2096,353 @@ mod tauri_integration_tests {
             0,
             "window B must not see window A's focus-changed: {events_b:?}",
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// nav.* dispatch integration tests
+// ---------------------------------------------------------------------------
+//
+// These tests close the gap between the individual Tauri commands (covered
+// above) and the full nav pipeline:
+//
+//     keypress → dispatch_command("nav.<dir>")
+//       → lookup_undoable + build CommandContext
+//       → NavigateCmd::execute
+//       → SpatialNavigatorExt (TauriSpatialNavigator<MockRuntime>)
+//       → spatial_state.navigate
+//       → emit_to("focus-changed")
+//
+// Before these tests existed, every stage above was covered by some unit
+// test but no single test exercised the full chain in-process. The symptom
+// that motivated this file — `SpatialState::navigate` returning `Ok(None)`
+// for every nav key in the running app — passed every test because the
+// individual stages never shared an `AppState` populated by real
+// `spatial_register` calls against the same `SpatialState` the navigator
+// reads.
+//
+// Each test builds a real `AppHandle<MockRuntime>`, registers at least
+// three entries via the same `spatial_register` IPC path the frontend uses,
+// then invokes `NavigateCmd::execute` against a `CommandContext` wired with
+// the same `SpatialNavigatorExt` that `build_dispatch_context` installs in
+// production. The only omitted step is the dispatcher's outer envelope
+// (undoable tracking, `{ result, undoable }` wrap) — which is irrelevant
+// to the nav path and would require generalising `dispatch_command_internal`
+// over `Runtime` solely for this test suite. The extension install site is
+// identical, so a regression in the navigator wiring surfaces here.
+#[cfg(test)]
+mod nav_dispatch_integration_tests {
+    use super::tauri_integration_tests::{
+        build_test_app, build_test_app_with_windows, capture_focus_events, invoke, invoke_in_window,
+    };
+    use crate::spatial::TauriSpatialNavigator;
+    use crate::state::AppState;
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::CommandContext;
+    use swissarmyhammer_kanban::spatial::SpatialNavigatorExt;
+    use swissarmyhammer_spatial_nav::Direction;
+    use tauri::test::MockRuntime;
+    use tauri::Manager;
+
+    /// Look up a registered `nav.*` command implementation and execute it
+    /// against a `CommandContext` wired with the same
+    /// `SpatialNavigatorExt` production uses.
+    ///
+    /// Mirrors the slice of `build_dispatch_context` that matters for nav
+    /// commands — the scope chain (carries `window:<label>`), the UIState,
+    /// and the navigator extension backed by the real
+    /// `TauriSpatialNavigator::new(app.handle())`. Skipping the outer
+    /// envelope (`{result, undoable}`) keeps the test focused on the
+    /// behavior under test: does dispatching a nav command route to the
+    /// right `SpatialState` and return the right moniker?
+    async fn dispatch_nav_via_cmd(
+        app: &tauri::App<MockRuntime>,
+        cmd_id: &str,
+        window_label: &str,
+    ) -> Value {
+        let state = app.state::<AppState>();
+        let cmd_impl = state
+            .command_impls
+            .get(cmd_id)
+            .unwrap_or_else(|| panic!("no registered impl for {cmd_id}"))
+            .clone();
+
+        let scope = vec![format!("window:{window_label}"), "engine".into()];
+        let mut ctx = CommandContext::new(cmd_id, scope, None, HashMap::new());
+        ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
+
+        // Install the real TauriSpatialNavigator, generic over MockRuntime,
+        // so the test exercises the same type the production code path
+        // constructs — including its `state::<AppState>()` lookup and
+        // `get_webview_window(label).emit_to(...)` emit path.
+        let navigator =
+            SpatialNavigatorExt(Arc::new(TauriSpatialNavigator::new(app.handle().clone())));
+        ctx.set_extension(Arc::new(navigator));
+
+        cmd_impl
+            .execute(&ctx)
+            .await
+            .unwrap_or_else(|e| panic!("{cmd_id} execute failed: {e}"))
+    }
+
+    /// Register three spatial entries on `window_label` under a single
+    /// window-layer so nav keys have a non-empty candidate pool in every
+    /// direction. The cross-layout is deliberate: k1 at (0, 0), k2 at
+    /// (200, 0) for horizontal neighbours, and k3 at (0, 200) for the
+    /// vertical neighbour — together they cover Up/Down/Left/Right.
+    fn register_three_entries(app: &tauri::App<MockRuntime>, window_label: &str) {
+        invoke_in_window(
+            app,
+            window_label,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "window"}),
+        );
+        for (i, (x, y)) in [(0.0, 0.0), (200.0, 0.0), (0.0, 200.0)].iter().enumerate() {
+            invoke_in_window(
+                app,
+                window_label,
+                "spatial_register",
+                json!({
+                    "args": {
+                        "key": format!("k{}", i + 1),
+                        "moniker": format!("task:{}", i + 1),
+                        "x": x, "y": y, "w": 100.0, "h": 50.0,
+                        "layerKey": "L1",
+                        "parentScope": null,
+                        "overrides": null,
+                    }
+                }),
+            );
+        }
+    }
+
+    /// With focus on the top-left entry, dispatching `nav.down` must reach
+    /// `NavigateCmd.execute`, delegate to the `SpatialNavigatorExt`, and
+    /// return the moniker of the entry directly below — not `Value::Null`.
+    ///
+    /// This is the regression test for the runtime symptom the task
+    /// diagnosed: every `nav.*` was returning `null` even when
+    /// `focused_key` was set and geometric candidates existed. If
+    /// `TauriSpatialNavigator` reads `focused_key` from a different
+    /// `SpatialState` than the one `spatial_register` wrote to, or if the
+    /// navigator extension is missing from the context, this fails.
+    #[test]
+    fn nav_down_with_focused_entry_returns_moniker_and_emits_event() {
+        let app = build_test_app();
+        let events = capture_focus_events(&app);
+        register_three_entries(&app, "main");
+        invoke(&app, "spatial_focus", json!({"key": "k1"}));
+        assert_eq!(
+            events.lock().unwrap().len(),
+            1,
+            "baseline: spatial_focus emits one focus-changed"
+        );
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.down", "main").await
+        });
+        assert_eq!(
+            result,
+            json!("task:3"),
+            "nav.down from k1 must reach k3 (geometric below); result={result}"
+        );
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            2,
+            "nav.down must emit focus-changed (total 2 after baseline)"
+        );
+        assert_eq!(events[1].prev_key.as_deref(), Some("k1"));
+        assert_eq!(events[1].next_key.as_deref(), Some("k3"));
+    }
+
+    /// With no focused entry at dispatch time, `nav.down` must trigger the
+    /// "fall back to first-in-layer" safety net so a nav key on app boot
+    /// — before any click has set focus — still lands on a sensible
+    /// target instead of silently doing nothing.
+    ///
+    /// Protects the app-load-before-first-click path that production users
+    /// hit every time they launch the app; without the fallback, nav keys
+    /// would be dead until the first click.
+    #[test]
+    fn nav_down_without_focus_falls_back_to_first_in_layer() {
+        let app = build_test_app();
+        let events = capture_focus_events(&app);
+        register_three_entries(&app, "main");
+        // Deliberately skip spatial_focus — focused_key is None.
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "no focus-changed before nav dispatch"
+        );
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.down", "main").await
+        });
+        assert_eq!(
+            result,
+            json!("task:1"),
+            "nav.down with no focus must fall back to first-in-layer (top-left); got={result}"
+        );
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "fallback-to-first must emit exactly one focus-changed"
+        );
+        assert_eq!(events[0].prev_key, None);
+        assert_eq!(events[0].next_key.as_deref(), Some("k1"));
+    }
+
+    /// Entries registered on the active layer must be visible to the
+    /// beam-test: if `spatial_search` culls them via the active-layer
+    /// filter, every nav direction from any source returns `None`. This is
+    /// the direct regression test for Hypothesis 2 from the task diagnosis
+    /// (`layer_key` mismatch silently empties the candidate pool): the
+    /// test asserts that with `layer_key` matching `active().key`, every
+    /// cardinal direction from a central entry finds a neighbour.
+    ///
+    /// If the dispatch pipeline read a different `SpatialState` than the
+    /// one `spatial_register` wrote to — which is what the user-visible
+    /// symptom suggested — none of the registered entries would be visible
+    /// to `navigate`, and at least one of the four assertions below would
+    /// fail with `Value::Null`.
+    #[test]
+    fn nav_cardinal_directions_reach_neighbours_on_active_layer() {
+        let app = build_test_app();
+        let _events = capture_focus_events(&app);
+
+        // Five-entry cross layout under layer L1:
+        //
+        //              top (200, 0)
+        //   left (0, 200)  center (200, 200)  right (400, 200)
+        //              bottom (200, 400)
+        invoke(
+            &app,
+            "spatial_push_layer",
+            json!({"key": "L1", "name": "window"}),
+        );
+        for (key, moniker, x, y) in [
+            ("top", "task:top", 200.0, 0.0),
+            ("left", "task:left", 0.0, 200.0),
+            ("center", "task:center", 200.0, 200.0),
+            ("right", "task:right", 400.0, 200.0),
+            ("bottom", "task:bottom", 200.0, 400.0),
+        ] {
+            invoke(
+                &app,
+                "spatial_register",
+                json!({
+                    "args": {
+                        "key": key,
+                        "moniker": moniker,
+                        "x": x, "y": y, "w": 100.0, "h": 50.0,
+                        "layerKey": "L1",
+                        "parentScope": null,
+                        "overrides": null,
+                    }
+                }),
+            );
+        }
+
+        // Each cardinal direction from center must land on its neighbour.
+        // If the active-layer filter culls the pool, every result is null
+        // — the exact symptom the task diagnosed in production.
+        for (cmd, expected) in [
+            ("nav.up", "task:top"),
+            ("nav.down", "task:bottom"),
+            ("nav.left", "task:left"),
+            ("nav.right", "task:right"),
+        ] {
+            invoke(&app, "spatial_focus", json!({"key": "center"}));
+            let result = tauri::async_runtime::block_on(async {
+                dispatch_nav_via_cmd(&app, cmd, "main").await
+            });
+            assert_eq!(
+                result,
+                json!(expected),
+                "{cmd} from center must reach {expected}; got {result}"
+            );
+        }
+    }
+
+    /// `NavigateCmd::execute` reads the window label from the scope chain
+    /// via `window_label_from_scope()`. A scope chain with `window:A` must
+    /// route the navigator to window A's `SpatialState`; window B's
+    /// registry must stay invisible to that call.
+    ///
+    /// This test registers entries on two windows, focuses different keys
+    /// in each, and asserts that a nav dispatched with window:A's scope
+    /// hits window A's focused key — not window B's.
+    #[test]
+    fn nav_routes_to_spatial_state_of_window_named_in_scope() {
+        let app = build_test_app_with_windows(&["A", "B"]);
+
+        register_three_entries(&app, "A");
+        invoke_in_window(&app, "A", "spatial_focus", json!({"key": "k1"}));
+
+        // Window B: same layout, but focused on k2 so a misrouted call
+        // would pick a different target (k2 → k3 also, but the entries
+        // themselves are distinct instances per-window — the moniker is
+        // the same "task:3" but the underlying SpatialState is B's).
+        register_three_entries(&app, "B");
+        invoke_in_window(&app, "B", "spatial_focus", json!({"key": "k2"}));
+
+        // Window A's dispatch: focus is on k1 (at 0, 0); nav.down must
+        // reach k3 (at 0, 200). The moniker returned is `"task:3"`.
+        let a_result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.down", "A").await
+        });
+        assert_eq!(
+            a_result,
+            json!("task:3"),
+            "nav on window A must use window A's focused_key (k1 → k3)"
+        );
+
+        // Confirm the focus mutation landed on A, not B: B's focused key
+        // should still be k2, unchanged by the A-scoped dispatch.
+        let state = app.state::<AppState>();
+        let a_state = tauri::async_runtime::block_on(state.spatial_state_for("A"));
+        let b_state = tauri::async_runtime::block_on(state.spatial_state_for("B"));
+        assert_eq!(
+            a_state.focused_key().as_deref(),
+            Some("k3"),
+            "window A's focus must have moved to k3"
+        );
+        assert_eq!(
+            b_state.focused_key().as_deref(),
+            Some("k2"),
+            "window B's focus must remain k2 (untouched by A's nav dispatch)"
+        );
+    }
+
+    /// The `NAV_DIRECTION_MAP` in the task description covers every
+    /// direction defined in `Direction`. This test exhaustively verifies
+    /// that each `nav.*` command ID resolves to a registered impl —
+    /// catching the silent "command ID changed, but JS keymap didn't"
+    /// class of regression the task calls out.
+    #[test]
+    fn every_nav_direction_resolves_to_a_registered_navigate_cmd() {
+        let app = build_test_app();
+
+        let state = app.state::<AppState>();
+        for (cmd_id, _dir) in [
+            ("nav.up", Direction::Up),
+            ("nav.down", Direction::Down),
+            ("nav.left", Direction::Left),
+            ("nav.right", Direction::Right),
+            ("nav.first", Direction::First),
+            ("nav.last", Direction::Last),
+            ("nav.rowStart", Direction::RowStart),
+            ("nav.rowEnd", Direction::RowEnd),
+        ] {
+            assert!(
+                state.command_impls.contains_key(cmd_id),
+                "missing command impl for {cmd_id}"
+            );
+        }
     }
 }
