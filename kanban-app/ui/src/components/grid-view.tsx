@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
+import { useContextMenu } from "@/lib/context-menu";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -12,6 +13,7 @@ import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
+import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -95,8 +97,7 @@ function gridEdgeNavPredicates(c: CellCtx): ClaimPredicate[] {
     out.push({
       command: "nav.last",
       when: (f) =>
-        isGridCell(f) &&
-        f !== c.cellMonikers[c.rowCount - 1][c.colCount - 1],
+        isGridCell(f) && f !== c.cellMonikers[c.rowCount - 1][c.colCount - 1],
     });
   return out;
 }
@@ -109,7 +110,14 @@ function buildCellPredicates(
   rowCount: number,
   colCount: number,
 ): ClaimPredicate[] {
-  const c: CellCtx = { ri, ci, cellMonikers, cellMonikerMap, rowCount, colCount };
+  const c: CellCtx = {
+    ri,
+    ci,
+    cellMonikers,
+    cellMonikerMap,
+    rowCount,
+    colCount,
+  };
   return [
     ...orthogonalNavPredicates(c),
     ...rowEdgeNavPredicates(c),
@@ -166,7 +174,9 @@ function warnUnknownCardField(
   // Emit the warn on a single line so the project's acceptance grep matches
   // exactly this call site — splitting it across lines would hide the string
   // literal from a non-multiline grep.
-  console.warn(`[GridView] unknown card_field "${badFieldName}" in view ${viewId} (${viewName ?? "<unnamed>"}); valid fields: [${validFieldNames.join(", ")}]`);
+  console.warn(
+    `[GridView] unknown card_field "${badFieldName}" in view ${viewId} (${viewName ?? "<unnamed>"}); valid fields: [${validFieldNames.join(", ")}]`,
+  );
 }
 
 /**
@@ -302,7 +312,8 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const { cellMonikers, cellMonikerMap } = useCellMonikers(entities, columns);
 
   const derivedCursor = useMemo(
-    () => (focusedMoniker ? cellMonikerMap.get(focusedMoniker) ?? null : null),
+    () =>
+      focusedMoniker ? (cellMonikerMap.get(focusedMoniker) ?? null) : null,
     [focusedMoniker, cellMonikerMap],
   );
   const grid = useGrid({
@@ -318,7 +329,14 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     const colCount = columns.length;
     return cellMonikers.map((row, ri) =>
       row.map((_, ci) =>
-        buildCellPredicates(ri, ci, cellMonikers, cellMonikerMap, rowCount, colCount),
+        buildCellPredicates(
+          ri,
+          ci,
+          cellMonikers,
+          cellMonikerMap,
+          rowCount,
+          colCount,
+        ),
       ),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
@@ -385,12 +403,9 @@ function buildGridNavCommands(
   ];
 }
 
-/** Build editing and row-mutation CommandDefs for the grid. */
-function buildGridEditCommands(
+/** Grid mode-switching commands (edit, exit, visual). */
+function buildGridModeCommands(
   gridRef: React.RefObject<ReturnType<typeof useGrid>>,
-  entities: Entity[],
-  entityType: string,
-  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
   return [
     {
@@ -423,6 +438,17 @@ function buildGridEditCommands(
         else gridRef.current.enterVisual();
       },
     },
+  ];
+}
+
+/** Grid row-mutation commands (delete row, new row above/below). */
+function buildGridRowCommands(
+  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
+  entities: Entity[],
+  entityType: string,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
+): CommandDef[] {
+  return [
     {
       id: "grid.deleteRow",
       name: "Delete Row",
@@ -453,6 +479,19 @@ function buildGridEditCommands(
         addNewEntity(dispatch, entityType);
       },
     },
+  ];
+}
+
+/** Build editing and row-mutation CommandDefs for the grid. */
+function buildGridEditCommands(
+  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
+  entities: Entity[],
+  entityType: string,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
+): CommandDef[] {
+  return [
+    ...buildGridModeCommands(gridRef),
+    ...buildGridRowCommands(gridRef, entities, entityType, dispatch),
   ];
 }
 
@@ -566,6 +605,86 @@ function GridStatusBar({
 }
 
 /**
+ * Title-case an entity type slug for display (e.g. `tag` -> `Tag`,
+ * `my-entity-type` -> `My Entity Type`).
+ *
+ * Entity types are constrained by `VALID_ENTITY_TYPE` to `[a-z][a-z0-9_-]*`,
+ * which permits hyphen- and underscore-separated multi-word slugs. Splits on
+ * those separators, upper-cases each word's first char, and joins with spaces.
+ *
+ * For the four builtin single-word types (task, tag, project, column) this
+ * matches the prior single-char upper-case behavior; multi-word slugs now
+ * render cleanly instead of producing strings like "My-entity-type".
+ */
+function titleCaseEntityType(entityType: string): string {
+  if (entityType.length === 0) return entityType;
+  return entityType
+    .split(/[-_]/)
+    .map((word) =>
+      word.length === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join(" ");
+}
+
+/**
+ * Prominent empty-state for a grid view with zero rows.
+ *
+ * Centered block with a large `Plus` icon, "No {EntityType}s yet" text,
+ * and a primary-styled "New {EntityType}" button. Clicking the button
+ * dispatches `entity.add:{entityType}` to create the first entity.
+ *
+ * Right-clicking anywhere in the empty-state block opens the view-scoped
+ * context menu (same pipeline as right-click on a row) — this surfaces
+ * "New {EntityType}" and whatever other view-level commands exist.
+ *
+ * Rendered in place of `<DataTable>` + `<AddEntityBar>` when
+ * `entities.length === 0`. Do NOT render both — `AddEntityBar` is a
+ * secondary affordance for non-empty grids; with no rows, the centered
+ * primary button is the single call-to-action.
+ */
+function GridEmptyState({
+  entityType,
+  dispatch,
+  onContextMenu,
+}: {
+  entityType: string;
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+  /**
+   * View-scoped context-menu handler. Passed in from `GridBody` which owns
+   * the single `useContextMenu()` call site for the grid body — keeps the
+   * empty and non-empty branches computing one scope chain per render.
+   */
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const typeTitle = titleCaseEntityType(entityType);
+  const label = `New ${typeTitle}`;
+  // Trivial pluralisation works for all four builtin entity types that
+  // have grid views: tasks, tags, projects, columns. If a future entity
+  // type breaks this (e.g. "person" -> "persons" not "people"), schema
+  // metadata can add an explicit plural later.
+  const plural = `${entityType}s`;
+  return (
+    <div
+      data-testid="grid-empty-state"
+      className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center"
+      onContextMenu={onContextMenu}
+    >
+      <Plus className="h-12 w-12 text-muted-foreground/40" aria-hidden="true" />
+      <p className="text-sm text-muted-foreground">No {plural} yet</p>
+      <Button
+        type="button"
+        variant="default"
+        size="default"
+        onClick={() => addNewEntity(dispatch, entityType)}
+      >
+        <Plus className="h-4 w-4" />
+        {label}
+      </Button>
+    </div>
+  );
+}
+
+/**
  * Thin action bar below the grid with a "+" button that dispatches
  * `entity.add:{entityType}` to create a new entity of the correct type.
  *
@@ -580,7 +699,7 @@ function AddEntityBar({
   entityType: string;
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
 }) {
-  const label = `Add ${entityType.charAt(0).toUpperCase() + entityType.slice(1)}`;
+  const label = `Add ${titleCaseEntityType(entityType)}`;
   return (
     <div className="flex items-center px-2 py-1 border-t border-border">
       <Tooltip>
@@ -618,6 +737,15 @@ interface GridBodyProps {
 }
 
 function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
+  // When a row-level `onContextMenu` runs, `useContextMenu` calls
+  // `e.stopPropagation()` — so this handler only fires from the grid
+  // whitespace (between rows, below the last row). It surfaces the same
+  // view-scoped command set as the empty-state right-click: "New
+  // <EntityType>" plus whatever other commands the view declares.
+  const containerContextMenu = useContextMenu();
+
+  const isEmpty = data.entities.length === 0;
+
   return (
     <main className="flex-1 flex flex-col min-h-0">
       <GridStatusBar
@@ -625,20 +753,31 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
         mode={nav.grid.mode}
         cursor={nav.grid.cursor}
       />
-      <DataTable
-        columns={data.columns}
-        rows={data.entities}
-        grid={nav.grid}
-        cellMonikers={nav.cellMonikers}
-        claimPredicates={nav.claimPredicates}
-        onCellClick={callbacks.handleCellClick}
-        renderEditor={callbacks.renderEditor}
-        grouping={data.grouping}
-        onVisibleRowCount={nav.setVisibleRowCount}
-        perspectiveSort={data.activePerspective?.sort}
-        perspectiveId={data.activePerspective?.id}
-      />
-      <AddEntityBar entityType={data.entityType} dispatch={dispatch} />
+      {isEmpty ? (
+        <GridEmptyState
+          entityType={data.entityType}
+          dispatch={dispatch}
+          onContextMenu={containerContextMenu}
+        />
+      ) : (
+        <>
+          <DataTable
+            columns={data.columns}
+            rows={data.entities}
+            grid={nav.grid}
+            cellMonikers={nav.cellMonikers}
+            claimPredicates={nav.claimPredicates}
+            onCellClick={callbacks.handleCellClick}
+            renderEditor={callbacks.renderEditor}
+            grouping={data.grouping}
+            onVisibleRowCount={nav.setVisibleRowCount}
+            perspectiveSort={data.activePerspective?.sort}
+            perspectiveId={data.activePerspective?.id}
+            onContainerContextMenu={containerContextMenu}
+          />
+          <AddEntityBar entityType={data.entityType} dispatch={dispatch} />
+        </>
+      )}
     </main>
   );
 }
@@ -669,7 +808,12 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      <GridBody data={data} nav={nav} callbacks={callbacks} dispatch={dispatch} />
+      <GridBody
+        data={data}
+        nav={nav}
+        callbacks={callbacks}
+        dispatch={dispatch}
+      />
     </CommandScopeProvider>
   );
 }

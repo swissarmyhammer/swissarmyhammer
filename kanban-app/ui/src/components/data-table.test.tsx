@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // jsdom stubs
@@ -19,7 +19,11 @@ Element.prototype.scrollIntoView = vi.fn();
 // ---------------------------------------------------------------------------
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve(null)),
+  // Return `[]` for list-like invoke calls (e.g. `list_commands_for_scope`
+  // fired by `useContextMenu`). Returning null tripped a TypeError inside
+  // `useContextMenu` when a test right-clicked a row; the empty array
+  // short-circuits cleanly without hiding real failures.
+  invoke: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -178,7 +182,6 @@ describe("DataTable row structure", () => {
       expect(cells.length).toBe(COLUMNS.length);
     }
   });
-
 });
 
 describe("DataTable grouping sync", () => {
@@ -219,5 +222,97 @@ describe("DataTable grouping sync", () => {
     const { container } = renderTable();
     const rows = container.querySelectorAll("tbody tr[data-moniker]");
     expect(rows.length).toBe(ENTITIES.length);
+  });
+});
+
+describe("DataTable container context menu", () => {
+  it("invokes onContainerContextMenu when whitespace below the last row is right-clicked", () => {
+    const handler = vi.fn();
+    const { container } = render(
+      <EntityFocusProvider>
+        <DataTable
+          columns={COLUMNS}
+          rows={ENTITIES}
+          grid={makeGrid()}
+          showRowSelector={true}
+          onContainerContextMenu={handler}
+        />
+      </EntityFocusProvider>,
+    );
+
+    // Fire contextmenu on the `<table>` element itself — it lives inside
+    // the scroll container but is NOT inside any `<tr>`, so it simulates
+    // a right-click on the whitespace region between/below rows. The
+    // event must bubble up to `onContainerContextMenu` via React synthetic
+    // event bubbling; firing on the container directly would pass even if
+    // bubbling were broken, which is the test gap this replaces.
+    const scrollContainer = container.querySelector("div.flex-1.overflow-auto");
+    expect(scrollContainer).not.toBeNull();
+    const table = scrollContainer!.querySelector("table");
+    expect(table).not.toBeNull();
+    fireEvent.contextMenu(table!);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onContainerContextMenu when a column header is right-clicked", () => {
+    // Right-clicking a `<TableHead>` must NOT bubble to the container
+    // handler — otherwise the header's grouping toggle would fire
+    // alongside the view-scoped native context menu. The header
+    // handler stops propagation explicitly.
+    const containerHandler = vi.fn();
+    const { container } = render(
+      <EntityFocusProvider>
+        <DataTable
+          columns={COLUMNS}
+          rows={ENTITIES}
+          grid={makeGrid()}
+          showRowSelector={true}
+          onContainerContextMenu={containerHandler}
+        />
+      </EntityFocusProvider>,
+    );
+
+    const header = container.querySelector(
+      "[data-testid='column-header-title']",
+    ) as HTMLElement;
+    expect(header).not.toBeNull();
+
+    fireEvent.contextMenu(header);
+    expect(containerHandler).not.toHaveBeenCalled();
+  });
+
+  it("does not fire onContainerContextMenu when a row's own context menu stops propagation", () => {
+    // `EntityRow.onContextMenu` calls `useContextMenu()` which in turn
+    // calls `e.stopPropagation()`. That means even though the row is
+    // inside the scroll container, a right-click on the row itself must
+    // NOT bubble up to fire `onContainerContextMenu`. Simulate that by
+    // calling `stopPropagation()` on the row event before the contextmenu
+    // bubbles — the container handler should receive zero calls.
+    const containerHandler = vi.fn();
+    const { container } = render(
+      <EntityFocusProvider>
+        <DataTable
+          columns={COLUMNS}
+          rows={ENTITIES}
+          grid={makeGrid()}
+          showRowSelector={true}
+          onContainerContextMenu={containerHandler}
+        />
+      </EntityFocusProvider>,
+    );
+
+    const firstRow = container.querySelector(
+      "tbody tr[data-moniker]",
+    ) as HTMLElement;
+    expect(firstRow).not.toBeNull();
+
+    // React's onContextMenu handler on EntityRow calls useContextMenu,
+    // which is wired to real Tauri invoke(). In this jsdom test,
+    // @tauri-apps/api/core is mocked to resolve `null`, so the handler
+    // runs through its preventDefault/stopPropagation logic before any
+    // real work. That's exactly what the container-vs-row dispatch
+    // separation relies on.
+    fireEvent.contextMenu(firstRow);
+    expect(containerHandler).not.toHaveBeenCalled();
   });
 });

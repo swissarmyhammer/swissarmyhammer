@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, screen, fireEvent } from "@testing-library/react";
 import React, { useContext, useEffect } from "react";
 
@@ -62,9 +62,15 @@ vi.mock("@/lib/schema-context", () => ({
   }),
 }));
 
+// Mutable per-test override so tests can provide entities and exercise
+// the non-empty grid path (where `DataTable` — and the injected test probe
+// — are actually rendered).
+const mockGetEntities = vi.hoisted(() =>
+  vi.fn<(entityType: string) => unknown[]>(() => []),
+);
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({
-    getEntities: () => [],
+    getEntities: (entityType: string) => mockGetEntities(entityType),
     getEntity: () => undefined,
     subscribe: () => () => {},
   }),
@@ -139,6 +145,13 @@ function RunCommandProbe({ id }: { id: string }) {
 // ---------------------------------------------------------------------------
 
 describe("GridView", () => {
+  beforeEach(() => {
+    // Default to no entities — tests that need the non-empty grid path
+    // (e.g. keyboard-probe dispatch tests that rely on the mocked
+    // `DataTable` slot rendering) override this to return a stub entity.
+    mockGetEntities.mockImplementation(() => []);
+  });
+
   it("renders without crash when activePerspective is null", async () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: null,
@@ -168,7 +181,7 @@ describe("GridView", () => {
     });
   });
 
-  it("renders a visible + button with entity-type aria-label", async () => {
+  it("renders a visible empty-state button with entity-type label", async () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: null,
       applySort: (entities: unknown[]) => entities,
@@ -190,11 +203,14 @@ describe("GridView", () => {
       );
     });
 
-    const button = screen.getByRole("button", { name: "Add Task" });
+    // With entities=[] the empty-state renders a prominent "New Task"
+    // button (not the faint "Add Task" AddEntityBar which only shows on
+    // non-empty grids).
+    const button = screen.getByRole("button", { name: "New Task" });
     expect(button).toBeTruthy();
   });
 
-  it("uses the correct aria-label for non-task entity types", async () => {
+  it("uses the correct label for non-task entity types in empty state", async () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: null,
       applySort: (entities: unknown[]) => entities,
@@ -216,28 +232,32 @@ describe("GridView", () => {
       );
     });
 
-    expect(screen.getByRole("button", { name: "Add Tag" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New Tag" })).toBeTruthy();
   });
 
-  // Parameterised dispatch tests — the + button, `grid.newBelow`, and
-  // `grid.newAbove` must all dispatch `entity.add:{entityType}` uniformly
-  // for every entity type that has a grid view. Before this test covered
-  // all three types, the tag grid worked but the task and project grids
-  // silently failed in the field — there was no automated proof that the
-  // three grids behave identically.
+  // Parameterised dispatch tests — the empty-state button, `grid.newBelow`,
+  // and `grid.newAbove` must all dispatch `entity.add:{entityType}`
+  // uniformly for every entity type that has a grid view. Before this test
+  // covered all three types, the tag grid worked but the task and project
+  // grids silently failed in the field — there was no automated proof
+  // that the three grids behave identically.
+  //
+  // Fixtures render with entities=[], so the rendered affordance is the
+  // GridEmptyState "New <Type>" button, not the muted AddEntityBar "+"
+  // which only surfaces on non-empty grids.
   const DISPATCH_CASES: Array<{
     entityType: string;
     buttonLabel: string;
   }> = [
-    { entityType: "task", buttonLabel: "Add Task" },
-    { entityType: "tag", buttonLabel: "Add Tag" },
-    { entityType: "project", buttonLabel: "Add Project" },
+    { entityType: "task", buttonLabel: "New Task" },
+    { entityType: "tag", buttonLabel: "New Tag" },
+    { entityType: "project", buttonLabel: "New Project" },
   ];
 
   describe.each(DISPATCH_CASES)(
     "entity.add dispatch for $entityType grid",
     ({ entityType, buttonLabel }) => {
-      it("dispatches entity.add:{entityType} when + button is clicked", async () => {
+      it("dispatches entity.add:{entityType} when the empty-state button is clicked", async () => {
         mockActivePerspective.mockReturnValue({
           activePerspective: null,
           applySort: (entities: unknown[]) => entities,
@@ -284,6 +304,18 @@ describe("GridView", () => {
           applySort: (entities: unknown[]) => entities,
           groupField: undefined,
         });
+        // Provide a stub entity so the non-empty grid path renders — the
+        // probe is injected via the mocked `DataTable`, which isn't
+        // rendered at all when the grid is empty (GridEmptyState takes
+        // over).
+        mockGetEntities.mockImplementation(() => [
+          {
+            id: "e1",
+            entity_type: entityType,
+            moniker: `${entityType}:e1`,
+            fields: {},
+          },
+        ]);
         mockInvoke.mockClear();
         dataTableSlot = <RunCommandProbe id="grid.newBelow" />;
 
@@ -321,6 +353,15 @@ describe("GridView", () => {
           applySort: (entities: unknown[]) => entities,
           groupField: undefined,
         });
+        // See grid.newBelow test above for why a stub entity is needed.
+        mockGetEntities.mockImplementation(() => [
+          {
+            id: "e1",
+            entity_type: entityType,
+            moniker: `${entityType}:e1`,
+            fields: {},
+          },
+        ]);
         mockInvoke.mockClear();
         dataTableSlot = <RunCommandProbe id="grid.newAbove" />;
 

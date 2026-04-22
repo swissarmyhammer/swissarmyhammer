@@ -72,26 +72,81 @@ interface DataTableProps {
   perspectiveSort?: readonly PerspectiveSortEntry[];
   /** Active perspective ID — required for dispatching sort commands. */
   perspectiveId?: string;
+  /**
+   * Context-menu handler for the outer scroll container. Right-clicking
+   * whitespace between rows or below the last row fires this handler so
+   * view-scoped commands (e.g. `entity.add:{type}`) surface even when the
+   * click doesn't land on a row. Per-row context menus stop propagation
+   * via `useContextMenu`, so this handler only fires from non-row areas.
+   */
+  onContainerContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export function DataTable({
-  columns,
-  rows,
-  grid,
-  cellMonikers,
-  claimPredicates,
-  onCellClick,
-  onRowContextMenu: _onRowContextMenu,
-  renderEditor,
-  grouping: groupingProp,
-  onVisibleRowCount,
-  showRowSelector = true,
-  perspectiveSort,
-  perspectiveId,
-}: DataTableProps) {
-  const tableContainerRef = useRef<HTMLDivElement>(null);
+export function DataTable(props: DataTableProps) {
   const cursorRef = useRef<HTMLTableCellElement>(null);
-  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
+  const { table, perspectiveSortMap, dataRowIndices, handleCellClick } =
+    useDataTableState(props, cursorRef);
+
+  const flatRows = table.getRowModel().rows;
+  const useClaimNav =
+    props.cellMonikers !== undefined && props.claimPredicates !== undefined;
+
+  return (
+    <div
+      className="flex-1 overflow-auto min-h-0"
+      onContextMenu={props.onContainerContextMenu}
+    >
+      <Table className="border-collapse text-sm">
+        <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <DataTableHeaderRow
+              key={headerGroup.id}
+              headerGroup={headerGroup}
+              showRowSelector={props.showRowSelector ?? true}
+              perspectiveSortMap={perspectiveSortMap}
+              perspectiveId={props.perspectiveId}
+            />
+          ))}
+        </TableHeader>
+        <TableBody>
+          {flatRows.map((row, ri) => (
+            <DataTableRow
+              key={row.id}
+              row={row}
+              ri={ri}
+              columns={props.columns}
+              grid={props.grid}
+              dataRowIndices={dataRowIndices}
+              showRowSelector={props.showRowSelector ?? true}
+              useClaimNav={useClaimNav}
+              cellMonikers={props.cellMonikers}
+              claimPredicates={props.claimPredicates}
+              handleCellClick={handleCellClick}
+              renderEditor={props.renderEditor}
+              onCellClick={props.onCellClick}
+              cursorRef={cursorRef}
+            />
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Bundle all the table-state hooks the renderer needs. */
+function useDataTableState(
+  props: DataTableProps,
+  cursorRef: React.RefObject<HTMLTableCellElement | null>,
+) {
+  const {
+    columns,
+    rows,
+    grid,
+    grouping: groupingProp,
+    onVisibleRowCount,
+    perspectiveSort,
+    onCellClick,
+  } = props;
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
@@ -101,8 +156,51 @@ export function DataTable({
     setGrouping(groupingProp ?? []);
   }, [groupingProp]);
 
-  // Build a lookup: field name → { direction, priority } from perspective sort entries.
-  const perspectiveSortMap = useMemo(() => {
+  const perspectiveSortMap = usePerspectiveSortMap(perspectiveSort);
+  const tanstackColumns = useTanstackColumns(columns);
+
+  const table = useReactTable({
+    data: rows,
+    columns: tanstackColumns,
+    state: { sorting, grouping },
+    onSortingChange: setSorting,
+    onGroupingChange: setGrouping,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getGroupedRowModel: getGroupedRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    enableGrouping: true,
+  });
+
+  const flatRows = table.getRowModel().rows;
+  const dataRowIndices = useDataRowIndices(flatRows);
+  const visibleDataRowCount = useMemo(
+    () => dataRowIndices.filter((i) => i >= 0).length,
+    [dataRowIndices],
+  );
+  useEffect(() => {
+    onVisibleRowCount?.(visibleDataRowCount);
+  }, [visibleDataRowCount, onVisibleRowCount]);
+
+  useEffect(() => {
+    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [grid.cursor.row, grid.cursor.col, cursorRef]);
+
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      onCellClick?.(row, col);
+    },
+    [onCellClick],
+  );
+
+  return { table, perspectiveSortMap, dataRowIndices, handleCellClick };
+}
+
+/** Build the per-field-name lookup of `{ direction, priority }`. */
+function usePerspectiveSortMap(
+  perspectiveSort: readonly PerspectiveSortEntry[] | undefined,
+) {
+  return useMemo(() => {
     const map = new Map<
       string,
       { direction: "asc" | "desc"; priority: number }
@@ -116,9 +214,11 @@ export function DataTable({
     }
     return map;
   }, [perspectiveSort]);
+}
 
-  // Build TanStack column definitions from our field-based columns
-  const tanstackColumns = useMemo<ColumnDef<Entity>[]>(
+/** Build TanStack column definitions from our field-based columns. */
+function useTanstackColumns(columns: DataTableColumn[]) {
+  return useMemo<ColumnDef<Entity>[]>(
     () =>
       columns.map((col) => ({
         id: col.field.name,
@@ -146,25 +246,11 @@ export function DataTable({
       })),
     [columns],
   );
+}
 
-  const table = useReactTable({
-    data: rows,
-    columns: tanstackColumns,
-    state: { sorting, grouping },
-    onSortingChange: setSorting,
-    onGroupingChange: setGrouping,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getGroupedRowModel: getGroupedRowModel(),
-    getExpandedRowModel: getExpandedRowModel(),
-    enableGrouping: true,
-  });
-
-  const flatRows = table.getRowModel().rows;
-
-  // Map each flatRow index to a data-row index (-1 for group headers).
-  // The grid cursor operates on data-row indices, not visual row indices.
-  const dataRowIndices = useMemo(() => {
+/** Map each flat-row index to a data-row index (-1 for group headers). */
+function useDataRowIndices(flatRows: Row<Entity>[]) {
+  return useMemo(() => {
     const indices: number[] = [];
     let di = 0;
     for (const row of flatRows) {
@@ -176,307 +262,343 @@ export function DataTable({
     }
     return indices;
   }, [flatRows]);
+}
 
-  const visibleDataRowCount = useMemo(
-    () => dataRowIndices.filter((i) => i >= 0).length,
-    [dataRowIndices],
+interface DataTableHeaderRowProps {
+  headerGroup: ReturnType<
+    ReturnType<typeof useReactTable<Entity>>["getHeaderGroups"]
+  >[number];
+  showRowSelector: boolean;
+  perspectiveSortMap: Map<
+    string,
+    { direction: "asc" | "desc"; priority: number }
+  >;
+  perspectiveId: string | undefined;
+}
+
+/** One header row containing the selector cell (optional) and all field headers. */
+function DataTableHeaderRow({
+  headerGroup,
+  showRowSelector,
+  perspectiveSortMap,
+  perspectiveId,
+}: DataTableHeaderRowProps) {
+  return (
+    <TableRow className="border-b border-border hover:bg-transparent">
+      {showRowSelector && (
+        <TableHead
+          data-testid="row-selector-header"
+          className="w-10 px-0 py-1.5 bg-muted/80"
+          style={{ width: 40 }}
+        />
+      )}
+      {headerGroup.headers.map((header, ci) => (
+        <DataTableHeaderCell
+          key={header.id}
+          header={header}
+          ci={ci}
+          perspectiveSortMap={perspectiveSortMap}
+          perspectiveId={perspectiveId}
+        />
+      ))}
+    </TableRow>
   );
+}
 
-  // Report visible data row count changes to parent
-  useEffect(() => {
-    onVisibleRowCount?.(visibleDataRowCount);
-  }, [visibleDataRowCount, onVisibleRowCount]);
+interface DataTableHeaderCellProps {
+  header: ReturnType<
+    ReturnType<typeof useReactTable<Entity>>["getHeaderGroups"]
+  >[number]["headers"][number];
+  ci: number;
+  perspectiveSortMap: Map<
+    string,
+    { direction: "asc" | "desc"; priority: number }
+  >;
+  perspectiveId: string | undefined;
+}
 
-  // Scroll the active cell into view
-  useEffect(() => {
-    cursorRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [grid.cursor.row, grid.cursor.col]);
+/**
+ * One TableHead cell. Left-click dispatches a sort toggle (when a perspective
+ * is active) or falls back to TanStack's built-in toggle; right-click toggles
+ * column grouping and stops propagation so the outer container's view-scoped
+ * context menu does not also fire.
+ */
+function DataTableHeaderCell({
+  header,
+  ci,
+  perspectiveSortMap,
+  perspectiveId,
+}: DataTableHeaderCellProps) {
+  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
+  const columnId = header.column.id;
+  const isGrouped = header.column.getIsGrouped();
+  const pSort = perspectiveSortMap.get(columnId);
+  const isSorted = pSort ? pSort.direction : header.column.getIsSorted();
+  const sortPriority = pSort?.priority;
+  const showPriority =
+    sortPriority !== undefined && perspectiveSortMap.size > 1;
 
-  const handleCellClick = useCallback(
-    (row: number, col: number) => {
-      onCellClick?.(row, col);
-    },
-    [onCellClick],
-  );
+  const handleHeaderClick = perspectiveId
+    ? () => {
+        dispatchSortToggle({
+          args: { field: columnId, perspective_id: perspectiveId },
+        }).catch(console.error);
+      }
+    : header.column.getToggleSortingHandler();
 
-  const selectedRange = grid.getSelectedRange();
-  const isSelected = (row: number, col: number) => {
-    if (!selectedRange) return false;
-    return (
-      row >= selectedRange.startRow &&
-      row <= selectedRange.endRow &&
-      col >= selectedRange.startCol &&
-      col <= selectedRange.endCol
-    );
+  // Right-clicking a column header toggles grouping. Must stopPropagation so
+  // the contextmenu event does NOT bubble to the outer scroll container's
+  // `onContainerContextMenu` — otherwise the header toggle would fire
+  // alongside the view-scoped native menu ("New <EntityType>" etc.).
+  const handleHeaderContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    header.column.toggleGrouping();
   };
 
-  /** Whether claimWhen-based FocusScopes should wrap cells. */
-  const useClaimNav =
-    cellMonikers !== undefined && claimPredicates !== undefined;
+  return (
+    <TableHead
+      data-testid={`column-header-${columnId}`}
+      className={cn(
+        "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
+        ci === 0 && "pl-4",
+      )}
+      style={
+        header.column.getSize() ? { width: header.column.getSize() } : undefined
+      }
+      onClick={handleHeaderClick}
+      onContextMenu={handleHeaderContextMenu}
+    >
+      <span className="flex items-center gap-1">
+        {isGrouped && <ChevronRight className="h-3 w-3 text-primary" />}
+        {flexRender(header.column.columnDef.header, header.getContext())}
+        {isSorted === "asc" && (
+          <ArrowUp
+            className="h-3 w-3"
+            data-testid={`sort-indicator-${columnId}`}
+          />
+        )}
+        {isSorted === "desc" && (
+          <ArrowDown
+            className="h-3 w-3"
+            data-testid={`sort-indicator-${columnId}`}
+          />
+        )}
+        {showPriority && (
+          <span
+            className="text-[9px] text-muted-foreground/70"
+            data-testid={`sort-priority-${columnId}`}
+          >
+            {sortPriority}
+          </span>
+        )}
+      </span>
+    </TableHead>
+  );
+}
 
-  if (flatRows.length === 0) {
+interface DataTableRowProps {
+  row: Row<Entity>;
+  ri: number;
+  columns: DataTableColumn[];
+  grid: UseGridReturn;
+  dataRowIndices: number[];
+  showRowSelector: boolean;
+  useClaimNav: boolean;
+  cellMonikers: string[][] | undefined;
+  claimPredicates: ClaimPredicate[][][] | undefined;
+  handleCellClick: (row: number, col: number) => void;
+  renderEditor: DataTableProps["renderEditor"];
+  onCellClick: DataTableProps["onCellClick"];
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+}
+
+/** Render one data or group-header row. */
+function DataTableRow(props: DataTableRowProps) {
+  const { row, ri, columns, grid, dataRowIndices, showRowSelector } = props;
+  if (row.getIsGrouped()) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
-        No rows to display
-      </div>
+      <GroupHeaderRow
+        row={row}
+        columns={columns}
+        showRowSelector={showRowSelector}
+      />
     );
   }
-
+  const di = dataRowIndices[ri];
+  const entity = row.original;
+  const entityMk = entity.moniker;
   return (
-    <div ref={tableContainerRef} className="flex-1 overflow-auto min-h-0">
-      <Table className="border-collapse text-sm">
-        <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow
-              key={headerGroup.id}
-              className="border-b border-border hover:bg-transparent"
-            >
-              {showRowSelector && (
-                <TableHead
-                  data-testid="row-selector-header"
-                  className="w-10 px-0 py-1.5 bg-muted/80"
-                  style={{ width: 40 }}
-                />
-              )}
-              {headerGroup.headers.map((header, ci) => {
-                const columnId = header.column.id;
-                const isGrouped = header.column.getIsGrouped();
-                // Use perspective sort state when available, fall back to TanStack
-                const pSort = perspectiveSortMap.get(columnId);
-                const isSorted = pSort
-                  ? pSort.direction
-                  : header.column.getIsSorted();
-                const sortPriority = pSort?.priority;
-                const showPriority =
-                  sortPriority !== undefined && perspectiveSortMap.size > 1;
+    <FocusScope moniker={entityMk} renderContainer={false}>
+      <EntityRow
+        entityMk={entityMk}
+        isCursorRow={di === grid.cursor.row}
+        isEditing={grid.mode === "edit"}
+      >
+        {showRowSelector && (
+          <RowSelector
+            di={di}
+            isCursorRow={di === grid.cursor.row}
+            onClick={() => props.handleCellClick(di, grid.cursor.col)}
+          />
+        )}
+        {columns.map((col, ci) => (
+          <DataBodyCell
+            key={col.field.id}
+            di={di}
+            ci={ci}
+            col={col}
+            entity={entity}
+            grid={grid}
+            useClaimNav={props.useClaimNav}
+            cellMonikers={props.cellMonikers}
+            claimPredicates={props.claimPredicates}
+            handleCellClick={props.handleCellClick}
+            renderEditor={props.renderEditor}
+            onCellClick={props.onCellClick}
+            cursorRef={props.cursorRef}
+          />
+        ))}
+      </EntityRow>
+    </FocusScope>
+  );
+}
 
-                const handleHeaderClick = perspectiveId
-                  ? (e: React.MouseEvent) => {
-                      // Shift+click appends to multi-sort via set; plain click toggles
-                      if (e.shiftKey) {
-                        // Shift+click: cycle this field independently (toggle)
-                        dispatchSortToggle({
-                          args: {
-                            field: columnId,
-                            perspective_id: perspectiveId,
-                          },
-                        }).catch(console.error);
-                      } else {
-                        dispatchSortToggle({
-                          args: {
-                            field: columnId,
-                            perspective_id: perspectiveId,
-                          },
-                        }).catch(console.error);
-                      }
-                    }
-                  : header.column.getToggleSortingHandler();
+interface GroupHeaderRowProps {
+  row: Row<Entity>;
+  columns: DataTableColumn[];
+  showRowSelector: boolean;
+}
 
-                const handleHeaderContextMenu = perspectiveId
-                  ? (e: React.MouseEvent) => {
-                      e.preventDefault();
-                      // Context menu not wired to command palette yet —
-                      // for now toggle grouping as before.
-                      header.column.toggleGrouping();
-                    }
-                  : (e: React.MouseEvent) => {
-                      e.preventDefault();
-                      header.column.toggleGrouping();
-                    };
+/** Row rendering the "— (N)" collapsible header for a TanStack group. */
+function GroupHeaderRow({
+  row,
+  columns,
+  showRowSelector,
+}: GroupHeaderRowProps) {
+  const groupColSpan = showRowSelector ? columns.length + 1 : columns.length;
+  return (
+    <TableRow
+      className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
+      onClick={() => row.toggleExpanded()}
+    >
+      <TableCell
+        colSpan={groupColSpan}
+        className="px-4 py-1.5 font-medium text-sm"
+      >
+        <span className="flex items-center gap-1.5">
+          {row.getIsExpanded() ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+          {String(row.groupingValue ?? "—")}
+          <span className="text-muted-foreground text-xs">
+            ({row.subRows.length})
+          </span>
+        </span>
+      </TableCell>
+    </TableRow>
+  );
+}
 
-                return (
-                  <TableHead
-                    key={header.id}
-                    data-testid={`column-header-${columnId}`}
-                    className={cn(
-                      "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
-                      ci === 0 && "pl-4",
-                    )}
-                    style={
-                      header.column.getSize()
-                        ? { width: header.column.getSize() }
-                        : undefined
-                    }
-                    onClick={handleHeaderClick}
-                    onContextMenu={handleHeaderContextMenu}
-                  >
-                    <span className="flex items-center gap-1">
-                      {isGrouped && (
-                        <ChevronRight className="h-3 w-3 text-primary" />
-                      )}
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext(),
-                      )}
-                      {isSorted === "asc" && (
-                        <ArrowUp
-                          className="h-3 w-3"
-                          data-testid={`sort-indicator-${columnId}`}
-                        />
-                      )}
-                      {isSorted === "desc" && (
-                        <ArrowDown
-                          className="h-3 w-3"
-                          data-testid={`sort-indicator-${columnId}`}
-                        />
-                      )}
-                      {showPriority && (
-                        <span
-                          className="text-[9px] text-muted-foreground/70"
-                          data-testid={`sort-priority-${columnId}`}
-                        >
-                          {sortPriority}
-                        </span>
-                      )}
-                    </span>
-                  </TableHead>
-                );
-              })}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {flatRows.map((row, ri) => {
-            // Group header rows -- not part of grid cursor navigation
-            if (row.getIsGrouped()) {
-              // colSpan covers all field columns plus the selector column when visible
-              const groupColSpan = showRowSelector
-                ? columns.length + 1
-                : columns.length;
-              return (
-                <TableRow
-                  key={row.id}
-                  className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
-                  onClick={() => row.toggleExpanded()}
-                >
-                  <TableCell
-                    colSpan={groupColSpan}
-                    className="px-4 py-1.5 font-medium text-sm"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {row.getIsExpanded() ? (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      )}
-                      {String(row.groupingValue ?? "—")}
-                      <span className="text-muted-foreground text-xs">
-                        ({row.subRows.length})
-                      </span>
-                    </span>
-                  </TableCell>
-                </TableRow>
-              );
-            }
+interface DataBodyCellProps {
+  di: number;
+  ci: number;
+  col: DataTableColumn;
+  entity: Entity;
+  grid: UseGridReturn;
+  useClaimNav: boolean;
+  cellMonikers: string[][] | undefined;
+  claimPredicates: ClaimPredicate[][][] | undefined;
+  handleCellClick: (row: number, col: number) => void;
+  renderEditor: DataTableProps["renderEditor"];
+  onCellClick: DataTableProps["onCellClick"];
+  cursorRef: React.RefObject<HTMLTableCellElement | null>;
+}
 
-            // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
-            const di = dataRowIndices[ri];
-            const entity = row.original;
-            const entityMk = entity.moniker;
-            return (
-              <FocusScope
-                key={row.id}
-                moniker={entityMk}
-                renderContainer={false}
-              >
-                <EntityRow
-                  entityMk={entityMk}
-                  isCursorRow={di === grid.cursor.row}
-                  isEditing={grid.mode === "edit"}
-                >
-                  {showRowSelector && (
-                    <RowSelector
-                      di={di}
-                      isCursorRow={di === grid.cursor.row}
-                      onClick={() => handleCellClick(di, grid.cursor.col)}
-                    />
-                  )}
-                  {columns.map((col, ci) => {
-                    const isCursor =
-                      di === grid.cursor.row && ci === grid.cursor.col;
-                    const isSel = isSelected(di, ci);
-                    const isEditing =
-                      isCursor && grid.mode === "edit" && renderEditor;
+/** One data cell. Claims focus for claimWhen nav when cell monikers are wired. */
+function DataBodyCell(props: DataBodyCellProps) {
+  const { di, ci, col, entity, grid, renderEditor, onCellClick } = props;
+  const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
+  const isSel = isCellSelected(grid, di, ci);
+  const isEditing = isCursor && grid.mode === "edit" && renderEditor;
+  const cellContent = isEditing ? (
+    renderEditor!(
+      entity,
+      col.field,
+      () => grid.exitEdit(),
+      () => grid.exitEdit(),
+    )
+  ) : (
+    <Field
+      fieldDef={col.field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={false}
+    />
+  );
+  const cellClasses = cn(
+    "px-3 py-1.5 align-middle max-w-[300px]",
+    ci === 0 && "pl-4",
+    isCursor && "ring-2 ring-primary ring-inset",
+    isSel && !isCursor && "bg-primary/10",
+    // Strip cell padding during editing for editors that fill the entire cell.
+    isEditing &&
+      col.field.editor !== "color-palette" &&
+      col.field.editor !== "select" &&
+      col.field.editor !== "multi-select" &&
+      "p-0",
+  );
 
-                    const cellContent = isEditing ? (
-                      renderEditor(
-                        entity,
-                        col.field,
-                        () => grid.exitEdit(),
-                        () => grid.exitEdit(),
-                      )
-                    ) : (
-                      <Field
-                        fieldDef={col.field}
-                        entityType={entity.entity_type}
-                        entityId={entity.id}
-                        mode="compact"
-                        editing={false}
-                      />
-                    );
+  if (props.useClaimNav) {
+    const mk = props.cellMonikers?.[di]?.[ci];
+    const preds = props.claimPredicates?.[di]?.[ci];
+    if (mk && preds) {
+      return (
+        <GridCellScope
+          moniker={mk}
+          claimWhen={preds}
+          isCursor={isCursor}
+          cursorRef={isCursor ? props.cursorRef : undefined}
+          className={cellClasses}
+          onClick={() => props.handleCellClick(di, ci)}
+          onDoubleClick={() => {
+            onCellClick?.(di, ci);
+            grid.enterEdit();
+          }}
+        >
+          {cellContent}
+        </GridCellScope>
+      );
+    }
+  }
+  return (
+    <TableCell
+      ref={isCursor ? props.cursorRef : undefined}
+      className={cellClasses}
+      onClick={() => props.handleCellClick(di, ci)}
+      onDoubleClick={() => {
+        onCellClick?.(di, ci);
+        grid.enterEdit();
+      }}
+    >
+      {cellContent}
+    </TableCell>
+  );
+}
 
-                    const cellClasses = cn(
-                      "px-3 py-1.5 align-middle max-w-[300px]",
-                      ci === 0 && "pl-4",
-                      isCursor && "ring-2 ring-primary ring-inset",
-                      isSel && !isCursor && "bg-primary/10",
-                      // Strip cell padding during editing for editors that
-                      // fill the entire cell.
-                      isEditing &&
-                        col.field.editor !== "color-palette" &&
-                        col.field.editor !== "select" &&
-                        col.field.editor !== "multi-select" &&
-                        "p-0",
-                    );
-
-                    // Wrap in FocusScope when claimWhen navigation is active
-                    if (useClaimNav) {
-                      const mk = cellMonikers[di]?.[ci];
-                      const preds = claimPredicates[di]?.[ci];
-                      if (mk && preds) {
-                        return (
-                          <GridCellScope
-                            key={col.field.id}
-                            moniker={mk}
-                            claimWhen={preds}
-                            isCursor={isCursor}
-                            cursorRef={isCursor ? cursorRef : undefined}
-                            className={cellClasses}
-                            onClick={() => handleCellClick(di, ci)}
-                            onDoubleClick={() => {
-                              onCellClick?.(di, ci);
-                              grid.enterEdit();
-                            }}
-                          >
-                            {cellContent}
-                          </GridCellScope>
-                        );
-                      }
-                    }
-
-                    // Fallback: plain TableCell (no claimWhen)
-                    return (
-                      <TableCell
-                        key={col.field.id}
-                        ref={isCursor ? cursorRef : undefined}
-                        className={cellClasses}
-                        onClick={() => handleCellClick(di, ci)}
-                        onDoubleClick={() => {
-                          onCellClick?.(di, ci);
-                          grid.enterEdit();
-                        }}
-                      >
-                        {cellContent}
-                      </TableCell>
-                    );
-                  })}
-                </EntityRow>
-              </FocusScope>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
+/** Is cell (row,col) inside the current grid selection range? */
+function isCellSelected(
+  grid: UseGridReturn,
+  row: number,
+  col: number,
+): boolean {
+  const r = grid.getSelectedRange();
+  if (!r) return false;
+  return (
+    row >= r.startRow && row <= r.endRow && col >= r.startCol && col <= r.endCol
   );
 }
 
@@ -523,11 +645,7 @@ function GridCellScope({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <FocusScope
-        moniker={moniker}
-        claimWhen={claimWhen}
-        showFocusBar={false}
-      >
+      <FocusScope moniker={moniker} claimWhen={claimWhen} showFocusBar={false}>
         {children}
       </FocusScope>
     </TableCell>
