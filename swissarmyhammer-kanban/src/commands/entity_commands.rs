@@ -138,6 +138,26 @@ impl Command for DeleteEntityCmd {
             "column" => run_op(&crate::column::DeleteColumn::new(id), &kanban).await,
             "actor" => run_op(&crate::actor::DeleteActor::new(id), &kanban).await,
             "project" => run_op(&crate::project::DeleteProject::new(id), &kanban).await,
+            // Attachments live as a multi-value field on their parent task;
+            // the dispatch path walks the scope chain innermost-first to find
+            // the owning task. When the user right-clicks an attachment chip
+            // the scope chain is `[attachment:<id>, task:<id>, column:<id>, ...]`,
+            // so `resolve_entity_id("task")` picks up the correct parent. If no
+            // task is in scope (e.g. a bare `entity.delete` against a raw
+            // attachment moniker with no surrounding context) we surface a
+            // loud error rather than guess.
+            "attachment" => {
+                let task_id = ctx.resolve_entity_id("task").ok_or_else(|| {
+                    CommandError::ExecutionFailed(
+                        "attachment delete requires a task in scope".into(),
+                    )
+                })?;
+                run_op(
+                    &crate::attachment::DeleteAttachment::new(task_id, id),
+                    &kanban,
+                )
+                .await
+            }
             _ => Err(CommandError::ExecutionFailed(format!(
                 "unknown entity type for delete: '{}'",
                 entity_type
@@ -366,29 +386,6 @@ impl Command for AttachmentRevealCmd {
         .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?
         .map_err(|e| CommandError::ExecutionFailed(format!("failed to reveal {}: {}", path, e)))?;
         Ok(serde_json::json!({ "revealed": path }))
-    }
-}
-
-/// Delete an attachment from a task.
-///
-/// Always available (all parameters come from args).
-/// Required args: `task_id`, `id`.
-pub struct AttachmentDeleteCmd;
-
-#[async_trait]
-impl Command for AttachmentDeleteCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-
-        let task_id = ctx.require_arg_str("task_id")?;
-        let id = ctx.require_arg_str("id")?;
-        let op = crate::attachment::DeleteAttachment::new(task_id, id);
-
-        run_op(&op, &kanban).await
     }
 }
 
@@ -636,6 +633,116 @@ mod tests {
         );
         let result = DeleteEntityCmd.execute(&cmd_ctx).await;
         assert!(result.is_err(), "invalid moniker should fail");
+    }
+
+    // =========================================================================
+    // DeleteEntityCmd execute — attachment (folded from retired
+    // `attachment.delete`). The dispatch path resolves the parent task via
+    // the scope chain (`resolve_entity_id("task")`).
+    // =========================================================================
+
+    /// End-to-end: right-clicking an attachment chip inside a task produces a
+    /// scope chain `[attachment:<path>, task:<tid>, column:<cid>]` where the
+    /// attachment moniker carries the absolute filesystem path emitted by
+    /// the frontend (`attachment:${attachment.path}`). Firing
+    /// `entity.delete` against that target must remove the attachment from
+    /// the parent task's attachments list.
+    #[tokio::test]
+    async fn delete_entity_deletes_attachment_via_scope_chain() {
+        let (temp, ctx) = setup().await;
+
+        let task_result = crate::task::AddTask::new("Has attachments")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap().to_string();
+
+        let source_file = temp.path().join("note.txt");
+        std::fs::write(&source_file, b"hello").unwrap();
+        crate::attachment::AddAttachment::new(
+            task_id.as_str(),
+            "note.txt",
+            source_file.to_string_lossy().to_string(),
+        )
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+        // Resolve the attachment's stored path — the same value the
+        // frontend embeds in the `attachment:${path}` moniker.
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id.as_str()).await.unwrap();
+        let attachment_path = task
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|entry| entry.get("path"))
+            .and_then(|v| v.as_str())
+            .expect("attachment path should be present after add")
+            .to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("attachment:{}", attachment_path)),
+            vec![
+                format!("attachment:{}", attachment_path),
+                format!("task:{}", task_id),
+                "column:todo".into(),
+            ],
+            HashMap::new(),
+        );
+
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_ok(),
+            "delete attachment should succeed: {:?}",
+            result
+        );
+
+        // Verify the attachment is removed from the task's list.
+        let ectx = kanban.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id.as_str()).await.unwrap();
+        let attachments = task.get("attachments");
+        let is_empty = attachments.is_none()
+            || attachments.unwrap().is_null()
+            || attachments.unwrap().as_array().is_none_or(|a| a.is_empty());
+        assert!(
+            is_empty,
+            "task attachments list should be empty after delete, got: {:?}",
+            attachments
+        );
+    }
+
+    /// Without a `task:` moniker in the scope chain there is no parent to
+    /// look up, so the dispatch should fail loudly rather than silently
+    /// succeed or guess.
+    #[tokio::test]
+    async fn delete_entity_attachment_missing_task_in_scope_errors() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("attachment:some-id".into()),
+            // Scope chain deliberately has no task: moniker.
+            vec!["attachment:some-id".into(), "column:todo".into()],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        match result {
+            Err(CommandError::ExecutionFailed(msg)) => {
+                assert!(
+                    msg.contains("requires a task in scope"),
+                    "expected 'requires a task in scope' error, got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected ExecutionFailed 'requires a task in scope', got: {:?}",
+                other
+            ),
+        }
     }
 
     // =========================================================================

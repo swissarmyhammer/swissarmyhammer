@@ -434,12 +434,13 @@ mod tests {
         // drag: start, cancel, complete = 3
         // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
-        // attachment: open, reveal, delete = 3
+        // attachment: open, reveal = 2  (attachment.delete retired, folded
+        //   into the cross-cutting `entity.delete` auto-emit)
         // column: reorder = 1
         // tag: tag.update = 1
         // task: task.move, task.delete, task.untag, task.doThisNext = 4
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 62);
+        assert_eq!(registry.all_commands().len(), 61);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -593,6 +594,59 @@ mod tests {
             assert!(
                 cmd.visible,
                 "{cmd_id} should be visible in the command palette"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_yaml_arg_only_commands_are_hidden_from_palette() {
+        // Hygiene test: any `ui.*` command whose params come `from: args`
+        // cannot be invoked from the command palette (the palette has no UI
+        // for collecting arbitrary args), so it must be marked
+        // `visible: false` in ui.yaml. User-facing palette entries for those
+        // operations are synthesized elsewhere (e.g. `view.switch:{id}` in
+        // `scope_commands::emit_view_switch`, rewritten back to `ui.view.set`
+        // by the dispatcher).
+        //
+        // See task 01KPTHX6J2K28GMMV6YQVJWYCE.
+        let ui = include_str!("../builtin/commands/ui.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("ui", ui)]);
+
+        // Commands that must be hidden from the palette.
+        let hidden = [
+            "ui.view.set",
+            "ui.perspective.set",
+            "ui.mode.set",
+            "ui.palette.close",
+            "ui.setFocus",
+        ];
+        for cmd_id in &hidden {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
+            assert!(
+                !cmd.visible,
+                "{cmd_id} requires args the palette cannot provide — \
+                 the command must be `visible: false`. See ui.yaml."
+            );
+        }
+
+        // Commands that are user-facing and must remain visible.
+        let visible = [
+            "ui.inspect",
+            "ui.inspector.close",
+            "ui.inspector.close_all",
+            "ui.palette.open",
+            "ui.perspective.startRename",
+        ];
+        for cmd_id in &visible {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
+            assert!(
+                cmd.visible,
+                "{cmd_id} is a user-facing palette entry and must remain \
+                 visible. See ui.yaml."
             );
         }
     }

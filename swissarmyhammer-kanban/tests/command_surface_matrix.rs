@@ -15,7 +15,7 @@
 //! | column      | yes     | yes    | —       | —         | —    | —   | yes   |
 //! | actor       | yes     | yes    | —       | —         | —    | —   | —     |
 //! | board       | yes     | —      | —       | —         | —    | —   | yes   |
-//! | attachment  | —       | —      | —       | —         | —    | —   | —     |
+//! | attachment  | —       | yes    | —       | —         | —    | —   | —     |
 //!
 //! Where "—" means either the command is not emitted for that entity moniker,
 //! or it is emitted with `available: false`. The matrix covers 49 cells
@@ -24,8 +24,9 @@
 //! Notes on the `—` cells:
 //!
 //! - **attachment**: cross-cutting commands still auto-emit (attachment is a
-//!   known entity) but the entity-specific `attachment.open` /
-//!   `attachment.reveal` / `attachment.delete` are the real UX surface.
+//!   known entity). Inspect and delete both use the cross-cutting path now
+//!   (`ui.inspect` and `entity.delete`), with `attachment.open` /
+//!   `attachment.reveal` remaining as the only type-specific surface.
 //!   The `—` cells assert the cross-cutting command is either absent or
 //!   unavailable, matching the intent documented in the card.
 //! - **project / column / actor / board delete**: the cross-cutting
@@ -1342,11 +1343,12 @@ async fn matrix_board_paste() {
 // Attachment row — 7 cells
 // =============================================================================
 //
-// Attachments have their own inspect-equivalent (`attachment.open`) and
-// type-specific delete (`attachment.delete`). The cross-cutting commands
+// Attachments have their own inspect-equivalent (`attachment.open`). Delete
+// is handled by the cross-cutting `entity.delete` command — the
+// `DeleteEntityCmd::execute` has an `"attachment"` match arm that walks the
+// scope chain to find the parent task. The other cross-cutting commands
 // still auto-emit for attachment monikers because attachment is a known
-// entity type, but the matrix card marks them all as "—" to document that
-// the real UX goes through the type-specific commands.
+// entity type; the matrix card marks the inapplicable cells as "—".
 
 #[tokio::test]
 async fn matrix_attachment_inspect_surface_emits_but_attachment_open_present() {
@@ -1378,15 +1380,14 @@ async fn matrix_attachment_inspect_surface_emits_but_attachment_open_present() {
 }
 
 #[tokio::test]
-async fn matrix_attachment_delete_surface_emits_but_attachment_delete_present() {
+async fn matrix_attachment_delete_surface_emits_entity_delete_only() {
     let h = MatrixHarness::new().await;
     let target = "attachment:/tmp/x.png";
 
     let surface = h.surface(&[target, "task:01X", "column:todo"]);
-    // Cross-cutting entity.delete is emitted with the attachment target,
-    // but DeleteEntityCmd has no match arm for "attachment" — it returns an
-    // error at dispatch time. Surface emission is still expected under the
-    // current contract.
+    // Cross-cutting entity.delete is emitted with the attachment target
+    // and rendered via the `"Delete {{entity.type}}"` template in
+    // `entity.yaml`. Dispatch resolves the parent task via the scope chain.
     assert_shape(
         &surface,
         "entity.delete",
@@ -1397,11 +1398,45 @@ async fn matrix_attachment_delete_surface_emits_but_attachment_delete_present() 
         true,
     );
 
-    // The primary delete path for attachments is `attachment.delete` —
-    // scoped by registry (task scope), targets the inner task+attachment.
+    // The type-specific `attachment.delete` command has been retired —
+    // delete is unified on `entity.delete`. Right-clicking a task-scoped
+    // surface must NOT offer a second "Delete Attachment" row.
     assert!(
-        surface.iter().any(|c| c.id == "attachment.delete"),
-        "attachment.delete should be in surface"
+        !surface.iter().any(|c| c.id == "attachment.delete"),
+        "attachment.delete must no longer appear in the surface; \
+         delete is unified on entity.delete"
+    );
+}
+
+/// Right-clicking a task (with NO attachment moniker in the scope chain)
+/// must not offer any "Delete Attachment" row. Before the unification
+/// the retired `attachment.delete` command was scoped `entity:task` and
+/// leaked onto every task context menu as a non-working row — this test
+/// pins that it stays gone.
+#[tokio::test]
+async fn task_context_menu_does_not_include_delete_attachment() {
+    let h = MatrixHarness::new().await;
+    let target = "task:01X";
+
+    let surface = h.surface(&[target, "column:todo"]);
+
+    // No `attachment.delete` anywhere — the command no longer exists.
+    assert!(
+        !surface.iter().any(|c| c.id == "attachment.delete"),
+        "task context menu must not include attachment.delete (retired command)"
+    );
+
+    // The cross-cutting `entity.delete` is present for the task target,
+    // and — because the target is a task, not an attachment — its
+    // template resolves to "Delete Task", never "Delete Attachment".
+    assert_shape(
+        &surface,
+        "entity.delete",
+        Some(target),
+        "Delete Task",
+        true,
+        false,
+        true,
     );
 }
 

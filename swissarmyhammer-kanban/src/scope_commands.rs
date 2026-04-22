@@ -232,15 +232,27 @@ fn push_dedup(
 
 /// Emit one `view.switch:{id}` command per known view.
 ///
-/// Marked `context_menu: false` because view switching is a navigation action
-/// that belongs in the palette, not on right-click. Shares `seen` with the
-/// other emit_* helpers so cross-emitter dedup works.
+/// The per-view `context_menu` flag is computed from `scope_chain`: the
+/// command is marked `context_menu: true` **only** for the view whose
+/// `view:{id}` moniker is present in the scope chain. All other views stay
+/// `context_menu: false`.
+///
+/// This gives the left-nav right-click exactly one "Switch to <ViewName>"
+/// entry — the one for the button the user actually right-clicked — while
+/// leaving palette behavior (`context_menu_only == false`) untouched: the
+/// palette still shows every view.switch command regardless of scope.
+///
+/// Mirrors the scope-chain-filtering pattern used by `emit_entity_add`.
+/// Shares `seen` with the other emit_* helpers so cross-emitter dedup works.
 fn emit_view_switch(
     views: &[ViewInfo],
+    scope_chain: &[String],
     seen: &mut HashSet<(String, Option<String>)>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for view in views {
+        let view_moniker = format!("view:{}", view.id);
+        let in_scope = scope_chain.iter().any(|m| m == &view_moniker);
         push_dedup(
             seen,
             result,
@@ -250,7 +262,7 @@ fn emit_view_switch(
                 menu_name: None,
                 target: None,
                 group: "view".into(),
-                context_menu: false,
+                context_menu: in_scope,
                 keys: None,
                 available: true,
             },
@@ -468,7 +480,7 @@ fn emit_dynamic_commands(
     // rather than O(scope × views).
     let views_by_id: HashMap<&str, &ViewInfo> =
         dyn_src.views.iter().map(|v| (v.id.as_str(), v)).collect();
-    emit_view_switch(&dyn_src.views, seen, result);
+    emit_view_switch(&dyn_src.views, scope_chain, seen, result);
     emit_board_switch(&dyn_src.boards, seen, result);
     emit_window_focus(&dyn_src.windows, seen, result);
     emit_perspective_goto(&dyn_src.perspectives, seen, result);
@@ -667,90 +679,43 @@ fn emit_cross_cutting_commands(
         target_primary_count,
         "emit_cross_cutting_commands: entering pass"
     );
-    let mut matched = 0usize;
+    // Collect matches into a local vec first so we can sort by
+    // (context_menu_group, context_menu_order, id) before emitting. Pushing
+    // straight into `result` would inherit the HashMap-iteration order of
+    // `all_registry_cmds`, which reseeds per process — the context menu
+    // would reshuffle every run.
+    let mut pending: Vec<Pending> = Vec::new();
     for cmd_def in all_registry_cmds {
-        if !cmd_def.visible {
-            continue;
-        }
-        // Rule 1: primary (first) param must be `from: target`.
-        let Some(first_param) = cmd_def.params.first() else {
-            continue;
-        };
-        if first_param.from != ParamSource::Target {
-            continue;
-        }
-        // Rule 2: if a scope pin is declared, it must include this type.
-        // No pin → cross-cutting on every type (the common case).
-        if cmd_def.scope.is_some()
-            && !scope_matches(cmd_def.scope.as_deref(), entity_type, &scope_prefixed)
-        {
-            tracing::debug!(
-                cmd_id = %cmd_def.id,
-                entity_type = %entity_type,
-                scope_pin = ?cmd_def.scope,
-                "emit_cross_cutting_commands: filtered — scope pin does not match"
-            );
-            continue;
-        }
-        // Rule 3: target param can constrain to a specific entity_type.
-        if let Some(constrained_type) = first_param.entity_type.as_deref() {
-            if constrained_type != entity_type {
-                tracing::debug!(
-                    cmd_id = %cmd_def.id,
-                    entity_type = %entity_type,
-                    constrained_type = %constrained_type,
-                    "emit_cross_cutting_commands: filtered — target param entity_type mismatch"
-                );
-                continue;
-            }
-        }
-
-        let tpl = paste_aware_tpl(&cmd_def.id, entity_type, clipboard_type);
-        let available = check_available(
-            &cmd_def.id,
+        if let Some(p) = try_match_cross_cutting_command(
+            cmd_def,
+            entity_type,
+            entity_moniker,
+            moniker,
             scope_chain,
-            Some(moniker),
+            &scope_prefixed,
             command_impls,
             ui_state,
-        );
-        let target = Some(entity_moniker.to_string());
-        // Probe the seen-set before push_dedup so dedup skips are observable
-        // in the trace — push_dedup itself silently drops duplicates.
-        let dedup_key = (cmd_def.id.clone(), target.clone());
-        if seen.contains(&dedup_key) {
-            tracing::debug!(
-                cmd_id = %cmd_def.id,
-                target = ?target,
-                available,
-                "emit_cross_cutting_commands: dedup skip — (id, target) already in seen set"
-            );
-            continue;
-        }
-        tracing::debug!(
-            cmd_id = %cmd_def.id,
-            target = ?target,
-            available,
-            outcome = if available { "included" } else { "filtered_unavailable" },
-            "emit_cross_cutting_commands: matched command"
-        );
-        matched += 1;
-        push_dedup(
+            clipboard_type,
             seen,
-            result,
-            ResolvedCommand {
-                id: cmd_def.id.clone(),
-                name: resolve_name_template(&cmd_def.name, &tpl),
-                menu_name: cmd_def
-                    .menu_name
-                    .as_ref()
-                    .map(|mn| resolve_name_template(mn, &tpl)),
-                target,
-                group: entity_type.to_string(),
-                context_menu: cmd_def.context_menu,
-                keys: cmd_def.keys.clone(),
-                available,
-            },
-        );
+        ) {
+            pending.push(p);
+        }
+    }
+    // Stable sort: primary by context_menu_group (None → u32::MAX sinks
+    // uncategorised to the bottom), then by context_menu_order (default 0),
+    // then by command id for a deterministic tiebreaker. Without the id
+    // tiebreaker, same-group-same-order commands would inherit
+    // HashMap-iteration order and reshuffle per process.
+    pending.sort_by(|a, b| {
+        (a.ctx_group, a.ctx_order, a.cmd.id.as_str()).cmp(&(
+            b.ctx_group,
+            b.ctx_order,
+            b.cmd.id.as_str(),
+        ))
+    });
+    let matched = pending.len();
+    for p in pending {
+        push_dedup(seen, result, p.cmd);
     }
     tracing::debug!(
         scope_moniker = %moniker,
@@ -758,6 +723,126 @@ fn emit_cross_cutting_commands(
         matched,
         "emit_cross_cutting_commands: pass complete"
     );
+}
+
+/// One entry in the sort buffer for `emit_cross_cutting_commands`.
+///
+/// Carries the sort-key fields alongside the `ResolvedCommand` so the
+/// final sort operates on primitive tuples rather than reaching into the
+/// resolved struct.
+struct Pending {
+    cmd: ResolvedCommand,
+    ctx_group: u32,
+    ctx_order: u32,
+}
+
+/// Decide whether one registry command matches the cross-cutting emit pass
+/// for a given moniker, returning the sort-buffered `Pending` entry when it
+/// does. Encapsulates the three filter rules (param kind, scope pin, target
+/// entity-type constraint) plus the seen-set dedup probe.
+#[allow(clippy::too_many_arguments)]
+fn try_match_cross_cutting_command(
+    cmd_def: &CommandDef,
+    entity_type: &str,
+    entity_moniker: &str,
+    moniker: &str,
+    scope_chain: &[String],
+    scope_prefixed: &str,
+    command_impls: &HashMap<String, Arc<dyn Command>>,
+    ui_state: &Arc<UIState>,
+    clipboard_type: Option<&str>,
+    seen: &HashSet<(String, Option<String>)>,
+) -> Option<Pending> {
+    if !cmd_def.visible {
+        return None;
+    }
+    // Rule 1: primary (first) param must be `from: target`.
+    let first_param = cmd_def.params.first()?;
+    if first_param.from != ParamSource::Target {
+        return None;
+    }
+    // Rule 2: if a scope pin is declared, it must include this type.
+    // No pin → cross-cutting on every type (the common case).
+    if cmd_def.scope.is_some()
+        && !scope_matches(cmd_def.scope.as_deref(), entity_type, scope_prefixed)
+    {
+        tracing::debug!(
+            cmd_id = %cmd_def.id,
+            entity_type = %entity_type,
+            scope_pin = ?cmd_def.scope,
+            "emit_cross_cutting_commands: filtered — scope pin does not match"
+        );
+        return None;
+    }
+    // Rule 3: target param can constrain to a specific entity_type.
+    if let Some(constrained_type) = first_param.entity_type.as_deref() {
+        if constrained_type != entity_type {
+            tracing::debug!(
+                cmd_id = %cmd_def.id,
+                entity_type = %entity_type,
+                constrained_type = %constrained_type,
+                "emit_cross_cutting_commands: filtered — target param entity_type mismatch"
+            );
+            return None;
+        }
+    }
+
+    let tpl = paste_aware_tpl(&cmd_def.id, entity_type, clipboard_type);
+    let available = check_available(
+        &cmd_def.id,
+        scope_chain,
+        Some(moniker),
+        command_impls,
+        ui_state,
+    );
+    let target = Some(entity_moniker.to_string());
+    // Probe the seen-set before push_dedup so dedup skips are observable
+    // in the trace — push_dedup itself silently drops duplicates.
+    let dedup_key = (cmd_def.id.clone(), target.clone());
+    if seen.contains(&dedup_key) {
+        tracing::debug!(
+            cmd_id = %cmd_def.id,
+            target = ?target,
+            available,
+            "emit_cross_cutting_commands: dedup skip — (id, target) already in seen set"
+        );
+        return None;
+    }
+    let ctx_group = cmd_def.context_menu_group.unwrap_or(u32::MAX);
+    let ctx_order = cmd_def.context_menu_order.unwrap_or(0);
+    tracing::debug!(
+        cmd_id = %cmd_def.id,
+        target = ?target,
+        available,
+        ctx_group,
+        ctx_order,
+        outcome = if available { "included" } else { "filtered_unavailable" },
+        "emit_cross_cutting_commands: matched command"
+    );
+    // `group` is the per-entity-type-suffixed context-menu bucket. The
+    // frontend renderer inserts a separator whenever it sees a new
+    // group string, so distinct `ctx_group` values must produce
+    // distinct strings. Suffixing with `entity_type` keeps adjacent
+    // entity monikers (e.g. tag then task) from bleeding into one
+    // group when context menus are rendered per-moniker.
+    let group = format!("{entity_type}:ctx{ctx_group}");
+    Some(Pending {
+        ctx_group,
+        ctx_order,
+        cmd: ResolvedCommand {
+            id: cmd_def.id.clone(),
+            name: resolve_name_template(&cmd_def.name, &tpl),
+            menu_name: cmd_def
+                .menu_name
+                .as_ref()
+                .map(|mn| resolve_name_template(mn, &tpl)),
+            target,
+            group,
+            context_menu: cmd_def.context_menu,
+            keys: cmd_def.keys.clone(),
+            available,
+        },
+    })
 }
 
 /// Emit registry commands whose `scope` names the current entity type.
@@ -1673,6 +1758,123 @@ mod tests {
             .find(|c| c.id == "view.switch:tasks-grid")
             .unwrap();
         assert_eq!(grid_switch.name, "Switch to Task Grid");
+    }
+
+    /// Right-click on a specific view button must surface exactly one
+    /// `view.switch:{id}` command — the one whose moniker is in the scope
+    /// chain. The other views' switch commands stay palette-only and must be
+    /// filtered out by `context_menu_only`.
+    #[test]
+    fn view_switch_context_menu_only_emits_in_scope_view() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["view:board-view".into()];
+        let dynamic = DynamicSources {
+            views: vec![
+                ViewInfo {
+                    id: "board-view".into(),
+                    name: "Board View".into(),
+                    entity_type: None,
+                },
+                ViewInfo {
+                    id: "tasks-grid".into(),
+                    name: "Task Grid".into(),
+                    entity_type: None,
+                },
+                ViewInfo {
+                    id: "tags-grid".into(),
+                    name: "Tag Grid".into(),
+                    entity_type: None,
+                },
+            ],
+            boards: vec![],
+            windows: vec![],
+            perspectives: vec![],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true, // context_menu_only
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"view.switch:board-view"),
+            "in-scope view.switch should appear in right-click menu: {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&"view.switch:tasks-grid"),
+            "out-of-scope view.switch must NOT appear in right-click menu: {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&"view.switch:tags-grid"),
+            "out-of-scope view.switch must NOT appear in right-click menu: {:?}",
+            ids
+        );
+    }
+
+    /// Palette behavior (`context_menu_only == false`) must be unchanged:
+    /// every `view.switch:{id}` still appears regardless of which view
+    /// moniker is in the scope chain. Guards against a regression where the
+    /// per-view scope filter accidentally suppresses palette entries.
+    #[test]
+    fn view_switch_palette_still_emits_all_views() {
+        let (registry, impls, fields, ui) = setup();
+        // No view:* in scope — palette shouldn't care either way.
+        let scope: Vec<String> = vec![];
+        let dynamic = DynamicSources {
+            views: vec![
+                ViewInfo {
+                    id: "board-view".into(),
+                    name: "Board View".into(),
+                    entity_type: None,
+                },
+                ViewInfo {
+                    id: "tasks-grid".into(),
+                    name: "Task Grid".into(),
+                    entity_type: None,
+                },
+                ViewInfo {
+                    id: "tags-grid".into(),
+                    name: "Tag Grid".into(),
+                    entity_type: None,
+                },
+            ],
+            boards: vec![],
+            windows: vec![],
+            perspectives: vec![],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false, // context_menu_only == false → palette
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"view.switch:board-view"),
+            "palette must show every view.switch: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"view.switch:tasks-grid"),
+            "palette must show every view.switch: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"view.switch:tags-grid"),
+            "palette must show every view.switch: {:?}",
+            ids
+        );
     }
 
     // =========================================================================
@@ -3425,6 +3627,167 @@ mod tests {
                 .iter()
                 .map(|c| (&c.id, &c.target))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    // =========================================================================
+    // Context-menu ordering and grouping
+    // =========================================================================
+
+    /// Right-clicking a task must produce the cross-cutting commands in a
+    /// stable, grouped order with distinct `group` strings that trigger
+    /// separator insertion in the frontend renderer:
+    ///
+    ///   1. Cut / Copy / Paste    (group ctx1)
+    ///   2. Delete / Archive      (group ctx2)
+    ///   3. Inspect               (group ctx3)
+    ///
+    /// The frontend renderer at `context-menu.ts` inserts a separator
+    /// whenever `cmd.group !== lastGroup`, so three distinct group strings
+    /// yield the two user-visible separators the design calls for.
+    #[test]
+    fn cross_cutting_context_menu_is_ordered_and_grouped() {
+        let (registry, impls, fields, ui) = setup();
+        // Put a task on the clipboard so `entity.paste` is available on a task
+        // scope (PasteEntityCmd validates clipboard-vs-target compatibility).
+        ui.set_clipboard_entity_type("tag");
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+
+        // Filter down to the cross-cutting entries we care about, in the order
+        // `commands_for_scope` emitted them.
+        let cross_cutting: Vec<&ResolvedCommand> = cmds
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.id.as_str(),
+                    "entity.cut"
+                        | "entity.copy"
+                        | "entity.paste"
+                        | "entity.delete"
+                        | "entity.archive"
+                        | "entity.unarchive"
+                        | "ui.inspect"
+                )
+            })
+            .collect();
+        let ids: Vec<&str> = cross_cutting.iter().map(|c| c.id.as_str()).collect();
+
+        // Expected order. `entity.unarchive` is unavailable on a todo-column
+        // task (nothing to unarchive) so it's filtered out by `available`.
+        let expected: &[&str] = &[
+            "entity.cut",
+            "entity.copy",
+            "entity.paste",
+            "entity.delete",
+            "entity.archive",
+            "ui.inspect",
+        ];
+        assert_eq!(
+            ids, expected,
+            "cross-cutting context-menu commands must appear in the documented \
+             order (cut/copy/paste → delete/archive → inspect); got {:?}",
+            ids
+        );
+
+        // Group strings must partition the list into three contiguous buckets
+        // so the frontend separator logic (new group → separator) triggers at
+        // the right spots. All buckets are per-entity-type-suffixed so
+        // `dedupe_by_id` across monikers still sees them as the same command.
+        let group_of = |id: &str| -> &str {
+            cross_cutting
+                .iter()
+                .find(|c| c.id == id)
+                .expect("command in filtered list")
+                .group
+                .as_str()
+        };
+        let g_cut = group_of("entity.cut");
+        let g_copy = group_of("entity.copy");
+        let g_paste = group_of("entity.paste");
+        let g_delete = group_of("entity.delete");
+        let g_archive = group_of("entity.archive");
+        let g_inspect = group_of("ui.inspect");
+
+        assert_eq!(
+            g_cut, g_copy,
+            "cut and copy must share a group to render contiguously"
+        );
+        assert_eq!(
+            g_copy, g_paste,
+            "copy and paste must share a group to render contiguously"
+        );
+        assert_eq!(
+            g_delete, g_archive,
+            "delete and archive must share a group to render contiguously"
+        );
+        assert_ne!(
+            g_paste, g_delete,
+            "cut/copy/paste group must differ from delete/archive group so a \
+             separator appears between them"
+        );
+        assert_ne!(
+            g_archive, g_inspect,
+            "delete/archive group must differ from inspect group so a \
+             separator appears between them"
+        );
+        assert!(
+            g_cut.contains("ctx1"),
+            "cut/copy/paste bucket should be tagged ctx1; got {:?}",
+            g_cut
+        );
+        assert!(
+            g_delete.contains("ctx2"),
+            "delete/archive bucket should be tagged ctx2; got {:?}",
+            g_delete
+        );
+        assert!(
+            g_inspect.contains("ctx3"),
+            "inspect bucket should be tagged ctx3; got {:?}",
+            g_inspect
+        );
+    }
+
+    /// Two back-to-back calls to `commands_for_scope` must return the
+    /// cross-cutting context-menu commands in the exact same order.
+    ///
+    /// The registry is backed by a `HashMap<String, CommandDef>`, and Rust's
+    /// `DefaultHasher` reseeds per process — so iteration order is stable
+    /// within one process run but different across runs. Running twice in one
+    /// test guards the *intra-process* invariant, which is what matters for a
+    /// single UI session: the menu doesn't reshuffle when you right-click a
+    /// second time.
+    #[test]
+    fn cross_cutting_order_is_stable_across_runs() {
+        let (registry, impls, fields, ui) = setup();
+        ui.set_clipboard_entity_type("tag");
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+
+        let extract = || -> Vec<String> {
+            commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None)
+                .into_iter()
+                .filter(|c| {
+                    matches!(
+                        c.id.as_str(),
+                        "entity.cut"
+                            | "entity.copy"
+                            | "entity.paste"
+                            | "entity.delete"
+                            | "entity.archive"
+                            | "entity.unarchive"
+                            | "ui.inspect"
+                    )
+                })
+                .map(|c| c.id)
+                .collect()
+        };
+
+        let first = extract();
+        let second = extract();
+        assert_eq!(
+            first, second,
+            "cross-cutting command order must be deterministic — HashMap \
+             iteration order must not leak into the emission sequence"
         );
     }
 

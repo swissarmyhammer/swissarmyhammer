@@ -7,15 +7,3 @@
   name: Show in Finder
   scope: "attachment"
   context_menu: true
-
-- id: attachment.delete
-  name: Delete Attachment
-  scope: "entity:task"
-  undoable: true
-  visible: true
-  context_menu: true
-  params:
-    - name: task_id
-      from: args
-    - name: id
-      from: args

@@ -1,10 +1,10 @@
 {
-  "command_count": 22,
+  "command_count": 28,
   "commands": [
     {
       "available": true,
       "context_menu": true,
-      "group": "board",
+      "group": "board:ctx1",
       "id": "entity.copy",
       "keys": {
         "cua": "Mod+C",
@@ -17,7 +17,7 @@
     {
       "available": true,
       "context_menu": true,
-      "group": "board",
+      "group": "board:ctx3",
       "id": "ui.inspect",
       "keys": null,
       "menu_name": null,
@@ -151,6 +151,46 @@
     },
     {
       "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearFilter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearGroup",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Group",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.filter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.group",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Group",
+      "target": null
+    },
+    {
+      "available": true,
       "context_menu": false,
       "group": "global",
       "id": "perspective.next",
@@ -173,6 +213,36 @@
       },
       "menu_name": null,
       "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.clear",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Sort",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.set",
+      "keys": {},
+      "menu_name": null,
+      "name": "Sort Field",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.toggle",
+      "keys": {},
+      "menu_name": null,
+      "name": "Toggle Sort",
       "target": null
     },
     {
@@ -242,16 +312,6 @@
       },
       "menu_name": null,
       "name": "Command Palette",
-      "target": null
-    },
-    {
-      "available": true,
-      "context_menu": false,
-      "group": "global",
-      "id": "ui.view.set",
-      "keys": null,
-      "menu_name": null,
-      "name": "Switch View",
       "target": null
     },
     {

@@ -1,5 +1,5 @@
 {
-  "command_count": 24,
+  "command_count": 30,
   "commands": [
     {
       "available": true,
@@ -128,6 +128,46 @@
     },
     {
       "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearFilter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearGroup",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Group",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.filter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.group",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Group",
+      "target": null
+    },
+    {
+      "available": true,
       "context_menu": false,
       "group": "global",
       "id": "perspective.next",
@@ -150,6 +190,36 @@
       },
       "menu_name": null,
       "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.clear",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Sort",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.set",
+      "keys": {},
+      "menu_name": null,
+      "name": "Sort Field",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.toggle",
+      "keys": {},
+      "menu_name": null,
+      "name": "Toggle Sort",
       "target": null
     },
     {
@@ -225,16 +295,6 @@
       "available": true,
       "context_menu": false,
       "group": "global",
-      "id": "ui.view.set",
-      "keys": null,
-      "menu_name": null,
-      "name": "Switch View",
-      "target": null
-    },
-    {
-      "available": true,
-      "context_menu": false,
-      "group": "global",
       "id": "window.new",
       "keys": {
         "cua": "Mod+Shift+N",
@@ -248,19 +308,7 @@
     {
       "available": true,
       "context_menu": true,
-      "group": "project",
-      "id": "entity.archive",
-      "keys": {
-        "vim": "dd"
-      },
-      "menu_name": null,
-      "name": "Archive Project",
-      "target": "project:backend"
-    },
-    {
-      "available": true,
-      "context_menu": true,
-      "group": "project",
+      "group": "project:ctx1",
       "id": "entity.copy",
       "keys": {
         "cua": "Mod+C",
@@ -273,7 +321,19 @@
     {
       "available": true,
       "context_menu": true,
-      "group": "project",
+      "group": "project:ctx2",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Project",
+      "target": "project:backend"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "project:ctx2",
       "id": "entity.delete",
       "keys": null,
       "menu_name": null,
@@ -283,7 +343,7 @@
     {
       "available": true,
       "context_menu": true,
-      "group": "project",
+      "group": "project:ctx3",
       "id": "ui.inspect",
       "keys": null,
       "menu_name": null,

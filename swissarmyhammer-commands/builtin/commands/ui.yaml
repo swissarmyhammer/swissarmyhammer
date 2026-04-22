@@ -1,6 +1,8 @@
 - id: ui.inspect
   name: "Inspect {{entity.type}}"
   context_menu: true
+  context_menu_group: 3
+  context_menu_order: 0
   params:
     - name: moniker
       from: target
@@ -29,6 +31,7 @@
 
 - id: ui.view.set
   name: Switch View
+  visible: false
   params:
     - name: view_id
       from: args

@@ -72,6 +72,8 @@
   name: "Delete {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 2
+  context_menu_order: 0
   params:
     - name: moniker
       from: target
@@ -80,6 +82,8 @@
   name: "Archive {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 2
+  context_menu_order: 1
   keys:
     vim: dd
   params:
@@ -90,6 +94,8 @@
   name: "Unarchive {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 2
+  context_menu_order: 2
   params:
     - name: moniker
       from: target
@@ -98,6 +104,8 @@
   name: "Cut {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 0
   keys:
     cua: Mod+X
     vim: x
@@ -113,6 +121,8 @@
   name: "Copy {{entity.type}}"
   undoable: false
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 1
   keys:
     cua: Mod+C
     vim: "y"
@@ -128,6 +138,8 @@
   name: "Paste {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 2
   keys:
     cua: Mod+V
     vim: p

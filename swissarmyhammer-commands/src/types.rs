@@ -82,6 +82,23 @@ pub struct CommandDef {
     pub undoable: bool,
     #[serde(default)]
     pub context_menu: bool,
+    /// Priority bucket for context-menu placement. Commands with the same
+    /// `context_menu_group` render contiguously; a separator is inserted
+    /// between groups. Lower values render first. Omit for "uncategorised"
+    /// (sorts after all explicit groups).
+    ///
+    /// Intentionally independent of [`MenuPlacement::group`]: the native
+    /// menu bar and the right-click context menu are two separate surfaces
+    /// with different grouping needs (e.g. Cut/Copy/Paste share a native
+    /// Edit-menu group, but context menus add Delete/Archive and Inspect
+    /// buckets that have no native-menu placement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_menu_group: Option<u32>,
+    /// Sort order within the same [`Self::context_menu_group`]. Omit for
+    /// default (0). Ties within the same group are broken by command id
+    /// to keep emission deterministic regardless of YAML load order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_menu_order: Option<u32>,
     /// Optional native menu bar placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub menu: Option<MenuPlacement>,
@@ -131,12 +148,18 @@ mod tests {
                 default: None,
             }],
             undoable: true,
-            context_menu: false,
+            context_menu: true,
+            context_menu_group: Some(1),
+            context_menu_order: Some(2),
             menu: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(def, parsed);
+        // The new context-menu fields must survive a full YAML round trip so
+        // `.kanban/commands/` overrides can opt into them.
+        assert_eq!(parsed.context_menu_group, Some(1));
+        assert_eq!(parsed.context_menu_order, Some(2));
     }
 
     #[test]
@@ -154,6 +177,8 @@ name: Quit
         assert!(def.params.is_empty());
         assert!(!def.undoable);
         assert!(!def.context_menu);
+        assert!(def.context_menu_group.is_none());
+        assert!(def.context_menu_order.is_none());
         assert!(def.menu.is_none());
     }
 

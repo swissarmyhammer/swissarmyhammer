@@ -1,5 +1,5 @@
 {
-  "command_count": 30,
+  "command_count": 35,
   "commands": [
     {
       "available": true,
@@ -128,6 +128,46 @@
     },
     {
       "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearFilter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.clearGroup",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Group",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.filter",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Filter",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.group",
+      "keys": {},
+      "menu_name": null,
+      "name": "Set Group",
+      "target": null
+    },
+    {
+      "available": true,
       "context_menu": false,
       "group": "global",
       "id": "perspective.next",
@@ -150,6 +190,36 @@
       },
       "menu_name": null,
       "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.clear",
+      "keys": {},
+      "menu_name": null,
+      "name": "Clear Sort",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.set",
+      "keys": {},
+      "menu_name": null,
+      "name": "Sort Field",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "global",
+      "id": "perspective.sort.toggle",
+      "keys": {},
+      "menu_name": null,
+      "name": "Toggle Sort",
       "target": null
     },
     {
@@ -225,16 +295,6 @@
       "available": true,
       "context_menu": false,
       "group": "global",
-      "id": "ui.view.set",
-      "keys": null,
-      "menu_name": null,
-      "name": "Switch View",
-      "target": null
-    },
-    {
-      "available": true,
-      "context_menu": false,
-      "group": "global",
       "id": "window.new",
       "keys": {
         "cua": "Mod+Shift+N",
@@ -244,54 +304,6 @@
       "menu_name": null,
       "name": "New Window",
       "target": null
-    },
-    {
-      "available": true,
-      "context_menu": true,
-      "group": "tag",
-      "id": "entity.archive",
-      "keys": {
-        "vim": "dd"
-      },
-      "menu_name": null,
-      "name": "Archive Tag",
-      "target": "tag:TAG"
-    },
-    {
-      "available": true,
-      "context_menu": true,
-      "group": "tag",
-      "id": "entity.copy",
-      "keys": {
-        "cua": "Mod+C",
-        "vim": "y"
-      },
-      "menu_name": null,
-      "name": "Copy Tag",
-      "target": "tag:TAG"
-    },
-    {
-      "available": true,
-      "context_menu": true,
-      "group": "tag",
-      "id": "entity.cut",
-      "keys": {
-        "cua": "Mod+X",
-        "vim": "x"
-      },
-      "menu_name": null,
-      "name": "Cut Tag",
-      "target": "tag:TAG"
-    },
-    {
-      "available": true,
-      "context_menu": true,
-      "group": "tag",
-      "id": "entity.delete",
-      "keys": null,
-      "menu_name": null,
-      "name": "Delete Tag",
-      "target": "tag:TAG"
     },
     {
       "available": true,
@@ -309,22 +321,60 @@
     {
       "available": true,
       "context_menu": true,
-      "group": "tag",
-      "id": "ui.inspect",
-      "keys": null,
+      "group": "tag:ctx1",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
       "menu_name": null,
-      "name": "Inspect Tag",
+      "name": "Copy Tag",
       "target": "tag:TAG"
     },
     {
       "available": true,
       "context_menu": true,
-      "group": "task",
-      "id": "attachment.delete",
+      "group": "tag:ctx1",
+      "id": "entity.cut",
+      "keys": {
+        "cua": "Mod+X",
+        "vim": "x"
+      },
+      "menu_name": null,
+      "name": "Cut Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.delete",
       "keys": null,
       "menu_name": null,
-      "name": "Delete Attachment",
-      "target": null
+      "name": "Delete Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx3",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Tag",
+      "target": "tag:TAG"
     },
     {
       "available": true,

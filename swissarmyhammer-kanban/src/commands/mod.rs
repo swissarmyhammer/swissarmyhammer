@@ -96,10 +96,9 @@ fn register_attachment(map: &mut CmdMap) {
         "attachment.reveal".into(),
         Arc::new(entity_commands::AttachmentRevealCmd),
     );
-    map.insert(
-        "attachment.delete".into(),
-        Arc::new(entity_commands::AttachmentDeleteCmd),
-    );
+    // attachment.delete retired: folded into the cross-cutting `entity.delete`
+    // command which now has an `"attachment"` match arm that resolves the
+    // parent task via the scope chain. See `DeleteEntityCmd::execute`.
 }
 
 fn register_column(map: &mut CmdMap) {
@@ -328,12 +327,14 @@ mod tests {
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
-        // + 3 attachment (open, reveal, delete)
+        // + 2 attachment (open, reveal) — attachment.delete retired, folded
+        //   into the cross-cutting `entity.delete` auto-emit with an
+        //   `"attachment"` match arm in `DeleteEntityCmd::execute`.
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // + 1 ui.mode.set = 62
-        assert_eq!(cmds.len(), 62);
+        // + 1 ui.mode.set = 61
+        assert_eq!(cmds.len(), 61);
     }
 
     // =========================================================================
