@@ -49,6 +49,7 @@ urlencoding = { workspace = true }
 whoami = "1"
 base64 = { workspace = true }
 ulid = { workspace = true }
+async-trait = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

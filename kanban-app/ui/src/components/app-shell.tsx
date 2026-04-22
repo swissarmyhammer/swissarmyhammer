@@ -15,7 +15,7 @@ import {
   type CommandDef,
   type DispatchOptions,
 } from "@/lib/command-scope";
-import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
+import { useFocusedScope } from "@/lib/entity-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
@@ -190,20 +190,24 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
   { id: "app.about", name: "About" },
 ];
 
-/** Type of the broadcaster ref used by nav command handlers. */
-type NavBroadcaster = (id: string) => void;
-
 /**
  * Key binding + display metadata for each universal navigation command.
  *
- * Kept as a data table so `buildNavCommands` can produce the CommandDef[] in
- * a single pass without repetitive object literals.
+ * These entries carry no `execute` handler on purpose: with no local
+ * handler, the dispatcher routes each nav keypress through
+ * `dispatch_command` to the Rust `NavigateCmd` impl, which drives the
+ * per-window `SpatialState::navigate` and emits `focus-changed`. The
+ * React focus store subscribes to that event and re-renders FocusScope
+ * decorations — the same round-trip `ui.inspect` uses. A local `execute`
+ * would short-circuit the dispatcher and break the round-trip.
+ *
+ * This list is kept in sync with the `nav.*` entries in
+ * `swissarmyhammer-commands/builtin/commands/nav.yaml`. The YAML is the
+ * registry source of truth for the backend; this array supplies the
+ * React-facing `CommandDef` shape so the palette and keybinding layers
+ * can see the same commands.
  */
-const NAV_COMMAND_SPEC: ReadonlyArray<{
-  id: string;
-  name: string;
-  keys: CommandDef["keys"];
-}> = [
+const NAV_COMMAND_DEFS: CommandDef[] = [
   {
     id: "nav.up",
     name: "Navigate Up",
@@ -235,40 +239,6 @@ const NAV_COMMAND_SPEC: ReadonlyArray<{
     keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
   },
 ];
-
-/**
- * Build universal navigation CommandDefs that broadcast through
- * EntityFocusContext. Each command delegates to `spatial_navigate` on the
- * Rust side, which resolves focus targets from DOM rects at runtime.
- */
-function buildNavCommands(
-  broadcastRef: React.MutableRefObject<NavBroadcaster>,
-): CommandDef[] {
-  return NAV_COMMAND_SPEC.map((spec) => ({
-    ...spec,
-    execute: () => broadcastRef.current(spec.id),
-  }));
-}
-
-/**
- * Build the dynamic global commands — nav commands plus the
- * ui.perspective.startRename command which exists in the backend registry
- * for palette discovery but runs locally via `triggerStartRename`.
- */
-function buildDynamicGlobalCommands(
-  broadcastRef: React.MutableRefObject<NavBroadcaster>,
-): CommandDef[] {
-  return [
-    ...buildNavCommands(broadcastRef),
-    {
-      id: "ui.perspective.startRename",
-      name: "Rename Perspective",
-      execute: () => {
-        triggerStartRename();
-      },
-    },
-  ];
-}
 
 /**
  * Sync app mode to the palette-open flag in backend UIState.
@@ -329,22 +299,28 @@ interface AppShellProps {
   onSwitchBoard?: (path: string) => void;
 }
 
+/** The single `ui.perspective.startRename` CommandDef wired locally. */
+const PERSPECTIVE_RENAME_COMMAND: CommandDef = {
+  id: "ui.perspective.startRename",
+  name: "Rename Perspective",
+  execute: () => {
+    triggerStartRename();
+  },
+};
+
 /** Top-level shell that wires global commands, keybindings, and the command palette. */
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
-  const { broadcastNavCommand } = useEntityFocus();
   const dismiss = useDispatchCommand("app.dismiss");
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
 
   usePaletteModeSync(paletteOpen);
 
-  // Static commands come from module scope; dynamic ones close over
-  // broadcastRef. Both are stable, so the memo has no dependencies.
+  // All module-scope arrays are stable; the memo has no dependencies.
   const globalCommands: CommandDef[] = useMemo(
     () => [
       ...STATIC_GLOBAL_COMMANDS,
-      ...buildDynamicGlobalCommands(broadcastRef),
+      ...NAV_COMMAND_DEFS,
+      PERSPECTIVE_RENAME_COMMAND,
     ],
     [],
   );

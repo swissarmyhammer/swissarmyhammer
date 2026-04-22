@@ -21,6 +21,7 @@ import {
   CommandScopeProvider,
   useDispatchCommand,
   type CommandDef,
+  type DispatchOptions,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
@@ -645,7 +646,15 @@ interface BoardActionDeps {
   columns: Entity[];
   taskMap: Map<string, Entity>;
   focusedMonikerRef: React.RefObject<string | null>;
-  broadcastRef: React.RefObject<(cmd: string) => void>;
+  /**
+   * Ambient dispatcher used by navigation aliases like
+   * `board.firstColumn`/`board.lastColumn`. These dispatch `nav.first`/
+   * `nav.last` through the unified pipeline to the Rust NavigateCmd impl
+   * — no local side-channel.
+   */
+  dispatchRef: React.RefObject<
+    (cmd: string, opts?: DispatchOptions) => Promise<unknown>
+  >;
   handleAddTaskRef: React.RefObject<(columnId: string) => void>;
   dispatchInspect: ReturnType<typeof useDispatchCommand>;
 }
@@ -680,8 +689,8 @@ function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
   };
 }
 
-/** Factory for a nav-broadcast command (first/last column). */
-function makeNavBroadcastCommand(
+/** Factory for a nav-dispatch command (first/last column). */
+function makeNavDispatchCommand(
   deps: BoardActionDeps,
   id: string,
   name: string,
@@ -693,7 +702,11 @@ function makeNavBroadcastCommand(
     name,
     keys,
     execute: () => {
-      if (deps.columns.length > 0) deps.broadcastRef.current(navCmd);
+      if (deps.columns.length > 0) {
+        deps.dispatchRef
+          .current(navCmd)
+          .catch((e) => console.error(`${navCmd} failed:`, e));
+      }
     },
   };
 }
@@ -708,7 +721,9 @@ function useBoardActionCommands(
   columns: Entity[],
   taskMap: Map<string, Entity>,
   focusedMonikerRef: React.RefObject<string | null>,
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  dispatchRef: React.RefObject<
+    (cmd: string, opts?: DispatchOptions) => Promise<unknown>
+  >,
   handleAddTaskRef: React.RefObject<(columnId: string) => void>,
   dispatchInspect: ReturnType<typeof useDispatchCommand>,
 ): CommandDef[] {
@@ -717,21 +732,21 @@ function useBoardActionCommands(
       columns,
       taskMap,
       focusedMonikerRef,
-      broadcastRef,
+      dispatchRef,
       handleAddTaskRef,
       dispatchInspect,
     };
     return [
       makeInspectCommand(deps),
       makeNewTaskCommand(deps),
-      makeNavBroadcastCommand(
+      makeNavDispatchCommand(
         deps,
         "board.firstColumn",
         "First Column",
         { vim: "0", cua: "Mod+Home" },
         "nav.first",
       ),
-      makeNavBroadcastCommand(
+      makeNavDispatchCommand(
         deps,
         "board.lastColumn",
         "Last Column",
@@ -744,7 +759,7 @@ function useBoardActionCommands(
     taskMap,
     dispatchInspect,
     focusedMonikerRef,
-    broadcastRef,
+    dispatchRef,
     handleAddTaskRef,
   ]);
 }
@@ -973,7 +988,9 @@ function BoardDndWrapper({
 /** Mutable refs BoardView threads into its action-command factories. */
 interface BoardCommandRefs {
   focusedMonikerRef: React.RefObject<string | null>;
-  broadcastRef: React.RefObject<(cmd: string) => void>;
+  dispatchRef: React.RefObject<
+    (cmd: string, opts?: DispatchOptions) => Promise<unknown>
+  >;
   handleAddTaskRef: React.RefObject<(columnId: string) => void>;
 }
 
@@ -985,14 +1002,14 @@ interface BoardCommandRefs {
  */
 function useBoardCommandRefs(
   focusedMoniker: string | null,
-  broadcastNavCommand: (cmd: string) => void,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): BoardCommandRefs {
   const focusedMonikerRef = useRef(focusedMoniker);
   focusedMonikerRef.current = focusedMoniker;
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
-  return { focusedMonikerRef, broadcastRef, handleAddTaskRef };
+  return { focusedMonikerRef, dispatchRef, handleAddTaskRef };
 }
 
 /**
@@ -1004,11 +1021,12 @@ function useBoardCommandRefs(
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const boardCommands = useEntityCommands("board", "board");
   const dispatchInspect = useDispatchCommand("ui.inspect");
-  const { broadcastNavCommand, setFocus } = useEntityFocus();
+  const dispatch = useDispatchCommand();
+  const { setFocus } = useEntityFocus();
   const focusedMoniker = useFocusedMoniker();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { focusedMonikerRef, broadcastRef, handleAddTaskRef } =
-    useBoardCommandRefs(focusedMoniker, broadcastNavCommand);
+  const { focusedMonikerRef, dispatchRef, handleAddTaskRef } =
+    useBoardCommandRefs(focusedMoniker, dispatch);
 
   const layout = useBoardLayout(board, tasks, groupValue);
   const dragDrop = useBoardDragDrop(
@@ -1021,7 +1039,7 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
     layout.columns,
     layout.taskMap,
     focusedMonikerRef,
-    broadcastRef,
+    dispatchRef,
     handleAddTaskRef,
     dispatchInspect,
   );

@@ -75,11 +75,38 @@ export const FIXTURE_PERSPECTIVE_MONIKERS: readonly string[] =
  * The overrides below are scoped to `data-moniker^="perspective:"` so
  * they cannot leak into other fixtures, and they match the production
  * Tailwind classes (`inline-flex`, `items-center`) verbatim.
+ *
+ * The `aria-label="Filter"` / `aria-label="Group"` rules size the inline
+ * icon buttons to the same 20×20px they occupy in production (Tailwind's
+ * `h-5 w-5`). Without these overrides the icon buttons render at the
+ * lucide-react SVG default of 24×24 plus button padding, which pushes
+ * the inline-flex tab's center point into the filter-focus button and
+ * causes a raw `userEvent.click(tabEl)` to hit that button's onClick
+ * handler — which then moves DOM focus into the formula-bar CM6 editor.
+ * That broke keyboard nav from the tab (the CM editor swallows h/j/k/l
+ * via `isEditableTarget`) even though the tab's React focus state was
+ * correct. Sizing the icon buttons correctly keeps the center of the
+ * tab div squarely on the TabButton label, matching production.
  */
 const PERSPECTIVE_FIXTURE_CSS = `
   [data-moniker^="perspective:"] {
     display: inline-flex;
     align-items: center;
+  }
+  [data-moniker^="perspective:"] [aria-label="Filter"],
+  [data-moniker^="perspective:"] [aria-label="Group"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  [data-moniker^="perspective:"] [aria-label="Filter"] svg,
+  [data-moniker^="perspective:"] [aria-label="Group"] svg {
+    width: 12px;
+    height: 12px;
   }
 `;
 

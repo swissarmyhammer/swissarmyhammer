@@ -174,6 +174,23 @@ impl LayerStack {
     pub fn len(&self) -> usize {
         self.layers.len()
     }
+
+    /// Returns `true` if `key` is in the stack AND at least one other
+    /// layer sits above it.
+    ///
+    /// Used by [`SpatialState::focus_first_in_layer`] to detect the
+    /// "stale RAF from a lower layer" scenario: if a deferred focus
+    /// call names a layer that has since been covered by an inner
+    /// layer, honouring it would steal focus down-stack.
+    ///
+    /// A key that is not in the stack at all returns `false` — there is
+    /// nothing above a layer that does not exist to defend against.
+    pub fn has_layer_above(&self, key: &str) -> bool {
+        self.layers
+            .iter()
+            .position(|l| l.key == key)
+            .is_some_and(|pos| pos + 1 < self.layers.len())
+    }
 }
 
 /// Spatial focus state machine: entry registry, layer stack, and focused key.
@@ -523,7 +540,7 @@ impl SpatialState {
     /// `Some(FocusChanged)` when focus actually moved so the caller can
     /// emit a `focus-changed` event.
     ///
-    /// Returns `None` in three cases:
+    /// Returns `None` in four cases:
     /// - The layer has no registered entries (the RAF-deferred caller must
     ///   tolerate this — entries may not yet have mounted).
     /// - The focused key already belongs to the given layer, so a user
@@ -533,6 +550,22 @@ impl SpatialState {
     /// - A remount: `push_layer` on a layer whose focus memory is already
     ///   pointing inside it (handled by the "already focused in layer"
     ///   early-exit).
+    /// - The named layer is strictly below another layer on the stack.
+    ///   This is the "RAF fires for a stale layer" guard: when multiple
+    ///   `FocusLayer`s mount in rapid succession, each one schedules a
+    ///   RAF at push time, but outer-parent `FocusLayer` effects run
+    ///   *after* all inner children. By the time the outer layer's RAF
+    ///   fires, an inner layer may already sit on top of it — in that
+    ///   case the outer layer is no longer "entering view" and must not
+    ///   steal focus from the layer that genuinely is active. See the
+    ///   `spatial-nav-multi-inspector.test.tsx` browser suite for the
+    ///   observable symptom this guard prevents.
+    ///
+    ///   Note: a call naming a layer that is NOT currently in the stack
+    ///   (e.g. the push IPC hasn't landed yet, or the layer was already
+    ///   removed) is not treated as a stale RAF — there is no layer
+    ///   above it to protect. Such calls fall through to `find_top_left`
+    ///   which naturally returns `None` when no entries match.
     ///
     /// Saves the outgoing focused key as `last_focused` on its owning
     /// layer, just like [`focus`], so `remove_layer` can restore it.
@@ -540,6 +573,21 @@ impl SpatialState {
     /// [`focus`]: Self::focus
     pub fn focus_first_in_layer(&self, layer_key: &str) -> Option<FocusChanged> {
         let mut inner = self.inner.write().unwrap();
+
+        // Only bail when another layer is strictly above `layer_key` in
+        // the stack. That's the single scenario the guard is defending
+        // against — an out-of-order RAF from a lower layer that would
+        // steal focus *down* the stack from the genuinely-active layer.
+        //
+        // A call naming the active layer (the common boot / "only layer"
+        // case), or naming a layer not currently in the stack, is
+        // allowed through; the empty-layer and "already focused in
+        // layer" short-circuits below, plus `find_top_left` returning
+        // `None` when no entries match, handle those benign cases
+        // without a false-positive bail.
+        if inner.layer_stack.has_layer_above(layer_key) {
+            return None;
+        }
 
         // Don't override manual focus that already landed in this layer —
         // e.g. a user click between the push and the RAF-deferred invoke.
@@ -2130,9 +2178,11 @@ mod tests {
         assert_eq!(state.focused_key(), Some("b".to_string()));
     }
 
-    /// Entries on other layers must never be considered. Layer A has one
-    /// entry at (0,0); layer B has two entries at (50,0) and (100,0).
-    /// Calling `focus_first_in_layer("A")` must pick A's sole entry.
+    /// Entries on other layers must never be considered when picking the
+    /// first entry. Layer A has one entry at (0,0); layer B (active) has
+    /// two entries at (50,0) and (100,0). Calling `focus_first_in_layer("B")`
+    /// must pick (50,0) — B's own top-left — and never leak across to A's
+    /// (0,0), even though (0,0) would win the full-registry tie-break.
     #[test]
     fn focus_first_in_layer_skips_entries_in_other_layers() {
         let state = SpatialState::new();
@@ -2163,10 +2213,62 @@ mod tests {
             None,
         );
 
-        let event = state.focus_first_in_layer("A").unwrap();
+        // B is the active layer, so this call is honoured and must pick
+        // B's top-left entry ("b1") — not A's (0,0) entry.
+        let event = state.focus_first_in_layer("B").unwrap();
 
-        assert_eq!(event.next_key, Some("a1".to_string()));
-        assert_eq!(state.focused_key(), Some("a1".to_string()));
+        assert_eq!(event.next_key, Some("b1".to_string()));
+        assert_eq!(state.focused_key(), Some("b1".to_string()));
+    }
+
+    /// Calling `focus_first_in_layer` on a layer that has another
+    /// layer sitting above it in the stack must be a no-op. React can
+    /// legitimately schedule `focus_first_in_layer` via RAF at the
+    /// moment an outer `FocusLayer` mounts, and — because React
+    /// flushes child effects before parent effects — an inner layer
+    /// may already sit on top of it by the time the RAF fires. Acting
+    /// on the outer layer in that situation would pull focus down the
+    /// stack, stealing it from the layer that genuinely is active
+    /// (the symptom the browser test suite
+    /// `spatial-nav-multi-inspector.test.tsx` catches).
+    ///
+    /// The narrower "only bail when covered by another layer" form of
+    /// the guard is deliberate: a call naming the active layer, or
+    /// naming a layer that isn't in the stack yet (push IPC in-flight
+    /// during boot), must succeed — see
+    /// `focus_first_in_layer_at_boot_picks_first_entry` for the
+    /// regression this distinction captures.
+    #[test]
+    fn focus_first_in_layer_noop_when_not_active_layer() {
+        let state = SpatialState::new();
+        state.push_layer("A".into(), "window".into());
+        state.push_layer("B".into(), "inspector".into());
+        reg(
+            &state,
+            "a1",
+            "task:A1",
+            rect(0.0, 0.0, 100.0, 50.0),
+            "A",
+            None,
+        );
+        reg(
+            &state,
+            "b1",
+            "field:B1",
+            rect(50.0, 0.0, 100.0, 50.0),
+            "B",
+            None,
+        );
+
+        // A is no longer the active layer — B was pushed on top.
+        // `focus_first_in_layer("A")` must decline rather than move
+        // focus into A.
+        let event = state.focus_first_in_layer("A");
+        assert!(
+            event.is_none(),
+            "non-active layer must be a no-op (guards against stale RAF)"
+        );
+        assert_eq!(state.focused_key(), None);
     }
 
     /// Push a layer but register no entries. `focus_first_in_layer` must
@@ -2181,6 +2283,66 @@ mod tests {
         let event = state.focus_first_in_layer("L1");
 
         assert!(event.is_none(), "empty layer must be a no-op");
+        assert_eq!(state.focused_key(), None);
+    }
+
+    /// Boot-time flow: the root `FocusLayer` mounts, pushes itself onto
+    /// the empty layer stack, registers an entry, and schedules a RAF
+    /// that calls `focus_first_in_layer(window_key)`. By the time the
+    /// RAF runs, the window layer IS the active (topmost and only)
+    /// layer — the guard against out-of-order RAFs must NOT bail here,
+    /// or the app boots with `focused_key == None` and every subsequent
+    /// nav key is a no-op. See card
+    /// `01KPTVARMZR21964VRVJMP32GF` for the regression this captures.
+    #[test]
+    fn focus_first_in_layer_at_boot_picks_first_entry() {
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "a",
+            "task:A",
+            rect(0.0, 0.0, 100.0, 40.0),
+            "window",
+            None,
+        );
+
+        let event = state
+            .focus_first_in_layer("window")
+            .expect("focus_first_in_layer must succeed when named layer is active");
+        assert_eq!(event.next_key, Some("a".to_string()));
+        assert_eq!(state.focused_key(), Some("a".to_string()));
+    }
+
+    /// A call naming a layer that is NOT in the stack yet (the push
+    /// IPC hasn't landed, or the layer was already removed) must fall
+    /// through to `find_top_left`, which naturally returns `None` when
+    /// no entries match — not trigger the "stale RAF" guard. There is
+    /// no layer above a non-existent layer to protect against.
+    #[test]
+    fn focus_first_in_layer_layer_not_in_stack_does_not_trigger_guard() {
+        let state = SpatialState::new();
+        // Only "other" is pushed; calling with a non-existent layer key
+        // must return None without the guard firing (the natural empty
+        // result from find_top_left handles this case).
+        state.push_layer("other".into(), "inspector".into());
+        reg(
+            &state,
+            "o1",
+            "field:O",
+            rect(0.0, 0.0, 100.0, 40.0),
+            "other",
+            None,
+        );
+
+        let event = state.focus_first_in_layer("missing");
+
+        assert!(
+            event.is_none(),
+            "layer not in stack with no matching entries must no-op"
+        );
+        // Crucially, focus was NOT stolen by `other` even though it was
+        // the only (and thus active) layer at call time.
         assert_eq!(state.focused_key(), None);
     }
 
@@ -2272,5 +2434,222 @@ mod tests {
             "single focus-changed with next_key: null when focused key is in batch"
         );
         assert_eq!(state.focused_key(), None);
+    }
+
+    // --- Multi-layer isolation tests (card 01KPTFSDB4FKNDJ1X3DBP7ZGNZ) ---
+
+    /// Three-layer stack with deliberately overlapping rects: `window` holds
+    /// a card at `y:0..100`, `inspector-1` has fields at `y:0..75`, and
+    /// `inspector-2` (active) has fields at the same `y:0..75` range.
+    /// Navigation from an inspector-2 field must only visit other
+    /// inspector-2 entries — never the identical-rect inspector-1 fields or
+    /// the overlapping window card.
+    ///
+    /// This extends the existing `navigate_only_sees_active_layer` — which
+    /// uses 2 layers with non-overlapping rects — to cover the real
+    /// "3+ inspectors open, each layer has rect collisions with the one
+    /// beneath" production topology, where a leak would be invisible
+    /// against the 2-layer fixture.
+    #[test]
+    fn navigate_with_three_layers_only_sees_topmost() {
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        state.push_layer("inspector-1".into(), "inspector".into());
+        state.push_layer("inspector-2".into(), "inspector".into());
+
+        // Window layer: card at y:0..60 — overlaps every inspector field's
+        // y-range, so a leak would let `Up`/`Down`/`Left`/`Right` return
+        // it as the closest beam-test candidate.
+        reg(
+            &state,
+            "window-card",
+            "task:01",
+            rect(0.0, 0.0, 200.0, 60.0),
+            "window",
+            None,
+        );
+
+        // Inspector-1 layer: two fields at the same x, same y-range as
+        // inspector-2 fields. If the layer filter has a hole, `Down` from
+        // an inspector-2 field would land here because the rect is
+        // vertically adjacent.
+        reg(
+            &state,
+            "i1-field-0",
+            "field:i1:title",
+            rect(300.0, 0.0, 200.0, 35.0),
+            "inspector-1",
+            None,
+        );
+        reg(
+            &state,
+            "i1-field-1",
+            "field:i1:desc",
+            rect(300.0, 40.0, 200.0, 35.0),
+            "inspector-1",
+            None,
+        );
+
+        // Inspector-2 layer (active): two fields at the same rects as
+        // inspector-1 — identical geometry, different layer. This is the
+        // worst-case overlap: tied beam-test scores mean any filter gap
+        // could hand the win to the wrong layer.
+        reg(
+            &state,
+            "i2-field-0",
+            "field:i2:title",
+            rect(300.0, 0.0, 200.0, 35.0),
+            "inspector-2",
+            None,
+        );
+        reg(
+            &state,
+            "i2-field-1",
+            "field:i2:desc",
+            rect(300.0, 40.0, 200.0, 35.0),
+            "inspector-2",
+            None,
+        );
+
+        state.focus("i2-field-0");
+
+        // Down from i2-field-0 must land on i2-field-1, not on the
+        // identically-positioned i1-field-1 in the layer beneath.
+        let event = state
+            .navigate(Some("i2-field-0"), crate::spatial_nav::Direction::Down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event.next_key,
+            Some("i2-field-1".to_string()),
+            "Down must stay in the active (topmost) inspector layer"
+        );
+
+        // Left from i2-field-0 must find nothing — the only candidate to
+        // the left is `window-card` on the window layer. A filter leak
+        // would incorrectly let that win.
+        state.focus("i2-field-0");
+        let result = state.navigate(Some("i2-field-0"), crate::spatial_nav::Direction::Left);
+        assert!(
+            result.unwrap().is_none(),
+            "Left must not reach the window-layer card at (0,0,200,60)"
+        );
+        assert_eq!(
+            state.focused_key(),
+            Some("i2-field-0".to_string()),
+            "focus unchanged on blocked nav"
+        );
+
+        // Up from i2-field-1 must land on i2-field-0, not on i1-field-0
+        // or window-card even though both are geometrically above.
+        state.focus("i2-field-1");
+        let event = state
+            .navigate(Some("i2-field-1"), crate::spatial_nav::Direction::Up)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event.next_key,
+            Some("i2-field-0".to_string()),
+            "Up must stay in the active inspector-2 layer despite identical i1-field-0 rect"
+        );
+
+        // Sanity: fallback_to_first (triggered by a null/stale source) must
+        // also respect the active layer. Clear focus, then navigate with
+        // `None` source — must land on the top-left inspector-2 entry, not
+        // on inspector-1's or window's top-left.
+        state.clear_focus();
+        let event = state
+            .navigate(None, crate::spatial_nav::Direction::Down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event.next_key,
+            Some("i2-field-0".to_string()),
+            "fallback_to_first must pick the top-left entry in the active layer only"
+        );
+    }
+
+    /// `parent_scope` container-first search must ignore parent rows on
+    /// inactive layers.
+    ///
+    /// By construction a `FocusScope` on layer L should only declare a
+    /// `parent_scope` whose entry is also on L — React wraps the
+    /// scope in whatever `FocusLayer` it lives inside, so the tree shape
+    /// enforces it. But the state machine receives these references as
+    /// opaque strings: if an edge case (delayed unmount, stale
+    /// `parent_scope`, test mis-wiring) produces a child on the active
+    /// layer whose `parent_scope` key refers to an entry on a lower layer,
+    /// the container-first search must still be bounded by the active
+    /// layer filter — otherwise a sibling on the lower layer could win via
+    /// the scoped search path.
+    ///
+    /// The filter works because `spatial_search` pre-filters `candidates`
+    /// to the active layer before handing them to `container_first_search`;
+    /// the scoped walk inside `container_first_search` re-filters that
+    /// already-filtered slice by `parent_scope`, which trivially excludes
+    /// any lower-layer entry. This test pins that invariant.
+    #[test]
+    fn parent_scope_in_lower_layer_is_ignored() {
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        state.push_layer("inspector".into(), "inspector".into());
+
+        // Lower layer: a "container" entry plus a sibling that would win
+        // the beam test if the layer filter leaked.
+        reg(
+            &state,
+            "lower-container",
+            "container:lower",
+            rect(0.0, 0.0, 400.0, 200.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "lower-sibling",
+            "field:lower",
+            rect(100.0, 100.0, 50.0, 30.0),
+            "window",
+            Some("lower-container".into()),
+        );
+
+        // Upper (active) layer: a source scope whose `parent_scope` points
+        // at `lower-container` — a malformed cross-layer parent reference.
+        // A correct implementation ignores it: the container-first search
+        // finds no sibling in the same parent on the active layer, falls
+        // back to the full (active-layer-filtered) candidate set, which is
+        // just the upper-layer target.
+        reg(
+            &state,
+            "upper-src",
+            "field:upper-src",
+            rect(300.0, 0.0, 50.0, 30.0),
+            "inspector",
+            Some("lower-container".into()),
+        );
+        reg(
+            &state,
+            "upper-target",
+            "field:upper-target",
+            rect(300.0, 50.0, 50.0, 30.0),
+            "inspector",
+            None,
+        );
+
+        state.focus("upper-src");
+
+        // Down from upper-src must land on upper-target. If the layer
+        // filter had a hole and the scoped walk returned `lower-sibling`
+        // because they share `parent_scope = "lower-container"`, this
+        // would fail.
+        let event = state
+            .navigate(Some("upper-src"), crate::spatial_nav::Direction::Down)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event.next_key,
+            Some("upper-target".to_string()),
+            "container-first walk must not cross layer boundaries even when parent_scope keys match"
+        );
     }
 }

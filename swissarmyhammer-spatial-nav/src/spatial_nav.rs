@@ -190,37 +190,94 @@ pub fn find_target(
     }
 }
 
+/// Major-axis distance from source to candidate's **near** edge along the
+/// travel direction. Always non-negative for directional candidates.
+fn major_axis_distance(source: &Rect, candidate: &Rect, direction: Direction) -> f64 {
+    match direction {
+        Direction::Right => candidate.x - source.right(),
+        Direction::Left => source.x - candidate.right(),
+        Direction::Down => candidate.y - source.bottom(),
+        Direction::Up => source.y - candidate.bottom(),
+        _ => 0.0,
+    }
+}
+
+/// Major-axis distance from source to candidate's **far** edge along the
+/// travel direction. Always greater than or equal to
+/// [`major_axis_distance`] for the same candidate.
+fn major_axis_distance_to_far_edge(source: &Rect, candidate: &Rect, direction: Direction) -> f64 {
+    match direction {
+        Direction::Right => candidate.right() - source.right(),
+        Direction::Left => source.x - candidate.x,
+        Direction::Down => candidate.bottom() - source.bottom(),
+        Direction::Up => source.y - candidate.y,
+        _ => 0.0,
+    }
+}
+
+/// Android FocusFinder "beam beats" rule: when `in_beam` is in the
+/// perpendicular beam of `source` and `out_beam` is not, in-beam wins
+/// **unless** `out_beam` is dramatically closer — specifically, unless
+/// its far edge is nearer than `in_beam`'s near edge along the travel
+/// direction.
+///
+/// This is the fix for the cross-region starvation bug: when the
+/// nearest in-beam candidate is very far (e.g. from a LeftNav button
+/// the only in-beam hit is a toolbar pill on the far right), a close
+/// out-of-beam candidate (e.g. a row selector just below the LeftNav)
+/// gets to win instead of being silently culled by the pool-split.
+fn in_beam_dominates(source: &Rect, in_beam: &Rect, out_beam: &Rect, direction: Direction) -> bool {
+    major_axis_distance(source, in_beam, direction)
+        < major_axis_distance_to_far_edge(source, out_beam, direction)
+}
+
 /// Cardinal direction navigation with beam test and scoring.
+///
+/// Candidates split into two pools by the perpendicular-beam test. The
+/// best candidate within each pool is chosen by Android FocusFinder's
+/// `13 * major² + minor²` score. The two pool-winners are then arbitrated
+/// by [`in_beam_dominates`]: the in-beam winner is preferred unless the
+/// out-of-beam winner is dramatically closer along the travel axis.
+///
+/// This unified ranking prevents the failure mode where a far-away
+/// in-beam candidate silently starves a close, obviously-correct
+/// out-of-beam candidate — the bug that broke cross-region moves such
+/// as LeftNav → grid row selector.
 fn find_cardinal(
     source: &SpatialEntry,
     candidates: &[&SpatialEntry],
     direction: Direction,
 ) -> Option<String> {
-    let mut in_beam: Vec<(&SpatialEntry, f64)> = Vec::new();
-    let mut out_beam: Vec<(&SpatialEntry, f64)> = Vec::new();
+    let mut best_in_beam: Option<(&SpatialEntry, f64)> = None;
+    let mut best_out_beam: Option<(&SpatialEntry, f64)> = None;
 
     for &c in candidates {
         if !is_in_direction(&source.rect, &c.rect, direction) {
             continue;
         }
         let s = score(&source.rect, &c.rect, direction);
-        if is_in_beam(&source.rect, &c.rect, direction) {
-            in_beam.push((c, s));
+        let bucket = if is_in_beam(&source.rect, &c.rect, direction) {
+            &mut best_in_beam
         } else {
-            out_beam.push((c, s));
+            &mut best_out_beam
+        };
+        match bucket {
+            Some((_, bs)) if *bs <= s => {}
+            _ => *bucket = Some((c, s)),
         }
     }
 
-    // In-beam candidates are always preferred over out-of-beam.
-    let pool = if in_beam.is_empty() {
-        &out_beam
-    } else {
-        &in_beam
-    };
-
-    pool.iter()
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(entry, _)| entry.key.clone())
+    match (best_in_beam, best_out_beam) {
+        (Some((in_entry, _)), Some((out_entry, _))) => {
+            if in_beam_dominates(&source.rect, &in_entry.rect, &out_entry.rect, direction) {
+                Some(in_entry.key.clone())
+            } else {
+                Some(out_entry.key.clone())
+            }
+        }
+        (Some((entry, _)), None) | (None, Some((entry, _))) => Some(entry.key.clone()),
+        (None, None) => None,
+    }
 }
 
 /// First: topmost-leftmost candidate, sorted by (y, x).
@@ -693,6 +750,102 @@ mod tests {
         assert_eq!(
             find_target(center, &cands, Direction::RowEnd).as_deref(),
             Some("cell-2-1"),
+        );
+    }
+
+    // --- Cross-region navigation (beam-starvation regression) ---
+    //
+    // These tests exercise the scenario described in the kanban task: a
+    // source sits in one screen region (LeftNav, perspective tab bar),
+    // the "natural" next focus target sits in another region with no
+    // perpendicular-axis overlap, and the pool-split culling incorrectly
+    // kept focus pinned to a far-away in-beam candidate. The fix widens
+    // the choice so dramatically closer out-of-beam candidates can win.
+
+    #[test]
+    fn right_from_leftnav_reaches_grid_row_selector_when_no_in_beam_candidate_closer() {
+        // LeftNav sits in the top-left corner, 40px tall near the top.
+        let leftnav_btn = entry("leftnav-board", 0.0, 100.0, 40.0, 40.0);
+        // A far-off in-beam candidate that is vertically overlapping the
+        // LeftNav button (shares a sliver of y-range) but is pushed all
+        // the way to the right — a noisy toolbar icon, say.
+        //
+        // Its x starts at 900, well beyond the row selector at x=60.
+        // Previously this "wins" over the closer out-of-beam row
+        // selector because `in_beam` is non-empty → pool-split culls the
+        // row selector. With the fix it must lose: the row selector's
+        // *far edge* (x=80) is closer than this button's *near edge*
+        // (x=900), so the out-of-beam candidate dominates.
+        let far_in_beam = entry("far-toolbar", 900.0, 110.0, 40.0, 20.0);
+        // Row selector: the westernmost grid-body cell, sitting below
+        // the LeftNav button with zero y-overlap.
+        let row_selector = entry("row-selector-0", 60.0, 200.0, 20.0, 36.0);
+
+        let cands = vec![&far_in_beam, &row_selector];
+        assert_eq!(
+            find_target(&leftnav_btn, &cands, Direction::Right).as_deref(),
+            Some("row-selector-0"),
+            "far in-beam candidate must not starve close out-of-beam row selector"
+        );
+    }
+
+    #[test]
+    fn right_from_leftnav_prefers_in_beam_candidate_when_available() {
+        // Same LeftNav source as above, but this time the in-beam
+        // candidate is a reasonable neighbour (close to the right, same
+        // vertical band). It must still win over a dramatically more
+        // distant out-of-beam candidate.
+        let leftnav_btn = entry("leftnav-board", 0.0, 100.0, 40.0, 40.0);
+        // Close in-beam candidate — 50 px to the right, overlapping y.
+        let close_in_beam = entry("close-in-beam", 90.0, 110.0, 40.0, 20.0);
+        // Far out-of-beam candidate — below and farther right.
+        let far_out_beam = entry("far-out-beam", 500.0, 400.0, 20.0, 20.0);
+
+        let cands = vec![&close_in_beam, &far_out_beam];
+        assert_eq!(
+            find_target(&leftnav_btn, &cands, Direction::Right).as_deref(),
+            Some("close-in-beam"),
+            "in-beam candidate must win when it is a reasonable neighbour"
+        );
+    }
+
+    #[test]
+    fn left_from_grid_row_selector_reaches_leftnav() {
+        // Symmetry: starting from the row selector (wedge in the grid
+        // body), Left must reach back onto the LeftNav button even
+        // though the LeftNav button has no vertical overlap.
+        let row_selector = entry("row-selector-0", 60.0, 200.0, 20.0, 36.0);
+        let leftnav_btn = entry("leftnav-board", 0.0, 100.0, 40.0, 40.0);
+        // A noisy in-beam distractor to the left (e.g. a sidebar cell
+        // that happens to overlap y but is very far horizontally).
+        let far_in_beam_left = entry("far-distractor", -900.0, 210.0, 40.0, 20.0);
+
+        let cands = vec![&leftnav_btn, &far_in_beam_left];
+        assert_eq!(
+            find_target(&row_selector, &cands, Direction::Left).as_deref(),
+            Some("leftnav-board"),
+            "close out-of-beam LeftNav button must beat far in-beam distractor"
+        );
+    }
+
+    #[test]
+    fn down_from_perspective_bar_reaches_grid_header_when_no_horizontal_overlap() {
+        // Perspective tab bar sits at the top, away from the first
+        // content scope which begins further down and shifted right —
+        // no horizontal overlap with the tab bar button.
+        let tab_btn = entry("perspective-tab-active", 0.0, 40.0, 120.0, 30.0);
+        // Far in-beam candidate (horizontally overlaps tab_btn, but
+        // way down the screen).
+        let far_in_beam_down = entry("far-footer", 50.0, 2000.0, 40.0, 20.0);
+        // Grid header sits just below the tab bar, shifted to the
+        // right (no horizontal overlap with tab_btn's x=[0,120]).
+        let grid_header = entry("grid-header", 300.0, 80.0, 200.0, 30.0);
+
+        let cands = vec![&far_in_beam_down, &grid_header];
+        assert_eq!(
+            find_target(&tab_btn, &cands, Direction::Down).as_deref(),
+            Some("grid-header"),
+            "close out-of-beam grid header must beat far in-beam footer"
         );
     }
 

@@ -29,6 +29,7 @@ swissarmyhammer-views = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-spatial-nav = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }
 

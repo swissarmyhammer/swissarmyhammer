@@ -6,10 +6,23 @@ import {
   type SetStateAction,
 } from "react";
 
-/** The grid's interaction mode: normal navigation, edit a cell, or visual selection. */
+/**
+ * The grid's interaction mode.
+ *
+ * - `"normal"` — navigation only; `h`/`j`/`k`/`l` move spatial focus
+ *   between cells and no cell-local editor is open.
+ * - `"edit"` — the cursor cell's editor is active; keystrokes land in
+ *   the editor instead of driving navigation.
+ * - `"visual"` — a rectangular range is being selected; movement keys
+ *   extend `GridSelection.head` while the anchor stays pinned.
+ */
 export type GridMode = "normal" | "edit" | "visual";
 
-/** A cursor position in the grid, referencing a single cell by row and column. */
+/**
+ * A cursor position in the grid, referencing a single cell by its
+ * zero-based data row index and column index. Not a pixel coordinate —
+ * the DOM rect for the cell is looked up separately.
+ */
 export interface GridCursor {
   row: number;
   col: number;
@@ -24,6 +37,7 @@ export interface GridSelection {
   head: GridCursor;
 }
 
+/** Options accepted by `useGrid`: grid dimensions and an externally-derived cursor. */
 export interface UseGridOptions {
   rowCount: number;
   colCount: number;
@@ -43,6 +57,11 @@ export interface UseGridOptions {
   cursor?: GridCursor | null;
 }
 
+/**
+ * Return shape of `useGrid`: the derived cursor, current mode, active
+ * selection, plus mode/selection control callbacks. Callers destructure
+ * only what they need; identities are stable across re-renders.
+ */
 export interface UseGridReturn {
   /**
    * Current cursor position derived from spatial focus, or `null` when
@@ -66,25 +85,7 @@ export interface UseGridReturn {
   } | null;
 }
 
-/**
- * Hook for managing grid mode (normal/edit/visual) and visual selection.
- *
- * The cursor is a pure derivation of spatial focus — it is never an
- * independent source of truth. Callers pass the cursor position they
- * compute from `useFocusedMoniker()` via `options.cursor`. When spatial
- * focus is on a non-cell target (or nothing), callers pass `null` and
- * no row/column is treated as the cursor. This guarantees the grid
- * never shows a "ghost" cursor highlight that disagrees with the actual
- * focused element.
- *
- * Navigation between cells is driven by Rust spatial nav on each cell's
- * `FocusScope`; this hook only manages mode (normal/edit/visual) and the
- * visual-mode selection range — both of which are orthogonal to the
- * cursor position.
- *
- * @param options - Grid dimensions and the externally-derived cursor
- * @returns Grid state and mode/selection control functions
- */
+/** Clamp helpers bounded by the grid's `rowCount` and `colCount`. */
 function useClampers(rowCount: number, colCount: number) {
   const clampRow = useCallback(
     (r: number) => Math.max(0, Math.min(r, rowCount - 1)),
@@ -174,6 +175,37 @@ function useExpandSelection(
   );
 }
 
+function useSelectedRange(selection: GridSelection | null) {
+  return useCallback(() => {
+    if (!selection) return null;
+    return {
+      startRow: Math.min(selection.anchor.row, selection.head.row),
+      endRow: Math.max(selection.anchor.row, selection.head.row),
+      startCol: Math.min(selection.anchor.col, selection.head.col),
+      endCol: Math.max(selection.anchor.col, selection.head.col),
+    };
+  }, [selection]);
+}
+
+/**
+ * Hook for managing grid mode (normal/edit/visual) and visual selection.
+ *
+ * The cursor is a pure derivation of spatial focus — it is never an
+ * independent source of truth. Callers pass the cursor position they
+ * compute from `useFocusedMoniker()` via `options.cursor`. When spatial
+ * focus is on a non-cell target (or nothing), callers pass `null` and
+ * no row/column is treated as the cursor. This guarantees the grid
+ * never shows a "ghost" cursor highlight that disagrees with the actual
+ * focused element.
+ *
+ * Navigation between cells is driven by Rust spatial nav on each cell's
+ * `FocusScope`; this hook only manages mode (normal/edit/visual) and the
+ * visual-mode selection range — both of which are orthogonal to the
+ * cursor position.
+ *
+ * @param options - Grid dimensions and the externally-derived cursor
+ * @returns Grid state and mode/selection control functions
+ */
 export function useGrid({
   rowCount,
   colCount,
@@ -183,7 +215,7 @@ export function useGrid({
   const [selection, setSelection] = useState<GridSelection | null>(null);
   const cursor = externalCursor ?? null;
   const { clampRow, clampCol } = useClampers(rowCount, colCount);
-  const { enterEdit, exitEdit, enterVisual, exitVisual } = useModeControls(
+  const modeControls = useModeControls(
     rowCount,
     colCount,
     cursor,
@@ -196,39 +228,17 @@ export function useGrid({
     clampCol,
     setSelection,
   );
-
-  const getSelectedRange = useCallback(() => {
-    if (!selection) return null;
-    return {
-      startRow: Math.min(selection.anchor.row, selection.head.row),
-      endRow: Math.max(selection.anchor.row, selection.head.row),
-      startCol: Math.min(selection.anchor.col, selection.head.col),
-      endCol: Math.max(selection.anchor.col, selection.head.col),
-    };
-  }, [selection]);
+  const getSelectedRange = useSelectedRange(selection);
 
   return useMemo(
     () => ({
       cursor,
       mode,
       selection,
-      enterEdit,
-      exitEdit,
-      enterVisual,
-      exitVisual,
+      ...modeControls,
       expandSelection,
       getSelectedRange,
     }),
-    [
-      cursor,
-      mode,
-      selection,
-      enterEdit,
-      exitEdit,
-      enterVisual,
-      exitVisual,
-      expandSelection,
-      getSelectedRange,
-    ],
+    [cursor, mode, selection, modeControls, expandSelection, getSelectedRange],
   );
 }

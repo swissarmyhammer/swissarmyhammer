@@ -1,81 +1,46 @@
 /**
- * Board-view spatial navigation contract tests.
+ * Board-view spatial navigation — React/dispatch boundary tests.
  *
- * Codifies the h/j/k/l navigation behavior expected between cards on a
- * 3-column × 3-card board:
- *
- * - `j`/`k` moves within a column (to the card below / above)
- * - `h`/`l` moves between columns (to the nearest card at the same
- *   vertical level)
- * - At column or row edges, nav clamps — no wrap-around
- *
- * Manual testing confirms this works today; no automated test existed
- * before this file. The corresponding kanban task
- * (01KPNWNEN1A9VV67A0XPC2PJP9) calls out that a regression is one bad
- * edit away — these tests lock the contract in so a future change
- * that breaks board nav fails fast.
- *
- * ## Test harness
- *
- * Uses the in-process `SpatialStateShim` via `setupSpatialShim()` —
- * no tauri-driver, no external Tauri backend. The shim is
- * behavior-equivalent to the Rust `SpatialState` (verified by
- * `spatial-shim-parity.test.ts`), so a pass here is a pass for the
- * real navigation engine.
- *
- * See `spatial-board-fixture.tsx` for the fixture and
- * `spatial-nav-canonical.test.tsx` for the grid-equivalent pattern.
+ * Asserts the React half of the h/j/k/l contract: keypresses flow
+ * through `dispatch_command` and scripted backend responses flip
+ * `data-focused` on the target card. The algorithm that picks the
+ * next card is Rust's concern and is covered by
+ * `swissarmyhammer-spatial-nav` unit tests.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-// Vitest hoists `vi.mock(...)` to the top of this file; the factories
-// live in `setup-spatial-shim` so tests only need to copy this
-// boilerplate to route `@tauri-apps/api/*` calls into the shim.
 vi.mock("@tauri-apps/api/core", async () => {
-  const { tauriCoreMock } = await import("./setup-spatial-shim");
+  const { tauriCoreMock } = await import("./setup-tauri-stub");
   return tauriCoreMock();
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const { tauriEventMock } = await import("./setup-spatial-shim");
+  const { tauriEventMock } = await import("./setup-tauri-stub");
   return tauriEventMock();
 });
 vi.mock("@tauri-apps/api/window", async () => {
-  const { tauriWindowMock } = await import("./setup-spatial-shim");
+  const { tauriWindowMock } = await import("./setup-tauri-stub");
   return tauriWindowMock();
 });
 vi.mock("@tauri-apps/api/webviewWindow", async () => {
-  const { tauriWebviewWindowMock } = await import("./setup-spatial-shim");
+  const { tauriWebviewWindowMock } = await import("./setup-tauri-stub");
   return tauriWebviewWindowMock();
 });
 vi.mock("@tauri-apps/plugin-log", async () => {
-  const { tauriPluginLogMock } = await import("./setup-spatial-shim");
+  const { tauriPluginLogMock } = await import("./setup-tauri-stub");
   return tauriPluginLogMock();
 });
 
-import {
-  setupSpatialShim,
-  type SpatialShimHandles,
-} from "./setup-spatial-shim";
+import { setupTauriStub, type TauriStubHandles } from "./setup-tauri-stub";
 import {
   AppWithBoardFixture,
   FIXTURE_CARD_MONIKERS,
 } from "./spatial-board-fixture";
 
-/** Poll timeout for `data-focused` attribute assertions (ms). */
 const FOCUS_POLL_TIMEOUT = 500;
 
-/**
- * Wait for the DOM element's `data-focused` attribute to flip to
- * `"true"`.
- *
- * The spatial shim is synchronous but React claim callbacks flush via
- * state updates, so assertions need a short poll window. 500ms is
- * well above typical flush latency in vitest-browser without tying CI
- * up on failure cases.
- */
 async function expectFocused(el: HTMLElement): Promise<void> {
   await expect
     .poll(() => el.getAttribute("data-focused"), {
@@ -84,100 +49,100 @@ async function expectFocused(el: HTMLElement): Promise<void> {
     .toBe("true");
 }
 
-/** Fixture shim handles — fresh per test, captured by `beforeEach`. */
-let handles: SpatialShimHandles;
+describe("board card navigation — React/dispatch boundary", () => {
+  let handles: TauriStubHandles;
 
-describe("board card navigation", () => {
   beforeEach(() => {
-    handles = setupSpatialShim();
+    handles = setupTauriStub();
   });
 
-  it("j moves focus from card(col 1, row 1) to card(col 1, row 2)", async () => {
+  it("click on a card dispatches spatial_focus and flips data-focused", async () => {
     const screen = await render(<AppWithBoardFixture />);
     const card11 = screen
       .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[0][0]}`)
       .element() as HTMLElement;
-    const card12 = screen
-      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[0][1]}`)
+
+    await userEvent.click(card11);
+    await expectFocused(card11);
+
+    // The click must have invoked `spatial_focus` with a key — the
+    // React → Tauri contract the stub records.
+    const focusCalls = handles
+      .invocations()
+      .filter((i) => i.cmd === "spatial_focus");
+    expect(focusCalls.length).toBeGreaterThan(0);
+  });
+
+  it("pressing j dispatches nav.down and scripted response flips the next card", async () => {
+    const screen = await render(<AppWithBoardFixture />);
+    const card11Mk = FIXTURE_CARD_MONIKERS[0][0];
+    const card12Mk = FIXTURE_CARD_MONIKERS[0][1];
+    const card11 = screen
+      .getByTestId(`data-moniker:${card11Mk}`)
       .element() as HTMLElement;
+    const card12 = screen
+      .getByTestId(`data-moniker:${card12Mk}`)
+      .element() as HTMLElement;
+
+    handles.scriptResponse("dispatch_command:nav.down", () =>
+      handles.payloadForFocusMove(card11Mk, card12Mk),
+    );
 
     await userEvent.click(card11);
     await expectFocused(card11);
 
     await userEvent.keyboard("j");
     await expectFocused(card12);
+    expect(handles.dispatchedCommands().some((d) => d.cmd === "nav.down")).toBe(
+      true,
+    );
   });
 
-  it("l moves focus across columns at the same vertical level", async () => {
+  it("pressing l dispatches nav.right and scripted response flips the next card", async () => {
     const screen = await render(<AppWithBoardFixture />);
+    const card12Mk = FIXTURE_CARD_MONIKERS[0][1];
+    const card22Mk = FIXTURE_CARD_MONIKERS[1][1];
     const card12 = screen
-      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[0][1]}`)
+      .getByTestId(`data-moniker:${card12Mk}`)
       .element() as HTMLElement;
     const card22 = screen
-      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[1][1]}`)
+      .getByTestId(`data-moniker:${card22Mk}`)
       .element() as HTMLElement;
+
+    handles.scriptResponse("dispatch_command:nav.right", () =>
+      handles.payloadForFocusMove(card12Mk, card22Mk),
+    );
 
     await userEvent.click(card12);
     await expectFocused(card12);
 
     await userEvent.keyboard("l");
     await expectFocused(card22);
+    expect(
+      handles.dispatchedCommands().some((d) => d.cmd === "nav.right"),
+    ).toBe(true);
   });
 
-  it("j at the bottom card of a column stays put (clamped)", async () => {
+  it("pressing j with no scripted response (backend clamped) keeps focus put", async () => {
     const screen = await render(<AppWithBoardFixture />);
-    const card23 = screen
-      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[1][2]}`)
+    const cardBottomMk = FIXTURE_CARD_MONIKERS[1][2];
+    const cardBottom = screen
+      .getByTestId(`data-moniker:${cardBottomMk}`)
       .element() as HTMLElement;
 
-    await userEvent.click(card23);
-    await expectFocused(card23);
+    // No scriptResponse for nav.down — the stub emits no
+    // focus-changed event, modeling a clamp at the bottom row.
 
-    // No card below `card-2-3`; `nav.down` from the bottom of a column
-    // must NOT wrap to the top of that column or jump to another column.
-    // Focus must remain on card-2-3.
+    await userEvent.click(cardBottom);
+    await expectFocused(cardBottom);
+
     await userEvent.keyboard("j");
 
-    // Negative assertion: confirm focus has NOT moved. The `SpatialStateShim`
-    // is strictly synchronous — `invoke("spatial_navigate", ...)` resolves
-    // before this line runs, so if the engine had picked a candidate, the
-    // subsequent emit + React state update would already be in flight.
-    // The fixed wait is purely to let any such React state flush land; it
-    // is bounded by React's commit loop, not by spatial nav latency, so it
-    // stays valid even if the engine later gets slower. Parity is locked
-    // down by `spatial-shim-parity.test.ts`.
-    await new Promise((r) => setTimeout(r, 100));
-    expect(handles.focusedMoniker()).toBe(FIXTURE_CARD_MONIKERS[1][2]);
-    expect(card23.getAttribute("data-focused")).toBe("true");
-  });
-
-  it("h at the leftmost column does NOT wrap to the rightmost column", async () => {
-    const screen = await render(<AppWithBoardFixture />);
-    const card12 = screen
-      .getByTestId(`data-moniker:${FIXTURE_CARD_MONIKERS[0][1]}`)
-      .element() as HTMLElement;
-
-    await userEvent.click(card12);
-    await expectFocused(card12);
-
-    await userEvent.keyboard("h");
-
-    // Same sync-shim rationale as the clamp test above: the shim resolves
-    // synchronously inside `userEvent.keyboard`, so any would-be wrap
-    // navigation would already be queued as a React state update. The
-    // 100ms buffer only covers the React flush, not spatial nav latency.
-    await new Promise((r) => setTimeout(r, 100));
-
-    // The engine may either clamp (focus stays on card-1-2) or cross a
-    // spatial boundary into a non-card moniker (e.g. left nav) — but it
-    // MUST NOT wrap around to a card in column 3. The contract here is
-    // "no wrap", not "must stay put".
-    //
-    // `focused` may be null (focus cleared) or any non-column-3 moniker —
-    // guard the regex check so `toMatch` doesn't throw on a null value.
-    const focused = handles.focusedMoniker();
-    if (focused !== null) {
-      expect(focused).not.toMatch(/^task:card-3-/);
-    }
+    // Dispatch fired …
+    expect(handles.dispatchedCommands().some((d) => d.cmd === "nav.down")).toBe(
+      true,
+    );
+    // … but focus stayed put because no focus-changed event landed.
+    expect(cardBottom.getAttribute("data-focused")).toBe("true");
   });
 });

@@ -175,13 +175,14 @@ function InspectorBody({ onClose }: InspectorBodyProps) {
  *
  * Usage:
  * ```tsx
- * setupSpatialShim();
+ * setupTauriStub();
  * const screen = await render(<AppWithInspectorFixture />);
  * const card = screen.getByTestId("fixture-card");
  * await userEvent.dblClick(card); // opens inspector
  * ```
  *
- * All Tauri IPC goes through the shim — no real backend involvement.
+ * All Tauri IPC goes through the boundary stub — no real backend
+ * involvement.
  * The inspector mounts/unmounts purely via React state, driven by
  * `ui.inspect` (open) and `app.dismiss` (close).
  *

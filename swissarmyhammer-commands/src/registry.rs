@@ -186,6 +186,7 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
         ),
         ("file", include_str!("../builtin/commands/file.yaml")),
         ("drag", include_str!("../builtin/commands/drag.yaml")),
+        ("nav", include_str!("../builtin/commands/nav.yaml")),
         (
             "perspective",
             include_str!("../builtin/commands/perspective.yaml"),
@@ -420,11 +421,12 @@ mod tests {
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
+        // nav: up, down, left, right, first, last, rowStart, rowEnd = 8
         // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 62);
+        assert_eq!(registry.all_commands().len(), 70);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

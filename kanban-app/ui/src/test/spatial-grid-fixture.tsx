@@ -8,7 +8,7 @@
  * requiring the AppShell's UIState/AppMode/Schema providers. Tests render
  * `<AppWithGridFixture />` once, then drive navigation through real DOM
  * clicks and keyboard events; the mocked `invoke()` routes every spatial
- * command into the `SpatialStateShim` via `setupSpatialShim()`.
+ * command through the Tauri-boundary stub in `setup-tauri-stub.ts`.
  *
  * ## Shape
  *
@@ -289,12 +289,13 @@ function FixtureHeaderDiv({
  *
  * Usage:
  * ```tsx
- * const { shim } = setupSpatialShim();
+ * const handles = setupTauriStub();
  * const screen = await render(<AppWithGridFixture />);
  * const cell = screen.getByTestId("data-moniker:field:tag:tag-0.tag_name");
  * ```
  *
- * All Tauri IPC goes through the shim — no real backend involvement.
+ * All Tauri IPC goes through the boundary stub — no real backend
+ * involvement.
  */
 export function AppWithGridFixture() {
   return (

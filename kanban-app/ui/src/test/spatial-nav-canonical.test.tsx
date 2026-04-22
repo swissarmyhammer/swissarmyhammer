@@ -1,128 +1,102 @@
 /**
- * Canonical vitest-browser test for spatial navigation, as specified by the
- * test-harness kanban task.
+ * Canonical vitest-browser test for spatial navigation at the
+ * React/Tauri boundary.
  *
- * This file is the first failing test in the TDD ladder for cell-level
- * spatial navigation. Per the task description:
+ * ## Purpose
  *
- * > MUST fail against HEAD today because cells aren't FocusScopes yet.
+ * This file pins down the React-side half of the spatial-nav
+ * round-trip:
  *
- * When a sibling task wraps each DataTable cell in a `FocusScope`, this
- * test flips from red to green — demonstrating that the harness itself
- * is not the bottleneck; the production grid just needs to register
- * cells as spatial entries.
+ * 1. Clicking a `FocusScope`-wrapped cell invokes
+ *    `spatial_focus(key)` with the cell's key and flips its
+ *    `data-focused` attribute once the backend emits `focus-changed`.
+ * 2. Pressing `j` dispatches `nav.down` via `dispatch_command`. The
+ *    stub then simulates the backend emitting `focus-changed` with
+ *    the next cell's key and the next cell's `data-focused` flips.
  *
- * ## What the test exercises
- *
- * 1. **React render**: real `EntityFocusProvider` + `FocusLayer` +
- *    `CommandScopeProvider` tree.
- * 2. **Click → focus**: `userEvent.click()` drives a real DOM click,
- *    which bubbles to `FocusScope`'s click handler and calls
- *    `invoke("spatial_focus", { key })`. The shim handles this
- *    synchronously, emits `focus-changed`, and the claim callback
- *    flips `data-focused="true"` on the focused scope.
- * 3. **Key → nav**: `userEvent.keyboard("j")` dispatches a real
- *    keydown. The production `createKeyHandler` resolves `j` →
- *    `nav.down` (vim mode), which calls `broadcastNavCommand("nav.down")`
- *    which `invoke`s `spatial_navigate`. The shim runs the beam test
- *    and emits a second `focus-changed` event.
- *
- * ## Why the test fails today
- *
- * Cells in `spatial-grid-fixture.tsx` are plain `<div>`s, not
- * `FocusScope`s, matching production's `DataTableRow` where only the
- * row is a `FocusScope`. So:
- *
- * - Clicking a cell bubbles to the *row* `FocusScope`, which focuses
- *   the row's entity moniker (`tag:tag-0`), not the cell's field moniker.
- * - `data-focused="true"` lands on the row, not the cell — so the
- *   first assertion on the cell's `data-focused` times out.
- *
- * When cells become `FocusScope`s, the click focuses the cell's field
- * moniker, `j` triggers `nav.down`, the shim picks the cell below by
- * beam test, and both assertions pass.
- *
- * ## Infrastructure this test proves out for sibling tasks
- *
- * Any future spatial-nav scenario test follows the same pattern:
- * `setupSpatialShim()` → `render(fixture)` → DOM interaction →
- * assert on `data-focused` and/or the shim state. No WebDriver, no
- * tauri-driver, no external processes.
+ * The algorithm that chooses "which cell is next" lives entirely in
+ * Rust (`swissarmyhammer-spatial-nav`). Tests here do NOT compute
+ * that answer — they script "the backend says next is cell (1,0)"
+ * and assert the UI reacts.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-// Wire the Tauri API mocks into the shim dispatcher. `vi.mock` calls
+// Wire the Tauri API mocks to the thin boundary stub. `vi.mock` calls
 // must appear literally in this file so vitest's hoist catches them —
-// the factories live in `setup-spatial-shim` so new tests can copy
-// this boilerplate without duplicating the dispatcher logic.
+// the factories live in `setup-tauri-stub` so new tests can copy this
+// boilerplate without duplicating the dispatcher logic.
 vi.mock("@tauri-apps/api/core", async () => {
-  const { tauriCoreMock } = await import("./setup-spatial-shim");
+  const { tauriCoreMock } = await import("./setup-tauri-stub");
   return tauriCoreMock();
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const { tauriEventMock } = await import("./setup-spatial-shim");
+  const { tauriEventMock } = await import("./setup-tauri-stub");
   return tauriEventMock();
 });
 vi.mock("@tauri-apps/api/window", async () => {
-  const { tauriWindowMock } = await import("./setup-spatial-shim");
+  const { tauriWindowMock } = await import("./setup-tauri-stub");
   return tauriWindowMock();
 });
 vi.mock("@tauri-apps/api/webviewWindow", async () => {
-  const { tauriWebviewWindowMock } = await import("./setup-spatial-shim");
+  const { tauriWebviewWindowMock } = await import("./setup-tauri-stub");
   return tauriWebviewWindowMock();
 });
 vi.mock("@tauri-apps/plugin-log", async () => {
-  const { tauriPluginLogMock } = await import("./setup-spatial-shim");
+  const { tauriPluginLogMock } = await import("./setup-tauri-stub");
   return tauriPluginLogMock();
 });
 
-import { setupSpatialShim } from "./setup-spatial-shim";
+import { setupTauriStub, type TauriStubHandles } from "./setup-tauri-stub";
 import {
   AppWithGridFixture,
   FIXTURE_CELL_MONIKERS,
 } from "./spatial-grid-fixture";
 
-describe("spatial navigation — canonical j test", () => {
+describe("spatial navigation — React/dispatch boundary (canonical)", () => {
+  let handles: TauriStubHandles;
+
   beforeEach(() => {
-    setupSpatialShim();
+    handles = setupTauriStub();
   });
 
-  // Originally authored as `it.fails` — at the time, cells in the
-  // fixture were plain `<div>`s and the canonical `j` test was RED.
-  // With cell-level `FocusScope`s now in place (see
-  // `spatial-nav-grid.test.tsx` for the full h/j/k/l coverage), this
-  // test flipped to green and must run as a plain `it`; leaving
-  // `.fails` would make vitest error with "test passed unexpectedly".
-  it("grid: pressing 'j' from cell (0,0) moves focus to cell (1,0)", async () => {
+  it("pressing 'j' from cell (0,0) dispatches nav.down and flips data-focused on (1,0)", async () => {
     const screen = await render(<AppWithGridFixture />);
 
-    const cell00Moniker = FIXTURE_CELL_MONIKERS[0][0]; // field:tag:tag-0.tag_name
-    const cell10Moniker = FIXTURE_CELL_MONIKERS[1][0]; // field:tag:tag-1.tag_name
-
+    const cell00Moniker = FIXTURE_CELL_MONIKERS[0][0];
+    const cell10Moniker = FIXTURE_CELL_MONIKERS[1][0];
     const cell00 = screen.getByTestId(`data-moniker:${cell00Moniker}`);
     const cell10 = screen.getByTestId(`data-moniker:${cell10Moniker}`);
 
-    await userEvent.click(cell00);
-    // Use `expect.poll` with a tight (200ms) timeout — the shim is
-    // synchronous and React renders flush well under this budget when
-    // cells ARE `FocusScope`s. When they aren't, the attribute never
-    // appears and the poll fails quickly instead of waiting for the
-    // default multi-second timeout to elapse. Keeps this red test from
-    // slowing CI.
+    // Script the backend's response to nav.down: focus moves from
+    // cell (0,0) to cell (1,0). This is the algorithm's concern; the
+    // stub just declares what Rust would have decided.
+    handles.scriptResponse("dispatch_command:nav.down", () =>
+      handles.payloadForFocusMove(cell00Moniker, cell10Moniker),
+    );
+
+    await userEvent.click(cell00.element());
+    // spatial_focus → focus-changed round-trip flips data-focused.
     await expect
       .poll(() => cell00.element().getAttribute("data-focused"), {
-        timeout: 200,
+        timeout: 300,
       })
       .toBe("true");
 
     await userEvent.keyboard("j");
     await expect
       .poll(() => cell10.element().getAttribute("data-focused"), {
-        timeout: 200,
+        timeout: 300,
       })
       .toBe("true");
+    // The origin cell loses its decoration on the same event.
+    expect(cell00.element().getAttribute("data-focused")).toBe(null);
+
+    // And the React → Tauri boundary fired the expected command.
+    expect(handles.dispatchedCommands().some((d) => d.cmd === "nav.down")).toBe(
+      true,
+    );
   });
 });

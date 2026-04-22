@@ -478,6 +478,77 @@ pub mod debug_commands {
     }
 }
 
+/// Per-window [`SpatialNavigator`] implementation for the Tauri binary.
+///
+/// Resolves the `SpatialState` for the named window via
+/// [`AppState::spatial_state_for`], reads its current focused key as the
+/// navigation source, applies `SpatialState::navigate`, and emits a
+/// `focus-changed` event scoped to that window when focus moves. This is
+/// the production impl of the `nav.*` command path:
+///
+/// ```text
+/// keypress → dispatch_command(nav.down) → NavigateCmd(Direction::Down)
+///     → TauriSpatialNavigator::navigate("main", Down)
+///     → spatial_state.navigate(focused_key, Down)
+///     → emit_focus_changed → React store → FocusScope re-render
+/// ```
+///
+/// Unlike the standalone `spatial_navigate` Tauri command (kept for
+/// direct JS-driven invokes via `syncSpatialFocus`), the navigator reads
+/// the focused key from `SpatialState` itself — React never has to pass
+/// it through. Rust is the authoritative owner of focus and can always
+/// find its own source without a round-trip.
+pub(crate) struct TauriSpatialNavigator {
+    app: tauri::AppHandle,
+}
+
+impl TauriSpatialNavigator {
+    /// Build a navigator bound to the given Tauri `AppHandle`.
+    ///
+    /// The handle resolves both the per-window `SpatialState` (via
+    /// `app.state::<AppState>()`) and the per-window event emitter
+    /// (`app.get_webview_window(label)`), so one handle is enough for the
+    /// entire navigator surface.
+    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[async_trait::async_trait]
+impl swissarmyhammer_kanban::spatial::SpatialNavigator for TauriSpatialNavigator {
+    async fn navigate(
+        &self,
+        window_label: &str,
+        direction: swissarmyhammer_spatial_nav::Direction,
+    ) -> Result<Option<String>, String> {
+        use tauri::Manager;
+        let state = self.app.state::<AppState>();
+        let spatial_state = state.spatial_state_for(window_label).await;
+        // Rust owns focus — read the source key from SpatialState itself.
+        // This removes the last place React had to pass the focused key
+        // back to Rust (`spatial_navigate` still takes it for the
+        // `syncSpatialFocus` click path).
+        let from_key = spatial_state.focused_key();
+        match spatial_state.navigate(from_key.as_deref(), direction)? {
+            Some(event) => {
+                // Emit scoped to the invoking window — matches how the
+                // standalone `spatial_navigate` Tauri command emits, so
+                // the React listener on `getCurrentWebviewWindow()` fires
+                // for this window only.
+                if let Some(window) = self.app.get_webview_window(window_label) {
+                    use tauri::Emitter;
+                    let _ = window.emit_to(window.label(), "focus-changed", &event);
+                }
+                let next_moniker = event
+                    .next_key
+                    .and_then(|k| spatial_state.get(&k).map(|e| e.moniker));
+                Ok(next_moniker)
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 /// Build the kanban-app Tauri `invoke_handler` from a comma-separated list of
 /// command idents, automatically appending the debug-only `__spatial_dump`
 /// command in debug builds and omitting it entirely in release builds.

@@ -13,7 +13,7 @@ import {
   useParentFocusScope,
 } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
-import { CommandScopeProvider } from "@/lib/command-scope";
+import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
@@ -1034,22 +1034,27 @@ describe("spatial focus integration", () => {
     });
   });
 
-  it("navOverride end-to-end: broadcastNavCommand routes override target through focus-changed", async () => {
-    // This test exercises the full navOverride path end-to-end:
+  it("navOverride end-to-end: nav.right dispatch routes override target through focus-changed", async () => {
+    // This test exercises the full navOverride path end-to-end through
+    // the unified command dispatch pipeline:
     //   React (mount FocusScope with navOverride)
     //   → Rust spatial_register (overrides payload captured)
     //   → user sets focus on the source scope
-    //   → React broadcastNavCommand("nav.right")
-    //   → Rust spatial_navigate invoked with source key + "Right"
-    //   → Rust would apply the override and emit focus-changed(next_key = target)
-    //     (simulated here by firing the event directly, since Rust is not in scope
-    //      for this harness)
+    //   → React useDispatchCommand("nav.right") → invoke("dispatch_command")
+    //   → Rust NavigateCmd reads SpatialState.focused_key, calls navigate()
+    //     (simulated here since Rust is not in scope for this harness)
+    //   → Rust applies the override and emits focus-changed(next_key = target)
     //   → React focus-changed listener routes back to focused moniker + claim flip
     //
-    // The Rust override *selection* is covered by unit tests in spatial_state.rs;
-    // this test proves React is wired such that if Rust returns the override
-    // target, the UI picks it up on both the focus-state and the claim
-    // highlight path.
+    // The Rust override *selection* is covered by unit tests in
+    // spatial_state.rs; this test proves React is wired such that if Rust
+    // returns the override target, the UI picks it up on both the
+    // focus-state and the claim highlight path.
+    //
+    // Critically: there is NO JS-side broadcaster in this graph. The
+    // `broadcastNavCommand` side-channel was deleted in favor of routing
+    // `nav.*` through the same `dispatch_command` pipeline the rest of
+    // the command surface uses.
     // Production `entity-focus-context` listens for `focus-changed` via
     // `getCurrentWebviewWindow().listen()` so listeners are scoped to this
     // window. Capture the handler via the shared webviewWindow mock.
@@ -1062,13 +1067,17 @@ describe("spatial focus integration", () => {
       return Promise.resolve(() => {});
     }) as unknown as () => Promise<() => void>);
 
-    // Helper that exposes broadcastNavCommand so the test can drive it.
-    function NavBroadcaster() {
-      const { broadcastNavCommand } = useEntityFocus();
+    // Helper that dispatches nav.right through the command pipeline — no
+    // JS-side broadcaster, just a useDispatchCommand call like
+    // production's `createKeyHandler` would make after a `l` keypress.
+    function NavDispatcher() {
+      const dispatch = useDispatchCommand();
       return (
         <button
-          data-testid="broadcast-right"
-          onClick={() => broadcastNavCommand("nav.right")}
+          data-testid="dispatch-right"
+          onClick={() => {
+            dispatch("nav.right").catch(() => {});
+          }}
         />
       );
     }
@@ -1077,7 +1086,7 @@ describe("spatial focus integration", () => {
       <EntityFocusProvider>
         <FocusLayer name="test">
           <FocusReader />
-          <NavBroadcaster />
+          <NavDispatcher />
           <FocusScope
             moniker="task:01"
             commands={[]}
@@ -1126,29 +1135,30 @@ describe("spatial focus integration", () => {
       }),
     );
 
-    // Seed focus on the source scope so broadcastNavCommand has something to
-    // navigate from. Clicking the scope populates the moniker→key map in
-    // entity-focus-context and calls spatial_focus.
+    // Seed focus on the source scope so Rust's `NavigateCmd` has a
+    // focused source when it reads SpatialState. Clicking populates the
+    // moniker→key map in entity-focus-context and calls spatial_focus.
     fireEvent.click(getByText("source"));
     expect(getByTestId("focus-reader").textContent).toBe("task:01");
 
-    // Clear mocks so we can assert exactly one spatial_navigate call.
+    // Clear mocks so we can assert exactly one dispatch_command call.
     (invoke as ReturnType<typeof vi.fn>).mockClear();
 
-    // User presses nav.right. React should invoke spatial_navigate with the
-    // source scope's spatial key and direction "Right".
-    fireEvent.click(getByTestId("broadcast-right"));
+    // User "presses" l (vim right): React dispatches nav.right through
+    // the command pipeline. The dispatcher forwards to Rust via
+    // invoke("dispatch_command", { cmd: "nav.right", ... }).
+    fireEvent.click(getByTestId("dispatch-right"));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
-        key: sourceKey,
-        direction: "Right",
-      });
+      expect(invoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({ cmd: "nav.right" }),
+      );
     });
 
     // Simulate Rust applying the override and emitting focus-changed with
     // next_key = target scope's key. This is the exact event shape Rust
-    // fires after navigate() returns Some(override_target_key).
+    // fires after NavigateCmd's navigate() returns Some(override_target_key).
     expect(eventCallback).toBeTruthy();
     await act(async () => {
       eventCallback!({
@@ -1540,5 +1550,259 @@ describe("renderContainer=false data-focused propagation", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
+  });
+});
+
+/* ---------- pull-based data-focused (regression suite) ---------- */
+
+describe("FocusScope data-focused pulls from focused-moniker store", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  /**
+   * Regression for orphaned focus bars: after A → B, only B's element may
+   * carry `data-focused`. Exercising both scopes through the same
+   * focused-moniker store proves that the attribute derives from the
+   * idempotent `focusedMoniker === myMoniker` comparison, with no residue
+   * from a missed "un-notify" step.
+   */
+  it("no stale data-focused after focus moves away", async () => {
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button data-testid="focus-a" onClick={() => setFocus("task:a")} />
+          <button data-testid="focus-b" onClick={() => setFocus("task:b")} />
+          <FocusScope moniker="task:a" commands={[]}>
+            <span>a</span>
+          </FocusScope>
+          <FocusScope moniker="task:b" commands={[]}>
+            <span>b</span>
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { container, getByTestId } = renderWithFocus(<Harness />);
+
+    fireEvent.click(getByTestId("focus-a"));
+    await waitFor(() => {
+      const a = container.querySelector("[data-moniker='task:a']");
+      expect(a?.hasAttribute("data-focused")).toBe(true);
+    });
+
+    fireEvent.click(getByTestId("focus-b"));
+    await waitFor(() => {
+      const b = container.querySelector("[data-moniker='task:b']");
+      expect(b?.hasAttribute("data-focused")).toBe(true);
+    });
+
+    // The critical guard: exactly one element carries data-focused after
+    // a rapid A → B sequence. The push-based implementation could leave
+    // A's attribute behind if the claim callback got unregistered before
+    // the "un-notify" ran.
+    const focused = container.querySelectorAll("[data-focused='true']");
+    expect(focused).toHaveLength(1);
+    const a = container.querySelector("[data-moniker='task:a']");
+    expect(a?.hasAttribute("data-focused")).toBe(false);
+  });
+
+  /**
+   * Regression for unmount races: a scope that unmounts while focused
+   * must not leave its `data-focused` attribute on any surviving element
+   * (including DOM nodes reused by React across re-renders).
+   */
+  it("no stale data-focused after focused scope unmounts", async () => {
+    function Harness({ show }: { show: boolean }) {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button data-testid="focus-a" onClick={() => setFocus("task:a")} />
+          {show && (
+            <FocusScope moniker="task:a" commands={[]}>
+              <span>a</span>
+            </FocusScope>
+          )}
+          <FocusScope moniker="task:other" commands={[]}>
+            <span>other</span>
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { container, getByTestId, rerender } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <Harness show={true} />
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    fireEvent.click(getByTestId("focus-a"));
+    await waitFor(() => {
+      const a = container.querySelector("[data-moniker='task:a']");
+      expect(a?.hasAttribute("data-focused")).toBe(true);
+    });
+
+    // Unmount the focused scope. No surviving element — including the
+    // sibling `task:other` scope — may carry data-focused.
+    rerender(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <Harness show={false} />
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-moniker='task:a']")).toBeNull();
+    });
+
+    const anyFocused = container.querySelectorAll("[data-focused='true']");
+    expect(anyFocused).toHaveLength(0);
+  });
+
+  /**
+   * The decoration must derive from the focused-moniker store on every
+   * render — no notifyClaim push needed. We drive the store directly
+   * via `setFocus` (which only mutates the store in the pull-based
+   * implementation) and assert the matching scope is decorated.
+   *
+   * This is the clearest proof of pull semantics: a single store write
+   * is sufficient to repaint every scope, without any per-key callback
+   * having to fire.
+   */
+  it("data-focused derives from store not from per-key notifications", async () => {
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button data-testid="focus-c" onClick={() => setFocus("task:c")} />
+          <FocusScope moniker="task:a" commands={[]}>
+            <span>a</span>
+          </FocusScope>
+          <FocusScope moniker="task:b" commands={[]}>
+            <span>b</span>
+          </FocusScope>
+          <FocusScope moniker="task:c" commands={[]}>
+            <span>c</span>
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { container, getByTestId } = renderWithFocus(<Harness />);
+
+    fireEvent.click(getByTestId("focus-c"));
+
+    await waitFor(() => {
+      const c = container.querySelector("[data-moniker='task:c']");
+      expect(c?.hasAttribute("data-focused")).toBe(true);
+    });
+
+    const focused = container.querySelectorAll("[data-focused='true']");
+    expect(focused).toHaveLength(1);
+    expect(focused[0].getAttribute("data-moniker")).toBe("task:c");
+  });
+
+  /**
+   * The Rust `focus-changed` event is the authoritative focus signal.
+   * When it fires, the store updates and every scope must re-derive
+   * `data-focused` by comparing its moniker to the new store value.
+   * No intermediate push call is required.
+   */
+  it("rust focus-changed event updates visual without any push notification", async () => {
+    // Capture the production focus-changed handler so this test can fire
+    // a synthetic Rust event directly at it.
+    let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
+    webviewWindowListen.mockImplementation(((
+      event: string,
+      cb: (evt: { payload: unknown }) => void,
+    ) => {
+      if (event === "focus-changed") eventCallback = cb;
+      return Promise.resolve(() => {});
+    }) as unknown as () => Promise<() => void>);
+
+    const { container } = render(
+      <EntityFocusProvider>
+        <FocusLayer name="test">
+          <FocusScope moniker="task:a" commands={[]}>
+            <span>a</span>
+          </FocusScope>
+          <FocusScope moniker="task:b" commands={[]}>
+            <span>b</span>
+          </FocusScope>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    // Extract b's spatial key from its spatial_register invoke so we can
+    // address it in the synthetic focus-changed event.
+    let targetKey: string | null = null;
+    await waitFor(() => {
+      const calls = (invoke as ReturnType<typeof vi.fn>).mock.calls;
+      const targetCall = calls.find(
+        (c: unknown[]) =>
+          c[0] === "spatial_register" &&
+          (c[1] as { args: { moniker: string } }).args.moniker === "task:b",
+      );
+      expect(targetCall).toBeTruthy();
+      targetKey = (targetCall![1] as { args: { key: string } }).args.key;
+    });
+
+    expect(eventCallback).toBeTruthy();
+    await act(async () => {
+      eventCallback!({
+        payload: { prev_key: null, next_key: targetKey },
+      });
+    });
+
+    await waitFor(() => {
+      const b = container.querySelector("[data-moniker='task:b']");
+      expect(b?.hasAttribute("data-focused")).toBe(true);
+    });
+
+    const a = container.querySelector("[data-moniker='task:a']");
+    expect(a?.hasAttribute("data-focused")).toBe(false);
+  });
+
+  /**
+   * Two scopes sharing a moniker both decorate themselves — the pull
+   * model is idempotent by construction (each scope independently
+   * compares its moniker to the store value). This proves duplicate
+   * mounts stay in sync without requiring every callback in a registry
+   * to fire.
+   */
+  it("two scopes sharing a moniker both decorate from the same store value", async () => {
+    function Harness() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <>
+          <button
+            data-testid="focus-dup"
+            onClick={() => setFocus("task:dup")}
+          />
+          <FocusScope moniker="task:dup" commands={[]} data-testid="dup-1">
+            <span>one</span>
+          </FocusScope>
+          <FocusScope moniker="task:dup" commands={[]} data-testid="dup-2">
+            <span>two</span>
+          </FocusScope>
+        </>
+      );
+    }
+
+    const { container, getByTestId } = renderWithFocus(<Harness />);
+
+    fireEvent.click(getByTestId("focus-dup"));
+
+    await waitFor(() => {
+      const nodes = container.querySelectorAll("[data-moniker='task:dup']");
+      expect(nodes).toHaveLength(2);
+      expect(nodes[0].hasAttribute("data-focused")).toBe(true);
+      expect(nodes[1].hasAttribute("data-focused")).toBe(true);
+    });
   });
 });

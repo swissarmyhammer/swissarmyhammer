@@ -1,38 +1,44 @@
-//! JS shim ↔ Rust parity tests.
+//! Scenario-driven spatial navigation tests.
 //!
-//! This test reads `kanban-app/ui/src/test/spatial-parity-cases.json` —
-//! the same fixture the vitest-browser suite consumes — and runs every
-//! scenario through the production [`SpatialState`]. Each step asserts
-//! the same event shape and post-step focused key that the JS shim's
-//! parity test asserts.
+//! Each case in `spatial_cases.json` is a named scenario composed of
+//! sequential ops (push_layer, register, focus, navigate, …). The test
+//! applies every op to a fresh [`SpatialState`] and asserts the emitted
+//! event shape and post-step focused key.
 //!
-//! The contract: both implementations must agree byte-for-byte on
-//! every fixture scenario. When they diverge (Rust adds an edge case,
-//! or the JS shim's beam-test scoring drifts) exactly one of the two
-//! test suites fails, forcing the author to reconcile the shim against
-//! Rust (never the other way around — Rust is the production path).
+//! ## Why a JSON-driven table?
 //!
-//! The JSON lives under `kanban-app/ui/src/test/` and is loaded via
-//! `include_str!` so the Rust crate does not need a filesystem path at
-//! runtime; the file is embedded at compile time.
+//! The cases cover higher-level interaction shapes — beam tests with
+//! out-of-beam distractors, layer stacks, parent-scope container-first
+//! search, boot-race focus restoration — that read more naturally as
+//! declarative fixtures than as hand-rolled Rust helpers. The JSON lets
+//! us add scenarios without touching boilerplate and keeps the
+//! algorithm coverage in one place.
+//!
+//! ## Scope
+//!
+//! Pure algorithm coverage. Rust is the sole owner of spatial-nav
+//! logic — the frontend is a dumb registrar that invokes into
+//! [`SpatialState`] via Tauri commands. There is no JS-side mirror to
+//! keep in sync; these tests simply exercise [`SpatialState`] against a
+//! table of scenarios.
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 use swissarmyhammer_spatial_nav::{Direction, FocusChanged, Rect, SpatialState};
 
-/// JSON rect format: shared with the JS shim fixture. Uses `w`/`h` for
-/// width/height to match the `ShimRect` shape in TypeScript.
+/// JSON rect format. Uses `w`/`h` for width/height to keep the case
+/// files compact.
 #[derive(Debug, Deserialize)]
-struct ParityRect {
+struct CaseRect {
     x: f64,
     y: f64,
     w: f64,
     h: f64,
 }
 
-impl From<&ParityRect> for Rect {
-    fn from(r: &ParityRect) -> Rect {
+impl From<&CaseRect> for Rect {
+    fn from(r: &CaseRect) -> Rect {
         Rect {
             x: r.x,
             y: r.y,
@@ -43,35 +49,36 @@ impl From<&ParityRect> for Rect {
 }
 
 /// JSON entry format — deserializes to the arguments of
-/// `SpatialState::register`.
+/// [`SpatialState::register`].
 #[derive(Debug, Deserialize)]
-struct ParityEntry {
+struct CaseEntry {
     key: String,
     moniker: String,
-    rect: ParityRect,
+    rect: CaseRect,
     layer_key: String,
     parent_scope: Option<String>,
     overrides: HashMap<String, Option<String>>,
 }
 
-/// Tagged-union op shape. Matches the TS `ParityOp` type exactly.
+/// Tagged-union op shape — one variant per [`SpatialState`] mutation.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op")]
-enum ParityOp {
+enum CaseOp {
     #[serde(rename = "push_layer")]
     PushLayer { key: String, name: String },
     #[serde(rename = "remove_layer")]
     RemoveLayer { key: String },
     #[serde(rename = "register")]
-    Register { entry: ParityEntry },
+    Register { entry: CaseEntry },
     #[serde(rename = "unregister")]
     Unregister { key: String },
     #[serde(rename = "focus")]
     Focus { key: String },
     #[serde(rename = "clear_focus")]
     ClearFocus,
-    /// `from_key` is optional so cases can exercise the null-source safety
-    /// net (`"from_key": null`) alongside normal and stale-source nav.
+    /// `from_key` is optional so cases can exercise the null-source
+    /// safety net (`"from_key": null`) alongside normal and stale-source
+    /// nav.
     #[serde(rename = "navigate")]
     Navigate {
         from_key: Option<String>,
@@ -83,7 +90,7 @@ enum ParityOp {
 
 /// Expected event payload shape. `None` means the op must not emit.
 #[derive(Debug, Deserialize)]
-struct ParityExpectedEvent {
+struct CaseExpectedEvent {
     prev_key: Option<String>,
     next_key: Option<String>,
 }
@@ -91,34 +98,34 @@ struct ParityExpectedEvent {
 /// Expectation for a single step: either an event and new focused key,
 /// or no event and the focused key stays the same.
 #[derive(Debug, Deserialize)]
-struct ParityExpect {
-    event: Option<ParityExpectedEvent>,
+struct CaseExpect {
+    event: Option<CaseExpectedEvent>,
     focused: Option<String>,
 }
 
-/// One step in a parity case: an op and its expected outcome.
+/// One step in a scenario: an op and its expected outcome.
 #[derive(Debug, Deserialize)]
-struct ParityStep {
-    op: ParityOp,
-    expect: ParityExpect,
+struct CaseStep {
+    op: CaseOp,
+    expect: CaseExpect,
 }
 
 /// A single named scenario composed of sequential steps.
 #[derive(Debug, Deserialize)]
-struct ParityCase {
+struct Case {
     name: String,
-    steps: Vec<ParityStep>,
+    steps: Vec<CaseStep>,
 }
 
 /// Apply one op to the state machine and return the emitted event.
-fn apply_op(state: &SpatialState, op: &ParityOp) -> Option<FocusChanged> {
+fn apply_op(state: &SpatialState, op: &CaseOp) -> Option<FocusChanged> {
     match op {
-        ParityOp::PushLayer { key, name } => {
+        CaseOp::PushLayer { key, name } => {
             state.push_layer(key.clone(), name.clone());
             None
         }
-        ParityOp::RemoveLayer { key } => state.remove_layer(key),
-        ParityOp::Register { entry } => {
+        CaseOp::RemoveLayer { key } => state.remove_layer(key),
+        CaseOp::Register { entry } => {
             state.register(
                 entry.key.clone(),
                 entry.moniker.clone(),
@@ -129,27 +136,26 @@ fn apply_op(state: &SpatialState, op: &ParityOp) -> Option<FocusChanged> {
             );
             None
         }
-        ParityOp::Unregister { key } => state.unregister(key),
-        ParityOp::Focus { key } => state.focus(key),
-        ParityOp::ClearFocus => state.clear_focus(),
-        ParityOp::Navigate {
+        CaseOp::Unregister { key } => state.unregister(key),
+        CaseOp::Focus { key } => state.focus(key),
+        CaseOp::ClearFocus => state.clear_focus(),
+        CaseOp::Navigate {
             from_key,
             direction,
         } => {
             let dir: Direction = direction
                 .parse()
                 .unwrap_or_else(|e| panic!("invalid direction {direction}: {e}"));
-            // Unwrap the Result; every parity case is expected to provide a
-            // valid direction. The inner Option distinguishes "no navigation
-            // target" (blocked / nothing to move to) from a move, matching
-            // the shim's `navigate()` contract. `from_key` may be `None` or
-            // an unregistered string to exercise the null/stale-source
-            // fallback.
+            // Unwrap the Result; every case is expected to provide a
+            // valid direction. The inner Option distinguishes "no
+            // navigation target" (blocked / nothing to move to) from a
+            // move. `from_key` may be `None` or an unregistered string
+            // to exercise the null/stale-source fallback.
             state
                 .navigate(from_key.as_deref(), dir)
                 .unwrap_or_else(|e| panic!("navigate {from_key:?} {direction} errored: {e}"))
         }
-        ParityOp::FocusFirstInLayer { layer_key } => state.focus_first_in_layer(layer_key),
+        CaseOp::FocusFirstInLayer { layer_key } => state.focus_first_in_layer(layer_key),
     }
 }
 
@@ -157,13 +163,13 @@ fn apply_op(state: &SpatialState, op: &ParityOp) -> Option<FocusChanged> {
 fn assert_event_matches(
     case_name: &str,
     step_idx: usize,
-    expected: &Option<ParityExpectedEvent>,
+    expected: &Option<CaseExpectedEvent>,
     observed: &Option<FocusChanged>,
 ) {
     match (expected, observed) {
         (None, None) => {}
         (
-            Some(ParityExpectedEvent { prev_key, next_key }),
+            Some(CaseExpectedEvent { prev_key, next_key }),
             Some(FocusChanged {
                 prev_key: obs_prev,
                 next_key: obs_next,
@@ -184,17 +190,18 @@ fn assert_event_matches(
     }
 }
 
-/// Embedded JSON fixture — shared with the JS parity test. Changing this
-/// path breaks both sides; that is the intended tripwire.
-const PARITY_JSON: &str = include_str!("../../kanban-app/ui/src/test/spatial-parity-cases.json");
+/// Embedded JSON fixture — lives next to this test file inside the
+/// crate so the Rust crate owns its own test data with no cross-crate
+/// path dependency.
+const CASES_JSON: &str = include_str!("spatial_cases.json");
 
 #[test]
-fn js_shim_rust_state_parity() {
-    let cases: Vec<ParityCase> = serde_json::from_str(PARITY_JSON)
-        .expect("spatial-parity-cases.json parses as ParityCase[]");
+fn spatial_state_scenarios() {
+    let cases: Vec<Case> =
+        serde_json::from_str(CASES_JSON).expect("spatial_cases.json parses as Case[]");
     assert!(
         !cases.is_empty(),
-        "parity fixture must contain at least one case",
+        "scenario fixture must contain at least one case",
     );
     for case in &cases {
         let state = SpatialState::new();

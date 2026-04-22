@@ -10,8 +10,8 @@
  * dnd-kit, drag session, perspectives). Tests render
  * `<AppWithBoardFixture />` once and drive h/j/k/l navigation through
  * real DOM clicks and keyboard events; the mocked `invoke()` routes
- * every spatial command into the `SpatialStateShim` via
- * `setupSpatialShim()`.
+ * every spatial command through the Tauri-boundary stub in
+ * `setup-tauri-stub.ts`.
  *
  * ## Shape
  *
@@ -428,14 +428,15 @@ export function FixtureColumn({ col }: { col: number }) {
  *
  * Usage:
  * ```tsx
- * const { shim } = setupSpatialShim();
+ * const handles = setupTauriStub();
  * const screen = await render(<AppWithBoardFixture />);
  * const card = screen.getByTestId("data-moniker:task:card-1-1");
  * await userEvent.click(card);
  * await userEvent.keyboard("j");
  * ```
  *
- * All Tauri IPC goes through the shim — no real backend involvement.
+ * All Tauri IPC goes through the boundary stub — no real backend
+ * involvement.
  */
 export function AppWithBoardFixture() {
   return (

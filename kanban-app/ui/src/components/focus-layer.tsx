@@ -2,7 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
-  useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { ulid } from "ulid";
@@ -14,36 +14,58 @@ import { invoke } from "@tauri-apps/api/core";
  */
 export const FocusLayerContext = createContext<string | null>(null);
 
-/** Generate a stable ULID layer key per mount — new on remount. */
-function useLayerKey(): string {
-  const keyRef = useRef<string | null>(null);
-  if (keyRef.current === null) keyRef.current = ulid();
-  return keyRef.current;
+/**
+ * Generate a stable layer key and push it onto the Rust layer stack
+ * in the same step — during React's initial render of the component.
+ *
+ * The push MUST happen during render (via `useState`'s initializer)
+ * rather than in a `useEffect`, because React flushes effects
+ * bottom-up (children before parents) but renders top-down (parents
+ * before children). Registering the layer in a `useEffect` would make
+ * outer `FocusLayer`s push *after* their inner children, inverting the
+ * stack order so the outermost layer ends up on top. For the
+ * single-layer-at-a-time case (one inspector opens per user action)
+ * that was invisible, but for the multi-layer-mount-at-once case
+ * (three inspectors mounted on initial render — see
+ * `spatial-nav-multi-inspector.test.tsx`) it flipped which layer was
+ * "active", and the topmost inspector's first field never received
+ * focus because `spatial_focus_first_in_layer` guards against being
+ * invoked on a non-active layer.
+ *
+ * Running the initializer from render is safe for our use: React
+ * invokes `useState` initializers exactly once per component instance,
+ * and the Rust `spatial_push_layer` command is idempotent-by-key (the
+ * ULID we generate here never repeats). A `useEffect` cleanup
+ * elsewhere in this component removes the layer on unmount so the
+ * stack stays consistent with the React tree.
+ */
+function useLayerKeyAndPush(name: string): string {
+  const [layerKey] = useState<string>(() => {
+    const key = ulid();
+    invoke("spatial_push_layer", { key, name }).catch(() => {});
+    return key;
+  });
+  return layerKey;
 }
 
 /**
- * Register/unregister the layer with the Rust spatial layer stack.
+ * Tear down the layer on unmount, and schedule the initial
+ * first-in-layer focus via `requestAnimationFrame`.
  *
- * After pushing, schedule a `requestAnimationFrame` to invoke
- * `spatial_focus_first_in_layer` so the layer's upper-left entry claims
- * focus on mount. The RAF delay is essential: descendant `FocusScope`
- * effects run bottom-up during the same commit, so this parent effect
- * fires before any child has registered its rect. The RAF gives React
- * one frame to flush the child registrations before the First-selector
- * runs; without it the layer is always empty at the moment the focus
- * command fires and the call is a silent no-op.
+ * The RAF delay lets descendant `FocusScope` effects register their
+ * rects before the First-selector runs; without the one-frame
+ * deferral the layer is still empty when the focus command fires, and
+ * the call silently no-ops. Cleanup cancels any still-pending RAF so
+ * a layer that mounts and unmounts inside one frame cannot race with
+ * `spatial_remove_layer`.
  *
- * Cleanup cancels a still-pending RAF — otherwise a layer that mounts
- * and unmounts inside one frame could call `focus_first_in_layer` after
- * the layer was already popped, racing with `spatial_remove_layer`.
- *
- * The method short-circuits when the focused key is already inside the
- * target layer (see `SpatialState::focus_first_in_layer`), so this is
- * also safe against a user who clicks between the push and the RAF.
+ * `spatial_focus_first_in_layer` short-circuits when the focused key
+ * already belongs to the target layer (safe against clicks between
+ * push and RAF) and when the layer is no longer the active one
+ * (safe against stale RAFs from lower layers).
  */
-function useLayerRegistration(layerKey: string, name: string) {
+function useLayerLifecycle(layerKey: string) {
   useEffect(() => {
-    invoke("spatial_push_layer", { key: layerKey, name }).catch(() => {});
     const raf = requestAnimationFrame(() => {
       invoke("spatial_focus_first_in_layer", {
         args: { layerKey },
@@ -53,7 +75,7 @@ function useLayerRegistration(layerKey: string, name: string) {
       cancelAnimationFrame(raf);
       invoke("spatial_remove_layer", { key: layerKey }).catch(() => {});
     };
-  }, [layerKey, name]);
+  }, [layerKey]);
 }
 
 /**
@@ -82,8 +104,8 @@ export function FocusLayer({
   name: string;
   children: ReactNode;
 }) {
-  const layerKey = useLayerKey();
-  useLayerRegistration(layerKey, name);
+  const layerKey = useLayerKeyAndPush(name);
+  useLayerLifecycle(layerKey);
 
   return (
     <FocusLayerContext.Provider value={layerKey}>

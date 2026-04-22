@@ -262,101 +262,6 @@ async function flush() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// broadcastNavCommand tests — verifies spatial_navigate delegation
-// ---------------------------------------------------------------------------
-
-describe("broadcastNavCommand", () => {
-  it("invokes spatial_navigate for a valid nav command", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-
-    // Register a claim so the moniker-to-key mapping exists
-    act(() => {
-      result.current.registerClaim("key-A", "task:01", () => {});
-      result.current.setFocus("task:01");
-    });
-    await flush();
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-
-    // Broadcast nav.right
-    act(() => {
-      result.current.broadcastNavCommand("nav.right");
-    });
-
-    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
-      key: "key-A",
-      direction: "Right",
-    });
-  });
-
-  it("returns false for unknown command id", async () => {
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-
-    act(() => {
-      result.current.registerClaim("key-A", "task:01", () => {});
-      result.current.setFocus("task:01");
-    });
-    await flush();
-
-    let dispatched = false;
-    act(() => {
-      dispatched = result.current.broadcastNavCommand("unknown.cmd");
-    });
-    expect(dispatched).toBe(false);
-  });
-
-  it("invokes spatial_navigate with null key when no moniker is focused", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-
-    // No focus set — `broadcastNavCommand` must still dispatch so Rust's
-    // fallback-to-first safety net can pick a sensible entry, preserving
-    // the "something is always focused" invariant across null/stale JS
-    // state. The old short-circuit (`if (!focusedMk) return false`) left
-    // the user wedged on "nav key does nothing" after a view swap.
-    let dispatched = false;
-    act(() => {
-      dispatched = result.current.broadcastNavCommand("nav.right");
-    });
-    expect(dispatched).toBe(true);
-    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
-      key: null,
-      direction: "Right",
-    });
-  });
-
-  it("invokes spatial_navigate with null key when focused moniker has no registered keys", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-
-    // setFocus without any registerClaim → `monikerToKeysRef` has no
-    // entry for the moniker. React still dispatches; Rust sees a null
-    // source and falls through to first-in-layer.
-    act(() => {
-      result.current.setFocus("task:99");
-    });
-    await flush();
-    (invoke as ReturnType<typeof vi.fn>).mockClear();
-
-    let dispatched = false;
-    act(() => {
-      dispatched = result.current.broadcastNavCommand("nav.down");
-    });
-    expect(dispatched).toBe(true);
-    expect(invoke).toHaveBeenCalledWith("spatial_navigate", {
-      key: null,
-      direction: "Down",
-    });
-  });
-});
-
 /* ---------- window moniker in scope chain ---------- */
 
 describe("window moniker in scope chain", () => {
@@ -406,10 +311,10 @@ describe("window moniker in scope chain", () => {
   });
 });
 
-/* ---------- spatial focus claim registry ---------- */
+/* ---------- spatial key registry + focus-changed store updates ---------- */
 
-describe("spatial focus claim registry", () => {
-  it("claim registry calls previous callback with false and next with true on focus-changed event", async () => {
+describe("spatial key registry and focus-changed store updates", () => {
+  it("focus-changed event updates the focused-moniker store to the moniker bound to next_key", async () => {
     const { getCurrentWebviewWindow } =
       await import("@tauri-apps/api/webviewWindow");
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
@@ -424,27 +329,19 @@ describe("spatial focus claim registry", () => {
       listen: webviewListen,
     });
 
-    const cbA = vi.fn();
-    const cbB = vi.fn();
-
     function Harness() {
-      const { registerClaim, unregisterClaim } = useEntityFocus();
+      const { registerSpatialKey } = useEntityFocus();
+      const focused = useFocusedMoniker();
       return (
         <>
           <button
             data-testid="register"
             onClick={() => {
-              registerClaim("key-A", "task:01", cbA);
-              registerClaim("key-B", "task:02", cbB);
+              registerSpatialKey("key-A", "task:01");
+              registerSpatialKey("key-B", "task:02");
             }}
           />
-          <button
-            data-testid="unregister"
-            onClick={() => {
-              unregisterClaim("key-A");
-              unregisterClaim("key-B");
-            }}
-          />
+          <span data-testid="focused">{focused ?? "null"}</span>
         </>
       );
     }
@@ -456,30 +353,26 @@ describe("spatial focus claim registry", () => {
     );
     await flush();
 
-    // Register claims
+    // Register both keys
     await act(async () => {
       getByTestId("register").click();
     });
+    expect(getByTestId("focused").textContent).toBe("null");
 
-    // Fire focus-changed: nothing → key-A
+    // Fire focus-changed: nothing → key-A; store should reflect task:01
     await act(async () => {
       eventCallback!({ payload: { prev_key: null, next_key: "key-A" } });
     });
-    expect(cbA).toHaveBeenCalledWith(true);
-    expect(cbB).not.toHaveBeenCalled();
+    expect(getByTestId("focused").textContent).toBe("task:01");
 
-    cbA.mockClear();
-    cbB.mockClear();
-
-    // Fire focus-changed: key-A → key-B
+    // Fire focus-changed: key-A → key-B; store should reflect task:02
     await act(async () => {
       eventCallback!({ payload: { prev_key: "key-A", next_key: "key-B" } });
     });
-    expect(cbA).toHaveBeenCalledWith(false);
-    expect(cbB).toHaveBeenCalledWith(true);
+    expect(getByTestId("focused").textContent).toBe("task:02");
   });
 
-  it("unregistered key in focus-changed event is a no-op", async () => {
+  it("focus-changed with an unknown next_key clears the store (no moniker bound)", async () => {
     const { getCurrentWebviewWindow } =
       await import("@tauri-apps/api/webviewWindow");
     let eventCallback: ((evt: { payload: unknown }) => void) | null = null;
@@ -494,15 +387,20 @@ describe("spatial focus claim registry", () => {
       listen: webviewListen,
     });
 
-    const cbA = vi.fn();
-
     function Harness() {
-      const { registerClaim } = useEntityFocus();
+      const { registerSpatialKey, setFocus } = useEntityFocus();
+      const focused = useFocusedMoniker();
       return (
-        <button
-          data-testid="register"
-          onClick={() => registerClaim("key-A", "task:01", cbA)}
-        />
+        <>
+          <button
+            data-testid="seed"
+            onClick={() => {
+              registerSpatialKey("key-A", "task:01");
+              setFocus("task:01");
+            }}
+          />
+          <span data-testid="focused">{focused ?? "null"}</span>
+        </>
       );
     }
 
@@ -513,17 +411,20 @@ describe("spatial focus claim registry", () => {
     );
     await flush();
 
+    // Seed a focused moniker.
     await act(async () => {
-      getByTestId("register").click();
+      getByTestId("seed").click();
     });
+    expect(getByTestId("focused").textContent).toBe("task:01");
 
-    // Fire event referencing a nonexistent prev_key — should not throw
+    // Fire event with an unknown next_key — the listener must not throw
+    // and must clear the focused moniker (no moniker bound → null).
     await act(async () => {
       eventCallback!({
-        payload: { prev_key: "nonexistent", next_key: "key-A" },
+        payload: { prev_key: "key-A", next_key: "nonexistent" },
       });
     });
-    expect(cbA).toHaveBeenCalledWith(true);
+    expect(getByTestId("focused").textContent).toBe("null");
   });
 
   it("EntityFocusProvider unmount cleans up event listener", async () => {

@@ -10,8 +10,10 @@
  * - A keydown handler that routes vim-mode keys through the focused scope's
  *   binding chain, matching `AppShell`'s `KeybindingHandler` in production.
  * - A `CommandScopeProvider` populated with `nav.up`/`nav.down`/`nav.left`/
- *   `nav.right` (and their `nav.first`/`nav.last` siblings) that call
- *   `broadcastNavCommand` — identical to `AppShell`'s `buildNavCommands`.
+ *   `nav.right` (and their `nav.first`/`nav.last` siblings) carrying no
+ *   local `execute:` — identical to `AppShell`'s `NAV_COMMAND_DEFS`. The
+ *   dispatcher routes each keypress through `dispatch_command` to the
+ *   Rust nav handler, exactly like production.
  * - A `FocusLayer name="window"` at the root so every scope has a layer to
  *   register with.
  *
@@ -42,7 +44,7 @@ import {
   type CommandDef,
   useDispatchCommand,
 } from "@/lib/command-scope";
-import { useEntityFocus, useFocusedScope } from "@/lib/entity-focus-context";
+import { useFocusedScope } from "@/lib/entity-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import {
   createKeyHandler,
@@ -66,24 +68,19 @@ export interface NavVimOverrides {
 }
 
 /**
- * Build the navigation commands that pipe `nav.*` through
- * `broadcastNavCommand` into `spatial_navigate`.
+ * Build the navigation commands with keybindings only — no local
+ * `execute:` handler.
  *
- * Mirrors `buildNavCommands` in `AppShell` exactly — bindings match
- * production so fixtures exercise the same keyboard → invoke path the real
- * app uses. The `overrides` parameter customises the optional vim bindings
- * for `nav.first`/`nav.last` when a fixture needs them (e.g. the inspector
- * binds `g g` and `Shift+G`; the grid and board leave them cua-only).
+ * Matches production's `NAV_COMMAND_DEFS` exactly: every nav keypress
+ * falls through to `dispatch_command`, which the test's `tauriCoreMock`
+ * intercepts and routes back into the shim's `SpatialState::navigate`.
+ * There is no JS-side broadcaster in the fixture's dependency graph,
+ * so a regression that re-adds one would fail the tests instead of
+ * passing on the broken side-channel.
  */
 export function useFixtureNavCommands(
   overrides: NavVimOverrides = {},
 ): CommandDef[] {
-  const { broadcastNavCommand } = useEntityFocus();
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
-
-  // Each `execute` discards `broadcastNavCommand`'s boolean return so the
-  // handler's signature matches `CommandDef.execute: () => void | Promise<void>`.
   const firstKeys: CommandDef["keys"] = overrides.navFirstVim
     ? { vim: overrides.navFirstVim, cua: "Home" }
     : { cua: "Home" };
@@ -96,49 +93,31 @@ export function useFixtureNavCommands(
       id: "nav.up",
       name: "Navigate Up",
       keys: { vim: "k", cua: "ArrowUp" },
-      execute: () => {
-        broadcastRef.current("nav.up");
-      },
     },
     {
       id: "nav.down",
       name: "Navigate Down",
       keys: { vim: "j", cua: "ArrowDown" },
-      execute: () => {
-        broadcastRef.current("nav.down");
-      },
     },
     {
       id: "nav.left",
       name: "Navigate Left",
       keys: { vim: "h", cua: "ArrowLeft" },
-      execute: () => {
-        broadcastRef.current("nav.left");
-      },
     },
     {
       id: "nav.right",
       name: "Navigate Right",
       keys: { vim: "l", cua: "ArrowRight" },
-      execute: () => {
-        broadcastRef.current("nav.right");
-      },
     },
     {
       id: "nav.first",
       name: "First",
       keys: firstKeys,
-      execute: () => {
-        broadcastRef.current("nav.first");
-      },
     },
     {
       id: "nav.last",
       name: "Last",
       keys: lastKeys,
-      execute: () => {
-        broadcastRef.current("nav.last");
-      },
     },
   ];
 }

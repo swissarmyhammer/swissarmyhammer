@@ -924,22 +924,7 @@ function DataTableEmpty() {
   );
 }
 
-function DataTableContents({
-  table,
-  flatRows,
-  dataRowIndices,
-  columns,
-  grid,
-  cursorRef,
-  showRowSelector,
-  rowEntityCommands,
-  renderEditor,
-  isSelected,
-  handleCellClick,
-  perspectiveSortMap,
-  perspectiveId,
-  dispatchSortToggle,
-}: {
+interface DataTableContentsProps {
   table: TanTable<Entity>;
   flatRows: Row<Entity>[];
   dataRowIndices: number[];
@@ -954,27 +939,29 @@ function DataTableContents({
   perspectiveSortMap: SortMap;
   perspectiveId: string | undefined;
   dispatchSortToggle: ReturnType<typeof useDispatchCommand>;
-}) {
+}
+
+function DataTableContents(p: DataTableContentsProps) {
   return (
     <Table className="border-collapse text-sm">
       <DataTableHeader
-        table={table}
-        showRowSelector={showRowSelector}
-        perspectiveSortMap={perspectiveSortMap}
-        perspectiveId={perspectiveId}
-        dispatchSortToggle={dispatchSortToggle}
+        table={p.table}
+        showRowSelector={p.showRowSelector}
+        perspectiveSortMap={p.perspectiveSortMap}
+        perspectiveId={p.perspectiveId}
+        dispatchSortToggle={p.dispatchSortToggle}
       />
       <DataTableBody
-        flatRows={flatRows}
-        dataRowIndices={dataRowIndices}
-        columns={columns}
-        grid={grid}
-        cursorRef={cursorRef}
-        showRowSelector={showRowSelector}
-        rowEntityCommands={rowEntityCommands}
-        renderEditor={renderEditor}
-        isSelected={isSelected}
-        handleCellClick={handleCellClick}
+        flatRows={p.flatRows}
+        dataRowIndices={p.dataRowIndices}
+        columns={p.columns}
+        grid={p.grid}
+        cursorRef={p.cursorRef}
+        showRowSelector={p.showRowSelector}
+        rowEntityCommands={p.rowEntityCommands}
+        renderEditor={p.renderEditor}
+        isSelected={p.isSelected}
+        handleCellClick={p.handleCellClick}
       />
     </Table>
   );

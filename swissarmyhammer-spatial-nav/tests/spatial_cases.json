@@ -345,6 +345,177 @@
     ]
   },
   {
+    "name": "three layer stack traps navigation in the topmost inspector",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "window", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "push_layer", "key": "insp-1", "name": "inspector" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "push_layer", "key": "insp-2", "name": "inspector" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "w-card",
+            "moniker": "task:W",
+            "rect": { "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0 },
+            "layer_key": "window",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "i1-f0",
+            "moniker": "field:i1:0",
+            "rect": { "x": 300.0, "y": 0.0, "w": 200.0, "h": 35.0 },
+            "layer_key": "insp-1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "i1-f1",
+            "moniker": "field:i1:1",
+            "rect": { "x": 300.0, "y": 40.0, "w": 200.0, "h": 35.0 },
+            "layer_key": "insp-1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "i2-f0",
+            "moniker": "field:i2:0",
+            "rect": { "x": 300.0, "y": 0.0, "w": 200.0, "h": 35.0 },
+            "layer_key": "insp-2",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "i2-f1",
+            "moniker": "field:i2:1",
+            "rect": { "x": 300.0, "y": 40.0, "w": 200.0, "h": 35.0 },
+            "layer_key": "insp-2",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "i2-f0" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "i2-f0" },
+          "focused": "i2-f0"
+        }
+      },
+      {
+        "op": { "op": "navigate", "from_key": "i2-f0", "direction": "Down" },
+        "expect": {
+          "event": { "prev_key": "i2-f0", "next_key": "i2-f1" },
+          "focused": "i2-f1"
+        }
+      },
+      {
+        "op": { "op": "navigate", "from_key": "i2-f1", "direction": "Left" },
+        "expect": { "event": null, "focused": "i2-f1" }
+      }
+    ]
+  },
+  {
+    "name": "identical rects on different layers stay isolated",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "W", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "push_layer", "key": "I", "name": "inspector" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "w-a",
+            "moniker": "card:A",
+            "rect": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+            "layer_key": "W",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "w-b",
+            "moniker": "card:B",
+            "rect": { "x": 120.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+            "layer_key": "W",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "i-a",
+            "moniker": "field:A",
+            "rect": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+            "layer_key": "I",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "i-a" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "i-a" },
+          "focused": "i-a"
+        }
+      },
+      {
+        "op": { "op": "navigate", "from_key": "i-a", "direction": "Right" },
+        "expect": { "event": null, "focused": "i-a" }
+      }
+    ]
+  },
+  {
     "name": "remove_layer restores focus from lastFocused",
     "steps": [
       {
@@ -843,6 +1014,84 @@
     ]
   },
   {
+    "name": "focus_first_in_layer is a no-op when the named layer is not the active (top) layer",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "push_layer", "key": "L2", "name": "inspector" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "l1-entry",
+            "moniker": "task:under",
+            "rect": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "l2-entry",
+            "moniker": "field:top",
+            "rect": { "x": 50.0, "y": 0.0, "w": 100.0, "h": 50.0 },
+            "layer_key": "L2",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "L1" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "L2" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "l2-entry" },
+          "focused": "l2-entry"
+        }
+      }
+    ]
+  },
+  {
+    "name": "focus_first_in_layer succeeds when the named layer is not in the stack yet but its entries are registered (boot race)",
+    "steps": [
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "pre-push",
+            "moniker": "task:Boot",
+            "rect": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 50.0 },
+            "layer_key": "window",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus_first_in_layer", "layer_key": "window" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "pre-push" },
+          "focused": "pre-push"
+        }
+      }
+    ]
+  },
+  {
     "name": "card-interior container-first: pill stays within card siblings before falling through",
     "steps": [
       {
@@ -1164,6 +1413,365 @@
         "expect": {
           "event": { "prev_key": "r1c0", "next_key": "r0c0" },
           "focused": "r0c0"
+        }
+      }
+    ]
+  },
+  {
+    "name": "right from leftnav reaches grid row selector when no in-beam candidate closer",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "leftnav",
+            "moniker": "view:board",
+            "rect": { "x": 0.0, "y": 100.0, "w": 40.0, "h": 40.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "far-toolbar",
+            "moniker": "toolbar:search",
+            "rect": { "x": 900.0, "y": 110.0, "w": 40.0, "h": 20.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "row-selector-0",
+            "moniker": "row-selector:0",
+            "rect": { "x": 60.0, "y": 200.0, "w": 20.0, "h": 36.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "leftnav" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "leftnav" },
+          "focused": "leftnav"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "leftnav",
+          "direction": "Right"
+        },
+        "expect": {
+          "event": { "prev_key": "leftnav", "next_key": "row-selector-0" },
+          "focused": "row-selector-0"
+        }
+      }
+    ]
+  },
+  {
+    "name": "right from leftnav prefers in-beam candidate when available",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "leftnav",
+            "moniker": "view:board",
+            "rect": { "x": 0.0, "y": 100.0, "w": 40.0, "h": 40.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "close-in-beam",
+            "moniker": "toolbar:close",
+            "rect": { "x": 90.0, "y": 110.0, "w": 40.0, "h": 20.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "far-out-beam",
+            "moniker": "footer:far",
+            "rect": { "x": 500.0, "y": 400.0, "w": 20.0, "h": 20.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "leftnav" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "leftnav" },
+          "focused": "leftnav"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "leftnav",
+          "direction": "Right"
+        },
+        "expect": {
+          "event": { "prev_key": "leftnav", "next_key": "close-in-beam" },
+          "focused": "close-in-beam"
+        }
+      }
+    ]
+  },
+  {
+    "name": "left from grid row selector reaches leftnav",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "row-selector-0",
+            "moniker": "row-selector:0",
+            "rect": { "x": 60.0, "y": 200.0, "w": 20.0, "h": 36.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "leftnav",
+            "moniker": "view:board",
+            "rect": { "x": 0.0, "y": 100.0, "w": 40.0, "h": 40.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "far-distractor",
+            "moniker": "distractor:sidebar",
+            "rect": { "x": -900.0, "y": 210.0, "w": 40.0, "h": 20.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "row-selector-0" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "row-selector-0" },
+          "focused": "row-selector-0"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "row-selector-0",
+          "direction": "Left"
+        },
+        "expect": {
+          "event": { "prev_key": "row-selector-0", "next_key": "leftnav" },
+          "focused": "leftnav"
+        }
+      }
+    ]
+  },
+  {
+    "name": "down from perspective bar reaches grid header when no horizontal overlap",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "perspective-tab",
+            "moniker": "perspective-tab:active",
+            "rect": { "x": 0.0, "y": 40.0, "w": 120.0, "h": 30.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "far-footer",
+            "moniker": "footer:far",
+            "rect": { "x": 50.0, "y": 2000.0, "w": 40.0, "h": 20.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "grid-header",
+            "moniker": "grid-header:status",
+            "rect": { "x": 300.0, "y": 80.0, "w": 200.0, "h": 30.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "perspective-tab" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "perspective-tab" },
+          "focused": "perspective-tab"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "perspective-tab",
+          "direction": "Down"
+        },
+        "expect": {
+          "event": { "prev_key": "perspective-tab", "next_key": "grid-header" },
+          "focused": "grid-header"
+        }
+      }
+    ]
+  },
+  {
+    "name": "toolbar: Up from perspective tab lands on toolbar button above",
+    "steps": [
+      {
+        "op": { "op": "push_layer", "key": "L1", "name": "window" },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "tb-board",
+            "moniker": "toolbar:board-selector",
+            "rect": { "x": 16.0, "y": 12.0, "w": 120.0, "h": 24.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "tb-inspect",
+            "moniker": "toolbar:inspect-board",
+            "rect": { "x": 150.0, "y": 14.0, "w": 24.0, "h": 24.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "tb-search",
+            "moniker": "toolbar:search",
+            "rect": { "x": 560.0, "y": 14.0, "w": 24.0, "h": 24.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": {
+          "op": "register",
+          "entry": {
+            "key": "pv-default",
+            "moniker": "perspective:default",
+            "rect": { "x": 150.0, "y": 60.0, "w": 80.0, "h": 24.0 },
+            "layer_key": "L1",
+            "parent_scope": null,
+            "overrides": {}
+          }
+        },
+        "expect": { "event": null, "focused": null }
+      },
+      {
+        "op": { "op": "focus", "key": "pv-default" },
+        "expect": {
+          "event": { "prev_key": null, "next_key": "pv-default" },
+          "focused": "pv-default"
+        }
+      },
+      {
+        "op": {
+          "op": "navigate",
+          "from_key": "pv-default",
+          "direction": "Up"
+        },
+        "expect": {
+          "event": { "prev_key": "pv-default", "next_key": "tb-inspect" },
+          "focused": "tb-inspect"
         }
       }
     ]

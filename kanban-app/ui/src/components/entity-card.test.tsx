@@ -258,9 +258,7 @@ describe("EntityCard", () => {
       render(
         <TooltipProvider>
           <SchemaProvider>
-            <EntityStoreProvider
-              entities={{ task: [currentEntity], tag: [] }}
-            >
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
               <EntityFocusProvider>
                 <FieldUpdateProvider>
                   <UIStateProvider>

@@ -10,6 +10,7 @@ pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
+pub mod nav_commands;
 pub mod perspective_commands;
 pub mod project_commands;
 pub mod task_commands;
@@ -151,6 +152,44 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
     map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
+
+    // Spatial navigation commands — delegate to the `SpatialNavigator`
+    // extension installed on every CommandContext by the Tauri binary.
+    {
+        use swissarmyhammer_spatial_nav::Direction;
+        map.insert(
+            "nav.up".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::Up)),
+        );
+        map.insert(
+            "nav.down".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::Down)),
+        );
+        map.insert(
+            "nav.left".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::Left)),
+        );
+        map.insert(
+            "nav.right".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::Right)),
+        );
+        map.insert(
+            "nav.first".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::First)),
+        );
+        map.insert(
+            "nav.last".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::Last)),
+        );
+        map.insert(
+            "nav.rowStart".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::RowStart)),
+        );
+        map.insert(
+            "nav.rowEnd".into(),
+            Arc::new(nav_commands::NavigateCmd(Direction::RowEnd)),
+        );
+    }
 
     // Drag session commands
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
@@ -313,9 +352,10 @@ mod tests {
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
         // + 3 attachment (open, reveal, delete)
-        // + 2 project (add, delete) + 1 ui.mode.set = 64
+        // + 2 project (add, delete) + 1 ui.mode.set
+        // + 8 nav (up, down, left, right, first, last, rowStart, rowEnd) = 72
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 64);
+        assert_eq!(cmds.len(), 72);
     }
 
     // =========================================================================

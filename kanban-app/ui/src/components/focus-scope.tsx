@@ -5,7 +5,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import {
@@ -14,7 +13,7 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useEntityFocus, useFocusedMoniker } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { useFocusLayerKey } from "@/components/focus-layer";
 import { ulid } from "ulid";
@@ -69,45 +68,48 @@ function useSpatialKey(): string {
 }
 
 /**
- * Register a spatial focus claim and Tauri spatial entry for this key.
- * Measures the element rect via ResizeObserver and reports updates to Rust.
- * When `layerKey` is `null` (no FocusLayer ancestor), spatial registration
- * is skipped — the claim callback still works for focus events.
+ * Bind this scope's spatial key to its moniker in the EntityFocus
+ * key↔moniker registry, and tear down the Tauri spatial entry on unmount.
  *
- * The optional `navOverride` map is forwarded to Rust as `overrides` on each
- * spatial registration call, enabling per-scope navigation redirection or blocking.
+ * The binding exists so the Rust `focus-changed` event listener can map
+ * a spatial key back to the moniker that owns it, and so `spatial_focus`
+ * / `spatial_navigate` can pick a key for a given moniker. It does NOT
+ * drive visual focus — FocusScope subscribes to the focused-moniker
+ * store via `useFocusedMoniker()` and derives `data-focused` by
+ * comparing its moniker against the store value on every render.
  *
- * When `spatial` is `false`, the spatial entry (rect) is never registered —
- * the scope still participates in focus/commands/claim callbacks, but the
- * Rust beam test does not see it as a navigation target. Used for container
- * scopes like table rows that must not shadow their own cells during
- * cardinal-direction searches.
+ * When `layerKey` is `null` (no FocusLayer ancestor), the Tauri spatial
+ * entry is never registered; the moniker↔key binding still happens so
+ * any focus events that still resolve to this key stay coherent.
  *
- * `parentScope` is the moniker of the nearest ancestor `FocusScope`, threaded
- * from `FocusScopeContext`. It is forwarded to Rust so the spatial engine's
- * container-first search can keep `h/j/k/l` within the focused card's
- * sub-parts (tag pills, assignees, etc.) before falling through to the full
- * layer — see `container_first_search` in `swissarmyhammer-spatial-nav`.
- *
- * Returns `{ isClaimed, elementRef }` — attach `elementRef` to the DOM node.
+ * When `spatial` is `false`, the spatial entry (rect) is never
+ * registered — the scope still participates in focus/commands/scope
+ * chain, but the Rust beam test does not see it as a navigation target.
+ * Used for container scopes like table rows that must not shadow their
+ * own cells during cardinal-direction searches.
  */
-function useClaimRegistration(
+function useSpatialKeyBinding(
   spatialKey: string,
   moniker: string,
   layerKey: string | null,
   spatial: boolean,
 ) {
-  const { registerClaim, unregisterClaim } = useEntityFocus();
-  const [isClaimed, setIsClaimed] = useState(false);
+  const { registerSpatialKey, unregisterSpatialKey } = useEntityFocus();
   useEffect(() => {
-    registerClaim(spatialKey, moniker, setIsClaimed);
+    registerSpatialKey(spatialKey, moniker);
     return () => {
-      unregisterClaim(spatialKey);
+      unregisterSpatialKey(spatialKey);
       if (layerKey && spatial)
         invoke("spatial_unregister", { key: spatialKey }).catch(() => {});
     };
-  }, [spatialKey, moniker, layerKey, spatial, registerClaim, unregisterClaim]);
-  return isClaimed;
+  }, [
+    spatialKey,
+    moniker,
+    layerKey,
+    spatial,
+    registerSpatialKey,
+    unregisterSpatialKey,
+  ]);
 }
 
 function useRectObserver(
@@ -156,7 +158,15 @@ function useRectObserver(
   ]);
 }
 
-function useSpatialClaim(
+/**
+ * Compose the moniker↔spatial-key binding with the rect observer that
+ * feeds `spatial_register` calls. Returns the `elementRef` the caller
+ * must attach to the DOM node it wants Rust to measure.
+ *
+ * Visual focus state is NOT returned from here; FocusScope derives it
+ * directly from the focused-moniker store via `useFocusedMoniker()`.
+ */
+function useSpatialRegistration(
   spatialKey: string,
   moniker: string,
   layerKey: string | null,
@@ -165,12 +175,7 @@ function useSpatialClaim(
   navOverride?: Record<string, string | null>,
 ) {
   const elementRef = useRef<HTMLElement | null>(null);
-  const isClaimed = useClaimRegistration(
-    spatialKey,
-    moniker,
-    layerKey,
-    spatial,
-  );
+  useSpatialKeyBinding(spatialKey, moniker, layerKey, spatial);
   useRectObserver(
     elementRef,
     spatialKey,
@@ -180,22 +185,30 @@ function useSpatialClaim(
     parentScope,
     navOverride,
   );
-  return { isClaimed, elementRef };
+  return elementRef;
 }
 
 /**
  * Imperatively mirror the scope's focus state onto its attached DOM
- * element. When `active` is `true` (the scope is claimed AND opts in
- * via `showFocusBar`), sets `data-focused="true"` on `elementRef.current`
- * and scrolls it into view. When `active` flips to `false`, removes the
- * attribute.
+ * element. When `active` is `true` (the scope's moniker matches the
+ * focused-moniker store AND the scope opts in via `showFocusBar`),
+ * sets `data-focused="true"` on `elementRef.current` and scrolls it
+ * into view. When `active` flips to `false`, removes the attribute.
+ *
+ * `active` is computed by the caller as `focusedMoniker === moniker`
+ * from a `useFocusedMoniker()` subscription — the pull-based model.
+ * Every scope independently re-derives its own `active` from the
+ * single source of truth on every focus change; no push notification
+ * is ever fanned out. Stale `data-focused` is impossible by
+ * construction: if the store says B is focused, only B evaluates to
+ * `true`; everyone else evaluates to `false` and clears the attribute
+ * in the same render.
  *
  * This is the single canonical driver of the focus decoration — consumers
- * of `renderContainer={false}` no longer need to subscribe to
- * `useFocusedMoniker()` and manage the attribute themselves. The attribute
- * is written directly to the DOM (not via React state) so the element
- * owns exactly one focus signal, regardless of whether the scope renders
- * its own container or shares a DOM node with a consumer.
+ * of `renderContainer={false}` do not manage the attribute themselves.
+ * The attribute is written directly to the DOM (not via React state) so
+ * the element owns exactly one focus signal, regardless of whether the
+ * scope renders its own container or shares a DOM node with a consumer.
  *
  * The `scrollIntoView({ block: "nearest" })` effect was previously in
  * `FocusHighlight` and only applied to `renderContainer={true}` scopes;
@@ -388,7 +401,7 @@ export function FocusScope({
   // container-first search so h/j/k/l stays within siblings before falling
   // through to the full layer. Null means this scope is at layer root.
   const parentScope = useContext(FocusScopeContext);
-  const { isClaimed, elementRef } = useSpatialClaim(
+  const elementRef = useSpatialRegistration(
     spatialKey,
     moniker,
     layerKey,
@@ -396,12 +409,14 @@ export function FocusScope({
     parentScope,
     navOverride,
   );
-  // Central, unconditional focus decoration: when claimed and opted in,
-  // write `data-focused` and scrollIntoView on the attached element —
-  // regardless of `renderContainer`. This is what lets consumers that
-  // own their own DOM node (rows, cells, buttons, tabs) share the same
-  // visual without re-implementing the `useFocusedMoniker` compare dance.
-  useFocusDecoration(elementRef, showFocusBar && isClaimed);
+  // Pull-based focus decoration: subscribe to the focused-moniker store
+  // and ask the idempotent question "is the current focus me?". Every
+  // scope re-evaluates on every focus change; stale state is impossible
+  // because each scope derives its own visual from the same single
+  // source of truth.
+  const focusedMoniker = useFocusedMoniker();
+  const isFocused = focusedMoniker === moniker;
+  useFocusDecoration(elementRef, showFocusBar && isFocused);
   const scope = useScopeRegistration(moniker, commands);
   const handleClick = useScopeClickHandler(moniker, handleEvents);
   // elementRefForContext: only populated for renderContainer={false} — then a

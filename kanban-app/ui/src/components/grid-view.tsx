@@ -135,7 +135,7 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     setVisibleRowCount(entities.length);
   }, [entities.length]);
 
-  const { setFocus, broadcastNavCommand } = useEntityFocus();
+  const { setFocus } = useEntityFocus();
   const focusedMoniker = useFocusedMoniker();
   const { cellMonikerMap, cellMonikers } = useCellMonikers(entities, columns);
 
@@ -157,59 +157,74 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     grid,
     cellMonikers,
     setFocus,
-    broadcastNavCommand,
   };
 }
 
-/** Build a navigation command that broadcasts a nav event. */
+/** Dispatch signature returned by `useDispatchCommand()` (no bound command). */
+type AdHocDispatch = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+
+/**
+ * Build a grid command alias that dispatches a canonical `nav.*` through
+ * the unified command pipeline.
+ *
+ * The alias carries the grid-specific id/name/keybinding but delegates
+ * actual navigation to the Rust `NavigateCmd` impl — no local side-channel.
+ */
 function navCmd(
   id: string,
   name: string,
   navEvent: string,
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  dispatchRef: React.RefObject<AdHocDispatch>,
   keys?: CommandDef["keys"],
 ): CommandDef {
-  return { id, name, keys, execute: () => broadcastRef.current(navEvent) };
+  return {
+    id,
+    name,
+    keys,
+    execute: () => {
+      dispatchRef
+        .current(navEvent)
+        .catch((e) => console.error(`${navEvent} failed:`, e));
+    },
+  };
 }
 
 /** Build navigation CommandDefs for the grid. */
 function buildGridNavCommands(
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  dispatchRef: React.RefObject<AdHocDispatch>,
 ): CommandDef[] {
   return [
-    navCmd("grid.moveUp", "Move Up", "nav.up", broadcastRef, {
+    navCmd("grid.moveUp", "Move Up", "nav.up", dispatchRef, {
       vim: "k",
       cua: "ArrowUp",
     }),
-    navCmd("grid.moveDown", "Move Down", "nav.down", broadcastRef, {
+    navCmd("grid.moveDown", "Move Down", "nav.down", dispatchRef, {
       vim: "j",
       cua: "ArrowDown",
     }),
-    navCmd("grid.moveLeft", "Move Left", "nav.left", broadcastRef, {
+    navCmd("grid.moveLeft", "Move Left", "nav.left", dispatchRef, {
       vim: "h",
       cua: "ArrowLeft",
     }),
-    navCmd("grid.moveRight", "Move Right", "nav.right", broadcastRef, {
+    navCmd("grid.moveRight", "Move Right", "nav.right", dispatchRef, {
       vim: "l",
       cua: "ArrowRight",
     }),
-    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", broadcastRef, {
+    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", dispatchRef, {
       vim: "0",
       cua: "Home",
     }),
-    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", broadcastRef, {
+    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", dispatchRef, {
       vim: "$",
       cua: "End",
     }),
-    navCmd("grid.firstCell", "First Cell", "nav.first", broadcastRef, {
+    navCmd("grid.firstCell", "First Cell", "nav.first", dispatchRef, {
       cua: "Mod+Home",
     }),
-    navCmd("grid.lastCell", "Last Cell", "nav.last", broadcastRef, {
+    navCmd("grid.lastCell", "Last Cell", "nav.last", dispatchRef, {
       vim: "Shift+G",
       cua: "Mod+End",
     }),
-    navCmd("nav.first", "First Cell", "nav.first", broadcastRef),
-    navCmd("nav.last", "Last Cell", "nav.last", broadcastRef),
   ];
 }
 
@@ -296,23 +311,22 @@ function buildGridEditCommands(
  * Compose the full grid CommandDef array from navigation + editing commands.
  */
 function useGridCommands(
-  broadcastNavCommand: (cmd: string) => void,
   grid: ReturnType<typeof useGrid>,
   entities: Entity[],
   entityType: string,
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
   return useMemo<CommandDef[]>(
     () => [
-      ...buildGridNavCommands(broadcastRef),
+      ...buildGridNavCommands(dispatchRef),
       ...buildGridEditCommands(gridRef, entities, entityType, dispatch),
     ],
-    [entities, entityType],
+    [entities, entityType, dispatch],
   );
 }
 
@@ -442,20 +456,9 @@ function useGridViewState(view: ViewDef) {
     schemaCommands,
     activePerspective,
   } = useGridData(view);
-  const {
-    setVisibleRowCount,
-    grid,
-    cellMonikers,
-    setFocus,
-    broadcastNavCommand,
-  } = useGridNavigation(entities, columns);
-  const gridCommands = useGridCommands(
-    broadcastNavCommand,
-    grid,
-    entities,
-    entityType,
-    dispatch,
-  );
+  const { setVisibleRowCount, grid, cellMonikers, setFocus } =
+    useGridNavigation(entities, columns);
+  const gridCommands = useGridCommands(grid, entities, entityType, dispatch);
   const { handleCellClick, buildRowEntityCommands, renderEditor } =
     useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
 

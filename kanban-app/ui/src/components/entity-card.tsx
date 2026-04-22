@@ -33,6 +33,24 @@ interface EntityCardProps {
 }
 
 /**
+ * Compose the card's `commands` array: the per-card Enter-to-inspect
+ * binding first, followed by any caller-supplied `extraCommands`. Callers
+ * can override Enter by providing their own `ui.inspect` entry in
+ * `extraCommands`.
+ */
+function useCardCommands(
+  entity: EntityCardProps["entity"],
+  extraCommands: CommandDef[] | undefined,
+) {
+  const enterCommand = useEnterInspectCommand(entity.moniker);
+  const mergedExtra = useMemo(
+    () => (extraCommands ? [...enterCommand, ...extraCommands] : enterCommand),
+    [enterCommand, extraCommands],
+  );
+  return useEntityCommands(entity.entity_type, entity.id, entity, mergedExtra);
+}
+
+/**
  * Compact card view for an entity on the board.
  *
  * Renders fields grouped by the entity's declared `on_card` sections.
@@ -58,22 +76,7 @@ export const EntityCard = memo(
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
-    const enterCommand = useEnterInspectCommand(entity.moniker);
-    // Merge the per-card Enter-to-inspect binding with any caller-supplied
-    // `extraCommands`. The spread order is stable: Enter first, then caller
-    // extras — so a caller can deliberately override Enter by providing their
-    // own `ui.inspect` entry in `extraCommands` if they ever need to.
-    const mergedExtraCommands = useMemo(
-      () =>
-        extraCommands ? [...enterCommand, ...extraCommands] : enterCommand,
-      [enterCommand, extraCommands],
-    );
-    const commands = useEntityCommands(
-      entity.entity_type,
-      entity.id,
-      entity,
-      mergedExtraCommands,
-    );
+    const commands = useCardCommands(entity, extraCommands);
 
     return (
       <FocusScope

@@ -1603,6 +1603,18 @@ async fn build_dispatch_context(
     ));
     ctx.set_extension(Arc::new(clipboard_ext));
 
+    // Inject SpatialNavigator so `nav.*` command handlers can drive
+    // per-window `SpatialState::navigate` and fan out the resulting
+    // `focus-changed` event through the same dispatch pipeline the rest of
+    // the command surface uses. Replaces the former JS-side
+    // `broadcastNavCommand` side-channel that short-circuited the
+    // dispatcher and prevented the focus round-trip from reaching the
+    // focused-moniker store.
+    let navigator_ext = swissarmyhammer_kanban::spatial::SpatialNavigatorExt(Arc::new(
+        crate::spatial::TauriSpatialNavigator::new(app.clone()),
+    ));
+    ctx.set_extension(Arc::new(navigator_ext));
+
     (ctx, active_handle)
 }
 

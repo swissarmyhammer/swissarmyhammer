@@ -13,9 +13,6 @@ import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-/** Callback type for the spatial focus claim registry. */
-export type ClaimCallback = (focused: boolean) => void;
-
 /** Listener signature for focused-moniker subscriptions. */
 type FocusListener = () => void;
 
@@ -29,26 +26,27 @@ interface EntityFocusContextValue {
   /** Look up a registered scope by moniker. */
   getScope: (moniker: string) => CommandScope | null;
   /**
-   * Dispatch a navigation command to the Rust spatial navigation engine.
+   * Register a spatial key ↔ moniker association.
    *
-   * Maps the command id (e.g. `"nav.right"`) to a direction string,
-   * looks up the focused entry's spatial key, and invokes `spatial_navigate`.
-   * Returns `true` if the command was dispatched, `false` if unmapped or
-   * no focused entry exists.
+   * The focused-moniker store is the single source of truth for which
+   * scope is visually focused; FocusScope subscribes to the store via
+   * `useFocusedMoniker()` and derives `data-focused` by comparing its
+   * moniker against the store value. This registration supplies the two
+   * maps that Rust-interop code needs:
+   *
+   * - `key → moniker`, so the `focus-changed` event listener can map the
+   *   Rust-chosen spatial key back to the moniker it belongs to.
+   * - `moniker → keys`, so `spatial_focus` and `spatial_navigate` can
+   *   pick a key to hand to Rust when the React side knows only the
+   *   moniker.
+   *
+   * A single moniker may have multiple registered keys (duplicate mounts
+   * of the same FocusScope); all remain registered until individually
+   * unregistered.
    */
-  broadcastNavCommand: (commandId: string) => boolean;
-  /**
-   * Register a spatial focus claim. The callback is called with `true` when
-   * this key gains focus and `false` when it loses focus, driven by the
-   * Rust `focus-changed` event.
-   */
-  registerClaim: (
-    key: string,
-    moniker: string,
-    callback: ClaimCallback,
-  ) => void;
-  /** Unregister a spatial focus claim by key. */
-  unregisterClaim: (key: string) => void;
+  registerSpatialKey: (key: string, moniker: string) => void;
+  /** Unregister a spatial key ↔ moniker association. */
+  unregisterSpatialKey: (key: string) => void;
   /**
    * Read the current focused moniker imperatively.
    *
@@ -146,25 +144,30 @@ function useScopeRegistry() {
   return { registryRef, registerScope, unregisterScope, getScope };
 }
 
-/** Spatial focus claim registry: three ref-based maps with register/unregister. */
-function useClaimRegistry() {
-  const claimRegistryRef = useRef<Map<string, ClaimCallback>>(new Map());
+/**
+ * Spatial key registry: two ref-based maps binding `key ↔ moniker`.
+ *
+ * The registry exists purely to bridge the Rust spatial-nav key space
+ * (opaque ULIDs used by the beam-test graph) with the moniker space
+ * (React-level identity used by command scopes and focus decoration).
+ *
+ * Visual focus state is NOT stored here — FocusScope pulls it from the
+ * focused-moniker store via `useFocusedMoniker()` and compares against
+ * its own moniker on every render. The registry has no subscribers and
+ * no per-key callbacks; it is a pure lookup table.
+ */
+function useSpatialKeyRegistry() {
   const keyToMonikerRef = useRef<Map<string, string>>(new Map());
   const monikerToKeysRef = useRef<Map<string, Set<string>>>(new Map());
 
-  const registerClaim = useCallback(
-    (key: string, moniker: string, callback: ClaimCallback) => {
-      claimRegistryRef.current.set(key, callback);
-      keyToMonikerRef.current.set(key, moniker);
-      const keys = monikerToKeysRef.current.get(moniker) ?? new Set<string>();
-      keys.add(key);
-      monikerToKeysRef.current.set(moniker, keys);
-    },
-    [],
-  );
+  const registerSpatialKey = useCallback((key: string, moniker: string) => {
+    keyToMonikerRef.current.set(key, moniker);
+    const keys = monikerToKeysRef.current.get(moniker) ?? new Set<string>();
+    keys.add(key);
+    monikerToKeysRef.current.set(moniker, keys);
+  }, []);
 
-  const unregisterClaim = useCallback((key: string) => {
-    claimRegistryRef.current.delete(key);
+  const unregisterSpatialKey = useCallback((key: string) => {
     const moniker = keyToMonikerRef.current.get(key);
     keyToMonikerRef.current.delete(key);
     if (moniker) {
@@ -177,26 +180,24 @@ function useClaimRegistry() {
   }, []);
 
   return {
-    claimRegistryRef,
     keyToMonikerRef,
     monikerToKeysRef,
-    registerClaim,
-    unregisterClaim,
+    registerSpatialKey,
+    unregisterSpatialKey,
   };
 }
 
 /**
- * Returns a `setFocus` callback that writes the focused moniker, dispatches
- * `ui.setFocus` to the backend, and syncs with Rust spatial state.
+ * Forward the focus change to Rust's spatial state. Picks the first
+ * registered key for `moniker` (if any) and invokes `spatial_focus`;
+ * when `moniker` is `null`, invokes `spatial_clear_focus`.
  *
- * The moniker is stored only in the ref-backed focus store — there is no
- * parallel React state. Consumers that need to re-render on focus change
- * subscribe via `useFocusedMoniker()` / `useIsFocused()` / `useFocusedScope()`.
- *
- * Claim callbacks for the outgoing and incoming keys are fired synchronously
- * (optimistic UI) so the focus highlight responds immediately without waiting
- * for the Rust `focus-changed` round trip. Rust remains the authoritative
- * owner — its event can override or confirm this local update.
+ * Rust is the authoritative owner of spatial focus — its eventual
+ * `focus-changed` event re-confirms or overrides this update via the
+ * focused-moniker store. FocusScope subscribes to the store and
+ * re-derives its visual state, so a later Rust-driven correction
+ * (e.g. a successor selected because `moniker` was not a valid target
+ * on Rust's side) automatically repaints without any separate push.
  */
 function syncSpatialFocus(
   moniker: string | null,
@@ -213,37 +214,30 @@ function syncSpatialFocus(
   }
 }
 
+/**
+ * Returns a `setFocus` callback that writes the focused moniker, dispatches
+ * `ui.setFocus` to the backend, and syncs with Rust spatial state.
+ *
+ * The moniker is stored only in the ref-backed focus store — there is no
+ * parallel React state, and no push-based claim notification fan-out.
+ * FocusScope subscribes to the store via `useFocusedMoniker()` and
+ * re-derives `data-focused` on every change by comparing its moniker to
+ * the new store value. Stale focus decorations are impossible by
+ * construction: the store is the single source of truth, and every
+ * scope re-evaluates against it.
+ */
 function useFocusSetter(
-  getFocusedMoniker: () => string | null,
   setFocusedMoniker: (m: string | null) => void,
   dispatch: (opts: { args: Record<string, unknown> }) => Promise<unknown>,
   registryRef: React.RefObject<Map<string, CommandScope>>,
   monikerToKeysRef: React.RefObject<Map<string, Set<string>>>,
-  claimRegistryRef: React.RefObject<Map<string, ClaimCallback>>,
 ) {
   return useCallback(
     (moniker: string | null) => {
-      const prev = getFocusedMoniker();
       setFocusedMoniker(moniker);
       if (import.meta.env.DEV) {
         console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
       }
-      // Optimistic claim update — flip the un-focus callback for the previous
-      // moniker and the focus callback for the new one so the highlight
-      // responds immediately. Both transitions are idempotent with the later
-      // Rust `focus-changed` event.
-      notifyClaim(
-        prev,
-        false,
-        monikerToKeysRef.current,
-        claimRegistryRef.current,
-      );
-      notifyClaim(
-        moniker,
-        true,
-        monikerToKeysRef.current,
-        claimRegistryRef.current,
-      );
       const chain = moniker
         ? buildScopeChain(moniker, registryRef.current)
         : [];
@@ -252,48 +246,19 @@ function useFocusSetter(
       );
       syncSpatialFocus(moniker, monikerToKeysRef.current);
     },
-    [
-      getFocusedMoniker,
-      setFocusedMoniker,
-      dispatch,
-      registryRef,
-      monikerToKeysRef,
-      claimRegistryRef,
-    ],
+    [setFocusedMoniker, dispatch, registryRef, monikerToKeysRef],
   );
 }
 
 /**
- * Fire the claim callback for every key registered against `moniker`, with
- * the given focus state. Used by `setFocus` to drive the focus highlight
- * immediately on user-initiated focus changes.
- *
- * A single moniker can have multiple spatial keys (one per mounted FocusScope
- * instance sharing that moniker) — all of them receive the notification so
- * every visible highlight stays in sync.
- */
-function notifyClaim(
-  moniker: string | null,
-  focused: boolean,
-  monikerToKeys: Map<string, Set<string>>,
-  claimRegistry: Map<string, ClaimCallback>,
-): void {
-  if (!moniker) return;
-  const keys = monikerToKeys.get(moniker);
-  if (!keys) return;
-  for (const key of keys) {
-    claimRegistry.get(key)?.(focused);
-  }
-}
-
-/**
- * Listen for `focus-changed` events from Rust. Drives claim callbacks and
- * updates the focused-moniker store so subscribers (`useFocusedMoniker` etc.)
- * re-render on focus transitions.
+ * Listen for `focus-changed` events from Rust and update the focused-moniker
+ * store. FocusScope subscribers re-render via `useSyncExternalStore` and
+ * derive `data-focused` by comparing their moniker to the new store value.
  *
  * The event listener is the sole authority for "current focused moniker" —
  * Rust owns focus, React only mirrors the scalar via the ref + listener
- * pattern below.
+ * pattern below. No per-key push callbacks fan out from here; every
+ * subscribed scope re-evaluates against the store on its own.
  *
  * The listener is registered on the current webview window (not the app-wide
  * event bus) so it only fires for `focus-changed` emissions scoped to this
@@ -302,7 +267,6 @@ function notifyClaim(
  * target, causing cross-window focus thrash.
  */
 function useFocusChangedEffect(
-  claimRegistryRef: React.RefObject<Map<string, ClaimCallback>>,
   keyToMonikerRef: React.RefObject<Map<string, string>>,
   getFocusedMoniker: () => string | null,
   setFocusedMoniker: (m: string | null) => void,
@@ -317,9 +281,7 @@ function useFocusChangedEffect(
       prev_key: string | null;
       next_key: string | null;
     }>("focus-changed", (event) => {
-      const { prev_key, next_key } = event.payload;
-      if (prev_key) claimRegistryRef.current.get(prev_key)?.(false);
-      if (next_key) claimRegistryRef.current.get(next_key)?.(true);
+      const { next_key } = event.payload;
       const newMoniker = next_key
         ? (keyToMonikerRef.current.get(next_key) ?? null)
         : null;
@@ -341,59 +303,6 @@ function useFocusChangedEffect(
     // Refs and setters are stable — effect runs once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-}
-
-/** Map from nav command id to Rust Direction string. */
-const NAV_DIRECTION_MAP: Record<string, string> = {
-  "nav.up": "Up",
-  "nav.down": "Down",
-  "nav.left": "Left",
-  "nav.right": "Right",
-  "nav.first": "First",
-  "nav.last": "Last",
-  "nav.rowStart": "RowStart",
-  "nav.rowEnd": "RowEnd",
-};
-
-/**
- * Returns a `broadcastNavCommand` callback that delegates to the Rust
- * spatial navigation engine via `spatial_navigate`.
- *
- * Maps the command id to a direction, looks up the focused moniker's
- * spatial key (if any), and fires an async invoke. Returns `true` if
- * dispatched.
- *
- * When no moniker is focused or no spatial key is registered for it,
- * `key` is `null`. Rust's `spatial_navigate` treats a null/unknown key
- * as "no source" and falls back to the top-left entry in the active
- * layer — the safety net that keeps the "something is always focused"
- * invariant recoverable after a view swap or a React/Rust desync. Do
- * NOT short-circuit here on a null moniker; let Rust pick a successor.
- */
-function useBroadcastNav(
-  getFocusedMoniker: () => string | null,
-  monikerToKeysRef: React.RefObject<Map<string, Set<string>>>,
-) {
-  return useCallback(
-    (commandId: string): boolean => {
-      const direction = NAV_DIRECTION_MAP[commandId];
-      if (!direction) return false;
-      const focusedMk = getFocusedMoniker();
-      // Pick the first registered spatial key for the focused moniker,
-      // or `null` when the moniker is missing or has no keys. Both cases
-      // tell Rust "no source" and trigger the fallback-to-first path.
-      let key: string | null = null;
-      if (focusedMk) {
-        const keys = monikerToKeysRef.current.get(focusedMk);
-        if (keys && keys.size > 0) {
-          key = keys.values().next().value ?? null;
-        }
-      }
-      invoke("spatial_navigate", { key, direction }).catch(() => {});
-      return true;
-    },
-    [getFocusedMoniker, monikerToKeysRef],
-  );
 }
 
 /** Re-dispatch the scope chain when the OS window gains focus (Alt-Tab). */
@@ -437,9 +346,8 @@ function useFocusContextValue(deps: {
   registerScope: EntityFocusContextValue["registerScope"];
   unregisterScope: EntityFocusContextValue["unregisterScope"];
   getScope: EntityFocusContextValue["getScope"];
-  broadcastNavCommand: EntityFocusContextValue["broadcastNavCommand"];
-  registerClaim: EntityFocusContextValue["registerClaim"];
-  unregisterClaim: EntityFocusContextValue["unregisterClaim"];
+  registerSpatialKey: EntityFocusContextValue["registerSpatialKey"];
+  unregisterSpatialKey: EntityFocusContextValue["unregisterSpatialKey"];
   getFocusedMoniker: EntityFocusContextValue["getFocusedMoniker"];
   subscribeFocus: EntityFocusContextValue["subscribeFocus"];
 }) {
@@ -448,9 +356,8 @@ function useFocusContextValue(deps: {
     registerScope,
     unregisterScope,
     getScope,
-    broadcastNavCommand,
-    registerClaim,
-    unregisterClaim,
+    registerSpatialKey,
+    unregisterSpatialKey,
     getFocusedMoniker,
     subscribeFocus,
   } = deps;
@@ -460,9 +367,8 @@ function useFocusContextValue(deps: {
       registerScope,
       unregisterScope,
       getScope,
-      broadcastNavCommand,
-      registerClaim,
-      unregisterClaim,
+      registerSpatialKey,
+      unregisterSpatialKey,
       getFocusedMoniker,
       subscribeFocus,
     }),
@@ -471,9 +377,8 @@ function useFocusContextValue(deps: {
       registerScope,
       unregisterScope,
       getScope,
-      broadcastNavCommand,
-      registerClaim,
-      unregisterClaim,
+      registerSpatialKey,
+      unregisterSpatialKey,
       getFocusedMoniker,
       subscribeFocus,
     ],
@@ -489,55 +394,68 @@ function useFocusContextValue(deps: {
  * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
  * that re-render via `useSyncExternalStore` when focus changes.
  */
-export function EntityFocusProvider({ children }: { children: ReactNode }) {
+/**
+ * Wire together all focus-provider subsystems: dispatch ref, focused-moniker
+ * store, scope registry, claim registry, setFocus, focus-changed effect,
+ * nav broadcaster, window-focus effect.
+ *
+ * Returns everything `EntityFocusProvider` needs to assemble its context
+ * value and its `FocusedScopeContext`.
+ */
+function useFocusProviderInternals() {
   const dispatch = useDispatchCommand("ui.setFocus");
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
-
   const { getFocusedMoniker, subscribeFocus, setFocusedMoniker } =
     useFocusedMonikerStore();
   const { registryRef, registerScope, unregisterScope, getScope } =
     useScopeRegistry();
   const {
-    claimRegistryRef,
     keyToMonikerRef,
     monikerToKeysRef,
-    registerClaim,
-    unregisterClaim,
-  } = useClaimRegistry();
+    registerSpatialKey,
+    unregisterSpatialKey,
+  } = useSpatialKeyRegistry();
   const setFocus = useFocusSetter(
-    getFocusedMoniker,
     setFocusedMoniker,
     dispatch,
     registryRef,
     monikerToKeysRef,
-    claimRegistryRef,
   );
   useFocusChangedEffect(
-    claimRegistryRef,
     keyToMonikerRef,
     getFocusedMoniker,
     setFocusedMoniker,
     registryRef,
     dispatchRef,
   );
-  const broadcastNavCommand = useBroadcastNav(
-    getFocusedMoniker,
-    monikerToKeysRef,
-  );
   useWindowFocusEffect(getFocusedMoniker, registryRef, dispatchRef);
-
-  const value = useFocusContextValue({
-    setFocus,
+  return {
+    getFocusedMoniker,
+    subscribeFocus,
+    registryRef,
     registerScope,
     unregisterScope,
     getScope,
-    broadcastNavCommand,
-    registerClaim,
-    unregisterClaim,
-    getFocusedMoniker,
-    subscribeFocus,
-  });
+    registerSpatialKey,
+    unregisterSpatialKey,
+    setFocus,
+  };
+}
+
+/**
+ * Provides entity focus state and a scope registry to the component tree.
+ * Should be provided once at the App level.
+ *
+ * Focus state is owned by Rust — this provider holds no `useState` mirror of
+ * the focused moniker. Instead, it exposes a subscribe/getSnapshot pair and
+ * a set of hooks (`useFocusedMoniker`, `useIsFocused`, `useFocusedScope`)
+ * that re-render via `useSyncExternalStore` when focus changes.
+ */
+export function EntityFocusProvider({ children }: { children: ReactNode }) {
+  const internals = useFocusProviderInternals();
+  const { getFocusedMoniker, subscribeFocus, registryRef } = internals;
+  const value = useFocusContextValue(internals);
 
   // Subscribe the provider itself so FocusedScopeContext re-renders when focus
   // changes — useDispatchCommand depends on this context to compute scope chains.
