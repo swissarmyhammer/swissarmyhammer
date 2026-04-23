@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8880'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9380
 project: spatial-nav
 title: 'Board virtualized cards: stale spatial rects — ResizeObserver doesn''t fire on translateY scroll, so Rust has wrong coordinates'
 ---
@@ -97,7 +97,7 @@ The perspective tab bug could share the same root cause IF the tab bar is inside
   - The test fails on the current broken code (ResizeObserver-only) and passes after the scroll-listener fix (verified by commenting out the scroll listener — both tests failed)
   - File: `kanban-app/ui/src/test/spatial-nav-virtual-scroll.test.tsx`
 - [x] Add a unit test for the scroll-ancestor detection helper (`findScrollableAncestor`) that verifies a scroll event on the nearest scrollable ancestor triggers a `report()` call
-  - File: `kanban-app/ui/src/components/focus-scope-scroll.node.test.ts` (9 cases: overflow auto/scroll/overlay, per-axis overflow-y/x, skipping non-scrollable ancestors, null fallback, overflow visible/hidden ignored, self-exclusion)
+  - File: `kanban-app/ui/src/components/focus-scope-scroll.node.test.ts` (10 cases: overflow auto/scroll/overlay, per-axis overflow-y/x, skipping non-scrollable ancestors, null fallback, overflow visible/hidden ignored, self-exclusion)
 - [x] Run `cd kanban-app/ui && npm test` — all green (1420/1420)
 
 ## Workflow
@@ -106,4 +106,9 @@ The perspective tab bug could share the same root cause IF the tab bar is inside
 - Measure scroll-listener performance with a console.warn during development. If flood of `spatial_register` invokes is visible in the OS log during fast scroll, the RAF throttle isn't right — fix before committing. (Verified via the RAF-coalescing test instead — bounds re-registers to ≤3 per card for a 10-scroll burst.)
 - Remove any temporary instrumentation before closing. (None added.)
 - Do not expand scope to auto-scroll-on-nav-at-edge. That's a follow-up task; note it in a comment but don't implement. (Done — comment in `useRectObserver` flags it as follow-up.)
+
+## Review Findings (2026-04-22 09:15)
+
+### Nits
+- [x] `kanban-app/ui/src/components/focus-scope-scroll.node.test.ts` — No explicit unit-test case for `overflow: overlay` even though the implementation's regex accepts it and the file docstring mentions it. The other scrollable modes (`auto`, `scroll`, `overflow-y: auto`, `overflow-x: scroll`) each have a dedicated test. Consider adding a 10th case asserting `findScrollableAncestor` returns an ancestor with `overflow: overlay` so a future regex tweak can't silently drop support. (Resolved 2026-04-22 — added `"returns the nearest ancestor with overflow: overlay"` case; unit suite now 10/10 green.)
 

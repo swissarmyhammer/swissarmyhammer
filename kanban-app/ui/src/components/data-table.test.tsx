@@ -484,7 +484,7 @@ describe("DataTable cursor-driven visuals collapse to spatial focus", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Row selector Enter → ui.inspect (scope shadowing)
+// Row selector Space → ui.inspect (scope shadowing)
 // ---------------------------------------------------------------------------
 
 /**
@@ -515,19 +515,21 @@ function DataTableWithCellFocus() {
 
 /**
  * When the row selector cell is spatially focused and the user presses
- * Enter, the binding must dispatch `ui.inspect` with the row's entity
- * moniker as the explicit target. It must NOT fall through to the
- * grid-level `grid.editEnter` binding (which would drop the grid into
- * edit mode on cell (0, 0)).
+ * Space, the binding must dispatch `ui.inspect` with the row's entity
+ * moniker as the explicit target. Space is the universal "inspect /
+ * peek" key; Enter is reserved for "activate / drill into" (e.g. grid
+ * edit mode), so pressing Enter on the selector must fall through to
+ * `grid.editEnter` rather than fire `ui.inspect`.
  *
  * The tests mount `DataTable` inside a `FixtureShell` which provides the
  * same keybinding wiring as production's `AppShell` — `createKeyHandler`
  * listens on `document` and routes keys through the focused scope's
  * commands. A sibling `CommandScopeProvider` contributes a parent-level
  * `grid.editEnter` binding so the shadow-key resolution is exercised:
- * without the row selector's Enter binding, `grid.editEnter` would fire.
+ * pressing Enter on the selector resolves to the parent's binding (not
+ * the row's inspect).
  */
-describe("DataTable row selector Enter opens inspector", () => {
+describe("DataTable row selector Space opens inspector", () => {
   const gridEditEnter = vi.fn();
 
   /** Parent scope's `grid.editEnter`/`grid.edit` — mirrors `grid-view.tsx`. */
@@ -587,7 +589,7 @@ describe("DataTable row selector Enter opens inspector", () => {
     vi.mocked(invoke).mockImplementation(() => Promise.resolve(null));
   });
 
-  it("Enter on row selector dispatches ui.inspect with target=row.moniker", async () => {
+  it("Space on row selector dispatches ui.inspect with target=row.moniker", async () => {
     const { container } = renderTableInShell();
 
     // Click the row-2 selector to focus it (index 1 → ENTITIES[1] = t2).
@@ -601,25 +603,23 @@ describe("DataTable row selector Enter opens inspector", () => {
     );
     await userEvent.click(selectorRow2);
 
-    // Fire Enter.
-    await userEvent.keyboard("{Enter}");
+    // Fire Space.
+    await userEvent.keyboard(" ");
 
     // Assert ui.inspect was dispatched with explicit target for row 2.
     const inspectCalls = dispatchCallsFor("ui.inspect");
     expect(inspectCalls.length).toBe(1);
     expect(inspectCalls[0].target).toBe("task:t2");
 
-    // Assert the parent's grid.editEnter did NOT fire — the row selector's
-    // Enter binding shadows it.
+    // Assert the parent's grid.editEnter did NOT fire — Space is a
+    // separate binding from Enter, and grid.editEnter only runs on Enter.
     expect(gridEditEnter).not.toHaveBeenCalled();
   });
 
-  it("Enter on the first-row selector targets that row, not row 0's cell", async () => {
-    // Guards the specific bug the task identifies: the grid cursor at
-    // init is (0, 0), so the old behavior of `grid.editEnter` with no
-    // target would edit cell (0, 0) regardless of which selector was
-    // focused. Asserting the target matches the focused selector's row
-    // (not row 0) locks that in.
+  it("Space on the first-row selector targets that row, not row 0's cell", async () => {
+    // Guards the companion bug: pressing Space on any selector must
+    // dispatch `ui.inspect` with that row's entity moniker as the target,
+    // not row 0 or the grid cursor's moniker.
     const { container } = renderTableInShell();
 
     const selectors = container.querySelectorAll<HTMLElement>(
@@ -627,12 +627,28 @@ describe("DataTable row selector Enter opens inspector", () => {
     );
     const selectorRow3 = selectors[2];
     await userEvent.click(selectorRow3);
-    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
 
     const inspectCalls = dispatchCallsFor("ui.inspect");
     expect(inspectCalls.length).toBe(1);
     expect(inspectCalls[0].target).toBe("task:t3");
     expect(gridEditEnter).not.toHaveBeenCalled();
+  });
+
+  it("Enter on row selector does NOT dispatch ui.inspect", async () => {
+    // Regression guard: Enter used to open the inspector on the row
+    // selector. Now Enter is reserved for activation (grid.editEnter is
+    // the parent binding; if Enter fell through it would fire). Pressing
+    // Enter on the selector must not dispatch `ui.inspect`.
+    const { container } = renderTableInShell();
+
+    const selectors = container.querySelectorAll<HTMLElement>(
+      "[data-testid='row-selector']",
+    );
+    await userEvent.click(selectors[1]);
+    await userEvent.keyboard("{Enter}");
+
+    expect(dispatchCallsFor("ui.inspect").length).toBe(0);
   });
 
   it("Enter on a regular data cell still falls through to grid.editEnter", async () => {

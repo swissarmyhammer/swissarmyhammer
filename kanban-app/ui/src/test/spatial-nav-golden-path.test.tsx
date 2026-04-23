@@ -427,11 +427,13 @@ function AppWithGridAndEditCommandsFixture({
 }
 
 /**
- * Grid fixture where each row selector carries its own per-row Enter →
+ * Grid fixture where each row selector carries its own per-row Space →
  * `ui.inspect` binding, mirroring the `RowSelector` component in
- * `data-table.tsx`. The per-row scope shadows any grid-level Enter binding,
- * so pressing Enter on a focused row selector dispatches `ui.inspect` with
- * the row entity's moniker as the target — not the cell-cursor's moniker.
+ * `data-table.tsx`. Space is the "inspect / peek" key; pressing it on a
+ * focused row selector dispatches `ui.inspect` with the row entity's
+ * moniker as the target — not the cell-cursor's moniker. Enter is
+ * reserved for "activate / drill into" and falls through to any
+ * grid-level Enter binding.
  */
 function AppWithGridAndRowSelectorEnterFixture() {
   return (
@@ -447,7 +449,7 @@ function AppWithGridAndRowSelectorEnterFixture() {
         >
           <FixtureHeaderRow />
           {Array.from({ length: GRID_ROWS }, (_, r) => (
-            <RowWithSelectorEnterCommand key={r} rowIndex={r} />
+            <RowWithSelectorInspectCommand key={r} rowIndex={r} />
           ))}
         </div>
       </FixtureShell>
@@ -457,25 +459,25 @@ function AppWithGridAndRowSelectorEnterFixture() {
 
 /**
  * A grid row that reuses the shared `FixtureRow` layout for cells, but
- * wraps it in a `FocusScope`-level Enter binding for the row-selector
+ * wraps it in a `FocusScope`-level Space binding for the row-selector
  * moniker. We cannot modify the shared `FixtureRow` (its row-selector
- * `FocusScope` is declared with `commands={[]}`), so the Enter binding is
+ * `FocusScope` is declared with `commands={[]}`), so the Space binding is
  * installed via a sibling `CommandScopeProvider` whose `ui.inspect`
  * executes with the correct per-row target. Clicking the row selector
  * sets focus to the selector moniker; the selector scope contains no
  * commands of its own but its ancestor `CommandScopeProvider` supplies
- * the Enter binding that production places directly on the selector's
+ * the Space binding that production places directly on the selector's
  * `FocusScope`. The dispatched target matches production's exactly:
  * `moniker("tag", "tag-<row>")`.
  */
-function RowWithSelectorEnterCommand({ rowIndex }: { rowIndex: number }) {
+function RowWithSelectorInspectCommand({ rowIndex }: { rowIndex: number }) {
   const rowEntityMoniker = useMemo(
     () => moniker("tag", `tag-${rowIndex}`),
     [rowIndex],
   );
   const dispatchInspect = useRef<((target: string) => void) | null>(null);
   return (
-    <RowSelectorEnterInjector
+    <RowSelectorInspectInjector
       rowIndex={rowIndex}
       entityMoniker={rowEntityMoniker}
       dispatchRef={dispatchInspect}
@@ -485,14 +487,14 @@ function RowWithSelectorEnterCommand({ rowIndex }: { rowIndex: number }) {
 
 /**
  * Wires a `CommandScopeProvider` that contributes `ui.inspect` with
- * `keys: Enter` above the row-selector scope, so the keybinding chain
- * resolves Enter to `ui.inspect` when the selector is focused.
+ * `keys: Space` above the row-selector scope, so the keybinding chain
+ * resolves Space to `ui.inspect` when the selector is focused.
  *
- * Extracted from `RowWithSelectorEnterCommand` because the provider must
+ * Extracted from `RowWithSelectorInspectCommand` because the provider must
  * call `useDispatchCommand` for the target dispatch — production does
  * the same inside the `RowSelector` component.
  */
-function RowSelectorEnterInjector({
+function RowSelectorInspectInjector({
   rowIndex,
   entityMoniker,
   dispatchRef: _dispatchRef,
@@ -510,7 +512,7 @@ function RowSelectorEnterInjector({
       {
         id: `ui.inspect.selector.${rowIndex}`,
         name: "Inspect Row",
-        keys: { vim: "Enter", cua: "Enter" },
+        keys: { vim: "Space", cua: "Space" },
         execute: () => {
           void (async () => {
             const { invoke } = await import("@tauri-apps/api/core");
@@ -532,13 +534,13 @@ function RowSelectorEnterInjector({
 }
 
 /**
- * Card fixture with a per-card Enter → `ui.inspect` binding, mirroring
- * `useEnterInspectCommand` in `entity-card.tsx`. Used to exercise the
- * keyboard Enter path on cards (complementary to the `dblClick` test,
+ * Card fixture with a per-card Space → `ui.inspect` binding, mirroring
+ * `useInspectCommand` in `entity-card.tsx`. Used to exercise the
+ * keyboard Space path on cards (complementary to the `dblClick` test,
  * which exercises the mouse path). The dispatched `ui.inspect` payload
  * uses the card moniker as the explicit `target`.
  */
-function AppWithCardEnterInspectFixture({
+function AppWithCardSpaceInspectFixture({
   cardMoniker: cardMk,
 }: {
   cardMoniker: string;
@@ -546,9 +548,9 @@ function AppWithCardEnterInspectFixture({
   const commands: CommandDef[] = useMemo(
     () => [
       {
-        id: `entity.activate.${cardMk}`,
+        id: `entity.inspect.${cardMk}`,
         name: "Inspect",
-        keys: { vim: "Enter", cua: "Enter" },
+        keys: { vim: "Space", cua: "Space" },
         execute: () => {
           void (async () => {
             const { invoke } = await import("@tauri-apps/api/core");
@@ -568,7 +570,7 @@ function AppWithCardEnterInspectFixture({
         <FocusScope
           moniker={cardMk}
           commands={commands}
-          data-testid="enter-inspect-card"
+          data-testid="space-inspect-card"
           style={{
             width: "200px",
             height: "60px",
@@ -1742,11 +1744,13 @@ describe("golden path: enter activation", () => {
   });
 
   /**
-   * Toolbar inspect button + Enter → `ui.inspect` targeting the board
+   * Toolbar inspect button + Space → `ui.inspect` targeting the board
    * moniker. The fixture supplies `board:b1` as the target; production's
-   * toolbar wires the active board similarly.
+   * toolbar wires the active board similarly. Space is the universal
+   * "inspect / peek" key (Enter is reserved for activation verbs like
+   * `app.search`).
    */
-  it("enter_on_toolbar_inspect_button_dispatches_ui_inspect_with_board_moniker", async () => {
+  it("space_on_toolbar_inspect_button_dispatches_ui_inspect_with_board_moniker", async () => {
     const screen = await render(<AppWithToolbarFixture />);
     const inspectBtn = screen
       .getByTestId(`data-moniker:${TOOLBAR_MONIKERS.inspectBoard}`)
@@ -1755,7 +1759,7 @@ describe("golden path: enter activation", () => {
     await userEvent.click(inspectBtn);
     const before = handles.dispatchedCommands().length;
 
-    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
 
     await expect
       .poll(() => handles.dispatchedCommands().length, {
@@ -1820,29 +1824,29 @@ describe("golden path: enter activation", () => {
 
   /**
    * Companion to `dblclick_on_card_opens_inspector_via_spatial_push_layer`
-   * that exercises the keyboard Enter path the task description names
-   * explicitly ("Card + Enter → inspector opens for that entity"). A
-   * regression that drops the Enter binding from `useEnterInspectCommand`
+   * that exercises the keyboard Space path the task description names
+   * explicitly ("Card + Space → inspector opens for that entity"). A
+   * regression that drops the Space binding from `useInspectCommand`
    * (or from the per-card FocusScope) would leave the dblClick path
    * unaffected but break the keyboard flow; only a test that presses
-   * Enter catches it.
+   * Space catches it.
    *
-   * Uses `AppWithCardEnterInspectFixture` because the default
+   * Uses `AppWithCardSpaceInspectFixture` because the default
    * `spatial-board-fixture.tsx` and `spatial-inspector-fixture.tsx` do not
-   * wire Enter on their card scopes — the fixture here mirrors
-   * `useEnterInspectCommand` in `entity-card.tsx` verbatim.
+   * wire Space on their card scopes — the fixture here mirrors
+   * `useInspectCommand` in `entity-card.tsx` verbatim.
    */
-  it("enter_on_card_dispatches_ui_inspect_with_card_target", async () => {
-    const cardMk = "task:enter-inspect-card";
+  it("space_on_card_dispatches_ui_inspect_with_card_target", async () => {
+    const cardMk = "task:space-inspect-card";
     const screen = await render(
-      <AppWithCardEnterInspectFixture cardMoniker={cardMk} />,
+      <AppWithCardSpaceInspectFixture cardMoniker={cardMk} />,
     );
-    const card = screen.getByTestId("enter-inspect-card");
+    const card = screen.getByTestId("space-inspect-card");
 
     await userEvent.click(card.element());
     const before = handles.dispatchedCommands().length;
 
-    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
 
     await expect
       .poll(() => handles.dispatchedCommands().length, {
@@ -1963,16 +1967,14 @@ describe("golden path: enter activation", () => {
   });
 
   /**
-   * Row selector + Enter → `ui.inspect` targeting the row's entity. The
-   * row selector's per-scope Enter binding shadows any grid-level Enter
-   * binding (see the `data-table.tsx` comment explaining the shadow),
-   * so the dispatched target must be the row entity's moniker, not the
-   * grid cursor's cell moniker. A regression that drops the Enter
-   * binding from the row selector scope would fall through to the
-   * grid's `grid.editEnter` and never emit `ui.inspect`; asserting the
-   * dispatch tail catches that.
+   * Row selector + Space → `ui.inspect` targeting the row's entity. The
+   * row selector's per-scope Space binding dispatches with the row
+   * entity's moniker as the target, not the grid cursor's cell moniker.
+   * A regression that drops the Space binding from the row selector
+   * scope would leave `ui.inspect` undispatched; asserting the dispatch
+   * tail catches that.
    */
-  it("enter_on_row_selector_dispatches_ui_inspect_with_row_target", async () => {
+  it("space_on_row_selector_dispatches_ui_inspect_with_row_target", async () => {
     const screen = await render(<AppWithGridAndRowSelectorEnterFixture />);
     const selectorMk = FIXTURE_ROW_SELECTOR_MONIKERS[1];
     const selector = screen
@@ -1983,7 +1985,7 @@ describe("golden path: enter activation", () => {
     await expectFocused(selector, "true");
     const before = handles.dispatchedCommands().length;
 
-    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
 
     await expect
       .poll(() => handles.dispatchedCommands().length, {

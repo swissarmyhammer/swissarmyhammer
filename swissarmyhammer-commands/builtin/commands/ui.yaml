@@ -1,6 +1,10 @@
 - id: ui.inspect
   name: Inspect
   visible: false
+  keys:
+    vim: Space
+    cua: Space
+    emacs: Space
   params:
     - name: moniker
       from: args

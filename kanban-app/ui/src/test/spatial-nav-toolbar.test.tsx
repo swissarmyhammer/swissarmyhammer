@@ -2,10 +2,12 @@
  * Toolbar navigation — React/dispatch boundary tests.
  *
  * Asserts that every interactive `<NavBar />` element registers its
- * `toolbar:*` moniker as a spatial entry and that Enter on a focused
- * toolbar button dispatches the expected command (`ui.inspect`,
- * `app.search`). The h/l spatial walking between toolbar elements is
- * covered by Rust unit tests.
+ * `toolbar:*` moniker as a spatial entry and that the activation key on a
+ * focused toolbar button dispatches the expected command — Space for
+ * `ui.inspect` (matching the universal "inspect / peek" convention) and
+ * Enter for `app.search` (which is an activation verb, not an inspect).
+ * The h/l spatial walking between toolbar elements is covered by Rust
+ * unit tests.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -227,28 +229,28 @@ describe("toolbar — React/dispatch boundary", () => {
     }
   });
 
-  it("Enter on the inspect button dispatches ui.inspect with the board moniker", async () => {
+  it("Space on the inspect button dispatches ui.inspect with the board moniker", async () => {
     const screen = await render(<AppWithToolbarFixture />);
     const inspectEl = screen
       .getByTestId(`data-moniker:${TOOLBAR_MONIKERS.inspectBoard}`)
       .element() as HTMLElement;
 
     await userEvent.click(inspectEl);
-    // Snapshot count so the Enter assertion isolates only the keypress
+    // Snapshot count so the Space assertion isolates only the keypress
     // dispatch (the click itself already dispatched ui.inspect).
-    const beforeEnter = handles.dispatchedCommands().length;
+    const beforeSpace = handles.dispatchedCommands().length;
 
-    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
 
     await expect
       .poll(() => handles.dispatchedCommands().length, {
         timeout: POLL_TIMEOUT,
       })
-      .toBeGreaterThan(beforeEnter);
+      .toBeGreaterThan(beforeSpace);
 
-    const postEnter = handles.dispatchedCommands().slice(beforeEnter);
+    const postSpace = handles.dispatchedCommands().slice(beforeSpace);
     expect(
-      postEnter.some((d) => d.cmd === "ui.inspect" && d.target === "board:b1"),
+      postSpace.some((d) => d.cmd === "ui.inspect" && d.target === "board:b1"),
     ).toBe(true);
   });
 

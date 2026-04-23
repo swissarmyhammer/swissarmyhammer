@@ -235,30 +235,34 @@ function ScopedPercentComplete({
  * Each interactive element is wrapped in a `FocusScope` with a
  * `toolbar:*` moniker so the spatial engine sees a rect for it and
  * `k` (up) from the perspective bar or LeftNav lands on the toolbar
- * rather than finding no candidate above. Enter on each scope mirrors
- * the corresponding click action:
+ * rather than finding no candidate above. The activation key on each
+ * scope mirrors the corresponding click action:
  *
- * - `toolbar:board-selector` — opens the board-switch dropdown
- * - `toolbar:inspect-board` — dispatches `ui.inspect` on the board
- * - `toolbar:search`        — dispatches `app.search`
- * - `toolbar:percent-complete` — no Enter action; read-only landing site
+ * - `toolbar:board-selector` — Enter opens the board-switch dropdown
+ * - `toolbar:inspect-board` — Space dispatches `ui.inspect` on the board
+ *   (inspect is the universal "peek" verb, bound to Space app-wide)
+ * - `toolbar:search`        — Enter dispatches `app.search`
+ * - `toolbar:percent-complete` — no keyboard action; read-only landing site
  */
 /**
- * Build an Enter-bound `CommandDef` excluded from the context menu.
+ * Build a keyboard-activation `CommandDef` excluded from the context menu.
  *
  * Every toolbar FocusScope exposes a single keyboard activation
  * command — this helper keeps the `id` / `name` / handler wiring
- * consistent and the context-menu noise suppressed.
+ * consistent and the context-menu noise suppressed. The activation
+ * key is passed in explicitly so inspect (Space) and activation (Enter)
+ * don't have to live in separate helpers.
  */
-function buildEnterCommand(
+function buildActivationCommand(
   id: string,
   name: string,
+  key: string,
   execute: () => void,
 ): CommandDef {
   return {
     id,
     name,
-    keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
+    keys: { vim: key, cua: key, emacs: key },
     execute,
     contextMenu: false,
   };
@@ -267,13 +271,19 @@ function buildEnterCommand(
 /**
  * Build the `{ handler, commands }` pair for each toolbar button: the
  * handler composes `setFocus(moniker)` + the click side effect so mouse
- * and keyboard Enter paths converge, and `commands` wires the same
- * handler behind Enter via an Enter-bound `CommandDef`.
+ * and keyboard paths converge, and `commands` wires the same handler
+ * behind the activation key (Enter for activation verbs, Space for
+ * inspect) via an activation-bound `CommandDef`.
  */
-function useEnterCommand(id: string, name: string, execute: () => void) {
+function useActivationCommand(
+  id: string,
+  name: string,
+  key: string,
+  execute: () => void,
+) {
   return useMemo<CommandDef[]>(
-    () => [buildEnterCommand(id, name, execute)],
-    [id, name, execute],
+    () => [buildActivationCommand(id, name, key, execute)],
+    [id, name, key, execute],
   );
 }
 
@@ -292,7 +302,8 @@ function useToolbarHandlers(board: ReturnType<typeof useBoardData>) {
   const { setFocus } = useEntityFocus();
 
   // Enter opens the Radix Select dropdown via a click on the SelectTrigger
-  // (located by its stable `data-slot` attribute).
+  // (located by its stable `data-slot` attribute). Opening a dropdown is
+  // an activation verb, so it stays bound to Enter.
   const openBoardSelector = useCallback(() => {
     setFocus(TOOLBAR_BOARD_SELECTOR_MONIKER);
     document
@@ -319,24 +330,29 @@ function useToolbarHandlers(board: ReturnType<typeof useBoardData>) {
 /**
  * Build the `{ handler, commands }` pair for each toolbar button: handlers
  * compose `setFocus(moniker)` + the click side effect so mouse and keyboard
- * Enter paths converge, and `commands` wires the same handler behind Enter
- * via an Enter-bound `CommandDef`.
+ * paths converge, and `commands` wires the same handler behind the
+ * scope's activation key. Inspect uses Space (matching the app-wide
+ * "inspect / peek" convention); board-selector and search use Enter
+ * (they're activation verbs — "open the dropdown", "open search").
  */
 function useToolbarActions(board: ReturnType<typeof useBoardData>) {
   const { openBoardSelector, inspectBoard, search } = useToolbarHandlers(board);
-  const boardSelectorCommands = useEnterCommand(
+  const boardSelectorCommands = useActivationCommand(
     "toolbar.board-selector.activate",
     "Open board selector",
+    "Enter",
     openBoardSelector,
   );
-  const inspectCommands = useEnterCommand(
+  const inspectCommands = useActivationCommand(
     "toolbar.inspect-board.activate",
     "Inspect board",
+    "Space",
     inspectBoard,
   );
-  const searchCommands = useEnterCommand(
+  const searchCommands = useActivationCommand(
     "toolbar.search.activate",
     "Search",
+    "Enter",
     search,
   );
   return {
@@ -432,8 +448,9 @@ function PercentCompleteScope({
  * Every interactive element is wrapped in a `FocusScope` under the
  * `toolbar:*` moniker namespace so the Rust spatial engine registers a
  * rect above the perspective bar and LeftNav — pressing `k` (Up) from
- * those regions reaches a toolbar button. Each scope binds Enter to the
- * button's click action through `useToolbarActions`, so mouse and
+ * those regions reaches a toolbar button. Each scope binds its
+ * activation key (Enter for activation verbs, Space for inspect) to
+ * the button's click action through `useToolbarActions`, so mouse and
  * keyboard paths converge on the same dispatcher.
  *
  * Meant to be rendered once at the App level inside `AppShell`.

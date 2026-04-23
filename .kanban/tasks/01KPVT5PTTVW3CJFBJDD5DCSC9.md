@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9280
 project: spatial-nav
 title: 'Grid column header: Enter should toggle sort (currently a no-op on a focused header)'
 ---

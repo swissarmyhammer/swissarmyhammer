@@ -129,6 +129,14 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
     parts.push("Shift");
   }
 
+  // Canonicalize the space character to the readable word "Space" so
+  // bindings can spell Space explicitly — matching the precedent set by
+  // Escape/Enter/ArrowUp and avoiding a bare whitespace literal in YAML
+  // and component `keys` maps.
+  if (key === " ") {
+    key = "Space";
+  }
+
   parts.push(key);
   return parts.join("+");
 }

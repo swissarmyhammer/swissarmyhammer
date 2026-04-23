@@ -55,6 +55,20 @@ describe("findScrollableAncestor", () => {
     expect(findScrollableAncestor(inner)).toBe(scroller);
   });
 
+  it("returns the nearest ancestor with overflow: overlay", () => {
+    // `overlay` is a non-standard (WebKit/Blink) overflow value that
+    // scrolls like `auto` but floats the scrollbar over the content.
+    // The regex in `findScrollableAncestor` accepts it explicitly; this
+    // case pins that behavior so a future tweak can't silently drop it.
+    const scroller = document.createElement("div");
+    scroller.style.overflow = "overlay";
+    const inner = document.createElement("div");
+    scroller.appendChild(inner);
+    document.body.appendChild(scroller);
+
+    expect(findScrollableAncestor(inner)).toBe(scroller);
+  });
+
   it("returns the nearest ancestor with overflow-y: auto even when overflow-x is visible", () => {
     const scroller = document.createElement("div");
     scroller.style.overflowY = "auto";

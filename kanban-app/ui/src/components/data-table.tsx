@@ -1117,15 +1117,14 @@ interface RowSelectorProps {
  * would duplicate the bar and disagree with spatial focus whenever the
  * user navigates elsewhere.
  *
- * The scope binds `Enter` (both vim and CUA modes) to `ui.inspect` with
- * an explicit `target` of this row's entity moniker. This shadows the
- * grid-level `grid.editEnter` / `grid.edit` bindings that live on the
- * parent scope (`grid-view.tsx`): without this shadow, pressing Enter
- * on a row selector would fall through to `grid.enterEdit()` and drop
- * the grid into edit mode on the current cursor cell (default (0, 0))
- * — never opening the inspector. The row selector is a per-row
- * affordance, so Enter here must open the inspector for this row's
- * entity, matching the `InspectButton` precedent in `entity-card.tsx`.
+ * The scope binds `Space` (both vim and CUA modes) to `ui.inspect` with
+ * an explicit `target` of this row's entity moniker. Space is the
+ * universal "inspect / peek" key (matching macOS Finder's Quick Look
+ * convention); Enter is reserved for "activate / drill into" and is
+ * left free on this scope so it falls through to the grid-level
+ * `grid.editEnter` binding. The row selector is a per-row affordance,
+ * so Space here opens the inspector for this row's entity, matching
+ * the `InspectButton` precedent in `entity-card.tsx`.
  */
 function RowSelector({ entity, di }: RowSelectorProps) {
   const { setFocus } = useEntityFocus();
@@ -1147,7 +1146,7 @@ function RowSelector({ entity, di }: RowSelectorProps) {
       {
         id: "ui.inspect",
         name: "Inspect",
-        keys: { vim: "Enter", cua: "Enter" },
+        keys: { vim: "Space", cua: "Space" },
         execute: () => {
           dispatchInspect({ target: entity.moniker }).catch(console.error);
         },

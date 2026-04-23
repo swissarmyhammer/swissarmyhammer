@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e080
+position_column: review
+position_ordinal: '8780'
 project: spatial-nav
 title: 'Perspective tabs: h/l (nav.left/right) from a focused tab doesn''t reach adjacent tab, focus vanishes'
 ---
@@ -135,14 +135,14 @@ If this test passes, the bug is NOT in the Rust algorithm — it's in the React-
 - [ ] Manual: symmetric for `h` — walks left through tabs, stops at first tab or steps over to an adjacent visible element (LeftNav)
 - [ ] At no point during tab navigation does the focus bar disappear without a visible target gaining it
 - [ ] `__spatial_dump` output captured in the task description before the fix
-- [ ] Rust unit test `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control` (plus a `nav.left` variant) passes
+- [x] Rust unit test `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control` (plus a `nav.left` variant) passes
 - [ ] If the fix lands in React: a vitest-browser test in `kanban-app/ui/src/test/` asserts `nav.right` from a perspective tab dispatches `dispatch_command` (via the real dispatcher, no shim) and the resulting `focus-changed` event's `next_key` resolves to the adjacent tab's moniker
-- [ ] All existing tests still green
+- [x] All existing tests still green
 
 ## Tests
 
-- [ ] `cargo test -p swissarmyhammer-spatial-nav navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control` — passes
-- [ ] `cargo test -p swissarmyhammer-spatial-nav -p swissarmyhammer-kanban -p kanban-app` — green
+- [x] `cargo test -p swissarmyhammer-spatial-nav navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control` — passes
+- [x] `cargo test -p swissarmyhammer-spatial-nav -p swissarmyhammer-kanban -p kanban-app` — green
 - [ ] `cd kanban-app/ui && npm test` — green
 - [ ] Manual verification per acceptance criteria 1–3
 
@@ -153,3 +153,113 @@ If this test passes, the bug is NOT in the Rust algorithm — it's in the React-
 - Fix at the root cause site the dump points to. Do not patch the symptom (e.g. "force nav to pick monikers starting with `perspective:` when in the perspective bar"). The general beam test must produce the right answer for geometrically-aligned sibling scopes.
 - If the fix turns out to be "some other FocusScope is registering a rect that outscores the tabs," the right fix is to either remove that scope's spatial registration (`spatial={false}`) or restructure the layout so it doesn't compete. Not to hack around it.
 
+## TDD Outcome (2026-04-22)
+
+### Rust algorithm test: PASSES against current code
+
+Two new regression tests added to
+`swissarmyhammer-spatial-nav/src/spatial_state.rs::tests`:
+
+1. `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control`
+   — three tabs + `+` + filter, verifies `nav.right` walks t1→t2 and
+   t3→`+` (not skipping to `flt`).
+2. `navigate_left_from_tab_reaches_adjacent_tab` — same layout, verifies
+   `nav.left` walks t3→t2→t1, and from t1 stays on t1 (no silent focus
+   loss at the leftmost edge).
+
+Both tests pass on first run. Full `cargo test -p swissarmyhammer-spatial-nav`: 84 passed, 0 failed. Full `cargo test -p swissarmyhammer-spatial-nav -p swissarmyhammer-kanban -p kanban-app`: green.
+
+### Conclusion: bug is NOT in the Rust algorithm
+
+Per the task's explicit workflow:
+
+> If this test passes, the bug is NOT in the Rust algorithm — it's in the
+> React-side rect registration or layer assignment for the real
+> perspective tabs.
+
+The pure-Rust beam-test algorithm correctly picks the adjacent tab for
+the geometric layout the perspective tab bar produces. The live-app
+"focus vanishes" symptom must come from one of:
+
+- Hypothesis (1) — a tab's rect registers as zero-size because
+  `ResizeObserver` fires before flex layout settles and no retry runs on
+  the next frame (candidate fix: `useRectObserver` retry in
+  `kanban-app/ui/src/components/focus-scope.tsx`).
+- Hypothesis (2) — a non-tab sibling in the perspective bar
+  (`AddPerspectiveButton`, `FilterEditor`, the bar container itself)
+  registers a rect that geometrically outscores the adjacent tab
+  (candidate fix: audit `perspective-tab-bar.tsx` and mark non-targets
+  `spatial={false}`).
+- Hypothesis (3) — layer_key mismatch between adjacent tabs and
+  `layer_stack.active()`.
+- Hypothesis (4) — duplicate entries from a re-keyed mount without
+  cleanup.
+- Hypothesis (5) — parent-scope shadowing where a container rect wins
+  over sibling tabs.
+
+### Why this task stops here
+
+The task explicitly scopes the unit-test step: "Do NOT launch the app.
+Work in unit tests." Determining which hypothesis is correct requires
+the live `__spatial_dump` of the real DOM — which requires launching
+the app. That diagnostic step, the React-side fix, the vitest-browser
+regression test, and manual verification all belong to a follow-up
+task that does launch the app.
+
+The Rust regression tests in this task are the permanent anchor: any
+future change to the beam-test algorithm that regresses tab-row
+navigation for this exact geometric layout will be caught by
+`cargo test`.
+
+### Unchecked boxes (left for follow-up)
+
+- `__spatial_dump` capture — requires running app.
+- vitest-browser test — requires mounting real components.
+- Manual acceptance criteria 1–3 — requires running app.
+
+## Review Findings (2026-04-22 17:35)
+
+### Blockers
+
+- [ ] `swissarmyhammer-spatial-nav/src/spatial_state.rs:3143` — The two new regression tests are **uncommitted working-tree changes**. `git status` shows `spatial_state.rs` as modified and the new test code does not appear in any commit on `navigation`. If this task advances without committing the tests, the "permanent anchor" the TDD-outcome note promises does not exist — a future clean checkout has no test to regress against. Fix: commit the two tests (plus the block comment preamble at line 3131) as a dedicated `test(spatial-nav):` commit before the task moves.
+
+### Warnings
+
+- [ ] `swissarmyhammer-spatial-nav/src/spatial_state.rs:3202-3216` — The `nav.right` test re-focuses `t3` after the earlier assertion left focus on `t2`, with a comment explaining that `state.focus()` is a no-op on a no-op focus call. This is fine as written, but the `nav.right` test does not include the leftmost-edge no-op assertion that the `nav.left` test includes at line 3294-3307 (pressing past the last tab with no `+`/filter). The task description's original sketch implied a `t3 → add` test but not a rightmost-edge check with `add`/`flt` absent. Consider adding a third geometry (three tabs only, no `+`, no filter) and asserting `nav.right` from `t3` is `None` with focus staying on `t3` — the symmetric match to the `nav.left` no-op check. Not required for correctness, but tightens the regression surface.
+
+- [ ] Task acceptance criteria: four of seven acceptance boxes (`__spatial_dump` capture, vitest-browser test, manual 1-3) remain **unchecked**, and the implementer's own TDD-outcome note explicitly states "requires launching the app… belong[s] to a follow-up task." That makes this task **not done** by its own definition. The right path is:
+  1. Commit the Rust tests on this task's branch (blocker above).
+  2. Leave this task in `review` with follow-up findings (this review).
+  3. Spawn a follow-up task scoped to: live-app diagnostic dump, React-side root-cause fix (1 of the 5 hypotheses), and a vitest-browser regression test covering tab→tab `nav.right`/`nav.left`.
+  4. When the follow-up lands, re-run `/review` here, and it moves to `done`.
+
+  Do not advance this task to `done` on the strength of passing Rust tests alone — the bug reported in the task title is a live-app symptom, and no evidence has been captured that it no longer reproduces. Prior ambient fixes (StrictMode layer refcount in `bcbdbfd06`, transitionend rect re-report in `6f3fc6fdb`, scroll-ancestor rect re-report in `33f60d132`) plausibly address Hypotheses 1 and 3 but this has not been verified. The dump capture is the cheapest way to close the loop.
+
+- [ ] `kanban-app/ui/src/test/spatial-nav-perspective.test.tsx:163-237` — The existing React-side perspective tests cover (a) moniker registration, (b) `nav.up` from a card dispatching, and (c) scripted `focus-changed` landing on a tab — but none exercise the tab-row itself: click a tab, press `l`, assert `nav.right` dispatches AND the scripted `focus-changed` with `next_key` resolving to the adjacent tab's moniker actually flips `data-focused` on that tab. That's the specific user-visible symptom this task reports, and the missing coverage is the reason a live-app bug could slip through the current test suite. When the follow-up task is created, this is the regression test it must add. Suggested shape:
+
+  ```tsx
+  it("pressing l from a focused perspective tab lands on the adjacent tab", async () => {
+    const screen = await render(<AppWithBoardAndPerspectiveFixture />);
+    const [mk1, mk2] = FIXTURE_PERSPECTIVE_MONIKERS;
+    const tab1 = screen.getByTestId(`data-moniker:${mk1}`).element() as HTMLElement;
+    const tab2 = screen.getByTestId(`data-moniker:${mk2}`).element() as HTMLElement;
+
+    handles.scriptResponse("dispatch_command:nav.right", () =>
+      handles.payloadForFocusMove(mk1, mk2),
+    );
+
+    await userEvent.click(tab1);
+    await expect.poll(() => tab1.getAttribute("data-focused"), { timeout: POLL_TIMEOUT }).toBe("true");
+
+    await userEvent.keyboard("l");
+    await expect.poll(() => tab2.getAttribute("data-focused"), { timeout: POLL_TIMEOUT }).toBe("true");
+  });
+  ```
+
+  Plus a symmetric `h` test. This asserts the dispatch→focus-changed→DOM-decoration loop for the exact key/scope the user reported broken.
+
+### Nits
+
+- [ ] `swissarmyhammer-spatial-nav/src/spatial_state.rs:3131-3140` — The block comment preamble is written as a narrative rather than a doc comment. Since these are internal `#[cfg(test)]` functions, plain `//` comments are fine, but the preamble is long enough that a single `/// Perspective tab navigation regression tests…` doc block above the first `#[test]` would scan better in `rustdoc --test` output. Purely cosmetic.
+
+- [ ] `swissarmyhammer-spatial-nav/src/spatial_state.rs:3143` — The test name `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control` matches the task description exactly but is 77 characters — unusually long for this file's test naming convention (most other tests in the module are under 50 characters). Consider `nav_right_perspective_tab_prefers_adjacent_sibling` or similar. Not worth changing on its own, but if a future refactor touches the test, trim.

@@ -659,12 +659,17 @@ interface BoardActionDeps {
   dispatchInspect: ReturnType<typeof useDispatchCommand>;
 }
 
-/** Factory for the "inspect focused entity" command. */
+/**
+ * Factory for the "inspect focused entity" command.
+ *
+ * Bound to Space (the universal "inspect / peek" key across the app);
+ * Enter is reserved for "activate / drill into" verbs on a given scope.
+ */
 function makeInspectCommand(deps: BoardActionDeps): CommandDef {
   return {
     id: "board.inspect",
     name: "Inspect",
-    keys: { vim: "Enter", cua: "Enter" },
+    keys: { vim: "Space", cua: "Space" },
     execute: () => {
       const fm = deps.focusedMonikerRef.current;
       if (fm) deps.dispatchInspect({ target: fm }).catch(console.error);

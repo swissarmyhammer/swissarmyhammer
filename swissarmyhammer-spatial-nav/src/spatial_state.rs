@@ -3127,4 +3127,183 @@ mod tests {
             "Direction::Last must pick the bottommost-rightmost entry in the ACTIVE layer"
         );
     }
+
+    // --- Perspective tab navigation regression tests (card
+    //     01KPVT95H4FTCC5Q4E7G644CHD): `h` / `l` from a focused perspective
+    //     tab must reach the adjacent tab. Symptom before the fix was focus
+    //     "vanishing" — nav event fires but no sibling gains focus. This
+    //     test pins the pure-Rust algorithm's behavior for the exact
+    //     geometric layout the perspective tab bar produces: three tabs in
+    //     a row, a `+` add button immediately to the right, and a filter
+    //     input further right. If this test passes, the algorithm is fine
+    //     and the bug is in React-side rect registration or layer
+    //     assignment.
+
+    #[test]
+    fn navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control() {
+        // Three perspective tabs in a row, plus a "+" button to the right
+        // of the last tab, plus a filter-editor rect further right. All
+        // entries live in the same `window` layer.
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "t1",
+            "perspective:p1",
+            rect(10.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t2",
+            "perspective:p2",
+            rect(100.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t3",
+            "perspective:p3",
+            rect(190.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "add",
+            "perspective:add",
+            rect(280.0, 40.0, 28.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "flt",
+            "filter:body",
+            rect(320.0, 40.0, 200.0, 28.0),
+            "window",
+            None,
+        );
+
+        // From t1, nav.right lands on t2 — not t3, not add, not flt.
+        state.focus("t1");
+        let ev = state
+            .navigate(Some("t1"), crate::spatial_nav::Direction::Right)
+            .expect("navigate must not error")
+            .expect("nav.right from t1 must find an adjacent tab");
+        assert_eq!(
+            ev.next_key,
+            Some("t2".to_string()),
+            "nav.right from t1 must reach t2 (adjacent tab), not skip to t3/add/flt"
+        );
+
+        // From t3, nav.right lands on `add` (adjacent, same row, in-beam).
+        // The navigate above moved focus to t2, so we must explicitly
+        // re-focus t3 before the next assertion. `focus` is a no-op (and
+        // returns None) if the key is already focused, so no unwrap.
+        state.focus("t3");
+        let ev = state
+            .navigate(Some("t3"), crate::spatial_nav::Direction::Right)
+            .expect("navigate must not error")
+            .expect("nav.right from t3 must find the adjacent `+` button");
+        assert_eq!(
+            ev.next_key,
+            Some("add".to_string()),
+            "nav.right from t3 (last tab) must land on `+`, not skip over it to the filter"
+        );
+    }
+
+    #[test]
+    fn navigate_left_from_tab_reaches_adjacent_tab() {
+        // Symmetric `h` / nav.left variant of
+        // `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control`.
+        // Same geometric layout — three tabs in a row with `+` and filter
+        // to the right. Walks leftward through the tabs and confirms each
+        // step lands on the immediately-adjacent sibling.
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "t1",
+            "perspective:p1",
+            rect(10.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t2",
+            "perspective:p2",
+            rect(100.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t3",
+            "perspective:p3",
+            rect(190.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "add",
+            "perspective:add",
+            rect(280.0, 40.0, 28.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "flt",
+            "filter:body",
+            rect(320.0, 40.0, 200.0, 28.0),
+            "window",
+            None,
+        );
+
+        // From t3, nav.left lands on t2.
+        state.focus("t3");
+        let ev = state
+            .navigate(Some("t3"), crate::spatial_nav::Direction::Left)
+            .expect("navigate must not error")
+            .expect("nav.left from t3 must find t2");
+        assert_eq!(
+            ev.next_key,
+            Some("t2".to_string()),
+            "nav.left from t3 must reach t2 (adjacent tab)"
+        );
+
+        // From t2, nav.left lands on t1.
+        state.focus("t2");
+        let ev = state
+            .navigate(Some("t2"), crate::spatial_nav::Direction::Left)
+            .expect("navigate must not error")
+            .expect("nav.left from t2 must find t1");
+        assert_eq!(
+            ev.next_key,
+            Some("t1".to_string()),
+            "nav.left from t2 must reach t1 (adjacent tab)"
+        );
+
+        // From t1, nav.left has nothing (no entries left of t1). Must be a
+        // clean no-op — focus must not silently vanish.
+        state.focus("t1");
+        let result = state
+            .navigate(Some("t1"), crate::spatial_nav::Direction::Left)
+            .expect("navigate must not error");
+        assert!(
+            result.is_none(),
+            "nav.left from leftmost tab must be a no-op (no silent focus loss), got: {:?}",
+            result
+        );
+        assert_eq!(
+            state.focused_key(),
+            Some("t1".to_string()),
+            "focus must remain on t1 when nav.left has no target"
+        );
+    }
 }
