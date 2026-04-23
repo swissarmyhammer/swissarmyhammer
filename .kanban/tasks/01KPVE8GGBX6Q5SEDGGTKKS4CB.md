@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9180
 title: Perspective undo doesn't refresh the cache or emit events — Group By (and filter/sort/etc.) undo silently no-ops
 ---
 ## What

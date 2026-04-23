@@ -1460,6 +1460,96 @@ mod tests {
         }
     }
 
+    /// Undo-of-delete reconciliation: delete a perspective (cache + disk
+    /// gone), then simulate the store-level undo by rewriting the YAML back
+    /// to disk. `reload_from_disk` must see the reappearing file, re-insert
+    /// the perspective into the cache, and fire `PerspectiveChanged` with
+    /// `is_create: false` so the Tauri bridge can translate it into an
+    /// `entity-field-changed` signal for the frontend refetch.
+    ///
+    /// This is the mirror image of
+    /// `reload_from_disk_evicts_cache_and_emits_deleted_on_file_absence`:
+    /// the delete branch and the undo-of-delete branch use the same method,
+    /// so both directions must be pinned. Without this coverage, a future
+    /// edit that skips the file-exists branch (e.g. returning early for any
+    /// id not already in `id_index`) would silently break delete-undo while
+    /// leaving the more-exercised field-edit-undo paths green.
+    #[tokio::test]
+    async fn reload_from_disk_reinserts_previously_deleted_perspective() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let mut ctx = PerspectiveContext::open(&dir).await.unwrap();
+
+        // Create a perspective with a distinguishing field value so the
+        // post-undo cache state is easy to assert against.
+        let mut seeded = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint");
+        seeded.group = Some("status".to_string());
+        seeded.filter = Some("#bug".to_string());
+        ctx.write(&seeded).await.unwrap();
+
+        // Delete — this removes the cache entry AND deletes the file. Mirrors
+        // the path `perspective.delete` takes through `PerspectiveContext`.
+        ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        assert!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_none(),
+            "cache must be empty after delete"
+        );
+        assert!(
+            !dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists(),
+            "file must be gone after delete"
+        );
+
+        // Subscribe AFTER the delete so the post-reload event is the first
+        // thing the receiver sees — no drained noise from create/delete.
+        let mut rx = ctx.subscribe();
+
+        // Rewrite the YAML back to disk (simulating what
+        // `PerspectiveStore::undo_erased` does when undoing a delete).
+        let yaml = serde_yaml_ng::to_string(&seeded).unwrap();
+        fs::write(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml"), yaml.as_bytes())
+            .await
+            .unwrap();
+
+        // Reload — cache must re-insert the perspective and emit an event.
+        ctx.reload_from_disk("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap();
+
+        let restored = ctx
+            .get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .expect("cache must contain the re-inserted perspective after reload");
+        assert_eq!(restored.name, "Sprint");
+        assert_eq!(restored.group.as_deref(), Some("status"));
+        assert_eq!(restored.filter.as_deref(), Some("#bug"));
+
+        // A `PerspectiveChanged` event must have fired with `is_create: false`.
+        // `is_create: true` would be wrong here — the perspective already had
+        // an id on disk before the reload; the create-emit path is reserved
+        // for truly new entities. A `PerspectiveDeleted` event would also be
+        // wrong — the file reappeared, so the post-undo state is "present."
+        let evt = rx
+            .try_recv()
+            .expect("reload must emit an event when the file reappears");
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(
+                    !is_create,
+                    "reload must emit is_create=false; the frontend treats post-undo events as refetch signals, not creates"
+                );
+                assert!(
+                    changed_fields.is_empty(),
+                    "reload emits empty changed_fields as the full-refresh marker"
+                );
+            }
+            other => panic!("expected PerspectiveChanged from reload, got {other:?}"),
+        }
+    }
+
     /// When both the cache and disk have no entry for the id, `reload_from_disk`
     /// is a no-op: no cache mutation, no event emitted. Prevents spurious
     /// deleted events for ids that were never present.

@@ -1013,6 +1013,179 @@ async fn perspective_sort_undo_reverts_and_emits_event() {
     );
 }
 
+/// Undo of a perspective delete must restore the cache entry and fire a
+/// `PerspectiveChanged` event. This is the mirror image of
+/// [`perspective_create_undo_evicts_cache_and_emits_deleted`] — the file
+/// re-appears on disk after the store-level undo, so the reconciliation
+/// hook picks up the reappearing YAML and re-inserts the cache entry.
+///
+/// Without the kanban-local `KanbanUndoCmd` wrapper calling
+/// `PerspectiveContext::reload_from_disk`, the file would be restored but
+/// the cache and broadcast channel would never learn about it — the
+/// frontend tab bar would stay empty and the user would see undo as a
+/// silent no-op (the bug this task fixes).
+///
+/// Redo then re-deletes the perspective (cache cleared, `PerspectiveDeleted`
+/// event fires). A second undo restores it again — pinning the full
+/// undo-redo cycle for delete.
+#[tokio::test]
+async fn perspective_delete_undo_restores_cache_and_emits_event() {
+    let engine = UndoEngine::new().await;
+    let pid = add_perspective(&engine, "Doomed").await;
+
+    // Sanity: perspective is present in both cache and disk before delete.
+    let perspectives_dir = engine.kanban.root().join("perspectives");
+    let yaml_path = perspectives_dir.join(format!("{pid}.yaml"));
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_some(),
+            "cache must contain the perspective before delete"
+        );
+    }
+    assert!(
+        yaml_path.exists(),
+        "YAML file must exist on disk before delete"
+    );
+
+    // Subscribe AFTER the create so only the delete/undo/redo events land.
+    let mut rx = {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        pctx.subscribe()
+    };
+
+    // Dispatch `perspective.delete` through the production command path.
+    // The `name` arg accepts an id, so pass the ULID directly.
+    let mut args = HashMap::new();
+    args.insert("name".into(), json!(pid));
+    engine
+        .dispatch("perspective.delete", &[], None, args)
+        .await
+        .expect("perspective.delete should succeed");
+
+    // Cache is empty and file is gone — the forward delete path worked.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_none(),
+            "cache must not contain the perspective after delete"
+        );
+        assert!(
+            pctx.all().is_empty(),
+            "perspective list must be empty after delete (it was the only one)"
+        );
+    }
+    assert!(
+        !yaml_path.exists(),
+        "YAML file must be gone from disk after delete"
+    );
+
+    // Drain the delete event so the next event we assert comes from undo.
+    let delete_event = rx
+        .try_recv()
+        .expect("perspective.delete must emit a PerspectiveDeleted event");
+    match delete_event {
+        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+            assert_eq!(id, &pid);
+        }
+        other => panic!("expected PerspectiveDeleted from delete, got {other:?}"),
+    }
+
+    // Undo — the fix under test. The store layer restores the YAML file,
+    // and `KanbanUndoCmd` calls `reload_from_disk` to re-insert the cache
+    // entry and emit the event.
+    engine.undo().await;
+
+    // Assertion 1: YAML file is back on disk (store-layer contract — pinned
+    // by `delete_pushes_onto_undo_stack` in the perspectives crate).
+    assert!(
+        yaml_path.exists(),
+        "YAML file must be restored on disk after undo of delete"
+    );
+
+    // Assertion 2: cache has the perspective back — this is the bug being
+    // fixed. Without reload_from_disk, the cache would still be empty.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        let restored = pctx
+            .get_by_id(&pid)
+            .expect("cache must contain the restored perspective after undo");
+        assert_eq!(
+            restored.name, "Doomed",
+            "restored perspective must have its original name intact"
+        );
+    }
+
+    // Assertion 3: a PerspectiveChanged event fired post-undo. The Tauri
+    // bridge translates this into an `entity-field-changed` event which the
+    // frontend perspective-context listener treats as a refetch signal.
+    // Without this event, the tab bar would never learn the perspective
+    // came back.
+    let undo_event = rx
+        .try_recv()
+        .expect("undo of delete must emit a PerspectiveChanged event");
+    match undo_event {
+        PerspectiveEvent::PerspectiveChanged {
+            ref id, is_create, ..
+        } => {
+            assert_eq!(id, &pid);
+            assert!(
+                !is_create,
+                "undo of delete emits is_create=false — the perspective was \
+                 previously created, not re-created"
+            );
+        }
+        other => panic!("expected PerspectiveChanged from undo of delete, got {other:?}"),
+    }
+
+    // Redo — removes it again. Full undo/redo cycle must work both ways.
+    engine.redo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_none(),
+            "cache must be empty after redo of delete"
+        );
+    }
+    assert!(
+        !yaml_path.exists(),
+        "YAML file must be gone from disk after redo of delete"
+    );
+
+    let redo_event = rx
+        .try_recv()
+        .expect("redo of delete must emit a PerspectiveDeleted event");
+    match redo_event {
+        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+            assert_eq!(id, &pid);
+        }
+        other => panic!("expected PerspectiveDeleted from redo of delete, got {other:?}"),
+    }
+
+    // A second undo restores the perspective again — the undo/redo history
+    // is not consumed by repeated cycles.
+    engine.undo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_some(),
+            "second undo must restore the perspective again"
+        );
+    }
+    assert!(
+        yaml_path.exists(),
+        "YAML file must be restored on disk after second undo"
+    );
+}
+
 /// Undo of a perspective create must evict the cache entry and fire a
 /// `PerspectiveDeleted` event. Before the fix, the file would be trashed
 /// on disk but the cache would still contain the create.
