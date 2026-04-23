@@ -1419,7 +1419,12 @@ async fn reorder_move_third_before_second_then_back() {
 }
 
 // ===========================================================================
-// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
+// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — task delete via cross-cutting entity.delete
+//
+// Originally covered the retired `task.delete` command. After the duplicate
+// context-menu cleanup, task deletion dispatches through the cross-cutting
+// `entity.delete` (target-driven) whose `"task"` match arm dispatches the
+// same `DeleteTask` op. This test pins the dispatch path end-to-end.
 // ===========================================================================
 
 #[tokio::test]
@@ -1443,11 +1448,12 @@ async fn task_delete_removes_task() {
         "task should exist after add"
     );
 
-    // Dispatch task.delete through the command harness
+    // Dispatch entity.delete with the task moniker as target.
+    let target = format!("task:{}", task_id);
     engine
-        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple("entity.delete", &[], Some(&target))
         .await
-        .expect("task.delete should succeed");
+        .expect("entity.delete should succeed for task target");
 
     // Verify the task is gone
     assert!(

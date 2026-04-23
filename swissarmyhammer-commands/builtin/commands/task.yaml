@@ -19,19 +19,6 @@
     - name: drop_index
       from: args
 
-- id: task.delete
-  name: Delete Task
-  scope: "entity:task"
-  undoable: true
-  context_menu: true
-  keys:
-    vim: dd
-    cua: Mod+Backspace
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-
 - id: task.untag
   name: Remove Tag
   scope: "entity:tag,entity:task"

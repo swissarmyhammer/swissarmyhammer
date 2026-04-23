@@ -31,7 +31,9 @@
       "context_menu": true,
       "group": "actor:ctx2",
       "id": "entity.delete",
-      "keys": null,
+      "keys": {
+        "cua": "Mod+Backspace"
+      },
       "menu_name": null,
       "name": "Delete Actor",
       "target": "actor:alice"

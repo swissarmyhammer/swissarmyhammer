@@ -378,13 +378,15 @@ async fn matrix_task_delete() {
     let target = format!("task:{task_id}");
 
     let surface = h.surface(&[&target, "column:todo", "board:main"]);
+    // `entity.delete` declares `keys.cua: Mod+Backspace` after migrating
+    // that shortcut off the retired `task.delete` command.
     assert_shape(
         &surface,
         "entity.delete",
         Some(&target),
         "Delete Task",
         true,
-        false, // no keys on entity.delete
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -611,7 +613,7 @@ async fn matrix_tag_delete() {
         Some(&target),
         "Delete Tag",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -809,7 +811,7 @@ async fn matrix_project_delete() {
         Some(&target),
         "Delete Project",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -996,7 +998,7 @@ async fn matrix_column_delete() {
         Some("column:todo"),
         "Delete Column",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -1130,7 +1132,7 @@ async fn matrix_actor_delete() {
         Some(&target),
         "Delete Actor",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -1394,7 +1396,7 @@ async fn matrix_attachment_delete_surface_emits_entity_delete_only() {
         Some(target),
         "Delete Attachment",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 
@@ -1435,7 +1437,7 @@ async fn task_context_menu_does_not_include_delete_attachment() {
         Some(target),
         "Delete Task",
         true,
-        false,
+        true, // keys.cua = Mod+Backspace on entity.delete
         true,
     );
 }

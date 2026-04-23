@@ -563,12 +563,13 @@ describe("extractScopeBindings", () => {
 // These tests exercise the full dispatch cycle for every keybinding declared
 // on a cross-cutting command:
 //
+//   - `entity.delete`  — cua `Mod+Backspace` (migrated from the retired
+//                        type-specific `task.delete` so the delete shortcut
+//                        now works on any entity — task, tag, column, etc.)
 //   - `entity.archive` — vim `dd`
 //   - `entity.cut`     — cua `Mod+X`, vim `x`
 //   - `entity.copy`    — cua `Mod+C`, vim `y`
 //   - `entity.paste`   — cua `Mod+V`, vim `p`
-//   - `task.delete`    — cua `Mod+Backspace`, vim `dd` (type-specific but
-//                        tested alongside cross-cutting as the delete UX)
 //   - `ui.inspector.close` — cua `Escape`, vim `q`
 //   - `ui.palette.open`    — cua `Mod+K`, vim `:`
 //
@@ -650,13 +651,15 @@ describe("cross-cutting command keybinding dispatch", () => {
     expect(executeCommand).toHaveBeenCalledWith("entity.archive");
   });
 
-  it("cua: Mod+Backspace dispatches task.delete from a task scope", () => {
-    // `task.delete` declares `keys.cua: Mod+Backspace` in
-    // swissarmyhammer-commands/builtin/commands/task.yaml. The
-    // scope-registry emit surfaces it into the task's scope chain so the
-    // binding resolves.
+  it("cua: Mod+Backspace dispatches entity.delete from a task scope", () => {
+    // `entity.delete` declares `keys.cua: Mod+Backspace` in
+    // swissarmyhammer-commands/builtin/commands/entity.yaml. The keybinding
+    // migrated from the retired type-specific `task.delete` so the delete
+    // shortcut now works on any entity (task, tag, column, project, actor).
+    // The cross-cutting emit surfaces the command with its keys into every
+    // entity scope; `extractScopeBindings` pulls it out.
     const scope = makeScope([
-      { id: "task.delete", keys: { cua: "Mod+Backspace", vim: "dd" } },
+      { id: "entity.delete", keys: { cua: "Mod+Backspace" } },
     ]);
 
     withMacPlatform(() => {
@@ -664,7 +667,7 @@ describe("cross-cutting command keybinding dispatch", () => {
         extractScopeBindings(scope, "cua"),
       );
       handler(fakeKeyEvent("Backspace", { metaKey: true }));
-      expect(executeCommand).toHaveBeenCalledWith("task.delete");
+      expect(executeCommand).toHaveBeenCalledWith("entity.delete");
     });
   });
 

@@ -42,13 +42,16 @@ type CmdMap = HashMap<String, Arc<dyn Command>>;
 
 fn register_task(map: &mut CmdMap) {
     // task.add removed: unified into dynamic `entity.add:task` in scope_commands.
+    // task.delete removed: folded into the cross-cutting `entity.delete`
+    // auto-emit (which has a `"task"` match arm in `DeleteEntityCmd::execute`).
+    // The `Mod+Backspace` keybinding migrated onto `entity.delete` so the
+    // delete shortcut works across every entity type, not just tasks.
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert(
         "task.doThisNext".into(),
         Arc::new(task_commands::DoThisNextCmd),
     );
-    map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 }
 
 fn register_clipboard(map: &mut CmdMap) {
@@ -319,8 +322,9 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task (move, untag, doThisNext, delete) — task.add retired in
-        // favour of dynamic `entity.add:task`.
+        // 3 task (move, untag, doThisNext) — task.add retired in favour of
+        // dynamic `entity.add:task`; task.delete retired in favour of the
+        // cross-cutting `entity.delete` auto-emit.
         // + 3 clipboard + 5 entity (add, update_field, delete, archive, unarchive)
         // + 1 tag + 1 column + 9 UI (+ startRename)
         // + 12 app (quit, about, help, command, palette, search,
@@ -333,8 +337,8 @@ mod tests {
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // + 1 ui.mode.set = 61
-        assert_eq!(cmds.len(), 61);
+        // + 1 ui.mode.set = 60
+        assert_eq!(cmds.len(), 60);
     }
 
     // =========================================================================
@@ -423,12 +427,19 @@ mod tests {
         assert!(!cmd.available(&ctx));
     }
 
+    /// After the `task.delete` removal, task delete is served by the
+    /// cross-cutting `entity.delete` command (target-driven, not scope-chain
+    /// driven). This test pins that the registry no longer ships a
+    /// `task.delete` entry — if anything re-introduces it, the duplicate
+    /// context-menu entry regression returns.
     #[test]
-    fn delete_task_available_with_task_in_scope() {
+    fn task_delete_not_registered_uses_entity_delete_instead() {
         let cmds = register_commands();
-        let cmd = cmds.get("task.delete").unwrap();
-        let ctx = ctx_scope(&["task:01ABC"]);
-        assert!(cmd.available(&ctx));
+        assert!(
+            !cmds.contains_key("task.delete"),
+            "task.delete must not be re-registered — use entity.delete with \
+             target `task:{{id}}` (see DeleteEntityCmd's `\"task\"` match arm)"
+        );
     }
 
     #[test]

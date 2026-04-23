@@ -335,7 +335,9 @@
       "context_menu": true,
       "group": "project:ctx2",
       "id": "entity.delete",
-      "keys": null,
+      "keys": {
+        "cua": "Mod+Backspace"
+      },
       "menu_name": null,
       "name": "Delete Project",
       "target": "project:backend"

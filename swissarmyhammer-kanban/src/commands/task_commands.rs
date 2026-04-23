@@ -1,4 +1,8 @@
-//! Task-related command implementations: add, move, tag, untag, delete.
+//! Task-related command implementations: move, untag, doThisNext.
+//!
+//! Task deletion is served by the cross-cutting `entity.delete` command (see
+//! `entity_commands::DeleteEntityCmd`), so there is no type-specific
+//! `task.delete` here. Task creation is served by dynamic `entity.add:task`.
 
 use super::run_op;
 use crate::context::KanbanContext;
@@ -244,31 +248,6 @@ impl Command for DoThisNextCmd {
         if let Some(id) = first_task_id {
             op = op.with_before(id);
         }
-        run_op(&op, &kanban).await
-    }
-}
-
-/// Delete a task.
-///
-/// Requires `task` in the scope chain or `id` in args.
-pub struct DeleteTaskCmd;
-
-#[async_trait]
-impl Command for DeleteTaskCmd {
-    fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.has_in_scope("task") || ctx.arg("id").and_then(|v| v.as_str()).is_some()
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-
-        let task_id = ctx
-            .resolve_entity_id("task")
-            .or_else(|| ctx.arg("id").and_then(|v| v.as_str()))
-            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
-
-        let op = crate::task::DeleteTask::new(task_id);
-
         run_op(&op, &kanban).await
     }
 }
@@ -654,84 +633,10 @@ mod tests {
     }
 
     // =========================================================================
-    // DeleteTaskCmd
+    // Task delete — covered by `entity_commands::tests::delete_entity_deletes_task`
+    // (the cross-cutting `entity.delete` with an `"task"` match arm replaces
+    // the retired `task.delete` command).
     // =========================================================================
-
-    #[tokio::test]
-    async fn delete_task_cmd_execute_via_scope() {
-        let (_temp, kctx) = setup().await;
-        let add_result = AddTask::new("Deletable")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap().to_string();
-        let kanban = Arc::new(kctx);
-        let cmd = DeleteTaskCmd;
-
-        let ctx = make_ctx(
-            Arc::clone(&kanban),
-            vec![format!("task:{task_id}")],
-            None,
-            HashMap::new(),
-        );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["deleted"], true);
-    }
-
-    #[tokio::test]
-    async fn delete_task_cmd_execute_via_id_arg() {
-        let (_temp, kctx) = setup().await;
-        let add_result = AddTask::new("Deletable via arg")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap().to_string();
-        let kanban = Arc::new(kctx);
-        let cmd = DeleteTaskCmd;
-
-        let mut args = HashMap::new();
-        args.insert("id".into(), serde_json::json!(task_id));
-        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["deleted"], true);
-    }
-
-    #[tokio::test]
-    async fn delete_task_cmd_fails_without_task() {
-        let (_temp, kctx) = setup().await;
-        let kanban = Arc::new(kctx);
-        let cmd = DeleteTaskCmd;
-
-        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, HashMap::new());
-        let result = cmd.execute(&ctx).await;
-        assert!(result.is_err(), "should fail without task id");
-    }
-
-    // =========================================================================
-    // DeleteTaskCmd availability
-    // =========================================================================
-
-    #[test]
-    fn delete_task_available_with_task_scope() {
-        let ctx = CommandContext::new("task.delete", vec!["task:01X".into()], None, HashMap::new());
-        assert!(DeleteTaskCmd.available(&ctx));
-    }
-
-    #[test]
-    fn delete_task_available_with_id_arg() {
-        let mut args = HashMap::new();
-        args.insert("id".into(), serde_json::json!("task-1"));
-        let ctx = CommandContext::new("task.delete", vec![], None, args);
-        assert!(DeleteTaskCmd.available(&ctx));
-    }
-
-    #[test]
-    fn delete_task_not_available_without_task_or_id() {
-        let ctx = CommandContext::new("task.delete", vec![], None, HashMap::new());
-        assert!(!DeleteTaskCmd.available(&ctx));
-    }
 
     // =========================================================================
     // DoThisNextCmd

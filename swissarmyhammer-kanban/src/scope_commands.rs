@@ -1149,6 +1149,38 @@ mod tests {
         );
     }
 
+    /// Regression guard for https://… — right-clicking a task used to render
+    /// two identical "Delete Task" entries in the context menu: one from the
+    /// cross-cutting `entity.delete` (template-resolved to "Delete Task") and
+    /// one from the retired type-specific `task.delete` (hardcoded name).
+    ///
+    /// The fix removes `task.delete` entirely and migrates its only unique
+    /// affordance (the `Mod+Backspace` keybinding) onto `entity.delete`.
+    /// This test pins the surface contract: exactly one context-menu command
+    /// whose display name is "Delete Task", and its id is `entity.delete`.
+    #[test]
+    fn task_context_menu_has_exactly_one_delete_task() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+
+        let deletes: Vec<&ResolvedCommand> =
+            cmds.iter().filter(|c| c.name == "Delete Task").collect();
+
+        assert_eq!(
+            deletes.len(),
+            1,
+            "expected exactly one 'Delete Task' in the task context menu, got {}: {:?}",
+            deletes.len(),
+            deletes.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            deletes[0].id, "entity.delete",
+            "the surviving 'Delete Task' must be the cross-cutting `entity.delete`, \
+             not a type-specific `task.delete`"
+        );
+    }
+
     // =========================================================================
     // Tag on task scope
     // =========================================================================

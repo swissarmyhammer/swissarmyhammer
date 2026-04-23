@@ -74,6 +74,8 @@
   context_menu: true
   context_menu_group: 2
   context_menu_order: 0
+  keys:
+    cua: Mod+Backspace
   params:
     - name: moniker
       from: target

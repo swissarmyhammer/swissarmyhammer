@@ -438,9 +438,12 @@ mod tests {
         //   into the cross-cutting `entity.delete` auto-emit)
         // column: reorder = 1
         // tag: tag.update = 1
-        // task: task.move, task.delete, task.untag, task.doThisNext = 4
+        // task: task.move, task.untag, task.doThisNext = 3
+        //   (task.delete retired, folded into the cross-cutting `entity.delete`
+        //   auto-emit with an `"task"` match arm in `DeleteEntityCmd::execute`.
+        //   The `Mod+Backspace` keybinding migrated onto `entity.delete`.)
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 61);
+        assert_eq!(registry.all_commands().len(), 60);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -556,6 +559,10 @@ mod tests {
 
     #[test]
     fn merge_yaml_sources_adds_new_commands() {
+        // Note: `task.add` / `task.delete` are inline-only strings used here
+        // to exercise the merge logic — they do NOT have to correspond to
+        // live builtin commands. (The real `task.delete` was retired in
+        // favour of cross-cutting `entity.delete`.)
         let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
         assert!(reg.get("task.add").is_some());

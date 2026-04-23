@@ -1,0 +1,99 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9080
+title: '"Delete Task" appears twice in task context menu — remove duplicate `task.delete` command'
+---
+## What
+
+Right-clicking a task card shows two identical "Delete Task" entries in the context menu. Root cause: both `entity.delete` (cross-cutting, renders as "Delete {{entity.type}}" → "Delete Task") AND `task.delete` (type-specific, hardcoded "Delete Task") are declared with `context_menu: true` and target the same `entity:task` scope. They have different command ids, so `dedupe_by_id` at `swissarmyhammer-kanban/src/scope_commands.rs:888-897` keeps both.
+
+**The two definitions** (traced and verified to dispatch to the same backend op):
+- `swissarmyhammer-commands/builtin/commands/task.yaml:22-33` — `task.delete`, `context_menu: true`, `keys: { vim: dd, cua: Mod+Backspace }`, `scope: "entity:task"`, `params: [{task, from: scope_chain}]`.
+- `swissarmyhammer-commands/builtin/commands/entity.yaml:71-77` — `entity.delete`, `context_menu: true`, no keybindings, `params: [{moniker, from: target}]`.
+
+Both ultimately run `crate::task::DeleteTask::new(id)`:
+- `DeleteTaskCmd::execute` (`swissarmyhammer-kanban/src/commands/task_commands.rs:262-273`) resolves the task id from the scope chain and dispatches `DeleteTask`.
+- `DeleteEntityCmd::execute` (`swissarmyhammer-kanban/src/commands/entity_commands.rs:135-146`) has a `"task"` match arm that dispatches the same `DeleteTask` op.
+
+`task.delete` is a pure duplicate that predates the cross-cutting refactor captured in the `command-organization` memory rule (cross-cutting destructive actions live in `entity.yaml` only; per-type files hold only truly type-specific commands). It was not cleaned up when `entity.delete`'s task match arm was added.
+
+**Secondary latent bug surfaced**: `task.delete` declares `vim: dd`, and `entity.archive` at `entity.yaml:83-84` also declares `vim: dd`. Two commands competing for the same vim binding. Removing `task.delete` eliminates the conflict with no loss — the vim `dd` binding correctly belongs to archive (the standard spreadsheet/vim idiom), and delete via vim is a rarer intent best left to the palette or explicit `Mod+Backspace`.
+
+## Approach
+
+**Delete `task.delete` entirely; migrate its `Mod+Backspace` accelerator to `entity.delete` so the "delete shortcut" still works on any entity (task, tag, column, project, actor).** Drop the `vim: dd` binding — archive's claim on that key wins, per the existing conflict.
+
+### Changes
+
+1. **Remove YAML**: `swissarmyhammer-commands/builtin/commands/task.yaml` — delete the `task.delete` block (lines 22-33).
+
+2. **Add keybinding**: `swissarmyhammer-commands/builtin/commands/entity.yaml:71-77` — add `keys:` block to `entity.delete`:
+   ```yaml
+   - id: entity.delete
+     name: "Delete {{entity.type}}"
+     undoable: true
+     context_menu: true
+     keys:
+       cua: Mod+Backspace
+     params:
+       - name: moniker
+         from: target
+   ```
+
+3. **Remove Rust command**: `swissarmyhammer-kanban/src/commands/task_commands.rs` — delete `DeleteTaskCmd` struct and impl (lines 251-274) and the associated tests in the same file (lines 657-733 — `DeleteTaskCmd` tests). Keep/port one invariant test into `entity_commands.rs` if the behavior it asserts isn't already covered (the task arm of `DeleteEntityCmd` is at line 136).
+
+4. **Remove registration**: `swissarmyhammer-kanban/src/commands/mod.rs:51` — delete the `map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));` line.
+
+5. **Update tests that reference `task.delete`**:
+   - `swissarmyhammer-commands/src/registry.rs:562-567` — the `.some()` assertion becomes `.is_none()`; drop the name check or repoint to `entity.delete`.
+   - `swissarmyhammer-kanban/tests/command_dispatch_integration.rs:1422, 1448` — swap `"task.delete"` dispatch to `"entity.delete"` with target `"task:{task_id}"`.
+   - `kanban-app/ui/src/lib/keybindings.test.ts:570-571, 653-667` — update the cua-Mod+Backspace test to assert `entity.delete` fires (with the scope-emitted cross-cutting command key map), not `task.delete`. Update the block comment at lines 565-574 to move `task.delete` OUT of the cross-cutting list (it's being removed) and note the `Mod+Backspace` binding now belongs to `entity.delete`.
+
+6. **Add regression test**: In `swissarmyhammer-kanban/src/scope_commands.rs` tests module, add `task_context_menu_has_exactly_one_delete_task`:
+   1. Build scope chain `["task:01X", "column:todo"]`.
+   2. Call `commands_for_scope(..., context_menu_only: true, ...)`.
+   3. Filter commands by `name == "Delete Task"`.
+   4. Assert exactly one result — with id `entity.delete`.
+
+## Acceptance Criteria
+
+- [x] Right-clicking a task card shows exactly one "Delete Task" entry (dispatched from `entity.delete`).
+- [x] Pressing `Mod+Backspace` while a task is in scope deletes it via `entity.delete` (no regression on the existing UX).
+- [x] Pressing `dd` in vim mode with a task focused still archives the task (via `entity.archive`), as it did before — no longer ambiguous.
+- [x] `Mod+Backspace` with a tag or column focused also deletes that entity (new affordance that falls out of unifying the keybinding on the cross-cutting command — intentional, aligns with how `entity.cut`/`entity.copy`/`entity.paste` already work across types).
+- [x] `DeleteEntityCmd` test coverage for the task arm is preserved (either by keeping the existing task arm tests in `entity_commands.rs` or by porting a representative case from `task_commands.rs`'s deleted tests).
+- [x] `cargo nextest run -p swissarmyhammer-kanban` and `cargo test -p swissarmyhammer-commands` both pass.
+- [x] `cd kanban-app/ui && bun test keybindings` passes with the updated assertion target. (Ran via `npx vitest run` since bun is not on PATH in this env — equivalent runner, same test file, 59 tests passing.)
+
+## Tests
+
+- [x] New `task_context_menu_has_exactly_one_delete_task` in `swissarmyhammer-kanban/src/scope_commands.rs` tests module — the direct regression guard for the exact bug the user reported.
+- [x] Update `swissarmyhammer-kanban/tests/command_dispatch_integration.rs:1422-1448` to dispatch `entity.delete` with target `"task:{id}"`; keep the delete-still-works assertion.
+- [x] Update `swissarmyhammer-commands/src/registry.rs:562-567` — remove/rewrite the `task.delete` existence assertions.
+- [x] Update `kanban-app/ui/src/lib/keybindings.test.ts:653-667` — `Mod+Backspace` test asserts `entity.delete` is dispatched (not `task.delete`). Update the block comment at 565-574 to reflect the new cross-cutting-only surface.
+- [x] Existing tests still pass after the migration:
+  - `swissarmyhammer-kanban/src/commands/entity_commands.rs` task-delete arm tests
+  - `swissarmyhammer-kanban/tests/command_surface_matrix.rs` — task delete surface entries (should now show one not two)
+  - `kanban-app/ui/src/lib/keybindings.test.ts` — other keybinding cases (cut/copy/paste/archive) unchanged
+- [x] Run: `cargo nextest run -p swissarmyhammer-kanban scope_commands command_surface_matrix`, `cargo test -p swissarmyhammer-commands registry`, `cd kanban-app/ui && bun test keybindings` — all passing.
+
+## Workflow
+
+- Use `/tdd`. Write `task_context_menu_has_exactly_one_delete_task` first — it should fail because today `entity.delete` and `task.delete` both emit with name "Delete Task". Make it pass by removing `task.delete` (YAML + Rust + registration). Then update the keybinding test after moving `Mod+Backspace` to `entity.delete`.
+- Do NOT modify `DeleteEntityCmd` — its task arm already does the right thing. The entire fix is removing the dead `task.delete` duplicate and migrating its one unique signal (the Mod+Backspace keybinding).
+- Do NOT touch `task.move`, `task.untag`, `task.doThisNext` in `task.yaml` — those are genuinely task-specific (move between columns, manage task↔tag associations, set position ordinal) and not duplicated by cross-cutting commands.
+
+## Related / Follow-up (NOT in this task)
+
+The existing task `01KPTJANAJPG39J3ASZ1M9QHC1` ("Entity context menu: group Cut/Copy/Paste and Delete/Archive with stable ordering and separator") adds `context_menu_group`/`context_menu_order` fields. After this task lands, the single surviving `entity.delete` participates in the group-2 sort correctly. No conflict; independent progress. #bug #commands #ux
+
+## Implementation Notes
+
+- Command count dropped from 61 → 60 (updated both `mod.rs::register_commands_returns_expected_count` and `registry.rs::builtin_yaml_files_parse`).
+- The surface matrix test `matrix_task_delete` was flipped from `expected_keys_present: false` → `true` for `entity.delete`, along with the four other cross-cutting delete matrix cells (`matrix_tag_delete`, `matrix_project_delete`, `matrix_column_delete`, `matrix_actor_delete`, and both attachment tests). The keybinding is a property of the command definition itself, not scope-specific, so every `entity.delete` `ResolvedCommand` now carries `keys.cua: Mod+Backspace`.
+- Committed snapshots regenerated via `UPDATE_SNAPSHOTS=1 cargo test -p swissarmyhammer-kanban --test command_snapshots`. The diff is exactly what you'd expect: `task.delete` entries removed; `entity.delete` entries now have `keys.cua = Mod+Backspace`.
+- The one test that was replaced with a regression guard (`delete_task_available_with_task_in_scope` → `task_delete_not_registered_uses_entity_delete_instead`) asserts the registry does NOT contain `task.delete` — matching the pattern already used for `task.add` and `project.add`.
+- `ARCHITECTURE.md` still mentions `task.delete` as an illustrative example of scope command resolution (alongside the also-retired `task.add`). Left untouched because it's auto-generated via `/map` and will be regenerated next time anyone maps the codebase.
+- The `swissarmyhammer-commands/src/registry.rs::merge_yaml_sources_adds_new_commands` test continues to use inline `task.delete` YAML strings — these are synthetic merge-fixture inputs, not tied to the builtin registry. Added a clarifying comment so future readers don't assume `task.delete` is still a live builtin.
