@@ -156,6 +156,31 @@ export function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/**
+ * CSS property names whose `transitionend` events imply the observed
+ * element may have moved in the viewport.
+ *
+ * - `transform` / `translate`: Tailwind's `translate-x-*` classes, the
+ *   `SlidePanel` open/close animation, and the virtualizer's per-card
+ *   `transform: translateY(px)` all animate these. When the transition
+ *   completes, the element settles at new viewport coordinates that
+ *   `getBoundingClientRect()` will now report correctly.
+ * - `left` / `top` / `right` / `bottom`: physical-position animations
+ *   on absolutely-positioned elements produce the same staleness.
+ *
+ * `opacity`, `color`, `background`, and any other non-positional
+ * properties are intentionally excluded — a fade should not trigger a
+ * spatial re-report.
+ */
+const POSITIONAL_TRANSITION_PROPS = new Set([
+  "transform",
+  "translate",
+  "left",
+  "top",
+  "right",
+  "bottom",
+]);
+
 function useRectObserver(
   elementRef: React.RefObject<HTMLElement | null>,
   spatialKey: string,
@@ -201,6 +226,20 @@ function useRectObserver(
     const observer = new ResizeObserver(report);
     observer.observe(el);
 
+    // Unified RAF-throttle handle — shared between the scroll listener,
+    // the `transitionend` listener, and the mount-time deferred re-report.
+    // Coalesces any number of signals within the same animation frame
+    // into a single `spatial_register` invocation per scope. `null` means
+    // no frame is pending; a number is the outstanding RAF id.
+    let rafId: number | null = null;
+    const scheduleReport = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        report();
+      });
+    };
+
     // When the element sits inside a virtualized column (cards positioned
     // via `transform: translateY(px)`), scrolling moves the card without
     // firing `ResizeObserver`. Re-report the rect on every scroll frame
@@ -213,23 +252,44 @@ function useRectObserver(
     // not in scope here — this hook only fixes stale rects on mounted
     // cards.
     const scroller = findScrollableAncestor(el);
-    let rafId: number | null = null;
-    const onScroll = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        report();
-      });
-    };
     if (scroller) {
-      scroller.addEventListener("scroll", onScroll, { passive: true });
+      scroller.addEventListener("scroll", scheduleReport, { passive: true });
     }
+
+    // When any animated ancestor completes a transform / translate /
+    // position transition, `getBoundingClientRect()` now returns
+    // post-animation coordinates. `ResizeObserver` does not fire for
+    // transform-only changes (no size delta) and no scroll occurred,
+    // so without this listener the rect registered at mount stays
+    // frozen at its mid-animation value for the life of the panel.
+    //
+    // The listener sits at `document` level and relies on bubbling:
+    // `transitionend` bubbles, so any transition anywhere in the tree
+    // is visible here. A single listener per FocusScope is cheap; the
+    // `propertyName` filter discards events for non-positional
+    // properties (opacity, color, …) that cannot move the rect.
+    const onTransitionEnd = (e: TransitionEvent) => {
+      if (!POSITIONAL_TRANSITION_PROPS.has(e.propertyName)) return;
+      scheduleReport();
+    };
+    document.addEventListener("transitionend", onTransitionEnd);
+
+    // Re-report one frame after the initial `report()`. Layout may
+    // settle on the frame after React commits the effect — virtualizer
+    // spacers, Flex layouts, and CSS custom-property reads can all
+    // produce a different rect between the mount-time measurement and
+    // the first post-commit paint. A single deferred re-invoke catches
+    // this race without any heuristic about which consumers need it.
+    // Shares `rafId` with the scroll and transition listeners so rapid
+    // signals on the first frame collapse into one invocation.
+    scheduleReport();
 
     return () => {
       observer.disconnect();
       if (scroller) {
-        scroller.removeEventListener("scroll", onScroll);
+        scroller.removeEventListener("scroll", scheduleReport);
       }
+      document.removeEventListener("transitionend", onTransitionEnd);
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
       }
