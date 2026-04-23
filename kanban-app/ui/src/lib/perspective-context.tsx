@@ -18,48 +18,20 @@ import { useViews } from "./views-context";
 /** This window's label — stable for the lifetime of the window. */
 const WINDOW_LABEL = getCurrentWindow().label;
 
-/** Payload for `entity-field-changed` — carries the exact field delta. */
+/**
+ * Payload shape for the `entity-field-changed` Tauri event, limited to
+ * the keys this listener reads.
+ *
+ * The backend bridge (`kanban-app/src/watcher.rs::process_perspective_event`)
+ * emits `WatchEvent::EntityFieldChanged { entity_type, id, changes }` for
+ * perspective field changes, with `value = Value::Null` on every change
+ * because the frontend is expected to re-fetch via `perspective.list`
+ * rather than trust the wire values. There is no field-delta fast path
+ * for perspectives on this channel.
+ */
 interface EntityFieldChangedEvent {
   entity_type: string;
   id: string;
-  fields?: Record<string, unknown>;
-}
-
-/**
- * Apply a field delta to the perspective with matching id, preserving object
- * identity for every other perspective in the list.
- *
- * This is how a field change should propagate: the backend tells us exactly
- * which entity changed and which fields changed, so we mutate only that one
- * perspective's object and leave the rest untouched. React consumers that
- * depend on unchanged perspectives never see new references, so they don't
- * re-render.
- */
-function applyFieldDelta(
-  prev: PerspectiveDef[],
-  id: string,
-  fields: Record<string, unknown>,
-): PerspectiveDef[] {
-  const idx = prev.findIndex((p) => p.id === id);
-  if (idx < 0) {
-    console.warn("[filter-diag] perspective applyFieldDelta MISS", {
-      id,
-      knownIds: prev.map((p) => p.id),
-    });
-    return prev;
-  }
-  const beforeFilter = (prev[idx] as { filter?: unknown }).filter;
-  const updated = { ...prev[idx], ...fields } as PerspectiveDef;
-  const afterFilter = (updated as { filter?: unknown }).filter;
-  console.warn("[filter-diag] perspective applyFieldDelta", {
-    id,
-    changedFields: Object.keys(fields),
-    beforeFilter,
-    afterFilter,
-  });
-  const next = prev.slice();
-  next[idx] = updated;
-  return next;
 }
 
 interface PerspectivesContextValue {
@@ -87,7 +59,6 @@ function usePerspectivesFetch(
   ) => Promise<unknown>,
 ): {
   perspectives: PerspectiveDef[];
-  setPerspectives: React.Dispatch<React.SetStateAction<PerspectiveDef[]>>;
   loaded: boolean;
   refresh: () => Promise<void>;
 } {
@@ -95,16 +66,11 @@ function usePerspectivesFetch(
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
-    console.warn("[filter-diag] perspective REFRESH (full refetch)");
     try {
       const wrapped = (await dispatch("perspective.list")) as {
         result?: { perspectives?: PerspectiveDef[] };
       };
       const list = wrapped?.result?.perspectives ?? [];
-      console.warn("[filter-diag] perspective REFRESH complete", {
-        count: list.length,
-        ids: list.map((p) => p.id),
-      });
       setPerspectives(list);
       setLoaded(true);
     } catch (error) {
@@ -123,7 +89,7 @@ function usePerspectivesFetch(
     };
   }, [refresh]);
 
-  return { perspectives, setPerspectives, loaded, refresh };
+  return { perspectives, loaded, refresh };
 }
 
 /**
@@ -199,60 +165,42 @@ function useAutoSelectActivePerspective(
 /**
  * Wire event listeners for perspective entity updates.
  *
- * - entity-field-changed: apply the delta in place, preserving identity for
- *   unchanged perspectives. Crucial during active editing — a full refetch
- *   here would churn every downstream consumer on every keystroke's save.
- * - entity-created/removed, board-changed: full refetch because list shape
- *   changed.
+ * All four events for a perspective — created, field-changed, removed,
+ * board-changed — trigger a full `perspective.list` re-fetch. The backend
+ * bridge emits `entity-field-changed` with empty/null values (the wire
+ * format is `{ entity_type, id, changes }` where each change carries a
+ * `Value::Null` placeholder) because perspective values are re-fetched
+ * from the canonical YAML, not patched from the event payload. Given that
+ * semantic, there is no usable field-delta fast path for perspectives,
+ * so every event is a refetch signal.
  */
 function usePerspectiveEventListeners(
-  setPerspectives: React.Dispatch<React.SetStateAction<PerspectiveDef[]>>,
   refresh: () => Promise<void>,
 ) {
   useEffect(() => {
     const unlisteners = [
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        console.warn("[filter-diag] event entity-field-changed", {
-          entity_type: event.payload.entity_type,
-          id: event.payload.id,
-          fieldKeys: event.payload.fields
-            ? Object.keys(event.payload.fields)
-            : null,
-        });
         if (event.payload.entity_type !== "perspective") return;
-        if (!event.payload.fields) {
-          console.warn(
-            "[filter-diag] event entity-field-changed perspective WITHOUT fields — falling back to refetch",
-            { id: event.payload.id },
-          );
-          refresh();
-          return;
-        }
-        setPerspectives((prev) =>
-          applyFieldDelta(prev, event.payload.id, event.payload.fields!),
-        );
+        refresh();
       }),
       listen<{ entity_type: string }>("entity-created", (event) => {
         if (event.payload.entity_type === "perspective") {
-          console.warn("[filter-diag] event entity-created → refresh");
           refresh();
         }
       }),
       listen<{ entity_type: string }>("entity-removed", (event) => {
         if (event.payload.entity_type === "perspective") {
-          console.warn("[filter-diag] event entity-removed → refresh");
           refresh();
         }
       }),
       listen("board-changed", () => {
-        console.warn("[filter-diag] event board-changed → refresh");
         refresh();
       }),
     ];
     return () => {
       for (const p of unlisteners) p.then((fn) => fn());
     };
-  }, [setPerspectives, refresh]);
+  }, [refresh]);
 }
 
 export function PerspectiveProvider({ children }: { children: ReactNode }) {
@@ -263,8 +211,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const viewKind = activeView?.kind ?? "board";
   const dispatch = useDispatchCommand();
 
-  const { perspectives, setPerspectives, loaded, refresh } =
-    usePerspectivesFetch(dispatch);
+  const { perspectives, loaded, refresh } = usePerspectivesFetch(dispatch);
   useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatch);
   useAutoSelectActivePerspective(
     loaded,
@@ -273,7 +220,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
     viewKind,
     dispatch,
   );
-  usePerspectiveEventListeners(setPerspectives, refresh);
+  usePerspectiveEventListeners(refresh);
 
   const setActivePerspectiveId = useCallback(
     (id: string) => {

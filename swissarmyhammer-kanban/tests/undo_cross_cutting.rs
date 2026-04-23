@@ -33,6 +33,7 @@ use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
+use swissarmyhammer_perspectives::{PerspectiveEvent, PerspectiveStore};
 use swissarmyhammer_store::{StoreContext, StoreHandle};
 use tempfile::TempDir;
 
@@ -98,6 +99,24 @@ impl UndoEngine {
             let handle = Arc::new(StoreHandle::new(Arc::new(entity_type_store)));
             ectx.register_store(entity_type, Arc::clone(&handle)).await;
             store_context.register(handle).await;
+        }
+
+        // Register the perspective store + wire it into PerspectiveContext.
+        // Mirrors `register_perspective_store` in `kanban-app/src/state.rs`.
+        // Without this wiring, perspective writes bypass the undo stack and
+        // the `perspective.*` commands cannot be undone end-to-end.
+        let perspectives_dir = kanban.root().join("perspectives");
+        let perspective_store = PerspectiveStore::new(&perspectives_dir);
+        let perspective_handle = Arc::new(StoreHandle::new(Arc::new(perspective_store)));
+        store_context.register(perspective_handle.clone()).await;
+        {
+            let pctx = kanban
+                .perspective_context()
+                .await
+                .expect("perspective context");
+            let mut pctx = pctx.write().await;
+            pctx.set_store_handle(perspective_handle);
+            pctx.set_store_context(Arc::clone(&store_context));
         }
 
         // Sanity: the canonical YAML registry must declare these commands
@@ -686,4 +705,371 @@ async fn entity_copy_is_not_undoable() {
         ectx.read("task", &task_id).await.is_ok(),
         "source task must remain after entity.copy"
     );
+}
+
+// ===========================================================================
+// Perspective undo/redo — the Group By bug
+// ===========================================================================
+
+/// Helper: create a perspective with `group: None` via `AddPerspective` and
+/// return its id. Uses the operation-level API so the perspective is written
+/// through the store handle (pushing a create onto the undo stack). The
+/// engine starts every test with an empty perspective directory; each test
+/// that needs a perspective calls this to populate one.
+async fn add_perspective(engine: &UndoEngine, name: &str) -> String {
+    let op = swissarmyhammer_kanban::perspective::AddPerspective::new(name, "board");
+    let result = KanbanOperationProcessor::new()
+        .process(&op, &engine.kanban)
+        .await
+        .expect("add perspective");
+    result["id"]
+        .as_str()
+        .expect("AddPerspective must return an id")
+        .to_string()
+}
+
+/// The "Group By undo doesn't work" bug reproduction.
+///
+/// Setting a `group` on a perspective via `perspective.group` is declared
+/// `undoable: true` in `perspective.yaml`. Before the fix, undo rewrote the
+/// YAML on disk but never refreshed the in-memory `PerspectiveContext`
+/// cache and never fired a `PerspectiveEvent` — so the frontend stayed
+/// grouped and the user saw undo as a silent no-op.
+///
+/// This test exercises the full loop:
+///
+///   1. Create a perspective with `group: None`.
+///   2. Subscribe to the perspective event stream.
+///   3. Dispatch `perspective.group` with `group: "status"`.
+///   4. Dispatch `app.undo`.
+///   5. Assert the cache reflects `group: None` (the pre-mutation state)
+///      and a `PerspectiveChanged` event fired post-undo.
+///   6. Dispatch `app.redo`.
+///   7. Assert the cache reflects `group: Some("status")` (the post-mutation
+///      state) and another `PerspectiveChanged` event fired post-redo.
+#[tokio::test]
+async fn perspective_group_undo_reverts_and_emits_event() {
+    let engine = UndoEngine::new().await;
+    let pid = add_perspective(&engine, "Sprint").await;
+
+    // Confirm the initial state.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert_eq!(
+            pctx.get_by_id(&pid).expect("perspective exists").group,
+            None,
+            "perspective must start with no group"
+        );
+    }
+
+    // Subscribe AFTER the initial write so we only see events from the
+    // mutation-and-undo cycle under test.
+    let mut rx = {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        pctx.subscribe()
+    };
+
+    // Set Group By = "status" via the production command.
+    let mut set_args = HashMap::new();
+    set_args.insert("perspective_id".into(), json!(pid));
+    set_args.insert("group".into(), json!("status"));
+    engine
+        .dispatch("perspective.group", &[], None, set_args)
+        .await
+        .expect("perspective.group should succeed");
+
+    // Drain the PerspectiveChanged event emitted by the mutation. What
+    // matters for the bug repro is the NEXT event, which must come from
+    // the undo path.
+    let set_event = rx
+        .try_recv()
+        .expect("perspective.group must emit a change event");
+    match set_event {
+        PerspectiveEvent::PerspectiveChanged {
+            ref id,
+            ref changed_fields,
+            is_create,
+        } => {
+            assert_eq!(id, &pid);
+            assert!(!is_create);
+            assert!(changed_fields.contains(&"group".to_string()));
+        }
+        other => panic!("expected PerspectiveChanged from perspective.group, got {other:?}"),
+    }
+
+    // Sanity: the mutation landed in the cache.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert_eq!(
+            pctx.get_by_id(&pid).unwrap().group.as_deref(),
+            Some("status"),
+            "cache must reflect group=status after perspective.group"
+        );
+    }
+
+    // Undo — the bug is that without the kanban-local wrapper, this rewrites
+    // the YAML on disk but does not refresh the cache or emit an event.
+    engine.undo().await;
+
+    // Assertion 1: the cache reflects the pre-mutation state.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert_eq!(
+            pctx.get_by_id(&pid).unwrap().group,
+            None,
+            "cache must reflect the pre-undo group=None after undo"
+        );
+    }
+
+    // Assertion 2: a PerspectiveChanged event fired post-undo. Without the
+    // fix, this is the deadlock: undo rewrites disk but emits nothing.
+    let undo_event = rx
+        .try_recv()
+        .expect("undo must emit a PerspectiveChanged event");
+    match undo_event {
+        PerspectiveEvent::PerspectiveChanged {
+            ref id, is_create, ..
+        } => {
+            assert_eq!(id, &pid);
+            assert!(!is_create, "undo is never a create");
+        }
+        other => panic!("expected PerspectiveChanged from undo, got {other:?}"),
+    }
+
+    // Redo — same contract in reverse. The cache must pick up the post-undo
+    // (i.e. post-mutation) state and another PerspectiveChanged event must fire.
+    engine.redo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert_eq!(
+            pctx.get_by_id(&pid).unwrap().group.as_deref(),
+            Some("status"),
+            "cache must reflect group=status after redo"
+        );
+    }
+
+    let redo_event = rx
+        .try_recv()
+        .expect("redo must emit a PerspectiveChanged event");
+    match redo_event {
+        PerspectiveEvent::PerspectiveChanged {
+            ref id, is_create, ..
+        } => {
+            assert_eq!(id, &pid);
+            assert!(!is_create, "redo of an update is not a create");
+        }
+        other => panic!("expected PerspectiveChanged from redo, got {other:?}"),
+    }
+}
+
+/// Same reconciliation path, exercised via `perspective.filter`. Confirms
+/// the fix is not group-specific — any undoable perspective command now
+/// triggers the cache sync + event emit.
+#[tokio::test]
+async fn perspective_filter_undo_reverts_and_emits_event() {
+    let engine = UndoEngine::new().await;
+    let pid = add_perspective(&engine, "Sprint").await;
+
+    let mut rx = {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        pctx.subscribe()
+    };
+
+    // Set filter = "#bug" via the production command.
+    let mut set_args = HashMap::new();
+    set_args.insert("perspective_id".into(), json!(pid));
+    set_args.insert("filter".into(), json!("#bug"));
+    engine
+        .dispatch("perspective.filter", &[], None, set_args)
+        .await
+        .expect("perspective.filter should succeed");
+
+    // Drain the set event.
+    let _ = rx.try_recv().expect("perspective.filter emits");
+
+    engine.undo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert_eq!(
+            pctx.get_by_id(&pid).unwrap().filter,
+            None,
+            "cache must reflect filter=None after undo"
+        );
+    }
+
+    // An event must have been emitted.
+    let undo_event = rx
+        .try_recv()
+        .expect("undo of perspective.filter must emit a PerspectiveChanged event");
+    assert!(
+        matches!(undo_event, PerspectiveEvent::PerspectiveChanged { .. }),
+        "expected PerspectiveChanged from undo, got {undo_event:?}"
+    );
+}
+
+/// Same reconciliation path, exercised via `perspective.sort.set`. The
+/// acceptance criteria explicitly calls out sort-undo and
+/// `reload_from_disk` is field-agnostic, but without a dedicated test a
+/// future YAML edit to sort semantics (e.g. renaming the wire field from
+/// `direction` to something else, or changing the command's undo
+/// payload shape) could silently regress undo for the sort path. This
+/// test pins the end-to-end loop — set a sort entry, undo, assert the
+/// cache reverts to the empty sort list, assert a `PerspectiveChanged`
+/// event fired so the frontend column-header sort indicator gets
+/// refreshed.
+#[tokio::test]
+async fn perspective_sort_undo_reverts_and_emits_event() {
+    let engine = UndoEngine::new().await;
+    let pid = add_perspective(&engine, "Sprint").await;
+
+    // Confirm the initial sort list is empty.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid)
+                .expect("perspective exists")
+                .sort
+                .is_empty(),
+            "perspective must start with an empty sort list"
+        );
+    }
+
+    let mut rx = {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        pctx.subscribe()
+    };
+
+    // Set a sort entry via the production command.
+    let mut set_args = HashMap::new();
+    set_args.insert("perspective_id".into(), json!(pid));
+    set_args.insert("field".into(), json!("title"));
+    set_args.insert("direction".into(), json!("asc"));
+    engine
+        .dispatch("perspective.sort.set", &[], None, set_args)
+        .await
+        .expect("perspective.sort.set should succeed");
+
+    // Drain the set event.
+    let _ = rx.try_recv().expect("perspective.sort.set emits");
+
+    // Sanity: the mutation landed in the cache.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        let sort = &pctx.get_by_id(&pid).unwrap().sort;
+        assert_eq!(sort.len(), 1, "cache must reflect one sort entry after set");
+        assert_eq!(sort[0].field, "title");
+    }
+
+    engine.undo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).unwrap().sort.is_empty(),
+            "cache must reflect empty sort list after undo"
+        );
+    }
+
+    // An event must have been emitted so the frontend's column-header
+    // sort indicator re-renders against the reverted state.
+    let undo_event = rx
+        .try_recv()
+        .expect("undo of perspective.sort.set must emit a PerspectiveChanged event");
+    assert!(
+        matches!(undo_event, PerspectiveEvent::PerspectiveChanged { .. }),
+        "expected PerspectiveChanged from undo, got {undo_event:?}"
+    );
+
+    // Redo restores the sort entry — the same loop in reverse.
+    engine.redo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        let sort = &pctx.get_by_id(&pid).unwrap().sort;
+        assert_eq!(sort.len(), 1, "cache must reflect sort entry after redo");
+        assert_eq!(sort[0].field, "title");
+    }
+
+    let redo_event = rx
+        .try_recv()
+        .expect("redo of perspective.sort.set must emit a PerspectiveChanged event");
+    assert!(
+        matches!(redo_event, PerspectiveEvent::PerspectiveChanged { .. }),
+        "expected PerspectiveChanged from redo, got {redo_event:?}"
+    );
+}
+
+/// Undo of a perspective create must evict the cache entry and fire a
+/// `PerspectiveDeleted` event. Before the fix, the file would be trashed
+/// on disk but the cache would still contain the create.
+#[tokio::test]
+async fn perspective_create_undo_evicts_cache_and_emits_deleted() {
+    let engine = UndoEngine::new().await;
+
+    let mut rx = {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        pctx.subscribe()
+    };
+
+    let pid = add_perspective(&engine, "Ephemeral").await;
+
+    // Drain the create event.
+    let create_event = rx.try_recv().expect("create emits");
+    assert!(
+        matches!(
+            create_event,
+            PerspectiveEvent::PerspectiveChanged {
+                is_create: true,
+                ..
+            }
+        ),
+        "expected PerspectiveChanged is_create=true from create, got {create_event:?}"
+    );
+
+    // Sanity: the create landed in the cache.
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_some(),
+            "cache has the new perspective before undo"
+        );
+    }
+
+    // Undo — reverses the create.
+    engine.undo().await;
+
+    {
+        let pctx = engine.kanban.perspective_context().await.unwrap();
+        let pctx = pctx.read().await;
+        assert!(
+            pctx.get_by_id(&pid).is_none(),
+            "cache entry must be evicted after undoing the create"
+        );
+    }
+
+    let undo_event = rx
+        .try_recv()
+        .expect("undo of create must emit a PerspectiveDeleted event");
+    match undo_event {
+        PerspectiveEvent::PerspectiveDeleted { ref id } => {
+            assert_eq!(id, &pid);
+        }
+        other => panic!("expected PerspectiveDeleted from undo of create, got {other:?}"),
+    }
 }

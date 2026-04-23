@@ -256,8 +256,15 @@ fn register_app(map: &mut CmdMap) {
         Arc::new(app_commands::SearchPaletteCmd),
     );
     map.insert("app.dismiss".into(), Arc::new(app_commands::DismissCmd));
-    map.insert("app.undo".into(), Arc::new(swissarmyhammer_entity::UndoCmd));
-    map.insert("app.redo".into(), Arc::new(swissarmyhammer_entity::RedoCmd));
+    // Kanban-local wrappers that delegate to `StoreContext::undo`/`redo` and
+    // additionally reconcile the `PerspectiveContext` cache so perspective
+    // mutations (Group By, filter, sort, etc.) reflect the post-undo state
+    // in memory and fire the broadcast event the Tauri bridge forwards to
+    // the frontend. The generic `swissarmyhammer_entity::UndoCmd`/`RedoCmd`
+    // stay available to any crate that mounts an undo surface without
+    // perspectives.
+    map.insert("app.undo".into(), Arc::new(app_commands::KanbanUndoCmd));
+    map.insert("app.redo".into(), Arc::new(app_commands::KanbanRedoCmd));
     map.insert(
         "settings.keymap.vim".into(),
         Arc::new(app_commands::SetKeymapModeCmd("vim")),
