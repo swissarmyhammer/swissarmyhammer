@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9780
 project: spatial-nav
 title: 'Nav keys: SpatialState::navigate returns Ok(None) for every nav.* — candidate pool is empty (registration or layer-key bug)'
 ---

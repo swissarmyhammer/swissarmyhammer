@@ -3,11 +3,38 @@ assignees:
 - claude-code
 depends_on:
 - 01KPX6E0QPNRWZTQXGXX2MBEMV
-position_column: done
-position_ordinal: ffffffffffffffffffffffff9680
+position_column: todo
+position_ordinal: e780
 project: spatial-nav
 title: Enter = drill-into-container — board column header drills to first card, fields keep Enter=edit
 ---
+## Reopened (2026-04-23) — previously closed but not actually working
+
+The task was moved to `done` but user manual verification shows Enter on a focused board column header does NOT drill to the first card. The implementation either shipped incomplete, never landed against the real column-header FocusScope, or was broken by a subsequent change.
+
+### Verification-first requirement
+
+Before claiming this task is done again:
+
+1. **Live manual check:** open the running app, click a board column header (any column with at least one card), press Enter. Focus MUST move to the first card's moniker — verify in the macOS unified log for `[FocusScope] focus → task:...`, AND verify the focus bar visually moves to the first card.
+2. **Capture dump:** run `__spatial_dump` (debug Tauri command) while on a column header; paste a `## Diagnostic Evidence (YYYY-MM-DD HH:MM)` block into this task description showing:
+   - The column header's focused key and moniker
+   - That a `column.enterChildren.<id>` command is present in its scope chain (or wherever it lives)
+   - The first card's moniker that the binding should resolve to
+3. **If the command never appears in the scope chain** — the binding was never actually wired into the column header's FocusScope `commands` prop. Grep `kanban-app/ui/src/components/column-view.tsx` for `column.enterChildren` or any `FocusScope commands=` pattern on the header. If absent, the implementation didn't ship.
+4. **If the command appears but execute doesn't fire on Enter** — the dispatch pipeline isn't routing. Check whether the parent scope's `grid.editEnter` / etc. is shadowing Enter at the board layer. Child-scope Enter should win, per `command-scope.tsx` shadow rules.
+5. **If execute fires but focus doesn't move** — `setFocus(firstCardMoniker)` was called but the moniker doesn't match any registered scope. Confirm the first card's moniker matches what `spatial_register` recorded for it. Tie to the broader task `01KPVDA8NYFFQ8R1D2G9YEATJ3` if card registrations are still not happening.
+
+### Evidence gate
+
+**Do not close this task again without:** (a) a captured diagnostic dump in the task description showing the binding IS wired and reachable, (b) a passing vitest-browser test that dispatches Enter on a real column header FocusScope and asserts focus moves to the first card's moniker (not just mocks it), (c) a live-app screenshot-equivalent log capture showing the `[FocusScope] focus → ...` line after the Enter keypress.
+
+The test must fail on the current `done`-marked-but-broken code. If the test passes on current code but the user still reports manual breakage, that's itself the diagnostic — the test is mocking something real would catch, and needs to exercise more of the stack.
+
+---
+
+## Original task body (preserved below)
+
 ## What
 
 Now that `ui.inspect` has been moved to Space (task `01KPX6E0QPNRWZTQXGXX2MBEMV`), Enter is free to become the universal "activate / drill into the focused scope" verb. This task ships the first container-drill binding:
@@ -95,19 +122,21 @@ Task `01KPX6E0QPNRWZTQXGXX2MBEMV` (Enter → Space for inspect) must land first.
 - [ ] Row selector + Enter does NOT open the inspector (same reason)
 - [ ] Task `01KPX5VD4W25K1ATD6BVPHCMPX` is closed as superseded
 - [ ] All existing tests green
+- [ ] **Diagnostic dump captured** in the description per the "Reopened" section above — proves the binding is wired AND reachable in the live app
 
 ## Tests
 
 - [ ] Add a vitest-browser test in `kanban-app/ui/src/components/column-view.test.tsx` (or a dedicated `spatial-nav-column-drill.test.tsx` fixture): render a board column with 3 cards, focus the column header, dispatch Enter, assert focus moves to the first card's moniker
 - [ ] Add an empty-column regression test: column with zero cards, focus header, dispatch Enter, assert focus is unchanged and no `setFocus` call is made
 - [ ] Add cross-scope regressions: Enter on a grid cell still enters edit mode; Enter on an inspector field still enters edit mode; Enter on a LeftNav button still switches view
+- [ ] **New regression test that would have caught this false-close:** a test that exercises the real dispatch path end-to-end (keypress → createKeyHandler → dispatch → column.enterChildren → setFocus) against a live FocusScope, not a mock. Must fail on the current `done`-marked code.
 - [ ] Run `cd kanban-app/ui && npm test` — green
 - [ ] Manual: load a board, click a column header, press Enter → focus moves to the first card. Press `k` → focus returns to the header.
 
 ## Workflow
 
-- Use `/tdd`. Write the "Enter on column header drills to first card" test first.
+- Use `/tdd`. Write the "Enter on column header drills to first card" test first — make it a test that would have caught the current false-close.
 - Confirm task `01KPX6E0QPNRWZTQXGXX2MBEMV` has landed before starting — this task's behavior assumes Enter is no longer bound to inspect.
 - Check if the column header currently has any other Enter binding (e.g. an old rename shortcut). If yes, the rename binding moves to F2; document the decision in the commit message.
 - Do NOT add drill-in bindings to cards, row selectors, grid column headers, or any other scope. One site only. Follow-ups can copy the pattern.
-
+- **Do not mark this task done without the diagnostic dump in the description proving live verification.** The task was closed once without working; the only reliable gate against a repeat is captured evidence.
