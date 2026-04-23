@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9580
 project: spatial-nav
 title: 'Perspective tabs: h/l (nav.left/right) from a focused tab doesn''t reach adjacent tab, focus vanishes'
 ---

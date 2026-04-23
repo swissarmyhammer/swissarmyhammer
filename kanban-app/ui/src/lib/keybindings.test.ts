@@ -63,17 +63,27 @@ describe("normalizeKeyEvent", () => {
     expect(normalizeKeyEvent(fakeKeyEvent(" "))).toBe("Space");
   });
 
-  it("preserves modifiers on Space", () => {
-    // Mod+Space and Shift+Space should still be reachable via the canonical
-    // form — e.g. a future binding like "Mod+Space" must resolve cleanly.
+  it("preserves Mod on Space; Shift collapses to plain Space", () => {
+    // Mod+Space is a reachable binding — e.g. a future shortcut like
+    // "Mod+Space" resolves cleanly via the canonical form.
+    //
+    // Shift+Space intentionally normalizes back to plain "Space": the
+    // Shift-prefix logic in `normalizeKeyEvent` only applies for
+    // printable single-letter keys (to disambiguate "A" vs "Shift+A"),
+    // not for named keys like Space/Enter/Escape. Documenting that
+    // here so a future reader doesn't expect "Shift+Space" to resolve.
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
     Object.defineProperty(navigator, "platform", {
       value: "MacIntel",
       configurable: true,
     });
     try {
-      const e = fakeKeyEvent(" ", { metaKey: true });
-      expect(normalizeKeyEvent(e)).toBe("Mod+Space");
+      expect(normalizeKeyEvent(fakeKeyEvent(" ", { metaKey: true }))).toBe(
+        "Mod+Space",
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(" ", { shiftKey: true }))).toBe(
+        "Space",
+      );
     } finally {
       if (original) {
         Object.defineProperty(navigator, "platform", original);

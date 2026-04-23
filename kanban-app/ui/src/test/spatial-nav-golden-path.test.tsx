@@ -435,7 +435,7 @@ function AppWithGridAndEditCommandsFixture({
  * reserved for "activate / drill into" and falls through to any
  * grid-level Enter binding.
  */
-function AppWithGridAndRowSelectorEnterFixture() {
+function AppWithGridAndRowSelectorInspectFixture() {
   return (
     <EntityFocusProvider>
       <FixtureShell>
@@ -1975,7 +1975,7 @@ describe("golden path: enter activation", () => {
    * tail catches that.
    */
   it("space_on_row_selector_dispatches_ui_inspect_with_row_target", async () => {
-    const screen = await render(<AppWithGridAndRowSelectorEnterFixture />);
+    const screen = await render(<AppWithGridAndRowSelectorInspectFixture />);
     const selectorMk = FIXTURE_ROW_SELECTOR_MONIKERS[1];
     const selector = screen
       .getByTestId(`data-moniker:${selectorMk}`)

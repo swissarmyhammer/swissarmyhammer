@@ -344,7 +344,7 @@ function useToolbarActions(board: ReturnType<typeof useBoardData>) {
     openBoardSelector,
   );
   const inspectCommands = useActivationCommand(
-    "toolbar.inspect-board.activate",
+    "toolbar.inspect-board.inspect",
     "Inspect board",
     "Space",
     inspectBoard,
