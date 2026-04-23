@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIState } from "@/lib/ui-state-context";
-import { useRestoreFocus } from "@/lib/entity-focus-context";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { useEntitiesByType } from "@/components/rust-engine-container";
@@ -57,8 +56,7 @@ function parsePanelStack(inspectorStack: string[] | undefined): PanelEntry[] {
  */
 export function InspectorsContainer() {
   const uiState = useUIState();
-  const entitiesByType = useEntitiesByType();
-  const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
+  const entityStore = useEntitiesByType();
 
   // Derive panel stack from UIState
   const winState = uiState.windows?.[WINDOW_LABEL];
@@ -119,51 +117,31 @@ export function InspectorsContainer() {
   );
 }
 
-/** Props for the InspectorPanel component. */
-interface InspectorPanelProps {
-  entry: PanelEntry;
-  entityStore: Record<string, Entity[]>;
-  onClose: () => void;
-  style?: React.CSSProperties;
-}
-
 /**
- * Resolves an entity for the inspector panel. Tries the local entity store
- * first, then falls back to fetching from the backend via get_entity.
+ * Resolve an entity by type+id: try the local entity store first,
+ * then fall back to fetching from the Rust backend via `get_entity`.
  */
-function InspectorPanel({
-  entry,
-  entityStore,
-  onClose,
-  style,
-}: InspectorPanelProps) {
-  // Save focus on mount, restore on unmount (guarded against stale monikers)
-  useRestoreFocus();
-
+function useResolvedEntity(
+  entityType: string,
+  entityId: string,
+  entityStore: Record<string, Entity[]>,
+): { entity: Entity | null; fetchError: string | null } {
   const { getSchema } = useSchema();
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const fetchedRef = useRef<string | null>(null);
 
-  // Try local store first — match by ID, then by search_display_field from schema
-  const entities = entityStore[entry.entityType];
-  let localEntity = entities?.find((e) => e.id === entry.entityId);
+  const entities = entityStore[entityType];
+  let localEntity = entities?.find((e) => e.id === entityId);
   if (!localEntity) {
-    const displayField = getSchema(entry.entityType)?.entity
-      .search_display_field;
+    const displayField = getSchema(entityType)?.entity.search_display_field;
     if (displayField) {
-      localEntity = entities?.find(
-        (e) => getStr(e, displayField) === entry.entityId,
-      );
+      localEntity = entities?.find((e) => getStr(e, displayField) === entityId);
     }
   }
   const resolved = localEntity ?? fetchedEntity;
+  const fetchKey = `${entityType}:${entityId}`;
 
-  // Fetch from backend if not found locally
-  const fetchKey = `${entry.entityType}:${entry.entityId}`;
-
-  // Reset fetch dedup ref when the target entity changes so a new
-  // fetch can be attempted (e.g. after a failed fetch for a different entity).
   useEffect(() => {
     fetchedRef.current = null;
   }, [fetchKey]);
@@ -172,24 +150,42 @@ function InspectorPanel({
     if (resolved || fetchedRef.current === fetchKey) return;
     fetchedRef.current = fetchKey;
     setFetchError(null);
-    invoke<Record<string, unknown>>("get_entity", {
-      entityType: entry.entityType,
-      id: entry.entityId,
-    })
-      .then((bag) => {
-        setFetchedEntity(entityFromBag(bag as EntityBag));
-      })
+    invoke<Record<string, unknown>>("get_entity", { entityType, id: entityId })
+      .then((bag) => setFetchedEntity(entityFromBag(bag as EntityBag)))
       .catch((err) => {
-        const msg = String(err);
         console.error(
           `[InspectorPanel] Failed to fetch entity: ${fetchKey}`,
           err,
         );
-        setFetchError(msg);
+        setFetchError(String(err));
       });
-  }, [resolved, fetchKey, entry.entityType, entry.entityId]);
+  }, [resolved, fetchKey, entityType, entityId]);
 
-  if (!resolved) {
+  return { entity: resolved, fetchError };
+}
+
+/** Props for the InspectorPanel component. */
+interface InspectorPanelProps {
+  entry: PanelEntry;
+  entityStore: Record<string, Entity[]>;
+  onClose: () => void;
+  style?: React.CSSProperties;
+}
+
+/** Renders a single inspector panel with entity resolution and error handling. */
+function InspectorPanel({
+  entry,
+  entityStore,
+  onClose,
+  style,
+}: InspectorPanelProps) {
+  const { entity, fetchError } = useResolvedEntity(
+    entry.entityType,
+    entry.entityId,
+    entityStore,
+  );
+
+  if (!entity) {
     return (
       <SlidePanel open={true} onClose={onClose} style={style}>
         <p className="text-sm text-muted-foreground">
@@ -202,7 +198,7 @@ function InspectorPanel({
   return (
     <SlidePanel open={true} onClose={onClose} style={style}>
       <ErrorBoundary>
-        <InspectorFocusBridge entity={resolved} />
+        <InspectorFocusBridge entity={entity} />
       </ErrorBoundary>
     </SlidePanel>
   );

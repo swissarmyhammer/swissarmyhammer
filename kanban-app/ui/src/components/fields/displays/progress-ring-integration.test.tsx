@@ -124,6 +124,12 @@ vi.mock("@tauri-apps/api/event", async () => {
     listen: vi.fn(() => Promise.resolve(() => {})),
   };
 });
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 // `window-container.tsx` calls `getCurrentWindow()` at module-load time.
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({

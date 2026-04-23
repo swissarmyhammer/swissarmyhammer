@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { userEvent } from "vitest/browser";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { FixtureShell } from "@/test/spatial-fixture-shell";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -12,6 +15,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -112,12 +121,21 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 
-/** Renders PerspectiveTabBar inside the required TooltipProvider. */
+/** Renders PerspectiveTabBar inside the required providers.
+ *
+ * `EntityFocusProvider` is required because each perspective tab is a
+ * `FocusScope` (see `ScopedPerspectiveTab`), and `FocusScope` calls
+ * `useEntityFocus()` to register its scope/claim — throws if rendered
+ * outside a provider. Tests that don't care about focus state still need
+ * the provider just to let the tree mount.
+ */
 function renderTabBar(delayDuration = 100) {
   return render(
-    <TooltipProvider delayDuration={delayDuration}>
-      <PerspectiveTabBar />
-    </TooltipProvider>,
+    <EntityFocusProvider>
+      <TooltipProvider delayDuration={delayDuration}>
+        <PerspectiveTabBar />
+      </TooltipProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -163,6 +181,33 @@ describe("PerspectiveTabBar", () => {
     expect(screen.queryByText("Grid Thing")).toBeNull();
   });
 
+  it("tab root carries `tab-focus` so the focus bar renders inside the tab", () => {
+    // The perspective-tab strip is a horizontal flex container with its own
+    // `overflow-x-auto`, so the default negative-left focus bar would be
+    // clipped by the scrolling parent. `tab-focus` repositions the bar
+    // inside the tab's root <div>. See `index.css` for the override rule.
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "First", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    // Each tab's root <div> carries `data-moniker="perspective:<id>"` —
+    // the same element the FocusScope's elementRef attaches to.
+    const tabRoots = container.querySelectorAll(
+      "[data-moniker^='perspective:']",
+    );
+    expect(tabRoots.length).toBe(2);
+    for (const root of tabRoots) {
+      expect(root.className).toContain("tab-focus");
+    }
+  });
+
   it("highlights the active perspective tab", () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,
@@ -196,6 +241,50 @@ describe("PerspectiveTabBar", () => {
     renderTabBar();
 
     fireEvent.click(screen.getByText("Second"));
+    expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
+  });
+
+  it("pressing Enter on a focused tab switches to that perspective", async () => {
+    // Gap 1 of 01KPRS0WVK7YMS20PEY12ZY70W: each `ScopedPerspectiveTab`
+    // registers a per-instance `perspective.activate.<id>` command bound to
+    // Enter across all keymaps, so pressing Enter while a tab is focused
+    // dispatches the same `setActivePerspectiveId` callback as a mouse click.
+    //
+    // We wrap `PerspectiveTabBar` in `FixtureShell`, which installs the same
+    // production `createKeyHandler` → `extractScopeBindings` pipeline the real
+    // `AppShell` uses — so this exercises the end-to-end binding path, not
+    // just the command definition.
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "First", view: "board" },
+    };
+
+    render(
+      <EntityFocusProvider>
+        <TooltipProvider delayDuration={100}>
+          <FixtureShell>
+            <PerspectiveTabBar />
+          </FixtureShell>
+        </TooltipProvider>
+      </EntityFocusProvider>,
+    );
+
+    // Clicking the tab triggers both `onSelect` (which calls
+    // `setActivePerspectiveId`) and `setFocus` via `onClickCapture`.
+    // Clear the mock after the click so we can assert Enter alone drives the
+    // second call.
+    const secondTab = screen.getByText("Second");
+    await userEvent.click(secondTab);
+    mockSetActivePerspectiveId.mockClear();
+
+    // Enter on the focused tab should dispatch `perspective.activate.p2` →
+    // `execute` → `onSelect` → `setActivePerspectiveId("p2")`.
+    await userEvent.keyboard("{Enter}");
+
     expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
   });
 

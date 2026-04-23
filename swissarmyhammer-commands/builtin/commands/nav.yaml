@@ -1,0 +1,73 @@
+# Spatial navigation commands.
+#
+# These are the single canonical set of keybindings for cardinal + edge
+# navigation.  Routes: keypress → createKeyHandler → useDispatchCommand →
+# dispatch_command → Rust NavigateCmd → SpatialNavigator → SpatialState →
+# focus-changed event → focused-moniker store → FocusScope re-render.
+#
+# Every command here has a Rust implementation in
+# swissarmyhammer-kanban/src/commands/nav_commands.rs.  `visible: false`
+# keeps them out of the command palette — they are key-driven only.
+
+- id: nav.up
+  name: Navigate Up
+  visible: false
+  undoable: false
+  keys:
+    vim: k
+    cua: ArrowUp
+    emacs: Ctrl+p
+
+- id: nav.down
+  name: Navigate Down
+  visible: false
+  undoable: false
+  keys:
+    vim: j
+    cua: ArrowDown
+    emacs: Ctrl+n
+
+- id: nav.left
+  name: Navigate Left
+  visible: false
+  undoable: false
+  keys:
+    vim: h
+    cua: ArrowLeft
+    emacs: Ctrl+b
+
+- id: nav.right
+  name: Navigate Right
+  visible: false
+  undoable: false
+  keys:
+    vim: l
+    cua: ArrowRight
+    emacs: Ctrl+f
+
+- id: nav.first
+  name: Navigate to First
+  visible: false
+  undoable: false
+  keys:
+    cua: Home
+    emacs: Alt+<
+
+- id: nav.last
+  name: Navigate to Last
+  visible: false
+  undoable: false
+  keys:
+    vim: Shift+G
+    cua: End
+    emacs: Alt+>
+
+- id: nav.rowStart
+  name: Row Start
+  visible: false
+  undoable: false
+
+- id: nav.rowEnd
+  name: Row End
+  visible: false
+  undoable: false

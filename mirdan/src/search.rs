@@ -25,7 +25,36 @@ const LINES_PER_RESULT: usize = 4;
 /// Fixed overhead lines: header(3) + prompt(2) + gap before footer(1) + footer(2).
 const OVERHEAD_LINES: usize = 8;
 
+/// Poll interval used when no pending query is waiting; only drives the
+/// terminal redraw loop.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Debounce window for short (≤ `SHORT_QUERY_LEN`) queries. Longer keystroke
+/// gaps reduce noisy queries when the user is still typing.
+const SHORT_QUERY_DEBOUNCE: Duration = Duration::from_millis(250);
+/// Debounce window for longer queries where typing is more deliberate.
+const LONG_QUERY_DEBOUNCE: Duration = Duration::from_millis(150);
+/// Query-length threshold for switching between short and long debounce.
+const SHORT_QUERY_LEN: usize = 3;
+/// Minimum number of results to request from the registry regardless of
+/// terminal height — ensures the user always sees some options.
+const MIN_VISIBLE_RESULTS: usize = 2;
+/// Maximum number of results to request to avoid over-fetching when the
+/// terminal is very tall.
+const MAX_VISIBLE_RESULTS: usize = 20;
+
+/// Horizontal padding reserved around rendered content: 4-char left indent
+/// plus a 2-char right gutter so text never touches the terminal edge.
+const CONTENT_HORIZONTAL_PADDING: usize = 6;
+
 /// Run the search command with a query string (non-interactive).
+///
+/// Queries the registry for packages matching `query` and prints results to
+/// stdout. When `json` is true, emits pretty-printed JSON instead of the
+/// human-readable table.
+///
+/// # Errors
+///
+/// Returns an error if the registry request fails or JSON serialization fails.
 pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
     let client = RegistryClient::new();
     let response = client.search(query, None, None).await?;
@@ -72,6 +101,12 @@ pub async fn run_search(query: &str, json: bool) -> Result<(), RegistryError> {
 /// Run interactive fuzzy search mode.
 ///
 /// Enters a TUI for live fuzzy search. On selection, installs the package.
+///
+/// # Errors
+///
+/// Returns an error if stdin is not a terminal, if the TUI fails to
+/// initialize, if a registry request fails, or if the subsequent install
+/// fails.
 pub async fn run_interactive_search() -> Result<(), RegistryError> {
     if !io::stdin().is_terminal() {
         return Err(RegistryError::Validation(
@@ -178,7 +213,6 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
         }
     };
 
-    // Guard handles cleanup via Drop
     drop(_guard);
 
     Ok(action)
@@ -188,13 +222,13 @@ fn interactive_search_loop() -> Result<Option<String>, RegistryError> {
 /// (debounce expired) or simply re-rendering.
 fn compute_poll_timeout(state: &SearchState, needs_query: bool) -> Duration {
     if !needs_query {
-        return Duration::from_millis(100);
+        return IDLE_POLL_INTERVAL;
     }
     // Adaptive debounce: longer for short queries (more ambiguous)
-    let debounce = if state.query.len() <= 3 {
-        Duration::from_millis(250)
+    let debounce = if state.query.len() <= SHORT_QUERY_LEN {
+        SHORT_QUERY_DEBOUNCE
     } else {
-        Duration::from_millis(150)
+        LONG_QUERY_DEBOUNCE
     };
     let elapsed = state.last_keypress.elapsed();
     debounce.saturating_sub(elapsed)
@@ -273,7 +307,7 @@ fn fetch_and_apply_results(
     let snapshot = state.query.clone();
     let (_cols, rows) = terminal::size().unwrap_or((80, 24));
     let max_results = (rows as usize).saturating_sub(OVERHEAD_LINES) / LINES_PER_RESULT;
-    let max_results = max_results.clamp(2, 20);
+    let max_results = max_results.clamp(MIN_VISIBLE_RESULTS, MAX_VISIBLE_RESULTS);
 
     let response = handle.block_on(client.fuzzy_search(&snapshot, Some(max_results)));
 
@@ -309,7 +343,7 @@ fn render(
 ) -> Result<(), RegistryError> {
     let (cols, _rows) = terminal::size().unwrap_or((80, 24));
     let w = cols as usize;
-    let content_w = w.saturating_sub(6); // 4-char left margin
+    let content_w = w.saturating_sub(CONTENT_HORIZONTAL_PADDING);
 
     execute!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
     render_header(stdout)?;

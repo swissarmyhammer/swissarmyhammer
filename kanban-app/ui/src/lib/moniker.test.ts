@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  columnHeaderMoniker,
   moniker,
   fieldMoniker,
   parseMoniker,
@@ -20,6 +21,22 @@ describe("moniker", () => {
 describe("fieldMoniker", () => {
   it("builds field:type:id.field string", () => {
     expect(fieldMoniker("task", "abc", "title")).toBe("field:task:abc.title");
+  });
+});
+
+describe("columnHeaderMoniker", () => {
+  it("builds column-header:<fieldName> string", () => {
+    expect(columnHeaderMoniker("title")).toBe("column-header:title");
+  });
+
+  it("parses round-trip through parseMoniker", () => {
+    // Uses the generic `moniker()` helper under the hood, so its output
+    // must round-trip cleanly — no field portion since the whole payload
+    // is the column/field name.
+    expect(parseMoniker(columnHeaderMoniker("status"))).toEqual({
+      type: "column-header",
+      id: "status",
+    });
   });
 });
 

@@ -69,6 +69,12 @@ vi.mock("@tauri-apps/api/event", async () => {
     listen: vi.fn(() => Promise.resolve(() => {})),
   };
 });
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
 // `window-container.tsx` calls `getCurrentWindow()` at module-load time.
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -92,7 +98,7 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import {
   EntityFocusProvider,
-  useEntityFocus,
+  useFocusedMoniker,
 } from "@/lib/entity-focus-context";
 
 import { FieldUpdateProvider } from "@/lib/field-update-context";
@@ -109,9 +115,9 @@ function makeEntity(fields: Record<string, unknown> = {}): Entity {
   };
 }
 
-/** Reads focusedMoniker and renders it as text for test assertions. */
+/** Reads the focused moniker and renders it as text for test assertions. */
 function FocusMonitorDisplay() {
-  const { focusedMoniker } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
   return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
 }
 

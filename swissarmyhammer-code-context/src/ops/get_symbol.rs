@@ -224,13 +224,30 @@ pub fn get_symbol(
     })
 }
 
+/// Base score for an exact symbol-path match (tier 1).
+const SCORE_EXACT: i64 = 1000;
+/// Base score for a `::foo` suffix match (tier 2); always scored below exact.
+const SCORE_SUFFIX: i64 = 900;
+/// Base score for a case-insensitive substring match (tier 3).
+const SCORE_CASE_INSENSITIVE: i64 = 800;
+/// Upper bound of `shorter_path_bonus`; paths longer than this value receive
+/// no bonus. Chosen so the bonus can never lift a lower tier into a higher
+/// one (tier gap is 100).
+const PATH_LENGTH_BONUS_CAP: i64 = 100;
+
 /// Tier 1: exact string match on the symbol path.
 fn match_exact(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymbolResult> {
     let exact: Vec<&MergedRow> = symbols.iter().filter(|s| s.symbol_path == query).collect();
     if exact.is_empty() {
         return None;
     }
-    Some(make_result(query, &exact, MatchTier::Exact, 1000, max))
+    Some(make_result(
+        query,
+        &exact,
+        MatchTier::Exact,
+        SCORE_EXACT,
+        max,
+    ))
 }
 
 /// Tier 2: suffix match — `foo` matches any `<prefix>::foo`.
@@ -239,7 +256,7 @@ fn match_suffix(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSym
     let mut suffix: Vec<(&MergedRow, i64)> = symbols
         .iter()
         .filter(|s| s.symbol_path.ends_with(&suffix_pattern) || s.symbol_path == query)
-        .map(|s| (s, 900 + shorter_path_bonus(s)))
+        .map(|s| (s, SCORE_SUFFIX + shorter_path_bonus(s)))
         .collect();
     if suffix.is_empty() {
         return None;
@@ -258,7 +275,7 @@ fn match_case_insensitive(
     let ci: Vec<(&MergedRow, i64)> = symbols
         .iter()
         .filter(|s| s.symbol_path.to_lowercase().contains(&query_lower))
-        .map(|s| (s, 800 + shorter_path_bonus(s)))
+        .map(|s| (s, SCORE_CASE_INSENSITIVE + shorter_path_bonus(s)))
         .collect();
     if ci.is_empty() {
         return None;
@@ -291,7 +308,9 @@ fn match_fuzzy(symbols: &[MergedRow], query: &str, max: usize) -> Option<GetSymb
 
 /// Small bonus that prefers shorter (more specific) symbol paths.
 fn shorter_path_bonus(row: &MergedRow) -> i64 {
-    100_i64.saturating_sub(row.symbol_path.len() as i64).max(0)
+    PATH_LENGTH_BONUS_CAP
+        .saturating_sub(row.symbol_path.len() as i64)
+        .max(0)
 }
 
 // ---------------------------------------------------------------------------

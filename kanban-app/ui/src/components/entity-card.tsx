@@ -15,7 +15,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 import {
   useEntitySections,
@@ -31,8 +30,25 @@ interface EntityCardProps {
   onDragEnd?: (e: React.DragEvent) => void;
   /** Additional commands to append to the entity's context menu. */
   extraCommands?: CommandDef[];
-  /** Predicates for pull-based navigation via broadcastNavCommand. */
-  claimWhen?: ClaimPredicate[];
+}
+
+/**
+ * Compose the card's `commands` array: the per-card Space-to-inspect
+ * binding first, followed by any caller-supplied `extraCommands`. Callers
+ * can override Space by providing their own `ui.inspect` entry in
+ * `extraCommands`.
+ */
+function useCardCommands(
+  entity: EntityCardProps["entity"],
+  extraCommands: CommandDef[] | undefined,
+) {
+  const inspectCommand = useInspectCommand(entity.moniker);
+  const mergedExtra = useMemo(
+    () =>
+      extraCommands ? [...inspectCommand, ...extraCommands] : inspectCommand,
+    [inspectCommand, extraCommands],
+  );
+  return useEntityCommands(entity.entity_type, entity.id, entity, mergedExtra);
 }
 
 /**
@@ -58,22 +74,15 @@ export const EntityCard = memo(
       onDragStart,
       onDragEnd,
       extraCommands,
-      claimWhen,
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
-    const commands = useEntityCommands(
-      entity.entity_type,
-      entity.id,
-      entity,
-      extraCommands,
-    );
+    const commands = useCardCommands(entity, extraCommands);
 
     return (
       <FocusScope
         moniker={entity.moniker}
         commands={commands}
-        claimWhen={claimWhen}
         className="entity-card-focus"
       >
         <div
@@ -286,6 +295,43 @@ function CardFieldIcon({
         {tip}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * Build a per-card `Space`-to-inspect command.
+ *
+ * Mirrors the `RowSelector` precedent (`data-table.tsx`): pressing Space
+ * while the card is focused dispatches `ui.inspect` with an explicit
+ * `target` equal to this card's entity moniker. Space is the universal
+ * "inspect / peek" key (matching macOS Finder's Quick Look convention);
+ * Enter is reserved for "activate / drill into" verbs elsewhere in the
+ * app.
+ *
+ * The target is passed directly so the backend uses `ctx.target` rather than
+ * walking the scope chain — matching the `InspectButton` click-path semantics
+ * so keyboard and mouse activation converge on the exact same dispatch shape.
+ */
+function useInspectCommand(moniker: string): CommandDef[] {
+  const dispatchInspect = useDispatchCommand("ui.inspect");
+  return useMemo<CommandDef[]>(
+    () => [
+      {
+        // Namespace the command id per card so the schema-derived
+        // `ui.inspect` entry (which has the same `Inspect` label the context
+        // menu surfaces) is not shadowed inside the card's scope Map, and so
+        // sibling cards' Space commands don't collide with each other
+        // through the scope chain.
+        id: `entity.inspect.${moniker}`,
+        name: "Inspect",
+        keys: { vim: "Space", cua: "Space", emacs: "Space" },
+        execute: () => {
+          dispatchInspect({ target: moniker }).catch(console.error);
+        },
+        contextMenu: false,
+      },
+    ],
+    [dispatchInspect, moniker],
   );
 }
 

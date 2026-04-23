@@ -3,10 +3,7 @@ import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import {
-  useEntityFocus,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { useEntityFocus, useFocusedMoniker } from "@/lib/entity-focus-context";
 import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -14,76 +11,6 @@ import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import { fieldMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
-
-/**
- * Build navigation claim predicates for a single grid cell.
- *
- * Returns an array of ClaimPredicate entries that let the cell claim focus
- * when adjacent cells are focused and a navigation command fires.
- */
-function buildCellPredicates(
-  ri: number,
-  ci: number,
-  cellMonikers: string[][],
-  cellMonikerMap: Map<string, { row: number; col: number }>,
-  rowCount: number,
-  colCount: number,
-): ClaimPredicate[] {
-  const predicates: ClaimPredicate[] = [];
-
-  if (ri > 0)
-    predicates.push({
-      command: "nav.down",
-      when: (f) => f === cellMonikers[ri - 1][ci],
-    });
-  if (ri < rowCount - 1)
-    predicates.push({
-      command: "nav.up",
-      when: (f) => f === cellMonikers[ri + 1][ci],
-    });
-  if (ci > 0)
-    predicates.push({
-      command: "nav.right",
-      when: (f) => f === cellMonikers[ri][ci - 1],
-    });
-  if (ci < colCount - 1)
-    predicates.push({
-      command: "nav.left",
-      when: (f) => f === cellMonikers[ri][ci + 1],
-    });
-
-  if (ci === 0)
-    predicates.push({
-      command: "nav.rowStart",
-      when: (f) => {
-        const pos = f ? cellMonikerMap.get(f) : undefined;
-        return pos !== undefined && pos.row === ri && pos.col !== 0;
-      },
-    });
-  if (ci === colCount - 1)
-    predicates.push({
-      command: "nav.rowEnd",
-      when: (f) => {
-        const pos = f ? cellMonikerMap.get(f) : undefined;
-        return pos !== undefined && pos.row === ri && pos.col !== colCount - 1;
-      },
-    });
-
-  const isGridCell = (mk: string | null) => !!mk && cellMonikerMap.has(mk);
-  if (ri === 0 && ci === 0)
-    predicates.push({
-      command: "nav.first",
-      when: (f) => isGridCell(f) && f !== cellMonikers[0][0],
-    });
-  if (ri === rowCount - 1 && ci === colCount - 1)
-    predicates.push({
-      command: "nav.last",
-      when: (f) =>
-        isGridCell(f) && f !== cellMonikers[rowCount - 1][colCount - 1],
-    });
-
-  return predicates;
-}
 
 /**
  * Pattern for valid entity type identifiers.
@@ -142,19 +69,12 @@ function useGridData(view: ViewDef) {
 }
 
 /**
- * Build cell moniker matrices, cursor tracking, claim predicates, and grid state.
+ * Build the cell moniker matrix and reverse-lookup map for the grid.
  *
- * Handles the pull-based navigation system: each cell declares predicates
- * for which nav commands it should claim focus on.
+ * The matrix is [row][col] of moniker strings. The map is moniker -> {row, col}
+ * for deriving the cursor from the focused moniker.
  */
-function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
-  const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
-  useEffect(() => {
-    setVisibleRowCount(entities.length);
-  }, [entities.length]);
-
-  const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
-
+function useCellMonikers(entities: Entity[], columns: DataTableColumn[]) {
   const cellMonikerMap = useMemo(() => {
     const map = new Map<string, { row: number; col: number }>();
     for (let r = 0; r < entities.length; r++) {
@@ -180,18 +100,19 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     [entities, columns],
   );
 
-  const derivedCursor = useMemo(() => {
-    if (!focusedMoniker) return null;
-    return cellMonikerMap.get(focusedMoniker) ?? null;
-  }, [focusedMoniker, cellMonikerMap]);
+  return { cellMonikerMap, cellMonikers };
+}
 
-  const grid = useGrid({
-    rowCount: visibleRowCount,
-    colCount: columns.length,
-    cursor: derivedCursor ?? undefined,
-  });
-
-  const firstCellMoniker = cellMonikers[0]?.[0] ?? null;
+/**
+ * Set focus to the first grid cell once on mount, if nothing else is focused.
+ *
+ * No-ops after the initial seed so manual focus changes are preserved.
+ */
+function useGridInitialFocus(
+  firstCellMoniker: string | null,
+  derivedCursor: { row: number; col: number } | null,
+  setFocus: (mk: string) => void,
+) {
   const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker || hasInitialFocusRef.current) return;
@@ -200,85 +121,176 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
       hasInitialFocusRef.current = true;
     }
   }, [firstCellMoniker, setFocus, derivedCursor]);
+}
 
-  const claimPredicates = useMemo(() => {
-    const rowCount = cellMonikers.length;
-    const colCount = columns.length;
-    return cellMonikers.map((row, ri) =>
-      row.map((_, ci) =>
-        buildCellPredicates(
-          ri,
-          ci,
-          cellMonikers,
-          cellMonikerMap,
-          rowCount,
-          colCount,
-        ),
-      ),
-    );
-  }, [cellMonikers, cellMonikerMap, columns.length]);
+/**
+ * Build cell moniker matrices, cursor tracking, and grid state.
+ *
+ * Spatial navigation handles all directional movement via DOM rects in Rust,
+ * so no manual claim predicates are needed for the grid.
+ */
+function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
+  const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
+  useEffect(() => {
+    setVisibleRowCount(entities.length);
+  }, [entities.length]);
+
+  const { setFocus } = useEntityFocus();
+  const focusedMoniker = useFocusedMoniker();
+  const { cellMonikerMap, cellMonikers } = useCellMonikers(entities, columns);
+
+  const derivedCursor = useMemo(() => {
+    if (!focusedMoniker) return null;
+    return cellMonikerMap.get(focusedMoniker) ?? null;
+  }, [focusedMoniker, cellMonikerMap]);
+
+  const grid = useGrid({
+    rowCount: visibleRowCount,
+    colCount: columns.length,
+    cursor: derivedCursor,
+  });
+
+  useGridInitialFocus(cellMonikers[0]?.[0] ?? null, derivedCursor, setFocus);
 
   return {
     setVisibleRowCount,
     grid,
     cellMonikers,
-    claimPredicates,
     setFocus,
-    broadcastNavCommand,
   };
 }
 
-/** Build a navigation command that broadcasts a nav event. */
+/** Dispatch signature returned by `useDispatchCommand()` (no bound command). */
+type AdHocDispatch = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+
+/**
+ * Build a grid command alias that dispatches a canonical `nav.*` through
+ * the unified command pipeline.
+ *
+ * The alias carries the grid-specific id/name/keybinding but delegates
+ * actual navigation to the Rust `NavigateCmd` impl — no local side-channel.
+ */
 function navCmd(
   id: string,
   name: string,
   navEvent: string,
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  dispatchRef: React.RefObject<AdHocDispatch>,
   keys?: CommandDef["keys"],
 ): CommandDef {
-  return { id, name, keys, execute: () => broadcastRef.current(navEvent) };
+  return {
+    id,
+    name,
+    keys,
+    execute: () => {
+      dispatchRef
+        .current(navEvent)
+        .catch((e) => console.error(`${navEvent} failed:`, e));
+    },
+  };
 }
 
 /** Build navigation CommandDefs for the grid. */
 function buildGridNavCommands(
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  dispatchRef: React.RefObject<AdHocDispatch>,
 ): CommandDef[] {
   return [
-    navCmd("grid.moveUp", "Move Up", "nav.up", broadcastRef, {
+    navCmd("grid.moveUp", "Move Up", "nav.up", dispatchRef, {
       vim: "k",
       cua: "ArrowUp",
     }),
-    navCmd("grid.moveDown", "Move Down", "nav.down", broadcastRef, {
+    navCmd("grid.moveDown", "Move Down", "nav.down", dispatchRef, {
       vim: "j",
       cua: "ArrowDown",
     }),
-    navCmd("grid.moveLeft", "Move Left", "nav.left", broadcastRef, {
+    navCmd("grid.moveLeft", "Move Left", "nav.left", dispatchRef, {
       vim: "h",
       cua: "ArrowLeft",
     }),
-    navCmd("grid.moveRight", "Move Right", "nav.right", broadcastRef, {
+    navCmd("grid.moveRight", "Move Right", "nav.right", dispatchRef, {
       vim: "l",
       cua: "ArrowRight",
     }),
-    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", broadcastRef, {
+    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", dispatchRef, {
       vim: "0",
       cua: "Home",
     }),
-    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", broadcastRef, {
+    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", dispatchRef, {
       vim: "$",
       cua: "End",
     }),
-    navCmd("grid.firstCell", "First Cell", "nav.first", broadcastRef, {
+    navCmd("grid.firstCell", "First Cell", "nav.first", dispatchRef, {
       cua: "Mod+Home",
     }),
-    navCmd("grid.lastCell", "Last Cell", "nav.last", broadcastRef, {
+    navCmd("grid.lastCell", "Last Cell", "nav.last", dispatchRef, {
       vim: "Shift+G",
       cua: "Mod+End",
     }),
-    navCmd("nav.first", "First Cell", "nav.first", broadcastRef),
-    navCmd("nav.last", "Last Cell", "nav.last", broadcastRef),
   ];
 }
+
+/**
+ * Build the execute callback for a grid editing command.
+ *
+ * Each command id maps to a specific grid or dispatch action. Row-mutation
+ * commands (`deleteRow`, `newBelow`, `newAbove`) dispatch to the backend.
+ */
+function gridEditExecutor(
+  id: string,
+  gridRef: React.RefObject<ReturnType<typeof useGrid>>,
+  entities: Entity[],
+  entityType: string,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
+): () => void {
+  const g = () => gridRef.current;
+  const addRow = () =>
+    dispatch(`${entityType}.add`, {
+      args: { title: `New ${entityType}` },
+    }).catch((err) => console.error("Failed to add row:", err));
+  switch (id) {
+    case "grid.edit":
+    case "grid.editEnter":
+      return () => g().enterEdit();
+    case "grid.exitEdit":
+      return () => {
+        if (g().mode === "edit") g().exitEdit();
+        else if (g().mode === "visual") g().exitVisual();
+      };
+    case "grid.toggleVisual":
+      return () => {
+        if (g().mode === "visual") g().exitVisual();
+        else g().enterVisual();
+      };
+    case "grid.deleteRow":
+      return () => {
+        // Cursor is derived from spatial focus — null when focus is on
+        // a non-cell target. Delete-row is meaningless without a target
+        // row, so silently no-op instead of picking an arbitrary cell.
+        const cursor = g().cursor;
+        if (!cursor) return;
+        const row = cursor.row;
+        if (row >= 0 && row < entities.length)
+          dispatch(`${entityType}.archive`, {
+            args: { id: entities[row].id },
+          }).catch((err) => console.error("Failed to delete row:", err));
+      };
+    case "grid.newBelow":
+    case "grid.newAbove":
+      return addRow;
+    default:
+      return () => {};
+  }
+}
+
+/** Descriptor table for grid editing commands: id, name, optional key bindings. */
+const GRID_EDIT_DESCRIPTORS: [string, string, CommandDef["keys"]?][] = [
+  ["grid.edit", "Edit Cell", { vim: "i", cua: "Enter" }],
+  ["grid.editEnter", "Edit Cell (Enter)", { vim: "Enter" }],
+  ["grid.exitEdit", "Exit Edit"],
+  ["grid.toggleVisual", "Toggle Visual Mode", { vim: "v" }],
+  ["grid.deleteRow", "Delete Row"],
+  ["grid.newBelow", "New Row Below", { vim: "o", cua: "Mod+Enter" }],
+  ["grid.newAbove", "New Row Above", { vim: "O", cua: "Mod+Shift+Enter" }],
+];
 
 /** Build editing and row-mutation CommandDefs for the grid. */
 function buildGridEditCommands(
@@ -287,99 +299,64 @@ function buildGridEditCommands(
   entityType: string,
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
-  return [
-    {
-      id: "grid.edit",
-      name: "Edit Cell",
-      keys: { vim: "i", cua: "Enter" },
-      execute: () => gridRef.current.enterEdit(),
-    },
-    {
-      id: "grid.editEnter",
-      name: "Edit Cell (Enter)",
-      keys: { vim: "Enter" },
-      execute: () => gridRef.current.enterEdit(),
-    },
-    {
-      id: "grid.exitEdit",
-      name: "Exit Edit",
-      execute: () => {
-        if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
-        else if (gridRef.current.mode === "visual")
-          gridRef.current.exitVisual();
-      },
-    },
-    {
-      id: "grid.toggleVisual",
-      name: "Toggle Visual Mode",
-      keys: { vim: "v" },
-      execute: () => {
-        if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
-        else gridRef.current.enterVisual();
-      },
-    },
-    {
-      id: "grid.deleteRow",
-      name: "Delete Row",
-      execute: () => {
-        const row = gridRef.current.cursor.row;
-        if (row >= 0 && row < entities.length) {
-          dispatch(`${entityType}.archive`, {
-            args: { id: entities[row].id },
-          }).catch((err) => console.error("Failed to delete row:", err));
-        }
-      },
-    },
-    {
-      id: "grid.newBelow",
-      name: "New Row Below",
-      keys: { vim: "o", cua: "Mod+Enter" },
-      execute: () => {
-        dispatch(`${entityType}.add`, {
-          args: { title: `New ${entityType}` },
-        }).catch((err) => console.error("Failed to add row:", err));
-      },
-    },
-    {
-      id: "grid.newAbove",
-      name: "New Row Above",
-      keys: { vim: "O", cua: "Mod+Shift+Enter" },
-      execute: () => {
-        dispatch(`${entityType}.add`, {
-          args: { title: `New ${entityType}` },
-        }).catch((err) => console.error("Failed to add row:", err));
-      },
-    },
-  ];
+  return GRID_EDIT_DESCRIPTORS.map(([id, name, keys]) => ({
+    id,
+    name,
+    keys,
+    execute: gridEditExecutor(id, gridRef, entities, entityType, dispatch),
+  }));
 }
 
 /**
  * Compose the full grid CommandDef array from navigation + editing commands.
  */
 function useGridCommands(
-  broadcastNavCommand: (cmd: string) => void,
   grid: ReturnType<typeof useGrid>,
   entities: Entity[],
   entityType: string,
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
   return useMemo<CommandDef[]>(
     () => [
-      ...buildGridNavCommands(broadcastRef),
+      ...buildGridNavCommands(dispatchRef),
       ...buildGridEditCommands(gridRef, entities, entityType, dispatch),
     ],
-    [entities, entityType],
+    [entities, entityType, dispatch],
   );
 }
 
 /** Props for the GridView component — the view definition that specifies entity type and columns. */
 interface GridViewProps {
   view: ViewDef;
+}
+
+/**
+ * Render a Field in inline-edit mode for a grid cell.
+ *
+ * Pure helper (no hooks) so it can be wrapped in a stable useCallback.
+ */
+function renderCellEditor(
+  entity: Entity,
+  field: FieldDef,
+  onCommit: (value: unknown) => void,
+  onCancel: () => void,
+): React.ReactNode {
+  return (
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={true}
+      onDone={() => onCommit(undefined)}
+      onCancel={onCancel}
+    />
+  );
 }
 
 /**
@@ -396,7 +373,6 @@ function useGridCallbacks(
 ) {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
-      // On click, set focus to the clicked cell's moniker
       const mk = cellMonikers[row]?.[col];
       if (mk) setFocus(mk);
     },
@@ -406,47 +382,16 @@ function useGridCallbacks(
   /**
    * Factory that builds entity-specific context menu commands for a given row.
    *
-   * Used by DataTable to wrap each row's selector cell in its own
-   * CommandScopeProvider so right-clicking row N always resolves commands for
-   * row N's entity -- regardless of the grid cursor position at the time of
-   * the right-click.
-   *
    * Uses buildEntityCommandDefs (non-hook) because this factory is called
    * inside a callback, not in the React render cycle.
    */
   const buildRowEntityCommands = useCallback(
-    (entity: Entity): CommandDef[] => {
-      return buildEntityCommandDefs(
-        schemaCommands,
-        entityType,
-        entity.id,
-        entity,
-      );
-    },
+    (entity: Entity): CommandDef[] =>
+      buildEntityCommandDefs(schemaCommands, entityType, entity.id, entity),
     [schemaCommands, entityType],
   );
 
-  const renderEditor = useCallback(
-    (
-      entity: Entity,
-      field: FieldDef,
-      onCommit: (value: unknown) => void,
-      onCancel: () => void,
-    ) => {
-      return (
-        <Field
-          fieldDef={field}
-          entityType={entity.entity_type}
-          entityId={entity.id}
-          mode="compact"
-          editing={true}
-          onDone={() => onCommit(undefined)}
-          onCancel={onCancel}
-        />
-      );
-    },
-    [],
-  );
+  const renderEditor = useCallback(renderCellEditor, []);
 
   return { handleCellClick, buildRowEntityCommands, renderEditor };
 }
@@ -458,7 +403,15 @@ function useGridCallbacks(
  * keyboard command definitions to useGridCommands, callback construction
  * to useGridCallbacks, and rendering to DataTable.
  */
-/** Status bar showing row count, grid mode, and cursor position. */
+/**
+ * Status bar showing row count, grid mode, and cursor position.
+ *
+ * `cursor` is derived from spatial focus; it is `null` when focus is
+ * on a non-cell target (header, selector, perspective tab) or nothing
+ * is focused yet. In that case the R/C readout is suppressed — we
+ * never fabricate coordinates that disagree with what's actually
+ * focused on screen.
+ */
 function GridStatusBar({
   rowCount,
   mode,
@@ -466,7 +419,7 @@ function GridStatusBar({
 }: {
   rowCount: number;
   mode: string;
-  cursor: { row: number; col: number };
+  cursor: { row: number; col: number } | null;
 }) {
   const label =
     mode === "edit" ? "EDIT" : mode === "visual" ? "VISUAL" : "NORMAL";
@@ -475,7 +428,7 @@ function GridStatusBar({
       <span>{rowCount} rows</span>
       <span className="text-muted-foreground/50">|</span>
       <span>{label}</span>
-      {rowCount > 0 && (
+      {rowCount > 0 && cursor && (
         <>
           <span className="text-muted-foreground/50">|</span>
           <span>
@@ -487,8 +440,13 @@ function GridStatusBar({
   );
 }
 
-/** Grid (spreadsheet-style) view for entities. */
-export function GridView({ view }: GridViewProps) {
+/**
+ * Compose all grid hooks into a single state bundle for GridView.
+ *
+ * Centralizes hook orchestration so the component body stays under the
+ * line limit while keeping every hook call at the top level.
+ */
+function useGridViewState(view: ViewDef) {
   const dispatch = useDispatchCommand();
   const {
     entityType,
@@ -498,23 +456,43 @@ export function GridView({ view }: GridViewProps) {
     schemaCommands,
     activePerspective,
   } = useGridData(view);
-  const {
+  const { setVisibleRowCount, grid, cellMonikers, setFocus } =
+    useGridNavigation(entities, columns);
+  const gridCommands = useGridCommands(grid, entities, entityType, dispatch);
+  const { handleCellClick, buildRowEntityCommands, renderEditor } =
+    useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
+
+  return {
+    entityType,
+    entities,
+    columns,
+    grouping,
+    activePerspective,
     setVisibleRowCount,
     grid,
     cellMonikers,
-    claimPredicates,
-    setFocus,
-    broadcastNavCommand,
-  } = useGridNavigation(entities, columns);
-  const gridCommands = useGridCommands(
-    broadcastNavCommand,
-    grid,
+    gridCommands,
+    handleCellClick,
+    buildRowEntityCommands,
+    renderEditor,
+  };
+}
+
+/** Grid (spreadsheet-style) view for entities. */
+export function GridView({ view }: GridViewProps) {
+  const {
     entities,
-    entityType,
-    dispatch,
-  );
-  const { handleCellClick, buildRowEntityCommands, renderEditor } =
-    useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
+    columns,
+    grouping,
+    activePerspective,
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    gridCommands,
+    handleCellClick,
+    buildRowEntityCommands,
+    renderEditor,
+  } = useGridViewState(view);
 
   if (!view.entity_type) {
     console.warn(
@@ -540,7 +518,6 @@ export function GridView({ view }: GridViewProps) {
           rows={entities}
           grid={grid}
           cellMonikers={cellMonikers}
-          claimPredicates={claimPredicates}
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
           grouping={grouping}

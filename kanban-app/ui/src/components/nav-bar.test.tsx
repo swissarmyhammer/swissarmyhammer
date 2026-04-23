@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,27 @@ vi.mock("@tauri-apps/api/window", () => ({
     label: "main",
     listen: vi.fn(() => Promise.resolve(() => {})),
   }),
+}));
+
+// EntityFocusProvider (mounted around NavBar for the FocusScope wrappers)
+// resolves the current webview via getCurrentWebviewWindow; stub it
+// with a minimal implementation rather than letting the real Tauri
+// module try to reach a runtime bridge that doesn't exist in the
+// headless browser.
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
 // ---------------------------------------------------------------------------
@@ -98,12 +120,21 @@ vi.mock("@/components/fields/field", () => ({
 // Import after mocks
 import { NavBar } from "./nav-bar";
 
-/** Renders NavBar inside the required TooltipProvider. */
+/**
+ * Renders NavBar inside the required providers.
+ *
+ * `TooltipProvider` is needed for the Inspect/Search tooltips; the
+ * `EntityFocusProvider` is needed by each toolbar element's `FocusScope`
+ * wrapper (registers/unregisters focus claims). Both are mounted high
+ * in the production component tree; tests reproduce that here.
+ */
 function renderNavBar() {
   return render(
-    <TooltipProvider>
-      <NavBar />
-    </TooltipProvider>,
+    <EntityFocusProvider>
+      <TooltipProvider>
+        <NavBar />
+      </TooltipProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -219,5 +250,47 @@ describe("NavBar", () => {
 
     renderNavBar();
     expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+});
+
+/**
+ * Spatial-nav contract: every interactive element in NavBar must carry a
+ * `data-moniker` (with `toolbar:` prefix) so the Rust spatial engine has
+ * a rect to register and `k`/`j` from adjacent strips can land on the
+ * toolbar. Without these attributes, `FocusScope.useSpatialClaim` never
+ * registers a rect and the toolbar is spatially invisible.
+ */
+describe("NavBar spatial monikers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBoardData.mockReturnValue(MOCK_BOARD);
+    mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
+    mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
+  });
+
+  it("board selector exposes toolbar:board-selector moniker", () => {
+    renderNavBar();
+    expect(
+      screen.getByTestId("data-moniker:toolbar:board-selector"),
+    ).toBeTruthy();
+  });
+
+  it("inspect button exposes toolbar:inspect-board moniker when board is loaded", () => {
+    renderNavBar();
+    expect(
+      screen.getByTestId("data-moniker:toolbar:inspect-board"),
+    ).toBeTruthy();
+  });
+
+  it("percent-complete field exposes toolbar:percent-complete moniker when board is loaded", () => {
+    renderNavBar();
+    expect(
+      screen.getByTestId("data-moniker:toolbar:percent-complete"),
+    ).toBeTruthy();
+  });
+
+  it("search button exposes toolbar:search moniker", () => {
+    renderNavBar();
+    expect(screen.getByTestId("data-moniker:toolbar:search")).toBeTruthy();
   });
 });

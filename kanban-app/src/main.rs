@@ -5,10 +5,19 @@ mod cli;
 mod commands;
 mod deeplink;
 mod menu;
+mod spatial;
 mod state;
 mod tauri_reporter;
+// Board-fixture factory used by in-process Rust tests (unit + tauri
+// integration). `#[cfg(test)]` keeps it out of production binaries and
+// scopes the `tempfile` dev-dependency to the test build.
+#[cfg(test)]
+mod test_support;
 mod watcher;
 
+/// Re-exported so integration tests and binary-adjacent tooling can install
+/// the custom `tracing` subscriber layer that routes records into Tauri's log
+/// plugin.
 pub use tauri_reporter::TauriReporter;
 
 use clap::Parser;
@@ -40,8 +49,7 @@ fn main() {
     // Tauri app exists. Session restore is driven from inside `setup_app`,
     // after the deep-link handler has had its chance to set
     // `AppState::deep_link_handled`.
-    let app_state = AppState::new();
-    run_app(app_state);
+    run_app(AppState::new());
 }
 
 fn run_app(app_state: AppState) {
@@ -52,7 +60,13 @@ fn run_app(app_state: AppState) {
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
-        .invoke_handler(tauri::generate_handler![
+        // `kanban_invoke_handler!` (defined in `spatial.rs`) is the single
+        // source of truth for the debug-only command surface: it appends
+        // `__spatial_dump` to the handler list in debug builds and drops it
+        // entirely in release builds. No `#[cfg]` required here — the macro
+        // internalizes the distinction so this call site cannot drift out of
+        // sync with the command definition.
+        .invoke_handler(kanban_invoke_handler![
             commands::log_command,
             commands::dispatch_command,
             commands::list_commands_for_scope,
@@ -73,6 +87,16 @@ fn run_app(app_state: AppState) {
             commands::get_undo_state,
             commands::create_window,
             commands::save_dropped_file,
+            spatial::spatial_register,
+            spatial::spatial_register_batch,
+            spatial::spatial_unregister,
+            spatial::spatial_unregister_batch,
+            spatial::spatial_focus,
+            spatial::spatial_clear_focus,
+            spatial::spatial_navigate,
+            spatial::spatial_push_layer,
+            spatial::spatial_remove_layer,
+            spatial::spatial_focus_first_in_layer,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)
@@ -105,6 +129,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     wire_deep_links(app);
 
     let state = app.state::<AppState>();
+
     tauri::async_runtime::block_on(state.auto_open_board());
 
     let app_handle = app.handle().clone();
@@ -327,13 +352,24 @@ fn on_window_close_requested(window: &tauri::Window, label: &str) {
     tracing::info!(label = %label, "removed window entry on mid-session close");
 }
 
-/// Rebuild the Window menu when a secondary window is destroyed. Actual
+/// Rebuild the Window menu when a secondary window is destroyed, and drop
+/// the window's per-window `SpatialState` so its entries don't leak back
+/// into a freshly-created window that happens to reuse the label. Actual
 /// UIState cleanup already happened in `on_window_close_requested`.
 fn on_window_destroyed(window: &tauri::Window) {
     let state = window.app_handle().state::<AppState>();
     if state.shutting_down.load(Ordering::SeqCst) {
         return;
     }
+    // Spatial state cleanup has to happen here, not in CloseRequested —
+    // CloseRequested can be vetoed and the window can live on; Destroyed is
+    // the point of no return.
+    let label = window.label().to_string();
+    let app_handle = window.app_handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app_handle.state::<AppState>();
+        state.remove_spatial_state(&label).await;
+    });
     crate::menu::rebuild_menu(window.app_handle());
 }
 

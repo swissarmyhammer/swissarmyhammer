@@ -1,33 +1,75 @@
-import { useState, useCallback, useMemo } from "react";
+import {
+  useState,
+  useCallback,
+  useMemo,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
+/**
+ * The grid's interaction mode.
+ *
+ * - `"normal"` — navigation only; `h`/`j`/`k`/`l` move spatial focus
+ *   between cells and no cell-local editor is open.
+ * - `"edit"` — the cursor cell's editor is active; keystrokes land in
+ *   the editor instead of driving navigation.
+ * - `"visual"` — a rectangular range is being selected; movement keys
+ *   extend `GridSelection.head` while the anchor stays pinned.
+ */
 export type GridMode = "normal" | "edit" | "visual";
 
+/**
+ * A cursor position in the grid, referencing a single cell by its
+ * zero-based data row index and column index. Not a pixel coordinate —
+ * the DOM rect for the cell is looked up separately.
+ */
 export interface GridCursor {
   row: number;
   col: number;
 }
 
+/**
+ * A rectangular visual-mode selection: an `anchor` (where selection started)
+ * and a `head` (the cursor end that expands with `expandSelection`).
+ */
 export interface GridSelection {
   anchor: GridCursor;
   head: GridCursor;
 }
 
+/** Options accepted by `useGrid`: grid dimensions and an externally-derived cursor. */
 export interface UseGridOptions {
   rowCount: number;
   colCount: number;
   /**
    * Externally-derived cursor position (from the focused moniker).
-   * When provided, the grid does not maintain its own cursor state --
-   * navigation is pull-based via claimWhen.
+   *
+   * Spatial focus is the single source of truth for "where the user is":
+   * callers compute this by looking up the focused moniker in their cell
+   * moniker map and passing `{ row, col }` when the focus points at a
+   * data cell, or `null` when focus is on a non-cell target (column
+   * header, row selector, perspective tab) or no cell is focused.
+   *
+   * The hook does not maintain its own cursor state — there is no parallel
+   * state machine. When this option is `null` or `undefined`, `cursor` is
+   * `null` and no cell is treated as the cursor target.
    */
-  cursor?: GridCursor;
+  cursor?: GridCursor | null;
 }
 
+/**
+ * Return shape of `useGrid`: the derived cursor, current mode, active
+ * selection, plus mode/selection control callbacks. Callers destructure
+ * only what they need; identities are stable across re-renders.
+ */
 export interface UseGridReturn {
-  cursor: GridCursor;
+  /**
+   * Current cursor position derived from spatial focus, or `null` when
+   * no data cell is focused.
+   */
+  cursor: GridCursor | null;
   mode: GridMode;
   selection: GridSelection | null;
-  setCursor: (row: number, col: number) => void;
   // Mode
   enterEdit: () => void;
   exitEdit: () => void;
@@ -43,113 +85,98 @@ export interface UseGridReturn {
   } | null;
 }
 
-/**
- * Hook for managing grid mode (normal/edit/visual) and visual selection.
- *
- * Navigation is pull-based: callers pass the cursor position derived from
- * the focused moniker via options.cursor. This hook no longer drives
- * cursor movement -- that is handled by claimWhen predicates on each
- * cell's FocusScope.
- *
- * When options.cursor is not provided, falls back to internal state
- * (for setCursor / click handling).
- *
- * @param options - Grid dimensions and optional external cursor
- * @returns Grid state and control functions
- */
-export function useGrid({
-  rowCount,
-  colCount,
-  cursor: externalCursor,
-}: UseGridOptions): UseGridReturn {
-  const [internalCursor, setCursorState] = useState<GridCursor>({
-    row: 0,
-    col: 0,
-  });
-  const [mode, setMode] = useState<GridMode>("normal");
-  const [selection, setSelection] = useState<GridSelection | null>(null);
-
-  // Use external cursor when provided, otherwise use internal state.
-  const cursor = externalCursor ?? internalCursor;
-
-  /** Clamp a row index to valid bounds [0, rowCount-1]. */
+/** Clamp helpers bounded by the grid's `rowCount` and `colCount`. */
+function useClampers(rowCount: number, colCount: number) {
   const clampRow = useCallback(
     (r: number) => Math.max(0, Math.min(r, rowCount - 1)),
     [rowCount],
   );
-
-  /** Clamp a column index to valid bounds [0, colCount-1]. */
   const clampCol = useCallback(
     (c: number) => Math.max(0, Math.min(c, colCount - 1)),
     [colCount],
   );
+  return { clampRow, clampCol };
+}
 
-  /** Set the cursor to an exact position, clamped to grid bounds. */
-  const setCursor = useCallback(
-    (row: number, col: number) => {
-      setCursorState({ row: clampRow(row), col: clampCol(col) });
-    },
-    [clampRow, clampCol],
-  );
-
-  /** Enter edit mode if the grid is non-empty. Clears any visual selection. */
+function useModeControls(
+  rowCount: number,
+  colCount: number,
+  cursor: GridCursor | null,
+  setMode: Dispatch<SetStateAction<GridMode>>,
+  setSelection: Dispatch<SetStateAction<GridSelection | null>>,
+) {
   const enterEdit = useCallback(() => {
     if (rowCount > 0 && colCount > 0) {
       setMode("edit");
       setSelection(null);
     }
-  }, [rowCount, colCount]);
+  }, [rowCount, colCount, setMode, setSelection]);
 
-  /** Exit edit mode, returning to normal mode. */
-  const exitEdit = useCallback(() => {
-    setMode("normal");
-  }, []);
+  const exitEdit = useCallback(() => setMode("normal"), [setMode]);
 
-  /** Enter visual mode, anchoring the selection at the current cursor position. */
   const enterVisual = useCallback(() => {
+    if (!cursor) return;
     setMode("visual");
     setSelection({ anchor: { ...cursor }, head: { ...cursor } });
-  }, [cursor]);
+  }, [cursor, setMode, setSelection]);
 
-  /** Exit visual mode, clearing the selection and returning to normal mode. */
   const exitVisual = useCallback(() => {
     setMode("normal");
     setSelection(null);
-  }, []);
+  }, [setMode, setSelection]);
 
-  /**
-   * Expand the visual selection by moving the head one cell in the given direction.
-   */
-  const expandSelection = useCallback(
+  return { enterEdit, exitEdit, enterVisual, exitVisual };
+}
+
+function moveHead(
+  head: { row: number; col: number },
+  direction: "up" | "down" | "left" | "right",
+  clampRow: (r: number) => number,
+  clampCol: (c: number) => number,
+) {
+  const next = { ...head };
+  switch (direction) {
+    case "up":
+      next.row = clampRow(head.row - 1);
+      break;
+    case "down":
+      next.row = clampRow(head.row + 1);
+      break;
+    case "left":
+      next.col = clampCol(head.col - 1);
+      break;
+    case "right":
+      next.col = clampCol(head.col + 1);
+      break;
+  }
+  return next;
+}
+
+function useExpandSelection(
+  cursor: GridCursor | null,
+  clampRow: (r: number) => number,
+  clampCol: (c: number) => number,
+  setSelection: Dispatch<SetStateAction<GridSelection | null>>,
+) {
+  return useCallback(
     (direction: "up" | "down" | "left" | "right") => {
       setSelection((sel) => {
-        if (!sel) return { anchor: { ...cursor }, head: { ...cursor } };
-        const next = { ...sel.head };
-        switch (direction) {
-          case "up":
-            next.row = clampRow(sel.head.row - 1);
-            break;
-          case "down":
-            next.row = clampRow(sel.head.row + 1);
-            break;
-          case "left":
-            next.col = clampCol(sel.head.col - 1);
-            break;
-          case "right":
-            next.col = clampCol(sel.head.col + 1);
-            break;
+        if (!sel) {
+          if (!cursor) return null;
+          return { anchor: { ...cursor }, head: { ...cursor } };
         }
-        return { ...sel, head: next };
+        return {
+          ...sel,
+          head: moveHead(sel.head, direction, clampRow, clampCol),
+        };
       });
     },
-    [cursor, clampRow, clampCol],
+    [cursor, clampRow, clampCol, setSelection],
   );
+}
 
-  /**
-   * Get the normalized selected range as min/max row and column indices.
-   * Returns null if there is no active selection.
-   */
-  const getSelectedRange = useCallback(() => {
+function useSelectedRange(selection: GridSelection | null) {
+  return useCallback(() => {
     if (!selection) return null;
     return {
       startRow: Math.min(selection.anchor.row, selection.head.row),
@@ -158,31 +185,60 @@ export function useGrid({
       endCol: Math.max(selection.anchor.col, selection.head.col),
     };
   }, [selection]);
+}
+
+/**
+ * Hook for managing grid mode (normal/edit/visual) and visual selection.
+ *
+ * The cursor is a pure derivation of spatial focus — it is never an
+ * independent source of truth. Callers pass the cursor position they
+ * compute from `useFocusedMoniker()` via `options.cursor`. When spatial
+ * focus is on a non-cell target (or nothing), callers pass `null` and
+ * no row/column is treated as the cursor. This guarantees the grid
+ * never shows a "ghost" cursor highlight that disagrees with the actual
+ * focused element.
+ *
+ * Navigation between cells is driven by Rust spatial nav on each cell's
+ * `FocusScope`; this hook only manages mode (normal/edit/visual) and the
+ * visual-mode selection range — both of which are orthogonal to the
+ * cursor position.
+ *
+ * @param options - Grid dimensions and the externally-derived cursor
+ * @returns Grid state and mode/selection control functions
+ */
+export function useGrid({
+  rowCount,
+  colCount,
+  cursor: externalCursor,
+}: UseGridOptions): UseGridReturn {
+  const [mode, setMode] = useState<GridMode>("normal");
+  const [selection, setSelection] = useState<GridSelection | null>(null);
+  const cursor = externalCursor ?? null;
+  const { clampRow, clampCol } = useClampers(rowCount, colCount);
+  const modeControls = useModeControls(
+    rowCount,
+    colCount,
+    cursor,
+    setMode,
+    setSelection,
+  );
+  const expandSelection = useExpandSelection(
+    cursor,
+    clampRow,
+    clampCol,
+    setSelection,
+  );
+  const getSelectedRange = useSelectedRange(selection);
 
   return useMemo(
     () => ({
       cursor,
       mode,
       selection,
-      setCursor,
-      enterEdit,
-      exitEdit,
-      enterVisual,
-      exitVisual,
+      ...modeControls,
       expandSelection,
       getSelectedRange,
     }),
-    [
-      cursor,
-      mode,
-      selection,
-      setCursor,
-      enterEdit,
-      exitEdit,
-      enterVisual,
-      exitVisual,
-      expandSelection,
-      getSelectedRange,
-    ],
+    [cursor, mode, selection, modeControls, expandSelection, getSelectedRange],
   );
 }

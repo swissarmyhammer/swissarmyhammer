@@ -448,7 +448,10 @@ export function useDispatchCommand(presetCmd?: string) {
         return runFrontendExecute(cmdId, opts, resolved);
       }
 
-      // Backend dispatch — Tauri IPC with busy tracking
+      // Backend dispatch — Tauri IPC with busy tracking. Forward the
+      // resolved CommandDef's target so keybinding-driven dispatch
+      // (which has no explicit opts.target) still carries the
+      // entity-level target stamped by `useEntityCommands`.
       const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
       return runBackendDispatch(
         cmdId,
@@ -456,6 +459,7 @@ export function useDispatchCommand(presetCmd?: string) {
         chain,
         boardPath,
         setInflightCount,
+        resolved?.target,
       );
     },
     [presetCmd, effectiveScope, boardPath, setInflightCount],
@@ -496,12 +500,22 @@ async function runBackendDispatch(
   chain: string[],
   boardPath: string | undefined,
   setInflightCount: React.Dispatch<React.SetStateAction<number>>,
+  resolvedTarget: string | undefined,
 ): Promise<unknown> {
   setInflightCount((c) => c + 1);
   try {
     return await invoke("dispatch_command", {
       cmd: cmdId,
-      target: opts.target,
+      // Target priority: caller-supplied opts.target wins (they're
+      // explicit), falls back to the target baked into the resolved
+      // CommandDef (set e.g. by `useEntityCommands` which stamps
+      // every entity command with `target: entityMoniker`). Without
+      // this fallback, keybinding-driven dispatch of commands like
+      // `ui.inspect` — which rely on the entity-level target for
+      // correct inspector routing — hit the backend with
+      // `target: undefined` and silently did nothing. See task
+      // 01KPX6E0QPNRWZTQXGXX2MBEMV.
+      target: opts.target ?? resolvedTarget,
       args: opts.args,
       scopeChain: chain,
       ...(boardPath ? { boardPath } : {}),

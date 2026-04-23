@@ -11,6 +11,7 @@ use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
+use swissarmyhammer_spatial_nav::SpatialState;
 use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::RwLock;
 
@@ -345,18 +346,9 @@ impl BoardHandle {
         let search_index = Arc::clone(&self.search_index);
         let board_path_str = kanban_root.display().to_string();
 
-        // Subscribe to the perspective broadcast channel so the bridge can
-        // forward perspective mutations as Tauri events.
-        //
-        // Invariant: `start_watcher` must be called after `register_perspective_store`
-        // has initialized the PerspectiveContext (via `perspective_context().await`)
-        // and before any concurrent perspective writes begin. This ensures:
-        //   1. `perspective_context_if_ready()` returns `Some` (context is initialized)
-        //   2. `try_read()` succeeds (no write lock held during startup)
-        //
-        // `try_read()` is used instead of `.read().await` because `start_watcher`
-        // is a synchronous function. The lock is only held momentarily to call
-        // `subscribe()` — the guard is dropped immediately.
+        // Subscribe to the perspective-store broadcast if the store is
+        // ready. `try_read()` keeps this synchronous since `start_watcher`
+        // is not async; the guard is dropped immediately after subscribe().
         let perspective_rx = ctx
             .perspective_context_if_ready()
             .and_then(|pctx| pctx.try_read().ok().map(|guard| guard.subscribe()));
@@ -395,6 +387,7 @@ impl MenuItemHandle {
         }
     }
 
+    /// Update this menu item's display label.
     pub(crate) fn set_text(&self, text: &str) -> tauri::Result<()> {
         match self {
             Self::Regular(item) => item.set_text(text),
@@ -408,6 +401,20 @@ pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
+    /// Per-window spatial focus state.
+    ///
+    /// Each webview window gets its own `SpatialState` keyed by its Tauri
+    /// window label, so FocusScope registrations, the layer stack, and the
+    /// focused key are all scoped to the window that owns them. Without this
+    /// scoping, spatial navigation in one window would leak into another:
+    /// every window's `FocusLayer name="window"` pushes onto a single stack
+    /// and beam-test candidates pool across windows.
+    ///
+    /// `Arc<SpatialState>` lets command handlers clone the state out and
+    /// drop the outer lock quickly. Entries are created lazily in
+    /// [`AppState::spatial_state_for`] on first access for a window label.
+    /// Transient — never persisted.
+    pub(crate) spatial_states: RwLock<HashMap<String, Arc<SpatialState>>>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
@@ -458,12 +465,53 @@ impl AppState {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state,
+            spatial_states: RwLock::new(HashMap::new()),
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
         }
+    }
+
+    /// Get or create the `SpatialState` for the given window label.
+    ///
+    /// Each webview window owns a distinct `SpatialState` so that FocusScope
+    /// registrations, layer stacks, and focused-key tracking don't leak
+    /// between windows. Called on every spatial Tauri command to resolve the
+    /// right state for the invoking window. Insertion on miss is the common
+    /// path — the first `spatial_push_layer` or `spatial_register` from a
+    /// newly-created window hits this code before any other access.
+    ///
+    /// Returns an `Arc<SpatialState>` so the caller can drop the outer lock
+    /// before doing work — the state itself owns an internal `RwLock`.
+    pub(crate) async fn spatial_state_for(&self, label: &str) -> Arc<SpatialState> {
+        // Fast path: state already exists — take the read lock only.
+        {
+            let states = self.spatial_states.read().await;
+            if let Some(state) = states.get(label) {
+                return Arc::clone(state);
+            }
+        }
+        // Slow path: upgrade to write lock and insert. A concurrent writer
+        // may have inserted in the meantime — re-check inside the write
+        // guard to keep insertion idempotent.
+        let mut states = self.spatial_states.write().await;
+        Arc::clone(
+            states
+                .entry(label.to_string())
+                .or_insert_with(|| Arc::new(SpatialState::new())),
+        )
+    }
+
+    /// Remove the `SpatialState` for a window that has been destroyed.
+    ///
+    /// Called from the window-destroyed handler so long-lived processes with
+    /// many transient windows don't leak `SpatialState` instances. Safe to
+    /// call even when no state exists for the label — it's a no-op.
+    pub(crate) async fn remove_spatial_state(&self, label: &str) {
+        let mut states = self.spatial_states.write().await;
+        states.remove(label);
     }
 
     /// Open a board at the given path, resolving to its .kanban directory.
@@ -553,10 +601,6 @@ impl AppState {
     /// If no `.kanban` directory is found in any ancestor, the app starts without
     /// a board (the frontend shows the "No board loaded" prompt).
     pub async fn auto_open_board(&self) {
-        // If a deep-link URL was already handled during setup, the user
-        // explicitly asked for a specific board — skip session restore and
-        // filesystem discovery entirely so we don't resurrect the previous
-        // session on top of their choice.
         if self
             .deep_link_handled
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -568,7 +612,6 @@ impl AppState {
         self.restore_persisted_boards().await;
         self.restore_window_boards().await;
 
-        // If we restored boards, we're done — don't override with CWD discovery.
         {
             let boards = self.boards.read().await;
             if !boards.is_empty() {
@@ -581,28 +624,11 @@ impl AppState {
             }
         }
 
-        let board_dir = self.discover_board_from_environment();
-        match board_dir {
-            Some(ref dir) => {
-                tracing::info!(path = %dir.display(), "auto_open_board: opening board");
-                if let Err(e) = self.open_board(dir, None).await {
-                    tracing::warn!(
-                        path = %dir.display(),
-                        error = %e,
-                        "auto_open_board: failed to open board"
-                    );
-                }
-            }
-            None => {
-                tracing::info!("auto_open_board: no board found, starting without one");
-            }
-        }
+        self.open_discovered_board().await;
     }
 
-    /// Restore previously-open boards from UIState's `open_boards` list.
-    ///
-    /// Removes stale entries (empty paths, directories that no longer exist)
-    /// and opens all valid board paths.
+    /// Reopen boards listed in `UIState::open_boards` from the previous session,
+    /// pruning entries whose paths no longer exist or are empty.
     async fn restore_persisted_boards(&self) {
         let paths: Vec<PathBuf> = self
             .ui_state
@@ -628,10 +654,8 @@ impl AppState {
         }
     }
 
-    /// Open boards referenced in UIState `window_boards` that aren't already open.
-    ///
-    /// Handles the case where a secondary window shows a different board
-    /// than the ones in `open_boards`.
+    /// Open any boards referenced in UIState window_boards that aren't already
+    /// open. Handles secondary windows pointing at boards not in `open_boards`.
     async fn restore_window_boards(&self) {
         let wb_paths: Vec<PathBuf> = self
             .ui_state
@@ -640,9 +664,10 @@ impl AppState {
             .map(PathBuf::from)
             .collect();
 
-        let boards = self.boards.read().await;
-        let already_open: HashSet<PathBuf> = boards.keys().cloned().collect();
-        drop(boards);
+        let already_open: HashSet<PathBuf> = {
+            let boards = self.boards.read().await;
+            boards.keys().cloned().collect()
+        };
 
         for path in wb_paths {
             let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -658,35 +683,65 @@ impl AppState {
         }
     }
 
-    /// Discover a board from CWD, home directory, or MRU history.
-    ///
-    /// Tries three strategies in order: (1) walk up from CWD, (2) check
-    /// home directory as backstop, (3) fall back to the most recently
-    /// used board from config.
-    fn discover_board_from_environment(&self) -> Option<PathBuf> {
+    /// Discover a board on disk via CWD walk / home backstop / MRU and open it.
+    async fn open_discovered_board(&self) {
         let cwd = match std::env::current_dir() {
             Ok(dir) => dir,
             Err(e) => {
                 tracing::warn!("Cannot determine current directory: {e}");
-                return None;
+                return;
             }
         };
         tracing::info!(cwd = %cwd.display(), "auto_open_board: starting discovery");
 
-        // Strategy 1: walk up from CWD
-        if let Some(dir) = discover_board(&cwd) {
+        let board_dir = self.discover_board_via_fallbacks(&cwd);
+
+        match board_dir {
+            Some(ref dir) => {
+                tracing::info!(path = %dir.display(), "auto_open_board: opening board");
+                if let Err(e) = self.open_board(dir, None).await {
+                    tracing::warn!(
+                        path = %dir.display(),
+                        error = %e,
+                        "auto_open_board: failed to open board"
+                    );
+                }
+            }
+            None => {
+                tracing::info!("auto_open_board: no board found, starting without one");
+            }
+        }
+    }
+
+    /// Try CWD walk, then home dir backstop, then MRU. Returns the first hit.
+    fn discover_board_via_fallbacks(&self, cwd: &Path) -> Option<PathBuf> {
+        if let Some(dir) = discover_board(cwd) {
             tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via CWD walk");
             return Some(dir);
         }
         tracing::info!("auto_open_board: no .kanban found walking up from CWD");
 
-        // Strategy 2: if CWD walk didn't pass through home, check home as backstop
-        if let Some(dir) = try_home_backstop(&cwd) {
+        if let Some(dir) = home_backstop(cwd) {
             return Some(dir);
         }
 
-        // Strategy 3: fall back to MRU — the most recently opened board
-        try_mru_fallback(&self.ui_state)
+        let recent_boards = self.ui_state.recent_boards();
+        let Some(recent) = recent_boards.first() else {
+            tracing::info!("auto_open_board: no MRU boards in config");
+            return None;
+        };
+        let path = PathBuf::from(&recent.path);
+        tracing::info!(
+            path = %path.display(),
+            name = %recent.name,
+            "auto_open_board: falling back to MRU board"
+        );
+        if path.is_dir() {
+            Some(path)
+        } else {
+            tracing::warn!(path = %path.display(), "auto_open_board: MRU path no longer exists");
+            None
+        }
     }
 
     /// Rebuild the commands registry from builtins + user overrides from the
@@ -778,6 +833,25 @@ impl Default for AppState {
     }
 }
 
+/// Check the home directory for a `.kanban` — but only if the CWD walk
+/// didn't already pass through home (in which case the absence is
+/// authoritative).
+fn home_backstop(cwd: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let walked_through_home = cwd.starts_with(&home);
+    tracing::info!(
+        home = %home.display(),
+        walked_through_home,
+        "auto_open_board: checking home dir backstop"
+    );
+    if walked_through_home {
+        return None;
+    }
+    let dir = discover_board(&home)?;
+    tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
+    Some(dir)
+}
+
 /// Walk up from `start_dir` looking for a `.kanban` subdirectory.
 ///
 /// Returns the parent directory containing `.kanban` (not the `.kanban` dir itself),
@@ -793,50 +867,6 @@ pub fn discover_board(start_dir: &Path) -> Option<PathBuf> {
         if !current.pop() {
             return None;
         }
-    }
-}
-
-/// Try the home directory as a backstop for board discovery.
-///
-/// If the CWD walk already passed through `$HOME`, this returns `None`
-/// (the walk already checked it). Otherwise, runs `discover_board` on the
-/// home directory and returns whatever it finds.
-fn try_home_backstop(cwd: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let walked_through_home = cwd.starts_with(&home);
-    tracing::info!(
-        home = %home.display(),
-        walked_through_home,
-        "auto_open_board: checking home dir backstop"
-    );
-    if walked_through_home {
-        return None;
-    }
-    let board_dir = discover_board(&home);
-    if let Some(ref dir) = board_dir {
-        tracing::info!(path = %dir.display(), "auto_open_board: found .kanban via home backstop");
-    }
-    board_dir
-}
-
-/// Try the most recently used board as a fallback.
-///
-/// Reads the MRU list from UIState and returns the first entry whose
-/// path still exists on disk, or `None` if no valid MRU entry is found.
-fn try_mru_fallback(ui_state: &swissarmyhammer_commands::UIState) -> Option<PathBuf> {
-    let recent_boards = ui_state.recent_boards();
-    let recent = recent_boards.first()?;
-    let path = PathBuf::from(&recent.path);
-    tracing::info!(
-        path = %path.display(),
-        name = %recent.name,
-        "auto_open_board: falling back to MRU board"
-    );
-    if path.is_dir() {
-        Some(path)
-    } else {
-        tracing::warn!(path = %path.display(), "auto_open_board: MRU path no longer exists");
-        None
     }
 }
 
@@ -880,19 +910,20 @@ const ACTOR_COLORS: &[&str] = &[
 
 /// Derive a deterministic hex color from a username.
 fn deterministic_color(username: &str) -> String {
-    let hash: u64 = username
-        .bytes()
-        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    // djb2 hash (Dan Bernstein): seed 5381, multiplier 33. Cheap,
+    // well-distributed enough for a 15-bucket palette lookup.
+    const DJB2_SEED: u64 = 5381;
+    const DJB2_MULTIPLIER: u64 = 33;
+    let hash: u64 = username.bytes().fold(DJB2_SEED, |h, b| {
+        h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(b as u64)
+    });
     ACTOR_COLORS[(hash as usize) % ACTOR_COLORS.len()].to_string()
 }
 
-/// Try to load the macOS user profile picture as a data URI.
-///
-/// macOS stores user pictures at `/Users/<username>/Library/Caches/com.apple.user-picture/`
-/// or via the DSCL directory services. We try the simplest approach: read the JPEG
-/// from the standard DS picture path.
+/// Scan the well-known cache/face-file locations for a user picture.
+/// Returns a `data:` URI on the first readable, non-empty candidate.
 #[cfg(target_os = "macos")]
-fn macos_profile_picture(username: &str) -> Option<String> {
+fn macos_profile_picture_from_files() -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     let home = std::env::var("HOME").ok()?;
@@ -904,35 +935,32 @@ fn macos_profile_picture(username: &str) -> Option<String> {
     ];
 
     for path in &candidates {
-        if let Ok(data) = std::fs::read(path) {
-            if data.is_empty() {
-                continue;
-            }
-            let mime = if path.ends_with(".png") {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
-            return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
+        let Ok(data) = std::fs::read(path) else {
+            continue;
+        };
+        if data.is_empty() {
+            continue;
         }
+        let mime = if path.ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        return Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)));
     }
-
-    dscl_jpeg_photo(username)
+    None
 }
 
-/// Try reading a profile picture from macOS's `dscl` JPEGPhoto attribute.
-///
-/// Falls back to shelling out to `dscl . -read /Users/<username> JPEGPhoto`,
-/// which outputs hex-encoded JPEG data. Returns a data URI if a valid JPEG
-/// header is found, or `None` otherwise.
-fn dscl_jpeg_photo(username: &str) -> Option<String> {
+/// Fallback: ask `dscl` for the user's `JPEGPhoto` attribute and parse the
+/// hex-encoded output. dscl prints lines like `JPEGPhoto:\n ffd8ffe0 …`.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture_from_dscl(username: &str) -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
     let output = std::process::Command::new("dscl")
         .args([".", "-read", &format!("/Users/{username}"), "JPEGPhoto"])
         .output()
         .ok()?;
-
     if !output.status.success() {
         return None;
     }
@@ -947,13 +975,25 @@ fn dscl_jpeg_photo(username: &str) -> Option<String> {
                 .and_then(|pair| u8::from_str_radix(pair, 16).ok())
         })
         .collect();
+    // Validate JPEG SOI marker (0xFFD8) so we don't emit garbage if the
+    // attribute was missing or decoded wrong.
     if bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
-        return Some(format!(
+        Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(&bytes)
-        ));
+        ))
+    } else {
+        None
     }
-    None
+}
+
+/// Try to load the macOS user profile picture as a data URI.
+///
+/// Walks two fallbacks: well-known file paths under the user's home, then
+/// the `dscl` directory-services query for `JPEGPhoto`.
+#[cfg(target_os = "macos")]
+fn macos_profile_picture(username: &str) -> Option<String> {
+    macos_profile_picture_from_files().or_else(|| macos_profile_picture_from_dscl(username))
 }
 
 #[cfg(not(target_os = "macos"))]

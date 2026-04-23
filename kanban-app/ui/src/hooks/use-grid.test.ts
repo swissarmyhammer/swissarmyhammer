@@ -5,9 +5,12 @@ import { useGrid } from "./use-grid";
 describe("useGrid", () => {
   const defaults = { rowCount: 5, colCount: 4 };
 
-  it("initializes at 0,0 in normal mode", () => {
+  it("cursor is null when no external cursor is provided", () => {
+    // With the collapse-to-one-source-of-truth refactor, the hook no longer
+    // maintains an internal (0,0) cursor. A null cursor is the correct
+    // signal that spatial focus is not on a data cell.
     const { result } = renderHook(() => useGrid(defaults));
-    expect(result.current.cursor).toEqual({ row: 0, col: 0 });
+    expect(result.current.cursor).toBeNull();
     expect(result.current.mode).toBe("normal");
     expect(result.current.selection).toBeNull();
   });
@@ -17,6 +20,33 @@ describe("useGrid", () => {
       useGrid({ ...defaults, cursor: { row: 2, col: 3 } }),
     );
     expect(result.current.cursor).toEqual({ row: 2, col: 3 });
+  });
+
+  it("cursor becomes null when external cursor is cleared", () => {
+    type Props = { cursor: { row: number; col: number } | null };
+    const { result, rerender } = renderHook(
+      ({ cursor }: Props) => useGrid({ ...defaults, cursor }),
+      { initialProps: { cursor: { row: 2, col: 3 } } as Props },
+    );
+    expect(result.current.cursor).toEqual({ row: 2, col: 3 });
+    rerender({ cursor: null });
+    expect(result.current.cursor).toBeNull();
+  });
+
+  it("cursor follows external input across re-renders", () => {
+    // Simulates spatial focus moving between cells: each time the caller
+    // derives a new cursor from `useFocusedMoniker()` and re-renders,
+    // `grid.cursor` must track that — no lag, no stale (0,0) fallback.
+    type Props = { cursor: { row: number; col: number } | null };
+    const { result, rerender } = renderHook(
+      ({ cursor }: Props) => useGrid({ ...defaults, cursor }),
+      { initialProps: { cursor: { row: 0, col: 0 } } as Props },
+    );
+    expect(result.current.cursor).toEqual({ row: 0, col: 0 });
+    rerender({ cursor: { row: 2, col: 1 } });
+    expect(result.current.cursor).toEqual({ row: 2, col: 1 });
+    rerender({ cursor: { row: 1, col: 3 } });
+    expect(result.current.cursor).toEqual({ row: 1, col: 3 });
   });
 
   it("enterEdit switches to edit mode", () => {
@@ -50,8 +80,19 @@ describe("useGrid", () => {
     });
   });
 
-  it("expandSelection extends the head", () => {
+  it("enterVisual is a no-op when cursor is null", () => {
+    // Visual selection needs a concrete anchor cell — without one, the
+    // selection would be ambiguous. Enter is silently ignored.
     const { result } = renderHook(() => useGrid(defaults));
+    act(() => result.current.enterVisual());
+    expect(result.current.mode).toBe("normal");
+    expect(result.current.selection).toBeNull();
+  });
+
+  it("expandSelection extends the head", () => {
+    const { result } = renderHook(() =>
+      useGrid({ ...defaults, cursor: { row: 0, col: 0 } }),
+    );
     act(() => result.current.enterVisual());
     act(() => result.current.expandSelection("down"));
     act(() => result.current.expandSelection("right"));
@@ -60,23 +101,13 @@ describe("useGrid", () => {
   });
 
   it("exitVisual clears selection", () => {
-    const { result } = renderHook(() => useGrid(defaults));
+    const { result } = renderHook(() =>
+      useGrid({ ...defaults, cursor: { row: 0, col: 0 } }),
+    );
     act(() => result.current.enterVisual());
     act(() => result.current.expandSelection("down"));
     act(() => result.current.exitVisual());
     expect(result.current.mode).toBe("normal");
     expect(result.current.selection).toBeNull();
-  });
-
-  it("setCursor sets exact position", () => {
-    const { result } = renderHook(() => useGrid(defaults));
-    act(() => result.current.setCursor(3, 2));
-    expect(result.current.cursor).toEqual({ row: 3, col: 2 });
-  });
-
-  it("setCursor clamps out-of-bounds", () => {
-    const { result } = renderHook(() => useGrid(defaults));
-    act(() => result.current.setCursor(100, 100));
-    expect(result.current.cursor).toEqual({ row: 4, col: 3 });
   });
 });

@@ -54,6 +54,43 @@ describe("normalizeKeyEvent", () => {
     expect(normalizeKeyEvent(e)).toBe(":");
   });
 
+  it("normalizes the space character to 'Space'", () => {
+    // Browsers emit KeyboardEvent.key === " " (a literal space) when the
+    // spacebar is pressed. Canonicalize to the readable word "Space" so
+    // YAML bindings and component `keys` maps can use a self-describing
+    // literal rather than a bare whitespace character — mirroring the
+    // existing pattern for Escape, Enter, ArrowUp, etc.
+    expect(normalizeKeyEvent(fakeKeyEvent(" "))).toBe("Space");
+  });
+
+  it("preserves Mod on Space; Shift collapses to plain Space", () => {
+    // Mod+Space is a reachable binding — e.g. a future shortcut like
+    // "Mod+Space" resolves cleanly via the canonical form.
+    //
+    // Shift+Space intentionally normalizes back to plain "Space": the
+    // Shift-prefix logic in `normalizeKeyEvent` only applies for
+    // printable single-letter keys (to disambiguate "A" vs "Shift+A"),
+    // not for named keys like Space/Enter/Escape. Documenting that
+    // here so a future reader doesn't expect "Shift+Space" to resolve.
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      expect(normalizeKeyEvent(fakeKeyEvent(" ", { metaKey: true }))).toBe(
+        "Mod+Space",
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(" ", { shiftKey: true }))).toBe(
+        "Space",
+      );
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, "platform", original);
+      }
+    }
+  });
+
   it("normalizes Meta on Mac to Mod", () => {
     // Simulate Mac: navigator.platform starts with Mac
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
@@ -230,6 +267,34 @@ describe("createKeyHandler", () => {
     const handler = createKeyHandler("cua", executeCommand);
     const e = fakeKeyEvent("q");
     handler(e);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("preventDefault's Space when it resolves to a scope binding (so the page does not scroll)", () => {
+    // Browsers scroll the page on Space by default. When Space resolves
+    // to a binding (e.g. `ui.inspect`), the handler must preventDefault
+    // so the inspect opens without also paging the focused column or
+    // any other scrollable ancestor. The `trySingleKey` branch calls
+    // preventDefault unconditionally on any matched key; this test pins
+    // that contract specifically for Space so a regression that treats
+    // Space specially (e.g. by bypassing trySingleKey) is caught.
+    const scopeBindings = () => ({ Space: "ui.inspect" });
+    const handler = createKeyHandler("cua", executeCommand, scopeBindings);
+    const e = fakeKeyEvent(" ");
+    handler(e);
+    expect(executeCommand).toHaveBeenCalledWith("ui.inspect");
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(e.stopPropagation).toHaveBeenCalled();
+  });
+
+  it("does not preventDefault Space when no binding resolves", () => {
+    // The converse guard: Space with no binding must not be suppressed —
+    // editable inputs and any non-bound scope should see the original
+    // browser default (scroll, or toggle a checkbox, etc.).
+    const handler = createKeyHandler("cua", executeCommand);
+    const e = fakeKeyEvent(" ");
+    handler(e);
+    expect(executeCommand).not.toHaveBeenCalled();
     expect(e.preventDefault).not.toHaveBeenCalled();
   });
 

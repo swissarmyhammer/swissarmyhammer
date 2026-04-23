@@ -157,3 +157,4 @@ ane-embedding/convert/output/
 /shelltool-cli/.github/copilot/
 /shelltool-cli/.skills/
 /shelltool-cli/.zed/
+.claude/scheduled_tasks.lock

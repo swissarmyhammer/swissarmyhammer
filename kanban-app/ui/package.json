@@ -46,7 +46,8 @@
     "recharts": "^3.8.0",
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@lezer/generator": "^1.8.0",

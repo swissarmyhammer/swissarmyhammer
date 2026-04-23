@@ -6,6 +6,10 @@ import {
   act,
   waitFor,
 } from "@testing-library/react";
+import { userEvent } from "vitest/browser";
+import { useEffect } from "react";
+import { FixtureShell } from "@/test/spatial-fixture-shell";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TASK_SCHEMA = {
@@ -97,6 +101,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
@@ -210,6 +220,135 @@ describe("EntityCard", () => {
     expect(
       container.querySelector("button[aria-label='Inspect']"),
     ).not.toBeNull();
+  });
+
+  it("pressing Space on a focused card dispatches ui.inspect with the card's moniker", async () => {
+    // The `EntityCard`'s `FocusScope` registers a per-instance
+    // `entity.inspect.<moniker>` command bound to Space across all keymaps,
+    // whose `execute` dispatches `ui.inspect` with the card's moniker as the
+    // explicit target — matching the `(i)` button click path exactly so
+    // keyboard and mouse activation converge. Space is the universal
+    // "inspect / peek" key (matching macOS Finder's Quick Look convention);
+    // Enter is reserved for "activate / drill into".
+    //
+    // We mount the card inside a `FixtureShell` to get the same production
+    // `createKeyHandler` → `extractScopeBindings` pipeline `AppShell` uses,
+    // so the test exercises the real keyboard → scope → dispatch path.
+    //
+    // Focus is set programmatically via `useEntityFocus().setFocus` rather
+    // than by clicking the card root — clicking the card root enters an
+    // inner field's edit mode (title → CM6), which would swallow the
+    // keypress as a CM6 keymap event instead of letting it reach the
+    // document-level keybinding handler. The `FocusSetter` harness is the
+    // same pattern `DataTableWithCellFocus` uses in `data-table.test.tsx`.
+    currentEntity = makeEntity();
+
+    /**
+     * Harness that sets spatial focus on the card's moniker after mount,
+     * simulating the end state of spatial navigation landing on the card
+     * without triggering any click-induced inner edit mode.
+     */
+    function FocusSetter({ moniker }: { moniker: string }) {
+      const { setFocus } = useEntityFocus();
+      useEffect(() => {
+        setFocus(moniker);
+      }, [setFocus, moniker]);
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <FixtureShell>
+                      <FocusSetter moniker={currentEntity.moniker} />
+                      <EntityCard entity={currentEntity} />
+                    </FixtureShell>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>,
+      );
+      // Let the schema load and focus propagate through EntityFocusContext.
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    mockInvoke.mockClear();
+
+    // Space fires the `entity.inspect.task:task-1` command, whose execute
+    // dispatches `ui.inspect` with `target: task:task-1`.
+    await userEvent.keyboard(" ");
+
+    // The frontend-execute path calls `dispatchInspect({ target })`, which
+    // resolves `ui.inspect` in the card's scope chain (the schema-derived
+    // `ui.inspect` has no execute) and falls through to backend dispatch —
+    // producing the `dispatch_command` invoke we assert on here.
+    await waitFor(() => {
+      const inspectCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+      );
+      expect(inspectCall).toBeTruthy();
+      const params = inspectCall![1] as Record<string, unknown>;
+      expect(params.target).toBe("task:task-1");
+    });
+  });
+
+  it("pressing Enter on a focused card does NOT dispatch ui.inspect", async () => {
+    // Regression guard: Enter used to dispatch `ui.inspect`. After the
+    // rebind, Enter is reserved for "activate / drill into" and must not
+    // open the inspector from a focused card scope. Inspect moved to Space.
+    currentEntity = makeEntity();
+
+    function FocusSetter({ moniker }: { moniker: string }) {
+      const { setFocus } = useEntityFocus();
+      useEffect(() => {
+        setFocus(moniker);
+      }, [setFocus, moniker]);
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <FixtureShell>
+                      <FocusSetter moniker={currentEntity.moniker} />
+                      <EntityCard entity={currentEntity} />
+                    </FixtureShell>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>,
+      );
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    mockInvoke.mockClear();
+
+    await userEvent.keyboard("{Enter}");
+
+    // Give any would-be dispatch time to land; assert none did.
+    await new Promise((r) => setTimeout(r, 50));
+    const inspectCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+    );
+    expect(inspectCall).toBeUndefined();
   });
 
   it("enters edit mode when title is clicked", async () => {

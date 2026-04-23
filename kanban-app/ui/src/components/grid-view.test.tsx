@@ -71,27 +71,30 @@ vi.mock("@/lib/entity-store-context", () => ({
 
 vi.mock("@/lib/entity-focus-context", () => ({
   useEntityFocus: () => ({
-    focusedMoniker: null,
     setFocus: vi.fn(),
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
-    registerClaimPredicates: vi.fn(),
-    unregisterClaimPredicates: vi.fn(),
+    registerSpatialKey: vi.fn(),
+    unregisterSpatialKey: vi.fn(),
+    getFocusedMoniker: () => null,
+    subscribeFocus: () => () => {},
   }),
+  useFocusedMoniker: () => null,
+  useFocusedScope: () => null,
   useIsFocused: () => false,
 }));
 
 vi.mock("@/hooks/use-grid", () => ({
   useGrid: () => ({
-    cursor: { row: 0, col: 0 },
+    cursor: null,
     mode: "normal",
-    setCursor: vi.fn(),
-    moveCursor: vi.fn(),
-    startEdit: vi.fn(),
-    endEdit: vi.fn(),
-    toggleVisual: vi.fn(),
-    clearVisual: vi.fn(),
+    selection: null,
+    enterEdit: vi.fn(),
+    exitEdit: vi.fn(),
+    enterVisual: vi.fn(),
+    exitVisual: vi.fn(),
+    expandSelection: vi.fn(),
     getSelectedRange: () => null,
   }),
 }));

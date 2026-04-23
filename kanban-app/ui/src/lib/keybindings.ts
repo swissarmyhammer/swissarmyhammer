@@ -129,6 +129,14 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
     parts.push("Shift");
   }
 
+  // Canonicalize the space character to the readable word "Space" so
+  // bindings can spell Space explicitly — matching the precedent set by
+  // Escape/Enter/ArrowUp and avoiding a bare whitespace literal in YAML
+  // and component `keys` maps.
+  if (key === " ") {
+    key = "Space";
+  }
+
   parts.push(key);
   return parts.join("+");
 }
@@ -201,6 +209,55 @@ function isEditableTarget(
  * @param executeCommand - Callback to run a command by ID.
  * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
  */
+/** Mutable state for multi-key vim-style sequence buffering. */
+interface SequenceState {
+  pending: string | null;
+  pendingTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** Clear the pending sequence buffer and cancel the pending timeout. */
+function clearPending(state: SequenceState): void {
+  state.pending = null;
+  if (state.pendingTimer !== null) {
+    clearTimeout(state.pendingTimer);
+    state.pendingTimer = null;
+  }
+}
+
+/** Try to complete a pending multi-key sequence. Returns true if consumed. */
+function tryCompletePending(
+  e: KeyboardEvent,
+  normalized: string,
+  state: SequenceState,
+  sequences: SequenceTable,
+  executeCommand: (id: string) => Promise<boolean>,
+): boolean {
+  if (state.pending === null) return false;
+  const secondMap = sequences[state.pending];
+  clearPending(state);
+  if (secondMap && normalized in secondMap) {
+    e.preventDefault();
+    e.stopPropagation();
+    executeCommand(secondMap[normalized]);
+    return true;
+  }
+  return false;
+}
+
+/** Dispatch a single-key binding. Returns true if consumed. */
+function trySingleKey(
+  e: KeyboardEvent,
+  normalized: string,
+  bindings: BindingTable,
+  executeCommand: (id: string) => Promise<boolean>,
+): boolean {
+  if (!(normalized in bindings)) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  executeCommand(bindings[normalized]);
+  return true;
+}
+
 export function createKeyHandler(
   mode: KeymapMode,
   executeCommand: (id: string) => Promise<boolean>,
@@ -208,52 +265,28 @@ export function createKeyHandler(
 ): (e: KeyboardEvent) => void {
   const globalBindings = BINDING_TABLES[mode];
   const sequences = SEQUENCE_TABLES[mode];
-
-  let pending: string | null = null;
-  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Clear the pending buffer and cancel the timeout. */
-  function clearPending(): void {
-    pending = null;
-    if (pendingTimer !== null) {
-      clearTimeout(pendingTimer);
-      pendingTimer = null;
-    }
-  }
+  const state: SequenceState = { pending: null, pendingTimer: null };
 
   return (e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
     const normalized = normalizeKeyEvent(e);
     if (normalized === null) return;
-
     if (isEditableTarget(normalized, target)) return;
 
-    const bindings = { ...globalBindings, ...(getScopeBindings?.() ?? {}) };
+    const scopeBindings = getScopeBindings?.() ?? {};
+    const bindings = { ...globalBindings, ...scopeBindings };
 
-    // Multi-key sequence handling
-    if (pending !== null) {
-      const secondMap = sequences[pending];
-      if (secondMap && normalized in secondMap) {
-        clearPending();
-        e.preventDefault();
-        e.stopPropagation();
-        executeCommand(secondMap[normalized]);
-        return;
-      }
-      clearPending();
-    }
+    if (tryCompletePending(e, normalized, state, sequences, executeCommand))
+      return;
     if (normalized in sequences) {
-      pending = normalized;
-      pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
+      state.pending = normalized;
+      state.pendingTimer = setTimeout(
+        () => clearPending(state),
+        SEQUENCE_TIMEOUT_MS,
+      );
       return;
     }
-
-    // Single-key binding lookup
-    if (normalized in bindings) {
-      e.preventDefault();
-      e.stopPropagation();
-      executeCommand(bindings[normalized]);
-    }
+    trySingleKey(e, normalized, bindings, executeCommand);
   };
 }
 

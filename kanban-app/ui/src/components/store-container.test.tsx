@@ -6,11 +6,27 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+  transformCallback: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+vi.mock("ulid", () => {
+  let counter = 0;
+  return { ulid: vi.fn(() => "01TEST" + String(++counter).padStart(20, "0")) };
+});
 
 // Import after mocks
 import { StoreContainer } from "./store-container";
@@ -77,8 +93,9 @@ describe("StoreContainer", () => {
       </EntityFocusProvider>,
     );
 
-    // FocusScope with renderContainer=false should not add a FocusHighlight wrapper
-    // The child should be directly inside the provider, not wrapped in a focus-highlight div
+    // FocusScope with renderContainer=false should not add a wrapping `<div>`.
+    // The child should be directly inside the provider, not wrapped in an
+    // extra div.
     expect(container.querySelector("[data-moniker]")).toBeNull();
   });
 });

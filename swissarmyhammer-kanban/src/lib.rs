@@ -87,6 +87,7 @@ pub mod entity;
 pub mod project;
 pub mod schema;
 pub mod scope_commands;
+pub mod spatial;
 pub mod tag;
 pub mod task;
 pub mod virtual_tags;

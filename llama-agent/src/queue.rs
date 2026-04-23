@@ -27,6 +27,16 @@ use ulid::Ulid;
 /// allowing us to restore a session without disk I/O.
 type SessionStateCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
+/// Fallback in-memory session-state cache capacity when
+/// `std::thread::available_parallelism` cannot be queried.
+const DEFAULT_SESSION_STATE_CACHE_LIMIT: usize = 4;
+
+/// Buffer size for the outbound streaming-chunk channel created by
+/// `submit_streaming_request`. Large enough to absorb generation bursts
+/// without blocking the worker, small enough to exert backpressure on slow
+/// consumers.
+const STREAM_CHUNK_CHANNEL_CAPACITY: usize = 100;
+
 /// Check whether we have a cached KV-state for this session, and log the
 /// resume/fresh-start decision. Returns true if the cache is usable.
 fn check_and_log_session_cache(
@@ -218,7 +228,7 @@ fn reject_cancelled_request(
 fn evict_oldest_session_states(worker_id: usize, cache: &mut HashMap<String, Vec<u8>>) {
     let cache_limit = std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4);
+        .unwrap_or(DEFAULT_SESSION_STATE_CACHE_LIMIT);
 
     if cache.len() <= cache_limit {
         return;
@@ -568,7 +578,7 @@ impl RequestQueue {
         session: &Session,
     ) -> Result<mpsc::Receiver<Result<StreamChunk, QueueError>>, QueueError> {
         let (response_sender, _) = oneshot::channel();
-        let (stream_sender, stream_receiver) = mpsc::channel(100);
+        let (stream_sender, stream_receiver) = mpsc::channel(STREAM_CHUNK_CHANNEL_CAPACITY);
 
         let cancellation_token = CancellationToken::new();
 
