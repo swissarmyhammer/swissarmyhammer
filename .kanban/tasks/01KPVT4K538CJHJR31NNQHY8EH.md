@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9180
 project: spatial-nav
 title: 'Inspector layer escape: nav.down past the last field leaks focus back to the window layer'
 ---
@@ -127,14 +127,14 @@ Extend the `nav_dispatch_integration.rs` test from task `01KPVDA8NYFFQ8R1D2G9YEA
 - [x] The new integration case in `nav_dispatch_integration.rs` — added in this pass as `nav_down_from_last_inspector_field_returns_null_via_dispatch` + 4 siblings (up/left/right + intra-layer positive control). Note: they pass on the current code — the algorithm and dispatch pipeline both already honour the active-layer filter; live-app bug is outside their reach, see Session Log
 - [ ] Diagnostic dumps captured in the task description before the fix lands *(requires live app launch)*
 - [ ] `__spatial_dump` output proves the inspector layer is `active()` while the inspector is open *(requires live app launch)*
-- [x] All existing tests still green — 77 spatial-nav, 99 kanban-app, 1420 UI all pass
+- [x] All existing tests still green — 82 spatial-nav, 99 kanban-app, 1423 UI all pass
 - [x] No new instrumentation left in production code — only test additions in `#[cfg(test)]` modules
 
 ## Tests
 
-- [x] `cargo test -p swissarmyhammer-spatial-nav` — 77 pass, including the 6 navigate_*_does_not_escape tests
+- [x] `cargo test -p swissarmyhammer-spatial-nav` — 82 pass, including the 6 navigate_*_does_not_escape tests and the 5 new refcount tests
 - [x] `cargo test -p kanban-app nav_dispatch_integration` — 10 pass (5 new inspector-layer cases + 5 pre-existing)
-- [x] `cd kanban-app/ui && npm test` — 1420 pass (132 files)
+- [x] `cd kanban-app/ui && npm test` — 1423 pass (133 files)
 - [ ] Manual verification per acceptance criteria 1–3 *(requires live app launch)*
 
 ## Workflow
@@ -214,3 +214,47 @@ If the dumps show the inspector layer as `active()` AND all inspector fields wit
 - `cd kanban-app/ui && npm test` — 1420 passed (132 files)
 - `cargo clippy -p kanban-app --tests` — clean
 
+## Review Findings (2026-04-23 07:59)
+
+Review of commit `bcbdbfd06` (the refcount fix) and the matching `focus-scope.test.tsx` StrictMode regression test. All 1423 UI + 99 kanban-app + 77 spatial-nav tests pass; clippy clean.
+
+The fix itself is well-placed — refcounting at the `LayerStack` layer solves the root cause (StrictMode double-invoke of `useState` initializer + single `useEffect` cleanup) rather than patching the symptom. The caller `remove_layer` correctly handles the new "only dropped when refcount hits zero" contract: it only performs focus restoration when `remove` returns `true`, which now means "the entry was actually removed," which matches the only time focus restoration is semantically correct.
+
+Two findings below are about coverage gaps / stale docs; both should be addressed before the task moves to done.
+
+### Warnings
+
+- [x] `swissarmyhammer-spatial-nav/src/spatial_state.rs:147-219` — `LayerStack::push` / `LayerStack::remove` have no dedicated Rust unit tests for the new refcount semantics. The existing `layer_stack_*` tests (lines 1229–1292) all push each key exactly once and remove once — they pass with both the old idempotent behavior and the new refcount behavior, so they cannot catch a regression. The only regression test for the refcount fix lives in `kanban-app/ui/src/components/focus-scope.test.tsx::under StrictMode, net live state has field scope registered under inspector layer only`, but that test reconstructs refcount semantics **in JavaScript** (see the `layerRefcount` / `liveLayers` map loop, lines 1066–1088) — the expected outcome is computed by the JS reconstructor independently of what Rust actually does. If someone reverts Rust back to idempotent push (e.g. as a "simplification"), every Rust test and that JS test still pass, but the live-app bug returns. Add at minimum: `layer_stack_push_twice_then_remove_keeps_entry_live` (push A, push A, remove A → `!is_empty`, `active().key == A`, `refcount == 1`) and `layer_stack_remove_saturates_at_zero` (push A, remove A, remove A → `is_empty`, no panic). Optionally a third covering the interaction with `last_focused`: push, focus, push, remove → entry still live, `last_focused` preserved.
+
+- [x] `kanban-app/ui/src/components/focus-layer.tsx:56-65` — the JSDoc on `useLayerKeyAndPush` is now stale. It still reads `spatial_push_layer is idempotent on the Rust side: pushing a key that is already on the stack is a no-op. StrictMode's double-invoke of the initializer pushes the same key twice, which collapses to a single stack entry.` and `Remove is unconditionally idempotent already ('LayerStack::remove' retains by key)`. Both claims are wrong after `bcbdbfd06` — push is now refcounted (second push bumps an existing entry's refcount instead of collapsing), and remove decrements the refcount and only drops the entry when it hits zero. Update the comment to describe the actual contract: "StrictMode's double-invoke pushes the same key twice, and `LayerStack::push` refcounts the entry up. The single `useEffect` cleanup decrements once, leaving the entry live with refcount = 1 (matching the single logical layer)." Cross-reference the `focus-scope.test.tsx::under StrictMode` regression.
+
+### Nits
+
+- [x] `swissarmyhammer-spatial-nav/src/spatial_state.rs:172` — the doc for `LayerStack::remove` says `Returns 'true' if the layer was dropped from the stack (i.e. the refcount reached zero on this call)`. Consider explicitly documenting the other two return paths to make the contract exhaustive: returns `false` for (a) key not found and (b) refcount decremented but still > 0. As written it implies only one `false` path. Minor, but helps future readers disambiguate without reading the body.
+
+### Resolution Log (2026-04-23 — this pass)
+
+Addressed all three findings:
+
+1. **Refcount unit tests added** — `swissarmyhammer-spatial-nav/src/spatial_state.rs::tests` now carries 5 new tests that exercise the refcount contract directly against `LayerStack` (not behind any React reconstructor):
+   - `layer_stack_push_twice_then_remove_keeps_entry_live` — push A, push A, remove A → `!is_empty()`, `active().key == A`, `refcount == 1`. Would fail if push is reverted to idempotent (single remove would empty the stack).
+   - `layer_stack_push_then_remove_drops_entry` — single push / single remove drops the entry. Sanity check so the refcount test's meaning is unambiguous.
+   - `layer_stack_push_twice_remove_twice_drops_entry` — push-push-remove-remove nets to empty, with the correct return-value progression (first remove `false`, second remove `true`).
+   - `layer_stack_remove_saturates_at_zero` — out-of-order unmount protection: push, remove, remove → `is_empty()`, no panic, no u32 underflow.
+   - `layer_stack_push_twice_preserves_last_focused` — the optional third from the finding: a second push for an existing key must not clobber `last_focused`, and must bump `refcount` to 2.
+
+2. **Stale JSDoc rewritten** — `kanban-app/ui/src/components/focus-layer.tsx` — `useLayerKeyAndPush`'s comment no longer claims idempotent push. It now describes the refcount contract: first push creates the entry with `refcount = 1`, subsequent pushes bump it without duplicating or reordering, remove decrements, the entry is dropped only when the refcount hits zero. Explicitly explains why idempotent push was wrong (StrictMode double-invoke + single cleanup would empty the stack) and cross-references both the `focus-scope.test.tsx::under StrictMode` regression and the Rust-side `layer_stack_push_twice_then_remove_keeps_entry_live` unit test.
+
+3. **`LayerStack::remove` Returns doc exhaustive** — `swissarmyhammer-spatial-nav/src/spatial_state.rs` — the Returns section now enumerates all three paths. `true` means "refcount reached zero on this call and the entry was dropped" (the only case where layer-teardown side effects are safe). `false` means either (a) key not found in the stack, or (b) refcount decremented but still positive. The two `false` paths are explicitly disjoint in the doc.
+
+### Files touched (this pass)
+
+- `swissarmyhammer-spatial-nav/src/spatial_state.rs` — 5 new `layer_stack_*` refcount tests; exhaustive Returns doc on `LayerStack::remove`.
+- `kanban-app/ui/src/components/focus-layer.tsx` — rewrote JSDoc on `useLayerKeyAndPush` to describe the refcount contract with cross-references to both regression tests.
+
+### Tests run (this pass) — all green
+
+- `cargo test -p swissarmyhammer-spatial-nav --lib` — 82 passed (5 new layer_stack refcount tests on top of the prior 77).
+- `cargo test -p kanban-app` — 99 passed.
+- `cd kanban-app/ui && npm test` — 1423 passed (133 files).
+- `cargo clippy -p swissarmyhammer-spatial-nav --tests -- -D warnings` — clean.

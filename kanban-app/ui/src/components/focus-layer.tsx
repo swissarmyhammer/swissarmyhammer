@@ -53,16 +53,33 @@ export const FocusLayerContext = createContext<string | null>(null);
  *   render**, which is top-down (parent before child). Outer
  *   `<FocusLayer>`s push before inner ones, stack order matches DOM
  *   tree order.
- * - `spatial_push_layer` is idempotent on the Rust side: pushing a
- *   key that is already on the stack is a no-op. StrictMode's
- *   double-invoke of the initializer pushes the same key twice, which
- *   collapses to a single stack entry. The mount-unmount-mount cycle
- *   removes and re-pushes the same key, again landing in the same
- *   stable state.
+ * - `spatial_push_layer` is **reference-counted** on the Rust side:
+ *   the first push for a key appends an entry with `refcount = 1`,
+ *   and each subsequent push for the same key bumps the existing
+ *   entry's refcount without duplicating or reordering it.
+ *   StrictMode's double-invoke of the initializer pushes the same
+ *   key twice, so the entry lands on the stack with `refcount = 2`.
+ *   The single `useEffect` cleanup below fires `spatial_remove_layer`
+ *   exactly once, decrementing the refcount to 1 — the entry stays
+ *   live, matching the single logical layer the component represents.
+ *   The mount-unmount-mount cycle balances pushes and removes across
+ *   the simulated remount.
  * - The remove lives in a `useEffect` cleanup so React's normal
- *   unmount path (including StrictMode's simulated unmount) removes
- *   the layer once. Remove is unconditionally idempotent already
- *   (`LayerStack::remove` retains by key).
+ *   unmount path (including StrictMode's simulated unmount) decrements
+ *   the refcount once. `LayerStack::remove` drops the entry only when
+ *   the refcount hits zero; while it remains positive the entry
+ *   (including its `last_focused` memory) stays intact.
+ *
+ * Plain idempotent push would collapse the StrictMode double-invoke
+ * to a single entry and the single `useEffect` cleanup would wipe
+ * it — leaving zero live layers, which degrades `spatial_search`'s
+ * active-layer filter to "no filter" and lets navigation pick
+ * candidates from any layer. That was the root cause of the
+ * inspector-layer escape reported in `01KPVT4K538CJHJR31NNQHY8EH`.
+ * Pinned by the `focus-scope.test.tsx::under StrictMode, net live
+ * state has field scope registered under inspector layer only`
+ * regression test and by the Rust-side
+ * `layer_stack_push_twice_then_remove_keeps_entry_live` unit test.
  */
 function useLayerKeyAndPush(name: string): string {
   const id = useId();

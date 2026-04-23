@@ -198,8 +198,19 @@ impl LayerStack {
     }
 
     /// Decrement a layer's refcount, removing it from the stack when
-    /// the count hits zero. Returns `true` if the layer was dropped
-    /// from the stack (i.e. the refcount reached zero on this call).
+    /// the count hits zero.
+    ///
+    /// ## Returns
+    ///
+    /// - `true` — the layer's refcount reached zero on this call and
+    ///   the entry was dropped from the stack. This is the only case
+    ///   where callers should perform layer-teardown side effects
+    ///   (e.g. restoring focus to the layer below).
+    /// - `false` — one of two disjoint paths:
+    ///   1. The key is not in the stack at all (nothing to remove).
+    ///   2. The refcount was decremented but remains greater than
+    ///      zero, so the entry is still live and the stack is
+    ///      unchanged in structure.
     ///
     /// See [`LayerStack::push`] for why push / remove are
     /// reference-counted rather than plain idempotent.
@@ -1289,6 +1300,129 @@ mod tests {
 
         assert!(!stack.remove("nonexistent"));
         assert_eq!(stack.len(), 1);
+    }
+
+    // --- Refcount semantics: push / remove are reference-counted by key,
+    // not idempotent. These tests pin the contract so a "simplify to
+    // idempotent push" regression cannot re-introduce the
+    // 01KPVT4K538CJHJR31NNQHY8EH inspector-layer escape bug. See the
+    // LayerStack::push doc-comment for the React StrictMode rationale.
+
+    #[test]
+    fn layer_stack_push_twice_then_remove_keeps_entry_live() {
+        // StrictMode double-invokes the `useState` initializer →
+        // `useLayerKeyAndPush` calls `spatial_push_layer` twice. The
+        // matching `useEffect` cleanup fires exactly one
+        // `spatial_remove_layer`. With refcounting, the entry is still
+        // live with refcount=1 after the single remove. With idempotent
+        // push, the stack would be empty and the active-layer filter
+        // would degrade to "no filter" — the root cause the refcount
+        // fix targets.
+        let mut stack = LayerStack::default();
+        stack.push("layer-A".into(), "inspector".into());
+        stack.push("layer-A".into(), "inspector".into());
+
+        assert!(
+            !stack.remove("layer-A"),
+            "remove must return false — entry still live"
+        );
+        assert!(
+            !stack.is_empty(),
+            "entry must remain on the stack with refcount > 0"
+        );
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.active().unwrap().key, "layer-A");
+        assert_eq!(
+            stack.active().unwrap().refcount,
+            1,
+            "after push-push-remove the refcount must be 1",
+        );
+    }
+
+    #[test]
+    fn layer_stack_push_then_remove_drops_entry() {
+        // Sanity: the single-push / single-remove path still drops the
+        // entry. Without this, `push_twice_then_remove_keeps_entry_live`
+        // passing would be meaningless — it could be passing because
+        // remove is broken, not because push is refcounted.
+        let mut stack = LayerStack::default();
+        stack.push("layer-A".into(), "inspector".into());
+
+        assert!(
+            stack.remove("layer-A"),
+            "remove must return true — entry dropped"
+        );
+        assert!(
+            stack.is_empty(),
+            "stack must be empty after matched push/remove"
+        );
+        assert!(stack.active().is_none());
+    }
+
+    #[test]
+    fn layer_stack_push_twice_remove_twice_drops_entry() {
+        // Two matched pushes and two matched removes net to zero — the
+        // entry drops on the second remove. This is the "component
+        // actually unmounts and StrictMode's simulated remount never
+        // fires" path.
+        let mut stack = LayerStack::default();
+        stack.push("layer-A".into(), "inspector".into());
+        stack.push("layer-A".into(), "inspector".into());
+
+        assert!(
+            !stack.remove("layer-A"),
+            "first remove: refcount 2 → 1, entry still live"
+        );
+        assert_eq!(stack.len(), 1);
+        assert!(
+            stack.remove("layer-A"),
+            "second remove: refcount 1 → 0, entry dropped"
+        );
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn layer_stack_remove_saturates_at_zero() {
+        // Out-of-order unmount protection: a stray extra
+        // `spatial_remove_layer` must not panic or wrap u32 underflow.
+        // `saturating_sub` keeps the count at 0; the extra remove is
+        // "key not found" once the entry has already been dropped.
+        let mut stack = LayerStack::default();
+        stack.push("layer-A".into(), "inspector".into());
+
+        assert!(stack.remove("layer-A"));
+        assert!(stack.is_empty());
+        // Second remove: key is no longer present — returns false, no panic.
+        assert!(
+            !stack.remove("layer-A"),
+            "extra remove on absent key returns false"
+        );
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn layer_stack_push_twice_preserves_last_focused() {
+        // The refcount contract interacts with focus memory: a second
+        // push for an existing key must NOT reset the entry's
+        // `last_focused`. If it did, every StrictMode double-invoke
+        // would wipe the memory we need to restore focus when an upper
+        // layer is popped.
+        let mut stack = LayerStack::default();
+        stack.push("layer-A".into(), "inspector".into());
+        stack.find_mut("layer-A").unwrap().last_focused = Some("field-title".into());
+
+        // Second push (StrictMode double-invoke) must keep the memory.
+        stack.push("layer-A".into(), "inspector".into());
+        assert_eq!(
+            stack.find("layer-A").unwrap().last_focused.as_deref(),
+            Some("field-title"),
+            "second push must not clobber the existing entry's last_focused",
+        );
+        assert_eq!(
+            stack.find("layer-A").unwrap().refcount,
+            2,
+            "second push bumps refcount to 2",
+        );
     }
 
     #[test]
