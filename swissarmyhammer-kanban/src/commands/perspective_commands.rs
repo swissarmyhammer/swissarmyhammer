@@ -449,10 +449,13 @@ impl Command for SetSortCmd {
     }
 }
 
-/// Clear a sort entry for a specific field on the active perspective.
+/// Clear every sort entry on the active perspective.
 ///
-/// Removes the given field from the sort list. If the field is not in
-/// the sort list, this is a no-op that still returns the perspective.
+/// Multi-field perspectives are reset to unsorted; perspectives that are
+/// already unsorted become a no-op (the command still returns the resolved
+/// perspective, so callers can treat it uniformly). The command never takes
+/// a `field` arg — per-field removal is covered by [`ToggleSortCmd`]'s
+/// asc → desc → none state cycle.
 ///
 /// Always available. The target perspective is resolved at execute time via
 /// [`resolve_perspective_id`].
@@ -466,32 +469,8 @@ impl Command for ClearSortCmd {
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
-
         let perspective_id = resolve_and_persist_perspective_id(ctx, &kanban).await?;
-
-        let field = ctx
-            .arg("field")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("field".into()))?;
-
-        // Read existing sort and remove the target field
-        let existing_sort = {
-            let pctx = kanban
-                .perspective_context()
-                .await
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-            let pctx = pctx.read().await;
-            pctx.get_by_id(&perspective_id)
-                .map(|p| p.sort.clone())
-                .unwrap_or_default()
-        };
-
-        let new_sort: Vec<SortEntry> = existing_sort
-            .into_iter()
-            .filter(|e| e.field != field)
-            .collect();
-
-        let op = UpdatePerspective::new(&perspective_id).with_sort(new_sort);
+        let op = UpdatePerspective::new(&perspective_id).with_sort(Vec::new());
         run_op(&op, &kanban).await
     }
 }
@@ -927,12 +906,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_clear_sort_cmd_removes_field() {
+    async fn test_clear_sort_cmd_removes_all_entries() {
+        // ClearSortCmd drops every sort entry on the resolved perspective.
+        // This is the regression guard for the bug where the palette/context-menu
+        // invocation failed with MissingArg("field") — the `field` arg was
+        // dropped from the command's contract.
         let (_temp, ctx) = setup().await;
         let kanban = Arc::new(ctx);
         let pid = create_perspective(&kanban, "Sort Test").await;
 
-        // Add a sort entry
+        // Add two sort entries on different fields.
+        for (field, direction) in [("title", "asc"), ("priority", "desc")] {
+            let mut args = HashMap::new();
+            args.insert("perspective_id".into(), Value::String(pid.clone()));
+            args.insert("field".into(), Value::String(field.into()));
+            args.insert("direction".into(), Value::String(direction.into()));
+            let cmd_ctx = make_ctx_with_scope(
+                Arc::clone(&kanban),
+                args,
+                vec![format!("perspective:{pid}")],
+            );
+            SetSortCmd.execute(&cmd_ctx).await.unwrap();
+        }
+
+        // Clear — no `field` arg supplied; the command must drop both entries.
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{pid}")],
+        );
+        let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
+        let sort = result["sort"].as_array();
+        assert!(
+            sort.is_none() || sort.unwrap().is_empty(),
+            "sort should be fully cleared, got: {:?}",
+            sort
+        );
+    }
+
+    #[tokio::test]
+    async fn test_clear_sort_cmd_noop_on_empty_sort() {
+        // Clearing an already-empty sort list must succeed without error.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective(&kanban, "Empty Sort").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{pid}")],
+        );
+        let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
+        let sort = result["sort"].as_array();
+        assert!(sort.is_none() || sort.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clear_sort_cmd_works_from_palette_with_no_perspective_id() {
+        // Palette invocation: no args, no scope perspective moniker.
+        // The resolver falls back to UIState.active_perspective_id("main"),
+        // and the command must clear the sort list on that perspective.
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective_with_view(&kanban, "Palette Sort", "grid").await;
+
+        // Mark this perspective as UIState-active for the default window.
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+        ui.set_active_perspective("main", &pid);
+
+        // Seed a sort entry on it.
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
         args.insert("field".into(), Value::String("title".into()));
@@ -944,19 +990,15 @@ mod tests {
         );
         SetSortCmd.execute(&cmd_ctx).await.unwrap();
 
-        // Clear it
-        let mut args = HashMap::new();
-        args.insert("perspective_id".into(), Value::String(pid.clone()));
-        args.insert("field".into(), Value::String("title".into()));
-        let cmd_ctx = make_ctx_with_scope(
-            Arc::clone(&kanban),
-            args,
-            vec![format!("perspective:{pid}")],
-        );
+        // Palette dispatch: empty args, no scope moniker — UIState must win.
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), HashMap::new(), Arc::clone(&ui));
         let result = ClearSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
-        // Sort should be empty or absent
-        assert!(sort.is_none() || sort.unwrap().is_empty());
+        assert!(
+            sort.is_none() || sort.unwrap().is_empty(),
+            "palette dispatch should resolve perspective via UIState and clear sort, got: {:?}",
+            sort
+        );
     }
 
     #[tokio::test]

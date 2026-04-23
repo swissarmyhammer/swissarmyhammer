@@ -98,11 +98,13 @@
 
 - id: perspective.sort.clear
   name: Clear Sort
+  # Unconditionally clears every sort entry on the resolved perspective.
+  # Per-field removal is covered by `perspective.sort.toggle`'s asc → desc →
+  # none state cycle; this command is the palette / context-menu entry point
+  # for "reset the whole sort list" and never takes a `field` arg.
   undoable: true
   context_menu: true
   params:
-    - name: field
-      from: args
     - name: perspective_id
       from: args
   keys: {}
