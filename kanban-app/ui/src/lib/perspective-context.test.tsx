@@ -173,7 +173,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.activePerspective?.name).toBe("Second");
   });
 
-  it("setActivePerspectiveId dispatches ui.perspective.set to backend", async () => {
+  it("setActivePerspectiveId dispatches perspective.set to backend", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -193,7 +193,7 @@ describe("PerspectiveProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "ui.perspective.set",
+      cmd: "perspective.set",
       args: { perspective_id: "p1" },
       scopeChain: ["window:main"],
       boardPath: "/tmp/test/.kanban",
@@ -285,9 +285,13 @@ describe("PerspectiveProvider", () => {
       "Updated",
     );
     expect(
-      (result.current.perspectives.find((p) => p.id === "p1") as {
-        filter?: unknown;
-      } | undefined)?.filter,
+      (
+        result.current.perspectives.find((p) => p.id === "p1") as
+          | {
+              filter?: unknown;
+            }
+          | undefined
+      )?.filter,
     ).toBe("#bug");
   });
 
@@ -406,12 +410,12 @@ describe("PerspectiveProvider", () => {
   // useAutoSelectActivePerspective: enforce "always a selected perspective"
   // -----------------------------------------------------------------------
 
-  /** Collect every `ui.perspective.set` dispatch recorded by the mock. */
+  /** Collect every `perspective.set` dispatch recorded by the mock. */
   function perspectiveSetCalls() {
     return mockInvoke.mock.calls.filter(
       (call) =>
         call[0] === "dispatch_command" &&
-        (call[1] as { cmd?: string })?.cmd === "ui.perspective.set",
+        (call[1] as { cmd?: string })?.cmd === "perspective.set",
     );
   }
 
@@ -433,7 +437,7 @@ describe("PerspectiveProvider", () => {
     const calls = perspectiveSetCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "ui.perspective.set",
+      cmd: "perspective.set",
       args: { perspective_id: "p1" },
     });
   });
@@ -459,7 +463,7 @@ describe("PerspectiveProvider", () => {
     const calls = perspectiveSetCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "ui.perspective.set",
+      cmd: "perspective.set",
       args: { perspective_id: "p1" },
     });
   });
@@ -488,7 +492,7 @@ describe("PerspectiveProvider", () => {
     const calls = perspectiveSetCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0][1]).toMatchObject({
-      cmd: "ui.perspective.set",
+      cmd: "perspective.set",
       args: { perspective_id: "b1" },
     });
   });
@@ -530,7 +534,7 @@ describe("PerspectiveProvider", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // No ui.perspective.set — only perspective.save would be dispatched by
+    // No perspective.set — only perspective.save would be dispatched by
     // the sibling hook (not asserted here; covered elsewhere).
     expect(perspectiveSetCalls().length).toBe(0);
   });
@@ -564,9 +568,9 @@ describe("PerspectiveProvider", () => {
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
-    expect(
-      (result.current.perspectives[0] as { group?: unknown }).group,
-    ).toBe("status");
+    expect((result.current.perspectives[0] as { group?: unknown }).group).toBe(
+      "status",
+    );
 
     // After undo, the backend has rewritten the YAML back to group=None.
     // Prime the next perspective.list response to reflect that state.

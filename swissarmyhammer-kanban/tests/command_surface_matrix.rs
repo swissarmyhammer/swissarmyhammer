@@ -57,9 +57,7 @@
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry, UIState};
 use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_fields::FieldsContext;
 use swissarmyhammer_kanban::clipboard::{
@@ -68,6 +66,7 @@ use swissarmyhammer_kanban::clipboard::{
 use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::defaults::{builtin_entity_definitions, builtin_field_definitions};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, ResolvedCommand};
+use swissarmyhammer_kanban::test_support::composed_builtin_yaml_sources;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -131,7 +130,7 @@ impl MatrixHarness {
             ectx.register_store(entity_type, handle).await;
         }
 
-        let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+        let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
         let commands = register_commands();
         let fields = FieldsContext::from_yaml_sources(
             kanban.root().to_path_buf(),

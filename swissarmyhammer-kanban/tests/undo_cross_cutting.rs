@@ -22,14 +22,13 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry, UIState};
 use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::clipboard::{
     ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,
 };
 use swissarmyhammer_kanban::commands::register_commands;
+use swissarmyhammer_kanban::test_support::composed_builtin_yaml_sources;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -125,7 +124,7 @@ impl UndoEngine {
         // would silently bypass the operation processor and undo would
         // become a no-op for that command — these regression guards fail
         // fast if that happens.
-        let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+        let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
         assert!(
             registry
                 .get("entity.delete")

@@ -650,7 +650,7 @@ useDispatchCommand("task.add")
     boardPath: "/path/to/.kanban"
   })
   │
-  ├── Prefix rewrite (view.switch:* → ui.view.set)
+  ├── Prefix rewrite (view.switch:* → view.set)
   ├── Look up CommandDef + Command impl
   ├── Build CommandContext with extensions
   ├── Check available(), execute()

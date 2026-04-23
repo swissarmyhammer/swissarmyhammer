@@ -50,7 +50,7 @@ const startRenameCallbacks = new Set<StartRenameCallback>();
  * Subscribe to "start rename" signals.
  *
  * Called by `usePerspectiveTabBar` to enter rename mode when the command
- * palette (or any other source) dispatches `ui.perspective.startRename`.
+ * palette (or any other source) dispatches `ui.entity.startRename`.
  *
  * @returns An unsubscribe function.
  */
@@ -656,7 +656,10 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
   function FilterFormulaBar({ filter, perspectiveId }, ref) {
     const editorRef = useRef<FilterEditorHandle>(null);
 
-    // Forward the inner editor handle so parents can call focus() / setValue().
+    // Forward the inner editor handle so parents can call focus(), setValue(),
+    // or getValue() (the last is used by reconciliation logic, not by the tab
+    // bar itself — but the handle shape must stay aligned with TextEditorHandle
+    // so the type remains substitutable through the ref chain).
     useImperativeHandle(
       ref,
       () => ({
@@ -665,6 +668,9 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
         },
         setValue(text: string) {
           editorRef.current?.setValue(text);
+        },
+        getValue() {
+          return editorRef.current?.getValue() ?? "";
         },
       }),
       [],

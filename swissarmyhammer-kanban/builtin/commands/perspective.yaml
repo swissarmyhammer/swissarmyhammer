@@ -27,7 +27,7 @@
   name: Rename Perspective
   # Hidden from the palette: this command requires `id` + `new_name` args
   # and cannot be invoked directly from the palette (no args prompt UI).
-  # The user-facing entry point is `ui.perspective.startRename`, which
+  # The user-facing entry point is `ui.entity.startRename`, which
   # triggers inline rename mode and then dispatches this command with the
   # collected arguments.
   visible: false
@@ -41,12 +41,18 @@
 
 - id: perspective.filter
   name: Set Filter
-  # Available from the palette (no scope) and the context menu. The
-  # `perspective_id` is resolved at execute time from (in order) args,
-  # scope-chain moniker, UIState active perspective, first perspective
-  # for the active view kind.
+  # Palette-only: requires a `filter` expression arg that the bare context
+  # menu has no way to collect. Users set filters through the formula bar
+  # CM6 editor on the tab bar, not through a right-click → "Set Filter"
+  # menu item, so exposing it in the context menu would surface a command
+  # that silently fails at dispatch time with `MissingArg("filter")`.
+  #
+  # `scope: "entity:perspective"` still applies — a palette invocation
+  # outside a perspective-bearing scope would also fail, so we hide it
+  # from the palette too in that case. `resolve_perspective_id` handles
+  # the scope/arg/UIState cascade at execute time.
+  scope: "entity:perspective"
   undoable: true
-  context_menu: true
   params:
     - name: filter
       from: args
@@ -56,6 +62,7 @@
 
 - id: perspective.clearFilter
   name: Clear Filter
+  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -65,8 +72,11 @@
 
 - id: perspective.group
   name: Set Group
+  # Palette-only: requires a `group` field name arg. The group-by UI is the
+  # popover on the tab bar; see the `perspective.filter` comment above for
+  # the full rationale.
+  scope: "entity:perspective"
   undoable: true
-  context_menu: true
   params:
     - name: group
       from: args
@@ -76,6 +86,7 @@
 
 - id: perspective.clearGroup
   name: Clear Group
+  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -85,8 +96,11 @@
 
 - id: perspective.sort.set
   name: Sort Field
+  # Palette-only: requires `field` and `direction` args. Sort-set is driven
+  # by column-header clicks in the grid view, which dispatch with explicit
+  # args; exposing it in the bare right-click menu would silently fail.
+  scope: "entity:perspective"
   undoable: true
-  context_menu: true
   params:
     - name: field
       from: args
@@ -102,6 +116,7 @@
   # Per-field removal is covered by `perspective.sort.toggle`'s asc → desc →
   # none state cycle; this command is the palette / context-menu entry point
   # for "reset the whole sort list" and never takes a `field` arg.
+  scope: "entity:perspective"
   undoable: true
   context_menu: true
   params:
@@ -111,8 +126,10 @@
 
 - id: perspective.sort.toggle
   name: Toggle Sort
+  # Palette-only: requires a `field` arg. Toggle is invoked from column
+  # headers with the field already known; see `perspective.sort.set` above.
+  scope: "entity:perspective"
   undoable: true
-  context_menu: true
   params:
     - name: field
       from: args
@@ -145,3 +162,22 @@
 - id: perspective.list
   name: List Perspectives
   visible: false
+
+- id: perspective.set
+  name: Switch Perspective
+  # Hidden from the palette: requires a `perspective_id` arg the palette has
+  # no UI for collecting. User-facing palette entries are the dynamic
+  # `perspective.goto:{id}` rows emitted by
+  # `scope_commands::emit_perspective_goto`, which
+  # `kanban-app/src/commands.rs::match_dynamic_prefix` rewrites back to
+  # `perspective.set` with the suffix moved into the arg bag.
+  #
+  # Relocated from `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 —
+  # "perspective" is a kanban concept (defined in
+  # `swissarmyhammer-perspectives`), not a generic UI primitive, so the
+  # command lives in the kanban domain alongside every other `perspective.*`
+  # entry.
+  visible: false
+  params:
+    - name: perspective_id
+      from: args

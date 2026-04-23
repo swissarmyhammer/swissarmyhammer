@@ -232,27 +232,19 @@ fn push_dedup(
 
 /// Emit one `view.switch:{id}` command per known view.
 ///
-/// The per-view `context_menu` flag is computed from `scope_chain`: the
-/// command is marked `context_menu: true` **only** for the view whose
-/// `view:{id}` moniker is present in the scope chain. All other views stay
-/// `context_menu: false`.
+/// Always marked `context_menu: false` — view switching is a palette-only
+/// navigation action, alongside `board.switch`, `window.focus`, and
+/// `perspective.goto`. Right-clicking a view button never surfaces a
+/// "Switch to <ViewName>" entry; the palette (`context_menu_only == false`)
+/// still lists every view.switch command.
 ///
-/// This gives the left-nav right-click exactly one "Switch to <ViewName>"
-/// entry — the one for the button the user actually right-clicked — while
-/// leaving palette behavior (`context_menu_only == false`) untouched: the
-/// palette still shows every view.switch command regardless of scope.
-///
-/// Mirrors the scope-chain-filtering pattern used by `emit_entity_add`.
 /// Shares `seen` with the other emit_* helpers so cross-emitter dedup works.
 fn emit_view_switch(
     views: &[ViewInfo],
-    scope_chain: &[String],
     seen: &mut HashSet<(String, Option<String>)>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for view in views {
-        let view_moniker = format!("view:{}", view.id);
-        let in_scope = scope_chain.iter().any(|m| m == &view_moniker);
         push_dedup(
             seen,
             result,
@@ -262,7 +254,7 @@ fn emit_view_switch(
                 menu_name: None,
                 target: None,
                 group: "view".into(),
-                context_menu: in_scope,
+                context_menu: false,
                 keys: None,
                 available: true,
             },
@@ -480,7 +472,7 @@ fn emit_dynamic_commands(
     // rather than O(scope × views).
     let views_by_id: HashMap<&str, &ViewInfo> =
         dyn_src.views.iter().map(|v| (v.id.as_str(), v)).collect();
-    emit_view_switch(&dyn_src.views, scope_chain, seen, result);
+    emit_view_switch(&dyn_src.views, seen, result);
     emit_board_switch(&dyn_src.boards, seen, result);
     emit_window_focus(&dyn_src.windows, seen, result);
     emit_perspective_goto(&dyn_src.perspectives, seen, result);
@@ -1021,7 +1013,7 @@ pub fn dedupe_for_menu_bar(commands: &mut Vec<ResolvedCommand>) {
 mod tests {
     use super::*;
     use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
-    use swissarmyhammer_commands::builtin_yaml_sources;
+    use crate::test_support::composed_builtin_yaml_sources;
 
     /// Test harness tuple: registry, command impls, fields context, and UI state.
     type TestHarness = (
@@ -1033,7 +1025,7 @@ mod tests {
 
     /// Build a test harness with registry, command impls, and fields context.
     fn setup() -> TestHarness {
-        let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+        let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
         let command_impls = crate::commands::register_commands();
         let defs = builtin_field_definitions();
         let entities = builtin_entity_definitions();
@@ -1792,10 +1784,9 @@ mod tests {
         assert_eq!(grid_switch.name, "Switch to Task Grid");
     }
 
-    /// Right-click on a specific view button must surface exactly one
-    /// `view.switch:{id}` command — the one whose moniker is in the scope
-    /// chain. The other views' switch commands stay palette-only and must be
-    /// filtered out by `context_menu_only`.
+    /// Right-click on a view button must NOT surface any `view.switch:{id}`
+    /// commands — view switching is a palette-only action. This holds
+    /// regardless of which `view:*` moniker is in the scope chain.
     #[test]
     fn view_switch_context_menu_only_emits_in_scope_view() {
         let (registry, impls, fields, ui) = setup();
@@ -1834,18 +1825,8 @@ mod tests {
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
         assert!(
-            ids.contains(&"view.switch:board-view"),
-            "in-scope view.switch should appear in right-click menu: {:?}",
-            ids
-        );
-        assert!(
-            !ids.contains(&"view.switch:tasks-grid"),
-            "out-of-scope view.switch must NOT appear in right-click menu: {:?}",
-            ids
-        );
-        assert!(
-            !ids.contains(&"view.switch:tags-grid"),
-            "out-of-scope view.switch must NOT appear in right-click menu: {:?}",
+            !ids.iter().any(|id| id.starts_with("view.switch:")),
+            "view.switch:* must NOT appear in right-click menu regardless of scope: {:?}",
             ids
         );
     }
@@ -2625,14 +2606,23 @@ mod tests {
     }
 
     #[test]
-    fn perspective_mutation_commands_available_from_palette_scope() {
-        // Perspective mutation commands (filter, group, sort) must be
-        // available from the palette (no perspective moniker in scope) so
-        // keybindings and command palette invocations can succeed. The
-        // `resolve_perspective_id` helper resolves the target perspective
-        // at execute time via UIState/first-perspective fallback.
+    fn perspective_mutation_commands_available_when_perspective_in_scope() {
+        // Perspective mutation commands (filter, group, sort) declare
+        // `scope: "entity:perspective"` — they are filtered out of scopes
+        // with no perspective moniker (e.g. right-click on a tag, actor,
+        // or column). The frontend's `PerspectivesContainer` injects the
+        // active perspective's moniker at the view-body level, so in
+        // practice every palette/context-menu invocation from within a
+        // view carries `perspective:<id>` in its chain and these commands
+        // are available.
+        //
+        // The resolver still consults args → scope → UIState → first-for-
+        // view-kind, so the command works whether or not the id was
+        // supplied explicitly; this test only guards the static
+        // registry-level scope filter.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
+            "perspective:01P".into(),
             "task:01X".into(),
             "column:todo".into(),
             "board:my-board".into(),
@@ -2651,7 +2641,40 @@ mod tests {
         ] {
             assert!(
                 ids.contains(&id),
-                "{id} should be available without perspective in scope (resolved via UIState at execute time): {ids:?}",
+                "{id} should be available when a perspective moniker is in scope: {ids:?}",
+            );
+        }
+    }
+
+    /// Symmetric guard: the same commands are filtered out when **no**
+    /// perspective moniker is in scope. This is the regression guard for
+    /// the bug the task fixes — right-clicking on a tag, actor, or column
+    /// must NOT surface perspective-mutation commands, because the scope
+    /// chain alone cannot identify which perspective to mutate.
+    #[test]
+    fn perspective_mutation_commands_hidden_without_perspective_in_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:bug".into(),
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for id in [
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+        ] {
+            assert!(
+                !ids.contains(&id),
+                "{id} must NOT appear in scopes without a perspective moniker: {ids:?}",
             );
         }
     }
@@ -3400,7 +3423,7 @@ mod tests {
     - name: moniker
       from: target
 "#;
-        let mut sources = swissarmyhammer_commands::builtin_yaml_sources();
+        let mut sources = composed_builtin_yaml_sources();
         sources.push(("stub_opt_out", stub_yaml));
         let registry = CommandsRegistry::from_yaml_sources(&sources);
         let mut impls = crate::commands::register_commands();
@@ -3479,7 +3502,7 @@ mod tests {
       from: target
       entity_type: task
 "#;
-        let mut sources = swissarmyhammer_commands::builtin_yaml_sources();
+        let mut sources = composed_builtin_yaml_sources();
         sources.push(("stub_task_only", stub_yaml));
         let registry = CommandsRegistry::from_yaml_sources(&sources);
         let impls = crate::commands::register_commands();
@@ -3604,7 +3627,7 @@ mod tests {
     - name: moniker
       from: scope_chain
 "#;
-        let mut sources = swissarmyhammer_commands::builtin_yaml_sources();
+        let mut sources = composed_builtin_yaml_sources();
         sources.push(("stub_cross_cutting_non_target", stub_yaml));
         let registry = CommandsRegistry::from_yaml_sources(&sources);
         let impls = crate::commands::register_commands();

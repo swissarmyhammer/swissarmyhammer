@@ -125,7 +125,7 @@ function useAutoCreateDefaultPerspective(
  * view kind, `UIState.active_perspective_id(window_label)` refers to one
  * of them. If the stored id is empty or names a perspective that doesn't
  * exist (deleted, or for a different view kind), dispatch
- * `ui.perspective.set` for the first matching perspective.
+ * `perspective.set` for the first matching perspective.
  *
  * Runs in tandem with [`useAutoCreateDefaultPerspective`]. When no
  * perspectives exist for the current view kind, that hook creates a
@@ -156,7 +156,7 @@ function useAutoSelectActivePerspective(
     }
     const stillValid = matching.some((p) => p.id === active_perspective_id);
     if (stillValid) return;
-    dispatch("ui.perspective.set", {
+    dispatch("perspective.set", {
       args: { perspective_id: matching[0].id },
     }).catch(console.error);
   }, [loaded, perspectives, active_perspective_id, viewKind, dispatch]);
@@ -174,9 +174,7 @@ function useAutoSelectActivePerspective(
  * semantic, there is no usable field-delta fast path for perspectives,
  * so every event is a refetch signal.
  */
-function usePerspectiveEventListeners(
-  refresh: () => Promise<void>,
-) {
+function usePerspectiveEventListeners(refresh: () => Promise<void>) {
   useEffect(() => {
     const unlisteners = [
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
@@ -224,7 +222,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
 
   const setActivePerspectiveId = useCallback(
     (id: string) => {
-      dispatch("ui.perspective.set", {
+      dispatch("perspective.set", {
         args: { perspective_id: id },
       }).catch(console.error);
     },

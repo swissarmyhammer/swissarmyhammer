@@ -109,8 +109,80 @@ pub use swissarmyhammer_entity::changelog::{ChangeEntry, FieldChange};
 pub use swissarmyhammer_entity::Entity;
 pub use swissarmyhammer_entity::EntityContext;
 
+/// Builtin command YAML files embedded at compile time, kanban-specific.
+///
+/// The `swissarmyhammer-commands` crate is consumer-agnostic and only ships
+/// generic commands (`app`, `settings`, `entity`, `ui`, `drag`). Kanban-specific
+/// commands (`task`, `column`, `tag`, `attachment`, `perspective`, `file`) live
+/// under `swissarmyhammer-kanban/builtin/commands/` and are contributed to the
+/// composed command registry via [`builtin_yaml_sources`]. Callers layer the
+/// commands crate's builtins first, then the kanban crate's builtins, then
+/// user overrides — later sources override earlier by ID with partial merge.
+static BUILTIN_COMMANDS: include_dir::Dir =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
+
+/// Returns the kanban-specific builtin command YAML sources embedded at compile time.
+///
+/// Enumerates every `*.yaml` file directly under `builtin/commands/` via
+/// `include_dir!` — adding a new kanban-specific command file requires no Rust
+/// changes. The source name is the file stem (e.g. `task.yaml` → `"task"`).
+///
+/// The loader enforces a flat layout: only files whose parent path is the
+/// root of the embedded directory are returned. `include_dir!` walks
+/// recursively, but keys here are basenames only, so a nested
+/// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
+/// `HashMap` insert downstream. Filtering to the root prevents that
+/// class of bug at the loader.
+pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_COMMANDS
+        .files()
+        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("yaml"))
+        .filter(|file| file.path().parent() == Some(std::path::Path::new("")))
+        .filter_map(|file| {
+            let name = file.path().file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
+}
+
 // Re-export commonly used types
 pub use types::{
     default_column_entities, ActorId, ColumnId, LogEntry, Noun, Operation as KanbanOperation,
     OperationResult, Ordinal, Position, ProjectId, TagId, TaskId, Verb,
 };
+
+/// Test-only helpers shared between this crate's unit tests and integration
+/// tests, as well as downstream crates running their own integration tests.
+///
+/// Gated on `#[cfg(any(test, feature = "test-support"))]` so release builds
+/// do not pay for these helpers. Integration tests under `tests/` see the
+/// module because the crate's own `dev-dependencies` enable the
+/// `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
+#[cfg(test)]
+mod builtin_commands_tests {
+    use super::builtin_yaml_sources;
+
+    /// With no YAML files in `builtin/commands/`, the function returns an
+    /// empty vec. This sanity-checks the `include_dir!` + flat-layout filter
+    /// before any kanban-specific YAML has been moved in.
+    ///
+    /// Once YAML files land under `swissarmyhammer-kanban/builtin/commands/`,
+    /// this test will need to be updated — the richer contents-coverage test
+    /// lives in `tests/builtin_commands.rs`.
+    #[test]
+    fn builtin_yaml_sources_has_kanban_specific_files() {
+        let sources = builtin_yaml_sources();
+        // After the move, the six kanban-specific YAML files live here.
+        let names: Vec<&str> = sources.iter().map(|(n, _)| *n).collect();
+        for expected in ["task", "column", "tag", "attachment", "perspective", "file"] {
+            assert!(
+                names.contains(&expected),
+                "kanban builtin commands missing `{expected}.yaml`: {names:?}",
+            );
+        }
+    }
+}

@@ -307,7 +307,7 @@ describe("PerspectiveTabBar", () => {
     // active — so before triggering rename, we expect exactly one editor.
     expect(container.querySelectorAll(".cm-editor").length).toBe(1);
 
-    // Dispatching ui.perspective.startRename (via triggerStartRename — the
+    // Dispatching ui.entity.startRename (via triggerStartRename — the
     // same code path the AppShell global command handler calls) should put
     // the active tab into rename mode.
     act(() => {

@@ -3,18 +3,33 @@
 # =============================================================================
 #
 # Command declarations (the full contract: id, name, params, undoable, keys,
-# context_menu, scope) live in `swissarmyhammer-commands/builtin/commands/`,
-# split by noun:
+# context_menu, scope) are stacked per-crate at app startup. Generic commands
+# live in `swissarmyhammer-commands/builtin/commands/`; domain-specific
+# commands live in the owning crate's `builtin/commands/` and are contributed
+# via that crate's `builtin_yaml_sources()`.
 #
-#   * entity.yaml      — cross-cutting commands that apply to any entity by
-#                        target moniker. Listed below.
-#   * ui.yaml          — UI commands, including the cross-cutting `ui.inspect`.
-#   * task.yaml,       — type-specific commands only. A command that operates
-#     tag.yaml,          on a single entity type belongs in that type's file,
-#     project.yaml,      not here.
-#     column.yaml,
-#     attachment.yaml,
-#     perspective.yaml
+# Generic commands live alongside this file, in
+# `swissarmyhammer-commands/builtin/commands/`:
+#
+#   * commands:app.yaml         — app-level commands (quit, undo, redo,
+#                                 palette, ...).
+#   * commands:settings.yaml    — keymap toggles.
+#   * commands:entity.yaml      — cross-cutting commands that apply to any
+#                                 entity by target moniker. Listed below.
+#   * commands:ui.yaml          — UI commands, including the cross-cutting
+#                                 `ui.inspect`.
+#   * commands:drag.yaml        — generic drag-and-drop mechanics.
+#
+# Kanban-specific commands live in a DIFFERENT crate, in
+# `swissarmyhammer-kanban/builtin/commands/` (not siblings of this file!):
+#
+#   * kanban:task.yaml          — type-specific commands only. A command that
+#     kanban:tag.yaml             operates on a single entity type belongs in
+#     kanban:column.yaml          that type's file, not here.
+#     kanban:attachment.yaml
+#     kanban:perspective.yaml
+#   * kanban:file.yaml          — kanban file/board lifecycle (switchBoard,
+#                                 newBoard, closeBoard, openBoard).
 #
 # A command is "cross-cutting" when its primary param declares `from: target`
 # — it operates on whatever entity the context menu fired over, regardless of

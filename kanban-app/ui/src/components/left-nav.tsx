@@ -32,9 +32,10 @@ function viewIcon(view: ViewDef) {
  *
  * Each button is wrapped in its own {@link CommandScopeProvider} with a
  * `view:{id}` moniker so right-click on that specific button resolves a
- * scope chain the backend recognises — {@link ScopedViewButton} then uses
- * {@link useContextMenu} to show a "Switch to <ViewName>" entry for that
- * view only.
+ * scope chain the backend recognises. View switching is palette-only, so
+ * the context menu never shows a "Switch to <ViewName>" entry; the
+ * `view:{id}` moniker is still needed for other dynamics (e.g.
+ * `entity.add:{type}` when the view declares an `entity_type`).
  */
 export function LeftNav() {
   const { views, activeView } = useViews();
@@ -66,9 +67,10 @@ interface ScopedViewButtonProps {
  *
  * Mirrors `ScopedPerspectiveTab` in `perspective-tab-bar.tsx`: the moniker
  * placed in the scope chain is what `useContextMenu` reads via
- * `CommandScopeContext`, which in turn is what the Rust backend uses to
- * decide that only *this* view's `view.switch:{id}` command should carry
- * `context_menu: true` and appear in the right-click menu.
+ * `CommandScopeContext`. The backend does not emit `view.switch:*` as a
+ * context-menu entry, but other dynamic commands (notably
+ * `entity.add:{type}` for views with an `entity_type`) still require the
+ * `view:{id}` moniker to resolve their scope.
  */
 function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
   return (
@@ -86,7 +88,10 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
  * building the context-menu request to the backend.
  *
  * Left-click dispatches `view.switch:{id}` through the command pipeline;
- * right-click raises the native context menu via `useContextMenu`.
+ * right-click raises the native context menu via `useContextMenu`. The
+ * menu never contains a `Switch to <ViewName>` entry — view switching is
+ * palette-only — but scope-dependent dynamics (e.g. `entity.add:{type}`)
+ * still surface for views that declare an `entity_type`.
  */
 function ViewButton({ view, isActive }: ScopedViewButtonProps) {
   const dispatch = useDispatchCommand();

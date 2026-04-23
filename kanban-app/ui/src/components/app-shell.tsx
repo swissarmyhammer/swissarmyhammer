@@ -252,7 +252,7 @@ function buildNavCommands(
 
 /**
  * Build the dynamic global commands — nav commands plus the
- * ui.perspective.startRename command which exists in the backend registry
+ * ui.entity.startRename command which exists in the backend registry
  * for palette discovery but runs locally via `triggerStartRename`.
  */
 function buildDynamicGlobalCommands(
@@ -261,7 +261,7 @@ function buildDynamicGlobalCommands(
   return [
     ...buildNavCommands(broadcastRef),
     {
-      id: "ui.perspective.startRename",
+      id: "ui.entity.startRename",
       name: "Rename Perspective",
       execute: () => {
         triggerStartRename();

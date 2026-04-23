@@ -1,0 +1,15 @@
+- id: view.set
+  name: Switch View
+  # Hidden from the palette: requires a `view_id` arg the palette has no UI
+  # for collecting. The user-facing palette entries are the dynamic
+  # `view.switch:{id}` rows emitted by `scope_commands::emit_view_switch`,
+  # which `kanban-app/src/commands.rs::match_dynamic_prefix` rewrites back
+  # to `view.set` with the suffix moved into the arg bag.
+  #
+  # Relocated from `ui.view.set` in 01KPY02X405QTP5ACH67THHSN8 — "view" is a
+  # kanban concept (defined in `swissarmyhammer-views`), not a generic UI
+  # primitive, so the command lives in the kanban domain.
+  visible: false
+  params:
+    - name: view_id
+      from: args

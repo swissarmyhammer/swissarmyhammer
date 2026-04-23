@@ -7,9 +7,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry, UIState};
 use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::clipboard::{
     ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,
@@ -17,6 +15,7 @@ use swissarmyhammer_kanban::clipboard::{
 use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::defaults::builtin_view_definitions;
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources, ViewInfo};
+use swissarmyhammer_kanban::test_support::composed_builtin_yaml_sources;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -56,7 +55,7 @@ impl TestEngine {
             .expect("board init failed");
 
         let kanban = Arc::new(kanban);
-        let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+        let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
         let commands = register_commands();
         let ui_state = Arc::new(UIState::new());
         let clipboard = Arc::new(InMemoryClipboard::new());
@@ -928,7 +927,7 @@ async fn reorder_move_to_middle() {
 /// commit.
 #[tokio::test]
 async fn task_move_is_undoable_in_registry() {
-    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
     let cmd_def = registry.get("task.move");
     assert!(
         cmd_def.is_some(),
@@ -955,7 +954,7 @@ async fn task_move_is_undoable_in_registry() {
 /// not from the static registry.
 #[tokio::test]
 async fn entity_add_is_registered_undoable_and_hidden() {
-    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
     let cmd_def = registry
         .get("entity.add")
         .expect("entity.add must exist in the YAML registry — the dynamic entity.add:{type} dispatch rewrites to this canonical id");
@@ -2003,7 +2002,7 @@ fn load_builtin_views_with_kind() -> Vec<(ViewInfo, ViewKind)> {
 #[tokio::test]
 async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
     let engine = TestEngine::new().await;
-    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
     let fields = engine.kanban.entity_context().await.unwrap();
     let views_with_kind = load_builtin_views_with_kind();
     let views: Vec<ViewInfo> = views_with_kind.iter().map(|(v, _)| v.clone()).collect();

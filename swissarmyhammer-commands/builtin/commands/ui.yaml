@@ -29,21 +29,7 @@
   name: Close Palette
   visible: false
 
-- id: ui.view.set
-  name: Switch View
-  visible: false
-  params:
-    - name: view_id
-      from: args
-
-- id: ui.perspective.set
-  name: Switch Perspective
-  visible: false
-  params:
-    - name: perspective_id
-      from: args
-
-- id: ui.perspective.startRename
+- id: ui.entity.startRename
   name: Rename Perspective
 
 - id: ui.mode.set

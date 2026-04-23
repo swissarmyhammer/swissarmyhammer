@@ -34,7 +34,7 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
   const uiState = useUIState();
   const active_view_id = uiState.windows?.[WINDOW_LABEL]?.active_view_id ?? "";
 
-  const dispatch = useDispatchCommand("ui.view.set");
+  const dispatch = useDispatchCommand("view.set");
 
   /** Dispatch a view switch through the command system so UIState owns the change. */
   const setActiveViewId = useCallback(

@@ -1311,7 +1311,7 @@ fn match_dynamic_prefix(
     cmd: &str,
 ) -> Result<Option<(&'static str, &'static str, String, bool)>, String> {
     if let Some(suffix) = cmd.strip_prefix("view.switch:") {
-        Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
+        Ok(Some(("view.set", "view_id", suffix.to_string(), false)))
     } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
         if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
             return Err(format!("Invalid board path in command: {:?}", suffix));
@@ -1319,7 +1319,7 @@ fn match_dynamic_prefix(
         Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
     } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
         Ok(Some((
-            "ui.perspective.set",
+            "perspective.set",
             "perspective_id",
             suffix.to_string(),
             false,
@@ -2473,6 +2473,40 @@ mod tests {
         // can fall through to the registry.
         assert!(match_dynamic_prefix("entity.add").unwrap().is_none());
         assert!(match_dynamic_prefix("task.add").unwrap().is_none());
+    }
+
+    /// `view.switch:{id}` rows in the palette rewrite to the live
+    /// `view.set` command with the id moved into the arg bag under
+    /// `view_id`. Regression-guards 01KPY02X405QTP5ACH67THHSN8, where the
+    /// target was renamed from `ui.view.set` → `view.set` as part of
+    /// relocating the definition out of generic `ui.yaml` into kanban's
+    /// `view.yaml`.
+    #[test]
+    fn match_dynamic_prefix_view_switch_rewrites_to_view_set() {
+        let (new_cmd, arg_key, arg_val, updates_bp) =
+            match_dynamic_prefix("view.switch:board-view")
+                .unwrap()
+                .unwrap();
+        assert_eq!(new_cmd, "view.set");
+        assert_eq!(arg_key, "view_id");
+        assert_eq!(arg_val, "board-view");
+        assert!(!updates_bp);
+    }
+
+    /// `perspective.goto:{id}` rewrites to `perspective.set` with the id
+    /// under `perspective_id`. Same task / same reason as
+    /// `match_dynamic_prefix_view_switch_rewrites_to_view_set` — the old
+    /// target was `ui.perspective.set` before the relocation.
+    #[test]
+    fn match_dynamic_prefix_perspective_goto_rewrites_to_perspective_set() {
+        let (new_cmd, arg_key, arg_val, updates_bp) =
+            match_dynamic_prefix("perspective.goto:sprint-01")
+                .unwrap()
+                .unwrap();
+        assert_eq!(new_cmd, "perspective.set");
+        assert_eq!(arg_key, "perspective_id");
+        assert_eq!(arg_val, "sprint-01");
+        assert!(!updates_bp);
     }
 
     #[test]

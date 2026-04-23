@@ -123,21 +123,25 @@ describe("LeftNav — right-click context menu", () => {
   });
 
   /**
-   * After the backend returns a single `view.switch:v1` entry, the hook
-   * must forward exactly that one item to `show_context_menu`. The full
-   * dispatch info (cmd id, name, scope chain) is attached so the native
-   * menu can dispatch without a round-trip.
+   * View switching is a palette-only action — right-clicking a view button
+   * must never surface a `Switch to <ViewName>` entry. The backend no longer
+   * returns `view.switch:*` commands when `contextMenu: true`, and whatever
+   * other entries it does return (e.g. `entity.add:*` for views declaring an
+   * `entity_type`) must be forwarded to `show_context_menu` without any
+   * `view.switch:*` items sneaking in.
    */
-  it("shows native context menu with the backend-supplied Switch to <view> entry", async () => {
+  it("right-click does not surface any view.switch:* entries", async () => {
     mockInvoke.mockImplementation(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (cmd: string, _args?: any) => {
         if (cmd === "list_commands_for_scope") {
+          // Backend returns an entity.add entry (what a view with an
+          // entity_type would legitimately surface) but no view.switch:*.
           return Promise.resolve([
             {
-              id: "view.switch:v1",
-              name: "Switch to View 1",
-              group: "view",
+              id: "entity.add:task",
+              name: "Add Task",
+              group: "entity",
               context_menu: true,
               available: true,
             },
@@ -168,10 +172,11 @@ describe("LeftNav — right-click context menu", () => {
       separator: boolean;
       scope_chain: string[];
     }>;
+    expect(items.some((i) => i.cmd.startsWith("view.switch:"))).toBe(false);
+    // The non-view.switch entry the backend did return still flows through
+    // with its dispatch info attached.
     expect(items).toHaveLength(1);
-    expect(items[0].cmd).toBe("view.switch:v1");
-    expect(items[0].name).toBe("Switch to View 1");
-    expect(items[0].separator).toBe(false);
+    expect(items[0].cmd).toBe("entity.add:task");
     expect(items[0].scope_chain).toEqual(expect.arrayContaining(["view:v1"]));
   });
 

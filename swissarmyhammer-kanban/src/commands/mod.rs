@@ -134,19 +134,22 @@ fn register_ui(map: &mut CmdMap) {
         Arc::new(ui_commands::PaletteCloseCmd),
     );
     map.insert(
-        "ui.view.set".into(),
-        Arc::new(ui_commands::SetActiveViewCmd),
-    );
-    map.insert(
-        "ui.perspective.set".into(),
-        Arc::new(ui_commands::SetActivePerspectiveCmd),
-    );
-    map.insert(
-        "ui.perspective.startRename".into(),
+        "ui.entity.startRename".into(),
         Arc::new(ui_commands::StartRenamePerspectiveCmd),
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
     map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
+}
+
+/// Register `view.*` kanban commands.
+///
+/// Currently only `view.set` — the impl lives in `ui_commands.rs` (the
+/// command mutates `UIState::active_view_id` which is a UI-surface concern)
+/// but the YAML declaration and id live in the kanban `view` namespace
+/// because "view" is a kanban concept, not a generic UI primitive.
+/// Relocated from `ui.view.set` in 01KPY02X405QTP5ACH67THHSN8.
+fn register_view(map: &mut CmdMap) {
+    map.insert("view.set".into(), Arc::new(ui_commands::SetActiveViewCmd));
 }
 
 fn register_drag(map: &mut CmdMap) {
@@ -236,6 +239,15 @@ fn register_perspective(map: &mut CmdMap) {
         "perspective.goto".into(),
         Arc::new(perspective_commands::GotoPerspectiveCmd),
     );
+    // `perspective.set` — the impl lives in `ui_commands.rs` (it mutates
+    // `UIState::active_perspective_id`, a UI-surface concern) but the
+    // YAML/id belong in the kanban `perspective.*` namespace because
+    // "perspective" is a kanban concept. Relocated from
+    // `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8.
+    map.insert(
+        "perspective.set".into(),
+        Arc::new(ui_commands::SetActivePerspectiveCmd),
+    );
 }
 
 fn register_app(map: &mut CmdMap) {
@@ -290,6 +302,7 @@ pub fn register_commands() -> CmdMap {
     register_attachment(&mut map);
     register_column(&mut map);
     register_ui(&mut map);
+    register_view(&mut map);
     register_drag(&mut map);
     register_file(&mut map);
     register_perspective(&mut map);
@@ -333,18 +346,29 @@ mod tests {
         // dynamic `entity.add:task`; task.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
         // + 3 clipboard + 5 entity (add, update_field, delete, archive, unarchive)
-        // + 1 tag + 1 column + 9 UI (+ startRename)
+        // + 1 tag + 1 column
+        // + 8 UI (inspect, inspector.close, inspector.close_all,
+        //         palette.open, palette.close, entity.startRename,
+        //         setFocus, mode.set) — ui.view.set and ui.perspective.set
+        //         relocated to `view.*` and `perspective.*` domains in
+        //         01KPY02X405QTP5ACH67THHSN8.
+        // + 1 view (view.set — relocated from ui.view.set)
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
+        // + 3 drag
+        // + 16 perspective (load, save, delete, rename, filter, clearFilter,
+        //                   group, clearGroup, sort.set, sort.clear,
+        //                   sort.toggle, next, prev, goto, list, set —
+        //                   perspective.set relocated from ui.perspective.set)
         // + 2 attachment (open, reveal) — attachment.delete retired, folded
         //   into the cross-cutting `entity.delete` auto-emit with an
         //   `"attachment"` match arm in `DeleteEntityCmd::execute`.
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // + 1 ui.mode.set = 60
+        // = 60 (unchanged by the view/perspective rename — no adds or
+        //       removes, just id relocations).
         assert_eq!(cmds.len(), 60);
     }
 
@@ -762,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn set_active_view_executes() {
         let cmds = register_commands();
-        let cmd = cmds.get("ui.view.set").unwrap();
+        let cmd = cmds.get("view.set").unwrap();
         let ui = Arc::new(UIState::new());
 
         let mut args = std::collections::HashMap::new();
@@ -1213,10 +1237,18 @@ mod tests {
     // YAML ↔ Rust completeness check
     // =========================================================================
 
-    /// Collect every command id declared in `builtin/commands/*.yaml`.
+    /// Collect every command id declared across all builtin YAML sources the
+    /// app composes at startup: generic commands from `swissarmyhammer-commands`
+    /// (`app`, `settings`, `entity`, `ui`, `drag`) and kanban-specific commands
+    /// from this crate's own `builtin/commands/` (`task`, `column`, `tag`,
+    /// `attachment`, `perspective`, `file`).
+    ///
+    /// Mirrors the stacking order in `kanban-app/src/state.rs` so this test
+    /// sees exactly the set the running app resolves.
     fn all_yaml_ids() -> Vec<String> {
         swissarmyhammer_commands::builtin_yaml_sources()
-            .iter()
+            .into_iter()
+            .chain(crate::builtin_yaml_sources())
             .flat_map(|(_name, yaml_content)| {
                 serde_yaml_ng::from_str::<Vec<swissarmyhammer_commands::CommandDef>>(yaml_content)
                     .unwrap_or_default()

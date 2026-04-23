@@ -450,9 +450,20 @@ impl AppState {
     }
 
     /// Internal constructor with an explicit UIState persistence path.
+    ///
+    /// The commands registry stacks two builtin YAML sources at startup:
+    /// generic commands from `swissarmyhammer-commands` first, then
+    /// kanban-specific commands from `swissarmyhammer-kanban`. User overrides
+    /// in `.kanban/commands/` layer on top later via
+    /// [`Self::reload_command_overrides`]. Later sources override earlier by
+    /// ID with partial merge (`CommandsRegistry::merge_yaml_sources`).
     fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
-        let sources = builtin_yaml_sources();
-        let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let commands_sources = builtin_yaml_sources();
+        let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
+        let mut source_refs: Vec<(&str, &str)> =
+            Vec::with_capacity(commands_sources.len() + kanban_sources.len());
+        source_refs.extend(commands_sources.iter().map(|(n, c)| (*n, *c)));
+        source_refs.extend(kanban_sources.iter().map(|(n, c)| (*n, *c)));
         let ui_state = Arc::new(UIState::load(ui_state_path));
 
         Self {
@@ -702,9 +713,16 @@ impl AppState {
             .map(|(n, c)| (n.as_str(), c.as_str()))
             .collect();
 
-        // Rebuild from scratch: builtins + user overrides
-        let builtin = builtin_yaml_sources();
-        let builtin_refs: Vec<(&str, &str)> = builtin.iter().map(|(n, c)| (*n, *c)).collect();
+        // Rebuild from scratch: commands-crate builtins, then kanban-crate
+        // builtins, then user overrides. Matches the stacking order in
+        // `with_ui_state_path` so user overrides can override either builtin
+        // source.
+        let commands_builtin = builtin_yaml_sources();
+        let kanban_builtin = swissarmyhammer_kanban::builtin_yaml_sources();
+        let mut builtin_refs: Vec<(&str, &str)> =
+            Vec::with_capacity(commands_builtin.len() + kanban_builtin.len());
+        builtin_refs.extend(commands_builtin.iter().map(|(n, c)| (*n, *c)));
+        builtin_refs.extend(kanban_builtin.iter().map(|(n, c)| (*n, *c)));
         let mut registry = CommandsRegistry::from_yaml_sources(&builtin_refs);
         registry.merge_yaml_sources(&refs);
 

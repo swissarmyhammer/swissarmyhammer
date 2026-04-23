@@ -369,7 +369,7 @@ mod tests {
             "view_id".to_string(),
             serde_json::json!("01JMVIEW0000000000TGGRD0"),
         );
-        let ctx = CommandContext::new("ui.view.set", vec!["window:main".to_string()], None, args)
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
             .with_ui_state(Arc::clone(&ui));
 
         SetActiveViewCmd.execute(&ctx).await.unwrap();
@@ -399,7 +399,7 @@ mod tests {
             "view_id".to_string(),
             serde_json::json!("01JMVIEW0000000000TGGRD0"),
         );
-        let ctx = CommandContext::new("ui.view.set", vec!["window:main".to_string()], None, args)
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
             .with_ui_state(Arc::clone(&ui));
 
         SetActiveViewCmd.execute(&ctx).await.unwrap();
@@ -464,7 +464,7 @@ mod tests {
         // not be available — it has nothing to rename.
         let ui = Arc::new(UIState::new());
         let ctx = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -495,7 +495,7 @@ mod tests {
         ui.set_active_perspective("main", "p1");
 
         let ctx_secondary = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:secondary".to_string()],
             None,
             HashMap::new(),

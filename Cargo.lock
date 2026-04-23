@@ -8394,6 +8394,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
+ "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
