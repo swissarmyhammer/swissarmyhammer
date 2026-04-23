@@ -299,8 +299,46 @@ function HeaderCell({
     header.column.toggleGrouping();
   };
 
+  // Per-column Enter binding so a spatially-focused header toggles sort via
+  // keyboard. `execute` re-uses the same `handleClick` the `<th>`'s `onClick`
+  // calls — mouse and keyboard converge on a single executor, so the
+  // perspective-driven and TanStack-native paths stay in sync automatically.
+  // The namespaced id keeps the entry scoped to its own header (each column's
+  // `FocusScope` sees only its own command) and `contextMenu: false` keeps it
+  // out of the global right-click menu (where click/right-click already
+  // dispatch sort/grouping directly).
+  //
+  // Mirrors the row-selector pattern in `RowSelector` (below) — each
+  // focusable scope binds Enter to whatever action its click handler performs.
+  //
+  // TanStack's compiled `getToggleSortingHandler()` does
+  // `e.persist == null || e.persist()` — a left-hand short-circuit that
+  // dereferences `e` before checking nullity, so passing `undefined` would
+  // throw. The perspective path ignores its argument entirely, but the
+  // TanStack-native path needs a truthy event-shaped object. Pass an empty
+  // object: `{}.persist` is `undefined`, so `undefined == null` is true and
+  // the branch short-circuits without calling `.persist()`.
+  const commands = useMemo<CommandDef[]>(
+    () => [
+      {
+        id: `column-header.sort.${columnId}`,
+        name: `Sort by ${columnId.replace(/_/g, " ")}`,
+        keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
+        execute: () => {
+          handleClick?.({} as React.MouseEvent);
+        },
+        contextMenu: false,
+      },
+    ],
+    [columnId, handleClick],
+  );
+
   return (
-    <FocusScope moniker={headerMoniker} commands={[]} renderContainer={false}>
+    <FocusScope
+      moniker={headerMoniker}
+      commands={commands}
+      renderContainer={false}
+    >
       <HeaderCellTh
         columnId={columnId}
         headerMoniker={headerMoniker}

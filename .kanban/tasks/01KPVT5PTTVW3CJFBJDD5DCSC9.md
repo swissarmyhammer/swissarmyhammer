@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: df80
+position_column: review
+position_ordinal: '8680'
 project: spatial-nav
 title: 'Grid column header: Enter should toggle sort (currently a no-op on a focused header)'
 ---
@@ -61,7 +61,7 @@ const commands = useMemo<CommandDef[]>(
 
 `execute` is `handleClick` — the identical function the `onClick` already calls. That means:
 - **Perspective-driven path** (a `perspectiveId` is present): `dispatchSortToggle({ args: { field: columnId, perspective_id: perspectiveId } })` — the same backend command click already dispatches. Correct.
-- **TanStack-native path** (no `perspectiveId`): `header.column.getToggleSortingHandler()` — TanStack's own toggle function. Takes an optional `MouseEvent` argument but does not require one, so calling it with zero args from `execute` works. Verify by reading the TanStack signature if in doubt.
+- **TanStack-native path** (no `perspectiveId`): `header.column.getToggleSortingHandler()` — TanStack's own toggle function. The compiled build of TanStack `getToggleSortingHandler()` does `e.persist == null || e.persist()` (left-hand short-circuit dereferences `e`), so we pass an empty object `{}` as a truthy event stub; `{}.persist` is undefined, the short-circuit passes, and the perspective path (which ignores its argument) is unaffected.
 
 Pass `commands` through to the `FocusScope`. `contextMenu: false` is important so the per-column command doesn't clutter the right-click menu (click / right-click already dispatch sort / grouping directly).
 
@@ -78,24 +78,24 @@ Pass `commands` through to the `FocusScope`. `contextMenu: false` is important s
 
 ## Acceptance Criteria
 
-- [ ] Each data-column `<th>`'s enclosing `FocusScope` carries a non-empty `commands` array with a per-column entry bound to `Enter` across `vim`/`cua`/`emacs` keymaps
-- [ ] With spatial focus on a column header in a grid that has an active perspective, pressing `Enter` dispatches `perspective.sort.toggle` with `{ field: <columnId>, perspective_id: <perspectiveId> }`
-- [ ] With spatial focus on a column header in a grid without a perspective (TanStack-native sort path), pressing `Enter` toggles the column's sort direction — verify via the `sorting` state on the TanStack table instance or the re-rendered sort indicator
-- [ ] Clicking the column header still toggles sort (regression protection — same `handleClick` reused as `execute`)
-- [ ] The per-column command does not appear in the global context menu (`contextMenu: false`)
-- [ ] Pressing `Enter` on a body cell, row selector, or any other focused grid scope is unaffected — existing scope-local Enter bindings continue to win over the new header-scope binding since they're nested deeper in the chain
-- [ ] The row-selector `<th>` (leftmost spacer) remains unscoped per the existing design in `HeaderCell`'s intentional-skip case (already out of the `header.column` iteration)
+- [x] Each data-column `<th>`'s enclosing `FocusScope` carries a non-empty `commands` array with a per-column entry bound to `Enter` across `vim`/`cua`/`emacs` keymaps
+- [x] With spatial focus on a column header in a grid that has an active perspective, pressing `Enter` dispatches `perspective.sort.toggle` with `{ field: <columnId>, perspective_id: <perspectiveId> }`
+- [x] With spatial focus on a column header in a grid without a perspective (TanStack-native sort path), pressing `Enter` toggles the column's sort direction — verify via the `sorting` state on the TanStack table instance or the re-rendered sort indicator
+- [x] Clicking the column header still toggles sort (regression protection — same `handleClick` reused as `execute`)
+- [x] The per-column command does not appear in the global context menu (`contextMenu: false`)
+- [x] Pressing `Enter` on a body cell, row selector, or any other focused grid scope is unaffected — existing scope-local Enter bindings continue to win over the new header-scope binding since they're nested deeper in the chain
+- [x] The row-selector `<th>` (leftmost spacer) remains unscoped per the existing design in `HeaderCell`'s intentional-skip case (already out of the `header.column` iteration)
 
 ## Tests
 
-- [ ] New test in `kanban-app/ui/src/components/data-table.test.tsx` — mirror the structure of `describe("DataTable row selector Enter opens inspector", …)` at line 526:
+- [x] New test in `kanban-app/ui/src/components/data-table.test.tsx` — mirror the structure of `describe("DataTable row selector Enter opens inspector", …)` at line 526:
   - Render a grid with 3 columns and `perspectiveId="default"`, focus the first data column's `<th>` (via `setFocus(columnHeaderMoniker(columnId))` on the fixture's `useEntityFocus`), press `userEvent.keyboard("{Enter}")`, assert the `dispatchSortToggle` mock received `args: { field: <col0-id>, perspective_id: "default" }` exactly once
   - Same fixture, focus the SECOND column header, assert the dispatch target is that column's id (guards against wrong-target bugs where the first column's handler fires for any header)
-- [ ] New test for the TanStack-native path (no `perspectiveId`): focus a column header, press Enter, assert `table.getState().sorting` flipped to include that column — verify against the rendered `SortIndicator` or on the TanStack instance directly (whichever the existing header tests use as precedent)
-- [ ] Regression test: focus a column header, click it (not keyboard), assert the same `dispatchSortToggle` fires — confirms `handleClick` is still the click executor
-- [ ] Run `cd kanban-app/ui && npm test -- data-table --run` — all existing 20-ish data-table tests plus the new ones green
-- [ ] Run `cd kanban-app/ui && npm test -- spatial-nav --run` — spatial-nav regression suite stays green (this change adds a per-scope command, it must not shadow anything)
-- [ ] Run `cd kanban-app/ui && npm test` — full 1404+-test UI suite green
+- [x] New test for the TanStack-native path (no `perspectiveId`): focus a column header, press Enter, assert `table.getState().sorting` flipped to include that column — verify against the rendered `SortIndicator` or on the TanStack instance directly (whichever the existing header tests use as precedent)
+- [x] Regression test: focus a column header, click it (not keyboard), assert the same `dispatchSortToggle` fires — confirms `handleClick` is still the click executor
+- [x] Run `cd kanban-app/ui && npm test -- data-table --run` — all existing 20-ish data-table tests plus the new ones green (25 passed)
+- [x] Run `cd kanban-app/ui && npm test -- spatial-nav --run` — spatial-nav regression suite stays green (93 passed)
+- [x] Run `cd kanban-app/ui && npm test` — full 1420-test UI suite green (1420 passed)
 
 ## Workflow
 

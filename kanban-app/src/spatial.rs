@@ -2445,4 +2445,234 @@ mod nav_dispatch_integration_tests {
             );
         }
     }
+
+    // ------------------------------------------------------------------
+    // Regression for 01KPVT4K538CJHJR31NNQHY8EH (inspector layer escape)
+    // ------------------------------------------------------------------
+    //
+    // The Rust algorithm-level invariant is pinned by
+    // `spatial_state.rs::navigate_down_from_last_inspector_field_does_not_escape_to_window_layer`
+    // and its up/left/right/first/last siblings (commit f74e608d1). The
+    // missing coverage — and the reason the live-app symptom slipped —
+    // was the integration layer: does the full `nav.*` → `NavigateCmd`
+    // → `TauriSpatialNavigator::navigate` → `SpatialState::navigate`
+    // pipeline honor the active-layer filter when two layers are on the
+    // stack at the same time?
+    //
+    // This fixture stacks a three-card window layer below a three-field
+    // inspector layer so the geometry alone is no guarantee — card rects
+    // sit directly above, below, left and right of the fields. The only
+    // thing that keeps nav from crossing is the active-layer filter
+    // inside `SpatialState::navigate`. If anything in the dispatch path
+    // (wrong `window_label`, stale `AppState`, a path that re-expands
+    // candidates after the filter) lets window entries back into the
+    // pool, the asserts below flip to `json!("card:*")` and fail loudly.
+
+    /// Build a two-layer scene on `main`: a window layer with three
+    /// cards stacked vertically on the left, and an inspector layer
+    /// pushed on top with three fields stacked vertically on the right.
+    ///
+    /// Layout (x/y in pixels):
+    ///
+    /// ```text
+    ///    card-1 (0,   0, 200x50)       field-1 (300,   0, 200x30)
+    ///    card-2 (0,  60, 200x50)       field-2 (300,  40, 200x30)
+    ///    card-3 (0, 120, 200x50)       field-3 (300,  80, 200x30)
+    /// ```
+    ///
+    /// The fields occupy the same vertical band as the cards, so a
+    /// naive down-beam from the last field will pick up card-2/card-3
+    /// if the active-layer filter ever leaks. A naive left-beam from
+    /// any field will pick up a card if the filter ever leaks.
+    fn register_inspector_over_window(app: &tauri::App<MockRuntime>) {
+        // Bottom layer: window. Cards stacked vertically.
+        invoke(
+            app,
+            "spatial_push_layer",
+            json!({"key": "L-window", "name": "window"}),
+        );
+        for (i, (x, y)) in [(0.0, 0.0), (0.0, 60.0), (0.0, 120.0)].iter().enumerate() {
+            invoke(
+                app,
+                "spatial_register",
+                json!({
+                    "args": {
+                        "key": format!("card-{}", i + 1),
+                        "moniker": format!("card:{}", i + 1),
+                        "x": x, "y": y, "w": 200.0, "h": 50.0,
+                        "layerKey": "L-window",
+                        "parentScope": null,
+                        "overrides": null,
+                    }
+                }),
+            );
+        }
+
+        // Top layer: inspector. Fields stacked vertically, offset
+        // horizontally so nav.left from a field would hit a card if
+        // the filter ever leaks.
+        invoke(
+            app,
+            "spatial_push_layer",
+            json!({"key": "L-inspector", "name": "inspector"}),
+        );
+        for (i, (x, y)) in [(300.0, 0.0), (300.0, 40.0), (300.0, 80.0)]
+            .iter()
+            .enumerate()
+        {
+            invoke(
+                app,
+                "spatial_register",
+                json!({
+                    "args": {
+                        "key": format!("field-{}", i + 1),
+                        "moniker": format!("field:{}", i + 1),
+                        "x": x, "y": y, "w": 200.0, "h": 30.0,
+                        "layerKey": "L-inspector",
+                        "parentScope": null,
+                        "overrides": null,
+                    }
+                }),
+            );
+        }
+    }
+
+    /// Full-dispatch regression: with the inspector layer active and
+    /// focus on the last inspector field, `nav.down` must return
+    /// `Value::Null` and emit **no** `focus-changed` event. Any other
+    /// result — a card moniker, a different field, or an event with
+    /// `next_key` pointing to a card — is the live-app layer-escape
+    /// bug the task reports.
+    #[test]
+    fn nav_down_from_last_inspector_field_returns_null_via_dispatch() {
+        let app = build_test_app();
+        register_inspector_over_window(&app);
+        invoke(&app, "spatial_focus", json!({"key": "field-3"}));
+        let events = capture_focus_events(&app);
+        // The spatial_focus call above fired before the capture hook
+        // installed — the hook sees only events emitted after this
+        // point.
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "capture hook installs after baseline focus — no events yet"
+        );
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.down", "main").await
+        });
+        assert_eq!(
+            result,
+            Value::Null,
+            "nav.down from the last inspector field must return Null via the dispatch pipeline — \
+             a moniker here is a layer-escape leak through the full stack (got {result})"
+        );
+
+        // No event means focus stayed put. Any emission with a card
+        // next_key would prove the filter leaked at the IPC layer.
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            0,
+            "nav.down with no in-layer target must emit zero focus-changed events; got {:#?}",
+            *events
+        );
+    }
+
+    /// Symmetric: `nav.up` from the first inspector field must also
+    /// return `Value::Null`. Cards sit below-left of field-1 but none
+    /// is inside the inspector layer, so the correct result is "no
+    /// movement". A card-1 moniker here is a north-ward leak.
+    #[test]
+    fn nav_up_from_first_inspector_field_returns_null_via_dispatch() {
+        let app = build_test_app();
+        register_inspector_over_window(&app);
+        invoke(&app, "spatial_focus", json!({"key": "field-1"}));
+        let events = capture_focus_events(&app);
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.up", "main").await
+        });
+        assert_eq!(
+            result,
+            Value::Null,
+            "nav.up from the first inspector field must return Null; got {result}"
+        );
+        assert_eq!(events.lock().unwrap().len(), 0);
+    }
+
+    /// `nav.left` from any inspector field must not pick up the cards
+    /// sitting to the left. With fields at x=300 and cards at x=0–200,
+    /// every card rect is geometrically to the left — if the filter
+    /// ever leaks, this test returns `"card:2"` instead of Null.
+    #[test]
+    fn nav_left_from_inspector_field_returns_null_via_dispatch() {
+        let app = build_test_app();
+        register_inspector_over_window(&app);
+        invoke(&app, "spatial_focus", json!({"key": "field-2"}));
+        let events = capture_focus_events(&app);
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.left", "main").await
+        });
+        assert_eq!(
+            result,
+            Value::Null,
+            "nav.left from an inspector field must not escape to a window card; got {result}"
+        );
+        assert_eq!(events.lock().unwrap().len(), 0);
+    }
+
+    /// `nav.right` from the rightmost (and only column of) inspector
+    /// fields must return Null — no inspector scope sits to the right
+    /// of a field, and the window-layer cards (to the *left*) must not
+    /// be considered.
+    #[test]
+    fn nav_right_from_inspector_field_returns_null_via_dispatch() {
+        let app = build_test_app();
+        register_inspector_over_window(&app);
+        invoke(&app, "spatial_focus", json!({"key": "field-2"}));
+        let events = capture_focus_events(&app);
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.right", "main").await
+        });
+        assert_eq!(
+            result,
+            Value::Null,
+            "nav.right from an inspector field must return Null — no inspector scope to the right; \
+             got {result}"
+        );
+        assert_eq!(events.lock().unwrap().len(), 0);
+    }
+
+    /// Positive control: intra-inspector navigation must still work
+    /// via the dispatch pipeline. Focus on field-1, press `j`
+    /// (nav.down) — focus moves to field-2. This rules out a broken
+    /// filter that culls *everything* (the cousin bug to the leak).
+    #[test]
+    fn nav_down_between_inspector_fields_returns_next_field_via_dispatch() {
+        let app = build_test_app();
+        register_inspector_over_window(&app);
+        invoke(&app, "spatial_focus", json!({"key": "field-1"}));
+        let events = capture_focus_events(&app);
+
+        let result = tauri::async_runtime::block_on(async {
+            dispatch_nav_via_cmd(&app, "nav.down", "main").await
+        });
+        assert_eq!(
+            result,
+            json!("field:2"),
+            "nav.down inside the inspector must reach field-2; got {result}"
+        );
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "intra-layer navigation must emit exactly one focus-changed; got {:#?}",
+            *events
+        );
+        assert_eq!(events[0].prev_key.as_deref(), Some("field-1"));
+        assert_eq!(events[0].next_key.as_deref(), Some("field-2"));
+    }
 }

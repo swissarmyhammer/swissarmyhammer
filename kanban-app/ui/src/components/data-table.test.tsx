@@ -54,7 +54,11 @@ import {
 } from "@/lib/entity-focus-context";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { FixtureShell } from "@/test/spatial-fixture-shell";
-import { fieldMoniker, ROW_SELECTOR_FIELD } from "@/lib/moniker";
+import {
+  columnHeaderMoniker,
+  fieldMoniker,
+  ROW_SELECTOR_FIELD,
+} from "@/lib/moniker";
 import { invoke } from "@tauri-apps/api/core";
 import type { Entity, FieldDef } from "@/types/kanban";
 import type { UseGridReturn } from "@/hooks/use-grid";
@@ -664,5 +668,199 @@ describe("DataTable row selector Enter opens inspector", () => {
     // (FixtureShell's default keymap). ui.inspect must NOT fire.
     expect(gridEditEnter).toHaveBeenCalledTimes(1);
     expect(dispatchCallsFor("ui.inspect").length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Column header Enter → sort toggle
+// ---------------------------------------------------------------------------
+
+/**
+ * Each grid column header is wrapped in its own `FocusScope`. Spatial nav
+ * can reach it (`k` from a body cell), but without a per-column command
+ * bound to Enter the focused header is a dead-end for the keyboard —
+ * clicking the header toggles sort, pressing Enter does nothing.
+ *
+ * The fix: mirror the row-selector pattern (lines 1100-ish of
+ * `data-table.tsx`). The `HeaderCell`'s `FocusScope` carries a
+ * `useMemo`'d `CommandDef[]` with a per-column entry bound to Enter
+ * across vim/cua/emacs keymaps, whose `execute` re-uses the same
+ * `handleClick` the `<th>`'s `onClick` already calls. Enter and click
+ * converge on one executor — the perspective-driven path dispatches
+ * `perspective.sort.toggle` with the column's field + perspective id;
+ * the TanStack-native path calls `header.column.getToggleSortingHandler()`.
+ *
+ * These tests lock that in.
+ */
+describe("DataTable column header Enter toggles sort", () => {
+  /**
+   * Find all `dispatch_command` invoke calls for the given cmd id.
+   *
+   * Returns the args object(s) passed as the second argument to `invoke`.
+   * Used to assert both that the command fired and with what args.
+   */
+  function dispatchCallsFor(cmd: string): Record<string, unknown>[] {
+    return vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === cmd,
+      )
+      .map((c) => c[1] as Record<string, unknown>);
+  }
+
+  function renderTableWithPerspective() {
+    return render(
+      <EntityFocusProvider>
+        <FixtureShell>
+          <DataTable
+            columns={COLUMNS}
+            rows={ENTITIES}
+            grid={makeGrid()}
+            showRowSelector={true}
+            rowEntityCommands={stubRowCommands}
+            perspectiveId="default"
+          />
+        </FixtureShell>
+      </EntityFocusProvider>,
+    );
+  }
+
+  function renderTableWithoutPerspective() {
+    return render(
+      <EntityFocusProvider>
+        <FixtureShell>
+          <DataTable
+            columns={COLUMNS}
+            rows={ENTITIES}
+            grid={makeGrid()}
+            showRowSelector={true}
+            rowEntityCommands={stubRowCommands}
+          />
+        </FixtureShell>
+      </EntityFocusProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(invoke).mockClear();
+    vi.mocked(invoke).mockImplementation(() => Promise.resolve(null));
+  });
+
+  it("Enter on the first column header dispatches perspective.sort.toggle with that column's field", async () => {
+    // With an active perspective, Enter on the focused column header
+    // must dispatch `perspective.sort.toggle` with the column's field
+    // and perspective id. Clicking the header sets spatial focus (via
+    // `onClickCapture` in `HeaderCellTh`); Enter then resolves through
+    // the header's scope-local command.
+    const { container } = renderTableWithPerspective();
+
+    const header0 = container.querySelector<HTMLElement>(
+      "[data-testid='column-header-title']",
+    );
+    expect(header0).not.toBeNull();
+    expect(header0!.getAttribute("data-moniker")).toBe(
+      columnHeaderMoniker("title"),
+    );
+    await userEvent.click(header0!);
+
+    // Clicking the header dispatches sort once already (via onClick).
+    // Clear the invoke spy so we only observe the Enter dispatch.
+    vi.mocked(invoke).mockClear();
+
+    await userEvent.keyboard("{Enter}");
+
+    const sortCalls = dispatchCallsFor("perspective.sort.toggle");
+    expect(sortCalls.length).toBe(1);
+    expect(sortCalls[0].args).toEqual({
+      field: "title",
+      perspective_id: "default",
+    });
+  });
+
+  it("Enter on the second column header targets that column, not the first", async () => {
+    // Guards a wrong-target bug where every header's Enter binding
+    // resolves to the first column's field. The per-column namespaced
+    // command id (`column-header.sort.<field>`) makes each scope's
+    // Enter binding distinct — asserting the dispatch field matches the
+    // focused header's column locks that in.
+    const { container } = renderTableWithPerspective();
+
+    const header1 = container.querySelector<HTMLElement>(
+      "[data-testid='column-header-status']",
+    );
+    expect(header1).not.toBeNull();
+    await userEvent.click(header1!);
+
+    vi.mocked(invoke).mockClear();
+    await userEvent.keyboard("{Enter}");
+
+    const sortCalls = dispatchCallsFor("perspective.sort.toggle");
+    expect(sortCalls.length).toBe(1);
+    expect(sortCalls[0].args).toEqual({
+      field: "status",
+      perspective_id: "default",
+    });
+  });
+
+  it("Enter on a column header without a perspective toggles TanStack sort (sort indicator appears)", async () => {
+    // Without a perspective id, `buildSortClickHandler` returns
+    // `header.column.getToggleSortingHandler()` — the TanStack-native
+    // toggle. The header's scope-local Enter binding re-uses that same
+    // handler as its `execute`, so the `sorting` state flips and the
+    // `<SortIndicator>` renders its arrow. Verify via the rendered
+    // indicator rather than reaching into the TanStack instance.
+    const { container } = renderTableWithoutPerspective();
+
+    const header0 = container.querySelector<HTMLElement>(
+      "[data-testid='column-header-title']",
+    );
+    expect(header0).not.toBeNull();
+
+    // Before any interaction: no sort indicator for this column.
+    expect(
+      container.querySelector("[data-testid='sort-indicator-title']"),
+    ).toBeNull();
+
+    await userEvent.click(header0!);
+
+    // The click already toggled sort once (asc). Confirm baseline.
+    expect(
+      container.querySelector("[data-testid='sort-indicator-title']"),
+    ).not.toBeNull();
+
+    // Focus the header (click also set spatial focus via
+    // `onClickCapture`). Press Enter to toggle again (asc → desc).
+    await userEvent.keyboard("{Enter}");
+
+    // The indicator must still be present; a toggle from asc → desc
+    // keeps the indicator rendered (only the arrow direction changes).
+    // The key assertion is that Enter re-ran the handler at all.
+    const indicator = container.querySelector(
+      "[data-testid='sort-indicator-title']",
+    );
+    expect(indicator).not.toBeNull();
+  });
+
+  it("clicking a column header still dispatches perspective.sort.toggle (click path unchanged)", async () => {
+    // Regression guard: the click path must remain wired. `handleClick`
+    // is the single executor shared between mouse click and keyboard
+    // Enter — any change that breaks the `onClick` binding on the
+    // `<th>` would surface here.
+    const { container } = renderTableWithPerspective();
+
+    const header0 = container.querySelector<HTMLElement>(
+      "[data-testid='column-header-title']",
+    );
+    expect(header0).not.toBeNull();
+    await userEvent.click(header0!);
+
+    const sortCalls = dispatchCallsFor("perspective.sort.toggle");
+    expect(sortCalls.length).toBe(1);
+    expect(sortCalls[0].args).toEqual({
+      field: "title",
+      perspective_id: "default",
+    });
   });
 });

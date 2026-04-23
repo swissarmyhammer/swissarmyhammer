@@ -119,6 +119,43 @@ function useSpatialKeyBinding(
   ]);
 }
 
+/**
+ * Walk up from `el` and return the first ancestor whose computed overflow
+ * indicates it is scrollable (`auto`, `scroll`, or `overlay` on any axis),
+ * or `null` if no such ancestor exists.
+ *
+ * ## Why the scroll listener needs this
+ *
+ * `useRectObserver` pushes rects to the Rust spatial state whenever the
+ * observed element's position changes. `ResizeObserver` covers size
+ * changes; `scroll` on the nearest scrollable ancestor covers
+ * translation-via-scroll. `@tanstack/react-virtual` in
+ * `column-view.tsx` places cards with `transform: translateY(px)` —
+ * neither a size change nor a layout change, so without a scroll
+ * listener the rect goes stale on every scroll tick.
+ *
+ * The element itself is never returned — even when the element is its
+ * own scroller, scrolling inside it does not move the element relative
+ * to the viewport; only the enclosing scroll context does. That keeps
+ * the listener wired to the right node.
+ *
+ * `overflow: hidden` is intentionally excluded: the user cannot scroll
+ * a hidden-overflow container, so its children's rects cannot move
+ * from it.
+ */
+export function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
+  let parent: HTMLElement | null = el.parentElement;
+  while (parent) {
+    const style = getComputedStyle(parent);
+    const overflows = `${style.overflow} ${style.overflowY} ${style.overflowX}`;
+    if (/\b(auto|scroll|overlay)\b/.test(overflows)) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
 function useRectObserver(
   elementRef: React.RefObject<HTMLElement | null>,
   spatialKey: string,
@@ -163,7 +200,40 @@ function useRectObserver(
     report();
     const observer = new ResizeObserver(report);
     observer.observe(el);
-    return () => observer.disconnect();
+
+    // When the element sits inside a virtualized column (cards positioned
+    // via `transform: translateY(px)`), scrolling moves the card without
+    // firing `ResizeObserver`. Re-report the rect on every scroll frame
+    // of the nearest scrollable ancestor so Rust's beam test sees
+    // accurate coordinates. RAF-throttled so fast scrolls produce at most
+    // ~60 `spatial_register` invokes per second per scope.
+    //
+    // Follow-up (separate task): when `j` past the last mounted card
+    // should auto-scroll the column to reveal the next card. That is
+    // not in scope here — this hook only fixes stale rects on mounted
+    // cards.
+    const scroller = findScrollableAncestor(el);
+    let rafId: number | null = null;
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        report();
+      });
+    };
+    if (scroller) {
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+    }
+
+    return () => {
+      observer.disconnect();
+      if (scroller) {
+        scroller.removeEventListener("scroll", onScroll);
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
   }, [
     elementRef,
     spatialKey,
