@@ -2671,4 +2671,272 @@ mod tests {
             "container-first walk must not cross layer boundaries even when parent_scope keys match"
         );
     }
+
+    // -----------------------------------------------------------------
+    // Layer-escape regression for task 01KPVT4K538CJHJR31NNQHY8EH.
+    //
+    // Reported symptom: with an inspector open over the window layer,
+    // `nav.down` past the last inspector field leaks focus back to a
+    // window-layer scope (card, row selector, etc.). The invariant
+    // these tests encode:
+    //
+    //   navigate() MUST NEVER return a next_key whose entry.layer_key
+    //   is different from layer_stack.active().key. If no in-layer
+    //   target exists, navigate() MUST return Ok(None) — focus stays.
+    //
+    // These tests stand up a mixed-layer topology where the
+    // geometrically-nearest candidate in the requested direction lives
+    // in the *lower* layer. A buggy filter (or a bypass in the
+    // container-first walk) would pick it; the correct code must not.
+    //
+    // Each direction has its own test so a regression in one axis is
+    // pinpointed.
+    // -----------------------------------------------------------------
+
+    /// Set up: window layer with 3 cards stacked vertically on the
+    /// left, inspector layer with 3 fields stacked vertically on the
+    /// right. Fields and cards overlap on the y-axis (the inspector
+    /// spans the whole viewport in production too), so the beam test
+    /// *would* see a card as a valid horizontal neighbor if layer
+    /// isolation were broken.
+    fn make_inspector_over_window() -> SpatialState {
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "card-1",
+            "card:1",
+            rect(0.0, 0.0, 200.0, 50.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "card-2",
+            "card:2",
+            rect(0.0, 60.0, 200.0, 50.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "card-3",
+            "card:3",
+            rect(0.0, 120.0, 200.0, 50.0),
+            "window",
+            None,
+        );
+
+        state.push_layer("inspector".into(), "inspector".into());
+        reg(
+            &state,
+            "field-1",
+            "field:1",
+            rect(300.0, 0.0, 200.0, 30.0),
+            "inspector",
+            None,
+        );
+        reg(
+            &state,
+            "field-2",
+            "field:2",
+            rect(300.0, 40.0, 200.0, 30.0),
+            "inspector",
+            None,
+        );
+        reg(
+            &state,
+            "field-3",
+            "field:3",
+            rect(300.0, 80.0, 200.0, 30.0),
+            "inspector",
+            None,
+        );
+        state
+    }
+
+    #[test]
+    fn navigate_down_from_last_inspector_field_does_not_escape_to_window_layer() {
+        let state = make_inspector_over_window();
+        state.focus("field-3");
+
+        let result = state
+            .navigate(Some("field-3"), crate::spatial_nav::Direction::Down)
+            .expect("navigate must not error");
+
+        assert!(
+            result.is_none(),
+            "nav.down from the last inspector field must return None (no in-layer target). \
+             Instead it returned: {:?}. A card-2 or card-3 in that result is a layer-escape leak.",
+            result
+        );
+        assert_eq!(
+            state.focused_key(),
+            Some("field-3".to_string()),
+            "focus must stay on the last field when navigate returns None"
+        );
+    }
+
+    #[test]
+    fn navigate_up_from_first_inspector_field_does_not_escape_to_window_layer() {
+        let state = make_inspector_over_window();
+        state.focus("field-1");
+
+        let result = state
+            .navigate(Some("field-1"), crate::spatial_nav::Direction::Up)
+            .expect("navigate must not error");
+
+        assert!(
+            result.is_none(),
+            "nav.up from the first inspector field must return None, got: {:?}",
+            result
+        );
+        assert_eq!(state.focused_key(), Some("field-1".to_string()));
+    }
+
+    #[test]
+    fn navigate_left_from_inspector_field_does_not_escape_to_window_card() {
+        let state = make_inspector_over_window();
+        state.focus("field-2");
+
+        // Cards sit to the LEFT of every field (card x=0..200, field
+        // x=300..500). If the layer filter leaked, nav.left would find
+        // card-1 / card-2 / card-3 as valid targets.
+        let result = state
+            .navigate(Some("field-2"), crate::spatial_nav::Direction::Left)
+            .expect("navigate must not error");
+
+        assert!(
+            result.is_none(),
+            "nav.left from any inspector field must return None (no inspector scope is to the left), got: {:?}",
+            result
+        );
+        assert_eq!(state.focused_key(), Some("field-2".to_string()));
+    }
+
+    #[test]
+    fn navigate_right_from_inspector_field_does_not_escape_to_window_card() {
+        // Variant: put a card to the RIGHT of the fields and confirm
+        // nav.right doesn't pick it either. Proves the invariant holds
+        // even when the lower layer is geometrically "in-beam" on the
+        // requested side.
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "side-card",
+            "card:side",
+            rect(600.0, 40.0, 100.0, 30.0),
+            "window",
+            None,
+        );
+        state.push_layer("inspector".into(), "inspector".into());
+        reg(
+            &state,
+            "field-a",
+            "field:a",
+            rect(300.0, 40.0, 100.0, 30.0),
+            "inspector",
+            None,
+        );
+        state.focus("field-a");
+
+        let result = state
+            .navigate(Some("field-a"), crate::spatial_nav::Direction::Right)
+            .expect("navigate must not error");
+
+        assert!(
+            result.is_none(),
+            "nav.right from an inspector field must not cross to a window-layer card to the right, got: {:?}",
+            result
+        );
+        assert_eq!(state.focused_key(), Some("field-a".to_string()));
+    }
+
+    #[test]
+    fn navigate_from_lower_layer_source_does_not_leak_into_lower_layer() {
+        // REPRODUCTION of the live-app symptom: user clicks a card
+        // (focused_key = card, which lives in the window layer). Then
+        // opens an inspector (pushes inspector layer). Before
+        // `spatial_focus_first_in_layer` RAF runs (or if it no-ops
+        // because fields haven't registered yet), the focused_key is
+        // STILL the card. User presses `j`. navigate() is called with
+        // from_key = card_key, active layer = inspector.
+        //
+        // The candidate filter in spatial_search correctly restricts
+        // the pool to inspector entries (source.key != e.key AND
+        // e.layer_key == active_layer_key). But the SOURCE RECT is the
+        // card's — geometrically the card might be above, below, or
+        // overlapping the inspector fields, and the beam-test picks
+        // whichever inspector field is "down" from the card.
+        //
+        // Crucially: the target WILL be an inspector field (candidates
+        // are filtered to inspector only), NOT a window-layer card. So
+        // this flow is actually fine — it moves focus INTO the
+        // inspector.
+        //
+        // This test documents that invariant: a navigate from a
+        // source in layer L1 with active layer L2 must return a target
+        // in L2 (or None), never a target in L1.
+        let state = make_inspector_over_window();
+        // Simulate: user clicked a card before opening inspector.
+        state.focus("card-2");
+        assert_eq!(state.focused_key(), Some("card-2".to_string()));
+
+        // Now dispatch nav.down. Active layer = inspector; source =
+        // card-2 (in window layer).
+        let ev = state
+            .navigate(Some("card-2"), crate::spatial_nav::Direction::Down)
+            .expect("navigate must not error");
+
+        match ev {
+            Some(changed) => {
+                let next = changed.next_key.as_deref().unwrap_or("");
+                // Target must be in the inspector layer — the
+                // candidate filter must never return a card even
+                // though the source itself is a card.
+                assert!(
+                    next.starts_with("field-"),
+                    "navigate from a lower-layer source must stay in the active (upper) layer, \
+                     but next_key was {:?} — this is a layer-leak regression",
+                    next
+                );
+            }
+            None => {
+                // Also acceptable: no in-beam inspector field relative
+                // to card-2's rect. What is NOT acceptable is returning
+                // another card.
+            }
+        }
+    }
+
+    #[test]
+    fn navigate_first_last_respects_active_layer() {
+        // The edge selectors (First / Last) also share the candidate
+        // pool built by `spatial_search`. Belt-and-suspenders: confirm
+        // they honor the layer filter too.
+        let state = make_inspector_over_window();
+        state.focus("field-2");
+
+        let first = state
+            .navigate(Some("field-2"), crate::spatial_nav::Direction::First)
+            .expect("navigate must not error")
+            .expect("First must find an entry in the active layer");
+        assert_eq!(
+            first.next_key.as_deref(),
+            Some("field-1"),
+            "Direction::First must pick the topmost-leftmost entry in the ACTIVE layer, not any window-layer card"
+        );
+
+        state.focus("field-2");
+        let last = state
+            .navigate(Some("field-2"), crate::spatial_nav::Direction::Last)
+            .expect("navigate must not error")
+            .expect("Last must find an entry in the active layer");
+        assert_eq!(
+            last.next_key.as_deref(),
+            Some("field-3"),
+            "Direction::Last must pick the bottommost-rightmost entry in the ACTIVE layer"
+        );
+    }
 }

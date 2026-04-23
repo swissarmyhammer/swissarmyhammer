@@ -876,6 +876,110 @@ describe("spatial focus integration", () => {
     });
   });
 
+  // --------------------------------------------------------------
+  // Regression for 01KPVT4K538CJHJR31NNQHY8EH (inspector layer escape)
+  // --------------------------------------------------------------
+  //
+  // The Rust algorithm correctly refuses to cross layer boundaries (see
+  // `spatial_state.rs::navigate_down_from_last_inspector_field_does_not_escape_to_window_layer`
+  // and friends — all green). For the live-app symptom "nav.down past
+  // the last inspector field leaks into the window layer" to be real,
+  // the FocusScopes inside the inner FocusLayer must be registering
+  // with the WRONG layerKey — specifically, the outer window layer
+  // instead of the inner inspector layer. If that is true, then from
+  // Rust's perspective the "inspector fields" share a layer with
+  // window-layer cards and the filter cannot save us.
+  //
+  // This test pins the contract: a FocusScope inside a nested
+  // `<FocusLayer name="inspector">` registers with the inspector's
+  // layer key, NOT the outer window layer's key.
+  it("FocusScope inside an inner FocusLayer registers with the inner layer key, not the outer", async () => {
+    render(
+      <EntityFocusProvider>
+        <FocusLayer name="window">
+          {/* An outer-layer scope so the test can confirm the outer
+              FocusLayer actually registered its own key too. */}
+          <FocusScope moniker="card:outer" commands={[]}>
+            <span>outer</span>
+          </FocusScope>
+          <FocusLayer name="inspector">
+            <FocusScope moniker="field:inner" commands={[]}>
+              <span>inner</span>
+            </FocusScope>
+          </FocusLayer>
+        </FocusLayer>
+      </EntityFocusProvider>,
+    );
+
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    // Capture the pushed layer keys in order.
+    const pushedLayerKeys: string[] = [];
+    await waitFor(() => {
+      const pushes = mockInvoke.mock.calls.filter(
+        (c) => c[0] === "spatial_push_layer",
+      );
+      expect(pushes.length).toBeGreaterThanOrEqual(2);
+      pushedLayerKeys.length = 0;
+      for (const p of pushes) {
+        pushedLayerKeys.push((p[1] as { key: string; name: string }).key);
+      }
+    });
+
+    // Pushes run top-down in render phase, so [0] is window and [1] is
+    // inspector. Validate the names too so this test fails loudly if
+    // that invariant drifts.
+    const windowPush = mockInvoke.mock.calls.find(
+      (c) =>
+        c[0] === "spatial_push_layer" &&
+        (c[1] as { name: string }).name === "window",
+    );
+    const inspectorPush = mockInvoke.mock.calls.find(
+      (c) =>
+        c[0] === "spatial_push_layer" &&
+        (c[1] as { name: string }).name === "inspector",
+    );
+    expect(windowPush).toBeDefined();
+    expect(inspectorPush).toBeDefined();
+    const windowLayerKey = (windowPush![1] as { key: string }).key;
+    const inspectorLayerKey = (inspectorPush![1] as { key: string }).key;
+    expect(windowLayerKey).not.toBe(inspectorLayerKey);
+
+    // The `field:inner` scope MUST register with the inspector's layer
+    // key. If it registers with the window layer key, every `nav.*`
+    // command will find window-layer cards in its candidate pool and
+    // leak focus across the layer boundary. Reproduces the live-app
+    // symptom reported in 01KPVT4K538CJHJR31NNQHY8EH.
+    await waitFor(() => {
+      const innerRegister = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === "spatial_register" &&
+          (c[1] as { args: { moniker: string } }).args.moniker ===
+            "field:inner",
+      );
+      expect(innerRegister).toBeDefined();
+      const innerArgs = (innerRegister![1] as { args: { layerKey: string } })
+        .args;
+      expect(innerArgs.layerKey).toBe(inspectorLayerKey);
+      expect(innerArgs.layerKey).not.toBe(windowLayerKey);
+    });
+
+    // Belt-and-suspenders: the outer scope still registers with the
+    // window layer. If both scopes ended up with the same key, the
+    // test above would silently pass on a degenerate config.
+    await waitFor(() => {
+      const outerRegister = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === "spatial_register" &&
+          (c[1] as { args: { moniker: string } }).args.moniker === "card:outer",
+      );
+      expect(outerRegister).toBeDefined();
+      const outerArgs = (outerRegister![1] as { args: { layerKey: string } })
+        .args;
+      expect(outerArgs.layerKey).toBe(windowLayerKey);
+    });
+  });
+
   it("FocusScope unmount invokes spatial_unregister", async () => {
     function Harness({ show }: { show: boolean }) {
       return (

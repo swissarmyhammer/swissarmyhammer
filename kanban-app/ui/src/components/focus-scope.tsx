@@ -129,18 +129,6 @@ function useRectObserver(
   navOverride?: Record<string, string | null>,
 ) {
   useEffect(() => {
-    // BREADCRUMB (temporary — remove before closing this task): logs
-    // every useRectObserver effect invocation BEFORE the guard clause
-    // runs, so we can distinguish "effect never fired" from "effect
-    // fired but skipped because layerKey was null".
-    console.warn(
-      "[FocusScope] useRectObserver effect",
-      moniker,
-      "layerKey=",
-      layerKey,
-      "spatial=",
-      spatial,
-    );
     if (!layerKey || !spatial) return;
     const el = elementRef.current;
     if (!el) return;
