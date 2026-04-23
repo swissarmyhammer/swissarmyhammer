@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: review
-position_ordinal: '8780'
+position_ordinal: '8980'
 project: spatial-nav
 title: 'Inspector layer escape: nav.down past the last field leaks focus back to the window layer'
 ---

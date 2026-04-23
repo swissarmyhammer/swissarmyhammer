@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import React from "react";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -978,6 +979,138 @@ describe("spatial focus integration", () => {
         .args;
       expect(outerArgs.layerKey).toBe(windowLayerKey);
     });
+  });
+
+  // --------------------------------------------------------------
+  // Regression for the live-app symptom the user reports:
+  // `j` past the last inspector field still leaks to a board card.
+  //
+  // The algorithm is correct. The previous test proves React threads
+  // the inner layer key correctly under `render()`. But production
+  // runs under `<React.StrictMode>` which mounts every component
+  // twice (mount → unmount → mount). This replays every
+  // `spatial_push_layer` / `spatial_register` / `spatial_unregister`
+  // / `spatial_remove_layer` invoke with different spatial keys
+  // (`useSpatialKey` generates a fresh ULID per mount). Net live
+  // state must have exactly ONE entry per moniker, with the correct
+  // layer_key.
+  //
+  // If this test fails, the live app has an orphan registration we
+  // never clean up — and a FocusScope inside a nested FocusLayer
+  // would show up in Rust under the OUTER layer's key as far as the
+  // beam test is concerned, breaking the layer filter from the
+  // ground up.
+  // --------------------------------------------------------------
+  it("under StrictMode, net live state has field scope registered under inspector layer only", async () => {
+    render(
+      <React.StrictMode>
+        <EntityFocusProvider>
+          <FocusLayer name="window">
+            <FocusScope moniker="card:outer" commands={[]}>
+              <span>outer</span>
+            </FocusScope>
+            <FocusLayer name="inspector">
+              <FocusScope moniker="field:inner" commands={[]}>
+                <span>inner</span>
+              </FocusScope>
+            </FocusLayer>
+          </FocusLayer>
+        </EntityFocusProvider>
+      </React.StrictMode>,
+    );
+
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    // Wait until every registration the harness is going to fire has
+    // fired — for a two-scope tree there will be 2 live registers
+    // plus 1-2 unregisters (StrictMode mount-unmount-mount for each
+    // scope). Capture the final live state by replaying the invoke
+    // log in Rust's style: a map of spatial_key → latest layer_key
+    // for each key, minus any keys that were subsequently
+    // unregistered.
+    await waitFor(() => {
+      const registers = mockInvoke.mock.calls.filter(
+        (c) => c[0] === "spatial_register",
+      );
+      // Net at least one register for each of the two scopes.
+      expect(registers.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // Simulate the Rust-side state: replay every spatial_* invoke in
+    // order.
+    interface LiveEntry {
+      moniker: string;
+      layerKey: string;
+    }
+    const liveEntries = new Map<string, LiveEntry>();
+    for (const call of mockInvoke.mock.calls) {
+      const [cmd, payload] = call as [string, unknown];
+      if (cmd === "spatial_register") {
+        const args = (payload as { args: LiveEntry & { key: string } }).args;
+        liveEntries.set(args.key, {
+          moniker: args.moniker,
+          layerKey: args.layerKey,
+        });
+      } else if (cmd === "spatial_unregister") {
+        const key = (payload as { key: string }).key;
+        liveEntries.delete(key);
+      }
+    }
+
+    // Replay the push/remove sequence for layers using Rust's
+    // refcounting semantics — each push increments, each remove
+    // decrements, entry lives while count > 0. Under StrictMode's
+    // useState double-invoke a layer gets push-push-remove, net
+    // refcount 1 (still live). Without the refcount that would
+    // collapse to 0 and the layer would vanish from the stack.
+    const layerRefcount = new Map<string, number>();
+    const layerOrder: string[] = [];
+    for (const call of mockInvoke.mock.calls) {
+      const [cmd, payload] = call as [string, unknown];
+      if (cmd === "spatial_push_layer") {
+        const key = (payload as { key: string }).key;
+        const prev = layerRefcount.get(key) ?? 0;
+        if (prev === 0) layerOrder.push(key);
+        layerRefcount.set(key, prev + 1);
+      } else if (cmd === "spatial_remove_layer") {
+        const key = (payload as { key: string }).key;
+        const prev = layerRefcount.get(key) ?? 0;
+        const next = Math.max(0, prev - 1);
+        layerRefcount.set(key, next);
+        if (next === 0) {
+          const idx = layerOrder.indexOf(key);
+          if (idx >= 0) layerOrder.splice(idx, 1);
+        }
+      }
+    }
+    const liveLayers = layerOrder.filter(
+      (k) => (layerRefcount.get(k) ?? 0) > 0,
+    );
+
+    // The window layer must still be live (outermost, not unmounted).
+    // The inspector layer must also still be live.
+    expect(liveLayers.length).toBe(2);
+    const [windowLayerKey, inspectorLayerKey] = liveLayers;
+    expect(windowLayerKey).toMatch(/^layer-window-/);
+    expect(inspectorLayerKey).toMatch(/^layer-inspector-/);
+
+    // Build: for each moniker, which layer_key is live?
+    const monikerToLayer = new Map<string, string>();
+    for (const entry of liveEntries.values()) {
+      monikerToLayer.set(entry.moniker, entry.layerKey);
+    }
+
+    // Invariant: the inner moniker must be live under the inspector
+    // layer — not the window layer, not both, not neither. Any
+    // deviation (missing, double-registered under different keys,
+    // stale orphan under window layer) means live-app nav will leak.
+    expect(monikerToLayer.get("field:inner")).toBe(inspectorLayerKey);
+    expect(monikerToLayer.get("card:outer")).toBe(windowLayerKey);
+
+    // There must be EXACTLY 2 live entries — not, e.g., 3 because a
+    // StrictMode orphan register from the first mount was never
+    // unregistered.
+    expect(liveEntries.size).toBe(2);
   });
 
   it("FocusScope unmount invokes spatial_unregister", async () => {

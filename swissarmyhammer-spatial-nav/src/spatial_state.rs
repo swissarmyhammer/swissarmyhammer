@@ -115,6 +115,22 @@ pub struct LayerEntry {
     /// as `last_focused` on the active layer. When `remove_layer()` pops a
     /// layer, focus restores to the layer below's `last_focused`.
     pub last_focused: Option<String>,
+    /// Reference count of outstanding `push` calls minus `remove` calls
+    /// for this `key`. The entry is only removed from the stack when
+    /// `refcount` drops to zero.
+    ///
+    /// This matters because React 18 `<StrictMode>` double-invokes
+    /// `useState` initializers (the React team's way of catching
+    /// impure initializers — see `focus-layer.tsx::useLayerKeyAndPush`).
+    /// Without refcounting, an impure initializer that fires
+    /// `spatial_push_layer` twice is deduped to one stack entry by the
+    /// idempotent `push`, but the single `useEffect` cleanup still
+    /// fires `spatial_remove_layer` once — leaving a net imbalance of
+    /// +1 push, -1 remove = 0 live entries. With refcounting, each
+    /// double-invoke bumps the count to 2 and the cleanup only
+    /// decrements it to 1 (still live), matching the single
+    /// logical layer the component represents.
+    pub refcount: u32,
 }
 
 /// Ordered layer stack with arbitrary removal by key.
@@ -129,39 +145,77 @@ pub struct LayerStack {
 }
 
 impl LayerStack {
-    /// Push a new layer onto the top of the stack.
+    /// Push a layer onto the top of the stack OR increment an existing
+    /// layer's refcount.
     ///
-    /// Idempotent by `key`: pushing a key that already exists in the
-    /// stack is a no-op. The first push wins and determines the
-    /// layer's stack position; later pushes with the same key do not
-    /// move or duplicate it. This is load-bearing for the React
-    /// FocusLayer wiring in `focus-layer.tsx`, where React 18
-    /// `<StrictMode>` double-invokes `useState` initializers (and
-    /// re-mounts components once for purity checks), causing the same
-    /// `spatial_push_layer(key, ...)` to fire multiple times for the
-    /// same logical layer. Without idempotency, each extra push
-    /// stacked a duplicate entry, the stale duplicate shadowed the
-    /// real active layer, and every `spatial_search` filtered out
-    /// every registered entry because `entry.layer_key !=
-    /// active.layer_key`. Pinned by `focus-layer.test.tsx` regression
-    /// tests in the `FocusLayer under React.StrictMode` describe
-    /// block.
+    /// Reference-counted by `key`: the first push for a key appends a
+    /// new entry with `refcount = 1`; every subsequent push with the
+    /// same key increments the existing entry's refcount without
+    /// moving or duplicating it. `remove(key)` decrements. The entry
+    /// is dropped from the stack only when `refcount` hits zero.
+    ///
+    /// ## Why refcounting, not plain idempotent push
+    ///
+    /// React 18 `<StrictMode>` double-invokes `useState` initializers
+    /// in development (a purity check that catches side-effectful
+    /// initializers — see `focus-layer.tsx::useLayerKeyAndPush`). Our
+    /// `useLayerKeyAndPush` deliberately fires `spatial_push_layer`
+    /// from inside that initializer so nested `<FocusLayer>`s push in
+    /// render-time top-down order (parent before child) before any
+    /// descendant `FocusScope` tries to register itself against the
+    /// layer's key. StrictMode's double-invoke means we see TWO
+    /// `spatial_push_layer(key)` calls for a single logical mount.
+    /// The matching `useEffect` cleanup fires `spatial_remove_layer`
+    /// exactly ONCE on unmount.
+    ///
+    /// Without refcounting, a plain idempotent push would collapse
+    /// the two pushes to one stack entry and the single remove would
+    /// wipe it — leaving no active layer at all. Rust's
+    /// `spatial_search` filters candidates by `entry.layer_key ==
+    /// active.key` and bails out to "no layer filter" when there is
+    /// no active layer, so every registered entry (inspector fields
+    /// AND window-layer cards) lands in the same candidate pool. Nav
+    /// then happily picks a card while the user is "inside" an
+    /// inspector — the live-app symptom reported in
+    /// `01KPVT4K538CJHJR31NNQHY8EH`. Refcounting keeps the stack
+    /// entry live through exactly the overshoot StrictMode introduces.
+    ///
+    /// Pinned by `focus-layer.test.tsx::FocusLayer under
+    /// React.StrictMode` and `focus-scope.test.tsx::under StrictMode,
+    /// net live state has field scope registered under inspector
+    /// layer only`.
     pub fn push(&mut self, key: String, name: String) {
-        if self.layers.iter().any(|l| l.key == key) {
+        if let Some(existing) = self.layers.iter_mut().find(|l| l.key == key) {
+            existing.refcount += 1;
             return;
         }
         self.layers.push(LayerEntry {
             key,
             name,
             last_focused: None,
+            refcount: 1,
         });
     }
 
-    /// Remove a layer by key. Returns `true` if found and removed.
+    /// Decrement a layer's refcount, removing it from the stack when
+    /// the count hits zero. Returns `true` if the layer was dropped
+    /// from the stack (i.e. the refcount reached zero on this call).
+    ///
+    /// See [`LayerStack::push`] for why push / remove are
+    /// reference-counted rather than plain idempotent.
     pub fn remove(&mut self, key: &str) -> bool {
-        let before = self.layers.len();
-        self.layers.retain(|l| l.key != key);
-        self.layers.len() < before
+        let Some(idx) = self.layers.iter().position(|l| l.key == key) else {
+            return false;
+        };
+        // Saturating to avoid underflow if something outside the
+        // React happy path over-removes. Out-of-order unmount where
+        // the second remove hits zero is the contract.
+        self.layers[idx].refcount = self.layers[idx].refcount.saturating_sub(1);
+        if self.layers[idx].refcount == 0 {
+            self.layers.remove(idx);
+            return true;
+        }
+        false
     }
 
     /// Returns the active (topmost) layer, or `None` if the stack is empty.
