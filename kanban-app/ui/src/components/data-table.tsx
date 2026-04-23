@@ -294,6 +294,12 @@ function HeaderCell({
     perspectiveId,
     dispatchSortToggle,
   );
+  // Keep the latest `handleClick` in a ref so the Enter binding below
+  // always calls the freshest closure — not the stale one captured when
+  // the scope was first registered. See the comment on `commands`.
+  const handleClickRef = useRef(handleClick);
+  handleClickRef.current = handleClick;
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     header.column.toggleGrouping();
@@ -311,6 +317,40 @@ function HeaderCell({
   // Mirrors the row-selector pattern in `RowSelector` (below) — each
   // focusable scope binds Enter to whatever action its click handler performs.
   //
+  // ### Why `execute` reads from a ref instead of the closed-over `handleClick`
+  //
+  // `handleClick` is rebuilt every render (because `buildSortClickHandler`
+  // returns a fresh closure every call) and it closes over
+  // `dispatchSortToggle`, whose `effectiveScope` is captured when
+  // `DataTable` last rendered. The spatial-focus store updates
+  // synchronously via `setFocusedMoniker`, but `EntityFocusProvider`'s
+  // `FocusedScopeContext` value is published via `useSyncExternalStore`,
+  // which re-publishes only on EntityFocusProvider's own re-renders —
+  // it does NOT re-publish when descendants re-register their scopes
+  // in the registry.
+  //
+  // The practical symptom: when a user arrows up from a body cell to a
+  // header and presses Enter, the keybinding handler resolves the
+  // command through the focused scope *as it was at
+  // EntityFocusProvider's last render* — which still points to the
+  // header scope object that was in the registry **before** the most
+  // recent `HeaderCell` re-render. That stale scope object's
+  // `execute` closure references the **pre-focus-change**
+  // `dispatchSortToggle`, which in turn dispatches with a scope chain
+  // rooted at the previously-focused cell (or the tree scope) instead
+  // of the header. The dispatch still reaches Rust, but the chain it
+  // carries is not the one the user's focus implies.
+  //
+  // Funneling the execute through `handleClickRef.current` sidesteps
+  // the whole staleness problem: the ref is mutated synchronously at
+  // every render's top-level, so every call site — whether the
+  // freshly-rendered `onClick` on the `<th>` or a years-old execute
+  // closure held by a scope the registry forgot to refresh — reads the
+  // freshest `handleClick` built with the freshest
+  // `dispatchSortToggle` and therefore the freshest effective scope
+  // chain. Mouse and keyboard converge on the same dispatch, with
+  // identical chains.
+  //
   // TanStack's compiled `getToggleSortingHandler()` does
   // `e.persist == null || e.persist()` — a left-hand short-circuit that
   // dereferences `e` before checking nullity, so passing `undefined` would
@@ -325,12 +365,12 @@ function HeaderCell({
         name: `Sort by ${columnId.replace(/_/g, " ")}`,
         keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
         execute: () => {
-          handleClick?.({} as React.MouseEvent);
+          handleClickRef.current?.({} as React.MouseEvent);
         },
         contextMenu: false,
       },
     ],
-    [columnId, handleClick],
+    [columnId],
   );
 
   return (
@@ -484,7 +524,15 @@ interface DataTableHeaderProps {
   dispatchSortToggle: ReturnType<typeof useDispatchCommand>;
 }
 
-/** Render the sticky table header with sortable/groupable column heads. */
+/**
+ * Render the sticky table header with sortable/groupable column heads.
+ *
+ * Also aliased below as `DataTableHeader_forTestingOnly` for focused
+ * test coverage of the header-Enter-toggles-sort contract (see
+ * `spatial-nav-grid-sort.test.tsx`). Tests import the
+ * `_forTestingOnly` alias so the intent is unmistakable at the call
+ * site — application code never needs this component directly.
+ */
 function DataTableHeader({
   table,
   showRowSelector,
@@ -1262,3 +1310,22 @@ function compareValues(a: unknown, b: unknown, field: FieldDef): number {
   }
   return String(a).localeCompare(String(b));
 }
+
+// ---------------------------------------------------------------------------
+// Testing seams
+// ---------------------------------------------------------------------------
+
+/**
+ * Testing-only alias for `DataTableHeader`.
+ *
+ * The production data-table entry point is `<DataTable>` — callers of
+ * the header in isolation always mean "I am writing a test that wants
+ * to exercise the `HeaderCell` + `HeaderCellTh` wiring without
+ * standing up the full table body". Naming the export with the
+ * `_forTestingOnly` suffix makes any stray production import obviously
+ * wrong at the call site (unlike a plain `DataTableHeader` export,
+ * which reads as a normal supported component).
+ *
+ * Current test consumer: `spatial-nav-grid-sort.test.tsx`.
+ */
+export { DataTableHeader as DataTableHeader_forTestingOnly };
