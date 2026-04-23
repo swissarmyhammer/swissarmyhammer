@@ -235,4 +235,105 @@ describe("perspective bar — React/dispatch boundary", () => {
       .poll(() => tabEl.getAttribute("data-focused"), { timeout: POLL_TIMEOUT })
       .toBe("true");
   });
+
+  // ------------------------------------------------------------------
+  // Tab-row horizontal nav regression tests (card 01KPVT95H4FTCC5Q4E7G644CHD).
+  //
+  // The original bug report: with focus on a perspective tab, pressing
+  // `l` (nav.right) or `h` (nav.left) "silently lost focus" — no
+  // adjacent tab gained decoration. The Rust algorithm is already
+  // pinned by `navigate_right_from_tab_reaches_adjacent_tab_not_parent_or_sibling_control`
+  // and `navigate_left_from_tab_reaches_adjacent_tab` in
+  // `spatial_state.rs`. These tests pin the React-side dispatch path:
+  //
+  //   click tab1 → `l` keypress → `nav.right` dispatched → scripted
+  //   focus-changed(next_key = tab2's key) → tab2's `data-focused`
+  //   flips to "true", tab1's clears.
+  //
+  // This is the exact dispatch→event→decoration loop the live app
+  // was silently breaking on. If a future change regresses any link
+  // in the chain (keybinding registration, command dispatch,
+  // focus-changed listener, `useFocusDecoration` write), one of these
+  // tests will fail.
+  // ------------------------------------------------------------------
+
+  it("pressing l from a focused perspective tab dispatches nav.right and lands on the adjacent tab", async () => {
+    const screen = await render(<AppWithBoardAndPerspectiveFixture />);
+    const [mk1, mk2] = FIXTURE_PERSPECTIVE_MONIKERS;
+    const tab1 = screen
+      .getByTestId(`data-moniker:${mk1}`)
+      .element() as HTMLElement;
+    const tab2 = screen
+      .getByTestId(`data-moniker:${mk2}`)
+      .element() as HTMLElement;
+
+    handles.scriptResponse("dispatch_command:nav.right", () =>
+      handles.payloadForFocusMove(mk1, mk2),
+    );
+
+    await userEvent.click(tab1);
+    await expect
+      .poll(() => tab1.getAttribute("data-focused"), { timeout: POLL_TIMEOUT })
+      .toBe("true");
+
+    const before = handles.dispatchedCommands().length;
+    await userEvent.keyboard("l");
+
+    // Assert the real dispatch path — `l` must dispatch `nav.right`
+    // through the command pipeline (not a shim), not a silent no-op.
+    await expect
+      .poll(
+        () =>
+          handles
+            .dispatchedCommands()
+            .slice(before)
+            .some((d) => d.cmd === "nav.right"),
+        { timeout: POLL_TIMEOUT },
+      )
+      .toBe(true);
+
+    // Assert the scripted focus-changed flips decoration to the
+    // adjacent tab — no silent focus loss.
+    await expect
+      .poll(() => tab2.getAttribute("data-focused"), { timeout: POLL_TIMEOUT })
+      .toBe("true");
+  });
+
+  it("pressing h from a focused perspective tab dispatches nav.left and lands on the adjacent tab", async () => {
+    const screen = await render(<AppWithBoardAndPerspectiveFixture />);
+    const [mk1, mk2] = FIXTURE_PERSPECTIVE_MONIKERS;
+    const tab1 = screen
+      .getByTestId(`data-moniker:${mk1}`)
+      .element() as HTMLElement;
+    const tab2 = screen
+      .getByTestId(`data-moniker:${mk2}`)
+      .element() as HTMLElement;
+
+    handles.scriptResponse("dispatch_command:nav.left", () =>
+      handles.payloadForFocusMove(mk2, mk1),
+    );
+
+    await userEvent.click(tab2);
+    await expect
+      .poll(() => tab2.getAttribute("data-focused"), { timeout: POLL_TIMEOUT })
+      .toBe("true");
+
+    const before = handles.dispatchedCommands().length;
+    await userEvent.keyboard("h");
+
+    await expect
+      .poll(
+        () =>
+          handles
+            .dispatchedCommands()
+            .slice(before)
+            .some((d) => d.cmd === "nav.left"),
+        { timeout: POLL_TIMEOUT },
+      )
+      .toBe(true);
+
+    await expect
+      .poll(() => tab1.getAttribute("data-focused"), { timeout: POLL_TIMEOUT })
+      .toBe("true");
+  });
 });

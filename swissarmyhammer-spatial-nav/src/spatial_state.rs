@@ -3306,4 +3306,56 @@ mod tests {
             "focus must remain on t1 when nav.left has no target"
         );
     }
+
+    #[test]
+    fn navigate_right_from_last_tab_is_noop_when_no_sibling() {
+        // Symmetric rightmost-edge check — three tabs only, no `+` or
+        // filter to land on. `nav.right` from t3 must be a clean no-op
+        // (returns `None` and leaves focus on t3). Pairs with the
+        // leftmost-edge no-op assertion in
+        // `navigate_left_from_tab_reaches_adjacent_tab`; together they
+        // lock in the "never lose focus silently" contract at both
+        // ends of the tab row.
+        let state = SpatialState::new();
+        state.push_layer("window".into(), "window".into());
+        reg(
+            &state,
+            "t1",
+            "perspective:p1",
+            rect(10.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t2",
+            "perspective:p2",
+            rect(100.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+        reg(
+            &state,
+            "t3",
+            "perspective:p3",
+            rect(190.0, 40.0, 80.0, 28.0),
+            "window",
+            None,
+        );
+
+        state.focus("t3");
+        let result = state
+            .navigate(Some("t3"), crate::spatial_nav::Direction::Right)
+            .expect("navigate must not error");
+        assert!(
+            result.is_none(),
+            "nav.right from rightmost tab must be a no-op (no silent focus loss), got: {:?}",
+            result
+        );
+        assert_eq!(
+            state.focused_key(),
+            Some("t3".to_string()),
+            "focus must remain on t3 when nav.right has no target"
+        );
+    }
 }
