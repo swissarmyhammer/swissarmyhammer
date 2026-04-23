@@ -294,6 +294,7 @@ export const ColumnView = memo(function ColumnView({
         setEditingName={setEditingName}
         setFocus={setFocus}
         taskCount={tasks.length}
+        firstCardMoniker={tasks[0]?.moniker}
         onAddTask={onAddTask}
       />
       <VirtualizedCardList
@@ -321,6 +322,13 @@ interface ColumnHeaderProps {
   setEditingName: (v: boolean) => void;
   setFocus: (moniker: string) => void;
   taskCount: number;
+  /**
+   * Moniker of the first card in the column's task list, used to
+   * implement the Enter-drills-into-column contract. `undefined` when
+   * the column is empty; in that case the drill binding is omitted
+   * and Enter on the header falls through to the scope chain.
+   */
+  firstCardMoniker?: string;
   onAddTask?: (columnId: string) => void;
 }
 
@@ -338,8 +346,30 @@ function ColumnHeader({
   setEditingName,
   setFocus,
   taskCount,
+  firstCardMoniker,
   onAddTask,
 }: ColumnHeaderProps) {
+  // Enter on a focused column header drills into the column — focus
+  // moves to the first card. Matches the file-manager convention
+  // (Enter opens the folder) and the task 01KPX6FSPY6V15JATXMY6AGRER
+  // contract that settles the ui.inspect Enter→Space rebind: Space
+  // = inspect (peek), Enter = activate / drill-in.
+  //
+  // Empty columns get no drill binding — Enter falls through the
+  // scope chain and does nothing. No fake "clever" behavior.
+  const drillCommands = useMemo<CommandDef[]>(() => {
+    if (!firstCardMoniker) return [];
+    return [
+      {
+        id: `column.drill.${column.id}`,
+        name: `Focus first card in ${column.id}`,
+        keys: { vim: "Enter", cua: "Enter", emacs: "Enter" },
+        execute: () => setFocus(firstCardMoniker),
+        contextMenu: false,
+      },
+    ];
+  }, [firstCardMoniker, column.id, setFocus]);
+
   // Renders as a direct child of the column scope (a `flex flex-col` container)
   // so it sizes to its content height. An earlier refactor left a `flex-col
   // flex-1` wrapper here, which made the header compete with the card list for
@@ -350,7 +380,11 @@ function ColumnHeader({
       className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
       onClickCapture={() => setFocus(columnNameMoniker)}
     >
-      <FocusScope moniker={columnNameMoniker} commands={[]} className="inline">
+      <FocusScope
+        moniker={columnNameMoniker}
+        commands={drillCommands}
+        className="inline"
+      >
         {nameFieldDef ? (
           <Field
             fieldDef={nameFieldDef}

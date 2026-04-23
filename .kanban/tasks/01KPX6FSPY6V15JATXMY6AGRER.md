@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPX6E0QPNRWZTQXGXX2MBEMV
-position_column: todo
-position_ordinal: e580
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9680
 project: spatial-nav
 title: Enter = drill-into-container — board column header drills to first card, fields keep Enter=edit
 ---
