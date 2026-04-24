@@ -110,15 +110,19 @@ fn perspective_yaml_retains_scope_and_visibility() {
     // All perspective commands should be visible (default true) except the
     // ones intentionally hidden from the command palette:
     //   - perspective.list: read-only introspection command
-    //   - perspective.goto: materialized dynamically as
-    //     `perspective.goto:{id}` per-perspective, so the template entry
-    //     stays hidden
+    //   - perspective.goto: takes `id` + `view_kind` from args; the palette
+    //     has no UI for supplying them, so the bare command stays hidden
+    //     (the user-facing "Go to Perspective: X" palette rows are emitted
+    //     as `perspective.set` with `perspective_id` pre-filled by
+    //     `scope_commands::emit_perspective_goto` and do NOT go through
+    //     this bare-`perspective.goto` path)
     //   - perspective.rename: requires `id` + `new_name` args and has no
     //     palette args UI; the user-facing entry is
     //     `ui.entity.startRename`
-    //   - perspective.set: requires a `perspective_id` arg — user-facing
-    //     palette rows are the dynamic `perspective.goto:{id}` entries
-    //     rewritten back to `perspective.set` by `match_dynamic_prefix`
+    //   - perspective.set: requires a `perspective_id` arg the palette has
+    //     no generic UI for; the user-facing palette rows for it are
+    //     fan-out entries emitted by `scope_commands::emit_perspective_goto`
+    //     with `perspective_id` pre-filled, one per perspective
     let hidden = [
         "perspective.list",
         "perspective.goto",
@@ -201,10 +205,13 @@ fn composed_builtins_register_all_sixty_commands() {
 /// These two commands were moved out of the generic `ui.yaml` into the
 /// kanban domain in 01KPY02X405QTP5ACH67THHSN8 because "view" and
 /// "perspective" are kanban concepts, not generic UI primitives. The
-/// palette-facing entries are dynamic rows (`view.switch:{id}`,
-/// `perspective.goto:{id}`) rewritten by `match_dynamic_prefix` in
-/// `kanban-app/src/commands.rs`, so the canonical definitions must stay
-/// hidden from the palette.
+/// palette-facing entries are dynamic rows emitted by
+/// `scope_commands::emit_view_switch` / `emit_perspective_goto` that now
+/// dispatch `view.set` / `perspective.set` directly with pre-filled args —
+/// 01KPZMXXEXKVE3RNPA4XJP0105 retired the old `view.switch:{id}` /
+/// `perspective.goto:{id}` rewrite indirection — so the canonical
+/// definitions must stay hidden from the palette (each row is only
+/// reachable via its dynamic-emission counterpart with args attached).
 #[test]
 fn view_set_and_perspective_set_registered_hidden() {
     let sources = swissarmyhammer_kanban::builtin_yaml_sources();

@@ -3,6 +3,8 @@
 
 use super::run_op;
 use crate::context::KanbanContext;
+use crate::focus::resolve_focused_column;
+use crate::types::{ColumnId, TaskId};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -45,9 +47,111 @@ impl Command for AddEntityCmd {
             overrides.insert(key.clone(), value.clone());
         }
 
+        // When the caller didn't supply an explicit `column`, inspect the
+        // scope chain for a focused column/task and synthesize one. This
+        // used to live as `resolveFocusedColumnId` in `board-view.tsx`
+        // (PR #40 review: column resolution is business logic, not
+        // presentation — it belongs in headless Rust). The frontend now
+        // fires `entity.add:task` without a pre-computed `column`, and
+        // the backend resolves it here from the scope chain the dispatch
+        // already carries.
+        if !overrides.contains_key("column") {
+            if let Some(column) =
+                resolve_column_from_scope(&kanban, &entity_type, &ctx.scope_chain).await?
+            {
+                overrides.insert("column".into(), Value::String(column.as_str().to_string()));
+            }
+        }
+
         let op = crate::entity::AddEntity::new(entity_type).with_overrides(overrides);
         run_op(&op, &kanban).await
     }
+}
+
+/// Resolve the focused column id implied by the scope chain, via the live
+/// task → home-column map when the focus points at a task.
+///
+/// Delegates the pure branching logic to
+/// [`crate::focus::resolve_focused_column`] (covered by headless tests in
+/// `tests/resolve_focused_column.rs`); this helper owns only the storage
+/// side — consulting [`KanbanContext::entity_context`] to materialize the
+/// task → column map when at least one `task:*` moniker sits in the
+/// chain.
+///
+/// Returns `None` when:
+/// - the chain carries no column/task context, or
+/// - `entity_type` does not declare a `position_column` field — actor,
+///   tag, project, column, and board would have any synthesized column
+///   silently dropped by [`crate::entity::add::AddEntity::apply_position`]
+///   anyway, so we skip the resolution (and any `ectx.list("task")` I/O
+///   it would incur) instead of doing the work for nothing.
+///
+/// In either case the caller falls through to the default placement path
+/// (lowest-order column) that [`crate::entity::position::resolve_column`]
+/// already owns.
+async fn resolve_column_from_scope(
+    kanban: &KanbanContext,
+    entity_type: &str,
+    scope_chain: &[String],
+) -> swissarmyhammer_commands::Result<Option<ColumnId>> {
+    // Short-circuit: if the chain has no column/task monikers at all, skip
+    // the entity-context read entirely. Keeps the dispatch path cheap for
+    // scopes like `[window:main]` (the "nothing focused" case).
+    let needs_task_map = scope_chain
+        .iter()
+        .any(|m| m.starts_with("task:") || m.starts_with("column:"));
+    if !needs_task_map {
+        return Ok(None);
+    }
+
+    // Skip the resolution entirely for entity types that don't declare a
+    // `position_column` field (actor, tag, project, column, board…). Their
+    // [`AddEntity::apply_position`] path silently drops any synthesized
+    // `column` override via the same `has_position_column` check, so the
+    // resolver — and especially the `ectx.list("task")` round-trip below —
+    // would be paying for a value the operation throws away.
+    let ectx = kanban
+        .entity_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let entity_def = match ectx.fields().get_entity(entity_type) {
+        Some(def) => def,
+        // Unknown entity type: let `AddEntity` surface the "unknown entity
+        // type" error during execute() rather than masking it here.
+        None => return Ok(None),
+    };
+    let has_position_column = entity_def
+        .fields
+        .iter()
+        .any(|f| f.as_str() == crate::entity::position::POSITION_COLUMN_FIELD);
+    if !has_position_column {
+        return Ok(None);
+    }
+
+    // Only materialize the task → column map when a `task:*` moniker sits
+    // in the chain — a `column:*`-only chain resolves without touching
+    // entity storage, so walking `ectx.list("task")` would be wasted I/O.
+    let needs_task_lookup = scope_chain.iter().any(|m| m.starts_with("task:"));
+    let task_to_column = if needs_task_lookup {
+        let tasks = ectx
+            .list("task")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        tasks
+            .iter()
+            .filter_map(|t| {
+                let col = t.get_str("position_column")?;
+                Some((
+                    TaskId::from_string(t.id.as_str()),
+                    ColumnId::from_string(col),
+                ))
+            })
+            .collect::<HashMap<TaskId, ColumnId>>()
+    } else {
+        HashMap::new()
+    };
+
+    Ok(resolve_focused_column(scope_chain, &task_to_column))
 }
 
 /// Update a single field on any entity.
@@ -1145,5 +1249,201 @@ mod tests {
         let ctx = CommandContext::new("attachment.reveal", vec![], None, HashMap::new());
         let result = AttachmentRevealCmd.execute(&ctx).await;
         assert!(result.is_err(), "should fail without attachment in scope");
+    }
+
+    // =========================================================================
+    // AddEntityCmd — scope-chain driven column resolution
+    //
+    // These tests assert that `AddEntityCmd` (the backend for the dynamic
+    // `entity.add:task` command surfaced in the palette/context menu)
+    // resolves the target column from the scope chain when the caller
+    // didn't supply an explicit `column` arg. This is the Rust replacement
+    // for the React `resolveFocusedColumnId` helper — see PR #40 review.
+    // =========================================================================
+
+    /// When the scope chain carries `column:<id>`, a bare `entity.add:task`
+    /// (no explicit `column` arg) must land the task in that column. This
+    /// is the "column focused, New Task pressed" path.
+    #[tokio::test]
+    async fn add_entity_task_uses_column_from_scope_chain() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("task".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec!["column:doing".to_string(), "window:main".to_string()],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["position_column"], "doing",
+            "focused column in scope chain must win over default placement"
+        );
+    }
+
+    /// When the scope chain carries `task:<tid>`, a bare `entity.add:task`
+    /// must land the new task in the focused task's home column. This is
+    /// the "task focused, New Task pressed" path — the resolver consults
+    /// the live task → column map and pulls the focused task's column.
+    #[tokio::test]
+    async fn add_entity_task_uses_focused_tasks_column() {
+        let (_temp, ctx) = setup().await;
+
+        // Seed an existing task in "doing" so the scope-chain lookup has
+        // a real task to resolve against.
+        let mut add = AddTask::new("Existing");
+        add.column = Some("doing".to_string());
+        let existing = add.execute(&ctx).await.into_result().unwrap();
+        let focused_task_id = existing["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("task".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec![
+                format!("task:{}", focused_task_id),
+                "column:todo".to_string(),
+                "window:main".to_string(),
+            ],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["position_column"], "doing",
+            "focused task's home column must win over the outer column scope"
+        );
+    }
+
+    /// When the scope chain has no column/task moniker, `AddEntityCmd`
+    /// falls through to the default placement path — lowest-order column.
+    /// This is the "palette invoked with nothing focused" case.
+    #[tokio::test]
+    async fn add_entity_task_defaults_to_lowest_order_column_without_focus() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("task".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec!["window:main".to_string()],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["position_column"], "todo",
+            "no column/task in scope → lowest-order column"
+        );
+    }
+
+    /// An explicit `column` arg supplied at dispatch time still wins over
+    /// the scope-chain resolution, preserving backward compatibility for
+    /// callers (like the grid-view `onAddTask` handler) that compute the
+    /// column from domain state rather than focus.
+    #[tokio::test]
+    async fn add_entity_task_explicit_column_arg_wins_over_scope() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("task".into()));
+        args.insert("column".into(), Value::String("doing".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            // Scope chain says "todo" via `column:todo`, but the explicit
+            // arg overrides it.
+            vec!["column:todo".to_string(), "window:main".to_string()],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["position_column"], "doing",
+            "explicit column arg must override scope-chain resolution"
+        );
+    }
+
+    /// When the scope chain's only `task:` moniker names a task that
+    /// doesn't exist (e.g. stale scope from a deleted task), the resolver
+    /// commits to the task lookup, misses the map, and returns `None`.
+    /// `AddEntityCmd` then falls through to the lowest-order column
+    /// default rather than silently picking up some outer `column:*`.
+    #[tokio::test]
+    async fn add_entity_task_unknown_task_in_scope_falls_back_to_default() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("task".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec![
+                "task:does-not-exist".to_string(),
+                "column:doing".to_string(),
+                "window:main".to_string(),
+            ],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(
+            result["position_column"], "todo",
+            "unknown task moniker must not fall through to an outer column scope"
+        );
+    }
+
+    /// `entity.add:<non-positional>` (actor, tag, project, column, board) must
+    /// succeed when the scope chain carries a `column:*` or `task:*` moniker,
+    /// and the resulting entity must have no `position_column` field. The
+    /// resolver gates on `EntityDef.fields.contains(POSITION_COLUMN_FIELD)`
+    /// and short-circuits before fetching the task map, so this also serves
+    /// as a regression for the no-extra-I/O contract called out in the PR
+    /// review's perf nit. If someone ever adds `position_column` to actor,
+    /// this test will start asserting against a populated value and surface
+    /// the contract change.
+    #[tokio::test]
+    async fn add_entity_non_positional_drops_synthesized_column_silently() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("entity_type".into(), Value::String("tag".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            // Scope chain implies a focused column, but `tag` doesn't declare
+            // `position_column` — the resolver must skip itself entirely and
+            // the resulting tag must carry no column field.
+            vec!["column:doing".to_string(), "window:main".to_string()],
+            args,
+        );
+
+        let result = AddEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert!(
+            result.get("position_column").is_none() || result["position_column"].is_null(),
+            "non-positional entity must not receive a synthesized position_column \
+             from the scope chain, got: {:?}",
+            result.get("position_column")
+        );
+        // Sanity: the tag was actually created with the schema default.
+        assert_eq!(result["tag_name"], "new-tag");
     }
 }

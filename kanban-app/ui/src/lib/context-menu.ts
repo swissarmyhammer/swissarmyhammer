@@ -11,6 +11,17 @@ interface ResolvedCommand {
   context_menu: boolean;
   keys?: { vim?: string; cua?: string; emacs?: string };
   available: boolean;
+  /**
+   * Pre-filled dispatch arguments for fan-out palette rows (e.g. per-view
+   * "Switch to X" emits `view.set` with `{ view_id: "..." }`). All current
+   * fan-out rows are `context_menu: false`, so they never reach this
+   * right-click surface; `ContextMenuItem` has no matching `args` field
+   * and the loop below intentionally drops this. If a future fan-out row
+   * opts into the context menu, `args` must be added to `ContextMenuItem`
+   * (both TS and Rust `kanban-app/src/commands.rs`) and forwarded through
+   * `show_context_menu` before that row can dispatch correctly.
+   */
+  args?: Record<string, unknown>;
 }
 
 /** Shape sent to the backend `show_context_menu`. Self-contained dispatch info. */
@@ -21,6 +32,9 @@ interface ContextMenuItem {
   scope_chain: string[];
   separator: boolean;
 }
+
+// Note: `ContextMenuItem` has no `args` field — see `ResolvedCommand.args`
+// above for why the palette's fan-out `args` is intentionally dropped here.
 
 /**
  * Hook that returns an onContextMenu handler.

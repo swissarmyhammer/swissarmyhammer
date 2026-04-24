@@ -65,6 +65,7 @@ pub mod cross_board;
 pub mod defaults;
 pub mod derive_handlers;
 pub mod dispatch;
+pub mod dynamic_sources;
 mod error;
 pub mod parse;
 mod processor;
@@ -84,6 +85,7 @@ pub mod attachment;
 pub mod board;
 pub mod column;
 pub mod entity;
+pub mod focus;
 pub mod project;
 pub mod schema;
 pub mod scope_commands;
@@ -144,6 +146,112 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
             Some((name, content))
         })
         .collect()
+}
+
+/// Returns the stacked builtin command YAML sources used by every kanban
+/// consumer at startup: generic commands from `swissarmyhammer-commands`
+/// first, then kanban-specific commands from this crate.
+///
+/// The ordering is load-bearing: later sources override earlier via the
+/// partial-merge-by-id semantics in `CommandsRegistry::merge_yaml_value`.
+/// User overrides (from `.kanban/commands/`) layer on top of this stack
+/// at the call site — see [`default_commands_registry_with_overrides`].
+///
+/// This replaces inline stacking that every consumer (GUI, CLI, MCP,
+/// tests) used to duplicate. The `test_support` crate used to carry a
+/// copy under `composed_builtin_yaml_sources`; that helper now delegates
+/// here so only one definition exists.
+pub fn default_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
+    let commands = swissarmyhammer_commands::builtin_yaml_sources();
+    let kanban = builtin_yaml_sources();
+    let mut out = Vec::with_capacity(commands.len() + kanban.len());
+    out.extend(commands);
+    out.extend(kanban);
+    out
+}
+
+/// Build a fresh [`swissarmyhammer_commands::CommandsRegistry`] containing
+/// the full default command stack (generic + kanban builtins).
+///
+/// Consumers that need user overrides can call
+/// [`default_commands_registry_with_overrides`] or merge them manually via
+/// [`swissarmyhammer_commands::CommandsRegistry::merge_yaml_sources`].
+///
+/// This is the self-composing factory the reviewer called for in PR #40:
+/// `AppState` no longer has to know about both source stacks — it just
+/// asks for the default registry and gets a ready-to-use one.
+pub fn default_commands_registry() -> swissarmyhammer_commands::CommandsRegistry {
+    let sources = default_builtin_yaml_sources();
+    swissarmyhammer_commands::CommandsRegistry::from_yaml_sources(&sources)
+}
+
+/// Build a [`swissarmyhammer_commands::CommandsRegistry`] composed of the
+/// default builtins plus user YAML overrides (typically loaded from a
+/// board's `.kanban/commands/` directory via
+/// [`swissarmyhammer_commands::load_yaml_dir`]).
+///
+/// Overrides apply last with partial-merge-by-id semantics, so they can
+/// tweak specific fields on a builtin without replacing the whole
+/// definition.
+pub fn default_commands_registry_with_overrides(
+    overrides: &[(String, String)],
+) -> swissarmyhammer_commands::CommandsRegistry {
+    let mut registry = default_commands_registry();
+    if !overrides.is_empty() {
+        let refs: Vec<(&str, &str)> = overrides
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        registry.merge_yaml_sources(&refs);
+    }
+    registry
+}
+
+/// File name for the UIState YAML config, used under every consumer's
+/// XDG subdirectory. Private to this module: callers go through
+/// [`default_ui_state`] rather than constructing paths by hand.
+const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
+
+/// Resolve the per-consumer UIState config path under the XDG config
+/// hierarchy: `$XDG_CONFIG_HOME/sah/<app_subdir>/ui-state.yaml`.
+///
+/// Falls back to `./{app_subdir}/ui-state.yaml` when the XDG base
+/// directory cannot be determined (e.g. no `$HOME` in a sandboxed
+/// environment). The fallback matches the legacy behavior the GUI
+/// crate used to implement inline, so existing installs keep finding
+/// their config even when XDG resolution fails.
+pub(crate) fn ui_state_xdg_config_path(app_subdir: &str) -> std::path::PathBuf {
+    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
+
+    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
+        .map(|dir| dir.root().join(app_subdir).join(UI_STATE_FILE_NAME))
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(".")
+                .join(app_subdir)
+                .join(UI_STATE_FILE_NAME)
+        })
+}
+
+/// Load a [`swissarmyhammer_commands::UIState`] from the per-consumer
+/// XDG config file, or return defaults if the file is missing or
+/// malformed.
+///
+/// This is the self-composing entry point consumers (GUI, CLI, MCP)
+/// use at startup. It resolves
+/// `$XDG_CONFIG_HOME/sah/<app_subdir>/ui-state.yaml` — keeping XDG
+/// awareness out of the Tier 0 `swissarmyhammer-commands` crate — and
+/// delegates the actual file I/O to [`UIState::load`], which remains
+/// path-driven and consumer-agnostic.
+///
+/// The `app_subdir` identifies the consumer (e.g. `"kanban-app"`,
+/// `"kanban-cli"`) so each one gets its own config without stepping on
+/// the others. Subsequent mutations auto-save to the resolved path
+/// just as with [`UIState::load`].
+///
+/// [`UIState`]: swissarmyhammer_commands::UIState
+/// [`UIState::load`]: swissarmyhammer_commands::UIState::load
+pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_commands::UIState {
+    swissarmyhammer_commands::UIState::load(ui_state_xdg_config_path(app_subdir))
 }
 
 // Re-export commonly used types

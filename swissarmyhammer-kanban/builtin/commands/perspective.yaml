@@ -166,11 +166,14 @@
 - id: perspective.set
   name: Switch Perspective
   # Hidden from the palette: requires a `perspective_id` arg the palette has
-  # no UI for collecting. User-facing palette entries are the dynamic
-  # `perspective.goto:{id}` rows emitted by
-  # `scope_commands::emit_perspective_goto`, which
-  # `kanban-app/src/commands.rs::match_dynamic_prefix` rewrites back to
-  # `perspective.set` with the suffix moved into the arg bag.
+  # no generic UI for collecting. User-facing palette entries are emitted
+  # by `scope_commands::emit_perspective_goto` — one `perspective.set` row
+  # per known perspective with `perspective_id` pre-filled in `args`. The
+  # dispatcher takes those rows verbatim; there is no suffix indirection.
+  #
+  # Before 01KPZMXXEXKVE3RNPA4XJP0105 the palette emitted
+  # `perspective.goto:{id}` rows that `match_dynamic_prefix` rewrote back
+  # to `perspective.set`; that indirection is gone.
   #
   # Relocated from `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 —
   # "perspective" is a kanban concept (defined in

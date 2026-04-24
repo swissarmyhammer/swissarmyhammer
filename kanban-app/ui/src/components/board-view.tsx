@@ -597,33 +597,9 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
   );
 }
 
-/**
- * Resolve the column id implied by the current focus, or `null` if unknown.
- *
- * A column moniker (`column:<id>`) resolves directly. A task moniker
- * (`task:<id>`) resolves to its home column via `taskMap`. Any other or
- * missing moniker returns `null`, signalling that the caller should let the
- * backend fall back to the lowest-order column (the default placement path
- * in `AddEntity`).
- */
-function resolveFocusedColumnId(
-  focusedMoniker: string | null,
-  taskMap: Map<string, Entity>,
-): string | null {
-  if (!focusedMoniker) return null;
-  if (focusedMoniker.startsWith("column:"))
-    return focusedMoniker.slice("column:".length);
-  if (focusedMoniker.startsWith("task:")) {
-    const entity = taskMap.get(focusedMoniker.slice("task:".length));
-    if (entity) return getStr(entity, "position_column") || null;
-  }
-  return null;
-}
-
 /** Shared dependencies passed to each board-action command factory. */
 interface BoardActionDeps {
   columns: Entity[];
-  taskMap: Map<string, Entity>;
   focusedMonikerRef: React.RefObject<string | null>;
   broadcastRef: React.RefObject<(cmd: string) => void>;
   dispatchInspect: ReturnType<typeof useDispatchCommand>;
@@ -646,10 +622,19 @@ function makeInspectCommand(deps: BoardActionDeps): CommandDef {
 
 /** Factory for the "create task in focused column" command.
  *
- * Dispatches the unified `entity.add:task` command. When the focus is on a
- * column or a task, passes that column as an override so the new task lands
- * in the expected place. With no focus, passes no column — `AddEntity`
- * resolves the lowest-order column as its default.
+ * Dispatches the unified `entity.add:task` with no `column` arg. The
+ * backend resolves the target column from the scope chain — which the
+ * dispatcher already carries — via
+ * `swissarmyhammer_kanban::focus::resolve_focused_column` inside
+ * `AddEntityCmd`. That matches the React flow that used to live here as
+ * `resolveFocusedColumnId`: a focused `column:<id>` moniker routes the
+ * new task into that column; a focused `task:<id>` moniker routes it
+ * into the focused task's home column; anything else falls through to
+ * the lowest-order column in `AddEntity::apply_position`.
+ *
+ * Per PR #40 review — column resolution is business logic, not
+ * presentation; it belongs in headless Rust (see
+ * `swissarmyhammer-kanban/src/focus.rs`).
  */
 function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
   return {
@@ -658,13 +643,8 @@ function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
     keys: { vim: "o", cua: "Mod+Enter" },
     execute: () => {
       if (deps.columns.length === 0) return;
-      const colId = resolveFocusedColumnId(
-        deps.focusedMonikerRef.current,
-        deps.taskMap,
-      );
-      const args = colId ? { column: colId } : {};
       deps
-        .dispatchEntityAddTask({ args })
+        .dispatchEntityAddTask()
         .then((result) => {
           const id = (result as { id?: string } | undefined)?.id;
           if (id) deps.setFocus(`task:${id}`);
@@ -704,7 +684,6 @@ function makeNavBroadcastCommand(
  */
 function useBoardActionCommands(
   columns: Entity[],
-  taskMap: Map<string, Entity>,
   focusedMonikerRef: React.RefObject<string | null>,
   broadcastRef: React.RefObject<(cmd: string) => void>,
   dispatchInspect: ReturnType<typeof useDispatchCommand>,
@@ -714,7 +693,6 @@ function useBoardActionCommands(
   return useMemo<CommandDef[]>(() => {
     const deps: BoardActionDeps = {
       columns,
-      taskMap,
       focusedMonikerRef,
       broadcastRef,
       dispatchInspect,
@@ -741,7 +719,6 @@ function useBoardActionCommands(
     ];
   }, [
     columns,
-    taskMap,
     dispatchInspect,
     dispatchEntityAddTask,
     focusedMonikerRef,
@@ -1070,7 +1047,6 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
 
   const boardActionCommands = useBoardActionCommands(
     layout.columns,
-    layout.taskMap,
     focusedMonikerRef,
     broadcastRef,
     dispatchInspect,

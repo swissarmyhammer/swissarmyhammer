@@ -28,8 +28,12 @@
 //!
 //!   3. **global-registry** — registry commands with no `scope:` pin
 //!      (e.g. `app.quit`, `app.undo`).
-//!   4. **dynamic** — runtime-generated commands like `view.switch:{id}`,
-//!      `board.switch:{path}`, `entity.add:{type}`.
+//!   4. **dynamic** — runtime-generated rows such as per-view "Switch to X"
+//!      entries (emitted as the canonical `view.set` command with a
+//!      pre-filled `args.view_id`), per-perspective "Go to Perspective: X"
+//!      entries (emitted as `perspective.set` with `args.perspective_id`),
+//!      plus the prefix-id rows `board.switch:{path}` and
+//!      `entity.add:{type}`.
 //!
 //! Within each phase, the shared `(id, target)` seen-set guarantees a command
 //! cannot double-emit for the same target.
@@ -43,9 +47,10 @@ use swissarmyhammer_fields::FieldsContext;
 
 /// Lightweight view descriptor for dynamic command generation.
 ///
-/// Only carries the fields needed to produce a `view.switch:{id}` command.
-/// Intentionally decoupled from `ViewDef` so the scope_commands module
-/// does not depend on the views crate directly.
+/// Only carries the fields needed to produce a palette row that dispatches
+/// `view.set` with a pre-filled `view_id`. Intentionally decoupled from
+/// `ViewDef` so the scope_commands module does not depend on the views
+/// crate directly.
 #[derive(Debug, Clone)]
 pub struct ViewInfo {
     /// View identifier (e.g. "board-view", "tasks-grid").
@@ -92,9 +97,10 @@ pub struct BoardInfo {
 
 /// Lightweight perspective descriptor for dynamic command generation.
 ///
-/// Only carries the fields needed to produce a `perspective.goto:{id}` command.
-/// Intentionally decoupled from `Perspective` so the scope_commands module
-/// does not depend on the perspectives crate directly.
+/// Only carries the fields needed to produce a palette row that dispatches
+/// `perspective.set` with a pre-filled `perspective_id`. Intentionally
+/// decoupled from `Perspective` so the scope_commands module does not
+/// depend on the perspectives crate directly.
 #[derive(Debug, Clone)]
 pub struct PerspectiveInfo {
     /// Perspective identifier (ULID).
@@ -109,13 +115,15 @@ pub struct PerspectiveInfo {
 /// registry and entity schemas.
 #[derive(Debug, Clone, Default)]
 pub struct DynamicSources {
-    /// Loaded view definitions — each generates a `view.switch:{id}` command.
+    /// Loaded view definitions — each generates a `view.set` palette row
+    /// with `args.view_id` pre-filled.
     pub views: Vec<ViewInfo>,
     /// Open boards — each generates a `board.switch:{path}` command.
     pub boards: Vec<BoardInfo>,
     /// Open windows — each generates a `window.focus:{label}` command.
     pub windows: Vec<WindowInfo>,
-    /// Perspectives — each generates a `perspective.goto:{id}` command.
+    /// Perspectives — each generates a `perspective.set` palette row with
+    /// `args.perspective_id` pre-filled.
     pub perspectives: Vec<PerspectiveInfo>,
 }
 
@@ -123,6 +131,13 @@ pub struct DynamicSources {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ResolvedCommand {
     /// Command ID (e.g. "entity.copy").
+    ///
+    /// For dynamic palette entries that fan out a single canonical command
+    /// across a runtime-discovered set of targets (e.g. one
+    /// "Switch to <ViewName>" row per view), multiple resolved commands can
+    /// share the same `id` — the distinguishing information lives in
+    /// [`Self::args`]. Consumers that need per-row identity (React keys,
+    /// test ids, dedup keys) must combine `id` with `target` and `args`.
     pub id: String,
     /// Fully resolved display name (e.g. "Copy Tag", never "Copy {{entity.type}}").
     pub name: String,
@@ -140,6 +155,15 @@ pub struct ResolvedCommand {
     pub keys: Option<KeysDef>,
     /// Whether the command is currently available (enabled).
     pub available: bool,
+    /// Pre-filled arguments to pass to the dispatcher alongside `id`.
+    ///
+    /// Used by dynamic palette entries that invoke a canonical command
+    /// with per-row state (e.g. `view.set` with `{"view_id": "..."}`
+    /// emitted one row per known view). When absent, the dispatcher
+    /// receives no additional arguments beyond whatever the caller
+    /// supplies at dispatch time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<serde_json::Value>,
 }
 
 /// Parameters for template resolution in command names.
@@ -212,17 +236,48 @@ fn check_available(
     cmd_impl.available(&ctx)
 }
 
-/// Push a command once, honoring the `(id, target)` seen-set for dedup.
+/// Identity key used across all `emit_*` helpers to collapse duplicates.
+///
+/// The tuple captures three axes that together distinguish one emitted row
+/// from another:
+///
+///   * the command `id`,
+///   * the per-row `target` moniker (empty for global rows), and
+///   * a canonical serialization of `args` (empty when absent).
+///
+/// The `args` axis is load-bearing for fan-out palette entries such as the
+/// "Switch to <ViewName>" rows emitted by `emit_view_switch`: every row
+/// shares `id == "view.set"` and `target == None`, so without `args` in the
+/// key they would all collapse to a single entry. The serialization uses
+/// `serde_json::to_string` so two equal `Value` payloads hash identically.
+type SeenKey = (String, Option<String>, Option<String>);
+
+/// Build a [`SeenKey`] from a row's `id`, `target`, and `args`.
+///
+/// The `args` JSON value is serialized to a canonical string — when two rows
+/// carry equivalent argument maps (same keys, same values) the resulting
+/// strings match and dedup collapses them. Returns `None` for the args slot
+/// when the row has no args, so the common case (no args) matches the same
+/// key shape as before the `args` axis was added.
+fn seen_key_of(cmd: &ResolvedCommand) -> SeenKey {
+    let args_key = cmd
+        .args
+        .as_ref()
+        .map(|v| serde_json::to_string(v).unwrap_or_default());
+    (cmd.id.clone(), cmd.target.clone(), args_key)
+}
+
+/// Push a command once, honoring the `(id, target, args)` seen-set for dedup.
 ///
 /// Shared across all `emit_*` helpers below so that overlapping emitters (and
 /// repeated scope monikers) can never produce duplicate commands in the same
 /// `commands_for_scope` result.
 fn push_dedup(
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
     cmd: ResolvedCommand,
 ) {
-    let key = (cmd.id.clone(), cmd.target.clone());
+    let key = seen_key_of(&cmd);
     if seen.contains(&key) {
         return;
     }
@@ -230,18 +285,28 @@ fn push_dedup(
     result.push(cmd);
 }
 
-/// Emit one `view.switch:{id}` command per known view.
+/// Emit one "Switch to <ViewName>" palette row per known view, each one
+/// dispatching the canonical `view.set` command with its `view_id`
+/// pre-filled in `args`.
 ///
 /// Always marked `context_menu: false` — view switching is a palette-only
-/// navigation action, alongside `board.switch`, `window.focus`, and
-/// `perspective.goto`. Right-clicking a view button never surfaces a
-/// "Switch to <ViewName>" entry; the palette (`context_menu_only == false`)
-/// still lists every view.switch command.
+/// navigation action, alongside `board.switch`, `window.focus`, and the
+/// sibling `perspective.set` fan-out. Right-clicking a view button never
+/// surfaces a "Switch to <ViewName>" entry; the palette
+/// (`context_menu_only == false`) still lists one row per view.
 ///
 /// Shares `seen` with the other emit_* helpers so cross-emitter dedup works.
+/// Every emitted row has `id == "view.set"` and `target == None`; the
+/// distinguishing information lives in `args["view_id"]`, which is why
+/// `push_dedup`'s [`SeenKey`] includes the args serialization.
+///
+/// The wire format change retires the legacy `view.switch:{id}` id in favour
+/// of the canonical `view.set` command with pre-filled args, removing the
+/// dispatcher-side rewrite that previously translated the former into the
+/// latter (PR #40, task 01KPZMXXEXKVE3RNPA4XJP0105).
 fn emit_view_switch(
     views: &[ViewInfo],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for view in views {
@@ -249,7 +314,7 @@ fn emit_view_switch(
             seen,
             result,
             ResolvedCommand {
-                id: format!("view.switch:{}", view.id),
+                id: "view.set".into(),
                 name: format!("Switch to {}", view.name),
                 menu_name: None,
                 target: None,
@@ -257,6 +322,7 @@ fn emit_view_switch(
                 context_menu: false,
                 keys: None,
                 available: true,
+                args: Some(serde_json::json!({ "view_id": view.id })),
             },
         );
     }
@@ -269,7 +335,7 @@ fn emit_view_switch(
 /// with the other emit_* helpers so cross-emitter dedup works.
 fn emit_board_switch(
     boards: &[BoardInfo],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for board in boards {
@@ -295,6 +361,7 @@ fn emit_board_switch(
                 context_menu: false,
                 keys: None,
                 available: true,
+                args: None,
             },
         );
     }
@@ -307,7 +374,7 @@ fn emit_board_switch(
 /// emit_* helpers so cross-emitter dedup works.
 fn emit_window_focus(
     windows: &[WindowInfo],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for window in windows {
@@ -323,18 +390,29 @@ fn emit_window_focus(
                 context_menu: false,
                 keys: None,
                 available: true,
+                args: None,
             },
         );
     }
 }
 
-/// Emit one `perspective.goto:{id}` command per known perspective.
+/// Emit one "Go to Perspective: <Name>" palette row per known perspective,
+/// each dispatching the canonical `perspective.set` command with its
+/// `perspective_id` pre-filled in `args`.
 ///
 /// Marked `context_menu: false` (palette-only). Shares `seen` with the other
-/// emit_* helpers so cross-emitter dedup works.
+/// emit_* helpers so cross-emitter dedup works. Every emitted row has
+/// `id == "perspective.set"` and `target == None`; the distinguishing
+/// information lives in `args["perspective_id"]`, which is why
+/// `push_dedup`'s [`SeenKey`] includes the args serialization.
+///
+/// The wire format change retires the legacy `perspective.goto:{id}` id in
+/// favour of the canonical `perspective.set` command with pre-filled args,
+/// removing the dispatcher-side rewrite that previously translated the
+/// former into the latter (PR #40, task 01KPZMXXEXKVE3RNPA4XJP0105).
 fn emit_perspective_goto(
     perspectives: &[PerspectiveInfo],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for perspective in perspectives {
@@ -342,7 +420,7 @@ fn emit_perspective_goto(
             seen,
             result,
             ResolvedCommand {
-                id: format!("perspective.goto:{}", perspective.id),
+                id: "perspective.set".into(),
                 name: format!("Go to Perspective: {}", perspective.name),
                 menu_name: None,
                 target: None,
@@ -350,6 +428,7 @@ fn emit_perspective_goto(
                 context_menu: false,
                 keys: None,
                 available: true,
+                args: Some(serde_json::json!({ "perspective_id": perspective.id })),
             },
         );
     }
@@ -408,7 +487,7 @@ fn resolve_entity_type_for_moniker<'a>(
 fn emit_entity_add(
     views_by_id: &HashMap<&str, &ViewInfo>,
     scope_chain: &[String],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for moniker in scope_chain {
@@ -438,6 +517,7 @@ fn emit_entity_add(
                 context_menu: true,
                 keys: None,
                 available: true,
+                args: None,
             },
         );
     }
@@ -445,15 +525,17 @@ fn emit_entity_add(
 
 /// Emit dynamic commands from runtime data into the result list.
 ///
-/// Generates `view.switch:{id}`, `board.switch:{path}`, `window.focus:{label}`,
-/// `perspective.goto:{id}`, and `entity.add:{type}` commands from the
-/// dynamic sources. Skips commands already in the `seen` set.
+/// Generates per-view and per-perspective palette rows (dispatching
+/// `view.set` / `perspective.set` directly with pre-filled args),
+/// `board.switch:{path}`, `window.focus:{label}`, and `entity.add:{type}`
+/// commands from the dynamic sources. Skips commands already in the
+/// `seen` set.
 ///
 /// `entity.add:{type}` is the only dynamic command that depends on the current
 /// scope chain: it surfaces only when a `view:{id}` moniker is active and
 /// the matching view declares an `entity_type`. Unlike the navigation
-/// dynamics (`view.switch`, `board.switch`, `perspective.goto`,
-/// `window.focus`) which all set `context_menu: false`, `entity.add:*` is a
+/// dynamics (view switching, board switching, perspective switching,
+/// window focus) which all set `context_menu: false`, `entity.add:*` is a
 /// first-class creation action and is emitted with `context_menu: true` so
 /// it appears on right-click inside the view.
 ///
@@ -465,7 +547,7 @@ fn emit_entity_add(
 fn emit_dynamic_commands(
     dyn_src: &DynamicSources,
     scope_chain: &[String],
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     // Index views by id once so the `entity.add` emission below is O(scope)
@@ -502,7 +584,7 @@ pub fn commands_for_scope(
     dynamic: Option<&DynamicSources>,
 ) -> Vec<ResolvedCommand> {
     let mut result: Vec<ResolvedCommand> = Vec::new();
-    let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
+    let mut seen: HashSet<SeenKey> = HashSet::new();
 
     let clipboard_type = ui_state.clipboard_entity_type();
     let all_registry_cmds = registry.available_commands(scope_chain);
@@ -559,7 +641,7 @@ fn emit_scoped_commands(
     fields: Option<&FieldsContext>,
     ui_state: &Arc<UIState>,
     clipboard_type: Option<&str>,
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     for moniker in scope_chain {
@@ -646,7 +728,7 @@ fn emit_cross_cutting_commands(
     command_impls: &HashMap<String, Arc<dyn Command>>,
     ui_state: &Arc<UIState>,
     clipboard_type: Option<&str>,
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     let scope_prefixed = format!("entity:{entity_type}");
@@ -743,7 +825,7 @@ fn try_match_cross_cutting_command(
     command_impls: &HashMap<String, Arc<dyn Command>>,
     ui_state: &Arc<UIState>,
     clipboard_type: Option<&str>,
-    seen: &HashSet<(String, Option<String>)>,
+    seen: &HashSet<SeenKey>,
 ) -> Option<Pending> {
     if !cmd_def.visible {
         return None;
@@ -789,8 +871,11 @@ fn try_match_cross_cutting_command(
     );
     let target = Some(entity_moniker.to_string());
     // Probe the seen-set before push_dedup so dedup skips are observable
-    // in the trace — push_dedup itself silently drops duplicates.
-    let dedup_key = (cmd_def.id.clone(), target.clone());
+    // in the trace — push_dedup itself silently drops duplicates. The third
+    // slot (`args`) is `None` here because cross-cutting rows are always
+    // emitted without pre-filled args; the fan-out `emit_*` helpers that do
+    // use args build their own keys via `push_dedup`.
+    let dedup_key: SeenKey = (cmd_def.id.clone(), target.clone(), None);
     if seen.contains(&dedup_key) {
         tracing::debug!(
             cmd_id = %cmd_def.id,
@@ -833,6 +918,7 @@ fn try_match_cross_cutting_command(
             context_menu: cmd_def.context_menu,
             keys: cmd_def.keys.clone(),
             available,
+            args: None,
         },
     })
 }
@@ -846,7 +932,7 @@ fn emit_scoped_registry_commands(
     command_impls: &HashMap<String, Arc<dyn Command>>,
     ui_state: &Arc<UIState>,
     clipboard_type: Option<&str>,
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     let scope_prefixed = format!("entity:{entity_type}");
@@ -857,7 +943,7 @@ fn emit_scoped_registry_commands(
         if !scope_matches(cmd_def.scope.as_deref(), entity_type, &scope_prefixed) {
             continue;
         }
-        let key = (cmd_def.id.clone(), None);
+        let key: SeenKey = (cmd_def.id.clone(), None, None);
         if seen.contains(&key) {
             continue;
         }
@@ -880,6 +966,7 @@ fn emit_scoped_registry_commands(
             context_menu: cmd_def.context_menu,
             keys: cmd_def.keys.clone(),
             available,
+            args: None,
         });
     }
 }
@@ -891,7 +978,7 @@ fn emit_global_registry_commands(
     command_impls: &HashMap<String, Arc<dyn Command>>,
     ui_state: &Arc<UIState>,
     clipboard_type: Option<&str>,
-    seen: &mut HashSet<(String, Option<String>)>,
+    seen: &mut HashSet<SeenKey>,
     result: &mut Vec<ResolvedCommand>,
 ) {
     let innermost_type = scope_chain
@@ -903,7 +990,7 @@ fn emit_global_registry_commands(
         if !cmd_def.visible {
             continue;
         }
-        let key = (cmd_def.id.clone(), None);
+        let key: SeenKey = (cmd_def.id.clone(), None, None);
         if seen.contains(&key) {
             continue;
         }
@@ -926,6 +1013,7 @@ fn emit_global_registry_commands(
             context_menu: cmd_def.context_menu,
             keys: cmd_def.keys.clone(),
             available,
+            args: None,
         });
     }
 }
@@ -956,19 +1044,31 @@ fn paste_aware_tpl<'a>(
     }
 }
 
-/// Keep only the innermost occurrence of each command id.
+/// Keep only the innermost occurrence of each distinct command row.
 ///
-/// When a command like `entity.cut` appears in both tag and task scopes, only
-/// the innermost (tag) copy is kept. To act on the task, right-click it
-/// directly. This prevents confusing menus that show both "Cut Tag" and
-/// "Cut Task" when right-clicking a tag pill.
+/// Identity keys on the same `(id, args)` pair the cross-emitter dedup
+/// uses: `id` alone is not enough because fan-out dynamic rows (e.g. the
+/// per-view `view.set` entries) share an id and only differ by `args`.
+/// Collapsing by `id` alone would drop every row but the first, erasing
+/// the palette's "Switch to <ViewName>" list.
+///
+/// When a command like `entity.cut` appears in both tag and task scopes
+/// (same id, no args on either), only the innermost (tag) copy is kept.
+/// To act on the task, right-click it directly. This prevents confusing
+/// menus that show both "Cut Tag" and "Cut Task" when right-clicking a
+/// tag pill.
 fn dedupe_by_id(result: &mut Vec<ResolvedCommand>) {
-    let mut seen_ids: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
     result.retain(|c| {
-        if seen_ids.contains(&c.id) {
+        let args_key = c
+            .args
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
+        let key = (c.id.clone(), args_key);
+        if seen.contains(&key) {
             return false;
         }
-        seen_ids.insert(c.id.clone());
+        seen.insert(key);
         true
     });
 }
@@ -1684,8 +1784,12 @@ mod tests {
     // Dynamic view switch commands
     // =========================================================================
 
+    /// The palette surfaces one `view.set` row per known view, each carrying
+    /// the matching `view_id` pre-filled in its `args`. The dispatcher takes
+    /// these rows verbatim — no suffix rewriting — so the wire format must
+    /// match the canonical `view.set` command's param contract.
     #[test]
-    fn view_switch_commands_appear_when_views_provided() {
+    fn view_switch_commands_emit_canonical_view_set_with_args() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
         let dynamic = DynamicSources {
@@ -1719,25 +1823,48 @@ mod tests {
             false,
             Some(&dynamic),
         );
-        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
+        // Legacy `view.switch:{id}` ids must NOT appear — the indirection is gone.
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(
-            ids.contains(&"view.switch:board-view"),
-            "should have board-view switch: {:?}",
+            !ids.iter().any(|id| id.starts_with("view.switch:")),
+            "legacy view.switch:* ids must not be emitted: {:?}",
             ids
         );
+
+        // One `view.set` row per view, distinguished by args.view_id.
+        let view_set_rows: Vec<&ResolvedCommand> =
+            cmds.iter().filter(|c| c.id == "view.set").collect();
+        let args_view_ids: Vec<&str> = view_set_rows
+            .iter()
+            .map(|c| {
+                c.args
+                    .as_ref()
+                    .and_then(|v| v.get("view_id"))
+                    .and_then(|v| v.as_str())
+                    .expect("every view.set palette row must carry args.view_id")
+            })
+            .collect();
         assert!(
-            ids.contains(&"view.switch:tasks-grid"),
-            "should have tasks-grid switch: {:?}",
-            ids
+            args_view_ids.contains(&"board-view"),
+            "should have view.set row for board-view: {:?}",
+            args_view_ids
         );
         assert!(
-            ids.contains(&"view.switch:tags-grid"),
-            "should have tags-grid switch: {:?}",
-            ids
+            args_view_ids.contains(&"tasks-grid"),
+            "should have view.set row for tasks-grid: {:?}",
+            args_view_ids
+        );
+        assert!(
+            args_view_ids.contains(&"tags-grid"),
+            "should have view.set row for tags-grid: {:?}",
+            args_view_ids
         );
     }
 
+    /// Per-view `view.set` rows keep the same display name and group the
+    /// legacy `view.switch:*` entries carried, so palette rendering (which
+    /// keys on `name`/`group`) is unchanged.
     #[test]
     fn view_switch_commands_have_correct_names() {
         let (registry, impls, fields, ui) = setup();
@@ -1771,22 +1898,35 @@ mod tests {
 
         let board_switch = cmds
             .iter()
-            .find(|c| c.id == "view.switch:board-view")
-            .unwrap();
+            .find(|c| {
+                c.id == "view.set"
+                    && c.args.as_ref().and_then(|v| v.get("view_id"))
+                        == Some(&serde_json::Value::String("board-view".into()))
+            })
+            .expect("view.set row for board-view must exist");
         assert_eq!(board_switch.name, "Switch to Board View");
         assert_eq!(board_switch.group, "view");
         assert!(board_switch.target.is_none());
 
         let grid_switch = cmds
             .iter()
-            .find(|c| c.id == "view.switch:tasks-grid")
-            .unwrap();
+            .find(|c| {
+                c.id == "view.set"
+                    && c.args.as_ref().and_then(|v| v.get("view_id"))
+                        == Some(&serde_json::Value::String("tasks-grid".into()))
+            })
+            .expect("view.set row for tasks-grid must exist");
         assert_eq!(grid_switch.name, "Switch to Task Grid");
     }
 
-    /// Right-click on a view button must NOT surface any `view.switch:{id}`
+    /// Right-click on a view button must NOT surface any "Switch to X"
     /// commands — view switching is a palette-only action. This holds
     /// regardless of which `view:*` moniker is in the scope chain.
+    ///
+    /// After 01KPZMXXEXKVE3RNPA4XJP0105 the dynamic rows emit `view.set`
+    /// directly with args instead of the legacy `view.switch:{id}` id, so
+    /// the guard checks both: the legacy prefix must stay absent, and the
+    /// "switch" group must not contribute any context-menu rows.
     #[test]
     fn view_switch_context_menu_only_emits_in_scope_view() {
         let (registry, impls, fields, ui) = setup();
@@ -1826,15 +1966,23 @@ mod tests {
 
         assert!(
             !ids.iter().any(|id| id.starts_with("view.switch:")),
-            "view.switch:* must NOT appear in right-click menu regardless of scope: {:?}",
+            "legacy view.switch:* prefix must never appear: {:?}",
             ids
+        );
+        assert!(
+            !cmds.iter().any(|c| c.group == "view"),
+            "\"Switch to X\" rows (group == \"view\") must NOT appear in \
+             right-click menu regardless of scope: {:?}",
+            cmds.iter().map(|c| (&c.id, &c.group)).collect::<Vec<_>>()
         );
     }
 
     /// Palette behavior (`context_menu_only == false`) must be unchanged:
-    /// every `view.switch:{id}` still appears regardless of which view
-    /// moniker is in the scope chain. Guards against a regression where the
-    /// per-view scope filter accidentally suppresses palette entries.
+    /// a "Switch to X" row still appears for every known view regardless of
+    /// which view moniker is in the scope chain. Guards against a regression
+    /// where the per-view scope filter accidentally suppresses palette
+    /// entries. Each row now emits as a canonical `view.set` command with
+    /// its `view_id` pre-filled in `args`.
     #[test]
     fn view_switch_palette_still_emits_all_views() {
         let (registry, impls, fields, ui) = setup();
@@ -1871,22 +2019,32 @@ mod tests {
             false, // context_menu_only == false → palette
             Some(&dynamic),
         );
-        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        let view_set_args: Vec<&str> = cmds
+            .iter()
+            .filter(|c| c.id == "view.set")
+            .filter_map(|c| {
+                c.args
+                    .as_ref()
+                    .and_then(|v| v.get("view_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .collect();
 
         assert!(
-            ids.contains(&"view.switch:board-view"),
-            "palette must show every view.switch: {:?}",
-            ids
+            view_set_args.contains(&"board-view"),
+            "palette must show view.set for every view: {:?}",
+            view_set_args
         );
         assert!(
-            ids.contains(&"view.switch:tasks-grid"),
-            "palette must show every view.switch: {:?}",
-            ids
+            view_set_args.contains(&"tasks-grid"),
+            "palette must show view.set for every view: {:?}",
+            view_set_args
         );
         assert!(
-            ids.contains(&"view.switch:tags-grid"),
-            "palette must show every view.switch: {:?}",
-            ids
+            view_set_args.contains(&"tags-grid"),
+            "palette must show view.set for every view: {:?}",
+            view_set_args
         );
     }
 
@@ -2119,8 +2277,8 @@ mod tests {
 
     #[test]
     fn entity_add_present_in_context_menu() {
-        // Unlike view.switch / board.switch / perspective.goto which are
-        // navigation and context_menu: false, entity.add:* is a first-class
+        // Unlike the view / board / perspective / window-focus navigation
+        // rows (all context_menu: false), entity.add:* is a first-class
         // creation action and IS present with context_menu_only=true.
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["view:tags-grid".into(), "board:my-board".into()];
@@ -2260,8 +2418,13 @@ mod tests {
     // Dynamic perspective goto commands
     // =========================================================================
 
+    /// The palette surfaces one `perspective.set` row per known perspective,
+    /// each carrying the matching `perspective_id` pre-filled in its `args`.
+    /// The dispatcher takes these rows verbatim — no suffix rewriting — so
+    /// the wire format must match the canonical `perspective.set` command's
+    /// param contract.
     #[test]
-    fn perspective_goto_commands_appear_when_perspectives_provided() {
+    fn perspective_goto_commands_emit_canonical_perspective_set_with_args() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
         let dynamic = DynamicSources {
@@ -2288,24 +2451,57 @@ mod tests {
             false,
             Some(&dynamic),
         );
+
+        // Legacy `perspective.goto:{id}` ids must NOT appear — the
+        // indirection is gone.
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-
         assert!(
-            ids.contains(&"perspective.goto:p1"),
-            "should have p1: {:?}",
-            ids
-        );
-        assert!(
-            ids.contains(&"perspective.goto:p2"),
-            "should have p2: {:?}",
+            !ids.iter().any(|id| id.starts_with("perspective.goto:")),
+            "legacy perspective.goto:* ids must not be emitted: {:?}",
             ids
         );
 
-        let p1 = cmds.iter().find(|c| c.id == "perspective.goto:p1").unwrap();
+        // One `perspective.set` row per perspective, distinguished by
+        // args.perspective_id.
+        let args_ids: Vec<&str> = cmds
+            .iter()
+            .filter(|c| c.id == "perspective.set")
+            .filter_map(|c| {
+                c.args
+                    .as_ref()
+                    .and_then(|v| v.get("perspective_id"))
+                    .and_then(|v| v.as_str())
+            })
+            .collect();
+        assert!(
+            args_ids.contains(&"p1"),
+            "should have perspective.set row for p1: {:?}",
+            args_ids
+        );
+        assert!(
+            args_ids.contains(&"p2"),
+            "should have perspective.set row for p2: {:?}",
+            args_ids
+        );
+
+        let p1 = cmds
+            .iter()
+            .find(|c| {
+                c.id == "perspective.set"
+                    && c.args.as_ref().and_then(|v| v.get("perspective_id"))
+                        == Some(&serde_json::Value::String("p1".into()))
+            })
+            .expect("perspective.set row for p1 must exist");
         assert_eq!(p1.name, "Go to Perspective: Alpha");
         assert_eq!(p1.group, "perspective");
     }
 
+    /// Right-click must not surface any perspective-navigation commands —
+    /// "Go to Perspective: X" is a palette-only action. After
+    /// 01KPZMXXEXKVE3RNPA4XJP0105 the rows emit as `perspective.set` with
+    /// args, so the guard checks both the legacy `perspective.goto:*` prefix
+    /// (must not reappear) and the "perspective" group (must not leak into
+    /// the context menu).
     #[test]
     fn perspective_goto_commands_not_in_context_menu() {
         let (registry, impls, fields, ui) = setup();
@@ -2331,10 +2527,23 @@ mod tests {
 
         assert!(
             !ids.iter().any(|id| id.starts_with("perspective.goto:")),
-            "perspective commands should not appear in context menu"
+            "legacy perspective.goto:* prefix must never appear"
+        );
+        // The dynamic palette row we emit has group "perspective" — none of
+        // those should be reachable in context-menu-only mode.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| c.id == "perspective.set" && c.group == "perspective"),
+            "perspective.set navigation rows should not appear in context menu: {:?}",
+            cmds.iter().map(|c| (&c.id, &c.group)).collect::<Vec<_>>()
         );
     }
 
+    /// Without `DynamicSources`, no perspective navigation rows are emitted.
+    /// Guards against a regression where the dynamic emitter runs on stale
+    /// or missing runtime data and accidentally leaks a naked
+    /// `perspective.set` row (without args) into the palette.
     #[test]
     fn no_perspective_commands_without_dynamic_sources() {
         let (registry, impls, fields, ui) = setup();
@@ -2344,7 +2553,16 @@ mod tests {
 
         assert!(
             !ids.iter().any(|id| id.starts_with("perspective.goto:")),
-            "no perspective commands without dynamic sources"
+            "legacy perspective.goto:* prefix must never appear"
+        );
+        // With no dynamic sources, the only way a `perspective.set` row could
+        // sneak through is the registry itself — which should not happen in
+        // `context_menu_only == false` without a perspective in scope.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| c.id == "perspective.set" && c.group == "perspective"),
+            "no perspective navigation rows without dynamic sources"
         );
     }
 
@@ -3867,6 +4085,7 @@ mod tests {
             context_menu: true,
             keys: None,
             available: true,
+            args: None,
         }
     }
 

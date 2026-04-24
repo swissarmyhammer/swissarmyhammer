@@ -74,6 +74,16 @@ export function CommandPalette({
     context_menu: boolean;
     keys?: { vim?: string; cua?: string; emacs?: string };
     available: boolean;
+    /**
+     * Pre-filled dispatch arguments for fan-out palette rows.
+     *
+     * Dynamic emitters (e.g. per-view "Switch to X") ship the canonical
+     * command id (`view.set`) plus the distinguishing argument
+     * (`{ view_id: "..." }`) inside `args`. `executeSelectedCommand`
+     * forwards this bag to `dispatch(id, { args, target })` verbatim,
+     * so no client-side suffix parsing is needed.
+     */
+    args?: Record<string, unknown>;
   }
 
   // Fetch commands from the backend when the palette opens or scope changes.
@@ -99,6 +109,7 @@ export function CommandPalette({
           name: cmd.name,
           target: cmd.target,
           keys: cmd.keys,
+          args: cmd.args,
         },
         depth: 0,
       })),
@@ -218,8 +229,12 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
+      // `args` is populated by dynamic-emission rows (e.g. "Switch to
+      // Board View" carries `{ view_id: "board-view" }`). Forward it
+      // verbatim so the canonical command sees its pre-filled arg bag.
       dispatch(entry.command.id, {
         target: entry.command.target,
+        args: entry.command.args,
       }).catch(console.error);
     }
   }, [filteredCommands, selectedIndex, onClose, dispatch]);
@@ -394,18 +409,34 @@ export function CommandPalette({
           ) : (
             filteredCommands.map((entry, index) => {
               const hint = keyHint(entry);
+              // Fan-out rows (e.g. multiple "view.set" entries with
+              // different `args.view_id`) share an id and target, so the
+              // React key must also depend on `args` or the list would
+              // collapse to a single row.
+              const argsKey = entry.command.args
+                ? JSON.stringify(entry.command.args)
+                : "";
               return (
                 <div
-                  key={entry.command.id + ":" + (entry.command.target ?? "")}
+                  key={
+                    entry.command.id +
+                    ":" +
+                    (entry.command.target ?? "") +
+                    ":" +
+                    argsKey
+                  }
                   role="option"
                   aria-selected={index === selectedIndex}
-                  data-testid={`command-item-${entry.command.id}`}
+                  data-testid={`command-item-${entry.command.id}${
+                    argsKey ? `:${argsKey}` : ""
+                  }`}
                   className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
                     dispatch(entry.command.id, {
                       target: entry.command.target,
+                      args: entry.command.args,
                     }).catch(console.error);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}

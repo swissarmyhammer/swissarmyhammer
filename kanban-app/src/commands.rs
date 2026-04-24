@@ -101,68 +101,12 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
-/// Gather view info from an optional board handle for dynamic commands.
-fn gather_views(
-    handle: Option<&BoardHandle>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
-    use swissarmyhammer_kanban::scope_commands::ViewInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Some(views_lock) = handle.ctx.views() else {
-        return vec![];
-    };
-    let Ok(vc) = views_lock.try_read() else {
-        return vec![];
-    };
-    vc.all_views()
-        .iter()
-        .map(|v| ViewInfo {
-            id: v.id.clone(),
-            name: v.name.clone(),
-            entity_type: v.entity_type.clone(),
-        })
-        .collect()
-}
-
-/// Gather open board info from UIState for dynamic commands.
-async fn gather_boards(
-    ui_state: &swissarmyhammer_commands::UIState,
-    boards: &tokio::sync::RwLock<
-        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>,
-    >,
-) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
-    use swissarmyhammer_kanban::scope_commands::BoardInfo;
-    let open_paths = ui_state.open_boards();
-    let boards_lock = boards.read().await;
-    let mut result = Vec::new();
-    for path in &open_paths {
-        let p = std::path::Path::new(path);
-        let dir_name = p
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("Board")
-            .to_string();
-        let entity_name = match boards_lock.get(p) {
-            Some(handle) => board_display_name(handle)
-                .await
-                .unwrap_or_else(|| dir_name.clone()),
-            None => dir_name.clone(),
-        };
-        let context_name = boards_lock
-            .get(p)
-            .map(|h| h.ctx.name().to_string())
-            .unwrap_or_else(|| dir_name.clone());
-        result.push(BoardInfo {
-            path: path.clone(),
-            name: dir_name,
-            entity_name,
-            context_name,
-        });
-    }
-    result
-}
-
 /// Gather window info from Tauri for dynamic commands.
+///
+/// Stays in the GUI crate because live window titles, visibility, and focus
+/// state only exist on the Tauri runtime. The headless `DynamicSources`
+/// builder in `swissarmyhammer_kanban::dynamic_sources` takes the result of
+/// this function as a caller-supplied input; tests fabricate the list.
 fn gather_windows(
     app: &tauri::AppHandle,
 ) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
@@ -179,49 +123,6 @@ fn gather_windows(
                 title,
                 focused: w.is_focused().unwrap_or(false),
             })
-        })
-        .collect()
-}
-
-/// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
-fn resolve_active_view_kind(
-    handle: Option<&BoardHandle>,
-    ui_state: &swissarmyhammer_commands::UIState,
-) -> Option<String> {
-    let handle = handle?;
-    let active_id = ui_state.active_view_id("main");
-    if active_id.is_empty() {
-        return None;
-    }
-    let views_lock = handle.ctx.views()?;
-    let vc = views_lock.try_read().ok()?;
-    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
-    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
-}
-
-/// Gather perspective info from an optional board handle for dynamic commands.
-///
-/// When `view_kind` is provided, only perspectives matching that view kind are
-/// returned. This prevents duplicate "Default" entries across view kinds.
-async fn gather_perspectives(
-    handle: Option<&BoardHandle>,
-    view_kind: Option<&str>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
-    use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Ok(pctx) = handle.ctx.perspective_context().await else {
-        return vec![];
-    };
-    let Ok(pc) = pctx.try_read() else {
-        return vec![];
-    };
-    pc.all()
-        .iter()
-        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
-        .map(|p| PerspectiveInfo {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            view: p.view.clone(),
         })
         .collect()
 }
@@ -1307,28 +1208,32 @@ fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
 }
 
 /// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
+///
+/// The two remaining dynamic prefixes:
+///
+///   * `board.switch:{path}` — rewrites to `file.switchBoard` with `path`
+///     lifted into args and additionally propagated as the effective board
+///     path so downstream multi-window targeting switches boards in lockstep
+///     with the command.
+///   * `entity.add:{type}` — rewrites to the canonical `entity.add` with
+///     `entity_type` moved into the arg bag; `AddEntityCmd` reads
+///     `entity_type` from args and forwards every other arg as a field
+///     override, so adding a new entity type needs zero Rust changes here.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the emit_* helpers in
+/// `swissarmyhammer_kanban::scope_commands` now produce `view.set` /
+/// `perspective.set` rows directly with the view / perspective id
+/// pre-filled in `args`, so no rewrite hop is needed.
 fn match_dynamic_prefix(
     cmd: &str,
 ) -> Result<Option<(&'static str, &'static str, String, bool)>, String> {
-    if let Some(suffix) = cmd.strip_prefix("view.switch:") {
-        Ok(Some(("view.set", "view_id", suffix.to_string(), false)))
-    } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
+    if let Some(suffix) = cmd.strip_prefix("board.switch:") {
         if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
             return Err(format!("Invalid board path in command: {:?}", suffix));
         }
         Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
-    } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
-        Ok(Some((
-            "perspective.set",
-            "perspective_id",
-            suffix.to_string(),
-            false,
-        )))
     } else if let Some(suffix) = cmd.strip_prefix("entity.add:") {
-        // `entity.add:{type}` → canonical `entity.add` with the type moved
-        // into the arg bag. The generic `AddEntityCmd` reads `entity_type`
-        // from args and forwards every other arg as a field override, so
-        // adding a new entity type requires zero Rust changes here.
         if suffix.is_empty() {
             return Err(format!("Missing entity type in command: {:?}", cmd));
         }
@@ -1345,10 +1250,15 @@ fn match_dynamic_prefix(
 
 /// Rewrite dynamic palette command prefixes to their canonical forms.
 ///
-/// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
-/// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
-/// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
-/// `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+/// Handles `window.focus:*` (pure side-effect, returns early),
+/// `board.switch:*`, and `entity.add:*` by stripping the prefix and
+/// injecting the suffix as an arg. Preserves all input validation
+/// (ASCII-only, `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits `view.set` /
+/// `perspective.set` directly with args pre-filled, so no rewrite is
+/// needed.
 fn rewrite_dynamic_prefix(
     app: &AppHandle,
     cmd: &str,
@@ -1451,11 +1361,14 @@ fn apply_prefix_rewrite(
 /// It handles: command lookup, context building, execution, undo tracking,
 /// entity flush, event emission, and UIState change broadcasting.
 ///
-/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`,
-/// `perspective.goto:*`, `entity.add:*`) are rewritten to their canonical
-/// command IDs via a single-pass loop. The rewrite is limited to one
-/// iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded recursion from
-/// malformed command chains like `board.switch:board.switch:…`.
+/// Dynamic prefix commands (`board.switch:*`, `entity.add:*`) are rewritten
+/// to their canonical command IDs via a single-pass loop. The rewrite is
+/// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
+/// recursion from malformed command chains like `board.switch:board.switch:…`.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` used to travel this path
+/// and were retired in 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits
+/// `view.set` / `perspective.set` directly with args pre-filled.
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
@@ -1479,8 +1392,11 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    // Rewrite dynamic prefixes (view.switch:*, board.switch:*, perspective.goto:*)
-    // to canonical commands with merged args. Also validates command ID.
+    // Rewrite the remaining dynamic prefixes (`window.focus:*`,
+    // `board.switch:*`, `entity.add:*`) to canonical commands with merged
+    // args. Also validates command ID. `view.switch:*` /
+    // `perspective.goto:*` are emitted as `view.set` / `perspective.set`
+    // directly (see 01KPZMXXEXKVE3RNPA4XJP0105) so no rewrite hop applies.
     let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
     if let Some(result) = rw.early_return {
         return Ok(result);
@@ -1992,30 +1908,46 @@ async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: 
 // list_commands_for_scope — backend-driven command resolution
 // ---------------------------------------------------------------------------
 
-/// Return all available commands for the given scope chain.
-///
-/// This is the single source of truth for what commands are available.
-/// The frontend calls this with a scope chain and renders the result.
-/// No command logic in the UI — just render and dispatch.
 /// Build a `DynamicSources` for the current app state (views, boards,
 /// windows, perspectives).
+///
+/// This is a thin Tauri-side shim around the headless
+/// [`swissarmyhammer_kanban::dynamic_sources::build_dynamic_sources`]
+/// entry point. All assembly logic (views/boards/perspectives + active
+/// view kind) lives in the kanban crate so it can be exercised without
+/// Tauri scaffolding; this shim contributes the one input that can only
+/// come from the GUI runtime — live window titles/visibility/focus.
 async fn build_dynamic_sources(
     app: &AppHandle,
     state: &AppState,
     active_handle: Option<&crate::state::BoardHandle>,
 ) -> swissarmyhammer_kanban::scope_commands::DynamicSources {
-    use swissarmyhammer_kanban::scope_commands::DynamicSources;
-    let views = gather_views(active_handle);
-    let boards = gather_boards(&state.ui_state, &state.boards).await;
+    use swissarmyhammer_kanban::dynamic_sources::{
+        build_dynamic_sources as build_headless, DynamicSourcesInputs,
+    };
     let windows = gather_windows(app);
-    let view_kind = resolve_active_view_kind(active_handle, &state.ui_state);
-    let perspectives = gather_perspectives(active_handle, view_kind.as_deref()).await;
-    DynamicSources {
-        views,
-        boards,
+    // Project the `HashMap<PathBuf, Arc<BoardHandle>>` down to
+    // `HashMap<PathBuf, Arc<KanbanContext>>` — the headless builder only
+    // needs the context, not the full handle (entity cache, bridge task,
+    // search index are irrelevant to dynamic-source assembly).
+    let boards_guard = state.boards.read().await;
+    let open_board_ctxs: std::collections::HashMap<
+        PathBuf,
+        Arc<swissarmyhammer_kanban::KanbanContext>,
+    > = boards_guard
+        .iter()
+        .map(|(path, handle)| (path.clone(), Arc::clone(&handle.ctx)))
+        .collect();
+    drop(boards_guard);
+    let active_ctx = active_handle.map(|h| h.ctx.as_ref());
+    build_headless(DynamicSourcesInputs {
+        ui_state: &state.ui_state,
+        active_ctx,
+        open_board_ctxs: &open_board_ctxs,
+        active_window_label: Some("main"),
         windows,
-        perspectives,
-    }
+    })
+    .await
 }
 
 /// Emit `info`-level telemetry about the resolved-command list so a
@@ -2475,38 +2407,26 @@ mod tests {
         assert!(match_dynamic_prefix("task.add").unwrap().is_none());
     }
 
-    /// `view.switch:{id}` rows in the palette rewrite to the live
-    /// `view.set` command with the id moved into the arg bag under
-    /// `view_id`. Regression-guards 01KPY02X405QTP5ACH67THHSN8, where the
-    /// target was renamed from `ui.view.set` → `view.set` as part of
-    /// relocating the definition out of generic `ui.yaml` into kanban's
-    /// `view.yaml`.
+    /// Regression guard for 01KPZMXXEXKVE3RNPA4XJP0105: the palette emits
+    /// `view.set` / `perspective.set` directly with pre-filled `args` —
+    /// there is no longer a `view.switch:*` or `perspective.goto:*` rewrite
+    /// branch. If an input string still carries one of the legacy prefixes
+    /// it must fall through to `Ok(None)` so the dispatcher surfaces it as
+    /// an unknown command rather than silently translating it.
     #[test]
-    fn match_dynamic_prefix_view_switch_rewrites_to_view_set() {
-        let (new_cmd, arg_key, arg_val, updates_bp) =
+    fn match_dynamic_prefix_no_longer_rewrites_view_switch_or_perspective_goto() {
+        assert!(
             match_dynamic_prefix("view.switch:board-view")
                 .unwrap()
-                .unwrap();
-        assert_eq!(new_cmd, "view.set");
-        assert_eq!(arg_key, "view_id");
-        assert_eq!(arg_val, "board-view");
-        assert!(!updates_bp);
-    }
-
-    /// `perspective.goto:{id}` rewrites to `perspective.set` with the id
-    /// under `perspective_id`. Same task / same reason as
-    /// `match_dynamic_prefix_view_switch_rewrites_to_view_set` — the old
-    /// target was `ui.perspective.set` before the relocation.
-    #[test]
-    fn match_dynamic_prefix_perspective_goto_rewrites_to_perspective_set() {
-        let (new_cmd, arg_key, arg_val, updates_bp) =
+                .is_none(),
+            "view.switch:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
+        assert!(
             match_dynamic_prefix("perspective.goto:sprint-01")
                 .unwrap()
-                .unwrap();
-        assert_eq!(new_cmd, "perspective.set");
-        assert_eq!(arg_key, "perspective_id");
-        assert_eq!(arg_val, "sprint-01");
-        assert!(!updates_bp);
+                .is_none(),
+            "perspective.goto:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
     }
 
     #[test]

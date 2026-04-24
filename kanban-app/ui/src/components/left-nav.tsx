@@ -87,20 +87,22 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
  * `view:{id}` moniker — {@link useContextMenu} reads that scope chain when
  * building the context-menu request to the backend.
  *
- * Left-click dispatches `view.switch:{id}` through the command pipeline;
- * right-click raises the native context menu via `useContextMenu`. The
- * menu never contains a `Switch to <ViewName>` entry — view switching is
- * palette-only — but scope-dependent dynamics (e.g. `entity.add:{type}`)
- * still surface for views that declare an `entity_type`.
+ * Left-click dispatches the canonical `view.set` command with the view id
+ * in `args` (the palette fan-out that used to emit `view.switch:{id}` was
+ * retired in 01KPZMXXEXKVE3RNPA4XJP0105). Right-click raises the native
+ * context menu via `useContextMenu`. The menu never contains a
+ * `Switch to <ViewName>` entry — view switching is palette-only — but
+ * scope-dependent dynamics (e.g. `entity.add:{type}`) still surface for
+ * views that declare an `entity_type`.
  */
 function ViewButton({ view, isActive }: ScopedViewButtonProps) {
-  const dispatch = useDispatchCommand();
+  const dispatch = useDispatchCommand("view.set");
   const handleContextMenu = useContextMenu();
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
-          onClick={() => dispatch(`view.switch:${view.id}`)}
+          onClick={() => dispatch({ args: { view_id: view.id } })}
           onContextMenu={handleContextMenu}
           className={cn(
             "flex items-center justify-center rounded-md p-1.5 transition-colors",

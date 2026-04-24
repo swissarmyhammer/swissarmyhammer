@@ -184,8 +184,12 @@ describe("LeftNav — right-click context menu", () => {
    * Left-click still dispatches the view switch through the command pipeline
    * (regression guard: wiring the context-menu handler must not swallow
    * click events on the same button).
+   *
+   * After 01KPZMXXEXKVE3RNPA4XJP0105 the button dispatches the canonical
+   * `view.set` command with `view_id` in `args` — the old
+   * `view.switch:{id}` indirection is gone.
    */
-  it("left-click dispatches view.switch:{id} through dispatch_command", async () => {
+  it("left-click dispatches view.set with view_id in args through dispatch_command", async () => {
     mockInvoke.mockImplementation(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (_cmd: string, _args?: any) => Promise.resolve(null),
@@ -203,6 +207,11 @@ describe("LeftNav — right-click context menu", () => {
       ([cmd]) => cmd === "dispatch_command",
     );
     expect(dispatchCall).toBeDefined();
-    expect((dispatchCall![1] as { cmd: string }).cmd).toBe("view.switch:v2");
+    const payload = dispatchCall![1] as {
+      cmd: string;
+      args?: Record<string, unknown>;
+    };
+    expect(payload.cmd).toBe("view.set");
+    expect(payload.args).toEqual({ view_id: "v2" });
   });
 });

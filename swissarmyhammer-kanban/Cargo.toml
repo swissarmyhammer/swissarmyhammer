@@ -23,6 +23,7 @@ open = "5"
 
 # Local workspace dependencies
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-views = { workspace = true }
@@ -51,6 +52,8 @@ swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
 # can import `swissarmyhammer_kanban::test_support::*` helpers without the
 # individual test file needing a feature gate.
 swissarmyhammer-kanban = { path = ".", features = ["test-support"] }
+# Serialize tests that mutate process-wide env vars (e.g. XDG_CONFIG_HOME).
+serial_test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 
 [[bench]]

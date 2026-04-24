@@ -604,11 +604,12 @@ mod tests {
         // cannot be invoked from the command palette (the palette has no UI
         // for collecting arbitrary args), so it must be marked
         // `visible: false` in ui.yaml. User-facing palette entries for those
-        // operations are synthesized elsewhere (e.g. `view.switch:{id}` in
-        // `scope_commands::emit_view_switch`, rewritten back to `view.set`
-        // by the dispatcher — `view.set` lives in
-        // `swissarmyhammer-kanban/builtin/commands/view.yaml` because
-        // "view" is a kanban concept, not a generic UI primitive).
+        // operations are synthesized elsewhere — e.g. the kanban crate's
+        // `scope_commands::emit_view_switch` emits one `view.set` row per
+        // known view with `view_id` pre-filled in `args`, dispatched as-is
+        // (no suffix rewriting after 01KPZMXXEXKVE3RNPA4XJP0105). `view.set`
+        // lives in `swissarmyhammer-kanban/builtin/commands/view.yaml`
+        // because "view" is a kanban concept, not a generic UI primitive.
         //
         // See task 01KPTHX6J2K28GMMV6YQVJWYCE. `ui.view.set` and
         // `ui.perspective.set` were relocated to the kanban crate in

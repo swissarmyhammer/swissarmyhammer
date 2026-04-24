@@ -4,9 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry, UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
@@ -20,8 +18,10 @@ use swissarmyhammer_kanban::Execute;
 use crate::watcher;
 use swissarmyhammer_entity::EntityCache;
 
+/// XDG subdirectory for this consumer's UIState config file. Passed to
+/// [`swissarmyhammer_kanban::default_ui_state`], which owns the full
+/// `$XDG_CONFIG_HOME/sah/<subdir>/ui-state.yaml` resolution.
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
-const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
 /// System clipboard provider using the Tauri clipboard plugin.
 pub struct TauriClipboardProvider {
@@ -433,43 +433,40 @@ pub(crate) struct AppState {
 impl AppState {
     /// Create a new AppState, loading config from disk.
     ///
-    /// Restores the inspector stack from the persisted config into UIState
-    /// so the backend is the single source of truth from startup.
+    /// Delegates all loading to the crates that own it:
+    /// [`swissarmyhammer_kanban::default_ui_state`] resolves the XDG
+    /// config path and reads the YAML (or seeds defaults), and
+    /// [`swissarmyhammer_kanban::default_commands_registry`] composes
+    /// the builtin command stack. This struct does not know the config
+    /// file format, the default path, or how the command registry is
+    /// assembled — it just wires the pieces together.
     pub fn new() -> Self {
-        Self::with_ui_state_path(ui_state_file_path())
+        Self::with_ui_state(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR))
     }
 
-    /// Create AppState with a specific UIState persistence path.
-    ///
-    /// Used by tests to avoid polluting the real config file.
+    /// Create AppState with a freshly loaded UIState written to a
+    /// per-test temp path, so unit tests don't clobber the developer's
+    /// real config. Still goes through [`UIState::load`] to exercise the
+    /// same loader the production path uses.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        Self::with_ui_state_path(
-            std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new())),
-        )
+        let path = std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new()));
+        Self::with_ui_state(UIState::load(path))
     }
 
-    /// Internal constructor with an explicit UIState persistence path.
+    /// Internal constructor that takes an already-loaded [`UIState`].
     ///
-    /// The commands registry stacks two builtin YAML sources at startup:
-    /// generic commands from `swissarmyhammer-commands` first, then
-    /// kanban-specific commands from `swissarmyhammer-kanban`. User overrides
-    /// in `.kanban/commands/` layer on top later via
-    /// [`Self::reload_command_overrides`]. Later sources override earlier by
-    /// ID with partial merge (`CommandsRegistry::merge_yaml_sources`).
-    fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
-        let commands_sources = builtin_yaml_sources();
-        let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
-        let mut source_refs: Vec<(&str, &str)> =
-            Vec::with_capacity(commands_sources.len() + kanban_sources.len());
-        source_refs.extend(commands_sources.iter().map(|(n, c)| (*n, *c)));
-        source_refs.extend(kanban_sources.iter().map(|(n, c)| (*n, *c)));
-        let ui_state = Arc::new(UIState::load(ui_state_path));
-
+    /// Every other constructor funnels through here so the wiring (MRU,
+    /// window bookkeeping, command registry) sits in exactly one place.
+    /// The command registry is composed by
+    /// [`swissarmyhammer_kanban::default_commands_registry`] — user
+    /// overrides from `.kanban/commands/` layer on top later via
+    /// [`Self::reload_command_overrides`].
+    fn with_ui_state(ui_state: UIState) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
-            ui_state,
-            commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
+            ui_state: Arc::new(ui_state),
+            commands_registry: RwLock::new(swissarmyhammer_kanban::default_commands_registry()),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
@@ -702,32 +699,28 @@ impl AppState {
 
     /// Rebuild the commands registry from builtins + user overrides from the
     /// active board's `.kanban/commands/` directory.
+    ///
+    /// Delegates the default-stack composition to
+    /// [`swissarmyhammer_kanban::default_commands_registry_with_overrides`]
+    /// so the stacking order (generic → kanban → user) lives in one
+    /// place, not spread across every call site that builds a registry.
     async fn reload_command_overrides(&self, kanban_path: &Path) {
         let commands_dir = kanban_path.join("commands");
         let user_sources = load_yaml_dir(&commands_dir);
         if user_sources.is_empty() {
             return;
         }
-        let refs: Vec<(&str, &str)> = user_sources
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
 
-        // Rebuild from scratch: commands-crate builtins, then kanban-crate
-        // builtins, then user overrides. Matches the stacking order in
-        // `with_ui_state_path` so user overrides can override either builtin
-        // source.
-        let commands_builtin = builtin_yaml_sources();
-        let kanban_builtin = swissarmyhammer_kanban::builtin_yaml_sources();
-        let mut builtin_refs: Vec<(&str, &str)> =
-            Vec::with_capacity(commands_builtin.len() + kanban_builtin.len());
-        builtin_refs.extend(commands_builtin.iter().map(|(n, c)| (*n, *c)));
-        builtin_refs.extend(kanban_builtin.iter().map(|(n, c)| (*n, *c)));
-        let mut registry = CommandsRegistry::from_yaml_sources(&builtin_refs);
-        registry.merge_yaml_sources(&refs);
+        let count = user_sources.len();
+        let registry =
+            swissarmyhammer_kanban::default_commands_registry_with_overrides(&user_sources);
 
         *self.commands_registry.write().await = registry;
-        tracing::info!(dir = %commands_dir.display(), count = user_sources.len(), "loaded user command overrides");
+        tracing::info!(
+            dir = %commands_dir.display(),
+            count,
+            "loaded user command overrides",
+        );
     }
 
     /// Start file watchers for all open boards that don't have one yet.
@@ -977,21 +970,6 @@ fn dscl_jpeg_photo(username: &str) -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 fn macos_profile_picture(_username: &str) -> Option<String> {
     None
-}
-
-/// Get the path to the UIState persistence file.
-///
-/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/ui-state.yaml`
-fn ui_state_file_path() -> PathBuf {
-    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
-
-    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
-        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(UI_STATE_FILE_NAME))
-        .unwrap_or_else(|_| {
-            PathBuf::from(".")
-                .join(CONFIG_APP_SUBDIR)
-                .join(UI_STATE_FILE_NAME)
-        })
 }
 
 #[cfg(test)]
