@@ -3,6 +3,8 @@ name: review
 description: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent.
 context: fork
 agent: reviewer
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool (for symbol lookup, callgraph, and blast-radius during review) and the `kanban` MCP tool (to drive tasks through the review column and capture follow-up findings). 
 metadata:
   author: "swissarmyhammer"
   version: "{{version}}"
@@ -96,10 +98,10 @@ Read the matching resource file bundled with this skill:
 
 | Language | File |
 |----------|------|
-| Rust | [RUST_REVIEW.md](./RUST_REVIEW.md) |
-| Dart / Flutter | [DART_FLUTTER_REVIEW.md](./DART_FLUTTER_REVIEW.md) |
-| Python | [PYTHON_REVIEW.md](./PYTHON_REVIEW.md) |
-| JavaScript / TypeScript | [JS_TS_REVIEW.md](./JS_TS_REVIEW.md) |
+| Rust | [RUST_REVIEW.md](./references/RUST_REVIEW.md) |
+| Dart / Flutter | [DART_FLUTTER_REVIEW.md](./references/DART_FLUTTER_REVIEW.md) |
+| Python | [PYTHON_REVIEW.md](./references/PYTHON_REVIEW.md) |
+| JavaScript / TypeScript | [JS_TS_REVIEW.md](./references/JS_TS_REVIEW.md) |
 
 If the project uses multiple languages, apply all relevant sections. Language-specific findings follow the same severity levels.
 
@@ -231,6 +233,36 @@ Finish with a short report covering:
 - Optional one-sentence overall assessment
 
 There is no verdict label (no approve / request-changes / comment-only) — the column movement *is* the verdict.
+
+## Examples
+
+### Example 1: task-mode review of an implementation that just landed in review
+
+User says: `/review 01KN2X3Y4Z5A6B7C8D9E0F1G2H`
+
+Actions:
+1. Ensure the `review` column exists (idempotent).
+2. Call `{"op": "get task", "id": "01KN2X3Y4Z5A6B7C8D9E0F1G2H"}` to read the task body and scope the diff to the referenced range.
+3. Call `{"op": "get changes"}` to auto-detect, read every changed file, and apply the six examination layers (plus RUST_REVIEW.md for a Rust change).
+4. Fresh review produces zero findings and all prior `- [ ]` items from earlier review sections are now `- [x]`.
+5. Move the task to `done` via `{"op": "move task", "id": "01KN2X3Y4Z5A6B7C8D9E0F1G2H", "column": "done"}`.
+
+Result: Task advances from `review` to `done`. The column move is the verdict — no new findings appended, prior history preserved.
+
+### Example 2: range-mode review with findings
+
+User says: `/review the last 4 commits`
+
+Actions:
+1. Ensure the `review` column exists.
+2. `review` column is empty, so enter range-mode. Call `{"op": "get changes", "range": "HEAD~4..HEAD"}`.
+3. For each changed file, use `{"op": "get diff", "left": "src/server.rs@HEAD~4", "right": "src/server.rs"}` for semantic diffs.
+4. Layered review produces 1 blocker (missing auth check) and 2 nits.
+5. Ensure the `#review` tag exists via `{"op": "list tags"}` (create it if absent).
+6. Create a tracking task in the `review` column: `{"op": "add task", "title": "Review of HEAD~4..HEAD", "description": "Scope: HEAD~4..HEAD\n\n## Review Findings (2026-04-24 14:08)\n\n### Blockers\n- [ ] `src/server.rs:42` — Missing auth check on /admin handler. Add `require_admin(&req)?` before the dispatch.\n\n### Nits\n- [ ] ...", "column": "review"}`.
+7. Tag it: `{"op": "tag task", "id": "<new-id>", "tag": "review"}`.
+
+Result: A single tracking task in `review` captures all findings as a GFM checklist. Subsequent `/review <new-id>` follows task-mode — moves to `done` once everything is checked off and a re-review is clean.
 
 ## Rules
 

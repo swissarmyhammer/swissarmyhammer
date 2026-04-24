@@ -1,6 +1,8 @@
 ---
 name: finish
-description: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag/project/filter). Uses ralph to prevent stopping between iterations.
+description: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter). Uses ralph to prevent stopping between iterations.
+license: MIT OR Apache-2.0
+compatibility: Requires the `kanban` and `ralph` MCP tools , plus a Stop-hook-capable harness (e.g. Claude Code) so the declared Stop hook can re-invoke the agent across iterations. Will not function on harnesses that lack Stop hooks or these MCP tools.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -112,6 +114,40 @@ Task ID: [TASK-ID]
 ```
 
 Each agent must target a specific task by id. Do NOT let parallel agents call `next task` — they will race and pick up the same task.
+
+## Examples
+
+### Example 1: single-task mode — drive one task all the way to done
+
+User says: `/finish 01KN2X3Y4Z5A6B7C8D9E0F1G2H`
+
+Actions:
+1. Argument matches the 26-char ULID pattern → single-task mode. Set ralph: `{"op": "set ralph", "instruction": "Finish task 01KN2X3Y4Z5A6B7C8D9E0F1G2H — loop until it lands in done"}`.
+2. Verify the task exists with `{"op": "get task", "id": "01KN2X3Y4Z5A6B7C8D9E0F1G2H"}`.
+3. Invoke `/implement 01KN2X3Y4Z5A6B7C8D9E0F1G2H`. The implement agent moves it through `doing` into `review`.
+4. Invoke `/test`. Tests pass.
+5. Invoke `/review 01KN2X3Y4Z5A6B7C8D9E0F1G2H`. Review returns one blocker: "missing auth check on /admin". The review skill appends a fresh `## Review Findings` section and leaves the task in `review`.
+6. Loop back to step 3 — `/implement 01KN2X3Y4Z5A6B7C8D9E0F1G2H` reads the unchecked findings, addresses them, flips the boxes to `- [x]`, and moves the task back to `review`.
+7. `/test` → `/review` again — clean this time. Task advances to `done`.
+8. Verify `{"op": "get task"}` shows `column: "done"`. Clear ralph: `{"op": "clear ralph"}`. Report: 2 iterations, tests green.
+
+Result: Single task driven from whatever starting column to `done`. Ralph kept the loop alive between steps; the guardrail would have stopped it if the same finding had recurred 3 times.
+
+### Example 2: scoped-batch mode — finish all ready bugs
+
+User says: `/finish #bug`
+
+Actions:
+1. Argument is not a ULID → scoped-batch mode with `<SCOPE_FILTER> = #bug`. Set ralph: `{"op": "set ralph", "instruction": "Finish all ready kanban tasks in scope until the scope is clear"}`.
+2. Query ready todo tasks in scope: `{"op": "list tasks", "column": "todo", "filter": "#READY && (#bug)"}` → returns 3 ready bug tasks.
+3. Spawn 3 parallel `Agent` subagents in a single message, one per task, each running `/implement <task-id>` pinned to its specific task id (never `next task` — would race).
+4. Run `/test` after the batch completes — all green.
+5. Query review-column tasks in scope: `{"op": "list tasks", "column": "review", "filter": "#bug"}`. Spawn parallel `/review <task-id>` agents in a single message. Two move to `done`; one gets fresh findings appended and stays in `review`.
+6. Dispatch `/implement` on the one remaining task to work through its findings checklist, then `/test`, then re-review.
+7. Loop back to step 2 until both scoped queries return empty.
+8. `{"op": "clear ralph"}` and report: 3 tasks driven to done, parallel counts, any stuck tasks. Tasks outside `#bug` are deliberately untouched.
+
+Result: Every ready bug on the board reaches `done` through the full implement → test → review pipeline, with max 4 concurrent agents, and the scope filter is respected on every query.
 
 ## Constraints
 

@@ -1,6 +1,8 @@
 ---
 name: lsp
 description: 'Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. Also use when live code intelligence ops (get_hover, get_completions, go to definition) return degraded results from the tree-sitter layer instead of LSP, or when you see "no code intelligence", "can''t go to definition", "no type info available", or "source_layer: TreeSitter" on ops that should have full LSP data.'
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool  for `lsp status` and `detect projects`. Also needs locally installed LSP servers (e.g. rust-analyzer, pyright, gopls, typescript-language-server) on the system PATH for the languages present in the workspace.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -64,3 +66,35 @@ If the result comes back with LSP-sourced data (not just tree-sitter), the serve
 
 - **Install command fails**: Report the error output and suggest the user install manually (e.g. different package manager, permissions issue, version conflict).
 - **No languages detected**: Suggest the user check that the project has source files and re-run `code_context` with `{"op": "lsp status"}` after adding them.
+
+## Troubleshooting
+
+### Error: `get_hover` / `get_definition` still return `source_layer: TreeSitter` after the server reports `installed: true`
+
+- **Cause**: The LSP process was already running (against the previous state of the workspace) when the server binary was installed, or the server has not finished its initial project scan. Installation does not restart live sessions.
+- **Solution**: Restart the MCP server (or the parent agent harness) so `sah` spawns a fresh LSP process, then wait for the initial scan. Verify with:
+  ```json
+  {"op": "get hover", "file_path": "<file-you-know>", "line": 0, "character": 0}
+  ```
+  A successful fix returns a non-empty `contents` field sourced from the LSP layer.
+
+### Error: `clangd` (C/C++) reports no symbols or "Unable to handle compilation, expected compilation database"
+
+- **Cause**: `clangd` needs a `compile_commands.json` at the workspace root (or in a `build/` directory it can find) to know include paths and compiler flags. Without it, it falls back to tree-sitter-only behavior.
+- **Solution**: Generate one from your build system and re-run `lsp status`:
+  - CMake: `cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ln -sf build/compile_commands.json .`
+  - Bear (Make-based builds): `bear -- make`
+  - Meson: already emitted in the build directory — symlink it to the root.
+
+### Error: `typescript-language-server` returns no completions or types in a monorepo
+
+- **Cause**: No `tsconfig.json` (or the wrong one) resolves for the file — the server cannot determine module resolution, target, or paths. Common in monorepos where each package has its own `tsconfig.json` but the root does not.
+- **Solution**: Add a root `tsconfig.json` with `"references"` to each package's config, or open the agent from inside the specific package directory. Confirm with:
+  ```json
+  {"op": "get hover", "file_path": "packages/<pkg>/src/index.ts", "line": 0, "character": 0}
+  ```
+
+### Error: `install command` succeeds but the binary is still not on `PATH`
+
+- **Cause**: The install placed the binary in a directory (e.g. `~/.cargo/bin`, `~/.npm-global/bin`, `~/go/bin`) that the MCP server's environment has not picked up. Shell `rc` files only affect interactive shells.
+- **Solution**: Export the directory in the environment that launches the agent (e.g. add it to `launchd` env on macOS or your service manager on Linux), then restart the MCP server. Verify with `which <server-binary>` in the same environment that launches `sah`.

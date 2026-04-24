@@ -1,7 +1,13 @@
 ---
 name: thoughtful
 description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
+license: MIT OR Apache-2.0
+metadata:
+  author: swissarmyhammer
+  version: 0.12.11
 ---
+
+# Thoughtful
 
 ## The Most Important Thinks
 

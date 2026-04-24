@@ -62,7 +62,13 @@ pub fn parse_skill_md_with_path(
     })
 }
 
-/// Parse a skill from a directory on disk
+/// Parse a skill from a directory on disk.
+///
+/// Reads the skill's `SKILL.md` from `dir` and walks the directory recursively
+/// to collect any additional resource files (e.g. `references/RUST_REVIEW.md`).
+/// Resource keys in [`Skill::resources`] are stored as forward-slash-separated
+/// paths relative to the skill root, preserving subdirectory structure so the
+/// deploy layer can recreate it under each agent's `.skills/` directory.
 pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, String> {
     let skill_md_path = dir.join("SKILL.md");
 
@@ -75,24 +81,59 @@ pub fn load_skill_from_dir(dir: &Path, source: SkillSource) -> Result<Skill, Str
 
     let mut skill = parse_skill_md_with_path(&content, source, Some(&skill_md_path))?;
 
-    // Load additional resource files from the directory
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.file_name().is_some_and(|n| n != "SKILL.md") {
-                if let Ok(file_content) = std::fs::read_to_string(&path) {
-                    let filename = path.file_name().unwrap().to_string_lossy().to_string();
-                    skill.resources.files.insert(filename, file_content);
-                }
-            }
+    // Walk the skill directory recursively so files under subdirectories
+    // (e.g. `references/`) are picked up. Resource keys are stored as paths
+    // relative to `dir`, normalized to forward slashes, so that deployment
+    // can recreate the subdirectory layout on disk.
+    for entry in walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        // Skip the top-level SKILL.md — it is already parsed above.
+        if path == skill_md_path {
+            continue;
+        }
+
+        let rel_path = match path.strip_prefix(dir) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Normalize to forward slashes so keys match the builtin-path format
+        // and remain platform-independent.
+        let key = rel_path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        if let Ok(file_content) = std::fs::read_to_string(path) {
+            skill.resources.files.insert(key, file_content);
         }
     }
 
     Ok(skill)
 }
 
-/// Parse a skill from embedded builtin content (name, list of (filename, content) pairs)
-pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Result<Skill, String> {
+/// Parse a skill from embedded builtin content.
+///
+/// `skill_name` is the leading directory segment used by the build-time
+/// generator to group files under a skill (e.g. `review`). `files` is the
+/// list of `(name, content)` pairs for that skill, where each `name` is a
+/// forward-slash path rooted at the builtin `skills/` directory
+/// (e.g. `review/SKILL.md`, `review/references/RUST_REVIEW.md`).
+///
+/// Resource keys in [`Skill::resources`] are stored as paths relative to the
+/// skill root — only the leading `<skill_name>/` segment is stripped, so
+/// subdirectory structure (e.g. `references/RUST_REVIEW.md`) is preserved for
+/// the deploy layer.
+pub fn load_skill_from_builtin(skill_name: &str, files: &[(&str, &str)]) -> Result<Skill, String> {
     // Find the SKILL.md content — names include the .md extension
     let skill_md_content = files
         .iter()
@@ -102,15 +143,21 @@ pub fn load_skill_from_builtin(_skill_name: &str, files: &[(&str, &str)]) -> Res
 
     let mut skill = parse_skill_md(skill_md_content, SkillSource::Builtin)?;
 
-    // Add any additional resource files
+    // Strip only the leading skill-name segment so the remaining relative path
+    // (e.g. `references/RUST_REVIEW.md`) becomes the resource key. This
+    // preserves subdirectory structure for the deploy layer, matching what
+    // `load_skill_from_dir` produces when walking the disk.
+    let prefix = format!("{skill_name}/");
     for (name, content) in files {
-        if !name.ends_with("/SKILL.md") && *name != "SKILL.md" {
-            let filename = name.rsplit('/').next().unwrap_or(name);
-            skill
-                .resources
-                .files
-                .insert(filename.to_string(), content.to_string());
+        if name.ends_with("/SKILL.md") || *name == "SKILL.md" {
+            continue;
         }
+
+        let key = name.strip_prefix(&prefix).unwrap_or(name);
+        skill
+            .resources
+            .files
+            .insert(key.to_string(), content.to_string());
     }
 
     Ok(skill)
@@ -278,5 +325,72 @@ Create a plan from a spec file.
         assert_eq!(skill.name.as_str(), "plan");
         assert_eq!(skill.allowed_tools.len(), 1);
         assert_eq!(skill.allowed_tools[0], "*");
+    }
+
+    /// Regression: disk-loaded skills preserve subdirectory structure for
+    /// progressive-disclosure resources (e.g. `references/RUST_REVIEW.md`)
+    /// instead of flattening them to bare filenames.
+    #[test]
+    fn test_load_skill_from_dir_preserves_subdirectories() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let skill_dir = temp_dir.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: A test skill\n---\nBody.",
+        )
+        .unwrap();
+
+        let references_dir = skill_dir.join("references");
+        std::fs::create_dir_all(&references_dir).unwrap();
+        std::fs::write(references_dir.join("helper.md"), "Helper content").unwrap();
+
+        let skill = load_skill_from_dir(&skill_dir, SkillSource::Local).unwrap();
+
+        assert!(
+            skill.resources.files.contains_key("references/helper.md"),
+            "resource key should retain the `references/` prefix, got keys: {:?}",
+            skill.resources.files.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            skill.resources.files.get("references/helper.md").unwrap(),
+            "Helper content"
+        );
+        assert!(
+            !skill.resources.files.contains_key("helper.md"),
+            "resource should not be stored under a flattened `helper.md` key"
+        );
+    }
+
+    /// Regression: builtin skills preserve subdirectory structure when the
+    /// build-time generator emits keys like `my-skill/references/helper.md`.
+    /// Only the leading skill-name segment is stripped; the remainder becomes
+    /// the resource key.
+    #[test]
+    fn test_load_skill_from_builtin_preserves_subdirectories() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "my-skill/SKILL.md",
+                "---\nname: my-skill\ndescription: A test skill\n---\nBody.",
+            ),
+            ("my-skill/references/helper.md", "Helper content"),
+        ];
+
+        let skill = load_skill_from_builtin("my-skill", &files).unwrap();
+
+        assert!(
+            skill.resources.files.contains_key("references/helper.md"),
+            "resource key should retain the `references/` prefix, got keys: {:?}",
+            skill.resources.files.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            skill.resources.files.get("references/helper.md").unwrap(),
+            "Helper content"
+        );
+        assert!(
+            !skill.resources.files.contains_key("helper.md"),
+            "resource should not be stored under a flattened `helper.md` key"
+        );
     }
 }
