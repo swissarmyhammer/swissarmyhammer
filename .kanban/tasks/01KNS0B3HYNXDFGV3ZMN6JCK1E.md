@@ -6,61 +6,121 @@ depends_on:
 position_column: todo
 position_ordinal: a880
 project: spatial-nav
-title: 'Handle dynamic FocusScope lifecycle: unmount, virtualization, batch registration'
+title: 'Dynamic FocusScope lifecycle: zone-aware fallback, virtualization, batch (newtype signatures)'
 ---
 ## What
 
-Handle edge cases where FocusScopes mount/unmount dynamically — virtualized lists, deleted entities, inspector field changes. The core spatial registry from cards 1-2 handles the happy path (mount → register, unmount → unregister). This card handles the hard cases.
+Handle edge cases where focusables and zones mount/unmount dynamically — virtualized lists, deleted entities, inspector field changes. The core registry (cards `01KNQXW7HH...` and `01KNQXXF5W...`) handles the happy path. This card covers the hard cases, respecting both the layer boundary and the zone tree, with **every struct / argument newtyped**.
 
-### Case 1: Focused scope unmounts
+### Crate placement
 
-When the focused entity is deleted or scrolled out of the virtual viewport, its FocusScope unmounts and calls `spatial_unregister`. Now `navigate()` can't find the origin rect.
+Per the commit-`b81336d42` refactor pattern:
+- Fallback resolution logic in `swissarmyhammer-kanban/src/focus/state.rs` (`SpatialState::handle_unregister`)
+- `FallbackResolution` enum in `swissarmyhammer-kanban/src/focus/state.rs`
+- `RegisterEntry` enum + `spatial_register_batch` command: type in `focus/registry.rs`, Tauri adapter in `kanban-app/src/commands.rs`
+- Virtualization placeholder wiring is React-only (`kanban-app/ui/src/components/column-view.tsx`)
+- Tests in `swissarmyhammer-kanban/tests/focus_fallback.rs` and `swissarmyhammer-kanban/tests/focus_batch_register.rs`
 
-**Solution**: `navigate()` checks if the focused moniker exists in the registry. If not, it falls back:
-- Return `First` direction result (top-left-most in active layer) as the new focus target
-- React detects the stale focus via the response and calls `setFocus(fallback)`
+### Case 1: Focused scope unmounts (zone-aware fallback)
 
-Add a `navigate()` return type that distinguishes `Found(moniker)` from `FallbackToFirst(moniker)` so React can log the recovery.
+When the focused entry's scope unmounts and calls `spatial_unregister_scope(SpatialKey)`, the registry has no origin rect. The state manager computes a fallback by walking outward through the zone tree, then the layer tree:
+
+1. **Sibling in same zone.** Pick the nearest remaining entry where `candidate.parent_zone() == lost.parent_zone()` in the same `LayerKey`. Prefer matching variant (Leaf→Leaf, Zone→Zone) if possible.
+2. **Walk up parent zones.** If the lost entry's zone is now empty, move to `lost.parent_zone()`. If that zone's `last_focused: Option<SpatialKey>` is still registered, use it. Otherwise pick the nearest entry in that zone.
+3. **Walk up to layer root.** Keep walking `parent_zone` until reaching `None`.
+4. **Walk up layer tree.** If the layer root has no remaining entries, walk `layer.parent`. Use that layer's `last_focused: Option<SpatialKey>` if valid.
+5. **No-focus.** Emit `FocusChangedEvent { next_key: None, next_moniker: None }`.
+
+Fallback never returns an entry whose `window_label: WindowLabel` differs from the lost entry's window.
+
+Internal return type (all variants carry typed data):
+
+```rust
+pub enum FallbackResolution {
+    Found(SpatialKey, Moniker),
+    FallbackSiblingInZone(SpatialKey, Moniker),
+    FallbackParentZoneLastFocused(SpatialKey, Moniker),
+    FallbackParentZoneNearest(SpatialKey, Moniker),
+    FallbackParentLayer(SpatialKey, Moniker),
+    NoFocus,
+}
+```
 
 ### Case 2: Virtualized lists
 
-Only visible cards have mounted FocusScopes. `nav.down` past the last visible card finds nothing below in the registry. The virtualizer must scroll to reveal the next card before spatial nav can resolve.
+Only visible cards have mounted primitives. The virtualizer registers **estimated rects** for off-screen items using `spatial_register_batch` — all entries using the same `LayerKey` / `parent_zone` (`Option<SpatialKey>`) as the virtualizer's enclosing zone. Placeholders register as `FocusScope::Zone` or `FocusScope::Focusable` matching the shape of the real mount.
 
-**Solution — placeholder rects**: The virtualizer registers **estimated rects** for off-screen items via `spatial_register(moniker, estimated_rect, layer)`. These are computed from item index × estimated height. When nav lands on a placeholder:
-1. Rust returns the placeholder's moniker
-2. React calls `setFocus(moniker)` which tells the virtualizer to scroll-to-item
-3. Virtualizer scrolls, real FocusScope mounts, calls `spatial_register` with measured rect (overwrites the estimate)
+When nav lands on a placeholder:
+1. Rust returns `Option<Moniker>` pointing at the placeholder
+2. React's `FocusChangedEvent` handler calls `setFocus(moniker)` → virtualizer scrolls-to-item
+3. The real primitive mounts with the **same `SpatialKey`** (virtualizer generates and threads it as a prop) — registration is idempotent on key; rect is overwritten, hierarchy preserved
 
-This means `spatial_register` can be called by both FocusScope (measured) and the virtualizer (estimated). The Rust side doesn't distinguish — it's just a rect.
-
-**Where to register placeholders**: `VirtualizedCardList` in `column-view.tsx` knows all task monikers and estimated positions. On mount, it registers estimated rects for all items (not just visible ones). On unmount of the list, it unregisters all. The real FocusScope mounts overwrite estimates with measurements.
+So `spatial_register_focusable` and `spatial_register_zone` are both idempotent on `SpatialKey`. Whoever registers last wins the rect; `kind`/`layer_key`/`parent_zone` must match.
 
 ### Case 3: Batch registration
 
-When a virtualizer reveals 20 cards or the board first renders, many FocusScopes mount simultaneously. Each calls `spatial_register` individually — 20 Tauri invokes.
+Twenty simultaneous mounts → one Tauri invoke. The batch entry uses newtypes throughout:
 
-**Solution**: Add `spatial_register_batch(entries: Vec<(moniker, rect, layer)>)` Tauri command. FocusScope can still use the single-entry version. The virtualizer uses batch for placeholder registration.
+```rust
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RegisterEntry {
+    Focusable {
+        key: SpatialKey,
+        moniker: Moniker,
+        rect: Rect,
+        layer_key: LayerKey,
+        parent_zone: Option<SpatialKey>,
+        overrides: HashMap<Direction, Option<Moniker>>,
+    },
+    Zone {
+        key: SpatialKey,
+        moniker: Moniker,
+        rect: Rect,
+        layer_key: LayerKey,
+        parent_zone: Option<SpatialKey>,
+        overrides: HashMap<Direction, Option<Moniker>>,
+    },
+}
+
+#[tauri::command]
+async fn spatial_register_batch(
+    window: tauri::Window,
+    entries: Vec<RegisterEntry>,
+) -> Result<()>;
+```
+
+Single lock on the registry, one iteration over `entries`.
 
 ### Subtasks
-- [ ] `navigate()` handles missing focused moniker — falls back to First in active layer
-- [ ] Add placeholder rect registration from VirtualizedCardList for off-screen items
-- [ ] Add `spatial_register_batch` Tauri command for bulk registration
-- [ ] Handle scroll-to-focus flow: nav lands on placeholder → virtualizer scrolls → real mount overwrites
-- [ ] Add tests for all three cases
+- [ ] Implement zone-aware fallback walking `parent_zone` then `layer.parent`, returning a `FallbackResolution` with typed fields
+- [ ] Emit `FocusChangedEvent` with typed fields based on the resolution
+- [ ] `VirtualizedCardList` reads `parent_zone` from `FocusZoneContext` and `layer_key` from `FocusLayerContext`; generates stable branded `SpatialKey` per index
+- [ ] Add `spatial_register_batch` with `Vec<RegisterEntry>` — newtyped throughout
+- [ ] Real-mount reuses placeholder's `SpatialKey`; registry overwrites rect, keeps hierarchy
 
 ## Acceptance Criteria
-- [ ] Deleting the focused entity doesn't break navigation — focus moves to a sensible fallback
+- [ ] `RegisterEntry` enum uses newtypes for every field; no bare `String` / `f64`
+- [ ] `FallbackResolution` variants carry typed `SpatialKey` / `Moniker`; none are raw strings
+- [ ] Deleting the focused entry restores focus within the same zone first, then walks up the zone chain, then the layer chain
+- [ ] Fallback never crosses `WindowLabel` boundaries
+- [ ] Deleting the sole entry in a zone falls back to the parent zone's `last_focused` if valid
+- [ ] Deleting the sole entry in a window root with no parent layer → `focus_by_window[WindowLabel]` cleared; `FocusChangedEvent { next_key: None, next_moniker: None }`
 - [ ] `nav.down` past the last visible card in a virtualized list scrolls to and focuses the next card
-- [ ] Batch registration works for virtualizer placeholder setup
-- [ ] No stale entries left in registry after component unmount
-- [ ] `cargo test` passes, `pnpm vitest run` passes
+- [ ] Placeholders inherit `LayerKey` and `parent_zone` from enclosing zone
+- [ ] Batch registration is atomic (single lock)
+- [ ] `cargo test` and `pnpm vitest run` pass
 
 ## Tests
-- [ ] `Rust unit tests` — navigate with missing focused moniker returns fallback
-- [ ] `Rust unit tests` — navigate returns placeholder moniker when it's the nearest match
-- [ ] `Rust unit tests` — register overwrites existing entry (placeholder → measured)
-- [ ] `Rust unit tests` — register_batch adds multiple entries atomically
-- [ ] `column-view.test.tsx` or integration — nav.down past visible area scrolls and focuses next card
+- [ ] Rust: fallback returns `FallbackSiblingInZone(SpatialKey, Moniker)` with typed values
+- [ ] Rust: fallback returns `FallbackParentZoneLastFocused` when zone empties but parent has live `last_focused`
+- [ ] Rust: fallback returns `FallbackParentLayer` walking up `layer.parent`
+- [ ] Rust: fallback returns `NoFocus` at a lone window root
+- [ ] Rust: fallback never returns an entry with a different `WindowLabel`
+- [ ] Rust: `spatial_register_focusable` with existing key overwrites rect; type stays `Focusable`
+- [ ] Rust: `spatial_register_zone` called for a key previously registered as `Focusable` is an error (kind must match)
+- [ ] Rust: `spatial_register_batch` deserializes `RegisterEntry` enum via `"kind"` tag; registers N entries under one lock
+- [ ] Integration: nav.down past visible area scrolls and focuses next card
 - [ ] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow

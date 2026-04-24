@@ -4,163 +4,128 @@ assignees:
 position_column: todo
 position_ordinal: '9980'
 project: spatial-nav
-title: 'Focus claim registry: key-based, event-driven, Rust owns state'
+title: 'Focus claim registry: per-window, event-driven, Rust owns state (newtype-only signatures)'
 ---
 ## What
 
-Replace the current `focusedMoniker` React state with an event-driven **focus claim registry** keyed by spatial key (ULID). Rust owns all focus state. React is a dumb renderer that responds to events.
+Replace the current `focusedMoniker` React state with an event-driven **focus claim registry** keyed by `SpatialKey`. Rust owns all focus state — tracked **per window** because the app is multi-window (see `UIState.windows`, per-window `inspector_stack`). Every signature uses newtypes, not bare primitives.
 
 ### Core principle
 
-- **Rust owns focus state.** `focused_key: Option<String>` lives in Rust. All focus changes go through Rust.
-- **React sends commands, Rust emits events.** No return values. Every Tauri invoke returns Ok/Err. Focus changes are communicated via a `"focus-changed"` event.
-- **Focus identity = key (ULID).** Not moniker. The claim registry is `Map<key, callback>`. Monikers are metadata for command dispatch, separate from focus mechanics.
+- **Rust owns focus state.** React is a dumb renderer that responds to events.
+- **Focus is per window.** Each Tauri window has its own focused element.
+- **Focus identity = `SpatialKey` (ULID).** Not `Moniker`. The claim registry is `Map<SpatialKey, callback>`.
+
+### Crate placement
+
+State lives in `swissarmyhammer-kanban/src/focus/state.rs` alongside the registry from card `01KNQXW7HH...`. Tauri adapters live in `kanban-app/src/commands.rs`. This follows the refactor pattern from commit `b81336d42` (headless business logic in the kanban crate, Tauri commands as thin adapters).
+
+### Newtypes — use `define_id!`
+
+All string-valued newtypes are defined via `swissarmyhammer_common::define_id!` in `focus/types.rs` (see card `01KNQXW7HH...` for full definitions). Referenced here for self-containment:
+
+```rust
+define_id!(WindowLabel, "Tauri window label");
+define_id!(SpatialKey, "ULID per scope mount");
+define_id!(LayerKey, "ULID per layer mount");
+define_id!(Moniker, "Entity focus identity");
+```
+
+No bare `String` appears in any signature below.
 
 ### API surface
 
-```
-React → Rust (all return Ok/Err, nothing else):
-  spatial_register(key, moniker, rect, layer_key)   — FocusScope mount/resize
-  spatial_unregister(key)                            — FocusScope unmount
-  spatial_navigate(key, direction)                   — keyboard nav (from key, in direction)
-  spatial_focus(key)                                 — click / programmatic
-  spatial_push_layer(key, name)                      — FocusLayer mount
-  spatial_pop_layer(key)                             — FocusLayer unmount
-
-Rust → React (Tauri event):
-  "focus-changed" { prev_key: Option<String>, next_key: Option<String> }
+```rust
+// Tauri commands in kanban-app/src/commands.rs; all derive WindowLabel from tauri::Window.
+async fn spatial_register_focusable(window: tauri::Window, key: SpatialKey, /* ... */) -> Result<(), String>;
+async fn spatial_register_zone(window: tauri::Window, key: SpatialKey, /* ... */) -> Result<(), String>;
+async fn spatial_unregister_scope(window: tauri::Window, key: SpatialKey) -> Result<(), String>;
+async fn spatial_focus(window: tauri::Window, key: SpatialKey) -> Result<(), String>;
+async fn spatial_navigate(window: tauri::Window, key: SpatialKey, direction: Direction) -> Result<(), String>;
+async fn spatial_push_layer(window: tauri::Window, key: LayerKey, name: LayerName, parent: Option<LayerKey>) -> Result<(), String>;
+async fn spatial_pop_layer(window: tauri::Window, key: LayerKey) -> Result<(), String>;
 ```
 
-### React side
+```rust
+// Emitted from Rust to React
+#[derive(Serialize)]
+pub struct FocusChangedEvent {
+    pub window_label: WindowLabel,
+    pub prev_key: Option<SpatialKey>,
+    pub next_key: Option<SpatialKey>,
+    pub next_moniker: Option<Moniker>,
+}
+```
+
+### Rust state — `swissarmyhammer-kanban/src/focus/state.rs`
+
+```rust
+pub struct SpatialState {
+    registry: SpatialRegistry,
+    focus_by_window: HashMap<WindowLabel, SpatialKey>,
+}
+
+impl SpatialState {
+    pub fn focus(&mut self, window: WindowLabel, key: SpatialKey) -> Option<FocusChangedEvent>;
+    pub fn navigate(&mut self, window: WindowLabel, key: SpatialKey, direction: Direction) -> Option<FocusChangedEvent>;
+    pub fn handle_unregister(&mut self, window: WindowLabel, key: SpatialKey) -> Option<FocusChangedEvent>;
+}
+```
+
+Methods return `Option<FocusChangedEvent>` rather than side-effecting so tests don't need Tauri mocking — the Tauri adapter in `kanban-app/src/commands.rs` is responsible for emitting the event.
+
+### React side — branded types
+
+Parity with Rust newtypes via TypeScript branded strings. Details live in the React-primitives card (`01KPZWY4B7...`). The `types/spatial.ts` file exports `WindowLabel`, `SpatialKey`, `LayerKey`, `Moniker`, `LayerName`, `Pixels` as branded types with brand helpers.
 
 **Global event listener** (in EntityFocusProvider):
 
 ```typescript
-listen("focus-changed", ({ prev_key, next_key }) => {
-  if (prev_key) claimRegistry.get(prev_key)?.(false);
-  if (next_key) claimRegistry.get(next_key)?.(true);
+listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
+  if (payload.prev_key) claimRegistry.get(payload.prev_key)?.(false);
+  if (payload.next_key) claimRegistry.get(payload.next_key)?.(true);
 });
 ```
 
-**FocusScope**:
-- Generates ULID key: `const key = useRef(ulid()).current`
-- Registers in claim registry: `registry.set(key, setIsFocused)`
-- On click: `invoke("spatial_focus", { key })` — fire and forget
-- Local `const [isFocused, setIsFocused] = useState(false)` driven by claim callback
+Each Tauri window has its own React tree and its own claim registry, so a `focus-changed` event for another window's key is a no-op here.
 
-**No focusedMoniker state in React.** React doesn't track who's focused — it just responds to events from Rust.
+### Tests — `swissarmyhammer-kanban/tests/focus_state.rs`
 
-### Moniker is separate
-
-When a FocusScope receives `claim(true)`, it knows its own moniker. It can separately dispatch `ui.setFocus` with moniker + scope chain for command dispatch purposes. But this is the command system's concern, not the focus system's.
-
-### Rust side
-
-**`SpatialState`** (or extend UIState):
-- `focused_key: Option<String>`
-- On `spatial_navigate(key, direction)`: resolve → update `focused_key` → emit event
-- On `spatial_focus(key)`: update `focused_key` → emit event
-- On `spatial_unregister(key)`: if key == focused_key, clear focus → emit event
-
-### Files to modify
-- `swissarmyhammer-commands/src/ui_state.rs` or new `spatial_state.rs` — `focused_key`, event emission
-- `swissarmyhammer-kanban/src/commands/` — Tauri commands for spatial_*
-- `kanban-app/ui/src/lib/entity-focus-context.tsx` — claim registry, global event listener, remove useState
-- `kanban-app/ui/src/components/focus-scope.tsx` — key generation, claim registration, fire-and-forget invokes
+Headless pattern matching `swissarmyhammer-kanban/tests/resolve_focused_column.rs`.
 
 ### Subtasks
-- [ ] Add claim registry `Map<string, (focused: boolean) => void>` to EntityFocusProvider
-- [ ] Add global `listen("focus-changed")` handler that claims/unclaims by key
-- [ ] Update FocusScope: ULID key, register claim, fire-and-forget invokes
-- [ ] Add `focused_key` to Rust state with event emission on change
+- [ ] Define TS branded types in `kanban-app/ui/src/types/spatial.ts`
+- [ ] Add `SpatialState` to `swissarmyhammer-kanban/src/focus/state.rs` with `focus_by_window: HashMap<WindowLabel, SpatialKey>`
+- [ ] `FocusChangedEvent { window_label, prev_key, next_key, next_moniker }` — all newtyped
+- [ ] Tauri commands in `kanban-app/src/commands.rs` derive `WindowLabel` from `tauri::Window`; emit `focus-changed` event
+- [ ] Claim registry `Map<SpatialKey, (focused: boolean) => void>` in EntityFocusProvider
+- [ ] Global `listen("focus-changed")` handler
 - [ ] Remove `focusedMoniker` useState from EntityFocusProvider
+- [ ] Tests in `swissarmyhammer-kanban/tests/focus_state.rs`
 
 ## Acceptance Criteria
-- [ ] Focus change triggers exactly 2 FocusScope re-renders via event callback
-- [ ] All Tauri invokes return Ok/Err only — no focus data in return values
-- [ ] Focus changes flow through Rust event: click → Rust → event → React claim
-- [ ] Keyboard nav: React invokes `spatial_navigate(key, direction)` → Rust emits event → React claims
-- [ ] No `focusedMoniker` state in React — Rust owns focus state
-- [ ] Event listener cleaned up on EntityFocusProvider unmount
-- [ ] `cargo test` passes, `pnpm vitest run` passes
+- [ ] State lives in `swissarmyhammer-kanban/src/focus/state.rs`, not `swissarmyhammer-commands`
+- [ ] Tauri commands live in `kanban-app/src/commands.rs`
+- [ ] No signature uses bare `String` or `f64`
+- [ ] TS branded types mirror Rust newtypes; no `string`/`number` in typed spatial signatures
+- [ ] Focus is per-window; windows A and B independent
+- [ ] Focus change in window A doesn't re-render scopes in window B
+- [ ] All Tauri invokes return Ok/Err only; no focus data in return values
+- [ ] `cargo test -p swissarmyhammer-kanban` and `pnpm vitest run` pass
 
 ## Tests
 
-### Rust unit tests (`swissarmyhammer-commands/src/spatial_state.rs` or similar)
+### Rust (`swissarmyhammer-kanban/tests/focus_state.rs`)
+- [ ] `focus` updates per-window state and returns `FocusChangedEvent` with matching `WindowLabel`
+- [ ] focus in A doesn't affect `focus_by_window[B]`
+- [ ] unregister of a focused key clears that window's focus only
+- [ ] `FocusChangedEvent.next_moniker` is `Some(entry.moniker.clone())` when next_key is Some
 
-```rust
-#[test]
-fn spatial_focus_updates_focused_key_and_emits_event() {
-    // Given: empty state
-    // When: spatial_focus("key-abc")
-    // Then: state.focused_key == Some("key-abc")
-    // And: emitted event == FocusChanged { prev_key: None, next_key: Some("key-abc") }
-}
-
-#[test]
-fn spatial_focus_emits_prev_and_next() {
-    // Given: focused_key == Some("key-1")
-    // When: spatial_focus("key-2")
-    // Then: event == FocusChanged { prev_key: Some("key-1"), next_key: Some("key-2") }
-}
-
-#[test]
-fn spatial_unregister_focused_key_clears_focus() {
-    // Given: focused_key == Some("key-1"), key-1 is registered
-    // When: spatial_unregister("key-1")
-    // Then: focused_key == None
-    // And: event == FocusChanged { prev_key: Some("key-1"), next_key: None }
-}
-
-#[test]
-fn spatial_unregister_non_focused_key_no_event() {
-    // Given: focused_key == Some("key-1"), key-2 is registered
-    // When: spatial_unregister("key-2")
-    // Then: focused_key still Some("key-1"), no event emitted
-}
-```
-
-### React unit tests (`kanban-app/ui/src/lib/entity-focus-context.test.tsx`)
-
-Mock setup:
-```typescript
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn((_event, callback) => {
-    // Store callback so tests can fire events manually
-    (listen as any).__callback = callback;
-    return Promise.resolve(() => {}); // unsub function
-  }),
-}));
-```
-
-```
-test: "claim registry calls previous callback with false and next with true on focus-changed event"
-  setup: render EntityFocusProvider with two FocusScopes (key-A, key-B)
-  act: fire focus-changed event { prev_key: null, next_key: "key-A" }
-  assert: FocusScope A has data-focused attribute, B does not
-  act: fire focus-changed event { prev_key: "key-A", next_key: "key-B" }
-  assert: FocusScope A no longer data-focused, FocusScope B has data-focused
-
-test: "unregistered key in focus-changed event is a no-op"
-  setup: render EntityFocusProvider with one FocusScope (key-A)
-  act: fire focus-changed event { prev_key: "nonexistent", next_key: "key-A" }
-  assert: no error thrown, FocusScope A has data-focused
-
-test: "FocusScope click invokes spatial_focus with its key"
-  setup: render FocusScope inside EntityFocusProvider + FocusLayer
-  act: click the FocusScope element
-  assert: invoke called with ("spatial_focus", { key: <the ULID> })
-
-test: "EntityFocusProvider unmount cleans up event listener"
-  setup: render then unmount EntityFocusProvider
-  assert: the unsub function returned by listen() was called
-
-test: "FocusScope unmount removes from claim registry"
-  setup: render FocusScope, capture its key
-  act: unmount FocusScope, then fire focus-changed { next_key: <captured key> }
-  assert: no error, no state update (callback was unregistered)
-```
+### React
+- [ ] Claim registry ignores events for unknown keys
+- [ ] Scope click invokes `spatial_focus` with its branded `SpatialKey`
+- [ ] Provider unmount removes the listener
+- [ ] Scope unmount removes from claim registry
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.

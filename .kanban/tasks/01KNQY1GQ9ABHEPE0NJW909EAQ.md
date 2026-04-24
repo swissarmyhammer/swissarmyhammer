@@ -8,71 +8,136 @@ depends_on:
 position_column: todo
 position_ordinal: a780
 project: spatial-nav
-title: 'Clean up: rename claimWhen to navOverride, remove bulk predicate code'
+title: 'navOverride cleanup: layer-scoped, Option&lt;Moniker&gt; overrides, remove predicate code'
 ---
 ## What
 
-After all views are migrated to spatial navigation, clean up the predicate infrastructure and replace the broadcast-based `claimWhen` with a simpler, targeted override model.
+After all views migrate to spatial navigation, clean up the predicate infrastructure and replace broadcast-based `claimWhen` with a simpler, targeted override model. Overrides are layer-scoped and use newtypes throughout — `Option<Moniker>` on the Rust side, branded `Moniker | null` on the TS side.
+
+### Crate placement
+
+Per the commit-`b81336d42` refactor pattern, the Rust side lives in `swissarmyhammer-kanban/src/focus/`:
+- `overrides` field already on `Focusable` / `FocusZone` in `focus/scope.rs` (card `01KNQXW7HH...`)
+- `check_override` implemented in `focus/navigate.rs` as rule-0 of the beam search (card `01KNQXXF5W...`)
+- No new Tauri commands needed — overrides travel with `spatial_register_focusable` / `spatial_register_zone`
+- Tests in `swissarmyhammer-kanban/tests/focus_overrides.rs`
+
+React side lives in `kanban-app/ui/src/` — `navOverride` prop on the primitives and composite `FocusScope`.
 
 ### New override model
 
-The old `claimWhen` was pull-based: every scope registers predicates, `broadcastNavCommand` walks all of them on every keystroke — O(all predicates). The new model is **targeted**: overrides live on the focused scope only, checked as a lookup table before spatial nav.
+Old: pull-based predicates, walked on every keystroke — O(all predicates).
+New: direct directive map on the focused scope — O(1) lookup.
 
-**Interface change:**
+**Interface:**
 
 ```typescript
-// Old: predicate function evaluated globally
-claimWhen={[{ command: "nav.right", when: (f) => f === "task:01" }]}
+// TypeScript (uses branded Moniker from card 01KNM3YHHFJ3...)
+type NavOverride = Partial<Record<Direction, Moniker | null>>;
 
-// New: directive map on the focused scope
-navOverride={{ "nav.right": "task:02", "nav.left": null }}
+// Example
+navOverride={{
+  "right": Moniker("task:02"),   // go here instead of spatial nav
+  "left":  null,                 // block this direction
+  // "up" omitted → use spatial nav (default)
+}}
 ```
 
-- **String value**: "go here instead of spatial nav"
-- **`null` value**: "block this direction, don't navigate"
-- **Missing key**: "use spatial nav (default)"
+- **`Moniker` value** — "go here instead of spatial nav"
+- **`null` value** — "block this direction, no movement"
+- **Missing key** — "use spatial nav default"
 
-**Rust-side**: The override map is stored in `SpatialEntry.overrides: HashMap<Direction, Option<String>>`. The `navigate()` function checks the focused entry's overrides first. If an override exists for the requested direction, return it (or None for null/blocked). Only if no override exists does the beam test + scoring run.
+### Rust side — all newtyped
 
-**React-side**: `navOverride` prop on FocusScope is a `Record<string, string | null>`. FocusScope sends it to Rust via `spatial_register`. No more predicate registry, no more `registerClaimPredicates` / `unregisterClaimPredicates` / `claimPredicatesRef`.
+```rust
+// Already on Focusable and FocusZone in card 01KNQXW7HH...
+pub struct Focusable {
+    // ...
+    pub overrides: HashMap<Direction, Option<Moniker>>,
+}
 
-This matches how every other system works: Android's `nextFocusRight` is a property on the view, UWP's `XYFocusRight` is a property on the element. Not a global listener.
+pub struct FocusZone {
+    // ...
+    pub overrides: HashMap<Direction, Option<Moniker>>,
+}
+```
+
+The `navigate()` function gets an override rule-0 check before beam test. The override-resolution helper's signature:
+
+```rust
+fn check_override(
+    &self,
+    focused: &FocusScope,
+    direction: Direction,
+) -> Option<Option<Moniker>> {
+    //  ^^^^^^^^^^^^^^^^^^^^^^^ outer Option = "did override apply?"
+    //                          inner Option = "target or blocked?"
+
+    let ov = focused.overrides().get(&direction)?;
+    match ov {
+        None => Some(None),  // explicit block
+        Some(target_moniker) => {
+            // Resolve only within the focused entry's layer — cross-layer overrides ignored.
+            let target_in_layer = self.scopes_in_layer(focused.layer_key())
+                .any(|s| s.moniker() == target_moniker);
+            if target_in_layer {
+                Some(Some(target_moniker.clone()))
+            } else {
+                None  // fall through to beam search
+            }
+        }
+    }
+}
+```
+
+- Outer `None` → override didn't apply; beam search runs.
+- Outer `Some(None)` → explicit block; `navigate` returns `None`.
+- Outer `Some(Some(moniker))` → override target; `navigate` returns `Some(moniker)`.
+
+Note: the signature compares `Moniker == Moniker` — typed equality, not string equality.
+
+### Layer scoping enforced at resolution
+
+An override target moniker is resolved **only within the focused entry's layer** (`focused.layer_key()`). If the target exists but lives in a different layer, the override is **ignored** and spatial nav runs as usual. Cross-layer teleportation is never allowed, even via override.
 
 ### Clean up
 
-1. **Replace `claimWhen` with `navOverride`** — new prop type is `Record<string, string | null>`, not `ClaimPredicate[]`
-2. **Delete predicate broadcast infrastructure** from `entity-focus-context.tsx`:
+1. Replace `claimWhen: ClaimPredicate[]` with `navOverride: NavOverride` on all component call sites
+2. Delete predicate broadcast infrastructure from `entity-focus-context.tsx`:
    - Remove `ClaimPredicate` interface
    - Remove `claimPredicatesRef`, `registerClaimPredicates`, `unregisterClaimPredicates`
-   - Remove the predicate walk from `broadcastNavCommand` (spatial nav is the only path now, with overrides checked in Rust)
-3. **Remove `useRestoreFocus`** — FocusLayer's focus memory replaces this
-4. **Send overrides to Rust** via `spatial_register` — the override map travels with the spatial entry
+   - Remove the predicate walk from `broadcastNavCommand` (spatial nav is the only path; overrides run in Rust)
+3. Confirm `useRestoreFocus` is gone (replaced by FocusLayer `last_focused` in card `01KNQXYC4RB...`)
+4. Send overrides to Rust via the typed register commands — `overrides: HashMap<Direction, Option<Moniker>>` on the wire
 
 ### Subtasks
-- [ ] Replace `claimWhen: ClaimPredicate[]` with `navOverride: Record<string, string | null>` on FocusScope
-- [ ] Add `overrides: HashMap<Direction, Option<String>>` to `SpatialEntry` in Rust
-- [ ] Update `navigate()` to check focused entry's overrides before beam test
-- [ ] Delete `ClaimPredicate` type, predicate registry, and broadcast walk from entity-focus-context
-- [ ] Remove `useRestoreFocus` hook (replaced by FocusLayer focus memory)
+- [ ] Replace `claimWhen: ClaimPredicate[]` with `navOverride: NavOverride` on `Focusable`/`FocusZone` React primitives and `FocusScope` wrapper
+- [ ] Wire `overrides: HashMap<Direction, Option<Moniker>>` into `Focusable` and `FocusZone` Rust structs (field already on them from card `01KNQXW7HH...` — confirm)
+- [ ] Implement `check_override` returning `Option<Option<Moniker>>`
+- [ ] Update `navigate` to invoke `check_override` as rule 0
+- [ ] Delete `ClaimPredicate` type, predicate registry, broadcast walk
+- [ ] Confirm `useRestoreFocus` removed
 
 ## Acceptance Criteria
-- [ ] `claimWhen` prop removed, replaced by `navOverride` with simple directive map
-- [ ] Override check is O(1) — lookup on focused entry, no broadcast walk
-- [ ] `navOverride={{ "nav.right": "task:02" }}` sends focus to task:02 on nav.right
-- [ ] `navOverride={{ "nav.left": null }}` blocks nav.left (no movement)
-- [ ] Missing direction key → spatial nav (default behavior)
-- [ ] Overrides stored in Rust `SpatialEntry`, checked in `navigate()` before beam test
-- [ ] `ClaimPredicate` type deleted, predicate registry deleted
-- [ ] `useRestoreFocus` deleted
-- [ ] `cargo test` passes, `pnpm vitest run` passes
+- [ ] `navOverride` typed as `Partial<Record<Direction, Moniker | null>>` on TS side — no raw strings
+- [ ] `overrides: HashMap<Direction, Option<Moniker>>` on Rust types — no `Option<String>`
+- [ ] Override check is O(1) on the focused entry; no broadcast walk
+- [ ] Same-layer override target → returns that moniker
+- [ ] Cross-layer override target → override ignored; beam search runs
+- [ ] `null` override → `navigate` returns `None` (blocked)
+- [ ] Missing direction key → spatial nav default
+- [ ] `ClaimPredicate` type deleted; predicate registry deleted
+- [ ] `useRestoreFocus` gone
+- [ ] `cargo test` and `pnpm vitest run` pass
 
 ## Tests
-- [ ] `Rust unit tests` — navigate with override returns override target
-- [ ] `Rust unit tests` — navigate with null override returns None (blocked)
-- [ ] `Rust unit tests` — navigate with no override for direction falls through to spatial
-- [ ] `focus-scope.test.tsx` — navOverride prop accepted and sent to Rust
-- [ ] All navigation works via spatial nav with no overrides in production code
-- [ ] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
+- [ ] Rust: override with same-layer target returns `Some(Some(Moniker(...)))`
+- [ ] Rust: override with `None` value returns `Some(None)` (block)
+- [ ] Rust: override with cross-layer moniker returns outer `None` (fall through)
+- [ ] Rust: `navigate` with no override delegates to beam search
+- [ ] React: `navOverride` typed; TS rejects a `string` where `Moniker` expected at call sites (compile-time check)
+- [ ] Full spatial nav works without any `navOverride` in production code
+- [ ] Run `cargo test -p swissarmyhammer-kanban` and `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.

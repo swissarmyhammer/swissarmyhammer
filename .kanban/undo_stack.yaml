@@ -1,7 +1,4 @@
 entries:
-- id: 01KNY79PH5F75A2WZDP9RVZ7EM
-  label: update perspective 01KNAGCS70G61X2JW682RWYEV5
-  item_id: 01KNAGCS70G61X2JW682RWYEV5
 - id: 01KNY79XNZWWEDN30PNMDWSQJF
   label: update perspective 01KNAGCS70G61X2JW682RWYEV5
   item_id: 01KNAGCS70G61X2JW682RWYEV5
@@ -299,5 +296,8 @@ entries:
 - id: 01KPNCYM9DREWAM8G039FYK6C3
   label: update perspective 01KNYE7F4VEE1P48FEPPP9NNCZ
   item_id: 01KNYE7F4VEE1P48FEPPP9NNCZ
-max_size: 100
+- id: 01KQ0247K93V1RTXWJZAFD50BH
+  label: update actor wballard
+  item_id: wballard
 pointer: 100
+max_size: 100
