@@ -29,13 +29,26 @@ use crate::db::IndexDatabase;
 use crate::error::{Result, TreeSitterError};
 use crate::language::LanguageRegistry;
 use crate::parsed_file::ParsedFile;
+use dashmap::DashMap;
 use ignore::WalkBuilder;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use swissarmyhammer_embedding::{Embedder, TextEmbedder};
+use tokio::sync::OnceCell;
+
+/// Process-wide cache of loaded `Embedder` instances, keyed by model name.
+///
+/// Loading an embedding model is expensive (model files on disk, CoreML
+/// initialization, etc.) and the loaded model is internally serialized by
+/// its own mutex — so every caller is better served by a shared instance.
+/// Without this cache, each `IndexContext` (including each test) paid the
+/// full cold-load cost, and parallel cold-loads would contend severely.
+static EMBEDDER_CACHE: Lazy<DashMap<String, Arc<OnceCell<Arc<Embedder>>>>> =
+    Lazy::new(DashMap::new);
 
 /// Compute the content hash for a file without parsing it
 ///
@@ -356,8 +369,10 @@ pub struct IndexContext {
     /// Database for persistent storage (writes happen immediately during indexing)
     database: Option<Arc<IndexDatabase>>,
 
-    /// Embedding model (lazy-loaded on first scan with embedding enabled)
-    embedding_model: Option<Embedder>,
+    /// Embedding model (lazy-loaded on first scan with embedding enabled).
+    /// Held as `Arc` so tests and callers can share a preloaded instance
+    /// across multiple `IndexContext`s via `with_embedder`.
+    embedding_model: Option<Arc<Embedder>>,
 
     /// Last scan status (updated during and after scan)
     last_status: IndexStatus,
@@ -412,6 +427,20 @@ impl IndexContext {
     /// Set custom configuration
     pub fn with_config(mut self, config: IndexConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Inject a pre-loaded embedder to use during scans.
+    ///
+    /// When set, `scan()` will skip `Embedder::from_model_name` + `load()` and
+    /// reuse this instance. The shared embedder's internal mutex serializes
+    /// inference, so this is safe to call from multiple concurrent contexts.
+    ///
+    /// Useful for callers (including the test suite) that want to load an
+    /// embedding model once and reuse it across many `IndexContext`s rather
+    /// than paying cold-start cost per context.
+    pub fn with_embedder(mut self, embedder: Arc<Embedder>) -> Self {
+        self.embedding_model = Some(embedder);
         self
     }
 
@@ -578,7 +607,7 @@ impl IndexContext {
                 total: file_chunk_count,
             });
 
-            let model = self.embedding_model.as_mut().unwrap();
+            let model = self.embedding_model.as_ref().unwrap();
             match model.embed_text(content).await {
                 Ok(result) => {
                     embedded.push((chunk, result.embedding().to_vec(), symbol.clone()));
@@ -706,21 +735,42 @@ impl IndexContext {
         }
     }
 
-    /// Ensure the embedding model is loaded
+    /// Ensure the embedding model is loaded.
+    ///
+    /// Consults a process-wide cache keyed by `model_name` so every caller
+    /// gets the same loaded instance. Concurrent callers for the same name
+    /// coalesce on a single `OnceCell` initialization.
     async fn ensure_embedding_model_loaded(&mut self, model_name: &str) -> Result<()> {
         if self.embedding_model.is_some() {
             return Ok(());
         }
 
-        let model = Embedder::from_model_name(model_name).await.map_err(|e| {
-            TreeSitterError::embedding_error(format!("Failed to create embedding model: {}", e))
-        })?;
+        let cell = EMBEDDER_CACHE
+            .entry(model_name.to_string())
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone();
 
-        model.load().await.map_err(|e| {
-            TreeSitterError::embedding_error(format!("Failed to load embedding model: {}", e))
-        })?;
+        let embedder = cell
+            .get_or_try_init(|| async {
+                let model = Embedder::from_model_name(model_name).await.map_err(|e| {
+                    TreeSitterError::embedding_error(format!(
+                        "Failed to create embedding model: {}",
+                        e
+                    ))
+                })?;
 
-        self.embedding_model = Some(model);
+                model.load().await.map_err(|e| {
+                    TreeSitterError::embedding_error(format!(
+                        "Failed to load embedding model: {}",
+                        e
+                    ))
+                })?;
+
+                Ok::<Arc<Embedder>, TreeSitterError>(Arc::new(model))
+            })
+            .await?;
+
+        self.embedding_model = Some(embedder.clone());
         Ok(())
     }
 
@@ -1048,7 +1098,7 @@ impl IndexContext {
 
         let model = self
             .embedding_model
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| TreeSitterError::embedding_error("Embedding model not loaded"))?;
 
         let result = model.embed_text(text).await.map_err(|e| {

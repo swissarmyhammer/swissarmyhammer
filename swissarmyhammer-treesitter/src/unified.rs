@@ -77,6 +77,7 @@ pub struct WorkspaceBuilder {
     election_config: ElectionConfig,
     index_config: IndexConfig,
     progress_callback: Option<ProgressCallback>,
+    embedder: Option<Arc<swissarmyhammer_embedding::Embedder>>,
 }
 
 impl WorkspaceBuilder {
@@ -87,6 +88,7 @@ impl WorkspaceBuilder {
             election_config: ElectionConfig::default(),
             index_config: IndexConfig::default(),
             progress_callback: None,
+            embedder: None,
         }
     }
 
@@ -113,6 +115,16 @@ impl WorkspaceBuilder {
         self
     }
 
+    /// Inject a pre-loaded embedder for the background indexer to use.
+    ///
+    /// Passed through to the underlying `IndexContext` via
+    /// `IndexContext::with_embedder`. Lets callers avoid cold-loading the
+    /// embedding model each time a workspace is opened.
+    pub fn with_embedder(mut self, embedder: Arc<swissarmyhammer_embedding::Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
     /// Open the workspace, establishing leader/reader mode
     ///
     /// This does NOT start indexing. Call `build()` to index the workspace.
@@ -122,6 +134,7 @@ impl WorkspaceBuilder {
             self.election_config,
             self.index_config,
             self.progress_callback,
+            self.embedder,
         )
         .await
     }
@@ -195,6 +208,7 @@ impl Workspace {
             ElectionConfig::default(),
             IndexConfig::default(),
             None,
+            None,
         )
         .await
     }
@@ -212,6 +226,7 @@ impl Workspace {
             workspace_root.as_ref().to_path_buf(),
             election_config,
             index_config.unwrap_or_default(),
+            None,
             None,
         )
         .await
@@ -286,6 +301,7 @@ impl Workspace {
         election_config: ElectionConfig,
         index_config: IndexConfig,
         progress_callback: Option<ProgressCallback>,
+        embedder: Option<Arc<swissarmyhammer_embedding::Embedder>>,
     ) -> Result<Self> {
         // Ensure root .gitignore contains tree-sitter database entries
         crate::db::ensure_root_gitignore(&workspace_root).map_err(|e| {
@@ -299,6 +315,9 @@ impl Workspace {
         let mut context = IndexContext::new(&workspace_root).with_config(index_config);
         if let Some(callback) = progress_callback {
             context = context.with_progress_callback(callback);
+        }
+        if let Some(embedder) = embedder {
+            context = context.with_embedder(embedder);
         }
 
         // Try to become the leader (non-blocking)

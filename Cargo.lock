@@ -8786,6 +8786,7 @@ version = "0.12.11"
 dependencies = [
  "anyhow",
  "async-watcher",
+ "dashmap",
  "ignore",
  "md5",
  "model-embedding",

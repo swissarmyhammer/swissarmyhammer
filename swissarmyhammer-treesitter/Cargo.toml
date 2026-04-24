@@ -55,6 +55,7 @@ swissarmyhammer-common = { workspace = true }
 # Async and concurrency
 tokio = { workspace = true }
 once_cell = { workspace = true }
+dashmap = { workspace = true }
 
 # File watching
 notify = { workspace = true }

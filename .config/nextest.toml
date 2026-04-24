@@ -27,12 +27,16 @@ test-group = "acp-conformance"
 # Slower tests: warn every 60s, kill after 5 periods (5 minutes)
 slow-timeout = { period = "60s", terminate-after = 5 }
 
-# swissarmyhammer-treesitter embedding tests load models and can be slow
+# swissarmyhammer-treesitter tests default to embedding_enabled=true so almost
+# every test loads the qwen-embedding model. Nextest runs each test in its own
+# process, so there is no in-process cache — N parallel tests means N cold
+# model loads, which contend catastrophically (observed: ~200s per test).
+# Serialising them keeps the real embedding pipeline exercised at ~1s per test.
 [test-groups.treesitter-embedding]
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = "package(swissarmyhammer-treesitter) & test(workspace_leader_reader)"
+filter = "package(swissarmyhammer-treesitter)"
 test-group = "treesitter-embedding"
 # Warn every 60s, kill after 6 periods (6 minutes)
 slow-timeout = { period = "60s", terminate-after = 6 }
@@ -53,11 +57,6 @@ filter = "package(llama-agent)"
 test-group = "llama-embedding-serial"
 slow-timeout = { period = "30s", terminate-after = 10 }
 
-[[profile.default.overrides]]
-filter = "package(swissarmyhammer-treesitter) & test(duplicate)"
-test-group = "treesitter-embedding"
-# Warn every 60s, kill after 8 periods (~8 minutes)
-slow-timeout = { period = "60s", terminate-after = 8 }
 
 # Profile for running embedding integration tests (requires HF models on disk).
 # Usage: cargo nextest run --profile embedding-models
