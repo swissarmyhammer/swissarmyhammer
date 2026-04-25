@@ -6,60 +6,61 @@ depends_on:
 position_column: todo
 position_ordinal: ff8a80
 project: spatial-nav
-title: 'Wrap app shell regions as zones: NavBar, Toolbar, tab bar, perspective, view container'
+title: 'Perspective: wrap perspective bar + container + view as zones, strip legacy nav'
 ---
 ## What
 
-Wrap the window chrome regions in `<FocusScope kind="zone">` so the app shell participates in the spatial-nav zone model. Without this, beam rule 1 (within-zone) has nothing to contain — focus would treat all chrome + content as a single flat layer of leaves, which gives worse locality.
+Wrap the perspective system as zones — the perspective tab bar, the perspective container, and the inner view container. Each is its own zone, nested. Strip every legacy keyboard-nav vestige from these files.
 
-### Regions to wrap
+NavBar and toolbar are split into their own cards (separate components, separate zones).
 
-Inside the window root `<FocusLayer name="window">`:
+### Zone shape
 
-- **`NavBar`** (`kanban-app/ui/src/components/nav-bar.tsx`) — `<FocusScope kind="zone" moniker="ui:navbar">` wrapping the whole nav bar. Children (logo, menu items, mode indicator) stay as default Leaves.
-- **Toolbar / action groups** — wherever action buttons cluster (e.g., "new task", "search", "filter"). Wrap each logical group in `<FocusScope kind="zone" moniker="ui:toolbar.{group}">`.
-- **Tab bar / perspective bar** (`PerspectivesContainer` or wherever the tab strip lives) — `<FocusScope kind="zone" moniker="ui:perspective-bar">`. Each tab is a Leaf.
-- **Perspective container** (`PerspectiveContainer`) — `<FocusScope kind="zone" moniker="ui:perspective">` wrapping the active perspective's content area.
-- **View container** (`ViewContainer`) — `<FocusScope kind="zone" moniker="ui:view">` wrapping the BoardView or GridView region.
-
-Inside these, existing FocusScopes that wrap entities (tasks, columns, field rows) keep their existing monikers but may be upgraded to `kind="zone"` by the column/inspector migration cards.
-
-### Monikers
-
-Use the `"ui:region.qualifier"` convention from card `01KNQXW7HH...` for non-entity chrome. Monikers must be stable and unique per window — the zone's SpatialKey (ULID) provides per-mount uniqueness regardless.
-
-### Why this matters
-
-Without these zones, the inspector field row, the board card, and the navbar button all have `parent_zone = None` and are peers in beam rule 1. Arrow-up from a card in column 0 could land on the toolbar's filter button if the geometry happens to line up, instead of on the column header. With zones, beam rule 1 stays inside the board content, and only rule 2's fallback can reach chrome — which is what we want as an escape hatch.
+```
+window root layer
+  ui:perspective-bar (FocusZone)        ← perspectives-container.tsx tabs
+    perspective_tab:{id} (Leaf, per tab)
+  ui:perspective (FocusZone)            ← active perspective
+    ui:view (FocusZone)                 ← BoardView or GridView selector
+      ui:board OR ui:grid (FocusZone, separate cards)
+```
 
 ### Files to modify
 
-- `kanban-app/ui/src/components/nav-bar.tsx`
-- `kanban-app/ui/src/components/perspectives-container.tsx` (tab bar)
-- `kanban-app/ui/src/components/perspective-container.tsx`
-- `kanban-app/ui/src/components/views-container.tsx` or `view-container.tsx`
-- `kanban-app/ui/src/App.tsx` — ensure `<FocusLayer name="window">` wraps everything, and the above components are inside it
+- `kanban-app/ui/src/components/perspectives-container.tsx` — the tab bar (or a child component if the tab strip lives elsewhere; check for `perspective-tab-bar.tsx`)
+- `kanban-app/ui/src/components/perspective-container.tsx` — the active perspective wrapper
+- `kanban-app/ui/src/components/views-container.tsx` and/or `view-container.tsx` — the view selector / wrapper
+
+### Legacy nav to remove
+
+- Any `onKeyDown` listeners on the tab strip (left/right arrow handling, Enter to switch) — these become spatial nav between sibling tab leaves at the perspective-bar zone level
+- Any `useEffect` keyboard listeners
+- Any `claimWhen` props or `ClaimPredicate` imports
+- Any imperative `tabRef.current?.focus()` calls wired to keyboard handlers
+
+What stays: tab-click dispatch (mouse), `aria-` attributes for accessibility.
 
 ### Subtasks
-- [ ] Wrap NavBar in `<FocusScope kind="zone">`
-- [ ] Wrap toolbar / action groups (inventory which groups exist first)
-- [ ] Wrap tab bar / perspective bar
-- [ ] Wrap perspective container
-- [ ] Wrap view container
-- [ ] Verify the root `<FocusLayer name="window">` is in place at App root
+- [ ] Wrap perspective tab bar in `<FocusZone moniker={Moniker("ui:perspective-bar")}>`
+- [ ] Each tab inside is a `<Focusable moniker={Moniker(`perspective_tab:${id}`)}>` leaf
+- [ ] Wrap the active perspective in `<FocusZone moniker={Moniker("ui:perspective")}>`
+- [ ] Wrap view container in `<FocusZone moniker={Moniker("ui:view")}>`
+- [ ] Remove `onKeyDown` / `keydown` listeners from perspective-tab-bar.tsx, perspectives-container.tsx, perspective-container.tsx, views-container.tsx, view-container.tsx
+- [ ] Remove `claimWhen` props / `ClaimPredicate` imports if present
 
 ## Acceptance Criteria
-- [ ] NavBar, toolbar groups, tab bar, perspective, and view container each register as a Zone
-- [ ] Zone hierarchy at a window root is: `window_root → [navbar_zone, toolbar_zone(s), perspective_zone → view_zone → board/grid content]`
-- [ ] Beam rule 1 within board content stays inside the view zone → doesn't leak into navbar/toolbar
-- [ ] Drill-out from a board card eventually reaches window-root level (zone nav traverses up through view → perspective → root)
-- [ ] Existing React tests for these components still pass
+- [ ] Three zones registered at startup: `ui:perspective-bar`, `ui:perspective`, `ui:view` (when on a perspective with a view)
+- [ ] Each tab is a leaf within `ui:perspective-bar`; arrow keys move between tabs via spatial nav, Enter activates via global `nav.drillIn` (fires the existing `view.set` / `perspective.set` command)
+- [ ] No keyboard listeners in any of the perspective files
+- [ ] Existing perspective tests pass
 - [ ] `pnpm vitest run` passes
 
 ## Tests
-- [ ] `nav-bar.test.tsx` — navbar wrapper registers with `kind="zone"`; children register with `parent_zone = navbar_zone_key`
-- [ ] `perspectives-container.test.tsx` — tab bar zone; tab buttons as leaves
-- [ ] Integration: arrow keys within the board view do not reach the nav bar via rule 1 (they only reach it via rule 2 fallback from edges, which is the intended escape hatch)
+- [ ] `perspective-tab-bar.test.tsx` — tab bar registers as a Zone; tabs are leaves
+- [ ] `perspective-container.test.tsx` — perspective container is a Zone with `parent_zone` = window root
+- [ ] `views-container.test.tsx` — view container is a Zone inside the perspective zone
+- [ ] Integration: arrow keys traverse tabs (via beam search, sibling leaves in the same parent_zone)
+- [ ] No `keydown` listener attached in any of the modified files
 - [ ] Run `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow
