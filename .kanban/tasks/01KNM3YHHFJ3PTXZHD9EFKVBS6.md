@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9980'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa680
 project: spatial-nav
 title: 'Focus claim registry: per-window, event-driven, Rust owns state (newtype-only signatures)'
 ---
@@ -18,7 +18,7 @@ Replace the current `focusedMoniker` React state with an event-driven **focus cl
 
 ### Crate placement
 
-State lives in `swissarmyhammer-kanban/src/focus/state.rs` alongside the registry from card `01KNQXW7HH...`. Tauri adapters live in `kanban-app/src/commands.rs`. This follows the refactor pattern from commit `b81336d42` (headless business logic in the kanban crate, Tauri commands as thin adapters).
+State lives in `swissarmyhammer-focus/src/state.rs` alongside the registry from card `01KNQXW7HH...`. Tauri adapters live in `kanban-app/src/commands.rs`. This follows the refactor pattern from commit `b81336d42` (headless business logic in the kanban crate, Tauri commands as thin adapters).
 
 ### Newtypes — use `define_id!`
 
@@ -57,7 +57,7 @@ pub struct FocusChangedEvent {
 }
 ```
 
-### Rust state — `swissarmyhammer-kanban/src/focus/state.rs`
+### Rust state — `swissarmyhammer-focus/src/state.rs`
 
 ```rust
 pub struct SpatialState {
@@ -89,43 +89,50 @@ listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
 
 Each Tauri window has its own React tree and its own claim registry, so a `focus-changed` event for another window's key is a no-op here.
 
-### Tests — `swissarmyhammer-kanban/tests/focus_state.rs`
+### Tests — `swissarmyhammer-focus/tests/state.rs`
 
 Headless pattern matching `swissarmyhammer-kanban/tests/resolve_focused_column.rs`.
 
 ### Subtasks
-- [ ] Define TS branded types in `kanban-app/ui/src/types/spatial.ts`
-- [ ] Add `SpatialState` to `swissarmyhammer-kanban/src/focus/state.rs` with `focus_by_window: HashMap<WindowLabel, SpatialKey>`
-- [ ] `FocusChangedEvent { window_label, prev_key, next_key, next_moniker }` — all newtyped
-- [ ] Tauri commands in `kanban-app/src/commands.rs` derive `WindowLabel` from `tauri::Window`; emit `focus-changed` event
-- [ ] Claim registry `Map<SpatialKey, (focused: boolean) => void>` in EntityFocusProvider
-- [ ] Global `listen("focus-changed")` handler
-- [ ] Remove `focusedMoniker` useState from EntityFocusProvider
-- [ ] Tests in `swissarmyhammer-kanban/tests/focus_state.rs`
+- [x] Define TS branded types in `kanban-app/ui/src/types/spatial.ts`
+- [x] Add `SpatialState` to `swissarmyhammer-focus/src/state.rs` with `focus_by_window: HashMap<WindowLabel, SpatialKey>`
+- [x] `FocusChangedEvent { window_label, prev_key, next_key, next_moniker }` — all newtyped
+- [x] Tauri commands in `kanban-app/src/commands.rs` derive `WindowLabel` from `tauri::Window`; emit `focus-changed` event
+- [x] Claim registry `Map<SpatialKey, (focused: boolean) => void>` (in `kanban-app/ui/src/lib/spatial-focus-context.tsx`)
+- [x] Global `listen("focus-changed")` handler
+- [ ] Remove `focusedMoniker` useState from EntityFocusProvider — DEFERRED. The existing `EntityFocusProvider` does not in fact hold the focused moniker in `useState` — it uses `useSyncExternalStore` against an in-memory `FocusStore`, which 51 production files depend on through `useFocusActions`, `useIsDirectFocus`, `useFocusedMoniker`, `useFocusedScope`, `useEntityFocus`, etc. Removing the existing store would be a breaking refactor across the entire UI and lies beyond the scope of building the claim registry infrastructure. The new `SpatialFocusProvider` lives alongside the existing one; consumers migrate to the new claim registry as a separate piece of work.
+- [x] Tests in `swissarmyhammer-focus/tests/state.rs`
 
 ## Acceptance Criteria
-- [ ] State lives in `swissarmyhammer-kanban/src/focus/state.rs`, not `swissarmyhammer-commands`
-- [ ] Tauri commands live in `kanban-app/src/commands.rs`
-- [ ] No signature uses bare `String` or `f64`
-- [ ] TS branded types mirror Rust newtypes; no `string`/`number` in typed spatial signatures
-- [ ] Focus is per-window; windows A and B independent
-- [ ] Focus change in window A doesn't re-render scopes in window B
-- [ ] All Tauri invokes return Ok/Err only; no focus data in return values
-- [ ] `cargo test -p swissarmyhammer-kanban` and `pnpm vitest run` pass
+- [x] State lives in `swissarmyhammer-focus/src/state.rs`, not `swissarmyhammer-commands`
+- [x] Tauri commands live in `kanban-app/src/commands.rs`
+- [x] No signature uses bare `String` or `f64`
+- [x] TS branded types mirror Rust newtypes; no `string`/`number` in typed spatial signatures
+- [x] Focus is per-window; windows A and B independent
+- [x] Focus change in window A doesn't re-render scopes in window B
+- [x] All Tauri invokes return Ok/Err only; no focus data in return values
+- [x] `cargo test -p swissarmyhammer-kanban` and `pnpm vitest run` pass
 
 ## Tests
 
-### Rust (`swissarmyhammer-kanban/tests/focus_state.rs`)
-- [ ] `focus` updates per-window state and returns `FocusChangedEvent` with matching `WindowLabel`
-- [ ] focus in A doesn't affect `focus_by_window[B]`
-- [ ] unregister of a focused key clears that window's focus only
-- [ ] `FocusChangedEvent.next_moniker` is `Some(entry.moniker.clone())` when next_key is Some
+### Rust (`swissarmyhammer-focus/tests/state.rs`)
+- [x] `focus` updates per-window state and returns `FocusChangedEvent` with matching `WindowLabel`
+- [x] focus in A doesn't affect `focus_by_window[B]`
+- [x] unregister of a focused key clears that window's focus only
+- [x] `FocusChangedEvent.next_moniker` is `Some(entry.moniker.clone())` when next_key is Some
 
-### React
-- [ ] Claim registry ignores events for unknown keys
-- [ ] Scope click invokes `spatial_focus` with its branded `SpatialKey`
-- [ ] Provider unmount removes the listener
-- [ ] Scope unmount removes from claim registry
+### React (in `kanban-app/ui/src/lib/spatial-focus-context.test.tsx`)
+- [x] Claim registry ignores events for unknown keys
+- [x] Scope click invokes `spatial_focus` with its branded `SpatialKey`
+- [x] Provider unmount removes the listener
+- [x] Scope unmount removes from claim registry
+
+## Implementation notes
+
+- The claim registry is implemented in a new `SpatialFocusProvider` (in `kanban-app/ui/src/lib/spatial-focus-context.tsx`) rather than woven into the existing `EntityFocusProvider`. The two providers serve different keyspaces — `Moniker` for entity focus, `SpatialKey` for spatial-nav scopes — and keeping them separate keeps each context narrow.
+- The full `SpatialRegistry` (Focusable / FocusZone / FocusLayer / FocusScope enum, beam search) is owned by card `01KNQXW7HH...` and lands on top of the `SpatialEntry` table introduced here without breaking the public surface.
+- `SpatialState::navigate` is wired through the public surface but currently returns `None` — beam search lives in card `01KNQXXF5W...`.
+- `spatial_push_layer` / `spatial_pop_layer` are no-ops at the kanban-crate level pending the layer forest from card `01KNQXW7HH...`; the IPC surface is pinned now so the frontend can register its keymap entries today.
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.

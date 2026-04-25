@@ -10,6 +10,7 @@ depends_on:
 - 01KQ20Q2PNNR9VMES60QQSVXTS
 - 01KQ20QW3KF0SMV98ZB8859PTM
 - 01KPZS32YN7CRNM0TH7GR28M86
+- 01KQ2E7RPBPJ8T8KZX39N2SZ0A
 position_column: todo
 position_ordinal: a780
 project: spatial-nav
@@ -21,11 +22,11 @@ After all views migrate to spatial navigation, clean up the predicate infrastruc
 
 ### Crate placement
 
-Per the commit-`b81336d42` refactor pattern, the Rust side lives in `swissarmyhammer-kanban/src/focus/`:
+Per the commit-`b81336d42` refactor pattern, the Rust side lives in `swissarmyhammer-focus/src/`:
 - `overrides` field already on `Focusable` / `FocusZone` in `focus/scope.rs` (card `01KNQXW7HH...`)
 - `check_override` implemented in `focus/navigate.rs` as rule-0 of the beam search (card `01KNQXXF5W...`)
 - No new Tauri commands needed — overrides travel with `spatial_register_focusable` / `spatial_register_zone`
-- Tests in `swissarmyhammer-kanban/tests/focus_overrides.rs`
+- Tests in `swissarmyhammer-focus/tests/overrides.rs`
 
 React side lives in `kanban-app/ui/src/` — `navOverride` prop on the primitives and composite `FocusScope`.
 

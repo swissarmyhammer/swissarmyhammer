@@ -3,43 +3,44 @@ assignees:
 - claude-code
 depends_on:
 - 01KNM3YHHFJ3PTXZHD9EFKVBS6
-position_column: todo
-position_ordinal: a180
+- 01KQ2E7RPBPJ8T8KZX39N2SZ0A
+position_column: review
+position_ordinal: '8280'
 project: spatial-nav
 title: 'Rust kernel: Focusable, FocusZone, FocusLayer, FocusScope types + SpatialRegistry'
 ---
 ## What
 
-Define the Rust kernel types for spatial focus. These types **peer** with React components of the same names (see the React-primitives and FocusScope-refactor cards). UI is authoritative for structure — React declares the components and registers them via Tauri commands. Rust owns all computation (beam search, fallback, layer ops) and emits events.
+Define the Rust kernel types for spatial focus inside the new `swissarmyhammer-focus` crate. These types **peer** with React components of the same names (see the React-primitives and FocusScope-refactor cards). UI is authoritative for structure — React declares the components and registers them via Tauri commands. Rust owns all computation (beam search, fallback, layer ops) and emits events.
 
 ### Crate placement
 
-Following the pattern established in commit `b81336d42` (move GUI-crate logic into headless-testable kanban crate), **this lives in `swissarmyhammer-kanban`**, not `swissarmyhammer-commands`. Rationale: spatial nav is business logic that must be testable without Tauri or jsdom; `swissarmyhammer-commands` stays Tier 0 (no app state, no windowing concepts).
-
-Specifically, organize as a submodule alongside the existing `focus.rs`:
+**Lives in `swissarmyhammer-focus`** (created by card `01KQ2E7RPBPJ8T8KZX39N2SZ0A`). Spatial focus is generic — opaque `Moniker` strings, abstract `Rect`s, `WindowLabel`s. No kanban concepts, no Tauri, no domain types. Putting it in `swissarmyhammer-kanban` was wrong; the dedicated crate makes it reusable, easier to test, and keeps the kanban crate focused on board logic.
 
 ```
-swissarmyhammer-kanban/src/focus/
-  mod.rs          (re-exports; existing resolve_focused_column migrates here)
-  column.rs       (existing resolve_focused_column logic)
-  types.rs        (newtypes: WindowLabel, SpatialKey, LayerKey, Moniker, LayerName, Pixels, Rect, Direction)
-  scope.rs        (Focusable, FocusZone, FocusScope enum)
-  layer.rs        (FocusLayer struct)
-  registry.rs     (SpatialRegistry with scope + layer ops)
-  state.rs        (SpatialState with focus_by_window, event emission)
-  navigate.rs     (beam search algorithm — separate card 01KNQXXF5W...)
+swissarmyhammer-focus/src/
+  lib.rs            (module declarations)
+  types.rs          ← THIS CARD: newtypes (WindowLabel, SpatialKey, LayerKey, Moniker, LayerName, Pixels) + Rect + Direction
+  scope.rs          ← THIS CARD: Focusable, FocusZone, FocusScope enum
+  layer.rs          ← THIS CARD: FocusLayer struct
+  registry.rs       ← THIS CARD: SpatialRegistry with scope + layer ops
+  state.rs          (SpatialState — card 01KNM3YHHFJ3...)
+  navigate.rs       (BeamNavStrategy impl — card 01KNQXXF5W...)
+  observer.rs       (FocusEventSink impls — card 01KQ2E7RPBPJ8...)
 ```
 
-Migration of `focus.rs` → `focus/column.rs` is part of this card's scope; keep the public re-export path (`swissarmyhammer_kanban::focus::resolve_focused_column`) stable.
+The crate skeleton + traits exist before this card runs (per the `01KQ2E7RPBPJ8...` dependency). This card fills `types.rs`, `scope.rs`, `layer.rs`, and `registry.rs`.
+
+**`swissarmyhammer-kanban/src/focus.rs` is untouched** — that file holds `resolve_focused_column`, kanban-specific column resolver, which stays where it is. The earlier plan to migrate it to a `focus/` subdirectory is canceled.
 
 ### The four peer types
 
-| Role                | React component     | Rust type             |
-|---------------------|---------------------|-----------------------|
-| Leaf focusable point| `Focusable`         | `struct Focusable`    |
-| Navigable container | `FocusZone`         | `struct FocusZone`    |
-| Modal layer boundary| `FocusLayer`        | `struct FocusLayer`   |
-| Entity-aware wrapper| `FocusScope`        | `enum FocusScope`     |
+| Role                | React component     | Rust type                                    |
+|---------------------|---------------------|----------------------------------------------|
+| Leaf focusable point| `Focusable`         | `swissarmyhammer_focus::Focusable`           |
+| Navigable container | `FocusZone`         | `swissarmyhammer_focus::FocusZone`           |
+| Modal layer boundary| `FocusLayer`        | `swissarmyhammer_focus::FocusLayer`          |
+| Entity-aware wrapper| `FocusScope`        | `swissarmyhammer_focus::FocusScope` (enum)   |
 
 ### Terminology — canonical definitions
 
@@ -66,27 +67,18 @@ These four terms are used everywhere in the spatial-nav plan. Definitions are no
 - Identified by `SpatialKey`.
 
 **Scope** (`FocusScope`, the **umbrella term**)
-- On Rust: the sum type `enum FocusScope { Focusable(Focusable), Zone(FocusZone) }`. This is what the registry stores per `SpatialKey`. Pattern matching distinguishes leaf vs container.
+- On Rust: the sum type `enum FocusScope { Focusable(Focusable), Zone(FocusZone) }`. This is what the registry stores per `SpatialKey`.
 - On React: the **composite wrapper component** that adds entity plumbing (`CommandScope`, click-to-focus, context menu, focus bar, data-moniker) on top of one primitive (`<Focusable>` or `<FocusZone>`, picked via the `kind` prop).
 - A "scope" in spatial-nav speak = "any registered focus point" = either a Focusable or a FocusZone. Not a Layer.
 - "Scope chain" / `parent_zone` chain = walk from focused leaf up through ancestor zones to the layer root.
 
 ### Disambiguation: `CommandScope` is a separate concept
 
-The existing codebase has `CommandScope` (in `kanban-app/ui/src/lib/command-scope.tsx`) — that is the **command-dispatch** boundary, with its own `parent` chain used to resolve which scope handles a dispatched command (like `ui.inspect`). It is *not* the same as `FocusScope`.
+The existing kanban codebase has `CommandScope` (in `kanban-app/ui/src/lib/command-scope.tsx`) — that is the **command-dispatch** boundary used to resolve which scope handles a dispatched command (like `ui.inspect`). It is *not* the same as `FocusScope`. The composite `<FocusScope>` React component creates **both** a spatial entry (in `swissarmyhammer-focus`) **and** a `CommandScope` (in the kanban app). The two systems share the moniker but are otherwise independent.
 
-How they relate:
-- The composite React `<FocusScope>` component creates **both** a spatial entry (Focusable or Zone) **and** a `CommandScope` for the same moniker. They share the moniker; they walk parallel chains (parent_zone chain in the registry; parent chain in CommandScope).
-- The primitives (`<Focusable>` / `<FocusZone>` / `<FocusLayer>`) by themselves do **not** create a `CommandScope`. Use them when you only need spatial registration without command dispatch (e.g., generic UI chrome). Use the composite `<FocusScope>` for entity-aware UI where commands matter.
-- `FocusLayer` is purely a modal boundary; it has no command-dispatch role.
-
-When in doubt, "scope" without qualifier in this plan means a spatial scope (`FocusScope` enum) — the focusable thing in the registry. Where command dispatch is meant, the cards say `CommandScope` explicitly.
+`swissarmyhammer-focus` itself has no concept of `CommandScope` — it's pure spatial-nav, generic across consumers.
 
 ### Newtype discipline — use `swissarmyhammer_common::define_id!`
-
-The project already has a canonical newtype macro: `define_id!` from `swissarmyhammer-common`. It provides `#[serde(transparent)]`, `Display`, `AsRef<str>`, `From<&str>`/`From<String>`, `Deref`, `Borrow<str>`, `FromStr`, `PartialEq<str>`, plus `new()` (fresh ULID), `from_string()`, `as_str()`. All existing ID types (`TaskId`, `ColumnId`, `TagId`, etc.) use it.
-
-Define the string-valued newtypes with this macro:
 
 ```rust
 use swissarmyhammer_common::define_id;
@@ -98,14 +90,13 @@ define_id!(Moniker,    "Entity focus identity: \"task:01ABC\", \"ui:toolbar.new\
 define_id!(LayerName,  "Layer role: \"window\", \"inspector\", \"dialog\", \"palette\"");
 ```
 
-`Pixels` is numeric, not string — hand-rolled:
+`Pixels` is numeric — hand-rolled with arithmetic so beam math stays type-safe:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Pixels(pub f64);
 
-// Arithmetic so beam/score math doesn't drop to f64:
 impl std::ops::Add for Pixels { /* ... */ }
 impl std::ops::Sub for Pixels { /* ... */ }
 impl std::ops::Mul<f64> for Pixels { /* ... */ }
@@ -117,17 +108,13 @@ impl std::ops::Div<f64> for Pixels { /* ... */ }
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
-    pub x: Pixels,
-    pub y: Pixels,
-    pub width: Pixels,
-    pub height: Pixels,
+    pub x: Pixels, pub y: Pixels, pub width: Pixels, pub height: Pixels,
 }
-
 impl Rect {
-    pub fn top(&self)    -> Pixels { self.y }
-    pub fn left(&self)   -> Pixels { self.x }
+    pub fn top(&self) -> Pixels { self.y }
+    pub fn left(&self) -> Pixels { self.x }
     pub fn bottom(&self) -> Pixels { self.y + self.height }
-    pub fn right(&self)  -> Pixels { self.x + self.width }
+    pub fn right(&self) -> Pixels { self.x + self.width }
 }
 ```
 
@@ -215,61 +202,40 @@ impl SpatialRegistry {
 
 ### Tauri commands — in `kanban-app/src/commands.rs`
 
-The headless registry lives in `swissarmyhammer-kanban`. Tauri adapters live in `kanban-app/src/commands.rs` (same file as `list_entities`, `get_entity`, etc.), each deriving `window_label` from the `tauri::Window` parameter and delegating to the kanban crate:
+The headless registry lives in `swissarmyhammer-focus`. Tauri adapters live in `kanban-app/src/commands.rs`, each deriving `WindowLabel` from the `tauri::Window` parameter and delegating to the focus crate.
 
-```rust
-#[tauri::command]
-pub async fn spatial_register_focusable(
-    window: tauri::Window,
-    state: State<'_, AppState>,
-    key: SpatialKey,
-    moniker: Moniker,
-    rect: Rect,
-    layer_key: LayerKey,
-    parent_zone: Option<SpatialKey>,
-    overrides: HashMap<Direction, Option<Moniker>>,
-) -> Result<(), String>;
+### Tests — `swissarmyhammer-focus/tests/registry.rs`
 
-// Likewise: spatial_register_zone, spatial_unregister_scope, spatial_update_rect,
-//           spatial_push_layer, spatial_pop_layer, spatial_focus, spatial_navigate,
-//           spatial_drill_in, spatial_drill_out
-```
-
-### Tests — `swissarmyhammer-kanban/tests/focus_registry.rs`
-
-Follow the pattern of `swissarmyhammer-kanban/tests/resolve_focused_column.rs` and `dynamic_sources_headless.rs` — pure-Rust, no Tauri, no jsdom. Constructs synthetic `Rect`/`SpatialKey`/`Moniker` values with `::from_string` / `Pixels(..)`.
+Pure-Rust, no Tauri, no jsdom, no kanban. Constructs synthetic `Rect`/`SpatialKey`/`Moniker` values with `::from_string` / `Pixels(..)`.
 
 ### Design decisions
 
-- **`swissarmyhammer-kanban` not `swissarmyhammer-commands`**: matches the refactor pattern — business logic over Tier 0.
+- **`swissarmyhammer-focus`, not `swissarmyhammer-kanban`**: spatial nav is generic — opaque monikers, abstract rects. Pulling it out keeps it reusable and keeps the kanban crate focused. (`swissarmyhammer-commands` stays Tier 0.)
 - **`define_id!` macro reuse**: consistent with `TaskId`/`ColumnId`/`TagId`; avoids hand-rolled boilerplate.
-- **`focus/` submodule**: groups all focus concerns (column resolver + spatial registry) together.
-- **Four peer types, not a `kind` field on one struct**: zone-only fields (`last_focused`) are type-checked.
+- **Four peer types, not a `kind` field on one struct**: zone-only fields are type-checked.
 - **`FocusScope` as a Rust enum**: one map, pattern matching.
+- **`Pixels` arithmetic**: prevents accidental mixing of pixel values with unrelated floats.
 
 ### Subtasks
-- [ ] Create `swissarmyhammer-kanban/src/focus/` directory; move existing `focus.rs` → `focus/column.rs`; `focus/mod.rs` re-exports to keep the public path stable
-- [ ] `focus/types.rs`: define `WindowLabel`, `SpatialKey`, `LayerKey`, `Moniker`, `LayerName` via `define_id!`; hand-roll `Pixels` + arithmetic; define `Rect`, `Direction`
-- [ ] `focus/scope.rs`: define `Focusable`, `FocusZone`, `FocusScope` enum with serde attrs + helper methods
-- [ ] `focus/layer.rs`: define `FocusLayer`
-- [ ] `focus/registry.rs`: implement `SpatialRegistry` with scope + layer ops
-- [ ] Forest ops (`children_of_layer`, `root_for_window`, `ancestors_of_layer`)
-- [ ] Zone tree ops (`children_of_zone`, `ancestor_zones`)
-- [ ] Add Tauri commands in `kanban-app/src/commands.rs` with fully-typed signatures; each derives `WindowLabel` from `tauri::Window`
-- [ ] Tests in `swissarmyhammer-kanban/tests/focus_registry.rs` following the headless pattern
+- [ ] (Skeleton + traits exist already from `01KQ2E7RPBPJ8...`)
+- [ ] Fill `swissarmyhammer-focus/src/types.rs`: `define_id!` newtypes; hand-roll `Pixels` + arithmetic; `Rect` + accessors; `Direction` enum
+- [ ] Fill `swissarmyhammer-focus/src/scope.rs`: `Focusable`, `FocusZone`, `FocusScope` enum + helper methods
+- [ ] Fill `swissarmyhammer-focus/src/layer.rs`: `FocusLayer`
+- [ ] Fill `swissarmyhammer-focus/src/registry.rs`: `SpatialRegistry` with all scope + layer + forest + zone-tree ops
+- [ ] Tauri commands in `kanban-app/src/commands.rs` import from `swissarmyhammer_focus::*`; derive `WindowLabel` from `tauri::Window`
 
 ## Acceptance Criteria
-- [ ] Location is `swissarmyhammer-kanban/src/focus/` — NOT `swissarmyhammer-commands`
-- [ ] String-valued newtypes use `define_id!` from `swissarmyhammer-common` — NOT hand-rolled
-- [ ] Every identity or measurement parameter on every public type / command signature uses a newtype; no bare `String` or `f64`
-- [ ] `Focusable`, `FocusZone`, `FocusLayer` exist as distinct structs; `FocusScope` is an enum over `Focusable | Zone`
-- [ ] `Pixels` supports `+` / `-` / `*`/f64 / `/`/f64 without `.0` access
-- [ ] Existing `resolve_focused_column` still accessible at `swissarmyhammer_kanban::focus::resolve_focused_column`
-- [ ] Tauri commands live in `kanban-app/src/commands.rs`, derive `WindowLabel` from `tauri::Window`
-- [ ] Tests run as `cargo test -p swissarmyhammer-kanban`; no Tauri or jsdom required
+- [ ] All types live in `swissarmyhammer-focus` — NOT `swissarmyhammer-kanban`
+- [ ] String-valued newtypes use `define_id!`; no hand-rolled `#[serde(transparent)]` String wrappers
+- [ ] No bare `String` or `f64` on any public type / command signature
+- [ ] `Focusable`, `FocusZone`, `FocusLayer` are distinct structs; `FocusScope` is an enum over `Focusable | Zone`
+- [ ] `Pixels` supports arithmetic without `.0` access
+- [ ] `swissarmyhammer-kanban/src/focus.rs` (`resolve_focused_column`) untouched
+- [ ] Tauri commands derive `WindowLabel` from `tauri::Window`
+- [ ] `cargo test -p swissarmyhammer-focus` passes; no Tauri or jsdom required
 
-## Tests (pure Rust, in `swissarmyhammer-kanban/tests/focus_registry.rs`)
-- [ ] Each newtype JSON-round-trips as a bare primitive (`#[serde(transparent)]` from `define_id!`)
+## Tests (in `swissarmyhammer-focus/tests/registry.rs`)
+- [ ] Each newtype JSON-round-trips as a bare primitive
 - [ ] `Pixels` arithmetic is type-preserving
 - [ ] `FocusScope::Focusable(_)` and `FocusScope::Zone(_)` round-trip with `"kind"` tag
 - [ ] Registry: register a Focusable + a FocusZone; `scope(key)` returns the right variant
@@ -277,7 +243,7 @@ Follow the pattern of `swissarmyhammer-kanban/tests/resolve_focused_column.rs` a
 - [ ] Registry: `ancestor_zones` walks `parent_zone` up to layer root
 - [ ] Registry: `children_of_layer` filtered by parent, not cross-window
 - [ ] Registry: `ancestors_of_layer` walks `layer.parent`
-- [ ] Registry: `scopes_in_layer` returns both Focusables and Zones by `layer_key`
+- [ ] Registry: `scopes_in_layer` returns Focusables and Zones by `layer_key`
 - [ ] Registry: 2 windows + 2 inspector layers + 1 dialog = 5 layers, 2 roots, correct chains
 
 ## Workflow

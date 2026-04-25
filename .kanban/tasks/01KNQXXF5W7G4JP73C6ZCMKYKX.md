@@ -3,6 +3,7 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXW7HHHB8HW76K3PXH3G34
+- 01KQ2E7RPBPJ8T8KZX39N2SZ0A
 position_column: todo
 position_ordinal: a280
 project: spatial-nav
@@ -14,7 +15,7 @@ Implement the spatial navigation algorithm in Rust as a pure function on `Spatia
 
 ### Crate placement
 
-Lives in `swissarmyhammer-kanban/src/focus/navigate.rs` (headless business logic, per the commit-`b81336d42` refactor pattern). Tests in `swissarmyhammer-kanban/tests/focus_navigate.rs`. The Tauri adapter in `kanban-app/src/commands.rs` is thin — it derives `WindowLabel` from `tauri::Window`, calls `SpatialState::navigate`, and emits `focus-changed`.
+Lives in `swissarmyhammer-focus/src/navigate.rs` as the **default `BeamNavStrategy::next` implementation** of the `NavStrategy` trait (trait declared by the refactor card `01KQ2E7RPBPJ8...`). Tests in `swissarmyhammer-focus/tests/navigate.rs`. The Tauri adapter in `kanban-app/src/commands.rs` is thin — it derives `WindowLabel` from `tauri::Window`, calls `SpatialState::navigate` (which delegates to the configured `NavStrategy`), and emits `focus-changed`.
 
 ### The core rule: nav happens *in* a layer
 
@@ -45,7 +46,7 @@ When the focused entry is a `FocusZone` (user drilled out), beam search runs aga
 ### API — newtyped signatures
 
 ```rust
-// In swissarmyhammer-kanban/src/focus/navigate.rs
+// In swissarmyhammer-focus/src/navigate.rs
 impl SpatialRegistry {
     pub fn navigate(&self, key: SpatialKey, direction: Direction) -> Option<Moniker> {
         let focused: &FocusScope = self.scope(&key)?;
@@ -91,7 +92,7 @@ Drill-in / drill-out are **separate commands** (see card `01KPZS4RG0...`), not d
 `broadcastNavCommand` becomes fire-and-forget: `invoke("spatial_navigate", { key, direction })`. Rust emits `FocusChangedEvent` with the new `SpatialKey` + `Moniker`; the claim registry from card `01KNM3YHHFJ3...` applies it.
 
 ### Subtasks
-- [ ] `swissarmyhammer-kanban/src/focus/navigate.rs`: `beam_test` + Android scoring on `Pixels`
+- [ ] `swissarmyhammer-focus/src/navigate.rs`: `beam_test` + Android scoring on `Pixels`
 - [ ] `beam_in_zone` (rule 1)
 - [ ] `beam_all_leaves_in_layer` (rule 2)
 - [ ] `beam_sibling_zones` (zone-level)
@@ -100,7 +101,7 @@ Drill-in / drill-out are **separate commands** (see card `01KPZS4RG0...`), not d
 - [ ] Tauri command `spatial_navigate` in `kanban-app/src/commands.rs` (thin adapter)
 
 ## Acceptance Criteria
-- [ ] Lives in `swissarmyhammer-kanban/src/focus/navigate.rs`
+- [ ] Lives in `swissarmyhammer-focus/src/navigate.rs`
 - [ ] `navigate` signature is `(SpatialKey, Direction) -> Option<Moniker>`
 - [ ] All beam helpers return `Option<Moniker>`
 - [ ] Candidate filtering compares newtypes (`LayerKey` / `SpatialKey`), not raw strings
@@ -109,9 +110,9 @@ Drill-in / drill-out are **separate commands** (see card `01KPZS4RG0...`), not d
 - [ ] Zone arrow-nav: only sibling zones; leaves invisible
 - [ ] All 8 directions correct at both levels
 - [ ] Aligned candidates preferred over closer-but-diagonal (13:1)
-- [ ] `cargo test -p swissarmyhammer-kanban` passes
+- [ ] `cargo test -p swissarmyhammer-focus` passes
 
-## Tests (`swissarmyhammer-kanban/tests/focus_navigate.rs`)
+## Tests (`swissarmyhammer-focus/tests/navigate.rs`)
 
 Pure-Rust with synthetic rects using `Pixels(...)` constructors and `SpatialKey::from_string(...)` / `LayerKey::from_string(...)` / `Moniker::from_string(...)`. No raw strings. Headless pattern matching `tests/resolve_focused_column.rs`.
 

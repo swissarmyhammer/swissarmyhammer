@@ -3,6 +3,7 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXXF5W7G4JP73C6ZCMKYKX
+- 01KQ2E7RPBPJ8T8KZX39N2SZ0A
 position_column: todo
 position_ordinal: a880
 project: spatial-nav
@@ -15,11 +16,11 @@ Handle edge cases where focusables and zones mount/unmount dynamically — virtu
 ### Crate placement
 
 Per the commit-`b81336d42` refactor pattern:
-- Fallback resolution logic in `swissarmyhammer-kanban/src/focus/state.rs` (`SpatialState::handle_unregister`)
-- `FallbackResolution` enum in `swissarmyhammer-kanban/src/focus/state.rs`
+- Fallback resolution logic in `swissarmyhammer-focus/src/state.rs` (`SpatialState::handle_unregister`)
+- `FallbackResolution` enum in `swissarmyhammer-focus/src/state.rs`
 - `RegisterEntry` enum + `spatial_register_batch` command: type in `focus/registry.rs`, Tauri adapter in `kanban-app/src/commands.rs`
 - Virtualization placeholder wiring is React-only (`kanban-app/ui/src/components/column-view.tsx`)
-- Tests in `swissarmyhammer-kanban/tests/focus_fallback.rs` and `swissarmyhammer-kanban/tests/focus_batch_register.rs`
+- Tests in `swissarmyhammer-focus/tests/fallback.rs` and `swissarmyhammer-focus/tests/batch_register.rs`
 
 ### Case 1: Focused scope unmounts (zone-aware fallback)
 

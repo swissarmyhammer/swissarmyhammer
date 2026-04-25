@@ -3,6 +3,7 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXXF5W7G4JP73C6ZCMKYKX
+- 01KQ2E7RPBPJ8T8KZX39N2SZ0A
 position_column: todo
 position_ordinal: ff8b80
 project: spatial-nav
@@ -17,10 +18,10 @@ Key-chord change: **Inspect moves from Enter to Space**, freeing Enter for drill
 ### Crate placement
 
 Per the commit-`b81336d42` refactor pattern:
-- `drill_in` / `drill_out` methods on `SpatialRegistry` in `swissarmyhammer-kanban/src/focus/registry.rs` (or a `focus/drill.rs` if it grows)
+- `drill_in` / `drill_out` methods on `SpatialRegistry` in `swissarmyhammer-focus/src/registry.rs` (or a `focus/drill.rs` if it grows)
 - Tauri adapters `spatial_drill_in` / `spatial_drill_out` in `kanban-app/src/commands.rs`
 - React commands and keybinding changes in `kanban-app/ui/src/`
-- Tests in `swissarmyhammer-kanban/tests/focus_drill.rs`
+- Tests in `swissarmyhammer-focus/tests/drill.rs`
 
 ### Commands
 
