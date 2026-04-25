@@ -1,0 +1,4 @@
+color: 9900cc
+description: Align builtin skills with Anthropic's "Complete Guide to Building Skills for Claude" — description quality, progressive disclosure via references/, naming conventions, and template structure.
+name: Skills Guide Compliance
+order: 6

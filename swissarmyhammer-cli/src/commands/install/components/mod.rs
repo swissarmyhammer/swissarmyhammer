@@ -784,16 +784,9 @@ fn init_all_agents(global: bool, reporter: &dyn InitReporter) -> Result<String, 
     let agents = resolver.resolve_builtins();
 
     let prompt_library = PromptLibrary::default();
-    let mut template_context = TemplateContext::new();
-    template_context.set(
-        "version".to_string(),
-        serde_json::json!(env!("CARGO_PKG_VERSION")),
-    );
+    let template_context = agent_template_context();
 
-    let project_root =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
-        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+    let (project_root, mut lockfile) = load_agent_project_lockfile()?;
 
     let mut installed_count = 0;
     let mut agent_targets: Vec<String> = Vec::new();
@@ -810,17 +803,7 @@ fn init_all_agents(global: bool, reporter: &dyn InitReporter) -> Result<String, 
         if agent_targets.is_empty() {
             agent_targets = targets.clone();
         }
-        lockfile.add_package(
-            name.clone(),
-            mirdan::lockfile::LockedPackage {
-                package_type: mirdan::package_type::PackageType::Agent,
-                version: "0.0.0".to_string(),
-                resolved: "builtin".to_string(),
-                integrity: String::new(),
-                installed_at: chrono::Utc::now().to_rfc3339(),
-                targets,
-            },
-        );
+        lockfile.add_package(name.clone(), locked_builtin_agent_package(targets));
         installed_count += 1;
     }
 
@@ -833,6 +816,35 @@ fn init_all_agents(global: bool, reporter: &dyn InitReporter) -> Result<String, 
         reporter,
     )?;
     Ok(format!("Deployed {} builtin agents", installed_count))
+}
+
+fn agent_template_context() -> TemplateContext {
+    let mut ctx = TemplateContext::new();
+    ctx.set(
+        "version".to_string(),
+        serde_json::json!(env!("CARGO_PKG_VERSION")),
+    );
+    ctx
+}
+
+fn load_agent_project_lockfile() -> Result<(std::path::PathBuf, mirdan::lockfile::Lockfile), String>
+{
+    let project_root =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let lockfile = mirdan::lockfile::Lockfile::load(&project_root)
+        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
+    Ok((project_root, lockfile))
+}
+
+fn locked_builtin_agent_package(targets: Vec<String>) -> mirdan::lockfile::LockedPackage {
+    mirdan::lockfile::LockedPackage {
+        package_type: mirdan::package_type::PackageType::Agent,
+        version: "0.0.0".to_string(),
+        resolved: "builtin".to_string(),
+        integrity: String::new(),
+        installed_at: chrono::Utc::now().to_rfc3339(),
+        targets,
+    }
 }
 
 /// Format an Agent back into AGENT.md content (frontmatter + rendered body).
@@ -1218,6 +1230,40 @@ pub(crate) fn is_safe_name(name: &str) -> bool {
         && !std::path::Path::new(name).is_absolute()
 }
 
+/// Validate that a forward-slash-separated relative path is safe to join
+/// under a target directory.
+///
+/// Accepts paths with `/` separators (e.g. `references/helper.md`) so skills
+/// can deploy resources into subdirectories, but rejects parent-directory
+/// references (`..`), backslashes, absolute paths, and empty segments — all of
+/// which could escape the target directory via path traversal.
+///
+/// This is the multi-segment sibling of [`is_safe_name`]; use it at deploy
+/// sites that genuinely need to preserve subdirectory structure, not as a
+/// general replacement — callers that expect a single filename component
+/// should still use [`is_safe_name`].
+pub(crate) fn is_safe_relative_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if path.contains('\\') {
+        return false;
+    }
+    if std::path::Path::new(path).is_absolute() {
+        return false;
+    }
+
+    // Each path segment must be non-empty, must not be a parent-directory
+    // reference, and must not contain the parent-directory sequence `..`.
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == ".." || segment.contains("..") {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Remove named entries from a store directory and their symlinks from link directories.
 ///
 /// This is the shared filesystem logic for both skill and agent uninstall.
@@ -1318,6 +1364,24 @@ mod tests {
         assert!(!is_safe_name("foo/bar"));
         assert!(!is_safe_name("foo\\bar"));
         assert!(!is_safe_name(""));
+    }
+
+    #[test]
+    fn test_is_safe_relative_path() {
+        // Accepted: single-segment and multi-segment forward-slash paths.
+        assert!(is_safe_relative_path("helper.md"));
+        assert!(is_safe_relative_path("references/helper.md"));
+        assert!(is_safe_relative_path("references/foo.md"));
+        assert!(is_safe_relative_path("a/b/c/d.md"));
+
+        // Rejected: parent-directory traversal, absolute paths, backslashes,
+        // and empty strings or empty segments.
+        assert!(!is_safe_relative_path("../escape.md"));
+        assert!(!is_safe_relative_path("references/../escape.md"));
+        assert!(!is_safe_relative_path("/abs/path.md"));
+        assert!(!is_safe_relative_path("foo\\bar.md"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("references//helper.md"));
     }
 
     #[test]

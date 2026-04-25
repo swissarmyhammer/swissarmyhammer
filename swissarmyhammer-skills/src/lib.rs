@@ -36,6 +36,7 @@ pub use schema::generate_skill_mcp_schema;
 pub use skill::{Skill, SkillName, SkillResources, SkillSource};
 pub use skill_library::SkillLibrary;
 pub use skill_resolver::SkillResolver;
+pub use validation::{validate_description, MAX_DESCRIPTION_CHARS};
 
 // Re-export Execute trait from operations crate
 pub use swissarmyhammer_operations::{async_trait, Execute, ExecutionResult, Operation};

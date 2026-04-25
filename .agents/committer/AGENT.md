@@ -227,7 +227,7 @@ use the skill tool to load the full instructions, then follow them.
 ### Available Skills
 
 
-- **code-context**: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use this skill before modifying code to understand structure, dependencies, and impact. Provides indexed, structural code intelligence that is faster and more precise than raw text search. (local)
+- **code-context**: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use when the user says "blast radius", "who calls this", "find symbol", "find references", "go to definition", "symbol lookup", "callgraph", "find callers", "what calls this function", or "what's affected if I change this". Also use proactively before modifying code to understand structure, dependencies, and impact — list symbols, get callgraph (inbound), and get blastradius before touching any function, type, or file. Provides indexed, structural code intelligence that is faster and more precise than raw text search. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
@@ -235,33 +235,33 @@ use the skill tool to load the full instructions, then follow them.
 
 - **deduplicate**: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent. (local)
 
-- **detected-projects**: Discover project types, build commands, test commands, and language-specific guidelines for the current workspace. Use early in any session before making changes. (local)
+- **detected-projects**: Discover project types, build commands, test commands, and language-specific guidelines for the current workspace. Use when the user says "what kind of project", "detect project", "build command", "test command", "project type", asks what language or framework the code uses, or wants to know how to build, test, or format the project. Also use early in any session before making changes. (local)
 
 - **double-check**: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work. (local)
 
 - **explore**: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting. (local)
 
-- **finish**: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag/project/filter). Uses ralph to prevent stopping between iterations. (local)
+- **finish**: Drive kanban tasks from ready to done by looping implement → test → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter). Uses ralph to prevent stopping between iterations. (local)
 
-- **implement**: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban task and does the work. Produces verbose output — automatically delegates to an implementer subagent. (local)
+- **implement**: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing to review. Produces verbose output — automatically delegates to an implementer subagent. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first. (local)
 
-- **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
+- **kanban**: Execute the next task from the kanban board. Use when the user says "kanban", "/kanban", "next task", "what's the next task", or "pick up work". Picks up the next ready task from the board and drives it through doing to review. (local)
 
 - **lsp**: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. Also use when live code intelligence ops (get_hover, get_completions, go to definition) return degraded results from the tree-sitter layer instead of LSP, or when you see "no code intelligence", "can't go to definition", "no type info available", or "source_layer: TreeSitter" on ops that should have full LSP data. (local)
 
 - **map**: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure. (local)
 
-- **plan**: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact. (local)
+- **plan**: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact. (local)
 
-- **really-done**: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always (local)
+- **really-done**: Verify work before claiming it done. Use when the user says "really done", "are we done", "ready to ship", "ready to commit", "is this passing", or when about to claim work is complete, fixed, or passing. Also use before committing or creating PRs. Requires running verification commands and confirming output before any success claim — evidence before assertions, always. (local)
 
 - **review**: Code review workflow. Use this skill whenever the user says "review", "code review", "review this PR", "review my changes", or otherwise wants a code review. Reviews produce verbose output — automatically delegates to a reviewer subagent. (local)
 
-- **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
+- **shell**: Shell command execution with persistent history, process management, and searchable output. Use when you need to run a shell command, search or grep previous command output, get output lines from a prior command, list running processes, or kill a hung process. Triggers on phrases like "run X", "execute X", "search the last build output", "grep the output", "kill that process", "show me the output of command N". (local)
 
 - **task**: Create a single, well-researched kanban task. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
 
-- **tdd**: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR. (local)
+- **tdd**: Use before writing or changing production code — enforces strict test-driven development (RED, GREEN, REFACTOR) by writing the failing test first, watching it fail, then writing the code to pass. Use when the user says "tdd", "test first", "write the test first", "red-green-refactor", "write a failing test", or when implementing a new function, fixing a bug, or adding behavior that needs a regression test. Do NOT use for reading, exploring, or explaining existing code — use the explore skill instead. Do NOT use for running an already-written test suite — use the test skill. Do NOT use for pure refactors that add no new behavior and keep the existing tests green. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 

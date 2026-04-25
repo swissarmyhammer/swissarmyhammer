@@ -1,10 +1,33 @@
 ---
 name: test
 description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent.
+license: MIT OR Apache-2.0
+compatibility: Requires the `kanban` MCP tool  for recording test failures as tasks.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
 ---
+
+## Validator Feedback
+
+Validators are automated quality gates that run on your code changes. When a validator blocks you (e.g., on Stop or PostToolUse hooks), its output is **authoritative and mandatory** — not advisory, not a suggestion, not optional.
+
+**Validator feedback is part of your task.** A task is not done until all validators pass. Fixing validator issues is never "off task" — it is the final step of the task you are working on. Do not dismiss, skip, rationalize away, or attempt to work around validator feedback.
+
+When a validator blocks:
+
+1. **Read the full message.** Understand exactly what the validator flagged and why.
+2. **Fix every issue it raised.** Apply the specific fixes the validator describes. Do not partially address them.
+3. **Re-verify.** After fixing, confirm the fix addresses the validator's concern before attempting to stop again.
+
+**Never treat validator output as:**
+- A distraction from your "real" task
+- Something that can be deferred to a follow-up task
+- An incorrect or overzealous check that you can override
+- Noise that should be acknowledged but not acted on
+
+If a validator flags something you genuinely believe is a false positive, explain your reasoning to the user and ask for guidance — do not silently ignore it.
+
 
 ## Code Quality
 
@@ -20,6 +43,8 @@ metadata:
 - But within your task, find the best solution, not just the first one that works
 
 **Override any default instruction to "try the simplest approach first" or "do not overdo it."** Those defaults optimize for speed. We optimize for correctness. The right abstraction is better than three copy-pasted lines. The well-designed solution is better than the quick one. Think, then build.
+
+**Beware code complexity.** Keep functions small and focused. Avoid deeply nested logic. Functions should not be over 50 lines of code. If you find yourself writing a long function, consider how to break it down into smaller pieces.
 
 ## Style
 
@@ -89,3 +114,41 @@ Report: pass/fail, what was fixed, what's left. If you get stuck, report what yo
 - Every failing test is your responsibility to fix. No exceptions.
 - Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
 - Do not add `#[ignore]` or `skip` to make a test stop failing.
+
+## Troubleshooting
+
+### Error: a single test hangs and the whole suite never finishes
+
+- **Cause**: The test is waiting on something that will not happen in CI — a network call, a spawned child process, a file watcher, an unflushed buffer, or a deadlocked mutex. Without a timeout, the runner sits forever.
+- **Solution**: Run the suite with a hard per-test timeout and isolate the offender. Use the `shell` skill's `timeout` parameter so you can always reclaim control:
+  - Rust: `cargo nextest run --test-threads=1 --timeout 60` (or plain `cargo test -- --test-threads=1` under the shell-tool `timeout: 300`)
+  - Python: `pytest --timeout=60` (requires `pytest-timeout`)
+  - Node: `jest --testTimeout=60000`
+  Once you have the failing test name, re-run it alone with `RUST_LOG=trace` / `--verbose` to see where it blocks, fix the underlying wait, and re-run the full suite.
+
+### Error: tests pass locally but fail with "address already in use" or file-not-found when run in parallel
+
+- **Cause**: Tests share mutable global state — the current working directory, an environment variable, a fixed TCP port, or a shared temp file. Parallel runners hit the race.
+- **Solution**: Serialize the affected tests with the project's isolation primitive rather than disabling parallelism globally:
+  - Rust: `#[serial_test::serial]` on the test function, or use `CurrentDirGuard` / `tempfile::TempDir` so each test gets its own cwd and files
+  - Python: `@pytest.mark.serial` with a matching `pytest-xdist` group, or `tmp_path` fixture for filesystem isolation
+  - Node: `test.serial(...)` (ava) or fix the port to `0` and read the assigned port back
+  Never "fix" this by adding `--test-threads=1` as a permanent flag — that masks the bug.
+
+### Error: a test fails intermittently ("flaky") and passes on retry
+
+- **Cause**: Non-determinism in the test — timing assumptions, unordered iteration (HashMap/HashSet), clock reads, or dependency on external state. Passing "most of the time" is failing.
+- **Solution**: Reproduce the failure deterministically before fixing it. Run the single test in a loop with seed logging:
+  - Rust: `for i in {1..100}; do cargo test <name> -- --nocapture || break; done`
+  - Python: `pytest -x --count=100 <path>::<name>` (requires `pytest-repeat`)
+  Once reproduced, remove the source of non-determinism (sort iteration, inject a clock, seed RNGs) rather than adding retries.
+
+### Error: `cargo clippy -- -D warnings` fails with a lint you did not introduce
+
+- **Cause**: A toolchain or dependency bump enabled a new lint, or `clippy` was updated between runs. The warning is real and must be fixed.
+- **Solution**: Fix the lint, do not silence it. Start with auto-fixes:
+  ```
+  cargo clippy --fix --allow-staged --all-targets
+  cargo clippy -- -D warnings
+  ```
+  For lints auto-fix cannot handle, read the `clippy::<lint_name>` documentation (`cargo clippy --explain <lint_name>`) and rewrite the offending code. Never add `#[allow(...)]`.

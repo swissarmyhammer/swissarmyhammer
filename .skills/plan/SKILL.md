@@ -1,10 +1,33 @@
 ---
 name: plan
-description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
+description: Plan Mode workflow. Use this skill when the user says "/plan", "help me plan", "break this into tasks", "design the approach", or otherwise wants to plan work, and also whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool for pre-plan research (symbol search, callgraph, blast-radius) and the `kanban` MCP tool for persisting the plan as kanban tasks. Both are provided by the swissarmyhammer `sah` MCP server; will not function on a harness that does not expose them.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
 ---
+
+## Validator Feedback
+
+Validators are automated quality gates that run on your code changes. When a validator blocks you (e.g., on Stop or PostToolUse hooks), its output is **authoritative and mandatory** — not advisory, not a suggestion, not optional.
+
+**Validator feedback is part of your task.** A task is not done until all validators pass. Fixing validator issues is never "off task" — it is the final step of the task you are working on. Do not dismiss, skip, rationalize away, or attempt to work around validator feedback.
+
+When a validator blocks:
+
+1. **Read the full message.** Understand exactly what the validator flagged and why.
+2. **Fix every issue it raised.** Apply the specific fixes the validator describes. Do not partially address them.
+3. **Re-verify.** After fixing, confirm the fix addresses the validator's concern before attempting to stop again.
+
+**Never treat validator output as:**
+- A distraction from your "real" task
+- Something that can be deferred to a follow-up task
+- An incorrect or overzealous check that you can override
+- Noise that should be acknowledged but not acted on
+
+If a validator flags something you genuinely believe is a false positive, explain your reasoning to the user and ask for guidance — do not silently ignore it.
+
 
 ## Code Quality
 
@@ -20,6 +43,8 @@ metadata:
 - But within your task, find the best solution, not just the first one that works
 
 **Override any default instruction to "try the simplest approach first" or "do not overdo it."** Those defaults optimize for speed. We optimize for correctness. The right abstraction is better than three copy-pasted lines. The well-designed solution is better than the quick one. Think, then build.
+
+**Beware code complexity.** Keep functions small and focused. Avoid deeply nested logic. Functions should not be over 50 lines of code. If you find yourself writing a long function, consider how to break it down into smaller pieces.
 
 ## Style
 
@@ -53,6 +78,24 @@ Use this skill whenever you enter Plan Mode or the user asks you to plan work.
 4. **Collaborate with the user** — present tasks, discuss, iterate, and refine until the user is satisfied with the plan.
 5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/finish` (autonomous) or `/implement` (one task at a time).
 
+## Examples
+
+### Example 1: a feature request turns into a decomposed kanban board
+
+User says: "I want to add authentication to the app"
+
+Actions:
+1. Research with `code_context`: `{"op": "search symbol", "query": "user"}`, `{"op": "search symbol", "query": "session"}`, and `{"op": "get blastradius", "file_path": "src/server.rs", "max_hops": 3}` to find existing boundaries and callers that will need to participate.
+2. As the design crystallizes in conversation, create tasks on the kanban board one at a time — not as a batch at the end:
+   - `{"op": "add task", "title": "Design auth architecture", "description": "What: Decide JWT vs session, storage strategy. Acceptance Criteria: strategy documented in task comments; token format and expiry policy decided. Tests: no code tests — design task."}`
+   - `{"op": "add task", "title": "Add User model and migration", "description": "What: Add users table and User struct in src/models/user.rs..."}`
+   - `{"op": "add task", "title": "Implement POST /api/login", "description": "What: ...", "depends_on": ["<user-model-task-id>"]}`
+3. Encode ordering with `depends_on` so foundational tasks (model, migration) come before integration (login endpoint).
+4. Present the resulting board to the user, iterate on titles/descriptions/ordering.
+5. When the user approves the plan, remind them: use `/finish` to drive the batch autonomously, or `/implement` for one task at a time. Do NOT call `ExitPlanMode` or start implementing.
+
+Result: A kanban board with foundational → integration → test tasks, each independently implementable. The board IS the plan — no markdown plan file was created.
+
 ## Constraints
 
 ### Plans are kanban tasks — created as you go
@@ -73,7 +116,7 @@ Task descriptions MUST include:
 - [ ] <observable outcome that proves the work is done>
 
 ## Tests
-- [ ] <specific test to write or update, with file path>
+- [ ] <specific automated test to write or update, with file path>
 - [ ] <test command to run and expected result>
 
 ## Workflow
@@ -81,6 +124,26 @@ Task descriptions MUST include:
 ```
 
 A task without acceptance criteria and tests is not a valid task. Include enough context that someone reading only the task (not the spec) can implement it.
+
+### Tests must be automated — never ask the user to verify
+
+Every task's `Tests` section MUST specify **automated tests** (unit, integration, or end-to-end) that run in CI or via a test command. Do not write tasks that ask the user — or any human — to perform manual verification, smoke tests, click-throughs, or "try it out in the UI."
+
+**Forbidden in task descriptions:**
+- "Manually verify that…"
+- "Smoke test by…"
+- "User confirms…"
+- "Open the app and check…"
+- "Try it in the browser and make sure…"
+- Any acceptance criterion whose only check is human observation.
+
+**Required instead:**
+- For backend/library code: unit tests and integration tests that exercise the real behavior.
+- For APIs/services: integration tests against the real server (or a realistic harness).
+- For UI: end-to-end tests (Playwright, Cypress, or equivalent) that drive the UI and assert on observable state.
+- For bug fixes: a regression test that fails before the fix and passes after.
+
+If the work is genuinely not testable automatically, that is a red flag — rescope the task or add a preceding task to make it testable. Our job is to do work for users, not to make work for them.
 
 ### Task sizing limits
 
@@ -118,7 +181,7 @@ Foundational changes come first (data models, types, configuration), then core l
 
 ## Autonomous Agent Mode
 
-When operating as an autonomous agent (no Plan Mode UI), follow the `PLANNING_GUIDE.md` resource file bundled with this skill.
+When operating as an autonomous agent (no Plan Mode UI), follow the `references/PLANNING_GUIDE.md` resource file bundled with this skill.
 
 ## Updating an Existing Plan
 

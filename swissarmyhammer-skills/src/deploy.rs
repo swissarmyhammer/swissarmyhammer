@@ -28,6 +28,8 @@ struct SkillFrontmatter<'a> {
     allowed_tools: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     license: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compatibility: Option<&'a str>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     metadata: HashMap<String, String>,
 }
@@ -79,6 +81,7 @@ pub fn format_skill_md(
         description: &skill.description,
         allowed_tools,
         license: skill.license.as_deref(),
+        compatibility: skill.compatibility.as_deref(),
         metadata: metadata.clone(),
     };
 
@@ -289,5 +292,41 @@ mod tests {
             !md.contains("license"),
             "None license should be omitted from frontmatter"
         );
+        assert!(
+            !md.contains("compatibility"),
+            "None compatibility should be omitted from frontmatter"
+        );
+    }
+
+    /// Regression: `compatibility` round-trips through `format_skill_md` and
+    /// `parse_skill_md` so the generated `.skills/` copy matches the builtin
+    /// source instead of silently dropping tool-prerequisite metadata.
+    #[test]
+    fn test_format_skill_md_round_trips_compatibility() {
+        let compatibility =
+            "Requires the `code_context` MCP tool for symbol lookup and blast-radius analysis.";
+        let skill = Skill {
+            name: SkillName::new("compat-skill").unwrap(),
+            description: "a skill that declares its tool prerequisites".to_string(),
+            license: Some("MIT OR Apache-2.0".to_string()),
+            compatibility: Some(compatibility.to_string()),
+            metadata: HashMap::new(),
+            allowed_tools: vec![],
+            instructions: "body".to_string(),
+            source_path: None,
+            source: SkillSource::Builtin,
+            resources: SkillResources::default(),
+        };
+
+        let md = format_skill_md(&skill, "body", &skill.metadata);
+
+        assert!(
+            md.contains("compatibility:"),
+            "frontmatter should contain compatibility field, got:\n{md}"
+        );
+
+        let parsed = crate::skill_loader::parse_skill_md(&md, SkillSource::Builtin)
+            .expect("output should parse as valid SKILL.md");
+        assert_eq!(parsed.compatibility.as_deref(), Some(compatibility));
     }
 }

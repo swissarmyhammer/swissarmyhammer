@@ -1,9 +1,13 @@
 ---
 name: really-done
-description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+description: Verify work before claiming it done. Use when the user says "really done", "are we done", "ready to ship", "ready to commit", "is this passing", or when about to claim work is complete, fixed, or passing. Also use before committing or creating PRs. Requires running verification commands and confirming output before any success claim — evidence before assertions, always.
+license: MIT OR Apache-2.0
+metadata:
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
-# Verification Before Completion
+# Really Done
 
 ## Overview
 
