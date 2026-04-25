@@ -41,7 +41,46 @@ Migration of `focus.rs` → `focus/column.rs` is part of this card's scope; keep
 | Modal layer boundary| `FocusLayer`        | `struct FocusLayer`   |
 | Entity-aware wrapper| `FocusScope`        | `enum FocusScope`     |
 
-On Rust: `FocusScope` is the sum type `Focusable | FocusZone` stored in the registry per `SpatialKey`. On React: `FocusScope` is the entity-aware wrapper that composes `<Focusable>` or `<FocusZone>`.
+### Terminology — canonical definitions
+
+These four terms are used everywhere in the spatial-nav plan. Definitions are normative; if another card uses these words differently, this card wins.
+
+**Layer** (`FocusLayer`)
+- A **hard modal boundary**. Spatial nav, fallback resolution, and zone tree walks **never cross a layer**.
+- Layers form a **forest**: each Tauri window has its own root layer; inspector / dialog / palette overlays are stacked child layers under their parent layer.
+- Examples: `window` (root, one per Tauri webview), `inspector` (one per window when any inspector is open), `dialog`, `palette`.
+- A layer is *not* itself focusable — you don't navigate "to" a layer; you navigate within the active focus's layer.
+- Identified by `LayerKey` (ULID per mount).
+
+**Zone** (`FocusZone`)
+- A **soft navigable container** within a layer. Zones group leaves; the beam search prefers within-zone candidates first (rule 1) before falling back across zones (rule 2).
+- Zones form a **tree within a layer**, rooted at the layer root (a top-level zone or directly at `parent_zone = None`).
+- Examples: board container, column, card, inspector panel, field row, nav bar, toolbar group, perspective bar, view container.
+- Each zone has its own `last_focused: Option<SpatialKey>` for drill-out / fallback memory.
+- A zone *is* focusable — you can drill out to it, then nav between sibling zones (zone-level beam search).
+- Identified by `SpatialKey` (ULID per mount).
+
+**Focusable** (the primitive, lower-case "focusable" when used as a noun)
+- A **leaf focusable point** — atomic, no children, no zone-level features.
+- Examples: task title text, status pill, tag pill, mention pill, button, menu item, breadcrumb item.
+- Identified by `SpatialKey`.
+
+**Scope** (`FocusScope`, the **umbrella term**)
+- On Rust: the sum type `enum FocusScope { Focusable(Focusable), Zone(FocusZone) }`. This is what the registry stores per `SpatialKey`. Pattern matching distinguishes leaf vs container.
+- On React: the **composite wrapper component** that adds entity plumbing (`CommandScope`, click-to-focus, context menu, focus bar, data-moniker) on top of one primitive (`<Focusable>` or `<FocusZone>`, picked via the `kind` prop).
+- A "scope" in spatial-nav speak = "any registered focus point" = either a Focusable or a FocusZone. Not a Layer.
+- "Scope chain" / `parent_zone` chain = walk from focused leaf up through ancestor zones to the layer root.
+
+### Disambiguation: `CommandScope` is a separate concept
+
+The existing codebase has `CommandScope` (in `kanban-app/ui/src/lib/command-scope.tsx`) — that is the **command-dispatch** boundary, with its own `parent` chain used to resolve which scope handles a dispatched command (like `ui.inspect`). It is *not* the same as `FocusScope`.
+
+How they relate:
+- The composite React `<FocusScope>` component creates **both** a spatial entry (Focusable or Zone) **and** a `CommandScope` for the same moniker. They share the moniker; they walk parallel chains (parent_zone chain in the registry; parent chain in CommandScope).
+- The primitives (`<Focusable>` / `<FocusZone>` / `<FocusLayer>`) by themselves do **not** create a `CommandScope`. Use them when you only need spatial registration without command dispatch (e.g., generic UI chrome). Use the composite `<FocusScope>` for entity-aware UI where commands matter.
+- `FocusLayer` is purely a modal boundary; it has no command-dispatch role.
+
+When in doubt, "scope" without qualifier in this plan means a spatial scope (`FocusScope` enum) — the focusable thing in the registry. Where command dispatch is meant, the cards say `CommandScope` explicitly.
 
 ### Newtype discipline — use `swissarmyhammer_common::define_id!`
 

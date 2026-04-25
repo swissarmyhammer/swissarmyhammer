@@ -20,7 +20,9 @@ Implement the three **React primitive components** that peer with the Rust types
 | `<FocusZone>` (`components/focus-zone.tsx`) | `swissarmyhammer_kanban::focus::FocusZone`   | Navigable container   |
 | `<FocusLayer>` (`components/focus-layer.tsx`) | `swissarmyhammer_kanban::focus::FocusLayer` | Modal layer boundary  |
 
-Rust types are in `swissarmyhammer-kanban/src/focus/` (card `01KNQXW7HH...`). Tauri commands are in `kanban-app/src/commands.rs`.
+These three are **primitives**: each registers a single thing with Rust and provides one bit of context to descendants (parent layer / parent zone). They do **not** create a `CommandScope` — that's the composite `<FocusScope>` wrapper's job (separate card, `01KPZWZE5A...`). Use a primitive when the component is non-entity chrome (e.g. `<FocusZone moniker="ui:toolbar.actions">`) and doesn't need command dispatch.
+
+Rust types are in `swissarmyhammer-kanban/src/focus/` (card `01KNQXW7HH...`, see also that card's terminology section for canonical Layer / Zone / Focusable / Scope definitions). Tauri commands are in `kanban-app/src/commands.rs`.
 
 ### Branded types (TypeScript)
 

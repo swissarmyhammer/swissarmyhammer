@@ -23,6 +23,8 @@ Refactor the existing `<FocusScope>` (in `kanban-app/ui/src/components/focus-sco
 
 On the Rust side, `enum FocusScope` is the stored sum type. On React, `<FocusScope>` is the entity-aware wrapper most call sites use. Direct use of primitives is also fine for non-entity chrome.
 
+See the canonical terminology section in the kernel card `01KNQXW7HH...` for definitions of Layer / Zone / Focusable / Scope. In short: this composite `<FocusScope>` is what you reach for when wrapping an entity (task, column, field row); its job is to produce **both** a spatial entry (Focusable or Zone, via the primitive it composes) **and** a `CommandScope` (the command-dispatch boundary — a separate, pre-existing concept). Primitives produce only the spatial entry.
+
 ### Props
 
 ```typescript
