@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
-position_column: todo
-position_ordinal: ff8f80
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9d80
 title: Defer scope-chain construction in useContextMenu; return a stable handler across renders
 ---
 ## What
@@ -56,22 +56,22 @@ Properties after the change:
 Call sites (`focus-scope.tsx`, `data-table.tsx`, `grid-view.tsx`) need no changes — the hook's external contract is unchanged.
 
 ### Subtasks
-- [ ] Refactor `useContextMenu` to use `scopeRef` + empty deps, moving `scopeChainFromScope` into the handler body.
-- [ ] Add regression test: render a consumer that captures the handler reference across two re-renders, assert the ref is identical (strict `===`), and assert `scopeChainFromScope` (or the first `invoke` arg) reflects a late-bound scope change between the renders.
-- [ ] Verify existing `context-menu.test.tsx` tests still pass (behavior when right-clicking, items fanned to `show_context_menu`, separators).
+- [x] Refactor `useContextMenu` to use `scopeRef` + empty deps, moving `scopeChainFromScope` into the handler body.
+- [x] Add regression test: render a consumer that captures the handler reference across two re-renders, assert the ref is identical (strict `===`), and assert `scopeChainFromScope` (or the first `invoke` arg) reflects a late-bound scope change between the renders.
+- [x] Verify existing `context-menu.test.tsx` tests still pass (behavior when right-clicking, items fanned to `show_context_menu`, separators).
 
 ## Acceptance Criteria
-- [ ] Returned handler from `useContextMenu()` has identical reference across consecutive renders when nothing else about the hook's inputs changed.
-- [ ] Scope chain passed to `list_commands_for_scope` reflects the scope **at right-click time**, not the scope from when the handler was first created — regression test proves this.
-- [ ] No behavioral change in the native context menu: same items, same separators, same order, same `cmd`/`target`/`scope_chain` payload shipped to `show_context_menu`.
-- [ ] Existing tests in `kanban-app/ui/src/lib/context-menu.test.tsx` pass unchanged.
+- [x] Returned handler from `useContextMenu()` has identical reference across consecutive renders when nothing else about the hook's inputs changed.
+- [x] Scope chain passed to `list_commands_for_scope` reflects the scope **at right-click time**, not the scope from when the handler was first created — regression test proves this.
+- [x] No behavioral change in the native context menu: same items, same separators, same order, same `cmd`/`target`/`scope_chain` payload shipped to `show_context_menu`.
+- [x] Existing tests in `kanban-app/ui/src/lib/context-menu.test.tsx` pass unchanged.
 - [ ] Manual smoke: right-click on a grid row, a column header (where grouping toggles stopPropagation), and grid whitespace — each surfaces the correct command set with no regressions.
 
 ## Tests
-- [ ] Add test to `kanban-app/ui/src/lib/context-menu.test.tsx` — `"returned handler is reference-stable across renders"`. Setup: render a consumer inside a `CommandScopeProvider`; capture the handler via `renderHook` `result.current`; `rerender()`; assert `result.current === previousRef`.
-- [ ] Add test `"handler reflects the scope at click time, not at render time"`. Render under a scope with moniker A, capture the handler; rerender under a scope with moniker B; invoke the captured handler; assert the `scopeChain` arg to `invoke("list_commands_for_scope", ...)` starts with moniker B, not A.
-- [ ] Test command: `cd kanban-app/ui && npm test -- context-menu`. Expected: green.
-- [ ] Full suite: `cd kanban-app/ui && npm test`. Expected: green.
+- [x] Add test to `kanban-app/ui/src/lib/context-menu.test.tsx` — `"returned handler is reference-stable across renders"`. Setup: render a consumer inside a `CommandScopeProvider`; capture the handler via `renderHook` `result.current`; `rerender()`; assert `result.current === previousRef`.
+- [x] Add test `"handler reflects the scope at click time, not at render time"`. Render under a scope with moniker A, capture the handler; rerender under a scope with moniker B; invoke the captured handler; assert the `scopeChain` arg to `invoke("list_commands_for_scope", ...)` starts with moniker B, not A.
+- [x] Test command: `cd kanban-app/ui && npm test -- context-menu`. Expected: green.
+- [x] Full suite: `cd kanban-app/ui && npm test`. Expected: green. (1340 tests / 123 files, all green.)
 - [ ] Manual smoke described above.
 
 ## Workflow

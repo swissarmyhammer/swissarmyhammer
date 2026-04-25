@@ -78,7 +78,19 @@ vi.mock("@/lib/entity-focus-context", () => ({
     focusedMoniker: null,
     setFocusedMoniker: vi.fn(),
   }),
+  useFocusActions: () => ({
+    setFocus: vi.fn(),
+    registerScope: vi.fn(),
+    unregisterScope: vi.fn(),
+    getScope: vi.fn(),
+    registerClaimPredicates: vi.fn(),
+    unregisterClaimPredicates: vi.fn(),
+    broadcastNavCommand: vi.fn(),
+  }),
+  useFocusedMoniker: () => null,
+  useFocusedMonikerRef: () => ({ current: null }),
   useIsFocused: () => false,
+  useIsDirectFocus: () => false,
 }));
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import {
@@ -14,7 +15,8 @@ import {
   type CommandScope,
 } from "@/lib/command-scope";
 import {
-  useEntityFocus,
+  useFocusActions,
+  useIsDirectFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
@@ -84,13 +86,17 @@ export function FocusScope({
   ...rest
 }: FocusScopeProps) {
   const {
-    focusedMoniker,
     setFocus,
     registerScope,
     unregisterScope,
     registerClaimPredicates,
     unregisterClaimPredicates,
-  } = useEntityFocus();
+  } = useFocusActions();
+
+  // Selective subscription: this scope re-renders only when *its own*
+  // moniker's focus slot flips — not on every focus move elsewhere in the
+  // tree. In a 12k-cell grid, one arrow-key press wakes only two of these.
+  const isFocused = useIsDirectFocus(moniker);
 
   // Build the scope ourselves so we can register it
   const parent = useContext(CommandScopeContext);
@@ -102,21 +108,54 @@ export function FocusScope({
     return { commands: map, parent, moniker };
   }, [commands, parent, moniker]);
 
-  const isDirectFocus = showFocusBar && focusedMoniker === moniker;
+  const isDirectFocus = showFocusBar && isFocused;
 
-  // Register/deregister scope in the EntityFocus registry
+  // Register the scope in the EntityFocus registry.
+  //
+  // The effect's dep list is deliberately `[moniker]` — NOT `[scope]`. The
+  // scope object's identity churns whenever `parent` (from
+  // `useContext(CommandScopeContext)`) changes, which happens on every
+  // ancestor-scope rebuild. Re-firing the effect on every such churn
+  // produces 12k unregister/register pairs per grid render on a 2000-row
+  // board, flooding React's commit phase with cleanups and freezing the UI.
+  //
+  // Instead we hold the latest scope in a ref (updated every render) and
+  // re-register on every render inline via `registerScope` — registration
+  // is a plain `Map.set`, not a React effect, so it does not pay React's
+  // per-effect overhead. Cleanup still runs on real unmount.
+  //
+  // This keeps the registry always in sync with the latest scope reference
+  // while the effect only fires when the moniker actually changes (mount /
+  // unmount / moniker swap).
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  registerScope(moniker, scope);
   useEffect(() => {
-    registerScope(moniker, scope);
+    // Re-register on mount (and when moniker changes) to cover the initial
+    // paint path where the inline call above has already run but React may
+    // have discarded the render in StrictMode.
+    registerScope(moniker, scopeRef.current);
     return () => unregisterScope(moniker);
-  }, [moniker, scope, registerScope, unregisterScope]);
+  }, [moniker, registerScope, unregisterScope]);
 
-  // Register/deregister claim predicates when claimWhen is provided
+  // Register claim predicates with the same ref-pinned pattern as `scope`
+  // above: `claimWhen` is typically a 2D-array slice rebuilt upstream on
+  // every grid render, so depending on its identity in the effect deps
+  // causes the same 12k unregister/register flood. Hold the latest value
+  // in a ref, write through on every render (plain `Map.set`), and keep
+  // the effect deps narrow so only the actual unmount path runs cleanup.
+  const claimWhenRef = useRef(claimWhen);
+  claimWhenRef.current = claimWhen;
+  if (claimWhen && claimWhen.length > 0) {
+    registerClaimPredicates(moniker, claimWhen);
+  }
   useEffect(() => {
-    if (claimWhen && claimWhen.length > 0) {
-      registerClaimPredicates(moniker, claimWhen);
+    const current = claimWhenRef.current;
+    if (current && current.length > 0) {
+      registerClaimPredicates(moniker, current);
       return () => unregisterClaimPredicates(moniker);
     }
-  }, [moniker, claimWhen, registerClaimPredicates, unregisterClaimPredicates]);
+  }, [moniker, registerClaimPredicates, unregisterClaimPredicates]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -188,7 +227,7 @@ function FocusScopeInner({
 }: FocusScopeInnerProps) {
   const contextMenuHandler = useContextMenu();
   const dispatch = useDispatchCommand("ui.inspect");
-  const { setFocus } = useEntityFocus();
+  const { setFocus } = useFocusActions();
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {

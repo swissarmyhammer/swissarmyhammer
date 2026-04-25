@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -6,7 +13,12 @@ import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import { useDispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
+import {
+  FocusedScopeContext,
+  scopeChainFromScope,
+  useDispatchCommand,
+  type CommandAtDepth,
+} from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
@@ -63,7 +75,19 @@ export function CommandPalette({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
+  const { keymap_mode: mode } = useUIState();
+  // Scope chain is sourced from `FocusedScopeContext` — the frontend-
+  // authoritative focus tree — rather than from `useUIState().scope_chain`.
+  // The backend echoes scope_chain on every `ui.setFocus`, but the
+  // `UIStateProvider` suppresses those events to keep `useUIState()`
+  // reference-stable. Reading the chain directly from the focus context
+  // preserves the "refetch commands when focus moves while palette is
+  // open" semantic without the round-trip.
+  const focusedScope = useContext(FocusedScopeContext);
+  const scopeChain = useMemo(
+    () => scopeChainFromScope(focusedScope),
+    [focusedScope],
+  );
   const dispatch = useDispatchCommand();
 
   /** Shape returned by the backend. */
@@ -91,7 +115,7 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     invoke<ResolvedCommand[]>("list_commands_for_scope", {
-      scopeChain: scopeChain ?? [],
+      scopeChain,
     })
       .then(setBackendCommands)
       .catch((e) => {

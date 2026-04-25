@@ -5,8 +5,8 @@ depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
 - 01KPZPY5F5HPXDKKHGKDEW6FNZ
 - 01KPZQDAC6P0AHTQ5F08A170H4
-position_column: todo
-position_ordinal: ff9080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa180
 title: 'Stabilize useDispatchCommand: read scope/boardPath/setInflight from a ref so dispatch identity survives focus changes'
 ---
 ## What
@@ -62,24 +62,24 @@ Properties after the change:
 The 30 call sites require no changes; the hook's external contract (a callable returning Promise<unknown>) is unchanged.
 
 ### Subtasks
-- [ ] Refactor `useDispatchCommand` to snapshot context reads into `latestRef` and keep only `[presetCmd]` as the `useCallback` dep.
-- [ ] Add regression test `"dispatch identity is stable across renders when presetCmd is unchanged"`.
-- [ ] Add regression test `"dispatch reads the latest focused scope at call time, not at render time"` — render under scope A, capture dispatch, rerender under scope B, invoke dispatch, assert the `scopeChain` passed to `invoke("dispatch_command", ...)` reflects scope B.
-- [ ] Add regression test `"dispatch respects presetCmd identity changes"` — passing a different `presetCmd` DOES return a new callable (so `useDispatchCommand("ui.inspect")` and `useDispatchCommand("nav.up")` remain distinguishable).
-- [ ] Confirm existing `command-scope.test.tsx` tests still pass.
-- [ ] Run full UI test suite; investigate any regressions (should be none given the contract is unchanged).
+- [x] Refactor `useDispatchCommand` to snapshot context reads into `latestRef` and keep only `[presetCmd]` as the `useCallback` dep.
+- [x] Add regression test `"dispatch identity is stable across renders when presetCmd is unchanged"`.
+- [x] Add regression test `"dispatch reads the latest focused scope at call time, not at render time"` — render under scope A, capture dispatch, rerender under scope B, invoke dispatch, assert the `scopeChain` passed to `invoke("dispatch_command", ...)` reflects scope B.
+- [x] Add regression test `"dispatch respects presetCmd identity changes"` — passing a different `presetCmd` DOES return a new callable (so `useDispatchCommand("ui.inspect")` and `useDispatchCommand("nav.up")` remain distinguishable).
+- [x] Confirm existing `command-scope.test.tsx` tests still pass.
+- [x] Run full UI test suite; investigate any regressions (should be none given the contract is unchanged).
 
 ## Acceptance Criteria
-- [ ] `useDispatchCommand()` (no preset) returns a reference-stable callable across re-renders triggered by `FocusedScopeContext` changes.
-- [ ] `useDispatchCommand("some.cmd")` returns a reference-stable callable across re-renders when the preset doesn't change.
-- [ ] Invoking the captured dispatch after the focused scope has moved produces a backend call whose `scopeChain` argument reflects the CURRENT focused scope, not the stale one. (Regression test enforces this.)
-- [ ] The existing behavior of every call site is preserved — no user-visible change to dispatch semantics (frontend execute handlers still run, busy counter still tracked, boardPath still attached).
-- [ ] After this change, arrow-key nav in the 2000-row swissarmyhammer board produces at most the same backend IPCs as today, MINUS the `perspective.list` cascade (already addressed separately but now reinforced at the source).
+- [x] `useDispatchCommand()` (no preset) returns a reference-stable callable across re-renders triggered by `FocusedScopeContext` changes.
+- [x] `useDispatchCommand("some.cmd")` returns a reference-stable callable across re-renders when the preset doesn't change.
+- [x] Invoking the captured dispatch after the focused scope has moved produces a backend call whose `scopeChain` argument reflects the CURRENT focused scope, not the stale one. (Regression test enforces this.)
+- [x] The existing behavior of every call site is preserved — no user-visible change to dispatch semantics (frontend execute handlers still run, busy counter still tracked, boardPath still attached).
+- [x] After this change, arrow-key nav in the 2000-row swissarmyhammer board produces at most the same backend IPCs as today, MINUS the `perspective.list` cascade (already addressed separately but now reinforced at the source).
 
 ## Tests
-- [ ] New cases in `kanban-app/ui/src/lib/command-scope.test.tsx` covering the three identity/semantics assertions above.
-- [ ] Test command: `cd kanban-app/ui && npm test -- command-scope`. Expected: green.
-- [ ] Full UI suite: `cd kanban-app/ui && npm test`. Expected: green.
+- [x] New cases in `kanban-app/ui/src/lib/command-scope.test.tsx` covering the three identity/semantics assertions above.
+- [x] Test command: `cd kanban-app/ui && npm test -- command-scope`. Expected: green.
+- [x] Full UI suite: `cd kanban-app/ui && npm test`. Expected: green.
 - [ ] Manual smoke: arrow-key nav in grid view while tracking `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'` — no spurious IPCs beyond `ui.setFocus` per keystroke.
 
 ## Workflow

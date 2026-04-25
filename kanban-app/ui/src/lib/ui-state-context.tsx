@@ -54,6 +54,50 @@ const DEFAULT_STATE: UIStateSnapshot = {
   recent_boards: [],
 };
 
+/**
+ * Discriminator values on the `ui-state-changed` wire event.
+ *
+ * One per `UIStateChange` variant plus the two board-side-effect result
+ * shapes (`board_switch`, `board_close`). The backend tags every emit with
+ * `kind` so the frontend can skip `setState` for slices it owns — notably
+ * `scope_chain`, which echoes back from every `ui.setFocus` call and would
+ * otherwise cascade re-renders through every `useUIState()` consumer.
+ *
+ * Kept in sync with `emit_ui_state_change_if_needed` in
+ * `kanban-app/src/commands.rs`.
+ */
+export type UIStateChangeKind =
+  | "scope_chain"
+  | "palette_open"
+  | "keymap_mode"
+  | "inspector_stack"
+  | "active_view"
+  | "active_perspective"
+  | "app_mode"
+  | "board_switch"
+  | "board_close";
+
+/** Shape of the `ui-state-changed` event payload from the Rust backend. */
+export interface UIStateChangedEvent {
+  kind: UIStateChangeKind;
+  state: UIStateSnapshot;
+}
+
+/**
+ * Kinds the `UIStateProvider` suppresses — the frontend is authoritative
+ * for these slices, so applying the backend echo would only waste renders.
+ *
+ * Currently only `scope_chain`: the frontend drives focus via
+ * `FocusedScopeContext` (see `entity-focus-context.tsx`), which is the
+ * source of truth for the scope chain. The backend still emits these
+ * events so the rest of the pipeline (menu rebuild, command logging)
+ * stays uniform — this listener just refuses to propagate them into
+ * `useUIState()` consumers.
+ */
+const FRONTEND_AUTHORITATIVE_KINDS: ReadonlySet<UIStateChangeKind> = new Set([
+  "scope_chain",
+]);
+
 interface UIStateContextValue {
   state: UIStateSnapshot;
   loading: boolean;
@@ -81,10 +125,18 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       });
 
-    // Subscribe to changes
-    const unlisten = listen<UIStateSnapshot>("ui-state-changed", (event) => {
-      setState(event.payload);
-    });
+    // Subscribe to changes. The backend wraps every emit as
+    // `{ kind, state }` so we can early-return on kinds the frontend owns —
+    // skipping `setState` here is what keeps `useUIState()` reference-stable
+    // across arrow-key focus moves and prevents the fan-out re-render
+    // cascade through every `useUIState()` consumer.
+    const unlisten = listen<UIStateChangedEvent>(
+      "ui-state-changed",
+      (event) => {
+        if (FRONTEND_AUTHORITATIVE_KINDS.has(event.payload.kind)) return;
+        setState(event.payload.state);
+      },
+    );
 
     return () => {
       unlisten.then((fn) => fn());

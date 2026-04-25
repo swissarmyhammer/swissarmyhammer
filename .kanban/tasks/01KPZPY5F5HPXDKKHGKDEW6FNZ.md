@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
-position_column: todo
-position_ordinal: ff8d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9f80
 title: Stop refetching perspectives on every focus change — use view scope + backend events
 ---
 ## What
@@ -33,11 +33,11 @@ useEffect(() => { refresh(); }, [refresh]);
 - `kanban-app/ui/src/lib/perspective-context.test.tsx` — add regression test.
 
 ### Subtasks
-- [ ] Refactor `usePerspectivesFetch` to hold `dispatch` in a ref; make `refresh` stable (no `dispatch` dep).
-- [ ] Refactor `useAutoCreateDefaultPerspective` to use the same `dispatchRef` pattern.
-- [ ] Refactor `useAutoSelectActivePerspective` to use the same `dispatchRef` pattern.
-- [ ] Add a regression test that proves `perspective.list` fires exactly once on mount and does NOT fire when focus changes.
-- [ ] Confirm existing tests for event-driven refetch (`refreshes on entity-created event for perspective type`, `refetches perspective.list on entity-field-changed for a perspective`, `refreshes on board-changed event`) still pass unchanged.
+- [x] Refactor `usePerspectivesFetch` to hold `dispatch` in a ref; make `refresh` stable (no `dispatch` dep).
+- [x] Refactor `useAutoCreateDefaultPerspective` to use the same `dispatchRef` pattern.
+- [x] Refactor `useAutoSelectActivePerspective` to use the same `dispatchRef` pattern.
+- [x] Add a regression test that proves `perspective.list` fires exactly once on mount and does NOT fire when focus changes.
+- [x] Confirm existing tests for event-driven refetch (`refreshes on entity-created event for perspective type`, `refetches perspective.list on entity-field-changed for a perspective`, `refreshes on board-changed event`) still pass unchanged.
 
 ## Acceptance Criteria
 - [ ] Arrow-key navigation in the grid (many `ui.setFocus` dispatches in a row) produces exactly ZERO additional `perspective.list` backend dispatches. Verified by `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'` — no `cmd=perspective.list` lines after the initial mount-time one for a window, until a backend event arrives.
@@ -47,8 +47,8 @@ useEffect(() => { refresh(); }, [refresh]);
 - [ ] No change to perspective semantics: active perspective still resolves correctly on mount, auto-create still fires when no perspective exists for the view kind, auto-select still coerces a stale `active_perspective_id` to the first matching perspective.
 
 ## Tests
-- [ ] Add test `kanban-app/ui/src/lib/perspective-context.test.tsx::"does not refetch perspective.list when focused scope changes"`. Setup: mount `PerspectiveProvider` under a wrapper that exposes a `FocusedScopeContext.Provider` whose value toggles. Flow: render, wait for initial fetch, reset `mockInvoke`, change the focused scope value (simulating entity focus change), await microtasks, assert `mockInvoke` was NOT called with `{ cmd: "perspective.list" }`.
-- [ ] Test command to run: `cd kanban-app/ui && npm test -- perspective-context`. Expected: all existing tests pass plus the new case.
+- [x] Add test `kanban-app/ui/src/lib/perspective-context.test.tsx::"does not refetch perspective.list when focused scope changes"`. Setup: mount `PerspectiveProvider` under a wrapper that exposes a `FocusedScopeContext.Provider` whose value toggles. Flow: render, wait for initial fetch, reset `mockInvoke`, change the focused scope value (simulating entity focus change), await microtasks, assert `mockInvoke` was NOT called with `{ cmd: "perspective.list" }`.
+- [x] Test command to run: `cd kanban-app/ui && npm test -- perspective-context`. Expected: all existing tests pass plus the new case.
 - [ ] Manual smoke: open the 2000-row swissarmyhammer board on the kanban branch, hold down ↓ for ~3 seconds, confirm only one `cmd=perspective.list` line appears in `log show` (the one emitted at initial mount).
 
 ## Workflow

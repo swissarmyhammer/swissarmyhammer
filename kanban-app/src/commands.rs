@@ -1829,13 +1829,57 @@ async fn perform_cross_board_drag_transfer(
 /// `UIStateChange` result envelope or mutated board open/close state (which
 /// is not typed as a `UIStateChange` but still affects what the React
 /// `UIStateProvider` renders).
+///
+/// The emitted payload is a wrapper of the form
+/// `{ "kind": "<discriminator>", "state": <full UIState snapshot> }`.
+/// `kind` names which slice of UI state changed — one of the seven
+/// `UIStateChange` variants plus the two board result shapes — so the
+/// frontend can skip `setState` for events it doesn't care about (e.g.
+/// every `ui.setFocus` arrow-key fires a `scope_chain` event; the
+/// frontend owns that slice via `FocusedScopeContext` and ignores the
+/// echo). No UI-specific policy lives here — the backend just tells the
+/// truth about which change it made.
 fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
-    if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    let Some(kind) = ui_state_change_kind(result) else {
+        return;
+    };
+    let _ = app.emit(
+        "ui-state-changed",
+        serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
+    );
+}
+
+/// Classify a command result into a `ui-state-changed` discriminator, or
+/// `None` if the result does not trigger a UI state event.
+///
+/// Returns the `kind` string used on the wire:
+/// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
+///   `keymap_mode`, `inspector_stack`, `active_view`,
+///   `active_perspective`, `app_mode`).
+/// - `board_switch` / `board_close` for the two board result shapes,
+///   which are not typed as `UIStateChange` but still mutate what the
+///   `UIStateProvider` renders.
+fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
+    if let Ok(change) =
+        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+    {
+        return Some(match change {
+            swissarmyhammer_commands::UIStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_commands::UIStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_commands::UIStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_commands::UIStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
+        });
     }
-    if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    if result.get("BoardSwitch").is_some() {
+        return Some("board_switch");
     }
+    if result.get("BoardClose").is_some() {
+        return Some("board_close");
+    }
+    None
 }
 
 /// Rebuild the native menu after commands whose effects change what items
@@ -2442,6 +2486,99 @@ mod tests {
         assert_eq!(
             row.get("display_name").and_then(|v| v.as_str()),
             Some("bug")
+        );
+    }
+
+    // ── ui_state_change_kind tests ─────────────────────────────────
+    //
+    // These guard the wire-format contract for `ui-state-changed` events:
+    // every payload carries a `kind` discriminator so the frontend can skip
+    // `setState` for slices it owns (notably `scope_chain`, which echoes
+    // back from every `ui.setFocus` call and would otherwise cascade
+    // re-renders through every `useUIState()` consumer).
+
+    use super::ui_state_change_kind;
+    use swissarmyhammer_commands::UIStateChange;
+
+    #[test]
+    fn ui_state_change_kind_scope_chain() {
+        let value = serde_json::to_value(UIStateChange::ScopeChain(vec!["board:main".to_string()]))
+            .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("scope_chain"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_palette_open() {
+        let value = serde_json::to_value(UIStateChange::PaletteOpen(true)).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_keymap_mode() {
+        let value = serde_json::to_value(UIStateChange::KeymapMode("vim".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("keymap_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_inspector_stack() {
+        let value =
+            serde_json::to_value(UIStateChange::InspectorStack(vec!["task:1".into()])).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_view() {
+        let value = serde_json::to_value(UIStateChange::ActiveView("board".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_view"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_perspective() {
+        let value =
+            serde_json::to_value(UIStateChange::ActivePerspective("sprint-01".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_perspective"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_app_mode() {
+        let value = serde_json::to_value(UIStateChange::AppMode("normal".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("app_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_switch() {
+        // BoardSwitch is not typed as a UIStateChange — it's a side-effect
+        // result shape. Detected by the presence of the `BoardSwitch` key.
+        let value = serde_json::json!({
+            "BoardSwitch": {
+                "path": "/boards/my-board",
+                "window_label": "main",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_switch"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_close() {
+        // Same shape as BoardSwitch — detected by the `BoardClose` key.
+        let value = serde_json::json!({
+            "BoardClose": {
+                "path": "/boards/my-board",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_close"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_unrelated_result_is_none() {
+        // Results that are neither a UIStateChange nor a board side-effect
+        // must NOT trigger a ui-state-changed emit. Null, plain strings,
+        // and arbitrary objects all fall through to None.
+        assert_eq!(ui_state_change_kind(&serde_json::Value::Null), None);
+        assert_eq!(ui_state_change_kind(&serde_json::json!("ok")), None);
+        assert_eq!(
+            ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
+            None
         );
     }
 }

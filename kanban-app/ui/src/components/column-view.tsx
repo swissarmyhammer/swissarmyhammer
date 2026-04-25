@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useSchema } from "@/lib/schema-context";
 import {
-  useEntityFocus,
+  useFocusActions,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
@@ -484,7 +484,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
-  const { setFocus } = useEntityFocus();
+  const { setFocus } = useFocusActions();
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 

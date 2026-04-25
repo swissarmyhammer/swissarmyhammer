@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef } from "react";
 import { CommandScopeContext } from "@/lib/command-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useFocusActions } from "@/lib/entity-focus-context";
 
 /**
  * Renderless component that bridges a navigation cursor to entity focus.
@@ -15,7 +15,7 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
  */
 export function CursorFocusBridge({ moniker: mk }: { moniker: string }) {
   const scope = useContext(CommandScopeContext);
-  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+  const { setFocus, registerScope, unregisterScope } = useFocusActions();
   const prevMonikerRef = useRef<string | null>(null);
 
   // Register scope — fires on any change to keep registry current

@@ -92,8 +92,21 @@ vi.mock("@/lib/entity-focus-context", () => ({
     getScope: vi.fn(),
     registerClaimPredicates: vi.fn(),
     unregisterClaimPredicates: vi.fn(),
+    broadcastNavCommand: vi.fn(),
   }),
+  useFocusActions: () => ({
+    setFocus: vi.fn(),
+    registerScope: vi.fn(),
+    unregisterScope: vi.fn(),
+    getScope: vi.fn(),
+    registerClaimPredicates: vi.fn(),
+    unregisterClaimPredicates: vi.fn(),
+    broadcastNavCommand: vi.fn(),
+  }),
+  useFocusedMoniker: () => null,
+  useFocusedMonikerRef: () => ({ current: null }),
   useIsFocused: () => false,
+  useIsDirectFocus: () => false,
 }));
 
 vi.mock("@/hooks/use-grid", () => ({

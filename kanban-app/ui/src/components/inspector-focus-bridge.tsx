@@ -3,7 +3,7 @@ import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useFocusActions } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 
 interface InspectorFocusBridgeProps {
@@ -25,7 +25,7 @@ interface InspectorFocusBridgeProps {
  */
 export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const navRef = useRef<UseInspectorNavReturn | null>(null);
-  const { broadcastNavCommand } = useEntityFocus();
+  const { broadcastNavCommand } = useFocusActions();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,6 +68,8 @@ import { PerspectiveProvider, usePerspectives } from "./perspective-context";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
+  FocusedScopeContext,
+  type CommandScope,
 } from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 
@@ -627,5 +629,173 @@ describe("PerspectiveProvider", () => {
     });
 
     expect(result.current.perspectives).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Focus-scope regression: perspective.list must NOT refetch on focus
+  // -----------------------------------------------------------------------
+  //
+  // `useDispatchCommand` memoizes its returned callback with `effectiveScope =
+  // focusedScope ?? treeScope` in its dep array. Every grid keystroke fires
+  // `ui.setFocus`, which rotates `FocusedScopeContext` and therefore the
+  // `dispatch` identity. If `PerspectiveProvider`'s hooks close over
+  // `dispatch` in `useCallback`/`useEffect` deps, a new `dispatch` identity
+  // triggers a full `perspective.list` refetch — and churns the companion
+  // auto-create / auto-select effects as well.
+  //
+  // Perspectives are a per-view concern, not per-focused-element. They should
+  // only refetch on mount (once per view kind) and in response to backend
+  // events (`entity-created` / `entity-field-changed` / `entity-removed` for
+  // perspectives, and `board-changed`).
+  //
+  // The fix is a `dispatchRef` pattern in `perspective-context.tsx`: hooks
+  // read `dispatchRef.current` instead of closing over `dispatch`, and their
+  // dep arrays no longer mention `dispatch`. These tests pin that behavior.
+
+  /** Count how many times `dispatch_command` was invoked with a given cmd id. */
+  function invokeCallsFor(cmd: string): number {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === cmd,
+    ).length;
+  }
+
+  /**
+   * Module-scoped setter captured during render so individual tests can
+   * toggle the focused scope value from outside React. Matches how
+   * EntityFocusProvider flips `FocusedScopeContext` on every `ui.setFocus`.
+   */
+  let setFocusedScopeExternal: ((next: CommandScope | null) => void) | null =
+    null;
+
+  /**
+   * Wrapper that exposes a toggleable `FocusedScopeContext` value. Calling
+   * `setFocusedScopeExternal` from a test simulates an entity focus change.
+   */
+  function FocusToggleWrapper({ children }: { children: ReactNode }) {
+    const [focused, setFocused] = useState<CommandScope | null>(null);
+    setFocusedScopeExternal = setFocused;
+    return (
+      <CommandScopeProvider commands={[]} moniker="window:main">
+        <ActiveBoardPathProvider value="/tmp/test/.kanban">
+          <FocusedScopeContext.Provider value={focused}>
+            <PerspectiveProvider>{children}</PerspectiveProvider>
+          </FocusedScopeContext.Provider>
+        </ActiveBoardPathProvider>
+      </CommandScopeProvider>
+    );
+  }
+
+  /**
+   * Build a synthetic focused scope with a fresh moniker so each toggle
+   * changes identity — matching how EntityFocusProvider produces a new
+   * `focusedScope` object whenever focus moves.
+   */
+  function makeFocusedScope(moniker: string): CommandScope {
+    return { commands: new Map(), parent: null, moniker };
+  }
+
+  it("does not refetch perspective.list when focused scope changes", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [makePerspective("p1", "Sprint")], count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+
+    // Let mount-time fetch + auto-select settle.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const listCallsBefore = invokeCallsFor("perspective.list");
+    expect(listCallsBefore).toBe(1);
+
+    // Simulate a sequence of focus changes — exactly what arrow-key navigation
+    // produces in production: each `ui.setFocus` rotates FocusedScopeContext.
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t3"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // No extra `perspective.list` dispatches — refetch is reserved for
+    // backend events, not focus changes.
+    expect(invokeCallsFor("perspective.list")).toBe(listCallsBefore);
+  });
+
+  it("does not re-run auto-create effect when focused scope changes", async () => {
+    // Empty perspective list on mount triggers auto-create exactly once.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const saveCallsBefore = invokeCallsFor("perspective.save");
+    // Auto-create fires once on mount when no perspectives exist for the kind.
+    expect(saveCallsBefore).toBe(1);
+
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Focus changes must not re-enter the auto-create effect — the per-kind
+    // ref guard already prevents a second save, but we also want to be sure
+    // the effect body itself does not run.
+    expect(invokeCallsFor("perspective.save")).toBe(saveCallsBefore);
+  });
+
+  it("does not re-run auto-select effect when focused scope changes", async () => {
+    // Stale active id forces auto-select to run once on mount.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "gone" } },
+    };
+
+    const ps = [makePerspective("p1", "Survivor")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const setCallsBefore = invokeCallsFor("perspective.set");
+    expect(setCallsBefore).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Focus changes must not redispatch `perspective.set`. The stored id is
+    // unchanged, the view kind is unchanged, and the perspectives list is
+    // unchanged — there is nothing to reconcile.
+    expect(invokeCallsFor("perspective.set")).toBe(setCallsBefore);
   });
 });

@@ -6,7 +6,7 @@ import {
   useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
-import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
+import { useFocusActions, useFocusedScope } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
@@ -331,7 +331,7 @@ interface AppShellProps {
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
-  const { broadcastNavCommand } = useEntityFocus();
+  const { broadcastNavCommand } = useFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;

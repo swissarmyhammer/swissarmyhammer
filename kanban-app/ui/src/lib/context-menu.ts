@@ -1,4 +1,4 @@
-import { useCallback, useContext } from "react";
+import { useCallback, useContext, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CommandScopeContext, scopeChainFromScope } from "@/lib/command-scope";
 
@@ -43,50 +43,64 @@ interface ContextMenuItem {
  * backend carries its full dispatch info (cmd, target, scope_chain).
  * When the user selects an item, Rust dispatches directly — no round-trip.
  *
+ * The hook is called from high-multiplier render sites (one per grid cell,
+ * one per data-table row, one per grid body) so both the returned handler
+ * and the scope-chain walk must stay off the render hot path:
+ *
+ * - The handler is memoised with empty deps so its identity is stable across
+ *   renders. Downstream components memoised on prop identity keep their
+ *   skip-children fast path.
+ * - The current scope is kept in a ref, updated every render. The handler
+ *   reads `scopeRef.current` at click time, so `scopeChainFromScope` runs
+ *   exactly once per right-click — never on render.
+ *
  * @returns Event handler to attach to onContextMenu.
  */
 export function useContextMenu(): (e: React.MouseEvent) => void {
   const scope = useContext(CommandScopeContext);
-  const scopeChain = scopeChainFromScope(scope);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
 
-  return useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
+  return useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
 
-      invoke<ResolvedCommand[]>("list_commands_for_scope", {
-        scopeChain,
-        contextMenu: true,
-      })
-        .then((commands) => {
-          if (commands.length === 0) return;
+    // Walk the scope chain at click time, not at render time. `scopeRef`
+    // is written on every commit, so this always reflects the scope that
+    // was committed at the most recent render.
+    const scopeChain = scopeChainFromScope(scopeRef.current);
 
-          const items: ContextMenuItem[] = [];
-          let lastGroup: string | null = null;
+    invoke<ResolvedCommand[]>("list_commands_for_scope", {
+      scopeChain,
+      contextMenu: true,
+    })
+      .then((commands) => {
+        if (commands.length === 0) return;
 
-          for (const cmd of commands) {
-            if (lastGroup !== null && cmd.group !== lastGroup) {
-              items.push({
-                name: "",
-                cmd: "",
-                separator: true,
-                scope_chain: [],
-              });
-            }
+        const items: ContextMenuItem[] = [];
+        let lastGroup: string | null = null;
+
+        for (const cmd of commands) {
+          if (lastGroup !== null && cmd.group !== lastGroup) {
             items.push({
-              name: cmd.name,
-              cmd: cmd.id,
-              target: cmd.target,
-              scope_chain: scopeChain,
-              separator: false,
+              name: "",
+              cmd: "",
+              separator: true,
+              scope_chain: [],
             });
-            lastGroup = cmd.group;
           }
+          items.push({
+            name: cmd.name,
+            cmd: cmd.id,
+            target: cmd.target,
+            scope_chain: scopeChain,
+            separator: false,
+          });
+          lastGroup = cmd.group;
+        }
 
-          invoke("show_context_menu", { items }).catch(console.error);
-        })
-        .catch(console.error);
-    },
-    [scopeChain],
-  );
+        invoke("show_context_menu", { items }).catch(console.error);
+      })
+      .catch(console.error);
+  }, []);
 }

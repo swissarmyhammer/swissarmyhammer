@@ -25,7 +25,11 @@ import {
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import {
+  useFocusActions,
+  useFocusedMoniker,
+  useFocusedMonikerRef,
+} from "@/lib/entity-focus-context";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -1006,15 +1010,16 @@ interface BoardCommandRefs {
 /**
  * Allocate and keep up-to-date the refs used by board action commands.
  *
- * The commands are memoized but need to see the latest focused moniker and
- * broadcast callback; refs avoid rebuilding the command list on every render.
+ * Focus is read through `useFocusedMonikerRef` — a subscribeAll-backed ref —
+ * so BoardView does not re-render on every focus move just to keep this
+ * ref current. The broadcast callback comes from the stable actions bag,
+ * but we wrap it in a ref too for API symmetry with action-command
+ * factories downstream that expect a mutable ref.
  */
 function useBoardCommandRefs(
-  focusedMoniker: string | null,
   broadcastNavCommand: (cmd: string) => void,
 ): BoardCommandRefs {
-  const focusedMonikerRef = useRef(focusedMoniker);
-  focusedMonikerRef.current = focusedMoniker;
+  const focusedMonikerRef = useFocusedMonikerRef();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
   return { focusedMonikerRef, broadcastRef };
@@ -1031,12 +1036,11 @@ function useBoardCommandRefs(
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const dispatchInspect = useDispatchCommand("ui.inspect");
   const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
-  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
+  const { broadcastNavCommand, setFocus } = useFocusActions();
+  const focusedMoniker = useFocusedMoniker();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { focusedMonikerRef, broadcastRef } = useBoardCommandRefs(
-    focusedMoniker,
-    broadcastNavCommand,
-  );
+  const { focusedMonikerRef, broadcastRef } =
+    useBoardCommandRefs(broadcastNavCommand);
 
   const layout = useBoardLayout(board, tasks, groupValue);
   const dragDrop = useBoardDragDrop(

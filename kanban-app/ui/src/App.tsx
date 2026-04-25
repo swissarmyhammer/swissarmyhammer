@@ -14,6 +14,7 @@ import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
 import { CommandBusyProvider } from "@/lib/command-scope";
+import { DiagErrorBoundary } from "@/components/diag-error-boundary";
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -54,30 +55,32 @@ if (IS_QUICK_CAPTURE) {
  */
 function App() {
   return (
-    <CommandBusyProvider>
-      <RustEngineContainer>
-        <WindowContainer>
-          <AppModeContainer>
-            <BoardContainer>
-              <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
-                <NavBar />
-                <ViewsContainer>
-                  <PerspectivesContainer>
-                    <PerspectiveContainer>
-                      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                        <ViewContainer />
-                      </div>
-                    </PerspectiveContainer>
-                  </PerspectivesContainer>
-                </ViewsContainer>
-                <ModeIndicator />
-              </div>
-              <InspectorsContainer />
-            </BoardContainer>
-          </AppModeContainer>
-        </WindowContainer>
-      </RustEngineContainer>
-    </CommandBusyProvider>
+    <DiagErrorBoundary>
+      <CommandBusyProvider>
+        <RustEngineContainer>
+          <WindowContainer>
+            <AppModeContainer>
+              <BoardContainer>
+                <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
+                  <NavBar />
+                  <ViewsContainer>
+                    <PerspectivesContainer>
+                      <PerspectiveContainer>
+                        <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                          <ViewContainer />
+                        </div>
+                      </PerspectiveContainer>
+                    </PerspectivesContainer>
+                  </ViewsContainer>
+                  <ModeIndicator />
+                </div>
+                <InspectorsContainer />
+              </BoardContainer>
+            </AppModeContainer>
+          </WindowContainer>
+        </RustEngineContainer>
+      </CommandBusyProvider>
+    </DiagErrorBoundary>
   );
 }
 

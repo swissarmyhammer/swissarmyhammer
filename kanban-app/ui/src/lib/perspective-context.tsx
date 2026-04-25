@@ -45,18 +45,54 @@ const PerspectivesContext = createContext<PerspectivesContextValue | null>(
   null,
 );
 
+/**
+ * Shape of the dispatch function this module consumes.
+ *
+ * Pulled out as an alias so the `useRef<DispatchFn>` declarations don't
+ * repeat the full signature in three places.
+ */
+type DispatchFn = (
+  cmd: string,
+  opts?: { args?: Record<string, unknown> },
+) => Promise<unknown>;
+
+/**
+ * Keep a ref tracking the latest `dispatch` so callbacks can read
+ * `ref.current` without depending on `dispatch` identity.
+ *
+ * `useDispatchCommand` returns a new callback whenever the effective scope
+ * rotates — which happens on every `ui.setFocus` because `FocusedScopeContext`
+ * rotates per-entity focus change. A raw dependency on `dispatch` therefore
+ * churns the mount fetch / auto-create / auto-select effects on every
+ * keystroke. Reading through a ref decouples those effects from dispatch
+ * identity while still picking up the freshest dispatch each invocation.
+ */
+function useDispatchRef(
+  dispatch: DispatchFn,
+): React.MutableRefObject<DispatchFn> {
+  const dispatchRef = useRef<DispatchFn>(dispatch);
+  useEffect(() => {
+    dispatchRef.current = dispatch;
+  }, [dispatch]);
+  return dispatchRef;
+}
+
 /** Provider that manages the perspectives list for this window.
  *
  * Follows the ViewsProvider pattern: self-contained state, own data fetching
  * via `perspective.list` command, event-driven refresh, and active perspective
  * selection from UIState.
  */
-/** Fetches perspectives on mount and exposes a refresh callback + loaded flag. */
+/**
+ * Fetches perspectives on mount and exposes a refresh callback + loaded flag.
+ *
+ * `refresh` is stable (depends only on the ref object's identity, which
+ * never changes) and reads `dispatchRef.current` so the mount-time
+ * `useEffect(() => refresh(), [refresh])` fires exactly once per provider
+ * mount — not once per focus change.
+ */
 function usePerspectivesFetch(
-  dispatch: (
-    cmd: string,
-    opts?: { args?: Record<string, unknown> },
-  ) => Promise<unknown>,
+  dispatchRef: React.MutableRefObject<DispatchFn>,
 ): {
   perspectives: PerspectiveDef[];
   loaded: boolean;
@@ -67,7 +103,7 @@ function usePerspectivesFetch(
 
   const refresh = useCallback(async () => {
     try {
-      const wrapped = (await dispatch("perspective.list")) as {
+      const wrapped = (await dispatchRef.current("perspective.list")) as {
         result?: { perspectives?: PerspectiveDef[] };
       };
       const list = wrapped?.result?.perspectives ?? [];
@@ -76,7 +112,9 @@ function usePerspectivesFetch(
     } catch (error) {
       console.error("Failed to load perspectives:", error);
     }
-  }, [dispatch]);
+    // dispatchRef itself is a stable ref object; its identity never changes,
+    // so `refresh` is stable across renders.
+  }, [dispatchRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,15 +133,16 @@ function usePerspectivesFetch(
 /**
  * Auto-create a "Default" perspective when none exist for the current view
  * kind. Uses a ref to avoid repeated creation attempts per kind.
+ *
+ * `dispatch` is read through `dispatchRef` so the effect does not re-run on
+ * every focus change. The only legitimate re-entry signals are `loaded`,
+ * `perspectives`, and `viewKind` — they pick up real state changes.
  */
 function useAutoCreateDefaultPerspective(
   loaded: boolean,
   perspectives: PerspectiveDef[],
   viewKind: string,
-  dispatch: (
-    cmd: string,
-    opts?: { args?: Record<string, unknown> },
-  ) => Promise<unknown>,
+  dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
   const autoCreatedForKindRef = useRef<string | null>(null);
   useEffect(() => {
@@ -111,10 +150,12 @@ function useAutoCreateDefaultPerspective(
     if (autoCreatedForKindRef.current === viewKind) return;
     if (perspectives.some((p) => p.view === viewKind)) return;
     autoCreatedForKindRef.current = viewKind;
-    dispatch("perspective.save", {
-      args: { name: "Default", view: viewKind },
-    }).catch(console.error);
-  }, [loaded, perspectives, viewKind, dispatch]);
+    dispatchRef
+      .current("perspective.save", {
+        args: { name: "Default", view: viewKind },
+      })
+      .catch(console.error);
+  }, [loaded, perspectives, viewKind, dispatchRef]);
 }
 
 /**
@@ -141,10 +182,7 @@ function useAutoSelectActivePerspective(
   perspectives: PerspectiveDef[],
   active_perspective_id: string,
   viewKind: string,
-  dispatch: (
-    cmd: string,
-    opts?: { args?: Record<string, unknown> },
-  ) => Promise<unknown>,
+  dispatchRef: React.MutableRefObject<DispatchFn>,
 ) {
   useEffect(() => {
     if (!loaded) return;
@@ -156,10 +194,14 @@ function useAutoSelectActivePerspective(
     }
     const stillValid = matching.some((p) => p.id === active_perspective_id);
     if (stillValid) return;
-    dispatch("perspective.set", {
-      args: { perspective_id: matching[0].id },
-    }).catch(console.error);
-  }, [loaded, perspectives, active_perspective_id, viewKind, dispatch]);
+    dispatchRef
+      .current("perspective.set", {
+        args: { perspective_id: matching[0].id },
+      })
+      .catch(console.error);
+    // dispatchRef is a stable object; its `.current` is read lazily. The real
+    // re-entry signals are loaded / perspectives / active id / viewKind.
+  }, [loaded, perspectives, active_perspective_id, viewKind, dispatchRef]);
 }
 
 /**
@@ -209,24 +251,34 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const viewKind = activeView?.kind ?? "board";
   const dispatch = useDispatchCommand();
 
-  const { perspectives, loaded, refresh } = usePerspectivesFetch(dispatch);
-  useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatch);
+  // Route every perspective-owned effect through a ref so focus-change
+  // driven `dispatch` identity churn does not re-run mount / auto-create /
+  // auto-select. Backend-event refetches still fire via
+  // `usePerspectiveEventListeners` below.
+  const dispatchRef = useDispatchRef(dispatch);
+
+  const { perspectives, loaded, refresh } = usePerspectivesFetch(dispatchRef);
+  useAutoCreateDefaultPerspective(loaded, perspectives, viewKind, dispatchRef);
   useAutoSelectActivePerspective(
     loaded,
     perspectives,
     active_perspective_id,
     viewKind,
-    dispatch,
+    dispatchRef,
   );
   usePerspectiveEventListeners(refresh);
 
   const setActivePerspectiveId = useCallback(
     (id: string) => {
-      dispatch("perspective.set", {
-        args: { perspective_id: id },
-      }).catch(console.error);
+      dispatchRef
+        .current("perspective.set", {
+          args: { perspective_id: id },
+        })
+        .catch(console.error);
+      // Reads through the ref so this callback's identity does not churn
+      // on focus change (would otherwise cascade to memoized consumers).
     },
-    [dispatch],
+    [dispatchRef],
   );
 
   const activePerspective = useMemo(

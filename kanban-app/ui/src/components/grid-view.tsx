@@ -6,7 +6,8 @@ import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import {
-  useEntityFocus,
+  useFocusActions,
+  useFocusedMoniker,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
@@ -308,7 +309,8 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     setVisibleRowCount(entities.length);
   }, [entities.length]);
 
-  const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
+  const { setFocus, broadcastNavCommand } = useFocusActions();
+  const focusedMoniker = useFocusedMoniker();
   const { cellMonikers, cellMonikerMap } = useCellMonikers(entities, columns);
 
   const derivedCursor = useMemo(

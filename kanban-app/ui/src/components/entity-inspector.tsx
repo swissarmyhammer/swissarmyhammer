@@ -23,8 +23,12 @@ import {
 } from "@/hooks/use-entity-sections";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
-import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useFocusActions,
+  useFocusedMonikerRef,
+  useIsFocused,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { HelpCircle, type LucideIcon } from "lucide-react";
@@ -206,7 +210,11 @@ function isInspectorField(
  * not when focus state changes under us (see inline eslint-disable).
  */
 function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
-  const { setFocus, focusedMoniker } = useEntityFocus();
+  const { setFocus } = useFocusActions();
+  // Ref-style read: we capture the previously focused moniker exactly once
+  // at mount, so subscribing (and re-rendering this hook's caller on every
+  // focus move) would be pure waste. The ref mirrors focus via subscribeAll.
+  const focusedMonikerRef = useFocusedMonikerRef();
   const setFocusRef = useRef(setFocus);
   setFocusRef.current = setFocus;
   const prevFocusRef = useRef<string | null>(null);
@@ -216,7 +224,7 @@ function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
     if (!firstFieldMoniker) return;
     // Only capture previous focus on true first mount, not on re-runs
     if (!mountedRef.current) {
-      prevFocusRef.current = focusedMoniker;
+      prevFocusRef.current = focusedMonikerRef.current;
       mountedRef.current = true;
     }
     setFocusRef.current(firstFieldMoniker);

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ff9380
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa080
 title: Add RenderProfiler diagnostic + strategic placements to establish before/after telemetry for performance work
 ---
 ## What

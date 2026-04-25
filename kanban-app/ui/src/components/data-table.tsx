@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import { memo, useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -413,8 +413,16 @@ interface DataTableRowProps {
   cursorRef: React.RefObject<HTMLTableCellElement | null>;
 }
 
-/** Render one data or group-header row. */
-function DataTableRow(props: DataTableRowProps) {
+/**
+ * Render one data or group-header row.
+ *
+ * `React.memo` so the ~2000 sibling rows don't re-render when GridView
+ * re-renders with identical per-row state (same grid cursor, same mode,
+ * same row data). Initial mount on a 2000-row grid used to fire 4x
+ * (strict-mode + focus/cursor init) × 2000 = 8000 row renders; with memo
+ * the three repeat renders skip the subtree when props are shallow-equal.
+ */
+const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
   const { row, ri, columns, grid, dataRowIndices, showRowSelector } = props;
   if (row.getIsGrouped()) {
     return (
@@ -462,7 +470,7 @@ function DataTableRow(props: DataTableRowProps) {
       </EntityRow>
     </FocusScope>
   );
-}
+});
 
 interface GroupHeaderRowProps {
   row: Row<Entity>;
@@ -517,8 +525,15 @@ interface DataBodyCellProps {
   cursorRef: React.RefObject<HTMLTableCellElement | null>;
 }
 
-/** One data cell. Claims focus for claimWhen nav when cell monikers are wired. */
-function DataBodyCell(props: DataBodyCellProps) {
+/**
+ * One data cell.
+ *
+ * Memoized so that when GridView re-renders with identical per-cell state,
+ * the ~12k sibling cells skip their render entirely. React.memo's default
+ * shallow comparison treats stable useMemo/useCallback/ref props as equal,
+ * so only cells whose props actually changed re-render.
+ */
+const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
   const { di, ci, col, entity, grid, renderEditor, onCellClick } = props;
   const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
   const isSel = isCellSelected(grid, di, ci);
@@ -587,7 +602,7 @@ function DataBodyCell(props: DataBodyCellProps) {
       {cellContent}
     </TableCell>
   );
-}
+});
 
 /** Is cell (row,col) inside the current grid selection range? */
 function isCellSelected(

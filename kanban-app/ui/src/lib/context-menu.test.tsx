@@ -452,6 +452,88 @@ describe("useContextMenu scope chain propagation", () => {
     }
   });
 
+  it("returned handler is reference-stable across renders", () => {
+    // The hook is called on every cell of every row of every grid body —
+    // ~14k invocations per 2000-row grid render. A fresh closure per
+    // invocation defeats prop-identity memoization downstream. The handler
+    // identity must be stable across re-renders so React's skip-children
+    // fast path stays effective.
+    const { result, rerender } = renderHook(() => useContextMenu(), {
+      wrapper: makeWrapper(["perspective:p1", "window:main"]),
+    });
+
+    const first = result.current;
+    rerender();
+    const second = result.current;
+    rerender();
+    const third = result.current;
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+  });
+
+  it("handler reflects the scope at click time, not at render time", async () => {
+    // The handler is memoised with empty deps, so it is created once. But
+    // it must still read the *current* scope when the user right-clicks —
+    // not the scope from when the handler was first created. This guards
+    // the ref-based scope capture against a regression that would freeze
+    // the scope chain at mount.
+    mockResolvedCommands([
+      {
+        id: "entity.inspect",
+        name: "Inspect",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+
+    // Use an outer mutable reference so the wrapper can read the current
+    // scope chain each render without needing renderHook props plumbing.
+    let currentMonikers: string[] = ["moniker:A", "window:main"];
+    const DynamicWrapper = ({ children }: { children: React.ReactNode }) => {
+      return makeWrapper(currentMonikers)({ children });
+    };
+
+    const { result, rerender } = renderHook(() => useContextMenu(), {
+      wrapper: DynamicWrapper,
+    });
+
+    // Capture the handler under scope A, then re-render under scope B.
+    const handler = result.current;
+    currentMonikers = ["moniker:B", "window:main"];
+    rerender();
+
+    // Same reference survives the re-render.
+    expect(result.current).toBe(handler);
+
+    // Now fire the captured handler — it must see scope B, not scope A.
+    await act(async () => {
+      handler(fakeMouseEvent());
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(invoke).toHaveBeenCalledWith("list_commands_for_scope", {
+      scopeChain: ["moniker:B", "window:main"],
+      contextMenu: true,
+    });
+
+    const showCall = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    expect(showCall).toBeDefined();
+    const items = showCall![1].items as Array<{
+      cmd: string;
+      scope_chain: string[];
+      separator: boolean;
+    }>;
+    const dispatchItems = items.filter((i) => !i.separator);
+    expect(dispatchItems.length).toBeGreaterThan(0);
+    for (const item of dispatchItems) {
+      expect(item.scope_chain).toEqual(["moniker:B", "window:main"]);
+    }
+  });
+
   it("captures a deep scope chain (perspective + view + window) verbatim", async () => {
     // Real right-click from a grid cell — the inner cell provider sits
     // under entity providers, perspective provider, view provider, and

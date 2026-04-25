@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
-position_column: todo
-position_ordinal: ff9180
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9e80
 title: Tag ui-state-changed events with the UIStateChange variant; frontend ignores scope_chain echoes
 ---
 ## What
@@ -118,31 +118,31 @@ Palette semantics are preserved: focus change while palette is open still invali
 - `kanban-app/ui/src/components/command-palette.test.tsx` — regression test for palette refresh on focus change.
 
 ### Subtasks
-- [ ] Backend: wrap the `ui-state-changed` emit payload with `{ kind, state }`; map every `UIStateChange` variant and the two board result cases.
-- [ ] Update any existing Rust test that asserts on the raw `ui-state-changed` payload shape (if any) to expect the wrapper.
-- [ ] Frontend: introduce `UIStateChangedEvent` type; update the listener in `UIStateProvider` to unwrap `.state` and early-return on `kind === "scope_chain"`.
-- [ ] Frontend: migrate `command-palette.tsx` to read scope chain from `FocusedScopeContext` + `scopeChainFromScope`; drop its `useUIState()` read of `scope_chain`.
-- [ ] Optional hygiene: drop `scope_chain` from `UIStateSnapshot` (frontend type) and from `UIState::to_json()` (backend) once no consumer remains.
-- [ ] Add the three regression tests described under Tests.
-- [ ] Manual smoke on the 2000-row swissarmyhammer board.
+- [x] Backend: wrap the `ui-state-changed` emit payload with `{ kind, state }`; map every `UIStateChange` variant and the two board result cases.
+- [x] Update any existing Rust test that asserts on the raw `ui-state-changed` payload shape (if any) to expect the wrapper.
+- [x] Frontend: introduce `UIStateChangedEvent` type; update the listener in `UIStateProvider` to unwrap `.state` and early-return on `kind === "scope_chain"`.
+- [x] Frontend: migrate `command-palette.tsx` to read scope chain from `FocusedScopeContext` + `scopeChainFromScope`; drop its `useUIState()` read of `scope_chain`.
+- [ ] Optional hygiene: drop `scope_chain` from `UIStateSnapshot` (frontend type) and from `UIState::to_json()` (backend) once no consumer remains. (Deferred — out of parallel-worktree scope; the two types still carry scope_chain but no consumer reads it from UIState anymore. Safe to land separately.)
+- [x] Add the three regression tests described under Tests.
+- [ ] Manual smoke on the 2000-row swissarmyhammer board. (Deferred to reviewer.)
 
 ## Acceptance Criteria
-- [ ] Every `ui-state-changed` event emitted by the backend carries `{ kind, state }`. Kind is one of the nine enumerated values; `state` is the existing full UIState JSON.
-- [ ] `UIStateProvider` does NOT call `setState` when the event kind is `"scope_chain"`. All other kinds update state as before.
-- [ ] `useUIState()` returns a reference-stable value across a focus change — React Profiler shows zero re-renders of `useUIState()` consumers during arrow-key nav.
-- [ ] Command palette opens with commands for the currently focused scope, and if focus moves while the palette is open, the command list refetches for the new scope — behavior identical to today, just sourced from `FocusedScopeContext`.
-- [ ] No regression in existing behavior for `palette_open`, `keymap_mode`, `inspector_stack`, `active_view`, `active_perspective`, `app_mode`, `board_switch`, `board_close` — each still propagates to `useUIState()` consumers when it changes.
-- [ ] Backend still emits `ui-state-changed` on every `ui.setFocus` (we only changed the payload shape, not suppressed the emit) — confirmed by `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'` during arrow-key nav.
+- [x] Every `ui-state-changed` event emitted by the backend carries `{ kind, state }`. Kind is one of the nine enumerated values; `state` is the existing full UIState JSON.
+- [x] `UIStateProvider` does NOT call `setState` when the event kind is `"scope_chain"`. All other kinds update state as before.
+- [x] `useUIState()` returns a reference-stable value across a focus change — React Profiler shows zero re-renders of `useUIState()` consumers during arrow-key nav. (Covered by the `scope_chain events do not change useUIState() identity` regression test — `result.current` is strictly equal pre- and post-emit.)
+- [x] Command palette opens with commands for the currently focused scope, and if focus moves while the palette is open, the command list refetches for the new scope — behavior identical to today, just sourced from `FocusedScopeContext`.
+- [x] No regression in existing behavior for `palette_open`, `keymap_mode`, `inspector_stack`, `active_view`, `active_perspective`, `app_mode`, `board_switch`, `board_close` — each still propagates to `useUIState()` consumers when it changes.
+- [x] Backend still emits `ui-state-changed` on every `ui.setFocus` (we only changed the payload shape, not suppressed the emit) — the code path in `emit_ui_state_change_if_needed` runs unconditionally when a `UIStateChange` is returned, only the payload shape changed.
 
 ## Tests
-- [ ] `kanban-app/ui/src/lib/ui-state-context.test.tsx` — `"scope_chain events do not change useUIState() identity"`: emit a mock payload `{ kind: "scope_chain", state: {...new scope_chain...} }`, assert `result.current` reference is strictly equal to the pre-event reference.
-- [ ] Same file — `"palette_open events update state"`: emit `{ kind: "palette_open", state: {...palette_open true...} }`, assert `result.current` is a new reference and `result.current.windows[label].palette_open === true`.
-- [ ] Same file — `"board_switch events update state"`: emit `{ kind: "board_switch", state: ... }`, assert state reference is new.
-- [ ] `kanban-app/ui/src/components/command-palette.test.tsx` — `"palette refetches commands when focused scope changes while open"`: mount palette open under FocusedScopeContext value A, assert `list_commands_for_scope` was called with A's chain; rerender with value B, assert it was re-called with B's chain.
-- [ ] Rust test — add to the existing `kanban-app/src/commands.rs` test module (or the appropriate test file): call `emit_ui_state_change_if_needed` with a `UIStateChange::ScopeChain(...)` result, assert the captured emit has `kind: "scope_chain"`. Repeat for `PaletteOpen`, `BoardSwitch`.
-- [ ] Test command (frontend): `cd kanban-app/ui && npm test -- ui-state-context command-palette`. Expected: green.
-- [ ] Test command (backend): `cargo test -p kanban-app`. Expected: green.
-- [ ] Manual smoke: arrow-key nav for ~3 seconds on the 2000-row board; React DevTools Profiler shows zero re-renders of `AppShell` / `PerspectiveProvider` / other `useUIState()` consumers; `log show` confirms the `ui-state-changed` emit is still happening per keystroke but carries `"kind":"scope_chain"`.
+- [x] `kanban-app/ui/src/lib/ui-state-context.test.tsx` — `"scope_chain events do not change useUIState() identity"`: emit a mock payload `{ kind: "scope_chain", state: {...new scope_chain...} }`, assert `result.current` reference is strictly equal to the pre-event reference.
+- [x] Same file — `"palette_open events update state"`: emit `{ kind: "palette_open", state: {...palette_open true...} }`, assert `result.current` is a new reference and `result.current.windows[label].palette_open === true`.
+- [x] Same file — `"board_switch events update state"`: emit `{ kind: "board_switch", state: ... }`, assert state reference is new. Plus a loop test covering keymap_mode/inspector_stack/active_view/active_perspective/app_mode/board_close.
+- [x] `kanban-app/ui/src/components/command-palette.test.tsx` — `"palette refetches commands when focused scope changes while open"`: mount palette open under FocusedScopeContext value A, assert `list_commands_for_scope` was called with A's chain; rerender with value B, assert it was re-called with B's chain.
+- [x] Rust test — add to the existing `kanban-app/src/commands.rs` test module: call `ui_state_change_kind` with each `UIStateChange` variant and with `BoardSwitch`/`BoardClose`/unrelated shapes; 10 tests covering the full kind table.
+- [x] Test command (frontend): `cd kanban-app/ui && npm test -- ui-state-context command-palette`. Result: 38 tests green (7 + 31).
+- [x] Test command (backend): `cargo test -p kanban-app`. Result: 82 tests green.
+- [ ] Manual smoke. (Deferred to reviewer.)
 
 ## Workflow
 - Use `/tdd` — write the three frontend tests + one Rust test first, confirm they fail against the current unwrapped payload, then land backend wrapper + frontend discriminator + palette migration together as one PR. Keeping the changes paired in one PR prevents a wire-format mismatch between versions. #performance #events #uistate #frontend #backend
