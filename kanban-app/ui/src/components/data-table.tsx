@@ -12,6 +12,7 @@ import {
   type GroupingState,
   type Row,
 } from "@tanstack/react-table";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import {
   Table,
   TableHeader,
@@ -30,7 +31,35 @@ import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
+import { COMPACT_ROW_HEIGHT_PX } from "@/components/fields/displays/compact-cell-wrapper";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
+
+/**
+ * Body row height in pixels.
+ *
+ * Body cells use `px-3 py-1.5` (12px combined vertical padding) and render
+ * `<Field mode="compact" />` whose displays wrap their output in
+ * {@link file://./fields/displays/compact-cell-wrapper.tsx CompactCellWrapper}
+ * (24px = `h-6`). 12 + 24 = 36 — the exact height every data row renders at
+ * regardless of which fields are populated, empty, or contain CM6 mention
+ * pills / avatars.
+ *
+ * Sourced from {@link COMPACT_ROW_HEIGHT_PX} so the wrapper class and the
+ * virtualizer's fixed-height estimate stay in lock-step automatically;
+ * changing one without the other used to silently reintroduce the
+ * row-jitter the wrapper was added to fix.
+ */
+const ROW_HEIGHT = COMPACT_ROW_HEIGHT_PX;
+
+/**
+ * Overscan rows rendered above and below the visible window.
+ *
+ * Mirrors `column-view.tsx::VirtualColumn` so card-grid and table-grid
+ * virtualization stay in lockstep. Five rows on each side keeps fast
+ * keyboard / wheel scrolling visually seamless without paying for many
+ * off-screen renders.
+ */
+const ROW_OVERSCAN = 5;
 
 export interface DataTableColumn {
   field: FieldDef;
@@ -84,6 +113,7 @@ interface DataTableProps {
 
 export function DataTable(props: DataTableProps) {
   const cursorRef = useRef<HTMLTableCellElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const { table, perspectiveSortMap, dataRowIndices, handleCellClick } =
     useDataTableState(props, cursorRef);
 
@@ -91,8 +121,35 @@ export function DataTable(props: DataTableProps) {
   const useClaimNav =
     props.cellMonikers !== undefined && props.claimPredicates !== undefined;
 
+  // Virtualize body rows. Header is a CSS-sticky `<thead>` outside the
+  // virtualized list so it continues to pin to the scroll container's
+  // top edge during scroll without needing virtualization itself.
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: ROW_OVERSCAN,
+  });
+
+  // Translate the cursor's data-row index into a flat-row index and
+  // scroll the virtualizer to that row whenever the cursor moves
+  // vertically. Without this, moving the cursor past the visible
+  // window leaves the cursor row unmounted -- `cursorRef.scrollIntoView`
+  // (the existing horizontal-scroll handler in `useDataTableState`)
+  // can't scroll a node that does not exist.
+  useCursorRowScroll(virtualizer, dataRowIndices, props.grid.cursor.row);
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? totalSize - virtualItems[virtualItems.length - 1].end
+      : 0;
+
   return (
     <div
+      ref={scrollRef}
       className="flex-1 overflow-auto min-h-0"
       onContextMenu={props.onContainerContextMenu}
     >
@@ -109,28 +166,128 @@ export function DataTable(props: DataTableProps) {
           ))}
         </TableHeader>
         <TableBody>
-          {flatRows.map((row, ri) => (
-            <DataTableRow
-              key={row.id}
-              row={row}
-              ri={ri}
-              columns={props.columns}
-              grid={props.grid}
-              dataRowIndices={dataRowIndices}
-              showRowSelector={props.showRowSelector ?? true}
-              useClaimNav={useClaimNav}
-              cellMonikers={props.cellMonikers}
-              claimPredicates={props.claimPredicates}
-              handleCellClick={handleCellClick}
-              renderEditor={props.renderEditor}
-              onCellClick={props.onCellClick}
-              cursorRef={cursorRef}
-            />
-          ))}
+          {paddingTop > 0 && <PaddingRow height={paddingTop} />}
+          {virtualItems.map((vi) => {
+            const row = flatRows[vi.index];
+            return (
+              <DataTableRow
+                key={row.id}
+                row={row}
+                ri={vi.index}
+                columns={props.columns}
+                grid={props.grid}
+                dataRowIndices={dataRowIndices}
+                showRowSelector={props.showRowSelector ?? true}
+                useClaimNav={useClaimNav}
+                cellMonikers={props.cellMonikers}
+                claimPredicates={props.claimPredicates}
+                handleCellClick={handleCellClick}
+                renderEditor={props.renderEditor}
+                onCellClick={props.onCellClick}
+                cursorRef={cursorRef}
+              />
+            );
+          })}
+          {paddingBottom > 0 && <PaddingRow height={paddingBottom} />}
         </TableBody>
       </Table>
     </div>
   );
+}
+
+interface PaddingRowProps {
+  height: number;
+}
+
+/**
+ * Empty `<tr>` spacer that reserves vertical space above or below the
+ * virtualized window of body rows.
+ *
+ * The padding-row pattern is the standard way to virtualize inside a
+ * `<table>` element while keeping browser table layout intact: two
+ * blank rows (top + bottom) absorb the scroll-extent that the unmounted
+ * rows would otherwise occupy, so the scrollbar reflects the full row
+ * count and `scrollToIndex` lands at the right pixel.
+ *
+ * `pointer-events: none` prevents the spacer (which can be hundreds of
+ * pixels tall on long lists) from swallowing right-click events that
+ * the outer scroll container's `onContainerContextMenu` handler relies
+ * on for view-scoped commands like "New Task" on whitespace.
+ */
+function PaddingRow({ height }: PaddingRowProps) {
+  return (
+    <tr
+      aria-hidden="true"
+      data-virtual-padding="true"
+      style={{ height, pointerEvents: "none" }}
+    />
+  );
+}
+
+/**
+ * Build an inverse map from data-row index to flat-row index.
+ *
+ * `dataRowIndices` maps `flatRowIndex -> dataRowIndex` (with `-1` for
+ * group-header rows). The virtualizer indexes into the flat row list,
+ * but the grid cursor uses data-row indices -- so to call
+ * `virtualizer.scrollToIndex(...)` for a cursor move we need the
+ * inverse: `dataRowIndex -> flatRowIndex`.
+ */
+function useDataRowToFlatRow(dataRowIndices: number[]): number[] {
+  return useMemo(() => {
+    const inverse: number[] = [];
+    for (let fi = 0; fi < dataRowIndices.length; fi++) {
+      const di = dataRowIndices[fi];
+      if (di >= 0) inverse[di] = fi;
+    }
+    return inverse;
+  }, [dataRowIndices]);
+}
+
+/**
+ * Scroll the virtualizer to the cursor row when the cursor moves
+ * outside the currently mounted virtual window.
+ *
+ * Runs only when the data-row index changes -- horizontal cursor moves
+ * (column changes) do not trigger a virtualizer scroll because they
+ * cannot move the cursor outside the vertical viewport. The existing
+ * `cursorRef.scrollIntoView` effect in `useDataTableState` handles
+ * inline (horizontal) scrolling once the row remounts.
+ *
+ * Skips the initial mount: on first render the cursor's previous row
+ * is undefined, so there is nothing to scroll *to* (the user has not
+ * yet moved). This also prevents an unconditional `scrollToIndex` on
+ * every component mount, which would fire a React state update inside
+ * the virtualizer outside any pending `act()` scope and produce a
+ * spurious warning in test runs.
+ *
+ * Bails out early when the cursor row is already within the mounted
+ * virtual window -- intra-window cursor moves are handled entirely by
+ * the existing `cursorRef.scrollIntoView` effect.
+ */
+function useCursorRowScroll(
+  virtualizer: Virtualizer<HTMLDivElement, Element>,
+  dataRowIndices: number[],
+  cursorRow: number,
+) {
+  const dataRowToFlatRow = useDataRowToFlatRow(dataRowIndices);
+  const previousCursorRow = useRef<number | null>(null);
+  useEffect(() => {
+    const previous = previousCursorRow.current;
+    previousCursorRow.current = cursorRow;
+    // Skip initial mount -- nothing to scroll to until the cursor moves.
+    if (previous === null) return;
+    if (previous === cursorRow) return;
+
+    const flatIndex = dataRowToFlatRow[cursorRow];
+    if (flatIndex === undefined) return;
+    const visible = virtualizer.getVirtualItems();
+    if (visible.length === 0) return;
+    const firstVisible = visible[0].index;
+    const lastVisible = visible[visible.length - 1].index;
+    if (flatIndex >= firstVisible && flatIndex <= lastVisible) return;
+    virtualizer.scrollToIndex(flatIndex, { align: "auto" });
+  }, [virtualizer, dataRowToFlatRow, cursorRow]);
 }
 
 /** Bundle all the table-state hooks the renderer needs. */

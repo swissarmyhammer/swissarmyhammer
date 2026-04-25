@@ -32,8 +32,8 @@ function ColorPaletteEditorAdapter({
   );
 }
 
-function ColorSwatchDisplayAdapter({ value }: FieldDisplayProps) {
-  return <ColorSwatchDisplay value={value} />;
+function ColorSwatchDisplayAdapter({ value, mode }: FieldDisplayProps) {
+  return <ColorSwatchDisplay value={value} mode={mode} />;
 }
 
 registerEditor("color-palette", ColorPaletteEditorAdapter);

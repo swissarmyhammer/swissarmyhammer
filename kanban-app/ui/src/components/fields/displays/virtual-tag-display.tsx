@@ -4,12 +4,15 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { useBoardData } from "@/components/window-container";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { VirtualTagMeta } from "@/types/kanban";
 
 /** Props for VirtualTagDisplay. */
 export interface VirtualTagDisplayProps {
   /** Array of virtual tag slugs (e.g. ["READY", "BLOCKING"]). */
   value: unknown;
+  /** Presentation mode — `compact` (grid cells) or `full` (inspector rows). */
+  mode?: "compact" | "full";
 }
 
 /**
@@ -19,16 +22,22 @@ export interface VirtualTagDisplayProps {
  * badges with tooltips. Colors and descriptions come from the backend
  * VirtualTagRegistry via `useBoardData().virtualTagMeta`.
  *
- * Renders nothing when the value is empty or undefined.
+ * Renders an empty wrapper in compact mode (preserving the row's fixed
+ * `ROW_HEIGHT` virtualizer contract) and `null` in full mode when the
+ * value is empty or undefined.
  */
-export function VirtualTagDisplay({ value }: VirtualTagDisplayProps) {
+export function VirtualTagDisplay({ value, mode }: VirtualTagDisplayProps) {
   const boardData = useBoardData();
   const vtMeta = boardData?.virtualTagMeta ?? [];
   const tags = Array.isArray(value) ? (value as string[]) : [];
 
-  if (tags.length === 0) return null;
+  if (tags.length === 0) {
+    return mode === "compact" ? (
+      <CompactCellWrapper>{null}</CompactCellWrapper>
+    ) : null;
+  }
 
-  return (
+  const pills = (
     <div className="flex flex-wrap gap-1">
       {tags.map((slug) => {
         const meta = vtMeta.find((m: VirtualTagMeta) => m.slug === slug);
@@ -53,5 +62,11 @@ export function VirtualTagDisplay({ value }: VirtualTagDisplayProps) {
         );
       })}
     </div>
+  );
+
+  return mode === "compact" ? (
+    <CompactCellWrapper>{pills}</CompactCellWrapper>
+  ) : (
+    pills
   );
 }

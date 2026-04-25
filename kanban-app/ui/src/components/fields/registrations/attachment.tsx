@@ -16,20 +16,34 @@ import {
 import { AttachmentEditor } from "@/components/fields/editors/attachment-editor";
 
 function AttachmentDisplayAdapter({
-  value,
-  mode,
-  onCommit,
-}: FieldDisplayProps) {
-  return <AttachmentDisplay value={value} mode={mode} onCommit={onCommit} />;
-}
-
-function AttachmentListDisplayAdapter({
+  field,
   value,
   mode,
   onCommit,
 }: FieldDisplayProps) {
   return (
-    <AttachmentListDisplay value={value} mode={mode} onCommit={onCommit} />
+    <AttachmentDisplay
+      field={field}
+      value={value}
+      mode={mode}
+      onCommit={onCommit}
+    />
+  );
+}
+
+function AttachmentListDisplayAdapter({
+  field,
+  value,
+  mode,
+  onCommit,
+}: FieldDisplayProps) {
+  return (
+    <AttachmentListDisplay
+      field={field}
+      value={value}
+      mode={mode}
+      onCommit={onCommit}
+    />
   );
 }
 
