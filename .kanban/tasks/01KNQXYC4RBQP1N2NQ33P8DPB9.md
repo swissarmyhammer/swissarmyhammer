@@ -3,54 +3,52 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXXF5W7G4JP73C6ZCMKYKX
-position_column: todo
-position_ordinal: a380
+- 01KQ4YYFCGJCRN6GBYGVGXVVG6
+- 01KQ5PP55SAAVJ0V3HDJ1DGNBY
+position_column: doing
+position_ordinal: '8680'
 project: spatial-nav
-title: Add FocusLayer to inspector (stacks on top of root window layer)
+title: 'Inspector layer: one layer per window, panels and field rows as zones inside'
 ---
-## What
+## STATUS: REOPENED 2026-04-26 — does not work in practice
 
-The root `<FocusLayer name="window">` is added in card 1 (at the app shell). This card adds the inspector's layer so it captures navigation when open, and replaces `useRestoreFocus` with layer stack semantics.
+The user reports that focus does not work inside inspector panels. The inspector layer + per-panel zone wrapping shipped, but the fields, labels, and pills inside cannot be focused or visibly selected. See umbrella card `01KQ5PEHWT...` for the systemic root-cause checklist.
 
-### Layer boundary semantics
+## Remaining work
 
-**Layers are hard boundaries.** Navigation stays within the active (topmost) layer. You cannot arrow out of the inspector — dismiss it to return to the board. This is the "semi-modal" behavior.
+This card owns the inspector **layer / panel zone** wrapping. The leaf-level focus issues (labels, editors, pills) are owned by sibling card `01KNQY0P9J03...`. This card needs to confirm the layer + panel zones are doing their part:
 
-When a FocusLayer mounts, it saves the currently focused moniker from the previous layer. When it unmounts, it restores that moniker via `setFocus`. This replaces the ad-hoc `useRestoreFocus()` hook entirely.
+1. **Verify the layer captures focus correctly.** With an inspector panel open, click on the panel body — does the panel zone receive focus and render visible feedback? If `showFocusBar={false}` is set on the panel zone, decide whether that's correct (the panel body fills with field rows, so a panel-edge bar might be the right affordance).
+2. **Verify drill-out within the layer.** From a focused field row, Escape should land focus on the panel zone, then on (no parent — the layer pop). Walk this path manually.
+3. **Verify multi-panel cross-zone fallback.** Open two panels, focus a field in panel B, close B → focus should land on panel A's `last_focused`. Walk this manually.
 
-### Files to modify
+## Files involved
 
-1. **`kanban-app/ui/src/components/inspector-focus-bridge.tsx`** — Wrap the inspector content in `<FocusLayer name="inspector">`. When the inspector mounts, this pushes onto the layer stack and becomes the active layer. When it unmounts, the layer pops and focus returns to the window layer's previously focused element.
-
-2. **`kanban-app/ui/src/components/inspectors-container.tsx`** — Remove `useRestoreFocus()` import and call. FocusLayer handles focus save/restore via the layer stack. This file currently imports and calls `useRestoreFocus` — that hook is now redundant.
-
-3. **`kanban-app/ui/src/components/entity-inspector.tsx`** — The manual first-field focus on mount (lines ~160-180) should still work — it sets focus within the inspector layer. But verify it doesn't conflict with FocusLayer's own mount behavior.
-
-4. **`kanban-app/ui/src/components/app-shell.tsx`** — Evaluate whether the command palette needs `<FocusLayer name="palette">`. It likely does if it should capture keyboard nav while open.
-
-### Subtasks
-- [ ] Add `<FocusLayer name="inspector">` to InspectorFocusBridge
-- [ ] Remove `useRestoreFocus()` from inspectors-container.tsx — replaced by FocusLayer stack
-- [ ] Verify inspector captures nav (arrows only move within inspector fields)
-- [ ] Verify inspector close pops the layer, restoring window layer's previously focused moniker
-- [ ] Verify entity-inspector's first-field focus on mount still works within the layer
+- `kanban-app/ui/src/components/inspectors-container.tsx`
+- `kanban-app/ui/src/components/inspector-focus-bridge.tsx`
 
 ## Acceptance Criteria
-- [ ] Inspector navigation is captured — arrows don't escape to the board (hard boundary)
-- [ ] Closing inspector restores focus to the element that was focused before it opened
-- [ ] `useRestoreFocus` removed from inspectors-container.tsx
-- [ ] Window layer navigation flows freely across board, toolbar, tab bar, perspective bar
-- [ ] `nav.up` from top board card reaches column header, then toolbar, then tab bar
-- [ ] Multiple inspector stack (open task A inspector, then task B inspector) works — each layer push/pop is independent via ULID key
-- [ ] Existing `claimWhen` predicates still work (this card doesn't remove them yet)
-- [ ] `pnpm vitest run` passes
+
+- [ ] Manual smoke: panel zone is focusable and shows visible feedback (or has a documented reason for hiding the bar)
+- [ ] Manual smoke: Escape from a field row inside a panel lands on the panel zone with visible feedback
+- [ ] Manual smoke: closing panel B with focus inside it → focus lands on panel A's `last_focused`
+- [ ] Integration test for panel-zone focus + drill-out chain
+- [ ] Existing inspector tests stay green
 
 ## Tests
-- [ ] `kanban-app/ui/src/components/inspector-focus-bridge.test.tsx` — inspector layer captures nav, teardown restores previous focus
-- [ ] `kanban-app/ui/src/components/inspectors-container.test.tsx` — no more useRestoreFocus; focus save/restore via layer stack
-- [ ] Integration test: with inspector closed, nav.up from top board element reaches toolbar/tab bar
-- [ ] Integration test: open inspector A, open inspector B on top, close B — focus returns to A's last focused field, not the board
+
+- [ ] `inspectors-container.spatial-nav.test.tsx` — panel zone receives focus + renders indicator
+- [ ] Integration test for cross-panel `last_focused` fallback
 - [ ] Run `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+
+- Use `/tdd` — write the integration test first, watch it fail, then fix.
+
+---
+
+(Original description and prior implementation notes preserved below for reference.)
+
+## (Prior) Implementation Notes (2026-04-26)
+
+`InspectorsContainer` reads `windowLayerKey = useCurrentLayerKey()` at the top, then wraps the panel list in `<FocusLayer name="inspector" parentLayerKey={windowLayerKey}>` only when `panelStack.length > 0`. Each panel is wrapped in `<FocusScope kind="zone" moniker="panel:${entityType}:${entityId}" showFocusBar={false}>` — the `panel:` moniker disambiguates from the underlying entity moniker. `useRestoreFocus()` removed; layer pop + zone `last_focused` handle that responsibility. New tests in `inspectors-container.test.tsx` (8 new) cover layer-mount lifecycle. New `inspectors-container.guards.node.test.ts` (4 tests) pins source-level invariants.

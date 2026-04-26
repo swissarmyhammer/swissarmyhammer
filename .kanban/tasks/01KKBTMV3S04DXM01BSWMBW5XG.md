@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: c480
+position_ordinal: cb80
 title: 'SHELL-4: Wire config into ShellSecurityValidator, remove singleton'
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff8380
+position_ordinal: ff8a80
 title: Move ordinal computation to backend
 ---
 ## What

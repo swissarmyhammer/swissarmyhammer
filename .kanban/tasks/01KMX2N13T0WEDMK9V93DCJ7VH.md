@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffe980
+position_ordinal: ffffffffffffffffcd80
 title: Add menu field to YAML CommandDef
 ---
 ## What

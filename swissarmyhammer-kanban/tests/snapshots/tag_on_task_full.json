@@ -1,0 +1,339 @@
+{
+  "command_count": 27,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.about",
+      "keys": null,
+      "menu_name": null,
+      "name": "About",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.command",
+      "keys": {
+        "cua": "Mod+Shift+P",
+        "emacs": "Mod+Shift+P",
+        "vim": ":"
+      },
+      "menu_name": null,
+      "name": "Command Palette",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.dismiss",
+      "keys": {
+        "cua": "Escape",
+        "emacs": "Escape",
+        "vim": "Escape"
+      },
+      "menu_name": null,
+      "name": "Dismiss",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.help",
+      "keys": {
+        "cua": "F1",
+        "vim": "F1"
+      },
+      "menu_name": null,
+      "name": "Help",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.quit",
+      "keys": {
+        "cua": "Mod+Q",
+        "vim": ":q"
+      },
+      "menu_name": null,
+      "name": "Quit",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.search",
+      "keys": {
+        "cua": "Mod+F",
+        "emacs": "Mod+F",
+        "vim": "/"
+      },
+      "menu_name": null,
+      "name": "Find",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.closeBoard",
+      "keys": {
+        "cua": "Mod+W",
+        "vim": "Mod+W"
+      },
+      "menu_name": null,
+      "name": "Close Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.newBoard",
+      "keys": {
+        "cua": "Mod+Shift+B"
+      },
+      "menu_name": null,
+      "name": "New Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.openBoard",
+      "keys": {
+        "cua": "Mod+O"
+      },
+      "menu_name": null,
+      "name": "Open Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.switchBoard",
+      "keys": null,
+      "menu_name": null,
+      "name": "Switch Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "perspective.next",
+      "keys": {
+        "cua": "Mod+]",
+        "vim": "gt"
+      },
+      "menu_name": null,
+      "name": "Next Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "perspective.prev",
+      "keys": {
+        "cua": "Mod+[",
+        "vim": "gT"
+      },
+      "menu_name": null,
+      "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.cua",
+      "keys": null,
+      "menu_name": null,
+      "name": "Standard Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.emacs",
+      "keys": null,
+      "menu_name": null,
+      "name": "Emacs Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.vim",
+      "keys": null,
+      "menu_name": null,
+      "name": "Vim Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.inspector.close",
+      "keys": {
+        "cua": "Escape",
+        "vim": "q"
+      },
+      "menu_name": null,
+      "name": "Close Inspector",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.inspector.close_all",
+      "keys": {
+        "cua": "Mod+Escape",
+        "vim": "Q"
+      },
+      "menu_name": null,
+      "name": "Close All Inspectors",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.palette.open",
+      "keys": {
+        "cua": "Mod+K",
+        "vim": ":"
+      },
+      "menu_name": null,
+      "name": "Command Palette",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "window.new",
+      "keys": {
+        "cua": "Mod+Shift+N",
+        "emacs": "Mod+Shift+N",
+        "vim": "Mod+Shift+N"
+      },
+      "menu_name": null,
+      "name": "New Window",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag",
+      "id": "task.untag",
+      "keys": {
+        "cua": "Delete",
+        "vim": "x"
+      },
+      "menu_name": null,
+      "name": "Remove Tag",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx1",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx1",
+      "id": "entity.cut",
+      "keys": {
+        "cua": "Mod+X",
+        "vim": "x"
+      },
+      "menu_name": null,
+      "name": "Cut Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.delete",
+      "keys": {
+        "cua": "Mod+Backspace"
+      },
+      "menu_name": null,
+      "name": "Delete Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx3",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "task",
+      "id": "task.doThisNext",
+      "keys": null,
+      "menu_name": null,
+      "name": "Do This Next",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "task",
+      "id": "task.move",
+      "keys": null,
+      "menu_name": null,
+      "name": "Move Task",
+      "target": null
+    }
+  ],
+  "context_menu_only": false,
+  "scope": [
+    "tag:TAG",
+    "task:TASK",
+    "column:todo",
+    "board:BOARD_ID_STABLE"
+  ]
+}

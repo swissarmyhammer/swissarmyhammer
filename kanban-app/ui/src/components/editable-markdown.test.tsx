@@ -19,7 +19,7 @@ const MENTIONABLE_TYPES: MentionableType[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Mocks — Tauri, schema, entity store, entity-commands
+// Mocks — Tauri, schema, entity store
 // ---------------------------------------------------------------------------
 
 const mockGetEntities = vi.fn((_type: string) => [mockTag]);
@@ -58,14 +58,12 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: MENTIONABLE_TYPES,
     loading: false,
   }),
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
 }));
 

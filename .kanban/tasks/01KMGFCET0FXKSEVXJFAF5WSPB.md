@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffa880
+position_ordinal: fffffffffffff880
 title: Add "Do This Next" context menu item to promote task to top of todo
 ---
 ## What

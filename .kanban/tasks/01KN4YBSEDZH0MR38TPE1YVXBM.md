@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb980
+position_ordinal: ffffffffffffffffffb380
 title: Fix (i) inspect button on task card — wrong command ID
 ---
 ## What

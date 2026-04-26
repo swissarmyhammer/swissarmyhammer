@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffce80
+position_ordinal: ffffffffffffffffffe680
 title: 'Test: column reorder drag (dnd-kit)'
 ---
 ## What

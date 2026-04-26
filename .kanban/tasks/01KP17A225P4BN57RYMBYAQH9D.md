@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc580
+position_ordinal: ffffffffffffffffffffffffffffffac80
 project: task-card-fields
 title: Enrich EntityCreated events with computed fields (progress, tags, virtual_tags, filter_tags)
 ---

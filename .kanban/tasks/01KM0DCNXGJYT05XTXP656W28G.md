@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DC89WJ5A3ZAE4YYM1WATR
 position_column: done
-position_ordinal: ffffffffbf80
+position_ordinal: ffffffffd280
 title: Extract kill_process operation
 ---
 Move KillProcess struct + impl Operation + handler into `execute/kill_process/mod.rs`.

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESQHQ68QVG341SMAKD8DXZ
 position_column: done
-position_ordinal: ffffffffffffffffd880
+position_ordinal: ffffffffffffffffffff8480
 title: 'VT-1: Add `virtual_tags` and `filter_tags` hidden field definitions on task entity'
 ---
 ## What

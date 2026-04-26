@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMN0A2T6RHDE4DV7T6PABR0F
 position_column: done
-position_ordinal: ffffffffffffffffffffffd080
+position_ordinal: ffffffffffffffffffffffffffffffc280
 project: task-card-fields
 title: Remove order field from project entity
 ---

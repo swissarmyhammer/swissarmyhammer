@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9780
+position_ordinal: ffffffffffffe580
 title: 'entity-inspector.test.tsx: update tests for Field-based inspector rendering'
 ---
 ## What

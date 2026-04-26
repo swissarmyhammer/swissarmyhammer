@@ -84,6 +84,12 @@ const AUTOSAVE_DELAY_MS = 300;
  * Empty text clears the filter; invalid text sets the error without dispatching;
  * valid text dispatches `perspective.filter`. Returns true if dispatch occurred
  * (or cleared), false if validation failed.
+ *
+ * Also stamps `lastDispatchedRef.current` with the effective value we send —
+ * empty string on clear, trimmed text on set. The reconciliation effect in
+ * `FilterEditorBody` compares incoming `filter` props against this stamp to
+ * decide whether a prop change is the echo of our own dispatch (no-op) or a
+ * genuinely external mutation (reset the buffer).
  */
 function applyFilter(
   text: string,
@@ -93,11 +99,13 @@ function applyFilter(
     args: Record<string, unknown>;
   }) => Promise<unknown>,
   setError: (err: string | null) => void,
+  lastDispatchedRef: { current: string },
 ): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
     console.warn("[filter-diag] applyFilter clear", { perspectiveId });
     setError(null);
+    lastDispatchedRef.current = "";
     dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
       console.error,
     );
@@ -115,6 +123,7 @@ function applyFilter(
     filter: trimmed,
     validationError: err,
   });
+  lastDispatchedRef.current = trimmed;
   dispatchFilter({
     args: { filter: trimmed, perspective_id: perspectiveId },
   })
@@ -219,11 +228,18 @@ function buildCompletionFlushExtension(flushRef: { current: () => void }) {
  *
  * The ref prevents stale captures inside extension-hosted callbacks when
  * dispatch identities churn across renders.
+ *
+ * Also exposes `lastDispatchedRef` — the effective filter value this editor
+ * most recently dispatched (via autosave, Enter flush, completion flush, or
+ * the inline clear button). `FilterEditorBody` reads this ref in its
+ * prop-to-buffer reconciliation effect to distinguish echoes of our own
+ * dispatches (no-op) from genuinely external mutations (reset the CM6 buffer).
  */
 function useApplyFilterRef(perspectiveId: string) {
   const dispatchFilter = useDispatchCommand("perspective.filter");
   const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
   const [error, setError] = useState<string | null>(null);
+  const lastDispatchedRef = useRef<string>("");
 
   const applyRef = useRef<(text: string) => boolean>(() => false);
   applyRef.current = (text: string) =>
@@ -233,9 +249,10 @@ function useApplyFilterRef(perspectiveId: string) {
       dispatchFilter,
       dispatchClearFilter,
       setError,
+      lastDispatchedRef,
     );
 
-  return { applyRef, error, dispatchClearFilter };
+  return { applyRef, error, dispatchClearFilter, lastDispatchedRef };
 }
 
 /**
@@ -247,7 +264,7 @@ function useApplyFilterRef(perspectiveId: string) {
  * button cancels any pending debounce and dispatches clearFilter.
  */
 function useFilterDispatch(perspectiveId: string, onClose: () => void) {
-  const { applyRef, error, dispatchClearFilter } =
+  const { applyRef, error, dispatchClearFilter, lastDispatchedRef } =
     useApplyFilterRef(perspectiveId);
   const { schedule, cancel, flush } = useDebouncedTimer();
 
@@ -258,9 +275,32 @@ function useFilterDispatch(perspectiveId: string, onClose: () => void) {
         text,
         len: text.length,
       });
+      // Suppress the scheduled apply when the new text matches the ref stamp.
+      //
+      // Two call sites stamp the ref BEFORE triggering a doc change that
+      // re-enters this handler: the reconciliation effect below in
+      // `FilterEditorBody` (for external mutations) and `handleClear` (for
+      // the × button). In both cases the ensuing `onChange` would otherwise
+      // schedule a redundant apply that dispatches the SAME value back to
+      // the backend — round-tripping a single external mutation as two
+      // undo-stack entries, or N-plicating across multi-window setups.
+      //
+      // Real keystrokes fall through because the ref still holds the
+      // PREVIOUS dispatched value (e.g. ref="#bug" while the user types
+      // "#bug a"), so the equality check fails and the debounce runs
+      // normally. The trim mirrors `applyFilter`'s own canonicalisation so
+      // whitespace-only variants (e.g. "#bug ") are treated as no-ops
+      // exactly as `applyFilter` would.
+      if (text.trim() === lastDispatchedRef.current) {
+        console.warn("[filter-diag] handleChange SUPPRESS (ref match)", {
+          perspectiveId,
+          text,
+        });
+        return;
+      }
       schedule(() => applyRef.current(text), AUTOSAVE_DELAY_MS);
     },
-    [schedule, applyRef, perspectiveId],
+    [schedule, applyRef, perspectiveId, lastDispatchedRef],
   );
 
   // Enter handler: flush pending save synchronously. Must NOT cancel — that
@@ -275,13 +315,24 @@ function useFilterDispatch(perspectiveId: string, onClose: () => void) {
   /** Clear × button — cancels debounce, clears filter immediately, closes. */
   const handleClear = useCallback(() => {
     cancel();
+    // Stamp the ref BEFORE dispatch so the backend's echoed entity-field
+    // event (which re-renders us with filter="") is recognised as our own
+    // and suppressed by the reconciliation effect in FilterEditorBody.
+    lastDispatchedRef.current = "";
     dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
       console.error,
     );
     onClose();
-  }, [perspectiveId, dispatchClearFilter, cancel, onClose]);
+  }, [perspectiveId, dispatchClearFilter, cancel, onClose, lastDispatchedRef]);
 
-  return { error, handleFlush, handleCancel, handleChange, handleClear };
+  return {
+    error,
+    handleFlush,
+    handleCancel,
+    handleChange,
+    handleClear,
+    lastDispatchedRef,
+  };
 }
 
 /**
@@ -370,8 +421,14 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
         console.warn("[filter-diag] FilterEditor UNMOUNT", { perspectiveId });
       };
     }, [perspectiveId]);
-    const { error, handleFlush, handleCancel, handleChange, handleClear } =
-      useFilterDispatch(perspectiveId, onClose);
+    const {
+      error,
+      handleFlush,
+      handleCancel,
+      handleChange,
+      handleClear,
+      lastDispatchedRef,
+    } = useFilterDispatch(perspectiveId, onClose);
 
     // Stable refs for extensions — callback identities churn, but ref
     // identities never do.
@@ -384,7 +441,7 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
     const languageExtension = useMemo(() => filterLanguage(), []);
 
     // Inner ref so the clear button can imperatively empty the CM6 buffer.
-    // Forward both `focus` and `setValue` out to the external consumer.
+    // Forward `focus`, `setValue`, and `getValue` out to the external consumer.
     const innerRef = useRef<TextEditorHandle>(null);
     useImperativeHandle(
       ref,
@@ -395,9 +452,68 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
         setValue(text: string) {
           innerRef.current?.setValue(text);
         },
+        getValue() {
+          return innerRef.current?.getValue() ?? "";
+        },
       }),
       [],
     );
+
+    // ---------------------------------------------------------------------
+    // External-change reconciliation
+    // ---------------------------------------------------------------------
+    // The TextEditor primitive captures `value` at mount and never reapplies
+    // it (doc is the source of truth after mount). That is correct for the
+    // keystroke-driven path — we must never echo a backend refresh back into
+    // the buffer mid-typing or we would clobber characters in flight.
+    //
+    // But some mutations originate *outside* this editor: context-menu
+    // "Clear Filter", command palette, keybindings, undo/redo of
+    // `perspective.clearFilter`, or filter changes pushed from another
+    // window. Those arrive as a `filter` prop change on the active
+    // perspective, with no keystroke to drive the buffer. Without a
+    // reconciliation path the CM6 buffer would continue to display stale
+    // text even though the backend filter was cleared.
+    //
+    // The guards below respond ONLY to truly external changes:
+    //
+    //   1. `filter !== lastDispatchedRef.current` — our own dispatches
+    //      (autosave, Enter flush, completion flush, × button) stamp the
+    //      ref BEFORE dispatch, so the echoed prop matches and is ignored.
+    //
+    //   2. `filter !== innerRef.current?.getValue()` — if the user has
+    //      typed ahead of the round-trip, the buffer already holds the
+    //      newer text; resetting it here would clobber keystrokes in
+    //      flight.
+    //
+    // When both guards pass we rewrite the buffer via the imperative
+    // `setValue` handle — the same mechanism the inline × button uses.
+    //
+    // Adversarial edge case — filter flaps back to `lastDispatchedRef`
+    // mid-typing: if an external source asserts the filter back to the
+    // value we most recently dispatched (e.g. window B sets filter to
+    // what window A last dispatched) while the user is typing in this
+    // window, guard (1) trips and the effect deliberately no-ops. The
+    // pending debounced save will later overwrite that external
+    // assertion with whatever the user has typed. This is a defensible
+    // trade-off (typing priority beats stale-but-equal-to-our-last-stamp
+    // external assertions) and flows naturally from the two guards.
+    useEffect(() => {
+      const next = filter ?? "";
+      if (next === lastDispatchedRef.current) return;
+      if (next === innerRef.current?.getValue()) return;
+      console.warn("[filter-diag] FilterEditor RECONCILE external->buffer", {
+        perspectiveId,
+        next,
+      });
+      // Stamp first, then setValue. The setValue triggers onChange which
+      // schedules a debounced applyFilter; that apply path also stamps the
+      // ref to the same value and dispatches an idempotent echo. Stamping
+      // up-front keeps the effect's own guards honest if React re-runs
+      // before the debounce fires.
+      lastDispatchedRef.current = next;
+      innerRef.current?.setValue(next);
+    }, [filter, lastDispatchedRef, perspectiveId]);
 
     const handleClearAndReset = useCallback(() => {
       handleClear();
@@ -443,10 +559,7 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
 export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
   function FilterEditor(props, ref) {
     return (
-      <CommandScopeProvider
-        commands={[]}
-        moniker={`perspective:${props.perspectiveId}`}
-      >
+      <CommandScopeProvider moniker={`perspective:${props.perspectiveId}`}>
         <FilterEditorBody ref={ref} {...props} />
       </CommandScopeProvider>
     );

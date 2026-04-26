@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffed80
+position_ordinal: ffffffffffffffffffffffffd580
 title: Fix InspectButton dispatching ui.inspect to board instead of task entity
 ---
 ## What

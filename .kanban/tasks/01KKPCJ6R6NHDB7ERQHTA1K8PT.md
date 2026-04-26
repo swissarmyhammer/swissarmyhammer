@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffffe880
+position_ordinal: ffffffffffa380
 title: AvpElicitationResultOutput missing deny_from_validator constructor
 ---
 `avp-common/src/types/avp_output.rs` — AvpElicitationResultOutput

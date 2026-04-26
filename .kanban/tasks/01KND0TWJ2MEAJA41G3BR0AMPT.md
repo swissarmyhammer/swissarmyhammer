@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffb080
 title: 'Integration test: session-scoped diff isolation across two sessions'
 ---
 ## What

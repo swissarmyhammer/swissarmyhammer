@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: dc80
+position_ordinal: e380
 title: Rewrite init.rs to use InitRegistry
 ---

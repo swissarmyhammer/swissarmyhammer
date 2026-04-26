@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '80'
+position_ordinal: '8380'
 title: Enforce npm in Tauri apps; eliminate pnpm contamination at the source
 ---
 ## What

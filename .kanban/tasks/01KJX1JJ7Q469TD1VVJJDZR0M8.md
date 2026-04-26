@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ef80
+position_ordinal: f680
 title: Client-side undo stack with Command objects (do/undo/redo)
 ---
 Phase 1 deliverable from app-architecture.md.

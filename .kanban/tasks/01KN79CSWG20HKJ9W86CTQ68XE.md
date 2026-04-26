@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa080
+position_ordinal: ffffffffffffffffffffffa580
 title: '1. Fix: external file edits don''t update UI — events are signals to re-fetch'
 ---
 ## What

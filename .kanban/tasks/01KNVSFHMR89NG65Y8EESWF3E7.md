@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffaa80
+position_ordinal: fffffffffffffffffffffffffffff180
 project: expr-filter
 title: 'filter-expr: add $project atom to DSL grammar, parser, and FilterContext'
 ---

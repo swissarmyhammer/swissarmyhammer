@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa680
+position_ordinal: ffffffffffffffffffffffb380
 title: 'Fix: "Do This Next" context menu command not appearing — frontend command lost in backend-driven menu migration'
 ---
 ## What

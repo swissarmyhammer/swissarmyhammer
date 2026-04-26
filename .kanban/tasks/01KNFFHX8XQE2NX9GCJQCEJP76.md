@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFFH9SCAX7CDKARJVC8G688
 position_column: done
-position_ordinal: ffffffffffffffffffffb380
+position_ordinal: ffffffffffffffffffffffffffd680
 title: Remove entity-scoped commands from command YAML files (entity.yaml, attachment.yaml)
 ---
 ## What

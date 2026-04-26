@@ -26,5 +26,5 @@ define_id!(PerspectiveId, "ULID-based identifier for perspectives");
 pub use context::PerspectiveContext;
 pub use error::{PerspectiveError, Result};
 pub use events::PerspectiveEvent;
-pub use store::PerspectiveStore;
+pub use store::{PerspectiveStore, PERSPECTIVE_STORE_NAME};
 pub use types::{Perspective, PerspectiveFieldEntry, SortDirection, SortEntry};

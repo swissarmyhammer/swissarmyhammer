@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1TQR2C3TYG1G8STEYZPA5
 position_column: done
-position_ordinal: ffffffffffffffffffff8e80
+position_ordinal: ffffffffffffffffffffffffff9380
 project: code-context-cli
 title: Implement magnifying glass banner for code-context CLI
 ---

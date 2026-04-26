@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffcd80
+position_ordinal: ffffffffffffffffb580
 title: 'Review finding: Undo/redo methods in context.rs have significant code duplication'
 ---
 **Severity**: Medium (maintainability)\n**File**: `swissarmyhammer-entity/src/context.rs` lines 567-1190\n\nThe undo/redo operation handlers follow near-identical patterns with only minor variations:\n\n- `undo_create` / `redo_delete` / `undo_unarchive` -- all read current entity, build Removed changes, append changelog, trash/archive files\n- `undo_delete` / `redo_create` / `undo_archive` / `redo_unarchive` -- all restore from trash/archive, read entity, build Set changes, append changelog\n- `undo_update` / `redo_update` -- read entity, apply changes (reversed vs forward), write, append changelog\n\nThis results in roughly 600 lines of code where a helper-based approach could cut it to ~200. Each method independently builds the same `changes` vector with the same sort, creates a `ChangeEntry`, appends to the changelog, and inserts into `changelog_index`.\n\nA suggested refactor pattern:\n```rust\nasync fn append_undo_redo_entry(\n    &self, entity_type: &str, entity_id: &str,\n    op: &str, // \"undo\" or \"redo\"\n    changes: Vec<(String, FieldChange)>,\n    reference_id: &ChangeEntryId, // undone_id or redone_id\n) -> Result<ChangeEntryId> { ... }\n```\n\nThis is not blocking -- the code is correct and well-tested. But the duplication makes it easy to introduce divergent behavior when adding new operation types. #review-finding

@@ -117,6 +117,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asLayerName } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -607,6 +610,104 @@ describe("EntityCard", () => {
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();
+    });
+  });
+
+  /**
+   * Tests that mount the card inside the full spatial-focus stack so the
+   * underlying `<FocusZone>` primitive registers with the Rust-side
+   * spatial graph via the mocked `invoke`.
+   */
+  describe("spatial registration as a FocusZone", () => {
+    /** Render with the full spatial-focus + focus-layer stack. */
+    function renderCardWithSpatial(ui: React.ReactElement) {
+      return render(
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <SpatialFocusProvider>
+                      <FocusLayer name={asLayerName("window")}>{ui}</FocusLayer>
+                    </SpatialFocusProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>,
+      );
+    }
+
+    async function renderWithSpatial(ui: React.ReactElement) {
+      const result = renderCardWithSpatial(ui);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      return result;
+    }
+
+    it('registers the card body as a FocusZone (kind="zone") with the entity moniker', async () => {
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const zoneCalls = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_zone")
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(zoneCalls.find((a) => a.moniker === "task:task-1")).toBeTruthy();
+    });
+
+    it("does not register the card root as a Focusable leaf — the zone replaces the leaf", async () => {
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const leafCalls = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_focusable")
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(
+        leafCalls.find((a) => a.moniker === "task:task-1"),
+      ).toBeUndefined();
+    });
+
+    it("the card zone is anchored at the surrounding window layer (parent_zone is null at the card level)", async () => {
+      // The card is the outermost spatial scope it owns — leaves and
+      // child zones inside the card register `parentZone = cardZone.key`
+      // via FocusZoneContext. The card itself has no enclosing zone in
+      // this test harness, so its own `parentZone` is null. This pins
+      // the contract that the card is the entry point to its sub-tree
+      // (descendant scopes will look up to it as their parent).
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const cardZone = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_zone")
+        .map((c) => c[1] as Record<string, unknown>)
+        .find((a) => a.moniker === "task:task-1");
+      expect(cardZone).toBeTruthy();
+      expect(cardZone!.parentZone).toBeNull();
+      // Anchored to the window layer the FocusLayer wrapper provides.
+      expect(cardZone!.layerKey).toBeTruthy();
+    });
+
+    it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {
+      currentEntity = makeEntity();
+      const { container } = await renderWithSpatial(
+        <EntityCard entity={currentEntity} />,
+      );
+      mockInvoke.mockClear();
+      const card = container.querySelector("[data-moniker='task:task-1']")!;
+      fireEvent.click(card);
+      // The primitive's click handler routes through `spatial_focus`.
+      const focusCall = mockInvoke.mock.calls.find(
+        (c) => c[0] === "spatial_focus",
+      );
+      expect(focusCall).toBeTruthy();
+      // Inspect is now a separate Space-bound command at app level —
+      // a bare card click must not dispatch ui.inspect.
+      const inspectCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+      );
+      expect(inspectCall).toBeUndefined();
     });
   });
 });

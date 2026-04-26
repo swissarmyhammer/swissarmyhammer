@@ -14,6 +14,17 @@ use crate::PerspectiveId;
 /// Convenience alias matching the store crate's Result type.
 type StoreResult<T> = std::result::Result<T, StoreError>;
 
+/// Store name returned by [`PerspectiveStore::store_name`].
+///
+/// Exposed as a constant so downstream code that needs to key off the
+/// store name (notably `app.undo` / `app.redo` reconciliation in the
+/// kanban crate) can reference the same literal the store exposes.
+/// Without this, the two sites drift silently: if either side changes
+/// the spelling, cache reconciliation becomes a no-op with no
+/// compile-time signal, and perspective undo regresses to the pre-fix
+/// state (disk rewrite without cache sync or event emit).
+pub const PERSPECTIVE_STORE_NAME: &str = "perspective";
+
 /// A [`TrackedStore`] for perspective definitions.
 ///
 /// Stores perspectives as YAML files in a single directory, one file per
@@ -65,7 +76,7 @@ impl TrackedStore for PerspectiveStore {
     }
 
     fn store_name(&self) -> &str {
-        "perspective"
+        PERSPECTIVE_STORE_NAME
     }
 }
 
@@ -97,6 +108,9 @@ mod tests {
     fn store_name_is_perspective() {
         let store = PerspectiveStore::new("/tmp/perspectives");
         assert_eq!(store.store_name(), "perspective");
+        // Also assert the constant matches — if someone edits either side
+        // this test catches the drift before it reaches reconciliation.
+        assert_eq!(store.store_name(), PERSPECTIVE_STORE_NAME);
     }
 
     #[test]

@@ -23,6 +23,10 @@ import { GroupedBoardView } from "@/components/grouped-board-view";
 import { GridView } from "@/components/grid-view";
 import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
+import { FocusZone } from "@/components/focus-zone";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asMoniker } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -50,14 +54,49 @@ export function ViewContainer({ children }: ViewContainerProps) {
   const moniker = useMemo(() => `view:${viewId}`, [viewId]);
 
   return (
-    <CommandScopeProvider commands={[]} moniker={moniker}>
-      <ActiveViewRenderer
-        activeView={activeView}
-        board={board!}
-        tasks={entitiesByType.task ?? []}
-      />
-      {children}
+    <CommandScopeProvider moniker={moniker}>
+      <ViewSpatialZone>
+        <ActiveViewRenderer
+          activeView={activeView}
+          board={board!}
+          tasks={entitiesByType.task ?? []}
+        />
+        {children}
+      </ViewSpatialZone>
     </CommandScopeProvider>
+  );
+}
+
+/**
+ * Wrap the rendered view in a `<FocusZone moniker={asMoniker("ui:view")}>`
+ * when the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every
+ * `ViewContainer` unit test that doesn't care about spatial nav to set up
+ * the providers. Conditionally rendering the zone when both context lookups
+ * succeed keeps the strict contract intact for direct `<FocusZone>` usage
+ * while letting the existing test suite keep its narrow provider tree.
+ *
+ * The zone preserves the `flex-1 flex flex-col min-h-0 min-w-0` chain so the
+ * inner BoardView / GridView can keep filling the available space when the
+ * spatial-nav stack is present.
+ */
+function ViewSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusZone
+      moniker={asMoniker("ui:view")}
+      showFocusBar={false}
+      className="flex-1 flex flex-col min-h-0 min-w-0"
+    >
+      {children}
+    </FocusZone>
   );
 }
 

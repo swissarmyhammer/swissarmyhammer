@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffde80
+position_ordinal: ffffffffffffffffffffffffac80
 title: 'LSP-T3A: get_rename_edits op'
 ---
 ## What

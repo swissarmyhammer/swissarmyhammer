@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8480
+position_ordinal: ffffffffffffffffffffee80
 title: 'Test file_watcher: watching lifecycle, retry logic, and MCP notifications'
 ---
 File: swissarmyhammer-tools/src/mcp/file_watcher.rs (17.1%, 116 uncovered lines)

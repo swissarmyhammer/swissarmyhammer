@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd980
+position_ordinal: ffffffffffffffffffffffffffffffd180
 title: Add display iconOverride to eliminate duplicate icons on status_date
 ---
 ## What

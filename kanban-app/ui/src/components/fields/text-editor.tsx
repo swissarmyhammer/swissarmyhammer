@@ -55,6 +55,30 @@ export interface TextEditorHandle {
    * mount (e.g. the × clear button in the formula bar) call this instead.
    */
   setValue(text: string): void;
+  /**
+   * Read the current buffer contents directly from the CM6 doc.
+   *
+   * The buffer — not the mount-time `value` prop — is the source of truth
+   * after mount (see the file-level docstring). Callers that need to compare
+   * an incoming prop against what is actually displayed (e.g. to decide
+   * whether an external prop change should reset the buffer) read it via
+   * this method rather than tracking mirrored React state.
+   *
+   * Returns an empty string if the editor view has not yet initialised.
+   *
+   * Caveat — the empty-string return value intentionally collapses two
+   * states: "buffer is empty" and "view has not mounted yet". For the
+   * current consumer (the filter-editor reconciliation effect) that
+   * collapse is safe because both states produce the same decision —
+   * "do not reset the buffer" — an incoming empty-filter prop matches
+   * an empty buffer or a not-yet-mounted buffer and is a no-op either
+   * way. Future callers that need to distinguish the two states should
+   * thread a separate ready flag (e.g. via `onCreateEditor`) rather
+   * than relying on `getValue`; widening the return type to
+   * `string | undefined` here would break the existing caller's
+   * ergonomics without improving its correctness.
+   */
+  getValue(): string;
 }
 
 /** Props for the pure {@link TextEditor} primitive. */
@@ -297,6 +321,9 @@ function useTextEditorHandle(
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: text },
         });
+      },
+      getValue() {
+        return editorRef.current?.view?.state.doc.toString() ?? "";
       },
     }),
     [editorRef],

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb080
+position_ordinal: fffffffffffffffffffffffffffffb80
 project: expr-filter
 title: Move @lezer/highlight and @lezer/lr from devDependencies to dependencies
 ---

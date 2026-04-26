@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe880
+position_ordinal: ffffffffffffffbe80
 title: claimWhen prop causes unnecessary effect re-runs with inline array literals
 ---
 **Severity: Low / Performance**

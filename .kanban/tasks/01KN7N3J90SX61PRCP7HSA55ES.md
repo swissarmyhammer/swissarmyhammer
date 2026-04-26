@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffd180
+position_ordinal: ffffffffffffffffffef80
 title: Fix task card drag-and-drop broken by FileDropProvider global event handlers
 ---
 ## Problem

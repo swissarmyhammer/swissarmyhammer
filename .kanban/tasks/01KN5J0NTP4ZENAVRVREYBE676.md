@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffc780
+position_ordinal: ffffffffffffffffffd180
 title: 'Fix: FileDropProvider global event prevention breaks HTML5 card drag-and-drop'
 ---
 ## What

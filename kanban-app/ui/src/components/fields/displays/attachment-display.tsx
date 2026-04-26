@@ -25,6 +25,9 @@ import {
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
+import type { FieldDef } from "@/types/kanban";
+import { asMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +44,16 @@ export interface AttachmentMeta {
 
 /** Props for the AttachmentDisplay component. */
 export interface AttachmentDisplayProps {
+  /**
+   * Field definition — drives the empty-state placeholder convention
+   * (`field.placeholder ?? "-"` in compact mode), matching
+   * {@link file://./avatar-display.tsx AvatarDisplay},
+   * {@link file://./badge-display.tsx BadgeDisplay}, and
+   * {@link file://./badge-list-display.tsx BadgeListDisplay}. Optional
+   * because some test call-sites still construct the component directly
+   * without wiring up a registration adapter.
+   */
+  field?: FieldDef;
   value: unknown;
   mode: "compact" | "full";
   onCommit?: (value: unknown) => void;
@@ -48,6 +61,8 @@ export interface AttachmentDisplayProps {
 
 /** Props for the AttachmentListDisplay component. */
 export interface AttachmentListDisplayProps {
+  /** See {@link AttachmentDisplayProps.field} — same convention. */
+  field?: FieldDef;
   value: unknown;
   mode: "compact" | "full";
   onCommit?: (value: unknown) => void;
@@ -191,8 +206,7 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
 
   return (
     <FocusScope
-      moniker={`attachment:${attachment.path}`}
-      commands={[]}
+      moniker={asMoniker(`attachment:${attachment.path}`)}
       className="min-w-0"
     >
       <AttachmentItemInner attachment={attachment} Icon={Icon} />
@@ -230,6 +244,7 @@ function AttachmentItemInner({ attachment, Icon }: AttachmentItemInnerProps) {
 
 /** Renders a single attachment metadata object. Also acts as a drag-drop target. */
 export function AttachmentDisplay({
+  field,
   value,
   mode,
   onCommit,
@@ -255,8 +270,28 @@ export function AttachmentDisplay({
     return () => unregisterDropTarget(cb);
   }, [registerDropTarget, unregisterDropTarget]);
 
-  if (mode === "compact" && !hasAttachment) {
-    return <span className="text-muted-foreground/50">-</span>;
+  // Compact mode renders an inline one-line summary so the row honors
+  // the fixed `ROW_HEIGHT` virtualizer contract — the full drop-zone UI
+  // would balloon the row well beyond the reserved slot. Empty cells
+  // honor `field.placeholder` (falling back to `-`) per the convention
+  // shared with `AvatarDisplay`/`BadgeDisplay`/`BadgeListDisplay`.
+  if (mode === "compact") {
+    return (
+      <CompactCellWrapper>
+        {hasAttachment ? (
+          <span className="flex items-center gap-1.5 truncate text-sm">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">
+              {(attachment as AttachmentMeta).name}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground/50">
+            {field?.placeholder ?? "-"}
+          </span>
+        )}
+      </CompactCellWrapper>
+    );
   }
 
   return (
@@ -283,6 +318,7 @@ export function AttachmentDisplay({
 
 /** Renders a list of attachment metadata objects. Also acts as a drag-drop target. */
 export function AttachmentListDisplay({
+  field,
   value,
   mode,
   onCommit,
@@ -306,8 +342,28 @@ export function AttachmentListDisplay({
     return () => unregisterDropTarget(handleDrop);
   }, [handleDrop, registerDropTarget, unregisterDropTarget]);
 
-  if (mode === "compact" && attachments.length === 0) {
-    return <span className="text-muted-foreground/50">-</span>;
+  // Compact mode collapses to an inline summary so the fixed-height row
+  // virtualizer contract (`data-table.tsx::ROW_HEIGHT`) holds — the
+  // full drop-zone UI is reserved for inspector rows in `mode="full"`.
+  // Empty cells honor `field.placeholder` (falling back to `-`) per the
+  // convention shared with `AvatarDisplay`/`BadgeDisplay`/`BadgeListDisplay`.
+  if (mode === "compact") {
+    return (
+      <CompactCellWrapper>
+        {attachments.length > 0 ? (
+          <span className="flex items-center gap-1.5 text-sm">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-muted-foreground tabular-nums">
+              {attachments.length}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground/50">
+            {field?.placeholder ?? "-"}
+          </span>
+        )}
+      </CompactCellWrapper>
+    );
   }
 
   return (

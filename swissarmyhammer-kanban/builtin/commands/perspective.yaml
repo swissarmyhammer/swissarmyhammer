@@ -1,0 +1,186 @@
+- id: perspective.load
+  name: Load Perspective
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.save
+  name: Save Perspective
+  undoable: true
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.delete
+  name: Delete Perspective
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.rename
+  name: Rename Perspective
+  # Hidden from the palette: this command requires `id` + `new_name` args
+  # and cannot be invoked directly from the palette (no args prompt UI).
+  # The user-facing entry point is `ui.entity.startRename`, which
+  # triggers inline rename mode and then dispatches this command with the
+  # collected arguments.
+  visible: false
+  undoable: true
+  params:
+    - name: id
+      from: args
+    - name: new_name
+      from: args
+  keys: {}
+
+- id: perspective.filter
+  name: Set Filter
+  # Palette-only: requires a `filter` expression arg that the bare context
+  # menu has no way to collect. Users set filters through the formula bar
+  # CM6 editor on the tab bar, not through a right-click → "Set Filter"
+  # menu item, so exposing it in the context menu would surface a command
+  # that silently fails at dispatch time with `MissingArg("filter")`.
+  #
+  # `scope: "entity:perspective"` still applies — a palette invocation
+  # outside a perspective-bearing scope would also fail, so we hide it
+  # from the palette too in that case. `resolve_perspective_id` handles
+  # the scope/arg/UIState cascade at execute time.
+  scope: "entity:perspective"
+  undoable: true
+  params:
+    - name: filter
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.clearFilter
+  name: Clear Filter
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.group
+  name: Set Group
+  # Palette-only: requires a `group` field name arg. The group-by UI is the
+  # popover on the tab bar; see the `perspective.filter` comment above for
+  # the full rationale.
+  scope: "entity:perspective"
+  undoable: true
+  params:
+    - name: group
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.clearGroup
+  name: Clear Group
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.set
+  name: Sort Field
+  # Palette-only: requires `field` and `direction` args. Sort-set is driven
+  # by column-header clicks in the grid view, which dispatch with explicit
+  # args; exposing it in the bare right-click menu would silently fail.
+  scope: "entity:perspective"
+  undoable: true
+  params:
+    - name: field
+      from: args
+    - name: direction
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.clear
+  name: Clear Sort
+  # Unconditionally clears every sort entry on the resolved perspective.
+  # Per-field removal is covered by `perspective.sort.toggle`'s asc → desc →
+  # none state cycle; this command is the palette / context-menu entry point
+  # for "reset the whole sort list" and never takes a `field` arg.
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.toggle
+  name: Toggle Sort
+  # Palette-only: requires a `field` arg. Toggle is invoked from column
+  # headers with the field already known; see `perspective.sort.set` above.
+  scope: "entity:perspective"
+  undoable: true
+  params:
+    - name: field
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.next
+  name: Next Perspective
+  keys:
+    cua: "Mod+]"
+    vim: "gt"
+
+- id: perspective.prev
+  name: Previous Perspective
+  keys:
+    cua: "Mod+["
+    vim: "gT"
+
+- id: perspective.goto
+  name: Go to Perspective
+  visible: false
+  params:
+    - name: id
+      from: args
+    - name: view_kind
+      from: args
+  keys: {}
+
+- id: perspective.list
+  name: List Perspectives
+  visible: false
+
+- id: perspective.set
+  name: Switch Perspective
+  # Hidden from the palette: requires a `perspective_id` arg the palette has
+  # no generic UI for collecting. User-facing palette entries are emitted
+  # by `scope_commands::emit_perspective_goto` — one `perspective.set` row
+  # per known perspective with `perspective_id` pre-filled in `args`. The
+  # dispatcher takes those rows verbatim; there is no suffix indirection.
+  #
+  # Before 01KPZMXXEXKVE3RNPA4XJP0105 the palette emitted
+  # `perspective.goto:{id}` rows that `match_dynamic_prefix` rewrote back
+  # to `perspective.set`; that indirection is gone.
+  #
+  # Relocated from `ui.perspective.set` in 01KPY02X405QTP5ACH67THHSN8 —
+  # "perspective" is a kanban concept (defined in
+  # `swissarmyhammer-perspectives`), not a generic UI primitive, so the
+  # command lives in the kanban domain alongside every other `perspective.*`
+  # entry.
+  visible: false
+  params:
+    - name: perspective_id
+      from: args

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
@@ -7,8 +7,12 @@ import type { BoardData, OpenBoard } from "@/types/kanban";
 // Mock Tauri APIs before importing components.
 // ---------------------------------------------------------------------------
 
+const mockInvoke = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => Promise.resolve()),
+);
+
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve()),
+  invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -79,7 +83,6 @@ vi.mock("@/lib/schema-context", () => ({
     getSchema: () => undefined,
     getFieldDef: (_entityType: string, fieldName: string) =>
       fieldName === "percent_complete" ? mockPercentFieldDef : undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),
@@ -97,14 +100,38 @@ vi.mock("@/components/fields/field", () => ({
 
 // Import after mocks
 import { NavBar } from "./nav-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asLayerName } from "@/types/spatial";
 
-/** Renders NavBar inside the required TooltipProvider. */
+/** Identity-stable layer name for the test window root, matches App.tsx. */
+const WINDOW_LAYER_NAME = asLayerName("window");
+
+/**
+ * Render `NavBar` inside the spatial-focus + window-root layer providers
+ * that the production tree mounts in `App.tsx`.
+ *
+ * `NavBar` is wrapped in a `<FocusZone>`, which throws when mounted outside
+ * a `<FocusLayer>` — so every render in this file sits under
+ * `SpatialFocusProvider` + `FocusLayer name="window"` to mirror production.
+ */
 function renderNavBar() {
   return render(
-    <TooltipProvider>
-      <NavBar />
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={WINDOW_LAYER_NAME}>
+        <TooltipProvider>
+          <NavBar />
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
+}
+
+/** Flush microtasks queued by the spatial-focus register effects. */
+async function flushSetup() {
+  await act(async () => {
+    await Promise.resolve();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +174,7 @@ describe("NavBar", () => {
     mockBoardData.mockReturnValue(null);
     mockOpenBoards.mockReturnValue([]);
     mockActiveBoardPath.mockReturnValue(undefined);
+    mockIsBusy.mockReturnValue(false);
   });
 
   it("renders without props", () => {
@@ -219,5 +247,121 @@ describe("NavBar", () => {
 
     renderNavBar();
     expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Spatial-nav wiring
+  //
+  // The nav bar mounts as `<FocusZone moniker="ui:navbar">` with each
+  // actionable child registered as a `<Focusable>` leaf whose `parent_zone`
+  // is the navbar zone. These tests assert the structural wiring — the
+  // spatial-graph contract the rest of the app relies on for arrow nav.
+  // -------------------------------------------------------------------------
+
+  /** Filter mock invoke calls to those whose first arg matches `cmd`. */
+  function callsFor(cmd: string): Record<string, unknown>[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === cmd)
+      .map((c) => c[1] as Record<string, unknown>);
+  }
+
+  it("exposes the implicit banner landmark for screen readers", () => {
+    // Replacing the previous <header> with <FocusZone> (a <div>) used to drop
+    // the implicit `role="banner"` landmark — losing the top-of-page anchor
+    // that screen-reader users navigate to. The FocusZone now forwards
+    // `role="banner"`; this test guards against that regression.
+    renderNavBar();
+    expect(screen.getByRole("banner")).toBeTruthy();
+  });
+
+  it("registers as a FocusZone with moniker ui:navbar at the layer root", async () => {
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_zone");
+    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    expect(navbarZone).toBeDefined();
+    expect(navbarZone!.parentZone).toBeNull();
+    expect(navbarZone!.layerKey).toBeTruthy();
+  });
+
+  it("registers ui:navbar.board-selector as a Focusable child of the navbar zone", async () => {
+    mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
+    mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
+
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_zone");
+    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    expect(navbarZone).toBeDefined();
+
+    const focusableCalls = callsFor("spatial_register_focusable");
+    const leaf = focusableCalls.find(
+      (c) => c.moniker === "ui:navbar.board-selector",
+    );
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentZone).toBe(navbarZone!.key);
+  });
+
+  it("registers ui:navbar.inspect as a Focusable child only when a board is loaded", async () => {
+    mockBoardData.mockReturnValue(MOCK_BOARD);
+
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_zone");
+    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    expect(navbarZone).toBeDefined();
+
+    const focusableCalls = callsFor("spatial_register_focusable");
+    const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.inspect");
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentZone).toBe(navbarZone!.key);
+  });
+
+  it("does not register ui:navbar.inspect when no board is loaded", async () => {
+    mockBoardData.mockReturnValue(null);
+
+    renderNavBar();
+    await flushSetup();
+
+    const focusableCalls = callsFor("spatial_register_focusable");
+    expect(
+      focusableCalls.find((c) => c.moniker === "ui:navbar.inspect"),
+    ).toBeUndefined();
+  });
+
+  it("registers ui:navbar.search as a Focusable child of the navbar zone", async () => {
+    renderNavBar();
+    await flushSetup();
+
+    const zoneCalls = callsFor("spatial_register_zone");
+    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    expect(navbarZone).toBeDefined();
+
+    const focusableCalls = callsFor("spatial_register_focusable");
+    const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.search");
+    expect(leaf).toBeDefined();
+    expect(leaf!.parentZone).toBe(navbarZone!.key);
+  });
+
+  it("regression: does not attach a global keydown listener for legacy nav", () => {
+    // The nav bar is purely declarative — arrow-key traversal is handled by
+    // the Rust spatial navigator, not by component-level keyboard handlers.
+    // Wiring up a `keydown` listener on `document` or `window` would resurrect
+    // the legacy nav model and race the spatial graph.
+    const docSpy = vi.spyOn(document, "addEventListener");
+    const winSpy = vi.spyOn(window, "addEventListener");
+
+    renderNavBar();
+
+    const docKeydown = docSpy.mock.calls.filter((c) => c[0] === "keydown");
+    const winKeydown = winSpy.mock.calls.filter((c) => c[0] === "keydown");
+    expect(docKeydown).toHaveLength(0);
+    expect(winKeydown).toHaveLength(0);
+
+    docSpy.mockRestore();
+    winSpy.mockRestore();
   });
 });

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffc780
+position_ordinal: ffffffffffffffffa580
 title: Migrate SkillResolver to use VirtualFileSystem
 ---
 SkillResolver in `swissarmyhammer-skills/src/skill_resolver.rs` hand-rolls the builtin→local→user file stacking pattern instead of using the shared `VirtualFileSystem` from `swissarmyhammer-directory/src/file_loader.rs`.

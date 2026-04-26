@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff9f80
+position_ordinal: ffffffffffffffffffffffffffb580
 title: Remove redundant "Clear" button from GroupSelector — "None" is sufficient
 ---
 ## What

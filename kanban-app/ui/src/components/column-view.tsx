@@ -1,34 +1,47 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+import { invoke } from "@tauri-apps/api/core";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useParentZoneKey } from "@/components/focus-zone";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
-import {
-  useEntityFocus,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { useFocusActions } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
+import {
+  asMoniker,
+  asPixels,
+  asSpatialKey,
+  type LayerKey,
+  type SpatialKey,
+} from "@/types/spatial";
 
 /**
  * Props for {@link ColumnView} — one column in the kanban board.
  *
- * Carries the column entity and its pre-sorted tasks plus the navigation
- * monikers of neighboring columns so the column can compute focus-claim
- * predicates for keyboard nav (up/down within the column, left/right across
- * columns, first/last at board edges). Drag/drop callbacks are optional and
- * wired by the parent board to route drops back through the command layer.
+ * Carries the column entity and its pre-sorted tasks plus the drag/drop
+ * callbacks the parent board uses to route drops through the command layer.
+ *
+ * Cross-column keyboard navigation now lives in the spatial-nav layer: each
+ * column body wraps in a `<FocusScope kind="zone">` (parent zone =
+ * `ui:board`), the column header is a leaf inside that zone, and each task
+ * card is its own `<FocusScope kind="zone">` parented at the column. The
+ * spatial graph computes nav.up / nav.down / nav.left / nav.right from the
+ * registered rectangles, so the legacy neighbor-moniker plumbing and the
+ * pull-based claim-predicate threading that used to live here are gone —
+ * the column receives only structural / drag-drop wiring now.
  */
 interface ColumnViewProps {
   column: Entity;
@@ -45,31 +58,6 @@ interface ColumnViewProps {
   dragTaskId?: string | null;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
-  /**
-   * Task monikers in the column to the left (in order), or empty array.
-   * Used to compute nav.right claimWhen predicates for cross-column navigation.
-   */
-  leftColumnTaskMonikers?: string[];
-  /** Column header moniker for the column to the left, or null. */
-  leftColumnHeaderMoniker?: string | null;
-  /**
-   * Task monikers in the column to the right (in order), or empty array.
-   * Used to compute nav.left claimWhen predicates for cross-column navigation.
-   */
-  rightColumnTaskMonikers?: string[];
-  /** Column header moniker for the column to the right, or null. */
-  rightColumnHeaderMoniker?: string | null;
-  /**
-   * All task monikers on the board, across all columns.
-   * Used for nav.first/nav.last predicates (any board card focused -> claim).
-   */
-  allBoardTaskMonikers?: Set<string>;
-  /** All column header monikers on the board. Used for nav.first/nav.last. */
-  allBoardHeaderMonikers?: Set<string>;
-  /** Whether this column contains the overall first card on the board. */
-  isFirstColumn?: boolean;
-  /** Whether this column contains the overall last card on the board. */
-  isLastColumn?: boolean;
 }
 
 /** Distance from container edge (px) that triggers auto-scroll during drag. */
@@ -82,167 +70,6 @@ const ESTIMATED_ITEM_HEIGHT = 80;
 const TRAILING_ZONE_HEIGHT = 6;
 /** Minimum task count to activate virtualization. Below this, all items render directly. */
 const VIRTUALIZE_THRESHOLD = 25;
-
-// ---------------------------------------------------------------------------
-// Navigation predicate hooks — extracted from ColumnView to keep it focused
-// ---------------------------------------------------------------------------
-
-/** Params for the header navigation predicate hook. */
-interface HeaderClaimParams {
-  taskMonikers: string[];
-  rightColumnHeaderMoniker: string | null;
-  leftColumnHeaderMoniker: string | null;
-  rightColumnTaskMonikers: string[];
-  leftColumnTaskMonikers: string[];
-  taskCount: number;
-  isFirstColumn: boolean;
-  isLastColumn: boolean;
-  columnNameMoniker: string;
-  isBoardElement: (f: string | null) => boolean;
-}
-
-/**
- * Compute claimWhen predicates for the column name field FocusScope.
- *
- * These predicates tell broadcastNavCommand when this header should claim
- * focus: nav.up from the first card, nav.left/right from adjacent headers,
- * cross-column nav into empty columns, and nav.first/last at board edges.
- */
-function useHeaderClaimPredicates(p: HeaderClaimParams): ClaimPredicate[] {
-  return useMemo<ClaimPredicate[]>(() => {
-    const predicates: ClaimPredicate[] = [];
-
-    if (p.taskMonikers.length > 0) {
-      const firstCard = p.taskMonikers[0];
-      predicates.push({ command: "nav.up", when: (f) => f === firstCard });
-    }
-    if (p.rightColumnHeaderMoniker) {
-      predicates.push({
-        command: "nav.left",
-        when: (f) => f === p.rightColumnHeaderMoniker,
-      });
-    }
-    if (p.leftColumnHeaderMoniker) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === p.leftColumnHeaderMoniker,
-      });
-    }
-    if (p.taskCount === 0) {
-      for (const m of p.rightColumnTaskMonikers) {
-        predicates.push({ command: "nav.left", when: (f) => f === m });
-      }
-      for (const m of p.leftColumnTaskMonikers) {
-        predicates.push({ command: "nav.right", when: (f) => f === m });
-      }
-    }
-    if (p.isFirstColumn && p.taskCount === 0) {
-      predicates.push({
-        command: "nav.first",
-        when: (f) => p.isBoardElement(f) && f !== p.columnNameMoniker,
-      });
-    }
-    if (p.isLastColumn && p.taskCount === 0) {
-      predicates.push({
-        command: "nav.last",
-        when: (f) => p.isBoardElement(f) && f !== p.columnNameMoniker,
-      });
-    }
-    return predicates;
-  }, [p]);
-}
-
-/** Params for the per-card navigation predicate hook. */
-interface CardClaimParams {
-  taskMonikers: string[];
-  columnMoniker: string;
-  columnNameMoniker: string;
-  rightColumnTaskMonikers: string[];
-  leftColumnTaskMonikers: string[];
-  isFirstColumn: boolean;
-  isLastColumn: boolean;
-  isBoardElement: (f: string | null) => boolean;
-}
-
-/**
- * Compute claimWhen predicates for each card in the column, indexed by position.
- *
- * Each card declares when it should claim focus for nav.up/down (within column),
- * nav.left/right (cross-column with clamped index), and nav.first/last (board edges).
- */
-function verticalNavPredicates(
-  i: number,
-  p: CardClaimParams,
-): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (i === 0) {
-    out.push({
-      command: "nav.down",
-      when: (f) => f === p.columnNameMoniker || f === p.columnMoniker,
-    });
-  } else {
-    const prev = p.taskMonikers[i - 1];
-    out.push({ command: "nav.down", when: (f) => f === prev });
-  }
-  if (i < p.taskMonikers.length - 1) {
-    const next = p.taskMonikers[i + 1];
-    out.push({ command: "nav.up", when: (f) => f === next });
-  }
-  return out;
-}
-
-function horizontalNavPredicates(
-  i: number,
-  p: CardClaimParams,
-): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  for (let ri = 0; ri < p.rightColumnTaskMonikers.length; ri++) {
-    const rightMoniker = p.rightColumnTaskMonikers[ri];
-    if (Math.min(ri, p.taskMonikers.length - 1) === i) {
-      out.push({ command: "nav.left", when: (f) => f === rightMoniker });
-    }
-  }
-  for (let li = 0; li < p.leftColumnTaskMonikers.length; li++) {
-    const leftMoniker = p.leftColumnTaskMonikers[li];
-    if (Math.min(li, p.taskMonikers.length - 1) === i) {
-      out.push({ command: "nav.right", when: (f) => f === leftMoniker });
-    }
-  }
-  return out;
-}
-
-function edgeNavPredicates(i: number, p: CardClaimParams): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (p.isFirstColumn && i === 0) {
-    out.push({
-      command: "nav.first",
-      when: (f) => p.isBoardElement(f) && f !== p.taskMonikers[0],
-    });
-  }
-  if (p.isLastColumn && i === p.taskMonikers.length - 1) {
-    out.push({
-      command: "nav.last",
-      when: (f) =>
-        p.isBoardElement(f) && f !== p.taskMonikers[p.taskMonikers.length - 1],
-    });
-  }
-  return out;
-}
-
-function buildCardPredicates(i: number, p: CardClaimParams): ClaimPredicate[] {
-  return [
-    ...verticalNavPredicates(i, p),
-    ...horizontalNavPredicates(i, p),
-    ...edgeNavPredicates(i, p),
-  ];
-}
-
-function useCardClaimPredicates(p: CardClaimParams): ClaimPredicate[][] {
-  return useMemo<ClaimPredicate[][]>(
-    () => p.taskMonikers.map((_, i) => buildCardPredicates(i, p)),
-    [p],
-  );
-}
 
 // ---------------------------------------------------------------------------
 // useColumnDragScroll — auto-scroll + drag-over handler for a column
@@ -331,39 +158,25 @@ function useColumnDragScroll(
 }
 
 // ---------------------------------------------------------------------------
-// useColumnLayout — zones, monikers, and navigation predicates
+// useColumnLayout — drop zones for one column
 // ---------------------------------------------------------------------------
 
 /** Derived layout data used by ColumnView's render. */
 interface ColumnLayout {
   zones: DropZoneDescriptor[];
-  nameFieldClaimWhen: ClaimPredicate[];
-  cardClaimPredicates: ClaimPredicate[][];
 }
 
-function useIsBoardElement(
-  allBoardTaskMonikers: Set<string> | undefined,
-  allBoardHeaderMonikers: Set<string> | undefined,
-): (f: string | null) => boolean {
-  return useCallback(
-    (f: string | null): boolean => {
-      if (!f) return false;
-      return !!(allBoardTaskMonikers?.has(f) || allBoardHeaderMonikers?.has(f));
-    },
-    [allBoardTaskMonikers, allBoardHeaderMonikers],
-  );
-}
-
-/** Compute drop zones and navigation predicates for one column. */
+/**
+ * Compute the drop-zone descriptor list for one column.
+ *
+ * Returns one descriptor per insertion point: a "before" zone for each task
+ * plus a trailing "after" zone (or a single "empty" zone when the column has
+ * no tasks). The keyboard-nav claim predicates that used to live here are
+ * gone — the spatial-nav layer derives those from the registered zone /
+ * focusable rectangles instead.
+ */
 function useColumnLayout(props: ColumnViewProps): ColumnLayout {
   const { column, tasks } = props;
-  const leftColumnTaskMonikers = props.leftColumnTaskMonikers ?? [];
-  const rightColumnTaskMonikers = props.rightColumnTaskMonikers ?? [];
-  const isFirstColumn = props.isFirstColumn ?? false;
-  const isLastColumn = props.isLastColumn ?? false;
-  const columnMoniker = column.moniker;
-  const columnNameMoniker = `${columnMoniker}.name`;
-
   const zones = useMemo(
     () =>
       computeDropZones(
@@ -372,37 +185,301 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
       ),
     [tasks, column.id],
   );
-  const taskMonikers = useMemo(() => tasks.map((t) => t.moniker), [tasks]);
-  const isBoardElement = useIsBoardElement(
-    props.allBoardTaskMonikers,
-    props.allBoardHeaderMonikers,
-  );
+  return { zones };
+}
 
-  const nameFieldClaimWhen = useHeaderClaimPredicates({
-    taskMonikers,
-    rightColumnHeaderMoniker: props.rightColumnHeaderMoniker ?? null,
-    leftColumnHeaderMoniker: props.leftColumnHeaderMoniker ?? null,
-    rightColumnTaskMonikers,
-    leftColumnTaskMonikers,
-    taskCount: tasks.length,
-    isFirstColumn,
-    isLastColumn,
-    columnNameMoniker,
-    isBoardElement,
-  });
+// ---------------------------------------------------------------------------
+// useStableSpatialKeys — stable per-task SpatialKey for virtualizer placeholders
+// ---------------------------------------------------------------------------
 
-  const cardClaimPredicates = useCardClaimPredicates({
-    taskMonikers,
-    columnMoniker,
-    columnNameMoniker,
-    rightColumnTaskMonikers,
-    leftColumnTaskMonikers,
-    isFirstColumn,
-    isLastColumn,
-    isBoardElement,
-  });
+/**
+ * Mint and reuse a stable [`SpatialKey`] per task ID for the lifetime of the
+ * column.
+ *
+ * The virtualized column registers two flavours of spatial scope per task:
+ *   - The real-mounted `EntityCard` (when the task is in the visible window)
+ *     mints its own `SpatialKey` inside `<FocusZone>`.
+ *   - The off-screen placeholder (registered via `spatial_register_batch`)
+ *     uses a stable per-id key from this map so re-registers across
+ *     scroll-window changes are idempotent — the kernel's `apply_batch`
+ *     overwrites the rect for an existing key without disturbing
+ *     `last_focused`.
+ *
+ * Stale entries (tasks that have since been removed from the column) are
+ * pruned so the map cannot grow without bound across long-lived columns.
+ * Returns the live map by reference; callers should not mutate it.
+ *
+ * **Commit-order caveat for callers.** Because `useStableSpatialKeys` is
+ * declared first in `VirtualColumn`, its prune effect runs *before* any
+ * later effect (e.g. `usePlaceholderRegistration`'s) in the same commit
+ * pass. A consumer that needs the deleted-task key during cleanup must
+ * keep its own copy of the keys it has registered against — the live
+ * map will already have forgotten them by the time the consumer's effect
+ * runs.
+ */
+function useStableSpatialKeys(tasks: Entity[]): Map<string, SpatialKey> {
+  const mapRef = useRef<Map<string, SpatialKey>>(new Map());
+  const map = mapRef.current;
 
-  return { zones, nameFieldClaimWhen, cardClaimPredicates };
+  // Mint missing keys. Done in render — `crypto.randomUUID()` is sync and
+  // safe; we only insert when absent so identity is stable across renders.
+  for (const task of tasks) {
+    if (!map.has(task.id)) {
+      map.set(task.id, asSpatialKey(crypto.randomUUID()));
+    }
+  }
+
+  // Prune entries whose tasks no longer exist (post-render to avoid
+  // mid-render mutation surprises).
+  useEffect(() => {
+    const live = new Set(tasks.map((t) => t.id));
+    for (const id of Array.from(map.keys())) {
+      if (!live.has(id)) map.delete(id);
+    }
+    // Including `tasks` in the dep list keeps the prune in sync with the
+    // task list. The map ref itself never changes identity, so we don't
+    // include it in the deps.
+  }, [tasks, map]);
+
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// useVisibleIndexSet — Set of indices currently in the virtualizer's window
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the set of task indices currently in the virtualizer's visible
+ * window.
+ *
+ * Excludes the trailing-zone pseudo-index (`vi.index === taskCount`) so the
+ * placeholder hook only sees real-task indices. The returned set is
+ * recomputed when the virtualizer's range changes — `getVirtualItems()` is
+ * stable across re-renders that don't shift the window, so the dependent
+ * `useEffect` in `usePlaceholderRegistration` only fires on real
+ * scroll-window changes.
+ */
+function useVisibleIndexSet<T extends Element>(
+  virtualizer: Virtualizer<T, Element>,
+  taskCount: number,
+): Set<number> {
+  const items = virtualizer.getVirtualItems();
+  return useMemo(() => {
+    const set = new Set<number>();
+    for (const vi of items) {
+      if (vi.index < taskCount) set.add(vi.index);
+    }
+    return set;
+    // `items` identity is stable across renders that don't change the
+    // window, which is exactly the cache-key we want.
+  }, [items, taskCount]);
+}
+
+// ---------------------------------------------------------------------------
+// usePlaceholderRegistration — register Vec<RegisterEntry> for off-screen rows
+// ---------------------------------------------------------------------------
+
+/** Inputs for `usePlaceholderRegistration`. */
+interface PlaceholderRegistrationInputs {
+  tasks: Entity[];
+  stableKeys: Map<string, SpatialKey>;
+  /** Set of indices currently in the virtualizer's visible window. */
+  visibleIndices: Set<number>;
+  /** Layer this column lives in, or `null` outside the spatial-nav stack. */
+  layerKey: LayerKey | null;
+  /** Enclosing zone (the column's own zone), or `null` when the column is
+   *  at the layer root. */
+  parentZone: SpatialKey | null;
+  /** The scrollable container — used to derive a sensible placeholder rect. */
+  scrollEl: HTMLDivElement | null;
+  /**
+   * Current scroll offset reported by the virtualizer. Subtracted from
+   * placeholder y-coordinates so placeholder rects share the viewport
+   * coordinate frame that real-mounted card rects use (their rects come
+   * from `getBoundingClientRect()`, which is viewport-relative). Without
+   * this, an above-viewport placeholder would land at the visible top
+   * edge while a real card on the same content row also sits there —
+   * beam search would see overlapping rects in completely different
+   * "rows" and pick wrong candidates.
+   *
+   * `null` when the virtualizer hasn't observed an offset yet (first
+   * render before the scroll observer fires). Treated as `0`.
+   */
+  scrollOffset: number | null;
+}
+
+/**
+ * Wire-shape companion to the Rust `RegisterEntry::Zone` enum variant.
+ *
+ * Mirrors the kernel-side `#[serde(tag = "kind", rename_all = "snake_case")]`
+ * discriminator. Task placeholders register as `Zone` (matching the kind that
+ * `EntityCard` uses for its own `<FocusScope kind="zone">`) so kind-stability
+ * holds when the real mount eventually overwrites the placeholder.
+ */
+interface ZoneRegisterEntry {
+  kind: "zone";
+  key: SpatialKey;
+  moniker: string;
+  rect: { x: number; y: number; width: number; height: number };
+  layer_key: LayerKey;
+  parent_zone: SpatialKey | null;
+  overrides: Record<string, never>;
+}
+
+/**
+ * Register placeholder zones for off-screen tasks via
+ * `spatial_register_batch`, and unregister placeholders for tasks that
+ * have just become visible.
+ *
+ * Why placeholders exist: the virtualizer only mounts cards in the visible
+ * window, so without placeholders the spatial graph has no entries below
+ * (or above) the visible range and `nav.down` past the last visible row
+ * dead-ends. Placeholders give the navigator candidate rectangles for
+ * every task — when nav lands on a placeholder the column scrolls to
+ * bring the real card into view (caller responsibility — that wiring sits
+ * outside this hook).
+ *
+ * Idempotency: the kernel's `apply_batch` is idempotent on `SpatialKey` —
+ * re-registering an existing key overwrites its rect and preserves any
+ * `last_focused` slot. Re-running this hook on every scroll is therefore
+ * cheap; the only real work is the IPC round-trip.
+ *
+ * Parallel-safety: when the spatial-nav stack is absent (`layerKey ===
+ * null`, e.g. a unit test that does not mount `<SpatialFocusProvider>`),
+ * the hook is a no-op so column-view renders without crashing in those
+ * tests.
+ */
+function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
+  const {
+    tasks,
+    stableKeys,
+    visibleIndices,
+    layerKey,
+    parentZone,
+    scrollEl,
+    scrollOffset,
+  } = inputs;
+  const spatial = useOptionalSpatialFocusActions();
+
+  // Track each registered placeholder as `(taskId → SpatialKey)` so the
+  // unregister path is self-contained: it does NOT depend on the live
+  // `stableKeys` map having an entry for the id. That decoupling is
+  // load-bearing — `useStableSpatialKeys`'s prune effect runs first in
+  // commit order (declared earlier in the parent component), so by the
+  // time this hook's effect runs after a task has been deleted the
+  // `stableKeys` map has already forgotten the deleted task's key. The
+  // map ref remembers it so we can still unregister.
+  const registeredRef = useRef<Map<string, SpatialKey>>(new Map());
+
+  useEffect(() => {
+    // Outside the spatial-nav stack — nothing to register against. Bail
+    // out early; the tests that mount column-view without a provider hit
+    // this path and stay quiet.
+    if (!spatial || !layerKey) return;
+
+    // Build the placeholder set for the current off-screen tasks, plus
+    // the wire-format batch entries to ship across the IPC boundary.
+    const wantPlaceholder = new Map<string, SpatialKey>();
+    const offScreen: ZoneRegisterEntry[] = [];
+
+    // Skip entirely when we don't have a real scroll element to anchor
+    // off — the next render will refire this effect once the ref
+    // attaches. Using a fake fallback rect would mislead beam search
+    // (real-mounted cards use viewport-relative rects from
+    // `getBoundingClientRect()`, so a fabricated one risks colliding).
+    const rect = scrollEl?.getBoundingClientRect();
+    if (rect) {
+      const baseX = rect.x;
+      const baseY = rect.y;
+      const width = rect.width;
+      // `scrollOffset` is the virtualizer's content-y of the visible
+      // top edge. Real cards' rects come from `getBoundingClientRect()`
+      // which is viewport-relative — they live at viewport-y `baseY +
+      // (item.start - scrollOffset)`. Mirror that for placeholders so
+      // both systems share one coordinate frame: `baseY + i * H -
+      // scrollOffset`. Without this subtraction, an above-viewport
+      // placeholder would land at `baseY` (the visible top edge) while
+      // a real card on row 50 also sits near `baseY` — beam search
+      // would see overlapping rects in completely different "rows".
+      const offset = scrollOffset ?? 0;
+
+      for (let i = 0; i < tasks.length; i++) {
+        if (visibleIndices.has(i)) continue;
+        const task = tasks[i];
+        const key = stableKeys.get(task.id);
+        if (!key) continue;
+        wantPlaceholder.set(task.id, key);
+        offScreen.push({
+          kind: "zone",
+          key,
+          moniker: task.moniker,
+          rect: {
+            x: asPixels(baseX),
+            y: asPixels(baseY + i * ESTIMATED_ITEM_HEIGHT - offset),
+            width: asPixels(width),
+            height: asPixels(ESTIMATED_ITEM_HEIGHT),
+          },
+          layer_key: layerKey,
+          parent_zone: parentZone,
+          overrides: {},
+        });
+      }
+    }
+
+    // Unregister placeholders that should no longer exist — IDs that
+    // either became visible (real card now owns the moniker) or left
+    // the task list. Done before the batch register so the kernel sees
+    // the unregisters first if the same key is being recycled.
+    //
+    // The unregister key comes from `registeredRef`, NOT from the live
+    // `stableKeys` map: the parent component's `useStableSpatialKeys`
+    // effect prunes deleted-task keys *before* this effect runs (it is
+    // declared earlier in commit order), so a `stableKeys.get(id)`
+    // lookup here would silently miss the deleted task and leak its
+    // placeholder.
+    const previouslyRegistered = registeredRef.current;
+    for (const [id, key] of previouslyRegistered) {
+      if (wantPlaceholder.has(id)) continue;
+      spatial.unregisterScope(key).catch((err) => {
+        console.error("[column-view] placeholder unregister failed", err);
+      });
+    }
+
+    // Register / refresh placeholders for the current off-screen set.
+    // Sent as one IPC round-trip so twenty placeholders collapse into a
+    // single registry lock.
+    if (offScreen.length > 0) {
+      invoke("spatial_register_batch", { entries: offScreen }).catch((err) => {
+        console.error("[column-view] placeholder batch register failed", err);
+      });
+    }
+
+    registeredRef.current = wantPlaceholder;
+  }, [
+    tasks,
+    stableKeys,
+    visibleIndices,
+    layerKey,
+    parentZone,
+    scrollEl,
+    scrollOffset,
+    spatial,
+  ]);
+
+  // Unregister every live placeholder when the column unmounts so a torn
+  // column does not leak stale entries into the registry.
+  useEffect(() => {
+    const registered = registeredRef;
+    return () => {
+      if (!spatial) return;
+      for (const [, key] of registered.current) {
+        spatial.unregisterScope(key).catch((err) => {
+          console.error("[column-view] placeholder cleanup failed", err);
+        });
+      }
+      registered.current.clear();
+    };
+  }, [spatial]);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +502,16 @@ interface ColumnBodyProps {
   setFocus: (moniker: string) => void;
 }
 
+/**
+ * Renders the column header and the virtualized card list as siblings.
+ *
+ * The flex chain (`flex flex-col` parent + `flex-1 overflow-y-auto` on the
+ * scroll container) is established by the outer `<FocusScope kind="zone">`
+ * directly — its `className` lands on the spatial primitive's root and
+ * children render as direct layout children. ColumnBody therefore returns
+ * a `<>` fragment so its children participate in that flex chain without
+ * an intermediate div.
+ */
 function ColumnBody({
   props,
   columnMoniker,
@@ -450,12 +537,11 @@ function ColumnBody({
     [props],
   );
   return (
-    <div className="flex flex-col min-h-0 min-w-0 flex-1">
+    <>
       <ColumnHeader
         column={column}
         columnMoniker={columnMoniker}
         columnNameMoniker={columnNameMoniker}
-        nameFieldClaimWhen={layout.nameFieldClaimWhen}
         nameFieldDef={nameFieldDef}
         editingName={editingName}
         setEditingName={setEditingName}
@@ -470,11 +556,10 @@ function ColumnBody({
         onZoneDrop={handleZoneDrop}
         onTaskDragStart={onTaskDragStart}
         onTaskDragEnd={onTaskDragEnd}
-        cardClaimPredicates={layout.cardClaimPredicates}
         containerRef={dragScroll.setContainerRef}
         onDragOver={dragScroll.handleDragOver}
       />
-    </div>
+    </>
   );
 }
 
@@ -485,16 +570,23 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
-  const { setFocus } = useEntityFocus();
-  const commands = useEntityCommands("column", column.id, column);
+  const { setFocus } = useFocusActions();
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 
+  // FocusScope's `className` lands on its outer primitive `<div>` and the
+  // primitive renders children as direct layout children — the `flex flex-col`
+  // chain established here propagates straight into ColumnHeader (header at
+  // top) and VirtualizedCardList (`flex-1 overflow-y-auto` fills the rest).
+  // `flex-1 min-h-0` participates in the SortableColumn parent's flex chain
+  // so the column takes its share of the board's width and gets a bounded
+  // scroll height for `useVirtualizer`'s windowing.
   return (
     <FocusScope
-      moniker={columnMoniker}
-      commands={commands}
-      className="flex flex-col min-h-0 min-w-[24em] max-w-[48em] flex-1 shrink-0"
+      moniker={asMoniker(columnMoniker)}
+      kind="zone"
+      showFocusBar={false}
+      className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
     >
       <ColumnBody
         props={props}
@@ -519,7 +611,6 @@ interface ColumnHeaderProps {
   column: Entity;
   columnMoniker: string;
   columnNameMoniker: string;
-  nameFieldClaimWhen: ClaimPredicate[];
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
@@ -567,7 +658,6 @@ function ColumnHeader({
   column,
   columnMoniker,
   columnNameMoniker,
-  nameFieldClaimWhen,
   nameFieldDef,
   editingName,
   setEditingName,
@@ -577,15 +667,10 @@ function ColumnHeader({
 }: ColumnHeaderProps) {
   return (
     <div
-      className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
+      className="px-3 py-2 flex items-center gap-2 rounded"
       onClickCapture={() => setFocus(columnNameMoniker)}
     >
-      <FocusScope
-        moniker={columnNameMoniker}
-        commands={[]}
-        claimWhen={nameFieldClaimWhen}
-        className="inline"
-      >
+      <FocusScope moniker={asMoniker(columnNameMoniker)} className="inline">
         <ColumnNameField
           column={column}
           nameFieldDef={nameFieldDef}
@@ -653,7 +738,6 @@ interface VirtualizedCardListProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   containerRef: (el: HTMLDivElement | null) => void;
   onDragOver: (e: React.DragEvent) => void;
 }
@@ -725,7 +809,6 @@ function SmallCardList({
   onZoneDrop,
   onTaskDragStart,
   onTaskDragEnd,
-  cardClaimPredicates,
   onDragOver,
   setRef,
 }: VirtualizedCardListProps & { setRef: (el: HTMLDivElement | null) => void }) {
@@ -743,7 +826,6 @@ function SmallCardList({
               entity={entity}
               onDragStart={onTaskDragStart}
               onDragEnd={onTaskDragEnd}
-              claimWhen={cardClaimPredicates[i]}
             />
           </div>
         </div>
@@ -764,7 +846,6 @@ interface VirtualColumnProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   scrollRef: React.RefObject<HTMLDivElement | null>;
   setRef: (el: HTMLDivElement | null) => void;
   containerClass: string;
@@ -790,7 +871,6 @@ interface VirtualRowProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  cardClaimPredicates: ClaimPredicate[][];
   measureElement: (node: HTMLElement | null) => void;
 }
 
@@ -830,7 +910,6 @@ function VirtualRow(props: VirtualRowProps): React.ReactElement {
           entity={entity}
           onDragStart={props.onTaskDragStart}
           onDragEnd={props.onTaskDragEnd}
-          claimWhen={props.cardClaimPredicates[vr.index]}
         />
       </div>
     </div>
@@ -846,6 +925,31 @@ function VirtualColumn(props: VirtualColumnProps) {
     estimateSize: (i) =>
       i < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT,
     overscan: 5,
+  });
+
+  // Spatial-nav placeholder wiring. Off-screen rows have no mounted
+  // primitives, so without placeholders the spatial graph dead-ends at the
+  // visible window. `useStableSpatialKeys` mints a stable key per task so
+  // the kernel's idempotent re-register path can refresh placeholder rects
+  // across scroll without losing drill-out memory; `usePlaceholderRegistration`
+  // ships the off-screen entries through `spatial_register_batch`.
+  //
+  // Hooks live deep inside the column body (here, not on `<ColumnView>`)
+  // so they sit alongside the virtualizer they depend on — keeping the
+  // outer `<FocusScope>` wrap untouched (the FocusScope wrap was rewritten
+  // when `FocusScopeBody` was removed).
+  const stableKeys = useStableSpatialKeys(tasks);
+  const layerKey = useOptionalLayerKey();
+  const parentZone = useParentZoneKey();
+  const visibleIndices = useVisibleIndexSet(virtualizer, tasks.length);
+  usePlaceholderRegistration({
+    tasks,
+    stableKeys,
+    visibleIndices,
+    layerKey,
+    parentZone,
+    scrollEl: scrollRef.current,
+    scrollOffset: virtualizer.scrollOffset,
   });
 
   return (
@@ -869,7 +973,6 @@ function VirtualColumn(props: VirtualColumnProps) {
             onZoneDrop={props.onZoneDrop}
             onTaskDragStart={props.onTaskDragStart}
             onTaskDragEnd={props.onTaskDragEnd}
-            cardClaimPredicates={props.cardClaimPredicates}
             measureElement={virtualizer.measureElement}
           />
         ))}

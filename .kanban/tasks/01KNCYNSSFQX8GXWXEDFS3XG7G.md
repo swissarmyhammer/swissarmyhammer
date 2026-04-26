@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff180
+position_ordinal: ffffffffffffffffffffffffdc80
 title: Fix file.closeBoard — close current window, only remove board if last viewer
 ---
 ## What

@@ -51,6 +51,35 @@ function makeSession(overrides: Partial<DragSession> = {}): DragSession {
     task_id: "task-1",
     task_fields: { title: "Test task" },
     copy_mode: false,
+    from: {
+      kind: "focus_chain",
+      entity_type: "task",
+      entity_id: "task-1",
+      fields: { title: "Test task" },
+      source_board_path: "/board/a/.kanban",
+      source_window_label: "main",
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * File-source session payload. External file drags leave the legacy
+ * flat task fields empty; the `from.kind === "file"` envelope is the
+ * authoritative source of truth for file drops.
+ */
+function makeFileSession(overrides: Partial<DragSession> = {}): DragSession {
+  return {
+    session_id: "file-sess-1",
+    source_board_path: "",
+    source_window_label: "main",
+    task_id: "",
+    task_fields: {},
+    copy_mode: false,
+    from: {
+      kind: "file",
+      path: "/tmp/dropped.png",
+    },
     ...overrides,
   };
 }
@@ -206,6 +235,111 @@ describe("DragSessionProvider", () => {
         afterId: null,
         copyMode: false,
       },
+      scopeChain: [],
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // File-source drag (card 01KPNGPRBQACX5ZPZEX414Z68R): external OS file
+  // dragged into the app is "paste by another name" — the session's
+  // `from.kind === "file"` envelope is the authoritative shape.
+  // ---------------------------------------------------------------------
+
+  it("exposes from.kind: 'file' on a file-source drag-session-active event", () => {
+    const { result } = renderHook(() => useDragSession(), { wrapper });
+    const fileSession = makeFileSession({
+      from: { kind: "file", path: "/tmp/example/screenshot.png" },
+    });
+
+    act(() => emitEvent("drag-session-active", fileSession));
+
+    const session = result.current.session;
+    expect(session).not.toBeNull();
+    // Narrow on the discriminant before asserting variant fields.
+    if (session?.from.kind !== "file") {
+      throw new Error("expected from.kind === 'file'");
+    }
+    expect(session.from.path).toBe("/tmp/example/screenshot.png");
+    // Legacy flat focus-chain fields are empty for file drags.
+    expect(session.task_id).toBe("");
+    expect(session.source_board_path).toBe("");
+  });
+
+  it("preserves from.kind: 'focus_chain' on a task drag-session-active event", () => {
+    const { result } = renderHook(() => useDragSession(), { wrapper });
+    const taskSession = makeSession();
+
+    act(() => emitEvent("drag-session-active", taskSession));
+
+    const session = result.current.session;
+    expect(session).not.toBeNull();
+    if (session?.from.kind !== "focus_chain") {
+      throw new Error("expected from.kind === 'focus_chain'");
+    }
+    expect(session.from.entity_type).toBe("task");
+    expect(session.from.entity_id).toBe("task-1");
+    expect(session.from.source_board_path).toBe("/board/a/.kanban");
+  });
+
+  it("startFileSession invokes dispatch_command drag.start with sourceKind=file", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { DragStart: { session_id: "file-sess" } },
+      undoable: false,
+    });
+    const { result } = renderHook(() => useDragSession(), { wrapper });
+
+    await act(async () => {
+      await result.current.startFileSession("/tmp/dropped.png");
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.start",
+      args: {
+        sourceKind: "file",
+        filePath: "/tmp/dropped.png",
+        sourceWindowLabel: "main",
+        copyMode: false,
+      },
+      scopeChain: [],
+    });
+  });
+
+  it("startFileSession forwards copyMode when provided", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { DragStart: { session_id: "file-sess-2" } },
+      undoable: false,
+    });
+    const { result } = renderHook(() => useDragSession(), { wrapper });
+
+    await act(async () => {
+      await result.current.startFileSession("/tmp/alt.png", true);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.start",
+      args: {
+        sourceKind: "file",
+        filePath: "/tmp/alt.png",
+        sourceWindowLabel: "main",
+        copyMode: true,
+      },
+      scopeChain: [],
+    });
+  });
+
+  it("completeFileSession dispatches drag.complete with target moniker and no column args", async () => {
+    mockInvoke.mockResolvedValue({ result: {} });
+    const { result } = renderHook(() => useDragSession(), { wrapper });
+
+    await act(async () => {
+      await result.current.completeFileSession("task:01ABC");
+    });
+
+    // File drags don't carry a targetColumn — the drop destination is
+    // the entity moniker itself, read from `target` by DragCompleteCmd.
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.complete",
+      target: "task:01ABC",
       scopeChain: [],
     });
   });

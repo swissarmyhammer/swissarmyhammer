@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff8980
+position_ordinal: ffffffffffffd780
 title: 'field-renderer: delete — replaced by Field'
 ---
 ## What

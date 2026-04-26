@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: bc80
+position_ordinal: c380
 title: 'SHELL-1: Create ShellConfig DirectoryConfig and builtin/shell/config.yaml'
 ---
 ## What

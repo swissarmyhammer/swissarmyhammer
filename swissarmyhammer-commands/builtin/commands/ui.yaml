@@ -1,9 +1,11 @@
 - id: ui.inspect
-  name: Inspect
-  visible: false
+  name: "Inspect {{entity.type}}"
+  context_menu: true
+  context_menu_group: 3
+  context_menu_order: 0
   params:
     - name: moniker
-      from: args
+      from: target
 
 - id: ui.inspector.close
   name: Close Inspector
@@ -27,20 +29,7 @@
   name: Close Palette
   visible: false
 
-- id: ui.view.set
-  name: Switch View
-  params:
-    - name: view_id
-      from: args
-
-- id: ui.perspective.set
-  name: Switch Perspective
-  visible: false
-  params:
-    - name: perspective_id
-      from: args
-
-- id: ui.perspective.startRename
+- id: ui.entity.startRename
   name: Rename Perspective
 
 - id: ui.mode.set

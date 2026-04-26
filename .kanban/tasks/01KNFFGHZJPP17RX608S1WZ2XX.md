@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFFCTKZ276HWZ3Z9HWNB70C
 position_column: done
-position_ordinal: ffffffffffffffffffffab80
+position_ordinal: ffffffffffffffffffffffffffc780
 title: Populate entity YAML files with all entity-scoped commands from command YAML
 ---
 ## What

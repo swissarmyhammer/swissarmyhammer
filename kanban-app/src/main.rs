@@ -73,6 +73,17 @@ fn run_app(app_state: AppState) {
             commands::get_undo_state,
             commands::create_window,
             commands::save_dropped_file,
+            commands::spatial_register_focusable,
+            commands::spatial_register_zone,
+            commands::spatial_register_batch,
+            commands::spatial_unregister_scope,
+            commands::spatial_update_rect,
+            commands::spatial_focus,
+            commands::spatial_navigate,
+            commands::spatial_push_layer,
+            commands::spatial_pop_layer,
+            commands::spatial_drill_in,
+            commands::spatial_drill_out,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)

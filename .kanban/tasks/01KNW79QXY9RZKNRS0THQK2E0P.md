@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNW77BBFV75MK5PEW86938TQ
 position_column: done
-position_ordinal: ffffffffffffffffffffffb480
+position_ordinal: ffffffffffffffffffffffffffffff80
 project: expr-filter
 title: 'filter-expr: delete defensive dead branch in parse()'
 ---

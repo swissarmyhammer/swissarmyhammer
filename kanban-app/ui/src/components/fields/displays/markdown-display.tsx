@@ -7,6 +7,7 @@ import {
   createMarkdownCheckboxPlugin,
   checkboxToggleFacet,
 } from "@/lib/cm-markdown-checkbox";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { DisplayProps } from "./text-display";
 
 /** Matches a markdown task-list checkbox: `- [ ]`, `- [x]`, or `- [X]`. */
@@ -51,16 +52,17 @@ export function MarkdownDisplay({
 }: MarkdownDisplayProps) {
   const text = typeof value === "string" ? value : "";
 
-  if (!text) {
-    return mode === "compact" ? (
+  if (mode === "compact") {
+    const inner = !text ? (
       <span className="text-muted-foreground/50">-</span>
     ) : (
-      <span className="text-muted-foreground italic">Empty</span>
+      <span className="truncate block">{text}</span>
     );
+    return <CompactCellWrapper>{inner}</CompactCellWrapper>;
   }
 
-  if (mode === "compact") {
-    return <span className="truncate block">{text}</span>;
+  if (!text) {
+    return <span className="text-muted-foreground italic">Empty</span>;
   }
 
   return <MarkdownFull text={text} onCommit={onCommit} />;

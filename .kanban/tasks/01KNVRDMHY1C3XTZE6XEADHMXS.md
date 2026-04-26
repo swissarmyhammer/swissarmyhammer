@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffab80
+position_ordinal: fffffffffffffffffffffffffffff480
 title: 'Fix perspective.goto palette commands: dispatch rewrite missing + duplicate entries'
 ---
 ## What

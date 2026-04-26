@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffec80
+position_ordinal: ffffffffffffffffffffffffd280
 title: 'Fix pre-content cache: persist to disk for cross-process diff computation'
 ---
 ## What

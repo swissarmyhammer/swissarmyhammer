@@ -175,7 +175,6 @@ function useGuardedRefreshEntities(
 ): RefreshEntitiesFn {
   const refetchIdRef = useRef(0);
   const setInflightCount = useSetCommandInflight();
-
   return useCallback(
     async (boardPath: string, taskFilter?: string): Promise<RefreshResult> => {
       activeBoardPathRef.current = boardPath;
@@ -257,6 +256,16 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
 //   entity-removed       → remove from store by id
 //
 // DO NOT add full-state replacement or get_entity re-fetch to field-changed.
+//
+// Architecture contract — event-driven grid:
+// Grid navigation (arrow keys, cell clicks, focus changes that don't touch
+// entity data) must NEVER trigger a backend data-fetch. The grid body
+// stays in sync exclusively through these three event handlers: field
+// cells subscribe via `useFieldValue` (see `entity-store-context.tsx`)
+// and redraw from the store when this code patches an entity in place.
+// On navigation only `ui.setFocus` is dispatched — no `list_entities`,
+// `get_entity`, `get_board_data`, or `perspective.list`. The regression
+// test `grid-view.nav-is-eventdriven.test.tsx` enforces this invariant.
 // ---------------------------------------------------------------------------
 
 /** Deps shared by all entity event handlers. */
@@ -447,7 +456,7 @@ function EngineProviderStack({
   children,
 }: EngineProviderStackProps) {
   return (
-    <CommandScopeProvider commands={[]} moniker="engine">
+    <CommandScopeProvider moniker="engine">
       <RefreshEntitiesContext.Provider value={refreshEntities}>
         <SetEntitiesByTypeContext.Provider value={setEntitiesByType}>
           <EngineActiveBoardPathContext.Provider value={setActiveBoardPath}>

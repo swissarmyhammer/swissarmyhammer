@@ -1,8 +1,18 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use include_dir::{include_dir, Dir};
+
 use crate::context::parse_moniker;
 use crate::types::CommandDef;
+
+/// Builtin command YAML files, embedded at compile time.
+///
+/// Each file in `builtin/commands/` is picked up automatically — adding a new
+/// YAML file requires no Rust changes. The source name is the file stem
+/// (e.g. `app.yaml` → `"app"`), matching the convention used by
+/// `load_yaml_dir` for on-disk overrides.
+static BUILTIN_COMMANDS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
 
 /// Registry of command definitions loaded from YAML sources.
 ///
@@ -175,26 +185,28 @@ fn scope_matches(scope: Option<&str>, scope_chain: &[String]) -> bool {
 }
 
 /// Returns the builtin command YAML sources embedded at compile time.
+///
+/// Enumerates every `*.yaml` file directly under `builtin/commands/` via
+/// `include_dir!` — adding a new builtin command file requires no Rust
+/// changes. The source name is the file stem (e.g. `app.yaml` → `"app"`).
+///
+/// The loader enforces a flat layout: only files whose parent path is the
+/// root of the embedded directory are returned. `include_dir!` walks
+/// recursively, but keys here are basenames only, so a nested
+/// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
+/// `HashMap` insert downstream. Filtering to the root prevents that
+/// class of bug at the loader.
 pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("app", include_str!("../builtin/commands/app.yaml")),
-        ("entity", include_str!("../builtin/commands/entity.yaml")),
-        ("ui", include_str!("../builtin/commands/ui.yaml")),
-        (
-            "settings",
-            include_str!("../builtin/commands/settings.yaml"),
-        ),
-        ("file", include_str!("../builtin/commands/file.yaml")),
-        ("drag", include_str!("../builtin/commands/drag.yaml")),
-        (
-            "perspective",
-            include_str!("../builtin/commands/perspective.yaml"),
-        ),
-        (
-            "attachment",
-            include_str!("../builtin/commands/attachment.yaml"),
-        ),
-    ]
+    BUILTIN_COMMANDS
+        .files()
+        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("yaml"))
+        .filter(|file| file.path().parent() == Some(Path::new("")))
+        .filter_map(|file| {
+            let name = file.path().file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
 }
 
 /// Load YAML files from a directory as `(name, content)` pairs.
@@ -246,34 +258,38 @@ mod tests {
     vim: u
 "#;
 
+    // Synthetic test-fixture YAML. The ids (`foo.add`, `foo.remove`) and entity
+    // types (`widget`, `gadget`) are deliberately generic placeholders — this
+    // crate is consumer-agnostic and must not reference specific domain types
+    // (task, column, tag, etc.) even in its own fixtures.
     const ENTITY_YAML: &str = r#"
-- id: task.add
-  name: New Task
-  scope: "entity:column"
+- id: foo.add
+  name: New Foo
+  scope: "entity:widget"
   undoable: true
   keys:
     cua: Mod+N
     vim: a
   params:
-    - name: column
+    - name: widget
       from: scope_chain
-      entity_type: column
+      entity_type: widget
 
-- id: task.untag
-  name: Remove Tag
-  scope: "entity:tag,entity:task"
+- id: foo.remove
+  name: Remove Foo
+  scope: "entity:widget,entity:gadget"
   undoable: true
   context_menu: true
   keys:
     vim: x
     cua: Delete
   params:
-    - name: tag
+    - name: widget
       from: scope_chain
-      entity_type: tag
-    - name: task
+      entity_type: widget
+    - name: gadget
       from: scope_chain
-      entity_type: task
+      entity_type: gadget
 "#;
 
     #[test]
@@ -283,8 +299,8 @@ mod tests {
         assert_eq!(registry.all_commands().len(), 4);
         assert!(registry.get("app.quit").is_some());
         assert!(registry.get("app.undo").is_some());
-        assert!(registry.get("task.add").is_some());
-        assert!(registry.get("task.untag").is_some());
+        assert!(registry.get("foo.add").is_some());
+        assert!(registry.get("foo.remove").is_some());
     }
 
     #[test]
@@ -309,17 +325,17 @@ mod tests {
     #[test]
     fn override_preserves_unspecified_fields() {
         let override_yaml = r#"
-- id: task.add
-  name: Create Task
+- id: foo.add
+  name: Create Foo
 "#;
         let registry = CommandsRegistry::from_yaml_sources(&[
             ("entity", ENTITY_YAML),
             ("override", override_yaml),
         ]);
 
-        let add = registry.get("task.add").unwrap();
-        assert_eq!(add.name, "Create Task"); // overridden
-        assert_eq!(add.scope.as_deref(), Some("entity:column")); // preserved
+        let add = registry.get("foo.add").unwrap();
+        assert_eq!(add.name, "Create Foo"); // overridden
+        assert_eq!(add.scope.as_deref(), Some("entity:widget")); // preserved
         assert!(add.undoable); // preserved
         assert_eq!(add.params.len(), 1); // preserved
     }
@@ -334,8 +350,8 @@ mod tests {
         let ids: Vec<&str> = avail.iter().map(|d| d.id.as_str()).collect();
         assert!(ids.contains(&"app.quit"));
         assert!(ids.contains(&"app.undo"));
-        assert!(!ids.contains(&"task.add")); // needs column
-        assert!(!ids.contains(&"task.untag")); // needs tag + task
+        assert!(!ids.contains(&"foo.add")); // needs widget
+        assert!(!ids.contains(&"foo.remove")); // needs widget + gadget
     }
 
     #[test]
@@ -343,29 +359,29 @@ mod tests {
         let registry =
             CommandsRegistry::from_yaml_sources(&[("app", APP_YAML), ("entity", ENTITY_YAML)]);
 
-        let scope = vec!["column:todo".to_string()];
+        let scope = vec!["widget:42".to_string()];
         let avail = registry.available_commands(&scope);
         let ids: Vec<&str> = avail.iter().map(|d| d.id.as_str()).collect();
         assert!(ids.contains(&"app.quit")); // global
-        assert!(ids.contains(&"task.add")); // column in scope
-        assert!(!ids.contains(&"task.untag")); // needs tag + task
+        assert!(ids.contains(&"foo.add")); // widget in scope
+        assert!(!ids.contains(&"foo.remove")); // needs widget + gadget
     }
 
     #[test]
     fn available_commands_multi_scope_requirement() {
         let registry = CommandsRegistry::from_yaml_sources(&[("entity", ENTITY_YAML)]);
 
-        // Only tag — not enough for task.untag
-        let scope = vec!["tag:bug".to_string()];
+        // Only widget — not enough for foo.remove
+        let scope = vec!["widget:42".to_string()];
         let avail = registry.available_commands(&scope);
         let ids: Vec<&str> = avail.iter().map(|d| d.id.as_str()).collect();
-        assert!(!ids.contains(&"task.untag"));
+        assert!(!ids.contains(&"foo.remove"));
 
-        // Both tag and task — matches
-        let scope = vec!["tag:bug".to_string(), "task:01ABC".to_string()];
+        // Both widget and gadget — matches
+        let scope = vec!["widget:42".to_string(), "gadget:99".to_string()];
         let avail = registry.available_commands(&scope);
         let ids: Vec<&str> = avail.iter().map(|d| d.id.as_str()).collect();
-        assert!(ids.contains(&"task.untag"));
+        assert!(ids.contains(&"foo.remove"));
     }
 
     #[test]
@@ -409,61 +425,62 @@ mod tests {
         let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
-        // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
-        // entity: task.add, task.move, task.delete, task.untag, task.doThisNext,
-        //         entity.update_field, entity.delete, entity.archive, entity.unarchive,
-        //         tag.update, column.reorder, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 15
-        // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, perspective.set, perspective.startRename,
-        //     setFocus, window.new = 10
-        // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        // file: switchBoard, closeBoard, newBoard, openBoard = 4
-        // drag: start, cancel, complete = 3
-        // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
-        //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
-        // attachment: open, reveal = 2
-        // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 62);
+        // This crate is consumer-agnostic — it ships only generic command
+        // YAML. Domain-specific commands (task, column, tag, attachment,
+        // perspective, file) are contributed by their owning crates and
+        // composed at app startup. See
+        // `swissarmyhammer_kanban::builtin_yaml_sources` and
+        // `swissarmyhammer-kanban/tests/builtin_commands.rs` for the kanban
+        // side, which together reach the app-composed total.
+        //
+        // Per-file breakdown of the generic YAMLs that remain here:
+        //   app:      about, help, quit, command, palette, search, dismiss,
+        //             undo, redo = 9
+        //   entity:   entity.add, entity.update_field, entity.delete,
+        //             entity.archive, entity.unarchive, entity.copy,
+        //             entity.cut, entity.paste = 8
+        //             (task.add and project.add were retired in favor of the
+        //             dynamic entity.add:{type} pipeline — see commit
+        //             8973cf694.)
+        //   ui:       inspect, inspector.close, inspector.close_all,
+        //             palette.open, palette.close,
+        //             entity.startRename, setFocus, window.new,
+        //             mode.set = 9
+        //             (`ui.view.set` and `ui.perspective.set` were relocated
+        //             to the kanban crate in 01KPY02X405QTP5ACH67THHSN8 —
+        //             "view" and "perspective" are kanban concepts, not
+        //             generic UI primitives.)
+        //   settings: keymap.vim, keymap.cua, keymap.emacs = 3
+        //   drag:     start, cancel, complete = 3
+        assert_eq!(registry.all_commands().len(), 32);
 
-        // Spot checks
+        // Spot checks — only generic commands remain.
         assert!(registry.get("app.quit").is_some());
-        assert!(registry.get("task.add").is_some());
+        assert!(registry.get("entity.add").is_some());
         assert!(registry.get("ui.palette.open").is_some());
         assert!(registry.get("settings.keymap.vim").is_some());
-        assert!(registry.get("task.untag").unwrap().context_menu);
-        assert!(registry.get("task.add").unwrap().undoable);
+        assert!(registry.get("entity.add").unwrap().undoable);
         assert!(!registry.get("app.undo").unwrap().undoable);
-        assert!(registry.get("file.closeBoard").is_some());
         assert!(registry.get("drag.start").is_some());
-    }
-
-    #[test]
-    fn perspective_commands_all_registered() {
-        let sources = builtin_yaml_sources();
-        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
-        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
-
-        let expected = [
-            "perspective.load",
-            "perspective.save",
-            "perspective.delete",
-            "perspective.rename",
-            "perspective.filter",
-            "perspective.clearFilter",
-            "perspective.group",
-            "perspective.clearGroup",
-            "perspective.sort.set",
-            "perspective.sort.clear",
-            "perspective.sort.toggle",
-            "perspective.list",
-        ];
-        for cmd_id in &expected {
-            assert!(
-                registry.get(cmd_id).is_some(),
-                "perspective command '{cmd_id}' must be registered"
-            );
-        }
+        // Kanban-specific commands must NOT be present — they live in
+        // `swissarmyhammer-kanban/builtin/commands/`.
+        assert!(registry.get("task.untag").is_none());
+        assert!(registry.get("task.move").is_none());
+        assert!(registry.get("task.doThisNext").is_none());
+        assert!(registry.get("column.reorder").is_none());
+        assert!(registry.get("tag.update").is_none());
+        assert!(registry.get("attachment.open").is_none());
+        assert!(registry.get("attachment.reveal").is_none());
+        assert!(registry.get("file.switchBoard").is_none());
+        assert!(registry.get("file.closeBoard").is_none());
+        assert!(registry.get("file.newBoard").is_none());
+        assert!(registry.get("file.openBoard").is_none());
+        assert!(registry.get("perspective.load").is_none());
+        assert!(registry.get("perspective.goto").is_none());
+        // task.add and project.add must NOT be registered — they were
+        // replaced by the dynamic entity.add:{type} pipeline.
+        assert!(registry.get("task.add").is_none());
+        assert!(registry.get("project.add").is_none());
     }
 
     #[test]
@@ -482,16 +499,16 @@ mod tests {
 
     #[test]
     fn scope_matches_single() {
-        let chain = vec!["column:todo".to_string()];
-        assert!(scope_matches(Some("entity:column"), &chain));
-        assert!(!scope_matches(Some("entity:task"), &chain));
+        let chain = vec!["widget:42".to_string()];
+        assert!(scope_matches(Some("entity:widget"), &chain));
+        assert!(!scope_matches(Some("entity:gadget"), &chain));
     }
 
     #[test]
     fn scope_matches_multi() {
-        let chain = vec!["tag:bug".to_string(), "task:01ABC".to_string()];
-        assert!(scope_matches(Some("entity:tag,entity:task"), &chain));
-        assert!(!scope_matches(Some("entity:tag,entity:column"), &chain));
+        let chain = vec!["widget:42".to_string(), "gadget:99".to_string()];
+        assert!(scope_matches(Some("entity:widget,entity:gadget"), &chain));
+        assert!(!scope_matches(Some("entity:widget,entity:thing"), &chain));
     }
 
     // --- load_yaml_dir tests ---
@@ -536,26 +553,29 @@ mod tests {
 
     #[test]
     fn merge_yaml_sources_adds_new_commands() {
-        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        // `foo.add` / `foo.remove` are synthetic inline strings used here to
+        // exercise the merge logic — they're generic placeholders and do not
+        // correspond to any real builtin commands.
+        let base = vec![("base", "- id: foo.add\n  name: Add Foo\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
-        assert!(reg.get("task.add").is_some());
-        assert!(reg.get("task.delete").is_none());
+        assert!(reg.get("foo.add").is_some());
+        assert!(reg.get("foo.remove").is_none());
 
-        let extra = vec![("extra", "- id: task.delete\n  name: Delete Task\n")];
+        let extra = vec![("extra", "- id: foo.remove\n  name: Remove Foo\n")];
         reg.merge_yaml_sources(&extra);
-        assert!(reg.get("task.delete").is_some());
-        assert_eq!(reg.get("task.delete").unwrap().name, "Delete Task");
+        assert!(reg.get("foo.remove").is_some());
+        assert_eq!(reg.get("foo.remove").unwrap().name, "Remove Foo");
     }
 
     #[test]
     fn merge_yaml_sources_overrides_existing_fields() {
-        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        let base = vec![("base", "- id: foo.add\n  name: Add Foo\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
-        assert_eq!(reg.get("task.add").unwrap().name, "Add Task");
+        assert_eq!(reg.get("foo.add").unwrap().name, "Add Foo");
 
-        let over = vec![("over", "- id: task.add\n  name: Add Task Updated\n")];
+        let over = vec![("over", "- id: foo.add\n  name: Add Foo Updated\n")];
         reg.merge_yaml_sources(&over);
-        assert_eq!(reg.get("task.add").unwrap().name, "Add Task Updated");
+        assert_eq!(reg.get("foo.add").unwrap().name, "Add Foo Updated");
     }
 
     #[test]
@@ -579,65 +599,67 @@ mod tests {
     }
 
     #[test]
-    fn test_perspective_yaml_parses() {
-        let perspective = include_str!("../builtin/commands/perspective.yaml");
-        let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
+    fn ui_yaml_arg_only_commands_are_hidden_from_palette() {
+        // Hygiene test: any `ui.*` command whose params come `from: args`
+        // cannot be invoked from the command palette (the palette has no UI
+        // for collecting arbitrary args), so it must be marked
+        // `visible: false` in ui.yaml. User-facing palette entries for those
+        // operations are synthesized elsewhere — e.g. the kanban crate's
+        // `scope_commands::emit_view_switch` emits one `view.set` row per
+        // known view with `view_id` pre-filled in `args`, dispatched as-is
+        // (no suffix rewriting after 01KPZMXXEXKVE3RNPA4XJP0105). `view.set`
+        // lives in `swissarmyhammer-kanban/builtin/commands/view.yaml`
+        // because "view" is a kanban concept, not a generic UI primitive.
+        //
+        // See task 01KPTHX6J2K28GMMV6YQVJWYCE. `ui.view.set` and
+        // `ui.perspective.set` were relocated to the kanban crate in
+        // 01KPY02X405QTP5ACH67THHSN8 and are covered by the kanban-side
+        // `view_set_and_perspective_set_registered_hidden` integration test.
+        let ui = include_str!("../builtin/commands/ui.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("ui", ui)]);
 
-        // All 15 perspective commands should parse (9 original + 3 sort + 2 next/prev + 1 goto)
-        assert_eq!(registry.all_commands().len(), 15);
-        assert!(registry.get("perspective.load").is_some());
-        assert!(registry.get("perspective.save").is_some());
-        assert!(registry.get("perspective.delete").is_some());
-        assert!(registry.get("perspective.rename").is_some());
-        assert!(registry.get("perspective.filter").is_some());
-        assert!(registry.get("perspective.clearFilter").is_some());
-        assert!(registry.get("perspective.group").is_some());
-        assert!(registry.get("perspective.clearGroup").is_some());
-        assert!(registry.get("perspective.sort.set").is_some());
-        assert!(registry.get("perspective.sort.clear").is_some());
-        assert!(registry.get("perspective.sort.toggle").is_some());
-        assert!(registry.get("perspective.next").is_some());
-        assert!(registry.get("perspective.prev").is_some());
-        assert!(registry.get("perspective.goto").is_some());
-        assert!(registry.get("perspective.list").is_some());
+        // Commands that must be hidden from the palette.
+        let hidden = ["ui.mode.set", "ui.palette.close", "ui.setFocus"];
+        for cmd_id in &hidden {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
+            assert!(
+                !cmd.visible,
+                "{cmd_id} requires args the palette cannot provide — \
+                 the command must be `visible: false`. See ui.yaml."
+            );
+        }
 
-        // Load/save/delete should have a 'name' param
-        let load = registry.get("perspective.load").unwrap();
-        assert_eq!(load.name, "Load Perspective");
-        assert!(load.params.iter().any(|p| p.name == "name"));
-
-        // Filter command should have 'filter' and 'perspective_id' params
-        let filter = registry.get("perspective.filter").unwrap();
-        assert_eq!(filter.name, "Set Filter");
-        assert!(filter.params.iter().any(|p| p.name == "filter"));
-        assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
-
-        // All perspective commands should be visible (default true) except
-        // the ones that are intentionally hidden from the command palette:
-        //   - perspective.list: read-only introspection command
-        //   - perspective.goto: materialized dynamically as `perspective.goto:{id}`
-        //     per-perspective, so the template entry stays hidden
-        //   - perspective.rename: requires `id` + `new_name` args and has no
-        //     palette args UI; user-facing entry is `ui.perspective.startRename`
-        let hidden = ["perspective.list", "perspective.goto", "perspective.rename"];
-        for cmd in registry.all_commands() {
-            if hidden.contains(&cmd.id.as_str()) {
-                assert!(!cmd.visible, "{} should not be visible", cmd.id);
-            } else {
-                assert!(cmd.visible, "{} should be visible", cmd.id);
-            }
+        // Commands that are user-facing and must remain visible.
+        let visible = [
+            "ui.inspect",
+            "ui.inspector.close",
+            "ui.inspector.close_all",
+            "ui.palette.open",
+            "ui.entity.startRename",
+        ];
+        for cmd_id in &visible {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing from ui.yaml"));
+            assert!(
+                cmd.visible,
+                "{cmd_id} is a user-facing palette entry and must remain \
+                 visible. See ui.yaml."
+            );
         }
     }
 
     #[test]
     fn merge_yaml_sources_invalid_yaml_skipped() {
-        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        let base = vec![("base", "- id: foo.add\n  name: Add Foo\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
 
         let invalid = vec![("bad", "{{{{not valid yaml")];
         reg.merge_yaml_sources(&invalid);
         // Original command still intact
-        assert!(reg.get("task.add").is_some());
+        assert!(reg.get("foo.add").is_some());
     }
 
     // --- merge_yaml_value edge cases ---
@@ -713,7 +735,7 @@ mod tests {
 
 - id: scoped.cmd
   name: Scoped
-  scope: "entity:task"
+  scope: "entity:widget"
 "#;
         let registry = CommandsRegistry::from_yaml_sources(&[("test", yaml)]);
         let all = registry.all_commands();
@@ -772,19 +794,19 @@ mod tests {
         // Start with a valid command, then overlay an override that makes the
         // merged result invalid (e.g., wrong type for a field).
         let base = r#"
-- id: task.add
-  name: Add Task
+- id: foo.add
+  name: Add Foo
   undoable: true
 "#;
         let override_yaml = r#"
-- id: task.add
+- id: foo.add
   undoable: not_a_bool
 "#;
         let registry =
             CommandsRegistry::from_yaml_sources(&[("base", base), ("override", override_yaml)]);
-        let cmd = registry.get("task.add");
+        let cmd = registry.get("foo.add");
         if let Some(cmd) = cmd {
-            assert_eq!(cmd.name, "Add Task");
+            assert_eq!(cmd.name, "Add Foo");
         }
     }
 

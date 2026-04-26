@@ -5,7 +5,7 @@ depends_on:
 - 01KNS10MMDVZG731XKM390C682
 - 01KP0V8285PSG6GSMCVRXG8VRJ
 position_column: done
-position_ordinal: ffffffffffffffffffffffc880
+position_ordinal: ffffffffffffffffffffffffffffffb280
 project: kanban-mcp
 title: 'kanban-cli: implement commands/registry.rs — KanbanMcpRegistration for init/deinit'
 ---

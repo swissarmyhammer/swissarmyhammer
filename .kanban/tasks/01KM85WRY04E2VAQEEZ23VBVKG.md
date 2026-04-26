@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85WCYYAT2XC8J2FDVRFMNT
 position_column: done
-position_ordinal: ffffffffffe180
+position_ordinal: ffffffffffffb080
 title: 'Remove AppConfig: delete struct and all references'
 ---
 ## What

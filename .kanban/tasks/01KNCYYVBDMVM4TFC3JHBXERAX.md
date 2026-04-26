@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff280
+position_ordinal: ffffffffffffffffffffffffdf80
 title: Fix board selector dropdown not switching board — bypasses onSelect prop
 ---
 ## What

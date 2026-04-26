@@ -1,0 +1,290 @@
+{
+  "command_count": 23,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor:ctx1",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor:ctx2",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor:ctx2",
+      "id": "entity.delete",
+      "keys": {
+        "cua": "Mod+Backspace"
+      },
+      "menu_name": null,
+      "name": "Delete Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "actor:ctx3",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Actor",
+      "target": "actor:alice"
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.about",
+      "keys": null,
+      "menu_name": null,
+      "name": "About",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.command",
+      "keys": {
+        "cua": "Mod+Shift+P",
+        "emacs": "Mod+Shift+P",
+        "vim": ":"
+      },
+      "menu_name": null,
+      "name": "Command Palette",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.dismiss",
+      "keys": {
+        "cua": "Escape",
+        "emacs": "Escape",
+        "vim": "Escape"
+      },
+      "menu_name": null,
+      "name": "Dismiss",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.help",
+      "keys": {
+        "cua": "F1",
+        "vim": "F1"
+      },
+      "menu_name": null,
+      "name": "Help",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.quit",
+      "keys": {
+        "cua": "Mod+Q",
+        "vim": ":q"
+      },
+      "menu_name": null,
+      "name": "Quit",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "app.search",
+      "keys": {
+        "cua": "Mod+F",
+        "emacs": "Mod+F",
+        "vim": "/"
+      },
+      "menu_name": null,
+      "name": "Find",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.closeBoard",
+      "keys": {
+        "cua": "Mod+W",
+        "vim": "Mod+W"
+      },
+      "menu_name": null,
+      "name": "Close Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.newBoard",
+      "keys": {
+        "cua": "Mod+Shift+B"
+      },
+      "menu_name": null,
+      "name": "New Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.openBoard",
+      "keys": {
+        "cua": "Mod+O"
+      },
+      "menu_name": null,
+      "name": "Open Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "file.switchBoard",
+      "keys": null,
+      "menu_name": null,
+      "name": "Switch Board",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "perspective.next",
+      "keys": {
+        "cua": "Mod+]",
+        "vim": "gt"
+      },
+      "menu_name": null,
+      "name": "Next Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "perspective.prev",
+      "keys": {
+        "cua": "Mod+[",
+        "vim": "gT"
+      },
+      "menu_name": null,
+      "name": "Previous Perspective",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.cua",
+      "keys": null,
+      "menu_name": null,
+      "name": "Standard Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.emacs",
+      "keys": null,
+      "menu_name": null,
+      "name": "Emacs Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "settings.keymap.vim",
+      "keys": null,
+      "menu_name": null,
+      "name": "Vim Keybindings",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.inspector.close",
+      "keys": {
+        "cua": "Escape",
+        "vim": "q"
+      },
+      "menu_name": null,
+      "name": "Close Inspector",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.inspector.close_all",
+      "keys": {
+        "cua": "Mod+Escape",
+        "vim": "Q"
+      },
+      "menu_name": null,
+      "name": "Close All Inspectors",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "ui.palette.open",
+      "keys": {
+        "cua": "Mod+K",
+        "vim": ":"
+      },
+      "menu_name": null,
+      "name": "Command Palette",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": false,
+      "group": "global",
+      "id": "window.new",
+      "keys": {
+        "cua": "Mod+Shift+N",
+        "emacs": "Mod+Shift+N",
+        "vim": "Mod+Shift+N"
+      },
+      "menu_name": null,
+      "name": "New Window",
+      "target": null
+    }
+  ],
+  "context_menu_only": false,
+  "scope": [
+    "actor:alice"
+  ]
+}

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa180
+position_ordinal: ffffffffffffffffffffffffffffe080
 title: 'Fix Enter key in filter bar: yield to autocomplete before submitting'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9a80
+position_ordinal: ffffffffffffffffffffffffffffd480
 title: Replace plain <input> with TextEditor (CM6) for perspective tab rename
 ---
 ## What

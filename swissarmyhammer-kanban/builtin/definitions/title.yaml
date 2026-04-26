@@ -4,6 +4,7 @@ description: Task title
 type:
   kind: markdown
   single_line: true
+default: Untitled
 editor: markdown
 display: text
 sort: alphanumeric

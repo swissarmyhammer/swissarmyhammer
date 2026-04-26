@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS10MMDVZG731XKM390C682
 position_column: done
-position_ordinal: ffffffffffffffffffffffbd80
+position_ordinal: ffffffffffffffffffffffffffffff9580
 project: kanban-mcp
 title: 'kanban-cli: create cli.rs with lifecycle subcommands for build.rs'
 ---

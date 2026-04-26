@@ -36,14 +36,12 @@ vi.mock("@/lib/schema-context", () => ({
     getSchema: (type: string) =>
       type === "task" ? { fields: mockFieldDefs } : undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     loading: false,
     mentionableTypes: [],
   }),
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
   SchemaProvider: ({ children }: { children: React.ReactNode }) => children,
 }));

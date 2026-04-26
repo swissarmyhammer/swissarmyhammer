@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9e80
+position_ordinal: ffffffffffffffffffffffffffffda80
 title: 'Perspective filter formula bar: move filter out of popover into right-side formula bar'
 ---
 ## What

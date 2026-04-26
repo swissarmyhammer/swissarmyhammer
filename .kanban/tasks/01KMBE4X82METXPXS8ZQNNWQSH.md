@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
 position_column: done
-position_ordinal: ffffffffffff80
+position_ordinal: ffffffffffffce80
 title: 'Field: markdown field type (compact + full)'
 ---
 ## What

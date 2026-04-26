@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMAQSRXFHW8RMACC3P6P5SQD
 position_column: done
-position_ordinal: ffffffffffff9b80
+position_ordinal: ffffffffffffe980
 title: Inspector command scope and keybindings
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffc980
+position_ordinal: ffffffffffffff9f80
 title: 'Backend: add before_id/after_id to cross_board::transfer_task'
 ---
 ## What

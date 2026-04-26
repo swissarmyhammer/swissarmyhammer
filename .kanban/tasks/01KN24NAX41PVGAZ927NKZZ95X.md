@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffa080
+position_ordinal: ffffffffffffffffff8580
 title: 'Fix: native menu bar not rebuilding from scope chain like palette and context menu do'
 ---
 ## What

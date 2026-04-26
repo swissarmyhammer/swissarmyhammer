@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQNHB64JZBK84A0V5QMAZY
 position_column: done
-position_ordinal: ffffffffff8980
+position_ordinal: ffffffffffe180
 title: 'Markdown merge strategy: YAML frontmatter + line-level body merge'
 ---
 ## What

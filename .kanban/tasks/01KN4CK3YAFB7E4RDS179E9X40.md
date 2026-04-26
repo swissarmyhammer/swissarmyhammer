@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4CJJPSRQNEB17E6CQFF0PH
 position_column: done
-position_ordinal: ffffffffffffffffba80
+position_ordinal: ffffffffffffffffffb680
 title: 'EXTRACT-4: Move changelog.rs to new crate'
 ---
 ## What

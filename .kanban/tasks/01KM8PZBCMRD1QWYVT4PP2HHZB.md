@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffdc80
+position_ordinal: ffffffffffffab80
 title: Fix inspector stack not restoring on restart/hot reload
 ---
 ## What

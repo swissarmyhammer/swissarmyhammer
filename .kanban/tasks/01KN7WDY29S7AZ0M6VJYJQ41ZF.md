@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffaa80
+position_ordinal: ffffffffffffffffffffffba80
 title: Move PerspectiveTabBar inside view components — perspectives are scoped per view, not global
 ---
 ## What

@@ -3,53 +3,57 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXYC4RBQP1N2NQ33P8DPB9
-position_column: todo
-position_ordinal: a680
+- 01KQ5PP55SAAVJ0V3HDJ1DGNBY
+- 01KQ5QB6F4MTD35GBTARJH4JEW
+position_column: doing
+position_ordinal: '8580'
 project: spatial-nav
-title: Remove manual claimWhen predicates from inspector and badge-list pills
+title: 'Inspector and badge-list: wrap field rows as zones, delete claimWhen predicates'
 ---
-## What
+## STATUS: REOPENED 2026-04-26 — does not work in practice
 
-Delete manual predicate construction from the inspector field rows and badge-list pill navigation. These are both linear (1D) layouts that spatial nav handles naturally — fields are stacked vertically, pills are laid out horizontally.
+The user reports that **fields in inspectors cannot be focused or selected**. The structural wrapping shipped (field rows as zones, labels and pills as leaves), but clicking a field, label, or pill does not produce visible focus feedback. See umbrella card `01KQ5PEHWT...` for the systemic root-cause checklist.
 
-### Files to modify
+## Remaining work
 
-1. **`kanban-app/ui/src/components/entity-inspector.tsx`**:
-   - Delete the `claimPredicates` memo that builds per-field up/down/first/last predicates (~30 lines)
-   - Delete `fieldMonikers` memo (only used for predicate neighbor references)
-   - Remove `claimWhen` prop from `<FieldRow>` and `<FocusScope>` inside FieldRow
-   - Remove `ClaimPredicate` import
-   - The `isInspectorField` helper may no longer be needed
+1. **Verify the click → indicator-rendered chain** for each leaf inside an inspector field row:
+   - field label leaf
+   - inline editor leaf (when present)
+   - badge-list pill leaves (per pill)
+2. Each field row is a zone (`<FocusScope kind="zone">`). If a row's body fills the whole visible width and has no clickable whitespace, ensure the row-level focus is reachable via drill-out. Verify the zone-level focus indicator is visible (or document why suppressed).
+3. Walk the focus-changed event path with dev console open: click a label, click a pill, click an editor — for each, watch the Tauri event, the React claim, the indicator render.
+4. Integration tests per leaf and per zone-level focus.
 
-2. **`kanban-app/ui/src/components/fields/displays/badge-list-display.tsx`**:
-   - Delete `pillClaimPredicates` memo that builds per-pill left/right predicates (~30 lines)
-   - Delete `pillMonikers` memo if only used for predicates (check — may still be needed for focusMoniker prop)
-   - Remove `claimWhen` prop from `<MentionPill>`
+## Files involved
 
-3. **`kanban-app/ui/src/components/mention-pill.tsx`**:
-   - Remove `claimWhen` prop — no longer needed
-   - Remove `ClaimPredicate` import
-
-### Subtasks
-- [ ] Delete `claimPredicates` memo from entity-inspector.tsx
-- [ ] Remove `claimWhen` prop from FieldRow and its FocusScope
-- [ ] Delete `pillClaimPredicates` memo from badge-list-display.tsx
-- [ ] Remove `claimWhen` from MentionPill
-- [ ] Verify inspector field nav: up/down between fields, first/last to extremes, pill left/right within a field
+- `kanban-app/ui/src/components/entity-inspector.tsx`
+- `kanban-app/ui/src/components/mention-view.tsx`
+- `kanban-app/ui/src/components/fields/displays/badge-list-display.tsx`
+- `kanban-app/ui/src/components/focusable.tsx` / `focus-zone.tsx` / `focus-indicator.tsx`
 
 ## Acceptance Criteria
-- [ ] Inspector field navigation works via spatial nav (up/down moves between field rows)
-- [ ] Pill navigation works via spatial nav (left/right moves between pills within a badge list)
-- [ ] `nav.left` from first pill returns focus to parent field (spatial nav: pill is to the right of field label, so left goes to field)
-- [ ] `nav.right` from last pill advances to next field or is a no-op (spatial nav resolves this naturally)
-- [ ] ~60 lines of predicate code removed
-- [ ] `pnpm vitest run` passes
+
+- [ ] Manual smoke: clicking a field label shows a visible focus indicator
+- [ ] Manual smoke: clicking a pill in a badge list shows a visible focus indicator
+- [ ] Manual smoke: clicking an inline editor (when not in edit mode) shows visible focus
+- [ ] Manual smoke: drilling out (Escape) from a pill lands focus on its enclosing field row with visible feedback
+- [ ] Integration test per leaf + zone-level focus
+- [ ] Existing inspector / badge-list tests stay green
 
 ## Tests
-- [ ] `kanban-app/ui/src/components/entity-inspector.test.tsx` — field navigation tests pass without predicates
-- [ ] `kanban-app/ui/src/components/fields/displays/badge-list-display.test.tsx` — pill navigation tests pass
-- [ ] `kanban-app/ui/src/components/fields/displays/badge-list-nav.test.tsx` — existing pill nav tests pass
+
+- [ ] `entity-inspector.spatial-nav.test.tsx` — click each kind of leaf → assert visible indicator
+- [ ] `badge-list-nav.test.tsx` — click each pill → assert visible indicator
 - [ ] Run `cd kanban-app/ui && npx vitest run` — all pass
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+
+- Use `/tdd` — write the integration test first, watch it fail, then fix.
+
+---
+
+(Original description and prior implementation notes preserved below for reference.)
+
+## (Prior) Implementation Notes (2026-04-26)
+
+Field rows became `<FocusScope kind="zone">`; `claimPredicates` memo + `useFieldClaimPredicates` hook + `predicatesForField` + `edgePredicates` deleted (~90 lines). `fieldMonikers` memo replaced with single `firstFieldMoniker` for mount-time first focus. `claimWhen` prop and `ClaimPredicate` import gone from `<FieldRow>` and inner `<FocusScope>`. `mention-view.tsx` lost `buildListClaimPredicates` and dropped `claimWhen` from `MentionViewProps` / `SingleMentionProps`. ~155 net lines removed across both files. All 1538 tests passed at completion.

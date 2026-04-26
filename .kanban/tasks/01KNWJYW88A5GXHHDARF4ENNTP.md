@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa280
+position_ordinal: ffffffffffffffffffffffffffffe180
 title: Expand shelltool-cli registry tests to cover init/deinit success and global paths
 ---
 shelltool-cli/src/registry.rs:51-54, 71, 100-104, 118-121, 132, 150-156, 160-168

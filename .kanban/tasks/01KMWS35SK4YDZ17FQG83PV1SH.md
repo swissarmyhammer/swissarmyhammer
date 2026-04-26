@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMWS2PV9EVCK6J7NXVMRJAZG
 position_column: done
-position_ordinal: ffffffffffffffe680
+position_ordinal: ffffffffffffffffca80
 title: Implement entity.copy and entity.cut commands
 ---
 ## What

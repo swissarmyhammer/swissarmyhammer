@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffc80
+position_ordinal: ffffffffffffffd280
 title: 'badge-list-nav tests: no coverage for reference-field pill navigation'
 ---
 **Severity**: Low / Test Gap

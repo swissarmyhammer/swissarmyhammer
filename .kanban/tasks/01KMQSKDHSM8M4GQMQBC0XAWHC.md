@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe580
+position_ordinal: ffffffffffffffbb80
 title: FocusScopeInner onClick type mismatch (TS2322)
 ---
 **Severity: Medium / Correctness**

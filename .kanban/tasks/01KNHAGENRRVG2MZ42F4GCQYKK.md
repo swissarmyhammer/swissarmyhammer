@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffffd80
+position_ordinal: ffffffffffffffffffffffffffffac80
 title: entity.unarchive should only be available for archived entities
 ---
 ## What

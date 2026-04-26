@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9480
+position_ordinal: ffffffffffffffffffffffffffffc980
 title: Decompose BoardView and GridView into smaller components
 ---
 ## What

@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: todo
-position_ordinal: dc80
+position_ordinal: '9280'
 title: Fix code-context workspace_e2e_test::test_lsp_reindexing_after_file_change (LSP re-index never fires)
 ---
 `swissarmyhammer-code-context/tests/workspace_e2e_test.rs::test_lsp_reindexing_after_file_change` fails after ~60 seconds during `cargo nextest run --workspace`. The test writes a Rust file, verifies the initial LSP index has 9 symbols for `src/lib.rs`, then modifies the file and polls for re-index. Output shows the initial index succeeded but the re-index polling loop prints `Poll re-index LSP: 0 symbols so far` over and over until the slow-timeout kills it.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9380
+position_ordinal: ffffffffffffe180
 title: 'MultiSelectEditor: render selected items as inline CM6 pill widgets'
 ---
 ## What

@@ -11,7 +11,7 @@ use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, ColumnId, LogEntry, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityCache, EntityContext, EntityWatcher};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
@@ -215,6 +215,29 @@ impl KanbanContext {
     /// Returns an empty string if the parent directory cannot be determined.
     pub fn name(&self) -> &str {
         &self.context_name
+    }
+
+    /// Process-wide [`PasteMatrix`] singleton, populated lazily on first
+    /// call by [`register_paste_handlers`].
+    ///
+    /// The matrix is a pure registry of `(clipboard_type, target_type) →
+    /// PasteHandler` mappings — it carries no per-board state, so a single
+    /// instance is shared across every [`KanbanContext`] (and across every
+    /// board open in the process). Callers that need to dispatch a
+    /// synthetic paste — notably the external-file branch of
+    /// [`crate::commands::drag_commands::DragCompleteCmd`] — read it via
+    /// this accessor instead of building their own matrix per invocation.
+    ///
+    /// [`PasteMatrix`]: crate::commands::paste_handlers::PasteMatrix
+    /// [`register_paste_handlers`]: crate::commands::paste_handlers::register_paste_handlers
+    pub fn paste_matrix(&self) -> Arc<crate::commands::paste_handlers::PasteMatrix> {
+        static MATRIX: OnceLock<Arc<crate::commands::paste_handlers::PasteMatrix>> =
+            OnceLock::new();
+        Arc::clone(
+            MATRIX.get_or_init(|| {
+                Arc::new(crate::commands::paste_handlers::register_paste_handlers())
+            }),
+        )
     }
 
     /// Path to board.yaml

@@ -5,7 +5,7 @@ depends_on:
 - 01KN2Q5EZYYNNZZAFQEFWYXMVQ
 - 01KN2Q5Q5CTFGX2EHEYNANQNHN
 position_column: done
-position_ordinal: ffffffffffffffffaa80
+position_ordinal: ffffffffffffffffff9680
 title: 'PERSP-4: Perspective CRUD operations'
 ---
 ## What

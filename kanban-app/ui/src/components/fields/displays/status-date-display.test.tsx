@@ -117,45 +117,66 @@ describe("StatusDateDisplay", () => {
     });
   });
 
-  describe("invalid shapes return null", () => {
-    it("returns empty for null value", () => {
+  describe("invalid shapes render an empty CompactCellWrapper (compact) or null (full)", () => {
+    /**
+     * In compact mode, every display must emit a fixed-height wrapper —
+     * even when the value is unparseable — so the row honors the
+     * `DataTable` virtualizer's `ROW_HEIGHT` contract. The wrapper has
+     * no visible content; the assertion is structural.
+     */
+    function expectEmptyCompactWrapper(container: HTMLElement) {
+      const wrapper = container.querySelector("[data-compact-cell='true']");
+      expect(wrapper).toBeTruthy();
+      expect(wrapper!.textContent).toBe("");
+      // No phrase content should leak from the StatusDateDisplay branches.
+      expect(container.querySelector("svg")).toBeNull();
+    }
+
+    it("renders an empty wrapper for null value (compact)", () => {
       const { container } = render(<StatusDateDisplay {...makeProps(null)} />);
-      expect(container.innerHTML).toBe("");
+      expectEmptyCompactWrapper(container);
     });
 
-    it("returns empty for non-object primitive", () => {
+    it("renders an empty wrapper for non-object primitive (compact)", () => {
       const { container } = render(
         <StatusDateDisplay {...makeProps("2026-04-10T00:00:00Z")} />,
       );
-      expect(container.innerHTML).toBe("");
+      expectEmptyCompactWrapper(container);
     });
 
-    it("returns empty for array value", () => {
+    it("renders an empty wrapper for array value (compact)", () => {
       const { container } = render(
         <StatusDateDisplay {...makeProps([1, 2, 3])} />,
       );
-      expect(container.innerHTML).toBe("");
+      expectEmptyCompactWrapper(container);
     });
 
-    it("returns empty for unknown kind", () => {
+    it("renders an empty wrapper for unknown kind (compact)", () => {
       const { container } = render(
         <StatusDateDisplay
           {...makeProps({ kind: "mystery", timestamp: daysAgo(1) })}
         />,
       );
-      expect(container.innerHTML).toBe("");
+      expectEmptyCompactWrapper(container);
     });
 
-    it("returns empty when timestamp is missing", () => {
+    it("renders an empty wrapper when timestamp is missing (compact)", () => {
       const { container } = render(
         <StatusDateDisplay {...makeProps({ kind: "completed" })} />,
       );
-      expect(container.innerHTML).toBe("");
+      expectEmptyCompactWrapper(container);
     });
 
-    it("returns empty when kind is missing", () => {
+    it("renders an empty wrapper when kind is missing (compact)", () => {
       const { container } = render(
         <StatusDateDisplay {...makeProps({ timestamp: daysAgo(1) })} />,
+      );
+      expectEmptyCompactWrapper(container);
+    });
+
+    it("returns null in full mode for invalid values (no wrapper, row collapses)", () => {
+      const { container } = render(
+        <StatusDateDisplay {...makeProps(null, "full")} />,
       );
       expect(container.innerHTML).toBe("");
     });

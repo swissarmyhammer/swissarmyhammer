@@ -1,67 +1,73 @@
-- id: task.add
-  name: New Task
-  scope: "entity:column"
-  undoable: true
-  keys:
-    cua: Mod+N
-    vim: a
-  params:
-    - name: column
-      from: scope_chain
-      entity_type: column
+# =============================================================================
+# COMMAND ORGANIZATION RULE — read this before adding or moving commands.
+# =============================================================================
+#
+# Command declarations (the full contract: id, name, params, undoable, keys,
+# context_menu, scope) are stacked per-crate at app startup. Generic commands
+# live in `swissarmyhammer-commands/builtin/commands/`; domain-specific
+# commands live in the owning crate's `builtin/commands/` and are contributed
+# via that crate's `builtin_yaml_sources()`.
+#
+# Generic commands live alongside this file, in
+# `swissarmyhammer-commands/builtin/commands/`:
+#
+#   * commands:app.yaml         — app-level commands (quit, undo, redo,
+#                                 palette, ...).
+#   * commands:settings.yaml    — keymap toggles.
+#   * commands:entity.yaml      — cross-cutting commands that apply to any
+#                                 entity by target moniker. Listed below.
+#   * commands:ui.yaml          — UI commands, including the cross-cutting
+#                                 `ui.inspect`.
+#   * commands:drag.yaml        — generic drag-and-drop mechanics.
+#
+# Kanban-specific commands live in a DIFFERENT crate, in
+# `swissarmyhammer-kanban/builtin/commands/` (not siblings of this file!):
+#
+#   * kanban:task.yaml          — type-specific commands only. A command that
+#     kanban:tag.yaml             operates on a single entity type belongs in
+#     kanban:column.yaml          that type's file, not here.
+#     kanban:attachment.yaml
+#     kanban:perspective.yaml
+#   * kanban:file.yaml          — kanban file/board lifecycle (switchBoard,
+#                                 newBoard, closeBoard, openBoard).
+#
+# A command is "cross-cutting" when its primary param declares `from: target`
+# — it operates on whatever entity the context menu fired over, regardless of
+# type. The scope_commands emitter auto-emits each cross-cutting command once
+# per entity moniker in the scope chain. Per-type opt-out lives in Rust
+# `Command::available()` (e.g. attachments reject `entity.archive`); it is
+# never declared by re-listing the command in a per-entity schema.
+#
+# CROSS-CUTTING COMMAND IDS (must NOT appear in
+# `swissarmyhammer-kanban/builtin/entities/*.yaml`):
+#
+#   * ui.inspect          (declared in ui.yaml)
+#   * entity.add
+#   * entity.delete
+#   * entity.archive
+#   * entity.unarchive
+#   * entity.copy
+#   * entity.cut
+#   * entity.paste
+#   * entity.update_field
+#
+# Per-entity schemas (`swissarmyhammer-kanban/builtin/entities/*.yaml`) list
+# ONLY type-specific command references with overlay metadata
+# (`context_menu`, `keys`, `menu_name`). Cross-cutting commands are NOT
+# listed there — they auto-emit from this registry.
+#
+# A YAML hygiene test enforces this rule:
+#   `cargo nextest run -p swissarmyhammer-kanban \
+#       yaml_hygiene_no_cross_cutting_in_entity_schemas`
+# =============================================================================
 
-- id: task.move
-  name: Move Task
-  scope: "entity:task"
+- id: entity.add
+  name: New Entity
   undoable: true
+  visible: false
   params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-    - name: column
-      from: target
-      entity_type: column
-    - name: drop_index
+    - name: entity_type
       from: args
-
-- id: task.delete
-  name: Delete Task
-  scope: "entity:task"
-  undoable: true
-  context_menu: true
-  keys:
-    vim: dd
-    cua: Mod+Backspace
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-
-- id: task.untag
-  name: Remove Tag
-  scope: "entity:tag,entity:task"
-  undoable: true
-  context_menu: true
-  keys:
-    vim: x
-    cua: Delete
-  params:
-    - name: tag
-      from: scope_chain
-      entity_type: tag
-    - name: task
-      from: scope_chain
-      entity_type: task
-
-- id: task.doThisNext
-  name: Do This Next
-  scope: "entity:task"
-  undoable: true
-  context_menu: true
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
 
 - id: entity.update_field
   name: Update Field
@@ -78,18 +84,23 @@
       from: args
 
 - id: entity.delete
-  name: Delete
+  name: "Delete {{entity.type}}"
   undoable: true
-  visible: false
+  context_menu: true
+  context_menu_group: 2
+  context_menu_order: 0
+  keys:
+    cua: Mod+Backspace
   params:
     - name: moniker
       from: target
 
 - id: entity.archive
-  name: Archive
-  scope: "entity:task"
+  name: "Archive {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 2
+  context_menu_order: 1
   keys:
     vim: dd
   params:
@@ -97,39 +108,21 @@
       from: target
 
 - id: entity.unarchive
-  name: Unarchive
-  scope: "entity:task"
+  name: "Unarchive {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 2
+  context_menu_order: 2
   params:
     - name: moniker
       from: target
 
-- id: tag.update
-  name: Update Tag
-  scope: "entity:tag"
-  undoable: true
-  visible: false
-  params:
-    - name: id
-      from: scope_chain
-      entity_type: tag
-
-- id: column.reorder
-  name: Reorder Columns
-  undoable: true
-  visible: false
-  params:
-    - name: id
-      from: args
-    - name: target_index
-      from: args
-
 - id: entity.cut
   name: "Cut {{entity.type}}"
-  scope: "entity:task"
   undoable: true
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 0
   keys:
     cua: Mod+X
     vim: x
@@ -138,15 +131,15 @@
     group: 1
     order: 0
   params:
-    - name: task
-      from: scope_chain
-      entity_type: task
+    - name: moniker
+      from: target
 
 - id: entity.copy
   name: "Copy {{entity.type}}"
-  scope: "entity:task"
   undoable: false
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 1
   keys:
     cua: Mod+C
     vim: "y"
@@ -155,14 +148,15 @@
     group: 1
     order: 1
   params:
-    - name: task
-      from: scope_chain
-      entity_type: task
+    - name: moniker
+      from: target
 
 - id: entity.paste
   name: "Paste {{entity.type}}"
   undoable: true
   context_menu: true
+  context_menu_group: 1
+  context_menu_order: 2
   keys:
     cua: Mod+V
     vim: p
@@ -171,17 +165,6 @@
     group: 1
     order: 2
   params:
-    - name: column
-      from: scope_chain
-      entity_type: column
+    - name: moniker
+      from: target
 
-- id: attachment.delete
-  name: Delete Attachment
-  scope: "entity:task"
-  undoable: true
-  visible: false
-  params:
-    - name: task_id
-      from: args
-    - name: id
-      from: args

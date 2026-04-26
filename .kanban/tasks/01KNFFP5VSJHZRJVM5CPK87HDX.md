@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFFCTKZ276HWZ3Z9HWNB70C
 position_column: done
-position_ordinal: ffffffffffffffffffffac80
+position_ordinal: ffffffffffffffffffffffffffc880
 title: Add commands field to FieldDef for field-specific commands (e.g. attachment.open)
 ---
 ## What

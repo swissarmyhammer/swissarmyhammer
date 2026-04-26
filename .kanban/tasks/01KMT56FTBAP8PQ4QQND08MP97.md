@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9c80
+position_ordinal: fffffffffffffff180
 title: 'Emacs Mod+f binding collision: nav.right shadows app.search'
 ---
 **Severity: High (Functionality)**

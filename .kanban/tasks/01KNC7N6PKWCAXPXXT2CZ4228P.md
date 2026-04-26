@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNC7MKFPZNR9MN1D4PYWMG0B
 position_column: done
-position_ordinal: fffffffffffffffffffd80
+position_ordinal: fffffffffffffffffffffffff180
 position_swimlane: container-refactor
 title: Extract WindowContainer from App.tsx
 ---

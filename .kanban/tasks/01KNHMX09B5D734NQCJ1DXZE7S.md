@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffffe80
+position_ordinal: ffffffffffffffffffffffffffffad80
 title: 'Fix: "Add task" Plus button in todo column appears to do nothing'
 ---
 ## What

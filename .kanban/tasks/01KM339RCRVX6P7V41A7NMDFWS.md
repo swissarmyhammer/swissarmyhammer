@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM3397BPR4801YWXTRFVYEY0
 position_column: done
-position_ordinal: fffffffff880
+position_ordinal: ffffffffffc280
 title: Show dependency pills in card header after tags
 ---
 ## What

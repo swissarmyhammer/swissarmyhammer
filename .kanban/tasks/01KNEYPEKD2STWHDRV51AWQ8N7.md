@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff9c80
+position_ordinal: ffffffffffffffffffffffffffaf80
 title: Fix tag pill context menus missing on entity cards — decouple showFocusBar from event handling in FocusScope
 ---
 ## What

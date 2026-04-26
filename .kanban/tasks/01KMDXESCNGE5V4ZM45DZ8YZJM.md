@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9280
+position_ordinal: ffffffffffffe080
 title: 'vim: exiting insert mode on a field should save and close the editor'
 ---
 ## What

@@ -703,6 +703,68 @@ impl EntityContext {
         }
     }
 
+    /// Reconcile the cache entry for `(entity_type, id)` with the current
+    /// on-disk state — used by the undo/redo command layer after a
+    /// `StoreContext` operation has rewritten the file.
+    ///
+    /// `StoreContext::undo` and `redo` mutate the live data file directly
+    /// (trashing, restoring from trash, moving between `.archive/` and
+    /// live, etc.) without routing through `EntityContext::write` or
+    /// `EntityContext::delete`, so the cache can hold stale state after
+    /// an undo — a just-created entity that undo trashed would still
+    /// appear to `read()`, a just-archived entity that undo restored
+    /// would still be missing from `list()`.
+    ///
+    /// This method re-reads the live path for the entity:
+    /// - If the file exists, the cache is refreshed to match disk (and
+    ///   an `EntityChanged` event fires if the content differs).
+    /// - If the file is gone (undo of a create, redo of a delete, redo
+    ///   of an archive), the cache entry is evicted and an
+    ///   `EntityDeleted` event fires.
+    ///
+    /// A no-op when no cache is attached, when the entity type is not
+    /// registered, or when the file state already matches the cache.
+    ///
+    /// This exists specifically to bridge the store layer (which knows
+    /// how to reverse bytes on disk) and the cache layer (which keeps
+    /// an in-memory index of those bytes); see the [`UndoCmd`] /
+    /// [`RedoCmd`] implementations that call it.
+    ///
+    /// [`UndoCmd`]: crate::UndoCmd
+    /// [`RedoCmd`]: crate::RedoCmd
+    pub async fn sync_entity_cache_from_disk(&self, entity_type: &str, id: &str) {
+        let Some(cache) = self.attached_cache() else {
+            return;
+        };
+        // An unknown entity type means the registry never saw a YAML for
+        // it; nothing to reconcile.
+        let def = match self.entity_def(entity_type) {
+            Ok(def) => def,
+            Err(_) => return,
+        };
+        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+
+        if path.exists() {
+            // File present — pull disk state into the cache. Errors here
+            // are non-fatal: `refresh_from_disk` only fails if the file
+            // cannot be parsed, which means the cache is the better of
+            // two bad options. Log and continue.
+            if let Err(e) = cache.refresh_from_disk(entity_type, id).await {
+                tracing::warn!(
+                    entity_type = entity_type,
+                    id = id,
+                    error = %e,
+                    "sync_entity_cache_from_disk: refresh_from_disk failed"
+                );
+            }
+        } else {
+            // File absent — the undo/redo either trashed it or moved it
+            // to `.archive/`. Drop the cache entry so `read`/`list`
+            // surface the deletion immediately.
+            cache.evict(entity_type, id).await;
+        }
+    }
+
     /// List all archived entities of a given type.
     ///
     /// Reads from the archive directory (`{root}/{type}s/.archive/`).

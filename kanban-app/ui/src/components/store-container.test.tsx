@@ -68,7 +68,7 @@ describe("StoreContainer", () => {
     expect(screen.getByTestId("child").textContent).toBe("hello");
   });
 
-  it("does not render a wrapping container div (renderContainer=false)", () => {
+  it("renders no DOM wrapper — CommandScopeProvider is context-only", () => {
     const { container } = render(
       <EntityFocusProvider>
         <StoreContainer path="/board">
@@ -77,8 +77,9 @@ describe("StoreContainer", () => {
       </EntityFocusProvider>,
     );
 
-    // FocusScope with renderContainer=false should not add a FocusHighlight wrapper
-    // The child should be directly inside the provider, not wrapped in a focus-highlight div
+    // StoreContainer is a pure context provider (CommandScopeProvider): it
+    // contributes a moniker to the scope chain but emits no DOM of its own,
+    // so no element should carry a `data-moniker` attribute.
     expect(container.querySelector("[data-moniker]")).toBeNull();
   });
 });

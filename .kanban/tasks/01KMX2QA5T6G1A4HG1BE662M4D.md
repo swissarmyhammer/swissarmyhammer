@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMX2PFZ0SYDJT8E3ZCEH1YY1
 position_column: done
-position_ordinal: ffffffffffffffeb80
+position_ordinal: ffffffffffffffffcf80
 title: CopyTask, CutTask, PasteTask entity kernel operations
 ---
 ## What

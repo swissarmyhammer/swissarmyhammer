@@ -85,7 +85,6 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [
       { entityType: "tag", prefix: "#", displayField: "tag_name" },
       { entityType: "task", prefix: "^", displayField: "title" },
@@ -95,7 +94,6 @@ vi.mock("@/lib/schema-context", () => ({
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
 }));
 

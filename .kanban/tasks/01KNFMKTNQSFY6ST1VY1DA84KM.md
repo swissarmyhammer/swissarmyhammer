@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff280
+position_ordinal: ffffffffffffffffffffffffde80
 title: 'Fix: Live LSP ops need atomic lock hold for didOpen+request+didClose sequence'
 ---
 ## What

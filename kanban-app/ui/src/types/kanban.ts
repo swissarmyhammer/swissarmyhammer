@@ -1,23 +1,4 @@
 // ---------------------------------------------------------------------------
-// Entity command definitions
-// ---------------------------------------------------------------------------
-
-/** Keymap bindings for an entity command, keyed by input mode. */
-export interface EntityCommandKeys {
-  readonly vim?: string;
-  readonly cua?: string;
-  readonly emacs?: string;
-}
-
-/** A command defined on an entity type in the YAML schema. */
-export interface EntityCommand {
-  readonly id: string;
-  readonly name: string;
-  readonly context_menu?: boolean;
-  readonly keys?: EntityCommandKeys;
-}
-
-// ---------------------------------------------------------------------------
 // View definitions
 // ---------------------------------------------------------------------------
 
@@ -188,7 +169,6 @@ export interface EntityDef {
    */
   mention_slug_field?: string;
   search_display_field?: string;
-  commands?: readonly EntityCommand[];
 }
 
 /** Schema response from get_entity_schema IPC command. */

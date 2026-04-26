@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffb080
+position_ordinal: ffffffffffffffffffa180
 title: Add Attachment variant to FieldType enum
 ---
 ## What

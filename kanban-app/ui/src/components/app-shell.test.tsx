@@ -1,21 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
+/**
+ * Shared default `invoke` stub for tests in this file.
+ *
+ * Returns a populated UIState payload for `get_ui_state` so AppShell's
+ * `useAppShellUIState` hook can read `uiState.windows?.[label]` without
+ * a null-deref. Tests that need to stub a *specific* command should
+ * call `mockInvoke.mockImplementation` with a dispatcher that defers
+ * to this default for everything else — overriding the entire mock
+ * implementation without preserving the UIState branch will crash the
+ * AppShell render.
+ */
+function defaultInvoke(cmd: string): Promise<unknown> {
+  if (cmd === "get_ui_state")
+    return Promise.resolve({
+      palette_open: false,
+      palette_mode: "command",
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      windows: {},
+      recent_boards: [],
+    });
+  return Promise.resolve(null);
+}
+
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string) => {
-    if (cmd === "get_ui_state")
-      return Promise.resolve({
-        palette_open: false,
-        palette_mode: "command",
-        keymap_mode: "cua",
-        scope_chain: [],
-        open_boards: [],
-        windows: {},
-        recent_boards: [],
-      });
-    return Promise.resolve(null);
-  }),
+  invoke: vi.fn((cmd: string) => defaultInvoke(cmd)),
 }));
 /**
  * Captured event listeners keyed by event name.
@@ -36,6 +49,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
+import { FocusLayer } from "./focus-layer";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
@@ -43,8 +57,13 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asLayerName, asMoniker, asSpatialKey } from "@/types/spatial";
 import { useAvailableCommands } from "@/lib/command-scope";
 import { invoke } from "@tauri-apps/api/core";
+
+/** Identity-stable layer name for the test window root, matches App.tsx. */
+const WINDOW_LAYER_NAME = asLayerName("window");
 
 /**
  * Helper component that renders inside AppShell to inspect commands
@@ -63,18 +82,31 @@ function CommandInspector() {
   );
 }
 
-/** Render AppShell with all required parent providers. */
+/** Render AppShell with all required parent providers.
+ *
+ * AppShell calls `useCurrentLayerKey()` to thread the window-root layer key
+ * into the palette's `<FocusLayer>` (the palette portals to `document.body`,
+ * so the React ancestor chain is severed at render time). The hook throws
+ * outside any `<FocusLayer>`, so the test harness must mirror App.tsx's
+ * production wrapping: a `<SpatialFocusProvider>` that owns the spatial
+ * focus actions bag, and a `<FocusLayer name="window">` that mounts the
+ * window-root layer in the Rust-side stack.
+ */
 function renderShell(children?: React.ReactNode) {
   return render(
-    <EntityFocusProvider>
-      <UIStateProvider>
-        <AppModeProvider>
-          <UndoProvider>
-            <AppShell>{children ?? <CommandInspector />}</AppShell>
-          </UndoProvider>
-        </AppModeProvider>
-      </UIStateProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={WINDOW_LAYER_NAME}>
+        <EntityFocusProvider>
+          <UIStateProvider>
+            <AppModeProvider>
+              <UndoProvider>
+                <AppShell>{children ?? <CommandInspector />}</AppShell>
+              </UndoProvider>
+            </AppModeProvider>
+          </UIStateProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -166,7 +198,7 @@ describe("AppShell", () => {
     function FocusedCard() {
       const { setFocus } = useEntityFocus();
       return (
-        <FocusScope moniker="task:t1" commands={[]}>
+        <FocusScope moniker={asMoniker("task:t1")} commands={[]}>
           <button onClick={() => setFocus("task:t1")}>Focus Card</button>
         </FocusScope>
       );
@@ -217,7 +249,7 @@ describe("AppShell", () => {
       const { setFocus } = useEntityFocus();
       return (
         <FocusScope
-          moniker="task:test"
+          moniker={asMoniker("task:test")}
           commands={[
             {
               id: "app.dismiss",
@@ -281,17 +313,21 @@ describe("AppShell", () => {
 
   it("shows mode indicator as COMMAND when palette opens", async () => {
     render(
-      <EntityFocusProvider>
-        <UIStateProvider>
-          <AppModeProvider>
-            <UndoProvider>
-              <AppShell>
-                <CommandInspector />
-              </AppShell>
-            </UndoProvider>
-          </AppModeProvider>
-        </UIStateProvider>
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={WINDOW_LAYER_NAME}>
+          <EntityFocusProvider>
+            <UIStateProvider>
+              <AppModeProvider>
+                <UndoProvider>
+                  <AppShell>
+                    <CommandInspector />
+                  </AppShell>
+                </UndoProvider>
+              </AppModeProvider>
+            </UIStateProvider>
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
 
     // The mode label can be checked via the commands being available.
@@ -403,5 +439,297 @@ describe("AppShell", () => {
       "column:todo",
       "window:main",
     ]);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // nav.drillIn / nav.drillOut — Enter/Escape command wiring
+  //
+  // Drill commands route through the global CommandScope: the closures
+  // read `focusedKey()` from `SpatialFocusProvider`, await the matching
+  // Tauri invoke (`spatial_drill_in` / `spatial_drill_out`), and on a
+  // non-null `Moniker` result dispatch `setFocus(moniker)` (which the
+  // entity focus provider in turn fans out as `ui.setFocus`).
+  //
+  // The tests below exercise each branch — non-null result, null
+  // result, leading focus state — by:
+  //   1. Setting `focus-changed` payload via the captured `listen`
+  //      callback so the provider's internal `focusedKeyRef` reflects
+  //      a known focused `SpatialKey`.
+  //   2. Stubbing `invoke()` to return a chosen value for the drill
+  //      command under test.
+  //   3. Pressing Enter / Escape and asserting the resulting
+  //      `invoke()` call list.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Push a synthetic `focus-changed` payload through the captured
+   * listener so the SpatialFocusProvider records `nextKey` as the
+   * latest focused SpatialKey.
+   *
+   * Tauri normally emits these from the Rust kernel after a successful
+   * `spatial_focus` / `spatial_navigate`; in the test environment the
+   * `listen` mock keeps the callback in `listenCallbacks` and we drive
+   * it directly.
+   */
+  function emitFocusChanged(nextKey: string | null): void {
+    const cb = listenCallbacks["focus-changed"];
+    expect(cb).toBeTruthy();
+    cb({
+      payload: {
+        window_label: "main",
+        prev_key: null,
+        next_key: nextKey,
+        next_moniker: nextKey,
+      },
+    });
+  }
+
+  it("nav.drillIn invokes spatial_drill_in for the focused SpatialKey on Enter", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    // Seed the provider's focusedKeyRef before the keystroke.
+    await act(async () => {
+      emitFocusChanged("k:zone");
+    });
+
+    mockInvoke.mockClear();
+    // Stub the kernel call so the closure has a non-null moniker to
+    // hand to setFocus. Preserve the `get_ui_state` default (the
+    // module-scope mock returns a populated UIState payload there);
+    // overriding the entire mockImplementation would null it out and
+    // break `useAppShellUIState`'s `uiState.windows?.[label]` read.
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "spatial_drill_in")
+        return Promise.resolve(asMoniker("task:child"));
+      return defaultInvoke(cmd);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    });
+
+    const drillCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "spatial_drill_in",
+    );
+    expect(drillCall).toBeTruthy();
+    expect((drillCall![1] as Record<string, unknown>).key).toBe(
+      asSpatialKey("k:zone"),
+    );
+  });
+
+  it("nav.drillIn dispatches ui.setFocus when the kernel returns a Moniker", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    await act(async () => {
+      emitFocusChanged("k:zone");
+    });
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "spatial_drill_in")
+        return Promise.resolve(asMoniker("task:child"));
+      return defaultInvoke(cmd);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    });
+
+    // setFocus fans out to dispatch_command(ui.setFocus, …). The exact
+    // shape carries the entity scope chain, but the cmd alone is
+    // sufficient evidence the drill closure walked into the success
+    // branch.
+    const setFocusCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    );
+    expect(setFocusCall).toBeTruthy();
+  });
+
+  it("nav.drillIn is a no-op when the kernel returns null", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    await act(async () => {
+      emitFocusChanged("k:leaf");
+    });
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "spatial_drill_in") return Promise.resolve(null);
+      return defaultInvoke(cmd);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    });
+
+    // No ui.setFocus dispatch — drill-in null means "leaf without
+    // editor or empty zone", and the closure exits without falling
+    // through to any other command.
+    const setFocusCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    );
+    expect(setFocusCall).toBeUndefined();
+    // Enter must NOT fall through to app.dismiss either — drill-in is
+    // the explicit no-op branch.
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeUndefined();
+  });
+
+  it("nav.drillOut invokes spatial_drill_out for the focused SpatialKey on Escape", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    await act(async () => {
+      emitFocusChanged("k:leaf");
+    });
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "spatial_drill_out")
+        return Promise.resolve(asMoniker("ui:zone"));
+      return defaultInvoke(cmd);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    const drillCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "spatial_drill_out",
+    );
+    expect(drillCall).toBeTruthy();
+    expect((drillCall![1] as Record<string, unknown>).key).toBe(
+      asSpatialKey("k:leaf"),
+    );
+
+    // Non-null result → setFocus, no app.dismiss.
+    const setFocusCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    );
+    expect(setFocusCall).toBeTruthy();
+  });
+
+  it("nav.drillOut falls through to app.dismiss when the kernel returns null", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    await act(async () => {
+      emitFocusChanged("k:rootLeaf");
+    });
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "spatial_drill_out") return Promise.resolve(null);
+      return defaultInvoke(cmd);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    // Drill-out happened but returned null (layer root). Closure
+    // dispatches app.dismiss as the fall-through.
+    const drillCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "spatial_drill_out",
+    );
+    expect(drillCall).toBeTruthy();
+
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeTruthy();
+  });
+
+  it("nav.drillOut falls through to app.dismiss when no spatial focus is set", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    // Explicitly clear any prior focus state.
+    await act(async () => {
+      emitFocusChanged(null);
+    });
+
+    mockInvoke.mockClear();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    // No focused key → no spatial_drill_out call, but app.dismiss
+    // still fires via the closure's early-return fall-through.
+    const drillCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "spatial_drill_out",
+    );
+    expect(drillCall).toBeUndefined();
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeTruthy();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ui.inspect — Space binding
+  //
+  // The CUA `keys.cua: "Space"` rebind on `board.inspect`
+  // (board-view.tsx) requires `normalizeKeyEvent` to canonicalise the
+  // physical spacebar (`e.key === " "`) to the string `"Space"`. The
+  // app-shell-level test below verifies that the round-trip works for
+  // an arbitrary scope-level command keyed to Space — the same code
+  // path `board.inspect` will take when a card is focused.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it("Space pressed on a focused scope dispatches a command with keys.cua=Space", async () => {
+    const inspectFn = vi.fn();
+
+    function FocusedCard() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope
+          moniker={asMoniker("task:t-space")}
+          commands={[
+            {
+              id: "ui.inspect",
+              name: "Inspect",
+              keys: { vim: "Enter", cua: "Space" },
+              execute: inspectFn,
+            },
+          ]}
+        >
+          <button onClick={() => setFocus("task:t-space")}>Focus</button>
+        </FocusScope>
+      );
+    }
+
+    renderShell(<FocusedCard />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus"));
+    });
+
+    await act(async () => {
+      // Browsers emit `e.key === " "` (a literal space) for the
+      // spacebar; `normalizeKeyEvent` is responsible for turning that
+      // into `"Space"` so scope-level `keys: { cua: "Space" }` matches.
+      fireEvent.keyDown(document, { key: " ", code: "Space" });
+    });
+
+    expect(inspectFn).toHaveBeenCalled();
   });
 });

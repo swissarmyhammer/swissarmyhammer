@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffc380
+position_ordinal: ffffffffffff9080
 title: 'STATUSLINE-M12: git_state module'
 ---
 ## What

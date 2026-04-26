@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffcf80
+position_ordinal: ffffffffffffffffffffffffffffffc080
 project: kanban-mcp
 title: 'kanban open &lt;path&gt;: honor the path, open and focus its window'
 ---

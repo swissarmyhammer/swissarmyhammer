@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffa680
+position_ordinal: ffffffffffffffffff8b80
 title: 'Bug: Reset Windows should close secondary windows and reset geometry, not restart the app'
 ---
 ## What

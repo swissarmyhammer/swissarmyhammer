@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9980
+position_ordinal: ffffffffffffffee80
 title: 'Duplicate nav command registrations: app-shell global + board/grid/inspector scopes'
 ---
 **Severity: Low (Design/Clarity)**

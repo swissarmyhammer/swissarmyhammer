@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85W10KVXQ4F4JVJCXXPN3A
 position_column: done
-position_ordinal: ffffffffffe480
+position_ordinal: ffffffffffffb380
 title: Replace active_board_path with most_recent_board_path driven by window focus
 ---
 ## What

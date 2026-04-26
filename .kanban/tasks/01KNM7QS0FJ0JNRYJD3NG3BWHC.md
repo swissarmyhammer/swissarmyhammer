@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNM7Q14EBEW0M6ZHBVTNHGQ2
 position_column: done
-position_ordinal: ffffffffffffffffffffffbc80
+position_ordinal: ffffffffffffffffffffffffffffff9480
 title: Register date derivation functions in kanban_compute_engine()
 ---
 ## What

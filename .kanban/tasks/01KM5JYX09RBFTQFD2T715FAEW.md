@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: '80'
+position_ordinal: '8580'
 title: Add slugify utility for mention slugs
 ---
 ## What

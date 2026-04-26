@@ -205,7 +205,7 @@ function useQuickCaptureSubmit(
   selectedPath: string | null,
   onDone: () => void,
 ) {
-  const dispatchTaskAdd = useDispatchCommand("task.add");
+  const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
   const dispatchSwitchBoard = useDispatchCommand("file.switchBoard");
 
   return useCallback(
@@ -221,8 +221,7 @@ function useQuickCaptureSubmit(
           .sort((a, b) => getNum(a, "order") - getNum(b, "order"));
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
-
-        await dispatchTaskAdd({
+        await dispatchEntityAddTask({
           args: { column: firstColumnId, title: text.trim() },
         });
         localStorage.setItem(STORAGE_KEY, selectedPath);
@@ -238,7 +237,7 @@ function useQuickCaptureSubmit(
       }
       onDone();
     },
-    [selectedPath, boards, onDone, dispatchTaskAdd, dispatchSwitchBoard],
+    [selectedPath, boards, onDone, dispatchEntityAddTask, dispatchSwitchBoard],
   );
 }
 

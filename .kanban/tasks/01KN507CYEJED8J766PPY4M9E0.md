@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN506PPQ09AQ2TW9FDW2V85Z
 position_column: done
-position_ordinal: ffffffffffffffffef80
+position_ordinal: ffffffffffffffffffffc580
 title: Wire entity writes through StoreHandle
 ---
 ## What

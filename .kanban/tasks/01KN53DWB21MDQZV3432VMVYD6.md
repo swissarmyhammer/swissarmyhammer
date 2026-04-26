@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffe780
+position_ordinal: ffffffffffffffffffffb280
 title: 'store.rs deserialize: body containing triple-dash on a line will corrupt frontmatter parsing'
 ---
 swissarmyhammer-entity/src/store.rs:143

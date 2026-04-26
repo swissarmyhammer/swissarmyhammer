@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8880
+position_ordinal: ffffffffffffffffffffffffff8780
 title: Replace title= with shadcn Tooltip in entity-card.tsx
 ---
 ## What

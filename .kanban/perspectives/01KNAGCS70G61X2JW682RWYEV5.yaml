@@ -1,3 +1,4 @@
 id: 01KNAGCS70G61X2JW682RWYEV5
 name: Default
 view: board
+filter: $spatial-focus-navigation

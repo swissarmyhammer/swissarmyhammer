@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffef80
+position_ordinal: ffffffffffffffffffffffffd980
 title: Clean up turn diffs and state on allowed Stop, not SessionStart
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffffffc780
+position_ordinal: ffffffffffff9480
 title: 'STATUSLINE-1: Crate skeleton + input types'
 ---
 ## What

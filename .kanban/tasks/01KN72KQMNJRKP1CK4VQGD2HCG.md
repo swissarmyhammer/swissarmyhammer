@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa480
+position_ordinal: ffffffffffffffffffffffad80
 title: 'E2E test: external file changes propagate events to UI'
 ---
 ## What

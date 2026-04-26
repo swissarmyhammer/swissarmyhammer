@@ -14,6 +14,7 @@ import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
   CommandBusyProvider,
+  FocusedScopeContext,
   useActiveBoardPath,
   useCommandBusy,
   resolveCommand,
@@ -594,6 +595,172 @@ describe("useDispatchCommand", () => {
       scopeChain: ["task:abc", "column:todo", "window:main"],
       boardPath: "/boards/test",
     });
+  });
+
+  /* ---------- dispatch identity stability ---------- */
+
+  /**
+   * Build a CommandScope value directly (no React component tree) so tests
+   * can feed synthetic focused scopes into FocusedScopeContext.
+   */
+  function makeFocusedScope(
+    monikers: string[],
+    commands: CommandDef[] = [],
+  ): CommandScope {
+    // Build innermost-to-outermost: monikers[0] is the innermost entity.
+    let current: CommandScope | null = null;
+    for (let i = monikers.length - 1; i >= 0; i--) {
+      const map = new Map<string, CommandDef>();
+      if (i === 0) {
+        for (const c of commands) map.set(c.id, c);
+      }
+      current = {
+        commands: map,
+        parent: current,
+        moniker: monikers[i],
+      };
+    }
+    return current!;
+  }
+
+  it("dispatch identity is stable across renders when presetCmd is unchanged", () => {
+    // Drive FocusedScopeContext from a mutable outer variable so a rerender
+    // can swap in a different focused scope — this is exactly what happens
+    // when arrow-key nav walks focus through 2000 rows.
+    let focused: CommandScope | null = makeFocusedScope(["task:a"]);
+
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value="/boards/test">
+        <FocusedScopeContext.Provider value={focused}>
+          {children}
+        </FocusedScopeContext.Provider>
+      </ActiveBoardPathProvider>
+    );
+
+    const { result, rerender } = renderHook(() => useDispatchCommand(), {
+      wrapper: w,
+    });
+
+    const first = result.current;
+
+    // Focus moves — FocusedScopeContext emits a new value, every consumer rerenders.
+    focused = makeFocusedScope(["task:b"]);
+    rerender();
+
+    const second = result.current;
+    expect(second).toBe(first);
+
+    // Several more focus moves — identity must remain stable.
+    focused = makeFocusedScope(["task:c"]);
+    rerender();
+    expect(result.current).toBe(first);
+
+    focused = makeFocusedScope(["task:d"]);
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("dispatch identity is stable across renders when preset IS supplied", () => {
+    let focused: CommandScope | null = makeFocusedScope(["task:a"]);
+
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value="/boards/test">
+        <FocusedScopeContext.Provider value={focused}>
+          {children}
+        </FocusedScopeContext.Provider>
+      </ActiveBoardPathProvider>
+    );
+
+    const { result, rerender } = renderHook(
+      () => useDispatchCommand("ui.inspect"),
+      { wrapper: w },
+    );
+
+    const first = result.current;
+
+    focused = makeFocusedScope(["task:b"]);
+    rerender();
+    expect(result.current).toBe(first);
+
+    focused = makeFocusedScope(["task:c"]);
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("dispatch reads the latest focused scope at call time, not at render time", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    let focused: CommandScope | null = makeFocusedScope([
+      "task:a",
+      "column:todo",
+      "window:main",
+    ]);
+
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value="/boards/test">
+        <FocusedScopeContext.Provider value={focused}>
+          {children}
+        </FocusedScopeContext.Provider>
+      </ActiveBoardPathProvider>
+    );
+
+    const { result, rerender } = renderHook(() => useDispatchCommand(), {
+      wrapper: w,
+    });
+
+    // Capture the dispatch from the initial render (scope A).
+    const capturedDispatch = result.current;
+
+    // Focus moves to scope B between capture and invocation — this mirrors
+    // the real scenario where a handler closed over `dispatch` at render time
+    // but fires after the user has moved focus.
+    focused = makeFocusedScope(["task:b", "column:doing", "window:main"]);
+    rerender();
+
+    await act(async () => {
+      await capturedDispatch("test.cmd");
+    });
+
+    // The backend call must reflect the CURRENT focused scope, not the stale one.
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "test.cmd",
+      target: undefined,
+      args: undefined,
+      scopeChain: ["task:b", "column:doing", "window:main"],
+      boardPath: "/boards/test",
+    });
+  });
+
+  it("dispatch respects presetCmd identity changes", () => {
+    // Different presetCmd values MUST produce distinguishable callables so
+    // `useDispatchCommand("ui.inspect")` and `useDispatchCommand("nav.up")`
+    // stay separate in consumers that rely on the preset binding.
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value="/boards/test">
+        {children}
+      </ActiveBoardPathProvider>
+    );
+
+    const { result: a } = renderHook(() => useDispatchCommand("ui.inspect"), {
+      wrapper: w,
+    });
+    const { result: b } = renderHook(() => useDispatchCommand("nav.up"), {
+      wrapper: w,
+    });
+
+    expect(a.current).not.toBe(b.current);
+
+    // Swapping the preset in the same hook invocation also yields a new callable.
+    let preset = "ui.inspect";
+    const { result, rerender } = renderHook(() => useDispatchCommand(preset), {
+      wrapper: w,
+    });
+    const first = result.current;
+    preset = "nav.up";
+    rerender();
+    expect(result.current).not.toBe(first);
   });
 });
 

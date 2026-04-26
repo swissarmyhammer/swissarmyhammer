@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb080
+position_ordinal: fffffffffffffffffffffffffffffa80
 project: expr-filter
 title: Asymmetric --project-color CSS fallback — add --tag-color / --actor-color or drop --project-color
 ---

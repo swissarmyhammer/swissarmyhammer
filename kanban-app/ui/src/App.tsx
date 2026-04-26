@@ -14,6 +14,19 @@ import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
 import { CommandBusyProvider } from "@/lib/command-scope";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asLayerName } from "@/types/spatial";
+import { DiagErrorBoundary } from "@/components/diag-error-boundary";
+
+/**
+ * Identity-stable `LayerName` for the window-root spatial-nav layer.
+ *
+ * Pulled to module scope so re-renders never mint a fresh value — the
+ * `<FocusLayer>` push effect depends on `name`, and a fresh literal in JSX
+ * would force an unnecessary tear-down / re-push of the window root layer.
+ */
+const WINDOW_LAYER_NAME = asLayerName("window");
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -54,30 +67,36 @@ if (IS_QUICK_CAPTURE) {
  */
 function App() {
   return (
-    <CommandBusyProvider>
-      <RustEngineContainer>
-        <WindowContainer>
-          <AppModeContainer>
-            <BoardContainer>
-              <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
-                <NavBar />
-                <ViewsContainer>
-                  <PerspectivesContainer>
-                    <PerspectiveContainer>
-                      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                        <ViewContainer />
-                      </div>
-                    </PerspectiveContainer>
-                  </PerspectivesContainer>
-                </ViewsContainer>
-                <ModeIndicator />
-              </div>
-              <InspectorsContainer />
-            </BoardContainer>
-          </AppModeContainer>
-        </WindowContainer>
-      </RustEngineContainer>
-    </CommandBusyProvider>
+    <DiagErrorBoundary>
+      <SpatialFocusProvider>
+        <FocusLayer name={WINDOW_LAYER_NAME}>
+          <CommandBusyProvider>
+            <RustEngineContainer>
+              <WindowContainer>
+                <AppModeContainer>
+                  <BoardContainer>
+                    <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
+                      <NavBar />
+                      <ViewsContainer>
+                        <PerspectivesContainer>
+                          <PerspectiveContainer>
+                            <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                              <ViewContainer />
+                            </div>
+                          </PerspectiveContainer>
+                        </PerspectivesContainer>
+                      </ViewsContainer>
+                      <ModeIndicator />
+                    </div>
+                    <InspectorsContainer />
+                  </BoardContainer>
+                </AppModeContainer>
+              </WindowContainer>
+            </RustEngineContainer>
+          </CommandBusyProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>
+    </DiagErrorBoundary>
   );
 }
 
@@ -87,6 +106,14 @@ function App() {
  * Uses RustEngineContainer for schema and entity state instead of
  * duplicating individual providers. Sets body/html to transparent so
  * the borderless window shows only the styled card.
+ *
+ * Wrapped in `<SpatialFocusProvider>` + `<FocusLayer name="window">` to
+ * match the main `App` shell — every Tauri webview's React root must
+ * mount its own window-root layer so descendants that consume spatial
+ * primitives have a layer to register against. The capture form does
+ * not currently use spatial primitives directly, but the wrapping is
+ * harmless when no descendants register and future-proofs the window
+ * for spatial-aware children (e.g. arrow-key navigation between fields).
  */
 function QuickCaptureApp() {
   // Mark document as transparent for the borderless capture window
@@ -94,9 +121,13 @@ function QuickCaptureApp() {
   document.body.style.background = "transparent";
 
   return (
-    <RustEngineContainer>
-      <QuickCapture />
-    </RustEngineContainer>
+    <SpatialFocusProvider>
+      <FocusLayer name={WINDOW_LAYER_NAME}>
+        <RustEngineContainer>
+          <QuickCapture />
+        </RustEngineContainer>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 

@@ -3,6 +3,7 @@ import {
   useContext,
   useMemo,
   useCallback,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -177,6 +178,21 @@ function warnOnceNoopSetter(_value: number | ((prev: number) => number)): void {
   }
 }
 
+/**
+ * Shared empty-array reference for command lists.
+ *
+ * Callers that never register commands in a given scope (and therefore
+ * would otherwise pass `commands={[]}`) should omit the prop — both
+ * `FocusScope` and `CommandScopeProvider` default to this constant.
+ *
+ * When a caller needs to pass an array explicitly (e.g. because a
+ * conditional would otherwise produce `undefined`), use this constant
+ * rather than a fresh `[]` literal. A stable reference keeps the
+ * downstream `useMemo`/`useEffect` dependencies stable across renders,
+ * so scope registration does not churn when nothing has actually changed.
+ */
+export const EMPTY_COMMANDS: readonly CommandDef[] = Object.freeze([]);
+
 /** Definition of a single command that can be registered in a scope. */
 export interface CommandDef {
   /** Unique identifier used to resolve the command through the scope chain. */
@@ -259,8 +275,12 @@ export function scopeChainFromScope(scope: CommandScope | null): string[] {
 }
 
 interface CommandScopeProviderProps {
-  /** Commands to register in this scope. */
-  commands: CommandDef[];
+  /**
+   * Commands to register in this scope. Optional — defaults to the shared
+   * `EMPTY_COMMANDS` constant. Most scopes exist purely to carry a moniker
+   * into the scope chain and have no commands of their own.
+   */
+  commands?: readonly CommandDef[];
   children: ReactNode;
   /** Optional moniker identifying which FocusScope created this scope. */
   moniker?: string;
@@ -272,7 +292,7 @@ interface CommandScopeProviderProps {
  * resolve commands upward through the chain.
  */
 export function CommandScopeProvider({
-  commands,
+  commands = EMPTY_COMMANDS,
   children,
   moniker,
 }: CommandScopeProviderProps) {
@@ -426,16 +446,50 @@ export function useDispatchCommand(presetCmd?: string) {
   const boardPath = useContext(ActiveBoardPathContext);
   const setInflightCount = useContext(CommandBusySetterContext);
 
-  // Prefer focused scope (includes entity + window monikers) over tree scope
-  // (just the component's position in the React tree). When nothing is focused,
-  // fall back to tree scope.
-  const effectiveScope = focusedScope ?? treeScope;
+  // Snapshot context reads into a ref so the returned dispatch callable can
+  // be reference-stable across renders. The prior implementation memoized
+  // on `[presetCmd, effectiveScope, boardPath, setInflightCount]`, which
+  // forced a new callable on every `FocusedScopeContext` change — i.e.
+  // every entity focus movement (arrow-key nav, cell click). That identity
+  // churn propagated through every consumer whose effect/memo deps included
+  // `dispatch`, triggering needless re-runs across the app.
+  //
+  // The ref is updated on every commit (rather than via useEffect) so reads
+  // during the same render always see the latest snapshot. Dispatch is an
+  // event handler, not a value — the React docs' "effect event" pattern —
+  // so it should act on the scope/path/setter current at CLICK time, not at
+  // render-memoization time. If focus moves between render and invocation,
+  // the invocation correctly targets the new focus.
+  const latestRef = useRef({
+    treeScope,
+    focusedScope,
+    boardPath,
+    setInflightCount,
+  });
+  latestRef.current = {
+    treeScope,
+    focusedScope,
+    boardPath,
+    setInflightCount,
+  };
 
   return useCallback(
     async (
       cmdOrOpts?: string | DispatchOptions,
       maybeOpts?: DispatchOptions,
     ): Promise<unknown> => {
+      const {
+        treeScope: latestTreeScope,
+        focusedScope: latestFocusedScope,
+        boardPath: latestBoardPath,
+        setInflightCount: latestSetInflightCount,
+      } = latestRef.current;
+
+      // Prefer focused scope (includes entity + window monikers) over tree
+      // scope (just the component's position in the React tree). When
+      // nothing is focused, fall back to tree scope.
+      const effectiveScope = latestFocusedScope ?? latestTreeScope;
+
       const { cmdId, opts } = resolveDispatchArgs(
         presetCmd,
         cmdOrOpts,
@@ -454,11 +508,13 @@ export function useDispatchCommand(presetCmd?: string) {
         cmdId,
         opts,
         chain,
-        boardPath,
-        setInflightCount,
+        latestBoardPath,
+        latestSetInflightCount,
       );
     },
-    [presetCmd, effectiveScope, boardPath, setInflightCount],
+    // `presetCmd` is the only input that genuinely changes the callable's
+    // behavior — everything else is read from `latestRef` at call time.
+    [presetCmd],
   );
 }
 

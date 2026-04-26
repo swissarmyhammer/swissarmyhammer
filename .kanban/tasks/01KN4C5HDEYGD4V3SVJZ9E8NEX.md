@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4C4R94N21004BP3YNEAJSK
 position_column: done
-position_ordinal: ffffffffffffffffb280
+position_ordinal: ffffffffffffffffffa580
 title: 'Migrate kanban attachments to use kind: attachment field type'
 ---
 ## What

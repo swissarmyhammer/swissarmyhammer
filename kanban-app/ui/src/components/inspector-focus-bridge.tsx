@@ -3,9 +3,9 @@ import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useFocusActions } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
-import { useEntityCommands } from "@/lib/entity-commands";
+import { asMoniker } from "@/types/spatial";
 
 interface InspectorFocusBridgeProps {
   entity: Entity;
@@ -14,9 +14,21 @@ interface InspectorFocusBridgeProps {
 /**
  * Wraps EntityInspector in a CommandScopeProvider with inspector navigation commands.
  *
- * Navigation is pull-based: vim/arrow/tab keys broadcast nav commands (nav.up, nav.down,
- * nav.first, nav.last) via broadcastNavCommand. Each field row's FocusScope uses claimWhen
- * predicates to claim focus when the command matches its position.
+ * Structural focus: each field row is a `<FocusScope kind="zone">` registered
+ * in the spatial-nav graph, and the Rust kernel's beam search picks the next
+ * focus — within-field nav (e.g. between pills) flows from rule 1 (in-zone
+ * candidates); cross-field nav flows from rule 2 (cross-zone leaf fallback).
+ * There are no per-row claimWhen predicates.
+ *
+ * Migration state — vim/arrow/tab nav: the `inspector.move{Up,Down,ToFirst,ToLast}`
+ * and tab/shift-tab command handlers below still call `broadcastNavCommand`, but
+ * that callback is now a no-op stub on `FocusActions` (it always returns `false`).
+ * Those branches exist only to keep the keymap registered while the inspector is
+ * rewired; today the only nav inside the inspector is whatever the spatial-nav
+ * kernel produces in response to keys handled elsewhere. To restore the
+ * documented vim/arrow/tab behaviour, these handlers should call
+ * `useSpatialFocusActions().navigate` (with the matching `Direction`) rather
+ * than `broadcastNavCommand`.
  *
  * Edit mode is managed by the inspector nav hook exposed via navRef.
  *
@@ -26,16 +38,11 @@ interface InspectorFocusBridgeProps {
  */
 export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const navRef = useRef<UseInspectorNavReturn | null>(null);
-  const { broadcastNavCommand } = useEntityFocus();
+  const { broadcastNavCommand } = useFocusActions();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  const entityMoniker = entity.moniker;
-  const entityCommands = useEntityCommands(
-    entity.entity_type,
-    entity.id,
-    entity,
-  );
+  const entityMoniker = asMoniker(entity.moniker);
 
   // Commands with keys — resolved by the global KeybindingHandler via scope bindings
   const commands = useMemo<CommandDef[]>(
@@ -114,11 +121,7 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   );
 
   return (
-    <FocusScope
-      moniker={entityMoniker}
-      commands={entityCommands}
-      showFocusBar={false}
-    >
+    <FocusScope moniker={entityMoniker} showFocusBar={false}>
       <CommandScopeProvider commands={commands}>
         <EntityInspector entity={entity} navRef={navRef} />
       </CommandScopeProvider>

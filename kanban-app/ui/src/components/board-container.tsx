@@ -134,7 +134,7 @@ export function BoardContainer({ children }: BoardContainerProps) {
   // the board handle from the scope chain.
   return (
     <StoreContainer path={activeBoardPath}>
-      <CommandScopeProvider commands={[]} moniker={moniker}>
+      <CommandScopeProvider moniker={moniker}>
         <FileDropProvider>
           <DragSessionProvider>
             <BoardContext.Provider value={contextValue}>
