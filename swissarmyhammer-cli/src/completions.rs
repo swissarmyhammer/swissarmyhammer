@@ -13,7 +13,7 @@ pub fn generate_completions<P: AsRef<Path>>(outdir: P) -> Result<()> {
     let mut cmd = Cli::command();
 
     for shell in [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell] {
-        generate_to(shell, &mut cmd, "swissarmyhammer", outdir)?;
+        generate_to(shell, &mut cmd, "sah", outdir)?;
     }
 
     println!("Generated shell completions in: {}", outdir.display());
@@ -25,7 +25,7 @@ pub fn generate_completions<P: AsRef<Path>>(outdir: P) -> Result<()> {
 pub fn print_completion(shell: Shell) -> Result<()> {
     let mut cmd = Cli::command();
 
-    clap_complete::generate(shell, &mut cmd, "swissarmyhammer", &mut io::stdout());
+    clap_complete::generate(shell, &mut cmd, "sah", &mut io::stdout());
 
     Ok(())
 }
@@ -43,10 +43,10 @@ mod tests {
         assert!(result.is_ok(), "generate_completions should succeed");
 
         // Check that completion files were created for each shell
-        let bash_completion = temp_dir.path().join("swissarmyhammer.bash");
-        let zsh_completion = temp_dir.path().join("_swissarmyhammer");
-        let fish_completion = temp_dir.path().join("swissarmyhammer.fish");
-        let ps_completion = temp_dir.path().join("_swissarmyhammer.ps1");
+        let bash_completion = temp_dir.path().join("sah.bash");
+        let zsh_completion = temp_dir.path().join("_sah");
+        let fish_completion = temp_dir.path().join("sah.fish");
+        let ps_completion = temp_dir.path().join("_sah.ps1");
 
         assert!(
             bash_completion.exists(),
@@ -69,7 +69,7 @@ mod tests {
             "Bash completion should not be empty"
         );
         assert!(
-            bash_content.contains("swissarmyhammer"),
+            bash_content.contains("sah"),
             "Completion should contain program name"
         );
     }
@@ -80,7 +80,7 @@ mod tests {
         let mut output = Vec::new();
         {
             let mut cmd = Cli::command();
-            clap_complete::generate(Shell::Bash, &mut cmd, "swissarmyhammer", &mut output);
+            clap_complete::generate(Shell::Bash, &mut cmd, "sah", &mut output);
         }
 
         let output_str = String::from_utf8(output).unwrap();
@@ -89,7 +89,7 @@ mod tests {
             "Bash completion output should not be empty"
         );
         assert!(
-            output_str.contains("swissarmyhammer"),
+            output_str.contains("sah"),
             "Output should contain program name"
         );
         assert!(
@@ -104,7 +104,7 @@ mod tests {
         let mut output = Vec::new();
         {
             let mut cmd = Cli::command();
-            clap_complete::generate(Shell::Zsh, &mut cmd, "swissarmyhammer", &mut output);
+            clap_complete::generate(Shell::Zsh, &mut cmd, "sah", &mut output);
         }
 
         let output_str = String::from_utf8(output).unwrap();
@@ -113,7 +113,7 @@ mod tests {
             "Zsh completion output should not be empty"
         );
         assert!(
-            output_str.contains("swissarmyhammer"),
+            output_str.contains("sah"),
             "Output should contain program name"
         );
         assert!(
@@ -128,7 +128,7 @@ mod tests {
         let mut output = Vec::new();
         {
             let mut cmd = Cli::command();
-            clap_complete::generate(Shell::Fish, &mut cmd, "swissarmyhammer", &mut output);
+            clap_complete::generate(Shell::Fish, &mut cmd, "sah", &mut output);
         }
 
         let output_str = String::from_utf8(output).unwrap();
@@ -137,11 +137,11 @@ mod tests {
             "Fish completion output should not be empty"
         );
         assert!(
-            output_str.contains("swissarmyhammer"),
+            output_str.contains("sah"),
             "Output should contain program name"
         );
         assert!(
-            output_str.contains("complete -c swissarmyhammer"),
+            output_str.contains("complete -c sah"),
             "Fish completion should contain complete command"
         );
     }
@@ -152,7 +152,7 @@ mod tests {
         let mut output = Vec::new();
         {
             let mut cmd = Cli::command();
-            clap_complete::generate(Shell::Bash, &mut cmd, "swissarmyhammer", &mut output);
+            clap_complete::generate(Shell::Bash, &mut cmd, "sah", &mut output);
         }
 
         let output_str = String::from_utf8(output).unwrap();
@@ -207,7 +207,7 @@ mod tests {
         let mut output = Vec::new();
         {
             let mut cmd = Cli::command();
-            clap_complete::generate(Shell::Bash, &mut cmd, "swissarmyhammer", &mut output);
+            clap_complete::generate(Shell::Bash, &mut cmd, "sah", &mut output);
         }
 
         let output_str = String::from_utf8(output).unwrap();
