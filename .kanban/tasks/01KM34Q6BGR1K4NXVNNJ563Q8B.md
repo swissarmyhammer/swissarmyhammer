@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffff8480
+position_ordinal: ffffffffffd780
 title: Fix cargo fmt formatting violations in swissarmyhammer-cli and swissarmyhammer-tools
 ---
 Two files have formatting diffs that fail `cargo fmt --check`:

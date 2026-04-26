@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffffff8f80
 title: Remove EntityFieldChanged.fields enrichment — use watcher diffs for all entity changes
 ---
 ## What

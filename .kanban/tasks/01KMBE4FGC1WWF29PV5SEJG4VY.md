@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMBE3DQN58BKFCJGRK40GPYA
 position_column: done
-position_ordinal: fffffffffffd80
+position_ordinal: ffffffffffffcc80
 title: Field component — data-bound control that owns read, write, and sync
 ---
 ## What

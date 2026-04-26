@@ -9,7 +9,7 @@ depends_on:
 - 01KPG6GD34NMPQE1DZD0MHWE0N
 - 01KPG6H74Z24N48DQR75CT7HP7
 position_column: done
-position_ordinal: fffffffffffffffffffffff880
+position_ordinal: fffffffffffffffffffffffffffffff180
 title: 'Commands: board.yaml cleanup — purge cross-cutting opt-ins'
 ---
 ## What

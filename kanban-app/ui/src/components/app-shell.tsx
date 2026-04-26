@@ -5,8 +5,13 @@ import {
   CommandScopeProvider,
   useDispatchCommand,
   type CommandDef,
+  type DispatchOptions,
 } from "@/lib/command-scope";
 import { useFocusActions, useFocusedScope } from "@/lib/entity-focus-context";
+import {
+  useSpatialFocusActions,
+  type SpatialFocusActions,
+} from "@/lib/spatial-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
@@ -16,7 +21,18 @@ import {
 } from "@/lib/keybindings";
 import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
+import { FocusLayer, useCurrentLayerKey } from "@/components/focus-layer";
+import { asLayerName } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
+
+/**
+ * Identity-stable `LayerName` for the command-palette overlay layer.
+ *
+ * Pulled to module scope so re-renders never mint a fresh value — the
+ * `<FocusLayer>` push effect depends on `name`, and a fresh-identity literal
+ * in JSX would force a tear-down / re-push cycle on every parent render.
+ */
+const PALETTE_LAYER_NAME = asLayerName("palette");
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -237,9 +253,19 @@ const NAV_COMMAND_SPEC: ReadonlyArray<{
 ];
 
 /**
- * Build universal navigation CommandDefs that broadcast through
- * EntityFocusContext. Each FocusScope with a matching `claimWhen` predicate
- * can pull focus when these fire.
+ * Build universal navigation CommandDefs that fire through
+ * `broadcastNavCommand`.
+ *
+ * Historically this was the entry point for the pull-based predicate
+ * registry: each FocusScope with a matching `claimWhen` predicate
+ * would claim focus when these commands fired. The predicate registry
+ * has been replaced by the Rust spatial-nav kernel (beam search plus
+ * per-direction `overrides`), so `broadcastNavCommand` is now a no-op
+ * stub that always returns `false`. The CommandDefs remain so the
+ * existing key bindings (`vim` j/k/h/l, arrows, Home/End, Ctrl-p/n/b/f
+ * in emacs) continue to register at the global scope; their `execute`
+ * closures simply land on a no-op until a follow-up wires them to
+ * `useSpatialFocusActions().navigate`.
  */
 function buildNavCommands(
   broadcastRef: React.MutableRefObject<NavBroadcaster>,
@@ -251,14 +277,108 @@ function buildNavCommands(
 }
 
 /**
- * Build the dynamic global commands — nav commands plus the
- * ui.entity.startRename command which exists in the backend registry
- * for palette discovery but runs locally via `triggerStartRename`.
+ * Read-only ref bag for the drill-in / drill-out command closures.
+ *
+ * The closures are minted once into the `globalCommands` memo and live
+ * for the AppShell's lifetime, but they need to read the *latest*
+ * spatial focus actions, entity setFocus callback, and `app.dismiss`
+ * dispatcher on every keystroke. Holding all three in refs lets the
+ * memo dependency list stay empty without staling on context updates.
+ */
+interface DrillRefs {
+  spatialActionsRef: React.MutableRefObject<SpatialFocusActions>;
+  setFocusRef: React.MutableRefObject<(moniker: string | null) => void>;
+  dismissRef: React.MutableRefObject<
+    (opts?: DispatchOptions) => Promise<unknown>
+  >;
+}
+
+/**
+ * Build the `nav.drillIn` (Enter) and `nav.drillOut` (Escape) commands.
+ *
+ * Both read the currently-focused [`SpatialKey`] from the
+ * `SpatialFocusProvider`, await the matching Tauri command
+ * (`spatial_drill_in` / `spatial_drill_out`), and on a non-null
+ * [`Moniker`] result dispatch `setFocus(moniker)` against the entity
+ * focus store. On a `null` result:
+ *
+ * - `nav.drillIn` is a no-op — there is nothing to descend into
+ *   (leaf with no editor, empty zone, or unknown key).
+ * - `nav.drillOut` falls through to `app.dismiss` so the existing
+ *   Escape chain (close the topmost modal layer) still fires at a
+ *   layer root.
+ *
+ * Mirrors the React contract documented on `SpatialFocusActions.drillIn`
+ * / `drillOut` — purely a registry query, no focus-state mutation; the
+ * caller wires the resulting moniker into the entity focus store.
+ */
+function buildDrillCommands(refs: DrillRefs): CommandDef[] {
+  return [
+    {
+      id: "nav.drillIn",
+      name: "Drill In",
+      keys: { vim: "Enter", cua: "Enter" },
+      execute: async () => {
+        const actions = refs.spatialActionsRef.current;
+        const key = actions.focusedKey();
+        if (key === null) return;
+        const moniker = await actions.drillIn(key);
+        if (moniker !== null) {
+          refs.setFocusRef.current(moniker);
+        }
+        // `null` → no-op. A leaf without an inline-edit affordance has
+        // nothing to drill into; leaves with an editor handle Enter via
+        // their own scope-level command (e.g. `inspector.edit`,
+        // card-name rename) which shadows this binding.
+      },
+    },
+    {
+      id: "nav.drillOut",
+      name: "Drill Out",
+      keys: { vim: "Escape", cua: "Escape" },
+      execute: async () => {
+        const actions = refs.spatialActionsRef.current;
+        const key = actions.focusedKey();
+        if (key === null) {
+          // No spatial focus → nothing to drill out of; honour the
+          // existing Escape chain (close topmost modal layer).
+          await refs.dismissRef.current();
+          return;
+        }
+        const moniker = await actions.drillOut(key);
+        if (moniker !== null) {
+          refs.setFocusRef.current(moniker);
+        } else {
+          // Layer root — fall through to `app.dismiss`.
+          await refs.dismissRef.current();
+        }
+      },
+    },
+  ];
+}
+
+/**
+ * Build the dynamic global commands — drill commands first (so they
+ * shadow the static `app.dismiss: Escape` binding when their
+ * scope-level `keys` are merged into the global key handler), nav
+ * commands next, plus the ui.entity.startRename command which exists in
+ * the backend registry for palette discovery but runs locally via
+ * `triggerStartRename`.
+ *
+ * Drill commands MUST come before `STATIC_GLOBAL_COMMANDS`-derived
+ * entries in the iteration order seen by `extractScopeBindings`: that
+ * walk uses "first key wins per scope", so to claim Escape away from
+ * `app.dismiss` the drill command's `CommandDef` must reach the scope
+ * map first. Putting them at the head of the dynamic batch — which
+ * AppShell prepends to the static batch in the spread — orders them
+ * correctly.
  */
 function buildDynamicGlobalCommands(
   broadcastRef: React.MutableRefObject<NavBroadcaster>,
+  drillRefs: DrillRefs,
 ): CommandDef[] {
   return [
+    ...buildDrillCommands(drillRefs),
     ...buildNavCommands(broadcastRef),
     {
       id: "ui.entity.startRename",
@@ -331,19 +451,57 @@ interface AppShellProps {
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
-  const { broadcastNavCommand } = useFocusActions();
+  const { broadcastNavCommand, setFocus } = useFocusActions();
+  const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
+
+  // Drill commands need read-on-demand access to spatial focus, entity
+  // setFocus, and the `app.dismiss` dispatcher. Holding each in a ref
+  // keeps the `globalCommands` memo dependency list empty while still
+  // letting the closures see the latest context values at keystroke
+  // time. The actions bag from `useSpatialFocusActions` is itself
+  // identity-stable (built once per provider lifetime), so the ref is
+  // belt-and-braces — a future refactor that turns it into a per-render
+  // value still survives.
+  const spatialActionsRef = useRef(spatialActions);
+  spatialActionsRef.current = spatialActions;
+  const setFocusRef = useRef(setFocus);
+  setFocusRef.current = setFocus;
+  const dismissRef = useRef(dismiss);
+  dismissRef.current = dismiss;
+
+  // Window-root layer key — passed explicitly to the palette `<FocusLayer>`
+  // because the command palette renders via `createPortal(document.body)`,
+  // which severs the React ancestor chain a `<FocusLayer>` would otherwise
+  // walk. Reading the key here, where `<FocusLayer name="window">` (mounted
+  // in `App.tsx`) is still a direct ancestor, captures the right parent
+  // regardless of how the palette portals out at render time.
+  const windowLayerKey = useCurrentLayerKey();
 
   usePaletteModeSync(paletteOpen);
 
   // Static commands come from module scope; dynamic ones close over
   // broadcastRef. Both are stable, so the memo has no dependencies.
+  //
+  // Dynamic commands precede static ones in the array so the drill
+  // commands' `keys: { cua: "Escape" }` reaches the `CommandScope` map
+  // before the static `app.dismiss: Escape`. `extractScopeBindings`
+  // walks the map in insertion order with first-key-wins semantics, so
+  // the `nav.drillOut` binding has to register first to claim Escape
+  // away from `app.dismiss` while a scope is focused. The drill
+  // execute closures fall through to `app.dismiss` themselves on a
+  // null kernel result, so the user-facing Escape behavior at a layer
+  // root is preserved.
   const globalCommands: CommandDef[] = useMemo(
     () => [
+      ...buildDynamicGlobalCommands(broadcastRef, {
+        spatialActionsRef,
+        setFocusRef,
+        dismissRef,
+      }),
       ...STATIC_GLOBAL_COMMANDS,
-      ...buildDynamicGlobalCommands(broadcastRef),
     ],
     [],
   );
@@ -357,12 +515,28 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
     <CommandScopeProvider commands={globalCommands}>
       <KeybindingHandler mode={keymapMode} />
       {children}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={closePalette}
-        mode={paletteMode}
-        onSwitchBoard={onSwitchBoard}
-      />
+      {/* The palette is its own modal layer: arrow keys move only between
+          palette rows, never bleeding back to whatever was beneath. The
+          layer mounts when the palette opens (from the backend UIState
+          `palette_open` flag) and unmounts when it closes — pop on
+          unmount restores `last_focused` on the parent (window-root)
+          layer, so dismissing the palette with Escape returns focus to
+          whichever leaf was focused before the palette opened.
+
+          `parentLayerKey={windowLayerKey}` is required because the
+          palette portals to `document.body`; without an explicit parent
+          the FocusLayer would compute `parent=null` and mint a second
+          window-root, which the Rust registry rejects as a corruption. */}
+      {paletteOpen && (
+        <FocusLayer name={PALETTE_LAYER_NAME} parentLayerKey={windowLayerKey}>
+          <CommandPalette
+            open={paletteOpen}
+            onClose={closePalette}
+            mode={paletteMode}
+            onSwitchBoard={onSwitchBoard}
+          />
+        </FocusLayer>
+      )}
     </CommandScopeProvider>
   );
 }

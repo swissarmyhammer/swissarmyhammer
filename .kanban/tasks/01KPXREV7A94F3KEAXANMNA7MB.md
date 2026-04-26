@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9480
+position_ordinal: ffffffffffffffffffffffffffffffff8f80
 title: Clear Filter command does not reset formula bar editor buffer
 ---
 ## What

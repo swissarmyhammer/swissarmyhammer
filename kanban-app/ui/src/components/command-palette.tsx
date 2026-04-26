@@ -25,6 +25,7 @@ import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { moniker } from "@/lib/moniker";
 import { FocusScope } from "@/components/focus-scope";
 import { EntityIcon } from "@/components/entity-icon";
+import { asMoniker } from "@/types/spatial";
 
 /** Result shape returned by the backend `search_entities` command. */
 interface SearchResult {
@@ -556,7 +557,9 @@ function SearchResultItem({
   onClose,
   onHoverIndex,
 }: ResultRowProps) {
-  const entityMoniker = moniker(result.entity_type, result.entity_id);
+  const entityMoniker = asMoniker(
+    moniker(result.entity_type, result.entity_id),
+  );
   const dispatch = useDispatchCommand("entity.inspect");
 
   return (

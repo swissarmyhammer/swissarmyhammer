@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffa780
+position_ordinal: fffffffffffff780
 title: 'Fix: board card fields start in vim insert mode instead of normal mode'
 ---
 ## What

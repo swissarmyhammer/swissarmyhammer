@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,11 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
+import { FocusZone } from "@/components/focus-zone";
+import { Focusable } from "@/components/focusable";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asMoniker } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -197,7 +203,7 @@ export function PerspectiveTabBar() {
   if (!activeView) return null;
 
   return (
-    <div className="flex items-center border-b bg-muted/20 px-1 h-8 shrink-0">
+    <PerspectiveBarSpatialZone>
       {/* Left: scrollable perspective tabs + add button */}
       <div className="flex items-center gap-0.5 overflow-x-auto shrink-0 max-w-[60%]">
         {filteredPerspectives.map((p) => (
@@ -227,7 +233,45 @@ export function PerspectiveTabBar() {
           perspectiveId={activePerspective.id}
         />
       )}
-    </div>
+    </PerspectiveBarSpatialZone>
+  );
+}
+
+/** Layout className shared by the spatial-zone wrapper and its plain-div fallback. */
+const PERSPECTIVE_BAR_LAYOUT =
+  "flex items-center border-b bg-muted/20 px-1 h-8 shrink-0";
+
+/**
+ * Wrap the perspective tab bar in a `<FocusZone moniker={asMoniker("ui:perspective-bar")}>`
+ * when the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every
+ * `PerspectiveTabBar` unit test that doesn't care about spatial nav to
+ * set up the providers. Conditionally rendering the zone when both context
+ * lookups succeed keeps the strict contract intact for direct
+ * `<FocusZone>` usage while letting the existing test suite keep its narrow
+ * provider tree.
+ *
+ * The zone (or plain div fallback) carries the same layout class so the
+ * `h-8 shrink-0` chain stays intact whether or not the spatial-nav stack is
+ * present.
+ */
+function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <div className={PERSPECTIVE_BAR_LAYOUT}>{children}</div>;
+  }
+  return (
+    <FocusZone
+      moniker={asMoniker("ui:perspective-bar")}
+      showFocusBar={false}
+      className={PERSPECTIVE_BAR_LAYOUT}
+    >
+      {children}
+    </FocusZone>
   );
 }
 
@@ -263,6 +307,12 @@ interface ScopedPerspectiveTabProps {
  * Wraps a single perspective tab in its CommandScopeProvider.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
+ *
+ * The tab's render also goes through `<PerspectiveTabFocusable>`, which adds a
+ * `<Focusable moniker={asMoniker(`perspective_tab:${id}`)}>` leaf when the
+ * spatial-nav stack is mounted. That makes each tab a peer leaf in the
+ * surrounding `ui:perspective-bar` zone so beam-search picks them up as
+ * sibling navigation targets.
  */
 function ScopedPerspectiveTab({
   perspective,
@@ -276,20 +326,49 @@ function ScopedPerspectiveTab({
 }: ScopedPerspectiveTabProps) {
   return (
     <CommandScopeProvider moniker={moniker("perspective", perspective.id)}>
-      <PerspectiveTab
-        id={perspective.id}
-        name={perspective.name}
-        filter={perspective.filter}
-        group={perspective.group}
-        isActive={activePerspectiveId === perspective.id}
-        isRenaming={renamingId === perspective.id}
-        onSelect={onSelect}
-        onDoubleClick={onDoubleClick}
-        onRenameCommit={onRenameCommit}
-        onRenameCancel={onRenameCancel}
-        onFilterFocus={onFilterFocus}
-      />
+      <PerspectiveTabFocusable id={perspective.id}>
+        <PerspectiveTab
+          id={perspective.id}
+          name={perspective.name}
+          filter={perspective.filter}
+          group={perspective.group}
+          isActive={activePerspectiveId === perspective.id}
+          isRenaming={renamingId === perspective.id}
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          onRenameCommit={onRenameCommit}
+          onRenameCancel={onRenameCancel}
+          onFilterFocus={onFilterFocus}
+        />
+      </PerspectiveTabFocusable>
     </CommandScopeProvider>
+  );
+}
+
+/**
+ * Wrap a perspective tab in `<Focusable moniker={asMoniker(`perspective_tab:${id}`)}>`
+ * when the spatial-nav stack is mounted; otherwise fall through.
+ *
+ * Same conditional pattern as `PerspectiveBarSpatialZone` and
+ * `ViewSpatialZone` — the strict primitive contract is preserved for
+ * production while keeping the test surface narrow.
+ */
+function PerspectiveTabFocusable({
+  id,
+  children,
+}: {
+  id: string;
+  children: ReactNode;
+}) {
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <Focusable moniker={asMoniker(`perspective_tab:${id}`)}>
+      {children}
+    </Focusable>
   );
 }
 

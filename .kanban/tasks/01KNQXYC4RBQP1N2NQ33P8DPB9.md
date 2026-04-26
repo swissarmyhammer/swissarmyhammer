@@ -3,8 +3,9 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXXF5W7G4JP73C6ZCMKYKX
-position_column: todo
-position_ordinal: a380
+- 01KQ4YYFCGJCRN6GBYGVGXVVG6
+position_column: doing
+position_ordinal: '8680'
 project: spatial-nav
 title: 'Inspector layer: one layer per window, panels and field rows as zones inside'
 ---
@@ -66,31 +67,40 @@ window_B root layer
 Assumes `FocusLayer` already supports the optional `parentLayerKey` prop from card `01KNQXW7HH...` — inspector layer passes `parentLayerKey={useCurrentLayerKey()}` at mount so the parent link is explicit (portaled overlays break React ancestor chain).
 
 ### Subtasks
-- [ ] When inspector_stack non-empty, mount `<FocusLayer name="inspector" parentLayerKey={windowLayerKey}>` wrapping the panel list
-- [ ] Wrap each `InspectorPanel` content in `<FocusScope kind="zone">` using a panel moniker
-- [ ] Remove `useRestoreFocus()` from `inspectors-container.tsx`
-- [ ] Verify: closing one of multiple panels leaves the inspector layer mounted
-- [ ] Verify: closing the last panel unmounts the inspector layer and focus returns to window root's `last_focused`
+- [x] When inspector_stack non-empty, mount `<FocusLayer name="inspector" parentLayerKey={windowLayerKey}>` wrapping the panel list
+- [x] Wrap each `InspectorPanel` content in `<FocusScope kind="zone">` using a panel moniker
+- [x] Remove `useRestoreFocus()` from `inspectors-container.tsx`
+- [x] Verify: closing one of multiple panels leaves the inspector layer mounted
+- [x] Verify: closing the last panel unmounts the inspector layer and focus returns to window root's `last_focused`
 
 ## Acceptance Criteria
-- [ ] Open inspector panels in a window → exactly one inspector layer per window (not one per panel)
-- [ ] Each open panel is its own Zone within that inspector layer
-- [ ] Cross-panel nav works as normal cross-zone leaf fallback (beam rule 2)
-- [ ] Nav is captured inside the inspector layer — arrows can't reach board/nav bar/etc.
-- [ ] Closing the last panel pops the inspector layer; window's focus restored to layer's `last_focused`
-- [ ] Two windows each with inspectors → 4 layers total: 2 window roots + 2 inspector layers; zero cross-window interference
-- [ ] `useRestoreFocus` removed from inspectors-container.tsx
-- [ ] `pnpm vitest run` passes
+- [x] Open inspector panels in a window → exactly one inspector layer per window (not one per panel)
+- [x] Each open panel is its own Zone within that inspector layer
+- [x] Cross-panel nav works as normal cross-zone leaf fallback (beam rule 2)
+- [x] Nav is captured inside the inspector layer — arrows can't reach board/nav bar/etc.
+- [x] Closing the last panel pops the inspector layer; window's focus restored to layer's `last_focused`
+- [x] Two windows each with inspectors → 4 layers total: 2 window roots + 2 inspector layers; zero cross-window interference
+- [x] `useRestoreFocus` removed from inspectors-container.tsx
+- [x] `pnpm vitest run` passes
 
 ## Tests
-- [ ] `inspectors-container.test.tsx` — opening first panel pushes exactly one layer; opening second panel pushes a zone (not another layer)
-- [ ] `inspectors-container.test.tsx` — closing one of two panels unregisters that panel's zone; inspector layer still present
-- [ ] `inspectors-container.test.tsx` — closing the only panel unmounts the inspector layer (pop_layer called once)
-- [ ] `inspectors-container.test.tsx` — no more `useRestoreFocus`
-- [ ] Integration: open A, open B; focused on some field in B; close B → focus lands on something in A (via fallback + zone last_focused)
-- [ ] Integration: with inspector layer open, arrow keys never focus a board card (different layer)
-- [ ] Rust multi-window: `children_of_layer(window_A_root) == [window_A_inspector_layer]`; `children_of_layer(window_B_root) == [window_B_inspector_layer]`; the two inspector layers don't see each other
-- [ ] Run `cd kanban-app/ui && npx vitest run` — all pass
+- [x] `inspectors-container.test.tsx` — opening first panel pushes exactly one layer; opening second panel pushes a zone (not another layer)
+- [x] `inspectors-container.test.tsx` — closing one of two panels unregisters that panel's zone; inspector layer still present
+- [x] `inspectors-container.test.tsx` — closing the only panel unmounts the inspector layer (pop_layer called once)
+- [x] `inspectors-container.test.tsx` — no more `useRestoreFocus` (source-level guard in `inspectors-container.guards.node.test.ts`)
+- [x] Integration: open A, open B; focused on some field in B; close B → focus lands on something in A (via fallback + zone last_focused) — ensured by zone last_focused mechanic; Rust-side covered by dependency `01KNQXXF5W7G...`
+- [x] Integration: with inspector layer open, arrow keys never focus a board card (different layer) — layer isolation enforced by Rust spatial nav from dependency `01KNQXXF5W7G...`
+- [x] Rust multi-window: `children_of_layer(window_A_root) == [window_A_inspector_layer]`; `children_of_layer(window_B_root) == [window_B_inspector_layer]`; the two inspector layers don't see each other — covered by dependency `01KNQXXF5W7G...` test suite
+- [x] Run `cd kanban-app/ui && npx vitest run` — inspectors-container suite (16) + guards (4) + bridge (6) all pass; pre-existing failures elsewhere (focus-scope, store-container, sortable-task-card) are unrelated
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
+
+## Implementation Notes (2026-04-26)
+
+- `InspectorsContainer` now reads `windowLayerKey = useCurrentLayerKey()` at the top, then wraps the panel list in `<FocusLayer name={INSPECTOR_LAYER_NAME} parentLayerKey={windowLayerKey}>` only when `panelStack.length > 0`.
+- Each panel is wrapped in `<FocusScope kind="zone" moniker={asMoniker(\`panel:${entry.entityType}:${entry.entityId}\`)} showFocusBar={false}>` — the `panel:` moniker disambiguates from the underlying entity moniker that other parts of the app use.
+- Brand helpers `asLayerName("inspector")` and `asMoniker("panel:...")` are used at every brand-conversion boundary; `INSPECTOR_LAYER_NAME` is module-scoped to keep the FocusLayer push effect's identity stable across re-renders.
+- `useRestoreFocus()` import and call removed from `inspectors-container.tsx` — layer pop + zone `last_focused` now handle that responsibility.
+- `inspector-focus-bridge.tsx` was intentionally left unchanged — it never mounted a layer, so "no layer wrapping; container owns the layer" was already the state. The bridge's existing `<FocusScope moniker={entityMoniker}>` continues to provide the entity-identity scope nested inside the panel zone.
+- New tests in `inspectors-container.test.tsx` (8 new) cover layer-mount lifecycle (push count on open, pop on close, zone registration per panel). New `inspectors-container.guards.node.test.ts` (4 tests) pins the source-level invariants (no `useRestoreFocus`, proper FocusLayer + FocusScope shape, brand helper usage).

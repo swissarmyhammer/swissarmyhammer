@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KP65VMEVVNECSK61H6BK32BM
 position_column: done
-position_ordinal: ffffffffffffffffffffffd280
+position_ordinal: ffffffffffffffffffffffffffffffc680
 title: 'entity-cache 2/4: wire EntityCache into EntityContext::list/read/write; KanbanContext preloads on init; supersedes drag-perf card'
 ---
 #entity-cache

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff8b80
+position_ordinal: ffffffffffffd980
 title: 'column-view: replace EditableMarkdown with Field for column name editing'
 ---
 ## What

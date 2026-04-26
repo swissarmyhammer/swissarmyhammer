@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffd880
+position_ordinal: ffffffffffffffffffffffffffff8780
 title: Define Project entity and field YAMLs
 ---
 ## What

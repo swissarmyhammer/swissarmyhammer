@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffff380
+position_ordinal: ffffffffffffc280
 title: Define EditorProps contract — editors own save, containers own lifecycle
 ---
 ## What

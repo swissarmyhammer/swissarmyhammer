@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff780
+position_ordinal: ffffffffffffffffffffffffe780
 title: 'Coverage: try_treesitter in ops/get_inbound_calls.rs'
 ---
 crates/code-context/src/ops/get_inbound_calls.rs

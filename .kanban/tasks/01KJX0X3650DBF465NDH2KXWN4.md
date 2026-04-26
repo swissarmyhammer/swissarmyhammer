@@ -1,7 +1,7 @@
 ---
 depends_on: ''
 position_column: done
-position_ordinal: af80
+position_ordinal: b680
 title: 'UI smoke test: verify board loads and data reload works!'
 ---
 Launch the Tauri app and verify the full data flow: initial load, mutation via commands, and event-driven refresh.

@@ -18,7 +18,7 @@ depends_on:
 - 01KPG7KH75NXGD65J1479HWMBN
 - 01KPJSSVCW774TK2E2JSMD3Y1J
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8580
+position_ordinal: fffffffffffffffffffffffffffffffe80
 title: 'Commands: automated verification — matrix test, snapshot tests, keybinding dispatch tests'
 ---
 ## What

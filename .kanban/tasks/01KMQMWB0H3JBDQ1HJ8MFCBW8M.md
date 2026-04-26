@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
 position_column: done
-position_ordinal: ffffffffffffff9680
+position_ordinal: ffffffffffffffeb80
 title: Migrate board navigation to claimWhen
 ---
 ## What

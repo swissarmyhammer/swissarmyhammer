@@ -116,18 +116,14 @@ vi.mock("@/hooks/use-grid", () => ({
   }),
 }));
 
-// Render DataTable as a thin div so the grid's CommandScope + FocusScope
-// wiring still runs (claim predicates are registered through the real
-// GridView path), but we skip the virtualized row machinery that is
-// orthogonal to the fetch contract.
+// Render DataTable as a thin div so the grid's CommandScope + spatial-nav
+// wiring still runs (each cell registers as a `<Focusable>` leaf through
+// the real GridView path), but we skip the virtualized row machinery that
+// is orthogonal to the fetch contract. The mock receives the same props
+// the real `<DataTable>` does; this stub renders only the test-id marker
+// so callers can assert the table mounted.
 vi.mock("@/components/data-table", () => ({
-  DataTable: ({ cellMonikers }: { cellMonikers: string[][] }) => (
-    <div data-testid="data-table">
-      {cellMonikers.flat().map((mk) => (
-        <span key={mk} data-moniker={mk} />
-      ))}
-    </div>
-  ),
+  DataTable: () => <div data-testid="data-table" />,
 }));
 
 // ---------------------------------------------------------------------------

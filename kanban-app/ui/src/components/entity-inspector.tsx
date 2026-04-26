@@ -27,11 +27,11 @@ import {
   useFocusActions,
   useFocusedMonikerRef,
   useIsFocused,
-  type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { HelpCircle, type LucideIcon } from "lucide-react";
+import { asMoniker } from "@/types/spatial";
 
 interface EntityInspectorProps {
   entity: Entity;
@@ -53,10 +53,13 @@ interface EntityInspectorProps {
  * `section` value is not in the declared list fall through to `body`
  * so schema typos stay visible.
  *
- * Navigation is pull-based: each field row's FocusScope gets claimWhen
- * predicates computed from its position in the field list. A mount effect
- * focuses the first field via setFocus. After that, navigation is purely
- * driven by broadcastNavCommand triggering claimWhen predicates.
+ * Navigation is structural: each field row registers as a
+ * `<FocusScope kind="zone">` that contains the label and the editor
+ * or pills as leaves. Within-field nav (e.g. between pills) flows from
+ * beam-search rule 1 (in-zone candidates); across-field nav flows from
+ * beam-search rule 2 (cross-zone leaf fallback). A mount effect focuses
+ * the first field via `setFocus` so the inspector opens with a sensible
+ * cursor.
  *
  * Pulls everything from context:
  * - Field definitions and ordering from SchemaContext
@@ -68,36 +71,23 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   const fields = schema?.fields ?? [];
   const visibleFields = useVisibleFields(entity, fields);
   const sections = useEntitySections(schema?.entity.sections, visibleFields);
-  const navigableFields = useMemo(
-    () => sections.flatMap((s) => s.fields),
-    [sections],
-  );
-  const fieldMonikers = useMemo(
-    () =>
-      navigableFields.map((f) =>
-        fieldMoniker(entity.entity_type, entity.id, f.name),
-      ),
-    [navigableFields, entity.entity_type, entity.id],
-  );
-  const claimPredicates = useFieldClaimPredicates(fieldMonikers);
+  const firstFieldMoniker = useMemo(() => {
+    const first = sections.flatMap((s) => s.fields)[0];
+    return first
+      ? fieldMoniker(entity.entity_type, entity.id, first.name)
+      : undefined;
+  }, [sections, entity.entity_type, entity.id]);
 
   const nav = useInspectorNav();
   // Expose nav to parent (InspectorFocusBridge) via ref
   if (navRef) navRef.current = nav;
 
-  useFirstFieldFocus(fieldMonikers[0]);
+  useFirstFieldFocus(firstFieldMoniker);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
-  return (
-    <InspectorSections
-      entity={entity}
-      sections={sections}
-      claimPredicates={claimPredicates}
-      nav={nav}
-    />
-  );
+  return <InspectorSections entity={entity} sections={sections} nav={nav} />;
 }
 
 /**
@@ -121,87 +111,6 @@ function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
       return !isEmpty(entity.fields[field.name]);
     });
   }, [entity, fields]);
-}
-
-/**
- * Compute the `claimWhen` predicate list for every navigable field, indexed
- * by its flat position in the inspector. Predicates wire up nav.up, nav.down,
- * nav.left, nav.first, and nav.last so keyboard navigation walks the list.
- */
-function useFieldClaimPredicates(fieldMonikers: string[]): ClaimPredicate[][] {
-  return useMemo(
-    () => fieldMonikers.map((_, i) => predicatesForField(fieldMonikers, i)),
-    [fieldMonikers],
-  );
-}
-
-/** Build the ClaimPredicate list for the field at index `i` in `monikers`. */
-function predicatesForField(monikers: string[], i: number): ClaimPredicate[] {
-  const predicates: ClaimPredicate[] = [];
-  // nav.down: claim if the field above me (or a child of it) is focused
-  if (i > 0) {
-    const prev = monikers[i - 1];
-    predicates.push({
-      command: "nav.down",
-      when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
-    });
-  }
-  // nav.up: claim if the field below me (or a child of it) is focused
-  if (i < monikers.length - 1) {
-    const next = monikers[i + 1];
-    predicates.push({
-      command: "nav.up",
-      when: (f, isDescendantOf) => f === next || isDescendantOf(next),
-    });
-  }
-  // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
-  // Pill predicates register before field rows (children before parents), so a
-  // middle pill's nav.left fires first.  Only when no pill matches (the first
-  // pill has no nav.left predicate) does this field-row predicate win.
-  predicates.push({
-    command: "nav.left",
-    when: (f, isDescendantOf) =>
-      f !== monikers[i] && isDescendantOf(monikers[i]),
-  });
-  predicates.push(...edgePredicates(monikers, i));
-  return predicates;
-}
-
-/**
- * nav.first / nav.last predicates for edge fields. The first field claims
- * nav.first when any other inspector field is focused; the last claims
- * nav.last symmetrically. Middle fields return an empty array.
- */
-function edgePredicates(monikers: string[], i: number): ClaimPredicate[] {
-  const edges: ClaimPredicate[] = [];
-  if (i === 0) {
-    edges.push({
-      command: "nav.first",
-      when: (f, isDescendantOf) =>
-        isInspectorField(monikers, f, isDescendantOf) && f !== monikers[0],
-    });
-  }
-  if (i === monikers.length - 1) {
-    edges.push({
-      command: "nav.last",
-      when: (f, isDescendantOf) =>
-        isInspectorField(monikers, f, isDescendantOf) &&
-        f !== monikers[monikers.length - 1],
-    });
-  }
-  return edges;
-}
-
-/** Check if a moniker is one of the inspector's fields or a descendant of one. */
-function isInspectorField(
-  monikers: string[],
-  f: string | null,
-  isDescendantOf: (a: string) => boolean,
-): boolean {
-  if (!f) return false;
-  if (monikers.includes(f)) return true;
-  // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
-  return monikers.some((m) => isDescendantOf(m));
 }
 
 /**
@@ -239,7 +148,6 @@ function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
 interface InspectorSectionsProps {
   entity: Entity;
   sections: ResolvedSection[];
-  claimPredicates: ClaimPredicate[][];
   nav: UseInspectorNavReturn;
 }
 
@@ -253,24 +161,17 @@ interface InspectorSectionsProps {
  * dense). The `header` section renders without field labels (legacy
  * compact styling); all other sections render field labels.
  *
- * `flatIndex` walks the already-flattened navigable field order so each
- * `FieldRow` receives its matching pull-based claim predicates.
+ * Each `FieldRow` becomes its own `<FocusScope kind="zone">` — beam
+ * search drives keyboard navigation between rows (cross-zone leaf
+ * fallback) and within rows (in-zone candidates).
  */
-function InspectorSections({
-  entity,
-  sections,
-  claimPredicates,
-  nav,
-}: InspectorSectionsProps) {
-  /** Track the running index across sections so each FieldRow knows its flat position. */
-  const flatIndex = { i: 0 };
+function InspectorSections({ entity, sections, nav }: InspectorSectionsProps) {
   const rowFor = (field: FieldDef, showLabel = true) => (
     <FieldRow
       key={field.name}
       field={field}
       entity={entity}
       showLabel={showLabel}
-      claimWhen={claimPredicates[flatIndex.i++]}
       inspectorMode={nav.mode}
       onExitEdit={nav.exitEdit}
       onEnterEdit={nav.enterEdit}
@@ -341,7 +242,6 @@ interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
   showLabel?: boolean;
-  claimWhen?: ClaimPredicate[];
   inspectorMode?: InspectorMode;
   onExitEdit?: () => void;
   onEnterEdit?: () => void;
@@ -351,13 +251,15 @@ interface FieldRowProps {
  * A single field row in the inspector. Manages editing state.
  * Field handles data binding, save, and display/editor dispatch.
  *
- * Wrapped in a FocusScope so the entity-focus system drives the
- * data-focused attribute — no explicit `focused` prop needed.
+ * Wrapped in a `<FocusScope kind="zone">` so the row registers as a
+ * navigable container in the spatial-nav graph: its label and the
+ * pills/editor inside become leaves whose nav is driven by beam-search
+ * rule 1 (in-zone candidates). Cross-row navigation (e.g. ArrowDown
+ * between field rows) uses beam-search rule 2 (cross-zone leaf fallback).
  *
  * Uses useIsFocused to determine if this row is the focused field.
  * Editing is triggered when isFocused AND inspectorMode === "edit".
  *
- * @param claimWhen - Predicates for pull-based navigation via broadcastNavCommand
  * @param inspectorMode - Current inspector mode (normal or edit)
  * @param onExitEdit - Callback to tell the inspector nav that editing is done
  * @param onEnterEdit - Callback to enter edit mode on the inspector
@@ -366,7 +268,6 @@ function FieldRow({
   field,
   entity,
   showLabel = true,
-  claimWhen,
   inspectorMode,
   onExitEdit,
   onEnterEdit,
@@ -408,16 +309,29 @@ function FieldRow({
     <FieldContent field={field} entity={entity} editState={editState} />
   );
   const bare = !showLabel && !Icon;
+  // FocusScope's `className` lands on its outer primitive `<div>` and the
+  // primitive renders children as direct layout children — no wrapping body
+  // chrome, so `flex items-start gap-2` here is enough to lay out the icon
+  // span and content div as siblings. (Earlier revisions duplicated the flex
+  // classes onto an inner wrapper because an internal `FocusScopeBody`
+  // collapsed the chain; that workaround was removed when FocusScope was
+  // restructured to attach its chrome directly to the primitive.)
 
   return (
     <FocusScope
-      moniker={scopeMoniker}
-      claimWhen={claimWhen}
+      moniker={asMoniker(scopeMoniker)}
+      kind="zone"
       data-testid={`field-row-${field.name}`}
       className={bare ? undefined : "flex items-start gap-2"}
     >
-      {Icon && <FieldIconTooltip Icon={Icon} tip={tip} />}
-      {bare ? content : <div className="flex-1 min-w-0">{content}</div>}
+      {bare ? (
+        content
+      ) : (
+        <>
+          {Icon && <FieldIconTooltip Icon={Icon} tip={tip} />}
+          <div className="flex-1 min-w-0">{content}</div>
+        </>
+      )}
     </FocusScope>
   );
 }

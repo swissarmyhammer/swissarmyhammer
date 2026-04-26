@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffde80
+position_ordinal: ffffe580
 title: Fix CM6 monospace font to inherit app font
 ---
 CM6 editors default to monospace which is jarring against the app's system-ui font stack. Quick fix.

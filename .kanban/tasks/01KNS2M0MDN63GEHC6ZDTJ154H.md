@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9f80
+position_ordinal: ffffffffffffffffffffffffffffdb80
 title: 'Fix formula bar focus: clicking filter icon or bar area must focus the CM6 editor'
 ---
 ## What

@@ -2130,6 +2130,524 @@ pub async fn show_context_menu(
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation commands.
+//
+// These wire the headless `swissarmyhammer-focus` kernel into Tauri. Each
+// command derives a `WindowLabel` from its `tauri::Window` parameter, locks
+// the registry and per-window focus state held in `AppState`, performs its
+// kernel call, and (where the kernel returns a `FocusChangedEvent`) emits
+// `focus-changed` so the React `SpatialFocusProvider` can update its claim
+// listeners.
+//
+// These commands intentionally bypass `dispatch_command` per the rule at the
+// top of this file: they are transient UI plumbing — not business state
+// mutations. The headless kernel owns the model; these commands only forward
+// register / focus / navigate calls and surface the resulting events.
+//
+// ## Lock ordering
+//
+// Every spatial command that touches both the registry and per-window focus
+// holds the locks in the same order: **registry first, state second**. The
+// helper [`with_spatial`] enforces this so callers cannot deadlock by
+// accident. The unregister command intentionally takes both locks together
+// for the duration of the transaction so observers (focus listeners,
+// fallback computations) cannot see a half-applied unregister.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use swissarmyhammer_focus::{
+    BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusZone,
+    Focusable, LayerKey, LayerName, Moniker, Rect, RegisterEntry, SpatialKey, SpatialRegistry,
+    SpatialState, WindowLabel,
+};
+
+/// Tauri event name for spatial focus changes — mirrors the listener
+/// registered in `kanban-app/ui/src/lib/spatial-focus-context.tsx`.
+const FOCUS_CHANGED_EVENT: &str = "focus-changed";
+
+/// Derive a [`WindowLabel`] newtype from a Tauri window handle.
+///
+/// `tauri::Window::label()` returns the borrowed string the user-space
+/// constructor mints (`"main"`, `"board-<ulid>"`, `"quick-capture"`, …);
+/// the kernel speaks in newtypes, so we wrap it at the boundary. Every
+/// spatial command funnels through this helper so a stray `String` cannot
+/// leak into the kernel surface.
+fn window_label_from(window: &Window) -> WindowLabel {
+    WindowLabel::from_string(window.label())
+}
+
+/// Acquire both spatial locks in canonical order and run `f` with mutable
+/// access.
+///
+/// Holding `spatial_registry` first then `spatial_state` mirrors the
+/// ordering used by [`spatial_unregister_scope`] (which is the only
+/// command that genuinely needs both at once). Centralizing the order
+/// here means every other adapter inherits it for free, and
+/// future commands cannot accidentally lock-invert.
+async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
+where
+    F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
+{
+    let mut registry = state.spatial_registry.lock().await;
+    let mut spatial_state = state.spatial_state.lock().await;
+    f(&mut registry, &mut spatial_state)
+}
+
+/// Forward a kernel-produced [`FocusChangedEvent`] to the React side.
+///
+/// Emits via the `tauri::Window` so the event reaches every webview the
+/// app has spawned. The frontend's `SpatialFocusProvider` filters its own
+/// claim registry by the `payload.next_key` lookup — windows that don't
+/// own the key receive the event silently and drop it, which matches the
+/// per-window claim-registry semantics described in the React module
+/// docs.
+fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
+    window
+        .emit(FOCUS_CHANGED_EVENT, event)
+        .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
+}
+
+// ── Pure inner logic, factored out of the Tauri commands so unit tests can
+// drive the same code paths against `&mut SpatialRegistry, &mut SpatialState`
+// without spinning up Tauri. The Tauri commands below are thin wrappers that
+// derive the [`WindowLabel`] from `tauri::Window`, lock the registry/state in
+// canonical order, dispatch to one of these helpers, and emit the resulting
+// `FocusChangedEvent` (when any) on the calling window.
+
+/// Register a [`Focusable`] leaf into `registry`.
+///
+/// Pulled out of [`spatial_register_focusable`] so unit tests can exercise
+/// the same body without constructing a Tauri runtime.
+#[allow(clippy::too_many_arguments)]
+fn spatial_register_focusable_inner(
+    registry: &mut SpatialRegistry,
+    key: SpatialKey,
+    moniker: Moniker,
+    rect: Rect,
+    layer_key: LayerKey,
+    parent_zone: Option<SpatialKey>,
+    overrides: HashMap<Direction, Option<Moniker>>,
+) {
+    registry.register_focusable(Focusable {
+        key,
+        moniker,
+        rect,
+        layer_key,
+        parent_zone,
+        overrides,
+    });
+}
+
+/// Register a [`FocusZone`] container into `registry`.
+///
+/// Preserves any existing `last_focused` slot so a placeholder→real-mount
+/// re-register doesn't lose drill-out memory. Mirrors `apply_batch`'s
+/// preservation logic so the single-entry path stays symmetric with the
+/// batch path.
+#[allow(clippy::too_many_arguments)]
+fn spatial_register_zone_inner(
+    registry: &mut SpatialRegistry,
+    key: SpatialKey,
+    moniker: Moniker,
+    rect: Rect,
+    layer_key: LayerKey,
+    parent_zone: Option<SpatialKey>,
+    overrides: HashMap<Direction, Option<Moniker>>,
+) {
+    let last_focused = registry
+        .scope(&key)
+        .and_then(|s| s.as_zone())
+        .and_then(|z| z.last_focused.clone());
+    registry.register_zone(FocusZone {
+        key,
+        moniker,
+        rect,
+        layer_key,
+        parent_zone,
+        last_focused,
+        overrides,
+    });
+}
+
+/// Unregister a scope, calling `handle_unregister` BEFORE `unregister_scope`
+/// so the focus tracker can read the lost entry's metadata.
+///
+/// This ordering is the central invariant of the unregister command — the
+/// kernel cannot compute a fallback target after the entry has been
+/// removed from the registry. Returns the [`FocusChangedEvent`] (if any)
+/// the kernel produced; the caller is responsible for emitting it.
+fn spatial_unregister_scope_inner(
+    registry: &mut SpatialRegistry,
+    spatial_state: &mut SpatialState,
+    key: &SpatialKey,
+) -> Option<FocusChangedEvent> {
+    let event = spatial_state.handle_unregister(registry, key);
+    registry.unregister_scope(key);
+    event
+}
+
+/// Apply a batch of [`RegisterEntry`] values to `registry` in one call.
+///
+/// Pulled out of [`spatial_register_batch`] so unit tests can drive the
+/// same code path against `&mut SpatialRegistry` without spinning up a
+/// Tauri runtime. The batch path is atomic at the registry boundary —
+/// `SpatialRegistry::apply_batch` validates every entry's kind-stability
+/// before mutating any scope, so a returned error guarantees the registry
+/// is unchanged. Errors are stringified at this layer because the wire
+/// boundary speaks `Result<(), String>`.
+fn spatial_register_batch_inner(
+    registry: &mut SpatialRegistry,
+    entries: Vec<RegisterEntry>,
+) -> Result<(), BatchRegisterError> {
+    registry.apply_batch(entries)
+}
+
+/// Push a layer into the registry under the given owning window.
+///
+/// `window_label` is derived from the calling `tauri::Window` in the
+/// command wrapper; the layer's owning window cannot be supplied by the
+/// React side because Tauri webviews are server-tracked, not client-known.
+fn spatial_push_layer_inner(
+    registry: &mut SpatialRegistry,
+    key: LayerKey,
+    name: LayerName,
+    parent: Option<LayerKey>,
+    window_label: WindowLabel,
+) {
+    registry.push_layer(FocusLayer {
+        key,
+        name,
+        parent,
+        window_label,
+        last_focused: None,
+    });
+}
+
+/// Register a `<Focusable>` leaf with the spatial registry.
+///
+/// Mirrors `Focusable` on the kernel side. `parent_zone` is `None` when the
+/// leaf sits directly under its layer root; `overrides` is empty when the
+/// leaf has no per-direction special cases. Replacing a registration with
+/// the same key is intentionally allowed (idempotent re-mount); the kernel
+/// preserves the per-key overwrite semantics described on
+/// `SpatialRegistry::register_focusable`.
+///
+/// Returns `Ok(())` on success. Registration is purely structural — no
+/// `focus-changed` event is emitted.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn spatial_register_focusable(
+    _window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+    moniker: Moniker,
+    rect: Rect,
+    layer_key: LayerKey,
+    parent_zone: Option<SpatialKey>,
+    overrides: HashMap<Direction, Option<Moniker>>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_focusable_inner(
+            registry,
+            key,
+            moniker,
+            rect,
+            layer_key,
+            parent_zone,
+            overrides,
+        );
+    })
+    .await;
+    Ok(())
+}
+
+/// Register a `<FocusZone>` container with the spatial registry.
+///
+/// Mirrors `FocusZone` on the kernel side. `last_focused` is **not** taken
+/// from the wire — registration is the React side's "this scope just
+/// mounted" signal, and `last_focused` is server-owned drill-out memory
+/// that the navigator populates as focus moves. The kernel preserves any
+/// existing `last_focused` slot when a zone is re-registered (the
+/// placeholder/real-mount swap).
+///
+/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
+/// registration does not move focus.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn spatial_register_zone(
+    _window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+    moniker: Moniker,
+    rect: Rect,
+    layer_key: LayerKey,
+    parent_zone: Option<SpatialKey>,
+    overrides: HashMap<Direction, Option<Moniker>>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_zone_inner(
+            registry,
+            key,
+            moniker,
+            rect,
+            layer_key,
+            parent_zone,
+            overrides,
+        );
+    })
+    .await;
+    Ok(())
+}
+
+/// Register a batch of [`RegisterEntry`] values in one Tauri invoke.
+///
+/// The React-side virtualizer ships a `Vec<RegisterEntry>` for off-screen
+/// rows whenever the visible window changes — twenty placeholder mounts
+/// collapse into a single IPC round-trip and a single registry lock,
+/// rather than twenty independent `spatial_register_focusable` /
+/// `spatial_register_zone` calls.
+///
+/// Atomic at the registry boundary: `SpatialRegistry::apply_batch`
+/// validates every entry's kind-stability before mutating any scope,
+/// so a [`BatchRegisterError`] response guarantees no entry was applied.
+/// Zone entries that target an already-registered key preserve the
+/// existing `last_focused` slot — the placeholder→real-mount swap path
+/// must not lose drill-out memory accumulated while the placeholder
+/// was live.
+///
+/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
+/// registration does not move focus. On kind-mismatch, returns the
+/// stringified error (the wire boundary speaks `Result<(), String>`).
+#[tauri::command]
+pub async fn spatial_register_batch(
+    _window: Window,
+    state: State<'_, AppState>,
+    entries: Vec<RegisterEntry>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_batch_inner(registry, entries)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Unregister a previously-registered scope.
+///
+/// **Lock ordering** is critical here: we acquire the registry lock first,
+/// then the state lock, then call `SpatialState::handle_unregister` BEFORE
+/// `SpatialRegistry::unregister_scope`. This ordering exists because
+/// `handle_unregister` must read the lost entry's metadata (its layer,
+/// parent zone, and rect) so the focus tracker can compute a fallback
+/// target — once `unregister_scope` runs, that metadata is gone.
+///
+/// Both locks are held together for the entire transaction so observers
+/// cannot see a half-applied unregister.
+///
+/// If the unregistered scope was the focused one, the resulting
+/// `FocusChangedEvent` is emitted to the React side so claim listeners
+/// release the focus visual.
+#[tauri::command]
+pub async fn spatial_unregister_scope(
+    window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_unregister_scope_inner(registry, spatial_state, &key)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Refresh the bounding rect of a registered scope.
+///
+/// Called from the React side when ResizeObserver fires on the underlying
+/// DOM node. No-op on the kernel side if the key is unknown — a
+/// late-arriving rect for an already-unregistered scope drops silently
+/// rather than re-creating the entry.
+///
+/// No `focus-changed` event is emitted; rect updates do not move focus.
+#[tauri::command]
+pub async fn spatial_update_rect(
+    state: State<'_, AppState>,
+    key: SpatialKey,
+    rect: Rect,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        registry.update_rect(&key, rect);
+    })
+    .await;
+    Ok(())
+}
+
+/// Move focus to the scope at `key`.
+///
+/// Delegates to `SpatialState::focus`, which derives the owning window
+/// from the registry, looks up the moniker, and updates its per-window
+/// focus map. The kernel returns `Some(FocusChangedEvent)` when focus
+/// actually moved (key was registered, in a known window, and not
+/// already focused) and `None` otherwise. We forward only the actual
+/// transitions to the frontend so claim listeners don't see redundant
+/// events.
+#[tauri::command]
+pub async fn spatial_focus(
+    window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.focus(registry, key)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Move focus relative to `key` in `direction`.
+///
+/// Uses the default [`BeamNavStrategy`] for the navigator. `key` is the
+/// currently-focused scope (the React side passes its own focused key
+/// to keep this call symmetric across windows).
+///
+/// Returns `Ok(())` whether or not focus actually moved — the kernel
+/// returns `None` when the strategy declines (no target in that
+/// direction), the strategy returns a moniker that no scope owns, or the
+/// resolved key is already focused. In all those cases nothing is emitted.
+#[tauri::command]
+pub async fn spatial_navigate(
+    window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+    direction: Direction,
+) -> Result<(), String> {
+    let strategy = BeamNavStrategy::new();
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.navigate_with(registry, &strategy, key, direction)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Push a new layer onto the registry.
+///
+/// Layers form a per-window forest: the window root has `parent = None`;
+/// inspector / dialog / palette overlays are stacked under their parent.
+/// `key` is the stable mount identifier; `name` is the layer role
+/// (`"window"`, `"inspector"`, `"dialog"`, `"palette"`); `parent` ties
+/// the layer to its stacking parent (`None` for a window root).
+///
+/// The owning window is taken from the calling `tauri::Window` — every
+/// layer in a forest path back to a root shares the same window label,
+/// and the registry uses that to bound spatial nav and fallback
+/// resolution to a single window.
+#[tauri::command]
+pub async fn spatial_push_layer(
+    window: Window,
+    state: State<'_, AppState>,
+    key: LayerKey,
+    name: LayerName,
+    parent: Option<LayerKey>,
+) -> Result<(), String> {
+    let window_label = window_label_from(&window);
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_push_layer_inner(registry, key, name, parent, window_label);
+    })
+    .await;
+    Ok(())
+}
+
+/// Pop a previously-pushed layer.
+///
+/// No-op if the key is unknown. The registry does not cascade-unregister
+/// scopes whose `layer_key` matches — the React side unmounts those
+/// scopes first via `spatial_unregister_scope`, so the registry stays
+/// consistent without a GC pass.
+///
+/// No `focus-changed` event is emitted; layer pops are not focus
+/// transitions on their own.
+#[tauri::command]
+pub async fn spatial_pop_layer(state: State<'_, AppState>, key: LayerKey) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        registry.remove_layer(&key);
+    })
+    .await;
+    Ok(())
+}
+
+/// Compute the [`Moniker`] to focus when the user drills *into* the scope
+/// at `key`.
+///
+/// Pure registry query — delegates to [`SpatialRegistry::drill_in`] and
+/// returns the result verbatim. Does not mutate focus state and does not
+/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
+/// on a non-null result, falling through to the next command (typically
+/// inline edit) on `null`.
+///
+/// `Some(Moniker)` — the zone has a registered `last_focused` (preferred)
+/// or at least one child entry, and that entry's moniker is returned for
+/// the caller to focus.
+///
+/// `None` — the key is unknown, the scope is a leaf with no children to
+/// descend into, the zone is empty, or the `last_focused` slot is stale
+/// (the kernel falls back to first-child by rect top-left, but if the zone
+/// has no children at all, `None` propagates).
+///
+/// The `window` parameter is unused but kept in the signature for
+/// symmetry with the other spatial commands; lock acquisition still
+/// goes through `with_spatial` so the registry/state ordering stays
+/// uniform across the spatial command surface.
+#[tauri::command]
+pub async fn spatial_drill_in(
+    _window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+) -> Result<Option<Moniker>, String> {
+    let moniker = with_spatial(&state, |registry, _spatial_state| registry.drill_in(key)).await;
+    Ok(moniker)
+}
+
+/// Compute the [`Moniker`] to focus when the user drills *out of* the
+/// scope at `key`.
+///
+/// Pure registry query — delegates to [`SpatialRegistry::drill_out`] and
+/// returns the result verbatim. Does not mutate focus state and does not
+/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
+/// on a non-null result, falling through to `app.dismiss` (close the
+/// topmost modal layer) on `null`.
+///
+/// `Some(Moniker)` — the scope has a registered `parent_zone`, and that
+/// zone's moniker is returned for the caller to focus.
+///
+/// `None` — the key is unknown, the scope sits directly at the layer
+/// root (no enclosing zone), or the `parent_zone` reference points at a
+/// scope that is no longer registered. In all cases the React side falls
+/// through to the next Escape handler.
+///
+/// The `window` parameter is unused but kept in the signature for
+/// symmetry with the other spatial commands; lock acquisition still
+/// goes through `with_spatial` so the registry/state ordering stays
+/// uniform across the spatial command surface.
+#[tauri::command]
+pub async fn spatial_drill_out(
+    _window: Window,
+    state: State<'_, AppState>,
+    key: SpatialKey,
+) -> Result<Option<Moniker>, String> {
+    let moniker = with_spatial(&state, |registry, _spatial_state| registry.drill_out(key)).await;
+    Ok(moniker)
+}
+
 #[cfg(test)]
 mod tests {
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
@@ -2580,5 +3098,434 @@ mod tests {
             ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
             None
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation command tests.
+//
+// These exercise the inner functions extracted from each `#[tauri::command]`
+// shell. We can't construct a `tauri::Window` or `State<'_, AppState>` in a
+// unit test without a Tauri runtime — so the inner helpers operate directly
+// on `&mut SpatialRegistry, &mut SpatialState`, which is exactly the
+// signature these tests want.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod spatial_command_tests {
+    use super::*;
+
+    /// Build a `Rect` at `(x, y)` with extent `(w, h)`.
+    fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        use swissarmyhammer_focus::Pixels;
+        Rect {
+            x: Pixels::new(x),
+            y: Pixels::new(y),
+            width: Pixels::new(w),
+            height: Pixels::new(h),
+        }
+    }
+
+    /// Push a window-root layer into `registry`, returning the layer key
+    /// the test should pass to subsequent register calls.
+    fn push_root_layer(registry: &mut SpatialRegistry, window: &str, layer: &str) -> LayerKey {
+        let key = LayerKey::from_string(layer);
+        spatial_push_layer_inner(
+            registry,
+            key.clone(),
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string(window),
+        );
+        key
+    }
+
+    /// Register a leaf with a deterministic key/moniker pair into
+    /// `registry`. Returns the `(key, moniker)` for assertions.
+    fn register_leaf(
+        registry: &mut SpatialRegistry,
+        layer: &LayerKey,
+        key: &str,
+        moniker: &str,
+        rect: Rect,
+    ) -> (SpatialKey, Moniker) {
+        let k = SpatialKey::from_string(key);
+        let m = Moniker::from_string(moniker);
+        spatial_register_focusable_inner(
+            registry,
+            k.clone(),
+            m.clone(),
+            rect,
+            layer.clone(),
+            None,
+            HashMap::new(),
+        );
+        (k, m)
+    }
+
+    /// `spatial_focus` invokes `SpatialState::focus` and the kernel returns
+    /// a `FocusChangedEvent` carrying the focused window, key, and moniker.
+    /// This is the same code path the Tauri command takes before
+    /// emitting on the window — so an event from this inner call is
+    /// exactly what the React side would receive over IPC.
+    #[test]
+    fn spatial_focus_emits_focus_changed_event() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (key, moniker) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let event = state
+            .focus(&registry, key.clone())
+            .expect("focus emits an event for a freshly registered scope");
+
+        assert_eq!(event.window_label, WindowLabel::from_string("main"));
+        assert_eq!(event.prev_key, None);
+        assert_eq!(event.next_key, Some(key));
+        assert_eq!(event.next_moniker, Some(moniker));
+    }
+
+    /// Registering a focusable leaf inserts it into the registry and the
+    /// scope is reachable via `scope()`. Mirrors the wire path
+    /// `spatial_register_focusable` → `register_focusable_inner` →
+    /// `SpatialRegistry::register_focusable`.
+    #[test]
+    fn spatial_register_focusable_round_trips() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (key, moniker) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "ui:button",
+            rect_at(5.0, 5.0, 20.0, 30.0),
+        );
+
+        let scope = registry.scope(&key).expect("scope was registered");
+        assert!(scope.is_focusable());
+        assert_eq!(scope.moniker(), &moniker);
+        assert_eq!(scope.layer_key(), &layer);
+        assert_eq!(scope.parent_zone(), None);
+    }
+
+    /// Registering a zone with the same key as a previous zone preserves
+    /// any existing `last_focused` slot — the kernel's placeholder/real-
+    /// mount swap requires drill-out memory to survive a re-register.
+    /// Verifies the inner helper applies the same preservation logic that
+    /// `apply_batch` uses for zones.
+    #[test]
+    fn spatial_register_zone_preserves_last_focused() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let zone_key = SpatialKey::from_string("z1");
+        let leaf_key = SpatialKey::from_string("leaf");
+        spatial_register_zone_inner(
+            &mut registry,
+            zone_key.clone(),
+            Moniker::from_string("ui:zone"),
+            rect_at(0.0, 0.0, 100.0, 100.0),
+            layer.clone(),
+            None,
+            HashMap::new(),
+        );
+
+        // Reach into the registry to set `last_focused` directly — that's
+        // what the navigator would do as focus moves through the zone.
+        // Re-register the zone and assert the slot survives.
+        {
+            // Use a fresh inserted zone with a populated last_focused via
+            // a new FocusZone — emulates the navigator's mutation.
+            registry.register_zone(FocusZone {
+                key: zone_key.clone(),
+                moniker: Moniker::from_string("ui:zone"),
+                rect: rect_at(0.0, 0.0, 100.0, 100.0),
+                layer_key: layer.clone(),
+                parent_zone: None,
+                last_focused: Some(leaf_key.clone()),
+                overrides: HashMap::new(),
+            });
+        }
+
+        // Re-register through the inner helper — the real wire path.
+        spatial_register_zone_inner(
+            &mut registry,
+            zone_key.clone(),
+            Moniker::from_string("ui:zone"),
+            rect_at(0.0, 0.0, 200.0, 200.0),
+            layer,
+            None,
+            HashMap::new(),
+        );
+
+        let scope = registry.scope(&zone_key).expect("zone still registered");
+        let zone = scope.as_zone().expect("scope is a zone");
+        assert_eq!(
+            zone.last_focused.as_ref(),
+            Some(&leaf_key),
+            "re-register should preserve last_focused for placeholder/real-mount swap"
+        );
+    }
+
+    /// The unregister path **must** call `handle_unregister` BEFORE
+    /// `unregister_scope` so the focus tracker can read the lost entry's
+    /// metadata. We verify the ordering by registering two leaves,
+    /// focusing one, unregistering it, and asserting:
+    ///
+    /// 1. A `focus-changed` event was produced (proves
+    ///    `handle_unregister` saw the lost entry's metadata).
+    /// 2. The lost key is no longer in the registry (proves
+    ///    `unregister_scope` ran).
+    /// 3. The fallback target is the surviving sibling (proves the
+    ///    fallback resolver had the metadata it needed).
+    #[test]
+    fn spatial_unregister_calls_handle_unregister_before_unregister_scope() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (k1, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (k2, m2) = register_leaf(
+            &mut registry,
+            &layer,
+            "k2",
+            "task:02",
+            rect_at(20.0, 0.0, 10.0, 10.0),
+        );
+
+        // Focus k1, then unregister it — fallback should pick k2.
+        state.focus(&registry, k1.clone()).expect("focus k1");
+
+        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &k1)
+            .expect("unregistering the focused scope must produce a focus-changed event");
+
+        assert_eq!(event.prev_key, Some(k1.clone()));
+        assert_eq!(event.next_key, Some(k2.clone()));
+        assert_eq!(event.next_moniker, Some(m2));
+        assert!(
+            registry.scope(&k1).is_none(),
+            "unregister_scope ran after handle_unregister"
+        );
+        assert!(
+            registry.scope(&k2).is_some(),
+            "sibling survives the unregister"
+        );
+    }
+
+    /// Unregister with no focus claim is a no-op at the focus-tracker
+    /// layer but still removes the scope from the registry.
+    /// Verifies the inner helper does not panic when there is no
+    /// focus to fall back from.
+    #[test]
+    fn spatial_unregister_unfocused_scope_is_noop_event_wise() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (key, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &key);
+        assert!(
+            event.is_none(),
+            "unregistering an unfocused scope produces no event"
+        );
+        assert!(
+            registry.scope(&key).is_none(),
+            "scope is still removed from the registry"
+        );
+    }
+
+    /// `spatial_navigate(Down)` from the top leaf moves focus to the
+    /// bottom leaf in the same zone. Exercises the full kernel pipeline:
+    /// `BeamNavStrategy::next` resolves the moniker, `navigate_with`
+    /// turns the moniker back into a `SpatialKey`, and `focus` emits the
+    /// transition.
+    #[test]
+    fn spatial_navigate_down_moves_focus_to_below_neighbor() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (top, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "top",
+            "task:top",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (bottom, m_bottom) = register_leaf(
+            &mut registry,
+            &layer,
+            "bottom",
+            "task:bottom",
+            rect_at(0.0, 20.0, 10.0, 10.0),
+        );
+
+        state.focus(&registry, top.clone()).expect("focus top");
+        let strategy = BeamNavStrategy::new();
+        let event = state
+            .navigate_with(&registry, &strategy, top.clone(), Direction::Down)
+            .expect("Down from top hits bottom");
+
+        assert_eq!(event.prev_key, Some(top));
+        assert_eq!(event.next_key, Some(bottom));
+        assert_eq!(event.next_moniker, Some(m_bottom));
+    }
+
+    /// `spatial_push_layer_inner` derives `window_label` from the calling
+    /// command (in production from `tauri::Window::label()`) and stores
+    /// the layer under that label so `root_for_window` can find it.
+    #[test]
+    fn spatial_push_layer_associates_window_label() {
+        let mut registry = SpatialRegistry::new();
+        spatial_push_layer_inner(
+            &mut registry,
+            LayerKey::from_string("L1"),
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string("board-abc"),
+        );
+
+        let root = registry
+            .root_for_window(&WindowLabel::from_string("board-abc"))
+            .expect("root layer registered for the window");
+        assert_eq!(root.key, LayerKey::from_string("L1"));
+        assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
+    }
+
+    /// `update_rect` refreshes the geometry of a registered scope.
+    /// No-op when the key is unknown — the kernel does not invent a new
+    /// scope from a stray rect update.
+    #[test]
+    fn spatial_update_rect_refreshes_registered_scope() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (key, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let new_rect = rect_at(50.0, 60.0, 70.0, 80.0);
+        registry.update_rect(&key, new_rect);
+        let scope = registry.scope(&key).unwrap();
+        assert_eq!(*scope.rect(), new_rect);
+
+        // Unknown key: pure no-op.
+        registry.update_rect(
+            &SpatialKey::from_string("ghost"),
+            rect_at(1.0, 2.0, 3.0, 4.0),
+        );
+        assert!(registry.scope(&SpatialKey::from_string("ghost")).is_none());
+    }
+
+    /// `spatial_pop_layer` removes the layer from the registry.
+    /// Consistent with `remove_layer`: no-op when the key is unknown.
+    #[test]
+    fn spatial_pop_layer_removes_layer() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        assert!(registry.layer(&layer).is_some());
+
+        registry.remove_layer(&layer);
+        assert!(registry.layer(&layer).is_none());
+    }
+
+    /// `spatial_register_batch_inner` applies a vector of `RegisterEntry`
+    /// values atomically. The wire path is
+    /// `spatial_register_batch` → `spatial_register_batch_inner` →
+    /// `SpatialRegistry::apply_batch`; this test exercises the inner half
+    /// to prove the adapter forwards the call without mutating the
+    /// payload.
+    #[test]
+    fn spatial_register_batch_inner_registers_all_entries() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let entries = vec![
+            RegisterEntry::Zone {
+                key: SpatialKey::from_string("z1"),
+                moniker: Moniker::from_string("task:01"),
+                rect: rect_at(0.0, 0.0, 10.0, 10.0),
+                layer_key: layer.clone(),
+                parent_zone: None,
+                overrides: HashMap::new(),
+            },
+            RegisterEntry::Focusable {
+                key: SpatialKey::from_string("k1"),
+                moniker: Moniker::from_string("ui:button"),
+                rect: rect_at(20.0, 0.0, 10.0, 10.0),
+                layer_key: layer,
+                parent_zone: None,
+                overrides: HashMap::new(),
+            },
+        ];
+
+        spatial_register_batch_inner(&mut registry, entries).expect("batch apply succeeds");
+
+        assert!(
+            registry.scope(&SpatialKey::from_string("z1")).is_some(),
+            "zone entry registered"
+        );
+        assert!(
+            registry.scope(&SpatialKey::from_string("k1")).is_some(),
+            "focusable entry registered"
+        );
+    }
+
+    /// A kind-mismatch (zone entry for a key already registered as a
+    /// focusable) bubbles up as `BatchRegisterError::KindMismatch` and
+    /// leaves the registry unchanged. Verifies the inner helper does not
+    /// silently swallow the error — the Tauri command stringifies it for
+    /// the wire, so the kernel error must reach the helper boundary.
+    #[test]
+    fn spatial_register_batch_inner_returns_kind_mismatch_error() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (existing, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "k1",
+            "ui:button",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        // Try to re-register `k1` as a zone — must fail kind-stability.
+        let entries = vec![RegisterEntry::Zone {
+            key: existing.clone(),
+            moniker: Moniker::from_string("ui:button"),
+            rect: rect_at(0.0, 0.0, 10.0, 10.0),
+            layer_key: layer,
+            parent_zone: None,
+            overrides: HashMap::new(),
+        }];
+
+        let result = spatial_register_batch_inner(&mut registry, entries);
+        assert!(
+            matches!(result, Err(BatchRegisterError::KindMismatch { .. })),
+            "kind-mismatch must surface as BatchRegisterError",
+        );
+        // Registry unchanged — the original focusable still wins.
+        let scope = registry.scope(&existing).expect("original entry preserved");
+        assert!(scope.is_focusable(), "kind preserved on rejected batch");
     }
 }

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd680
+position_ordinal: ffffffffffffffffffffffffffffffcd80
 title: 'Architecture: consolidate the two "EntityCache" types — one in-memory entity store at the entity layer, kanban-app becomes a thin bridge'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: fe80
+position_ordinal: '9780'
 title: 'Bug: dragging a file onto task inspector attachment field corrupts the task ("name.lastIndexOf" crash, wedges inspector)'
 ---
 ## What

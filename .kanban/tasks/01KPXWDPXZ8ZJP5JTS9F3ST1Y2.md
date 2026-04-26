@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff8880
+position_ordinal: 9d80
 title: Fix runaway drag-auto-scroll that mis-positions card drops in columns
 ---
 ## What

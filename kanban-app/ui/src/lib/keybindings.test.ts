@@ -135,6 +135,32 @@ describe("normalizeKeyEvent", () => {
       }
     }
   });
+
+  it("canonicalises spacebar (e.key === ' ') to 'Space'", () => {
+    // Browsers report the spacebar as a literal single space
+    // (`e.key === " "`). The binding tables and command-keys speak
+    // in symbolic names, so the normalizer must translate that
+    // single character into the canonical "Space" token. Without
+    // this rewrite, command-keys like `keys: { cua: "Space" }`
+    // would never match a real keystroke.
+    expect(normalizeKeyEvent(fakeKeyEvent(" "))).toBe("Space");
+  });
+
+  it("canonicalises spacebar with Mod modifier to 'Mod+Space'", () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      const e = fakeKeyEvent(" ", { metaKey: true });
+      expect(normalizeKeyEvent(e)).toBe("Mod+Space");
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, "platform", original);
+      }
+    }
+  });
 });
 
 /* ---------- BINDING_TABLES ---------- */
@@ -152,7 +178,16 @@ describe("BINDING_TABLES", () => {
     expect(vim["Mod+Shift+P"]).toBe("app.palette");
     expect(vim["u"]).toBe("app.undo");
     expect(vim["Mod+r"]).toBe("app.redo");
-    expect(vim["Escape"]).toBe("app.dismiss");
+    // Escape is now claimed by `nav.drillOut`, which delegates to
+    // `app.dismiss` itself when the spatial registry has nothing to
+    // drill out of (no spatial focus or layer-root). The global
+    // binding therefore points at the drill command, not directly at
+    // `app.dismiss` — the dismiss path still runs, just via the
+    // drill closure's null fall-through.
+    expect(vim["Escape"]).toBe("nav.drillOut");
+    // Enter drives drill-in: descends into a focused zone or no-ops
+    // on a focusable leaf without an inline-edit affordance.
+    expect(vim["Enter"]).toBe("nav.drillIn");
   });
 
   it("cua bindings include expected commands", () => {
@@ -160,13 +195,17 @@ describe("BINDING_TABLES", () => {
     expect(cua["Mod+Shift+P"]).toBe("app.palette");
     expect(cua["Mod+z"]).toBe("app.undo");
     expect(cua["Mod+Shift+Z"]).toBe("app.redo");
-    expect(cua["Escape"]).toBe("app.dismiss");
+    // See vim notes — Escape is now `nav.drillOut`, which falls
+    // through to `app.dismiss` on a null kernel result.
+    expect(cua["Escape"]).toBe("nav.drillOut");
+    expect(cua["Enter"]).toBe("nav.drillIn");
   });
 
   it("emacs bindings include expected commands", () => {
     const emacs = BINDING_TABLES.emacs;
     expect(emacs["Mod+Shift+P"]).toBe("app.palette");
-    expect(emacs["Escape"]).toBe("app.dismiss");
+    expect(emacs["Escape"]).toBe("nav.drillOut");
+    expect(emacs["Enter"]).toBe("nav.drillIn");
   });
 });
 
@@ -190,7 +229,10 @@ describe("createKeyHandler", () => {
     const handler = createKeyHandler("cua", executeCommand);
     const e = fakeKeyEvent("Escape");
     handler(e);
-    expect(executeCommand).toHaveBeenCalledWith("app.dismiss");
+    // Escape now drives `nav.drillOut`; the dismiss path still
+    // runs via that command's null fall-through, but the binding
+    // table dispatches `nav.drillOut` directly.
+    expect(executeCommand).toHaveBeenCalledWith("nav.drillOut");
   });
 
   it("executes a modifier binding from cua mode", () => {
@@ -426,7 +468,10 @@ describe("createKeyHandler", () => {
   });
 
   it("scope bindings shadow global bindings for the same key", () => {
-    // Escape is globally app.dismiss — scope can override it
+    // Escape is globally `nav.drillOut` (which itself falls through
+    // to `app.dismiss` on a null kernel result) — scope can still
+    // claim it back when the focused subtree wants its own Escape
+    // semantics (e.g. the inspector's own close handler).
     const scopeBindings = () => ({ Escape: "inspector.escape" });
     const handler = createKeyHandler("cua", executeCommand, scopeBindings);
     handler(fakeKeyEvent("Escape"));
@@ -437,7 +482,10 @@ describe("createKeyHandler", () => {
     const scopeBindings = () => ({ ArrowDown: "inspector.moveDown" });
     const handler = createKeyHandler("cua", executeCommand, scopeBindings);
     handler(fakeKeyEvent("Escape"));
-    expect(executeCommand).toHaveBeenCalledWith("app.dismiss");
+    // Escape now binds globally to `nav.drillOut`; behaviorally the
+    // user still ends up at `app.dismiss` via that command's null
+    // fall-through, but the immediate binding lookup hits drill-out.
+    expect(executeCommand).toHaveBeenCalledWith("nav.drillOut");
   });
 
   it("scope bindings update dynamically (callback called per keydown)", () => {
@@ -618,9 +666,7 @@ describe("cross-cutting command keybinding dispatch", () => {
     // swissarmyhammer-commands/builtin/commands/entity.yaml. The
     // cross-cutting emit pass surfaces the command with its keys into the
     // task's scope; `extractScopeBindings` pulls it out.
-    const scope = makeScope([
-      { id: "entity.archive", keys: { vim: "dd" } },
-    ]);
+    const scope = makeScope([{ id: "entity.archive", keys: { vim: "dd" } }]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractScopeBindings(scope, "vim"),
     );
@@ -639,9 +685,7 @@ describe("cross-cutting command keybinding dispatch", () => {
     // task, tag, project, or any other entity that auto-emits
     // `entity.archive`. The binding is a function of the command's keys,
     // not the scope type.
-    const scope = makeScope([
-      { id: "entity.archive", keys: { vim: "dd" } },
-    ]);
+    const scope = makeScope([{ id: "entity.archive", keys: { vim: "dd" } }]);
     const handler = createKeyHandler("vim", executeCommand, () =>
       extractScopeBindings(scope, "vim"),
     );

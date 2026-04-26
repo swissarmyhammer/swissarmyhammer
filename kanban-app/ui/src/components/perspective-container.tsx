@@ -31,6 +31,10 @@ import { usePerspectives } from "@/lib/perspective-context";
 import { evaluateSort } from "@/lib/perspective-eval";
 import { CommandScopeProvider, useActiveBoardPath } from "@/lib/command-scope";
 import { useRefreshEntities } from "@/components/rust-engine-container";
+import { FocusZone } from "@/components/focus-zone";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asMoniker } from "@/types/spatial";
 import type { Entity, PerspectiveDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -124,8 +128,42 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
   return (
     <CommandScopeProvider moniker={scopeMoniker}>
       <ActivePerspectiveContext.Provider value={value}>
-        {children}
+        <PerspectiveSpatialZone>{children}</PerspectiveSpatialZone>
       </ActivePerspectiveContext.Provider>
     </CommandScopeProvider>
+  );
+}
+
+/**
+ * Wrap the active perspective body in a `<FocusZone moniker={asMoniker("ui:perspective")}>`
+ * when the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every
+ * `PerspectiveContainer` unit test that doesn't care about spatial nav to
+ * set up the providers. Conditionally rendering the zone when both context
+ * lookups succeed keeps the strict contract intact for direct
+ * `<FocusZone>` usage while letting the existing test suite keep its narrow
+ * provider tree.
+ *
+ * The zone preserves the `flex flex-col flex-1 min-h-0 min-w-0` chain so the
+ * nested `<ui:view>` zone (and the BoardView/GridView inside it) can keep
+ * filling the available space when the spatial-nav stack is present.
+ */
+function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusZone
+      moniker={asMoniker("ui:perspective")}
+      showFocusBar={false}
+      className="flex flex-col flex-1 min-h-0 min-w-0"
+    >
+      {children}
+    </FocusZone>
   );
 }

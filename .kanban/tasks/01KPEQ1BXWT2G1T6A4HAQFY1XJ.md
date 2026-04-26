@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: todo
-position_ordinal: db80
+position_ordinal: '9180'
 title: 'Fix CLI error_scenarios tests: 5 timeouts in subprocess fallback under parallel load'
 ---
 Five tests in `swissarmyhammer-cli/tests/integration/error_scenarios.rs` fail with "Test command timed out after 60 seconds" (exit 124) during `cargo nextest run --workspace`. When run in isolation the same `sah` subprocess completes in ~140 ms, so the root cause is subprocess oversubscription: the test harness routes every `tool kanban ...` call through the debug `sah` binary (see `ExecutionStrategy::Subprocess` in `swissarmyhammer-cli/tests/in_process_test_utils.rs:348-407`), which is wrapped in a 60-second timeout at line 294-309. During a full workspace run the machine is saturated and the wrapped call exceeds 60 s.

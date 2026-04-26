@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9880
+position_ordinal: ffffffffffffffffffffffffffffffff9380
 title: Audit ui.perspective.startRename for kanban-domain leak
 ---
 ## What

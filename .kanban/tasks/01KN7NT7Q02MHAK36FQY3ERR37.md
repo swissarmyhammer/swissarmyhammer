@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffcd80
+position_ordinal: ffffffffffffffffffe480
 title: 'Test: task card cross-board drag (between windows)'
 ---
 ## What

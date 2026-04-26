@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNQXW7HHHB8HW76K3PXH3G34
 - 01KQ2E7RPBPJ8T8KZX39N2SZ0A
-position_column: todo
-position_ordinal: a280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffa580
 project: spatial-nav
 title: 'Spatial nav algorithm: three-rule beam search (newtype-only signatures)'
 ---
@@ -92,25 +92,25 @@ Drill-in / drill-out are **separate commands** (see card `01KPZS4RG0...`), not d
 `broadcastNavCommand` becomes fire-and-forget: `invoke("spatial_navigate", { key, direction })`. Rust emits `FocusChangedEvent` with the new `SpatialKey` + `Moniker`; the claim registry from card `01KNM3YHHFJ3...` applies it.
 
 ### Subtasks
-- [ ] `swissarmyhammer-focus/src/navigate.rs`: `beam_test` + Android scoring on `Pixels`
-- [ ] `beam_in_zone` (rule 1)
-- [ ] `beam_all_leaves_in_layer` (rule 2)
-- [ ] `beam_sibling_zones` (zone-level)
-- [ ] Edge commands (First, Last, RowStart, RowEnd) with level-aware candidate sets
-- [ ] Override check as rule 0 (implemented in card `01KNQY1GQ9...`)
-- [ ] Tauri command `spatial_navigate` in `kanban-app/src/commands.rs` (thin adapter)
+- [x] `swissarmyhammer-focus/src/navigate.rs`: `beam_test` + Android scoring on `Pixels`
+- [x] `beam_in_zone` (rule 1)
+- [x] `beam_all_leaves_in_layer` (rule 2)
+- [x] `beam_sibling_zones` (zone-level)
+- [x] Edge commands (First, Last, RowStart, RowEnd) with level-aware candidate sets
+- [x] Override check as rule 0 (implemented in card `01KNQY1GQ9...`)
+- [x] Tauri command `spatial_navigate` in `kanban-app/src/commands.rs` (thin adapter)
 
 ## Acceptance Criteria
-- [ ] Lives in `swissarmyhammer-focus/src/navigate.rs`
-- [ ] `navigate` signature is `(SpatialKey, Direction) -> Option<Moniker>`
-- [ ] All beam helpers return `Option<Moniker>`
-- [ ] Candidate filtering compares newtypes (`LayerKey` / `SpatialKey`), not raw strings
-- [ ] `navigate` never returns a `Moniker` from a different layer
-- [ ] Leaf arrow-nav: in-zone preferred; cross-zone leaf fallback fires when no in-zone
-- [ ] Zone arrow-nav: only sibling zones; leaves invisible
-- [ ] All 8 directions correct at both levels
-- [ ] Aligned candidates preferred over closer-but-diagonal (13:1)
-- [ ] `cargo test -p swissarmyhammer-focus` passes
+- [x] Lives in `swissarmyhammer-focus/src/navigate.rs`
+- [x] `navigate` signature is `(SpatialKey, Direction) -> Option<Moniker>`
+- [x] All beam helpers return `Option<Moniker>`
+- [x] Candidate filtering compares newtypes (`LayerKey` / `SpatialKey`), not raw strings
+- [x] `navigate` never returns a `Moniker` from a different layer
+- [x] Leaf arrow-nav: in-zone preferred; cross-zone leaf fallback fires when no in-zone
+- [x] Zone arrow-nav: only sibling zones; leaves invisible
+- [x] All 8 directions correct at both levels
+- [x] Aligned candidates preferred over closer-but-diagonal (13:1)
+- [x] `cargo test -p swissarmyhammer-focus` passes
 
 ## Tests (`swissarmyhammer-focus/tests/navigate.rs`)
 

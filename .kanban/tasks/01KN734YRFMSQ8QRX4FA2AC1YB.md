@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffdb80
+position_ordinal: ffffffffffffffffffff8f80
 title: Add tests for fs_utils.rs StdFileSystem and FileSystemUtils methods
 ---
 swissarmyhammer-common/src/fs_utils.rs:98-445\n\nCoverage: 43.0% (61/142 lines)\n\nUncovered lines: 99-100, 103-104, 107, 114-115, 141, 153, 155-162, 169-170, 173-174, 177-178, 181-182, 185, 190-191, 194-195, 197-199, 201, 203, 206, 209-210, 213, 219-221, 258, 260, 275, 284, 288, 297-298, 307, 316, 320, 329-330, 354-355, 403-405, 415, 435, 442, 450-451, 462-463, 485-487, 522-524, 527, 533, 536, 538, 541-543, 546, 548\n\nKey uncovered functions:\n- StdFileSystem::read_to_string (line 99)\n- StdFileSystem::write (line 103)\n- StdFileSystem::write_with_permissions non-test path (line 107)\n- StdFileSystem::exists/is_file/is_dir/create_dir_all (lines 168-182)\n- StdFileSystem::create_dir_all_with_permissions (line 184)\n- StdFileSystem::read_dir (line 193)\n- StdFileSystem::remove_file (line 208)\n- StdFileSystem::set_permissions (line 212)\n- FileSystemUtils::read_yaml/write_yaml/write_yaml_secure (lines 269-298)\n- FileSystemUtils::read_json/write_json/write_json_secure (lines 301-330)\n- FileSystemUtils::validate_file_path (line 374) - partial coverage\n- MockFileSystem methods (lines 460-548)\n\nMost StdFileSystem methods are thin wrappers around std::fs. Focus tests on: write_with_permissions atomic write path, set_permissions, read_dir, and the FileSystemUtils serialization methods (read_yaml, write_yaml, read_json, write_json). Use temp directories. #coverage-gap

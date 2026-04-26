@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff8680
+position_ordinal: 9c80
 title: 'Resolve field/group from field: scope moniker in sort and group commands'
 ---
 ## What

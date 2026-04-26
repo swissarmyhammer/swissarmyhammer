@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffdf80
+position_ordinal: ffffe680
 title: 'Generic mention system (parameterize #tag into @actor)'
 ---
 Refactor the #tag CM6 infrastructure into a generic mention system parameterized by prefix character, with backend-driven autocomplete. Then create @actor wrappers.

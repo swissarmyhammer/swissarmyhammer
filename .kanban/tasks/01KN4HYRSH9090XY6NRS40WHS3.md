@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffc680
+position_ordinal: ffffffffffffffffa380
 title: Migrate ConfigurationDiscovery to use VirtualFileSystem
 ---
 ConfigurationDiscovery in `swissarmyhammer-config/src/discovery.rs` hand-rolls directory walking and file discovery instead of using VFS. It then feeds paths into Figment for deep merging.

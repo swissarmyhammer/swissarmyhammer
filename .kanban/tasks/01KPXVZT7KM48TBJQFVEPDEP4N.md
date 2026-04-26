@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9580
+position_ordinal: ffffffffffffffffffffffffffffffff9080
 title: Remove 'Switch to <View>' entries from context menus
 ---
 ## What

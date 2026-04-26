@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffdd80
+position_ordinal: ffffffffffffffffffffffffffffffd780
 title: Document reserved `_`-prefixed pseudo-field dependencies in ARCHITECTURE.md
 ---
 ## What

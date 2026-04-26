@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffffffffc880
+position_ordinal: ffffffffffffffffffffffffffffffb380
 project: task-card-fields
 title: Hide due/scheduled from task card view (inspector-only)
 ---

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: f780
+position_ordinal: '9580'
 title: 'clippy: 2 collapsible-if violations in swissarmyhammer-sem'
 ---
 Pre-existing clippy errors surfaced by `cargo clippy --workspace --all-targets -- -D warnings`. Not regressions from the kanban review tasks.

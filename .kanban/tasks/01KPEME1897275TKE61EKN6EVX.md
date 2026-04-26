@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPG6XZ9GKP2VJPA6XWNE8WN4
 position_column: done
-position_ordinal: fffffffffffffffffffffffb80
+position_ordinal: fffffffffffffffffffffffffffffff480
 title: 'Commands: retire DeleteProjectCmd and project.delete registration (superseded by entity.delete auto-emit)'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNF8RC3NRWS8H1G64RQMZFTA
 position_column: done
-position_ordinal: ffffffffffffffffffffda80
+position_ordinal: ffffffffffffffffffffffffffff8980
 title: 'Rust: Create Project CRUD operations'
 ---
 ## What

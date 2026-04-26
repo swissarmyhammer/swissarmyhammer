@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffe180
+position_ordinal: ffffffffffffffffffffa080
 title: 'BLOCKER: ReadyStrategy and task_is_ready disagree on missing dependency semantics'
 ---
 **File:** swissarmyhammer-kanban/src/virtual_tags.rs (ReadyStrategy::matches) vs swissarmyhammer-kanban/src/task_helpers.rs (task_is_ready)\n\n**What:** `ReadyStrategy::matches` treats a missing dependency (dep ID not found in all_tasks) as NOT ready (`unwrap_or(false)`), while `task_is_ready` in task_helpers.rs treats a missing dependency as complete/ready (`unwrap_or(true)`). These two functions compute the same semantic concept but produce opposite results for the missing-dep edge case.\n\n**Why this matters:** Both code paths contribute to the `ready` field on tasks. `enrich_task_entity` calls `task_is_ready` to set the `ready` field AND `registry.evaluate` which calls `ReadyStrategy::matches` to set virtual tags. A task with a missing dependency will be `ready=true` (from task_is_ready) but will NOT have the READY virtual tag (from ReadyStrategy). Conversely it won't have the BLOCKED virtual tag either (BlockedStrategy also uses `unwrap_or(true)` making missing deps blocking). The enriched `ready` field and the presence/absence of READY virtual tag will contradict each other.\n\n**Suggestion:** Pick one semantic and use it consistently. The ReadyStrategy approach (missing dep = not ready) is arguably safer. Update `task_is_ready` to use `unwrap_or(false)` to match, or vice versa. Add a test that exercises the missing-dependency scenario across both code paths.\n\n**Verification:** cargo test -p swissarmyhammer-kanban --lib -- virtual_tags task_helpers" #review-finding

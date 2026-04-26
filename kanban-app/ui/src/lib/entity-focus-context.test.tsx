@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, renderHook, act } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import {
   EntityFocusProvider,
   FocusStore,
@@ -12,10 +12,7 @@ import {
   useFocusedScope,
   useIsDirectFocus,
   useIsFocused,
-  useRestoreFocus,
-  type ClaimPredicate,
 } from "./entity-focus-context";
-import { FocusScope } from "@/components/focus-scope";
 import { type CommandScope } from "./command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -223,355 +220,6 @@ describe("useIsFocused", () => {
       result.current.focus.setFocus("task:abc");
     });
     expect(result.current.isFocused).toBe(false);
-  });
-});
-
-/** Flush microtasks and pending effects. */
-async function flush() {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 0));
-  });
-}
-
-/** Reads focusedMoniker from context and renders it as text. */
-function FocusMonitor() {
-  const { focusedMoniker } = useEntityFocus();
-  return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
-}
-
-// ---------------------------------------------------------------------------
-// broadcastNavCommand tests
-// ---------------------------------------------------------------------------
-
-describe("broadcastNavCommand", () => {
-  it("matching predicate claims focus", async () => {
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: (f) => f === "field:tags" },
-    ];
-
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope moniker="field:tags" commands={[]}>
-          <span>tags</span>
-        </FocusScope>
-        <FocusScope
-          moniker="panel:inspector"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>inspector</span>
-        </FocusScope>
-        <FocusMonitor />
-        <SetFocusButton moniker="field:tags" />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    // Set focus to field:tags
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags");
-
-    // Broadcast nav.right — should claim focus for panel:inspector
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("panel:inspector");
-  });
-
-  it("no matching predicate leaves focus unchanged", async () => {
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: (f) => f === "field:tags" },
-    ];
-
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope
-          moniker="panel:inspector"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>inspector</span>
-        </FocusScope>
-        <FocusMonitor />
-        <SetFocusButton moniker="field:title" />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    // Set focus to field:title (not field:tags, so predicate won't match)
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:title");
-
-    // Broadcast nav.right — predicate checks for field:tags, won't match
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:title");
-  });
-
-  it("first match wins (short-circuit)", async () => {
-    const secondPredWhen = vi.fn(() => true);
-    const claimA: ClaimPredicate[] = [
-      { command: "nav.right", when: () => true },
-    ];
-    const claimB: ClaimPredicate[] = [
-      { command: "nav.right", when: secondPredWhen },
-    ];
-
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <FocusScope moniker="panel:a" commands={[]} claimWhen={claimA}>
-          <span>a</span>
-        </FocusScope>
-        <FocusScope moniker="panel:b" commands={[]} claimWhen={claimB}>
-          <span>b</span>
-        </FocusScope>
-        <FocusMonitor />
-        <BroadcastButton commandId="nav.right" />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    // First registered (panel:a) should win
-    expect(getByTestId("focus-monitor").textContent).toBe("panel:a");
-    // Second predicate should NOT have been called (short-circuit)
-    expect(secondPredWhen).not.toHaveBeenCalled();
-  });
-
-  it("unmounted scope's predicate is not evaluated", async () => {
-    const predWhen = vi.fn(() => true);
-    const claimPredicates: ClaimPredicate[] = [
-      { command: "nav.right", when: predWhen },
-    ];
-
-    function UnmountableScope({ show }: { show: boolean }) {
-      return show ? (
-        <FocusScope
-          moniker="panel:temp"
-          commands={[]}
-          claimWhen={claimPredicates}
-        >
-          <span>temp</span>
-        </FocusScope>
-      ) : null;
-    }
-
-    function Harness() {
-      const [show, setShow] = useState(true);
-      return (
-        <>
-          <UnmountableScope show={show} />
-          <FocusMonitor />
-          <button data-testid="toggle" onClick={() => setShow(false)} />
-          <BroadcastButton commandId="nav.right" />
-        </>
-      );
-    }
-
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <Harness />
-      </EntityFocusProvider>,
-    );
-    await flush();
-
-    // Unmount the scope
-    await act(async () => {
-      getByTestId("toggle").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    // Reset the spy to clear any calls from mount phase
-    predWhen.mockClear();
-
-    // Broadcast — predicate should NOT be evaluated since scope is unmounted
-    await act(async () => {
-      getByTestId("broadcast").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    expect(predWhen).not.toHaveBeenCalled();
-    expect(getByTestId("focus-monitor").textContent).toBe("null");
-  });
-});
-
-/** Helper button to set focus imperatively. */
-function SetFocusButton({ moniker }: { moniker: string }) {
-  const { setFocus } = useEntityFocus();
-  return <button data-testid="set-focus" onClick={() => setFocus(moniker)} />;
-}
-
-/** Helper button to call broadcastNavCommand. */
-function BroadcastButton({ commandId }: { commandId: string }) {
-  const { broadcastNavCommand } = useEntityFocus();
-  return (
-    <button
-      data-testid="broadcast"
-      onClick={() => broadcastNavCommand(commandId)}
-    />
-  );
-}
-
-describe("useRestoreFocus", () => {
-  /**
-   * Helper component that conditionally renders a child that calls useRestoreFocus.
-   * The parent manages focus state and controls when the child mounts/unmounts.
-   */
-  function RestoreFocusHarness({
-    initialMoniker,
-    scope,
-  }: {
-    initialMoniker: string | null;
-    scope?: CommandScope;
-  }) {
-    const [showChild, setShowChild] = useState(false);
-    const focus = useEntityFocus();
-
-    return (
-      <>
-        <button
-          data-testid="setup"
-          onClick={() => {
-            if (initialMoniker && scope) {
-              focus.registerScope(initialMoniker, scope);
-            }
-            if (initialMoniker) {
-              focus.setFocus(initialMoniker);
-            }
-          }}
-        />
-        <button data-testid="show" onClick={() => setShowChild(true)} />
-        <button data-testid="hide" onClick={() => setShowChild(false)} />
-        <button
-          data-testid="steal-focus"
-          onClick={() => focus.setFocus("task:inspected")}
-        />
-        <button
-          data-testid="unregister"
-          onClick={() => {
-            if (initialMoniker) focus.unregisterScope(initialMoniker);
-          }}
-        />
-        <span data-testid="focused">{focus.focusedMoniker ?? "null"}</span>
-        {showChild && <RestoreChild />}
-      </>
-    );
-  }
-
-  function RestoreChild() {
-    useRestoreFocus();
-    return <span data-testid="child">child</span>;
-  }
-
-  it("restores focus to saved moniker when scope still exists", () => {
-    const scope: CommandScope = {
-      commands: new Map(),
-      parent: null,
-      moniker: "task:abc",
-    };
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
-      </EntityFocusProvider>,
-    );
-
-    // 1. Set up focus
-    act(() => {
-      getByTestId("setup").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:abc");
-
-    // 2. Mount the restore hook — captures "task:abc"
-    act(() => {
-      getByTestId("show").click();
-    });
-    expect(getByTestId("child")).toBeTruthy();
-
-    // 3. Inspector steals focus
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:inspected");
-
-    // 4. Unmount — should restore to "task:abc"
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:abc");
-  });
-
-  it("clears focus when saved moniker no longer exists in registry", () => {
-    const scope: CommandScope = {
-      commands: new Map(),
-      parent: null,
-      moniker: "task:abc",
-    };
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
-      </EntityFocusProvider>,
-    );
-
-    act(() => {
-      getByTestId("setup").click();
-    });
-    act(() => {
-      getByTestId("show").click();
-    });
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-
-    // Simulate deletion — unregister the scope
-    act(() => {
-      getByTestId("unregister").click();
-    });
-
-    // Unmount — should clear to null since scope no longer exists
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("null");
-  });
-
-  it("clears focus when there was no previous focus", () => {
-    const { getByTestId } = render(
-      <EntityFocusProvider>
-        <RestoreFocusHarness initialMoniker={null} />
-      </EntityFocusProvider>,
-    );
-
-    // Mount with no focus
-    act(() => {
-      getByTestId("show").click();
-    });
-
-    // Inspector steals focus
-    act(() => {
-      getByTestId("steal-focus").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("task:inspected");
-
-    // Unmount — should restore to null
-    act(() => {
-      getByTestId("hide").click();
-    });
-    expect(getByTestId("focused").textContent).toBe("null");
   });
 });
 
@@ -993,8 +641,38 @@ describe("useEntityFocus (compat shim)", () => {
     expect(typeof shim.registerScope).toBe("function");
     expect(typeof shim.unregisterScope).toBe("function");
     expect(typeof shim.getScope).toBe("function");
-    expect(typeof shim.registerClaimPredicates).toBe("function");
-    expect(typeof shim.unregisterClaimPredicates).toBe("function");
     expect(typeof shim.broadcastNavCommand).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// broadcastNavCommand — predicate registry has been removed
+// ---------------------------------------------------------------------------
+
+describe("broadcastNavCommand", () => {
+  it("is a no-op stub that always returns false", () => {
+    // The pull-based predicate registry has been replaced by the Rust
+    // spatial-nav kernel's `overrides` map. The callable remains in the
+    // actions bag for source compatibility but has no behavior — it
+    // never claims focus and always returns `false`.
+    const { result } = renderHook(() => useFocusActions(), { wrapper });
+    expect(result.current.broadcastNavCommand("nav.right")).toBe(false);
+    expect(result.current.broadcastNavCommand("nav.up")).toBe(false);
+    expect(result.current.broadcastNavCommand("any.command")).toBe(false);
+  });
+
+  it("does not mutate focus state", () => {
+    // Even when there's a focused entity, broadcastNavCommand must not
+    // touch the store — all real navigation lives in the Rust kernel.
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+    act(() => {
+      result.current.setFocus("task:abc");
+    });
+    expect(result.current.focusedMoniker).toBe("task:abc");
+
+    act(() => {
+      result.current.broadcastNavCommand("nav.right");
+    });
+    expect(result.current.focusedMoniker).toBe("task:abc");
   });
 });

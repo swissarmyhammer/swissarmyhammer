@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: '9280'
+position_ordinal: '9680'
 title: Create kanban-cli crate with banner and workspace registration
 ---
 ## What

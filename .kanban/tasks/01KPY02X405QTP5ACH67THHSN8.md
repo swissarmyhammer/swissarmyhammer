@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPXY7Q6980X2R5DVNVCY4SZK
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9780
+position_ordinal: ffffffffffffffffffffffffffffffff9280
 title: Move ui.view.set / ui.perspective.set out of generic ui.yaml into kanban domain
 ---
 ## What

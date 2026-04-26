@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1WP3ZEAKNNAD6G3WAGSEK
 position_column: done
-position_ordinal: ffffffffffffffffffff9380
+position_ordinal: ffffffffffffffffffffffffff9d80
 project: code-context-cli
 title: Implement serve command — CodeContextServer MCP server
 ---

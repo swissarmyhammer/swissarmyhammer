@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffa680
+position_ordinal: ffffffffffffffffffffffb180
 title: Add ClaudeMd initializable + doctor check to ensure CLAUDE.md loads thoughtful skill
 ---
 ## What

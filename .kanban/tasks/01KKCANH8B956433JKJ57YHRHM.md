@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffc480
+position_ordinal: ffffffffffff9180
 title: 'STATUSLINE-M13: kanban module'
 ---
 ## What

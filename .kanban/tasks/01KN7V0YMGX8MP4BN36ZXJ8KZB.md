@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffd280
+position_ordinal: fffffffffffffffffff180
 title: 'Inspector opens on wrong window: keyboard dispatch missing scopeChain'
 ---
 ## What

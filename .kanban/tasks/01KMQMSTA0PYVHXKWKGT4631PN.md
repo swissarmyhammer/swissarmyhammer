@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe380
+position_ordinal: ffffffffffffffb980
 title: Add claimWhen primitive to FocusScope
 ---
 ## What

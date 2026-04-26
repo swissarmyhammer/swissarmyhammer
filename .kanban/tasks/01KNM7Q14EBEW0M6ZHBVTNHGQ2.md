@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNM6AEYM2DRRQ7CQ4DHXCX8N
 position_column: done
-position_ordinal: ffffffffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffffffffffffff8e80
 title: Inject _changelog into entity fields for changelog-dependent computed fields
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff8580
+position_ordinal: 9b80
 title: Scope sort commands to grid-kind views via generic view_kinds filter
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffffe280
+position_ordinal: ffffffffff9780
 title: HookEvent variants with empty session_id — consider Option<String>
 ---
 `hookable_agent.rs` — to_base_json() for InstructionsLoaded, WorktreeCreate, WorktreeRemove

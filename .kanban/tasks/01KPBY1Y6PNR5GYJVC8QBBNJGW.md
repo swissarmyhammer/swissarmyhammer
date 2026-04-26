@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: d580
+position_ordinal: 8a80
 title: Perspective undo/redo must emit events to refresh the UI
 ---
 ## What

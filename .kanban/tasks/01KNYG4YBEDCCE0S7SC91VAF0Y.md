@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: cf80
+position_ordinal: '8780'
 project: task-card-fields
 title: Auto-refresh board view on board/column entity file-change events
 ---

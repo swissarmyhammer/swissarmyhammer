@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffff8c80
+position_ordinal: ffffffffffe680
 title: Add merge subcommand to kanban-cli
 ---
 ## What\nAdd a hardcoded `kanban merge {jsonl,yaml,md} <base> <ours> <theirs>` subcommand to `kanban-cli`, similar to the existing `open` special case.\n\nGit calls these as: `kanban merge jsonl %O %A %B`\n\n### Files to modify\n- `kanban-cli/Cargo.toml` — add `swissarmyhammer-merge` dependency\n- `kanban-cli/src/main.rs` — add a `merge` subcommand to the clap `Command`, add a match arm that dispatches to merge handler functions\n\n### Files to create\n- `kanban-cli/src/merge.rs` — module with:\n  - `pub fn handle_merge(matches: &ArgMatches) -> i32` — dispatches to jsonl/yaml/md based on subcommand\n  - Shared `read_three_files(base, ours, theirs) -> Result<(String, String, String), i32>` helper\n  - `run_jsonl(base, ours, theirs) -> i32`\n  - `run_yaml(base, ours, theirs) -> i32` — looks for sibling .jsonl for newest-wins\n  - `run_md(base, ours, theirs) -> i32` — looks for sibling .jsonl for frontmatter conflicts\n  - Exit codes: 0 = success, 1 = conflict, 2 = fatal error\n  - Use the proper `MergeError` enum from swissarmyhammer-merge to determine exit codes\n\n### Build the clap command\n```rust\nCommand::new(\"merge\")\n    .about(\"Git merge drivers for .kanban/ files\")\n    .subcommand(merge_sub(\"jsonl\", \"Union-by-id merge\"))\n    .subcommand(merge_sub(\"yaml\", \"Field-level merge\"))\n    .subcommand(merge_sub(\"md\", \"Frontmatter + body merge\"))\n```\nEach sub has three positional args: base, ours, theirs.\n\n## Tests\n- `cargo nextest run -p kanban-cli`\n- Unit tests in `merge.rs` for each driver (same pattern as the removed sah CLI tests)"}

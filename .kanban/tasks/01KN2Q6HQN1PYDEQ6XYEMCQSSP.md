@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN2Q67HEFFEM63KJ5V006ASD
 position_column: done
-position_ordinal: ffffffffffffffffab80
+position_ordinal: ffffffffffffffffff9780
 title: 'PERSP-5: Dispatch integration and Noun/Verb wiring'
 ---
 ## What

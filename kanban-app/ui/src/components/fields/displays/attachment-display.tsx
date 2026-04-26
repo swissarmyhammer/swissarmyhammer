@@ -27,6 +27,7 @@ import { FocusScope } from "@/components/focus-scope";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
 import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { FieldDef } from "@/types/kanban";
+import { asMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -204,7 +205,10 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
   const Icon = getFileIcon(attachment.mime_type, attachment.name);
 
   return (
-    <FocusScope moniker={`attachment:${attachment.path}`} className="min-w-0">
+    <FocusScope
+      moniker={asMoniker(`attachment:${attachment.path}`)}
+      className="min-w-0"
+    >
       <AttachmentItemInner attachment={attachment} Icon={Icon} />
     </FocusScope>
   );

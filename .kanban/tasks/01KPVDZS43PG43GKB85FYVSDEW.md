@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9080
+position_ordinal: ffffffffffffffffffffffffffffffff8b80
 title: '"Clear Sort" should clear ALL sort entries on the active perspective — drop required `field` arg'
 ---
 ## What

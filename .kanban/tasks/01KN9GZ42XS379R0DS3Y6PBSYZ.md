@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffb180
+position_ordinal: ffffffffffffffffffffffc980
 title: 'Fix: command-palette Escape — replace ad-hoc domEventHandlers with buildSubmitCancelExtensions'
 ---
 ## What

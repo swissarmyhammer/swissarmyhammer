@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffffffffffffff9080
 project: kanban-mcp
 title: 'sah-cli: add .mcp.json for local dev'
 ---

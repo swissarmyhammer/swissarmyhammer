@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff8780
+position_ordinal: ffffffffffffd580
 title: 'Audit: find all Field bypasses — places that render editors/displays directly'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
 position_column: done
-position_ordinal: ffffffffffff8180
+position_ordinal: ffffffffffffcf80
 title: 'Field: number field type'
 ---
 ## What

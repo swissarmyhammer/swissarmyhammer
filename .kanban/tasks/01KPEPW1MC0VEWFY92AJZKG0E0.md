@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: db80
+position_ordinal: '9080'
 title: Move perspective commands out of swissarmyhammer-commands crate into swissarmyhammer-perspectives
 ---
 ## What

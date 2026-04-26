@@ -160,6 +160,23 @@ describe("DataTable row structure", () => {
     }
   });
 
+  it("does not accept claimWhen / cellMonikers / claimPredicates props", async () => {
+    // The legacy pull-based navigation props (`cellMonikers`,
+    // `claimPredicates`) and the lower-level `claimWhen` predicate that
+    // wrapped each cell's `<FocusScope>` were deleted as part of the
+    // spatial-nav migration. Cells are now `<Focusable>` leaves whose
+    // moniker is computed from `(di, colKey)` directly. We cannot prove
+    // the absence at the type level here, but rendering with only the
+    // new prop surface and asserting the table mounts is the runtime
+    // stand-in. The source-level guard
+    // `grid-spatial-nav.guards.node.test.ts` complements this by greppping
+    // the source file for the deleted token names.
+    const { container } = await renderTable();
+    const tbody = container.querySelector("tbody")!;
+    const rows = tbody.querySelectorAll("tr");
+    expect(rows.length).toBe(ENTITIES.length);
+  });
+
   it("selector cell shows row number", async () => {
     const { container } = await renderTable();
     const selectors = container.querySelectorAll(

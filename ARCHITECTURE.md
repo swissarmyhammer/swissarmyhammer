@@ -24,6 +24,8 @@ Crates are organized in dependency tiers. A crate may only depend on crates in t
 
 **The key structural constraint**: Application libraries have no knowledge of Tauri, React, or any specific CLI framework. They are pure domain libraries. The Tauri app and CLI tools are thin wiring layers over the engines.
 
+**Spatial focus engine — `swissarmyhammer-focus`**: The headless spatial-navigation kernel lives at Tier 0. It owns the focus state machine, the registry of focusable scopes, and the pluggable extension traits (`NavStrategy`, `FocusEventSink`) — but knows nothing about kanban tasks, columns, or boards. Its surface is intentionally generic: opaque `Moniker` strings, abstract `Rect`s, and `WindowLabel`s. Its only workspace dependency is `swissarmyhammer-common` (for `define_id!`). Adapters in `kanban-app/src/commands.rs` translate Tauri window events into focus-engine calls and emit `FocusChangedEvent`s back to React; the kanban-specific helper `resolve_focused_column` is the small piece of focus code that *does* know about kanban and stays in `swissarmyhammer-kanban`. This split is what lets the same focus engine drive any future tier-4 application without dragging kanban semantics in.
+
 ### Virtual File System and Content Stacking
 
 The `VirtualFileSystem` (`swissarmyhammer-directory`) is a foundational abstraction. It stacks three directory layers with precedence:

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9680
+position_ordinal: ffffffffffffffffffffffffffffffff9180
 title: 'Stack builtin commands per-crate: move kanban-specific YAMLs out of swissarmyhammer-commands'
 ---
 ## What

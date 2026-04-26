@@ -109,12 +109,10 @@ function mockListCommands(commands: ResolvedCommand[]) {
 // ---------------------------------------------------------------------------
 
 import { MentionView } from "./mention-view";
-import {
-  EntityFocusProvider,
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -298,42 +296,20 @@ describe("MentionView — list mode", () => {
     expect(scopes.length).toBe(0);
   });
 
-  it("nav.right from parent field focuses first pill, then the second", async () => {
-    /** Button that broadcasts a nav command imperatively. */
-    function BroadcastButton({
-      commandId,
-      testId,
-    }: {
-      commandId: string;
-      testId: string;
-    }) {
-      const { broadcastNavCommand } = useEntityFocus();
-      return (
-        <button
-          data-testid={testId}
-          onClick={() => broadcastNavCommand(commandId)}
-        />
-      );
-    }
-    /** Button that sets focus imperatively. */
-    function SetFocusButton({ moniker }: { moniker: string }) {
-      const { setFocus } = useEntityFocus();
-      return (
-        <button data-testid="set-focus" onClick={() => setFocus(moniker)} />
-      );
-    }
-    /** Reads focusedMoniker from context. */
-    function FocusReader() {
-      const { focusedMoniker } = useEntityFocus();
-      return <span data-testid="focus-reader">{focusedMoniker ?? "null"}</span>;
-    }
-
+  it("renders one pill scope per item, nested inside the parent field row", async () => {
+    // After the spatial-nav zone migration, within-list keyboard navigation
+    // is handled by beam-search rule 1 in the Rust spatial graph rather
+    // than by `claimWhen` predicates on each pill. The pills are simple
+    // leaves nested under the parent field-row scope; the beam search
+    // picks the next horizontal candidate by rect math. This test
+    // verifies the structural surface — the actual rule-1 beam-search
+    // behaviour is exercised by the Rust spatial-nav unit tests.
     const parentMoniker = "field:mixed";
 
-    const { getByTestId } = render(
+    const { container } = render(
       <EntityFocusProvider>
         <TooltipProvider>
-          <FocusScope moniker={parentMoniker} commands={[]}>
+          <FocusScope moniker={asMoniker(parentMoniker)} commands={[]}>
             <MentionView
               items={[
                 { entityType: "tag", id: "tag-1" },
@@ -344,41 +320,24 @@ describe("MentionView — list mode", () => {
             />
           </FocusScope>
         </TooltipProvider>
-        <FocusReader />
-        <SetFocusButton moniker={parentMoniker} />
-        <BroadcastButton commandId="nav.right" testId="nav-right" />
-        <BroadcastButton commandId="nav.left" testId="nav-left" />
       </EntityFocusProvider>,
     );
     await flush();
 
-    // Start by focusing the parent field.
-    await act(async () => {
-      getByTestId("set-focus").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe(parentMoniker);
+    // The parent field-row scope sits at the top of the tree.
+    const fieldRow = container.querySelector(
+      `[data-moniker="${parentMoniker}"]`,
+    );
+    expect(fieldRow).toBeTruthy();
 
-    // nav.right → first pill
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe("tag:tag-1");
-
-    // nav.right → second pill
-    await act(async () => {
-      getByTestId("nav-right").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe("tag:tag-2");
-
-    // nav.left → back to first pill
-    await act(async () => {
-      getByTestId("nav-left").click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    expect(getByTestId("focus-reader").textContent).toBe("tag:tag-1");
+    // Three pill scopes — one per item — are nested inside it.
+    const pills = fieldRow!.querySelectorAll(
+      '[data-moniker]:not([data-moniker="field:mixed"])',
+    ) as NodeListOf<HTMLElement>;
+    const monikers = Array.from(pills).map((p) =>
+      p.getAttribute("data-moniker"),
+    );
+    expect(monikers).toEqual(["tag:tag-1", "tag:tag-2", "actor:alice"]);
   });
 });
 

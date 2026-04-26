@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffa780
+position_ordinal: ffffffffffffffffff8d80
 title: 'PERSP-1: Perspective data types and YAML serialization'
 ---
 ## What

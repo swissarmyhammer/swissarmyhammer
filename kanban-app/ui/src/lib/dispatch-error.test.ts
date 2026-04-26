@@ -42,7 +42,9 @@ describe("reportDispatchError", () => {
   it("surfaces dispatch failures via toast.error", () => {
     reportDispatchError(
       "entity.paste",
-      new Error("Command failed: destination invalid: Column 'doing' no longer exists"),
+      new Error(
+        "Command failed: destination invalid: Column 'doing' no longer exists",
+      ),
     );
     expect(toast.error).toHaveBeenCalledTimes(1);
   });
@@ -62,7 +64,9 @@ describe("reportDispatchError", () => {
     // sees what failed instead of a generic "paste failed".
     reportDispatchError(
       "entity.paste",
-      new Error("Command failed: destination invalid: Column 'doing' no longer exists"),
+      new Error(
+        "Command failed: destination invalid: Column 'doing' no longer exists",
+      ),
     );
     const arg = (toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(arg).toContain("Column 'doing' no longer exists");
@@ -74,7 +78,9 @@ describe("reportDispatchError", () => {
     // toast and duplicate the framing we add ourselves.
     reportDispatchError(
       "entity.paste",
-      new Error("Command failed: source entity missing: Tag '01XYZ' no longer exists"),
+      new Error(
+        "Command failed: source entity missing: Tag '01XYZ' no longer exists",
+      ),
     );
     const arg = (toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(arg).not.toContain("Command failed:");

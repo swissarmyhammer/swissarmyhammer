@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPEM811W5XE6WVHDQVRCZ4B0
 position_column: done
-position_ordinal: ffffffffffffffffffffffe580
+position_ordinal: ffffffffffffffffffffffffffffffe080
 title: 'Commands: entity.yaml — establish as cross-cutting home (un-pin scope, header comment)'
 ---
 ## What

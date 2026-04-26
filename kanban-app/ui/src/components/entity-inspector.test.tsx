@@ -223,14 +223,14 @@ import { InspectorFocusBridge } from "./inspector-focus-bridge";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
-import {
-  EntityFocusProvider,
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandScopeProvider } from "@/lib/command-scope";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asLayerName } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
@@ -240,21 +240,6 @@ function makeEntity(fields: Record<string, unknown> = {}): Entity {
     moniker: "task:test-id",
     fields,
   };
-}
-
-/**
- * Helper that exposes `broadcastNavCommand` via a hidden button. Rendered
- * inside the EntityFocusProvider tree so tests can synthesise keyboard
- * navigation without importing the command plumbing.
- */
-function NavBroadcastButton({ commandId }: { commandId: string }) {
-  const { broadcastNavCommand } = useEntityFocus();
-  return (
-    <button
-      data-testid={`nav-broadcast-${commandId}`}
-      onClick={() => broadcastNavCommand(commandId)}
-    />
-  );
 }
 
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
@@ -267,8 +252,6 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
               <UIStateProvider>
                 <CommandScopeProvider commands={[]}>
                   <EntityInspector entity={entity} />
-                  <NavBroadcastButton commandId="nav.down" />
-                  <NavBroadcastButton commandId="nav.up" />
                 </CommandScopeProvider>
               </UIStateProvider>
             </FieldUpdateProvider>
@@ -304,6 +287,58 @@ async function renderViaInspectorBridge(
     </TooltipProvider>,
   );
   // Wait for async schema load
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  return result;
+}
+
+/**
+ * Render `EntityInspector` inside the production spatial-focus stack
+ * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`).
+ *
+ * Without this wrapper, `<FocusScope>` falls through to its no-spatial-context
+ * branch and renders a plain `<div>` instead of a `<FocusZone>` primitive.
+ * The two paths share a contract — children render as direct layout children
+ * of the scope's root element — but they exercise different code: the
+ * primitive path goes through `<FocusZone>`'s ResizeObserver/click wiring and
+ * forwards the consumer's `className` onto the same div that owns
+ * `data-moniker`/`data-focused`. This helper pins the production DOM shape so
+ * a future refactor of the primitive can't silently break the inspector's
+ * icon-and-content row layout.
+ *
+ * Use this helper for tests that depend on the production DOM shape produced
+ * by `<FocusScope kind="zone">`. Other tests that only need the inspector's
+ * data-binding behaviour can keep using `renderInspector`.
+ */
+async function renderInspectorWithSpatial(
+  entity: Entity,
+  tagEntities: Entity[] = [],
+) {
+  const result = render(
+    <SpatialFocusProvider>
+      <FocusLayer name={asLayerName("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider
+              entities={{ task: [entity], tag: tagEntities }}
+            >
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <CommandScopeProvider commands={[]}>
+                      <EntityInspector entity={entity} />
+                    </CommandScopeProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
+  );
+  // Wait for async schema load and spatial register effects.
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -538,8 +573,15 @@ describe("EntityInspector", () => {
       ).toBeTruthy();
     });
 
-    it("ArrowDown from title skips the hidden progress row", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("hidden progress row is absent so spatial nav has nothing to skip", async () => {
+      // After the spatial-nav migration, ArrowDown navigation between field
+      // rows is driven by beam-search rule 2 in the Rust spatial graph. In
+      // this test environment we don't mount the Rust IPC stack, so we
+      // exercise the surface visible to the React tree: the hidden row is
+      // not rendered at all, so there is no zone for the navigator to land
+      // on. The navigator's "skip" behaviour is therefore implicit — only
+      // the visible rows are navigable.
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -553,23 +595,26 @@ describe("EntityInspector", () => {
       );
       expect(titleRow!.getAttribute("data-focused")).toBe("true");
 
-      // ArrowDown from title — progress is hidden, so the next navigable row
-      // is `tags` (the remaining header field).
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-      expect(titleRow!.getAttribute("data-focused")).toBeNull();
+      // The hidden progress row is not rendered, so it never registers as
+      // a zone in the spatial graph.
       expect(
         container.querySelector('[data-testid="field-row-progress"]'),
       ).toBeNull();
+      // The remaining navigable rows (title, tags, body) all render as zones.
+      expect(
+        container.querySelector('[data-testid="field-row-tags"]'),
+      ).toBeTruthy();
+      expect(
+        container.querySelector('[data-testid="field-row-body"]'),
+      ).toBeTruthy();
     });
 
-    it("ArrowDown from title lands on the progress row when it is visible", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("visible progress row renders alongside other field-row zones", async () => {
+      // When `progress` has a positive `total`, the progress row is rendered
+      // and registers as its own field-row zone — beam-search rule 2 picks
+      // it up as a navigable target. Verify the row is present alongside
+      // its sibling field-row zones.
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -583,25 +628,15 @@ describe("EntityInspector", () => {
       );
       expect(titleRow!.getAttribute("data-focused")).toBe("true");
 
-      // Header order is title → tags → progress, so ArrowDown from title
-      // lands on tags first.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-
-      // Second ArrowDown should now land on the visible progress row.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
+      // Header order is title → tags → progress; all three rows render.
+      expect(
+        container.querySelector('[data-testid="field-row-tags"]'),
+      ).toBeTruthy();
       const progressRow = container.querySelector(
         '[data-testid="field-row-progress"]',
       );
       expect(progressRow).toBeTruthy();
-      expect(progressRow!.getAttribute("data-focused")).toBe("true");
+      expect(progressRow!.querySelector('[role="progressbar"]')).toBeTruthy();
     });
   });
 
@@ -1122,8 +1157,13 @@ describe("EntityInspector", () => {
       expect(dividers.length).toBe(2);
     });
 
-    it("ArrowDown from the last body field focuses the first dates field", async () => {
-      const { container, getByTestId } = await renderWithSectionedSchema(
+    it("dates section's field rows render as zones alongside body and header rows", async () => {
+      // After the spatial-nav migration, cross-section ArrowDown navigation
+      // is driven by beam-search rule 2 in the Rust spatial graph. In this
+      // test environment we don't mount the Rust IPC stack, so we verify
+      // the structural surface: every navigable row across header, body,
+      // and dates renders so the navigator has zones to land on.
+      const { container } = await renderWithSectionedSchema(
         makeEntity({
           title: "T",
           body: "B",
@@ -1132,27 +1172,124 @@ describe("EntityInspector", () => {
         }),
       );
 
-      // Navigable order is title (header) → body (body) → due (dates) → scheduled (dates).
-      // From the default first-focus on `title`, two ArrowDowns should land on `due`.
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
       expect(titleRow!.getAttribute("data-focused")).toBe("true");
 
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-      expect(bodyRow!.getAttribute("data-focused")).toBe("true");
+      // All four navigable rows render and live in the right sections.
+      const headerSection = container.querySelector(
+        '[data-testid="inspector-section-header"]',
+      );
+      const bodySection = container.querySelector(
+        '[data-testid="inspector-section-body"]',
+      );
+      const datesSection = container.querySelector(
+        '[data-testid="inspector-section-dates"]',
+      );
+      expect(
+        headerSection!.querySelector('[data-testid="field-row-title"]'),
+      ).toBeTruthy();
+      expect(
+        bodySection!.querySelector('[data-testid="field-row-body"]'),
+      ).toBeTruthy();
+      expect(
+        datesSection!.querySelector('[data-testid="field-row-due"]'),
+      ).toBeTruthy();
+      expect(
+        datesSection!.querySelector('[data-testid="field-row-scheduled"]'),
+      ).toBeTruthy();
+    });
+  });
 
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const dueRow = container.querySelector('[data-testid="field-row-due"]');
-      expect(dueRow).toBeTruthy();
-      expect(dueRow!.getAttribute("data-focused")).toBe("true");
+  describe("field rows as zones", () => {
+    it("each field row carries the entity's field moniker as its data-moniker", async () => {
+      // After the spatial-nav migration, each field row renders as a
+      // <FocusScope kind="zone"> whose moniker uniquely identifies it
+      // inside the inspector layer. Verify the moniker shape per row.
+      const { container } = await renderInspector(
+        makeEntity({ title: "T", body: "B", tags: [] }),
+      );
+
+      const titleRow = container.querySelector(
+        '[data-testid="field-row-title"]',
+      );
+      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
+      const bodyRow = container.querySelector('[data-testid="field-row-body"]');
+
+      // Field monikers follow the `field:<entityType>:<entityId>.<fieldName>`
+      // convention from `lib/moniker.ts`. The exact entity type / id come
+      // from `makeEntity()` (task, test-id).
+      expect(titleRow!.getAttribute("data-moniker")).toBe(
+        "field:task:test-id.title",
+      );
+      expect(tagsRow!.getAttribute("data-moniker")).toBe(
+        "field:task:test-id.tags",
+      );
+      expect(bodyRow!.getAttribute("data-moniker")).toBe(
+        "field:task:test-id.body",
+      );
+    });
+
+    it("field row outer element has flex row layout classes (icon + content stay horizontal)", async () => {
+      // Regression guard: the `<FocusScope kind="zone">` wrap around each
+      // FieldRow must not collapse the icon | content layout into a vertical
+      // stack. The outer field-row element (the FocusZone div carrying the
+      // data-testid) must carry `flex` and `items-start` so the row joins
+      // the parent layout chain horizontally; the icon span and content div
+      // are direct children of the same FocusZone div, so the consumer's
+      // flex classes are sufficient to lay them out side-by-side.
+      //
+      // CRITICAL: this test must mount inside the spatial-focus provider
+      // stack (`<SpatialFocusProvider>` + `<FocusLayer>`). Without it,
+      // `<FocusScope>` short-circuits to its no-spatial-context fallback
+      // (a plain `<div>`) instead of mounting the spatial primitive, so
+      // any regression that manifests only against the primitive path
+      // would slip past.
+      const { container } = await renderInspectorWithSpatial(
+        makeEntity({ title: "T", body: "B", tags: ["bug"] }),
+      );
+
+      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
+      expect(tagsRow).toBeTruthy();
+      // Outer field-row element carries the row's flex layout classes.
+      expect(tagsRow!.className).toContain("flex");
+      expect(tagsRow!.className).toContain("items-start");
+      expect(tagsRow!.className).toContain("gap-2");
+      // Critical: the row must NOT be a column — that's the regression.
+      expect(tagsRow!.className).not.toContain("flex-col");
+
+      // The icon span and the content div must share a single flex-row
+      // ancestor so they lay out side-by-side rather than stacking. Walk
+      // up from the icon span until we hit a flex container; verify the
+      // content div is also a descendant of the same container, and that
+      // the container is row-direction (no `flex-col`).
+      const iconSpan = tagsRow!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
+      ) as HTMLElement | null;
+      expect(iconSpan).toBeTruthy();
+
+      let flexAncestor: HTMLElement | null = iconSpan!.parentElement;
+      while (
+        flexAncestor &&
+        !flexAncestor.className.split(/\s+/).includes("flex")
+      ) {
+        flexAncestor = flexAncestor.parentElement;
+      }
+      expect(
+        flexAncestor,
+        "icon span has no flex ancestor inside the field row",
+      ).toBeTruthy();
+      expect(flexAncestor!.className).not.toContain("flex-col");
+      // The content's `flex-1 min-w-0` div is a sibling of the icon span
+      // inside that flex container.
+      const contentDiv = flexAncestor!.querySelector(
+        ":scope > .flex-1.min-w-0",
+      );
+      expect(
+        contentDiv,
+        "content div is not a sibling of the icon span in the flex row",
+      ).toBeTruthy();
     });
   });
 });

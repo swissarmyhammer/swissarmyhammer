@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DC89WJ5A3ZAE4YYM1WATR
 position_column: done
-position_ordinal: ffffffffc080
+position_ordinal: ffffffffd380
 title: Extract search_history operation
 ---
 Move SearchHistory struct + impl Operation + handler into `execute/search_history/mod.rs`.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffffffffffe680
 title: 'WARNING: effectiveSort in data-table.tsx duplicates Rust backend logic'
 ---
 **File**: kanban-app/ui/src/components/data-table.tsx (effectiveSort function)\n\n**What**: The `effectiveSort` function replicates the Rust backend's `effective_sort()` logic with a kind-based fallback switch statement (`date` -> `datetime`, `number`/`integer` -> `numeric`, `select`/`multi-select` -> `option-order`, default -> `lexical`). The comment acknowledges this: \"the backend resolves the same fallback chain, so these two implementations must stay in sync.\"\n\n**Why**: This violates ARCHITECTURE.md Section 5 Practice 5 (\"UI interprets Field metadata. Never hardcode field-specific rendering logic in React.\") and the metadata-driven-ui principle. The `field.sort` property should always be populated by the backend's schema loader so the frontend never needs kind-based fallbacks. Two implementations that must stay in sync is a maintenance risk.\n\n**Suggestion**: Ensure the backend always populates `field.sort` in the schema response (via `effective_sort()` at load time). Then the frontend function reduces to just `return field.sort ?? 'lexical'`.\n\n**Subtasks**:\n- [ ] Verify backend schema loader populates field.sort for all field types\n- [ ] Simplify effectiveSort to use field.sort directly without kind-based fallback\n- [ ] Verify fix by running tests #review-finding

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9080
+position_ordinal: ffffffffffffffffffffffffffffffff8a80
 title: '"Delete Task" appears twice in task context menu — remove duplicate `task.delete` command'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKYR690S88SENAN2HVB6X5BJ
 position_column: done
-position_ordinal: ffffffffea80
+position_ordinal: ffffffffffa680
 title: Add shutdown-aware window close handler
 ---
 ## What

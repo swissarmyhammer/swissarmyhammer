@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe180
+position_ordinal: ffffffffffffffffffffffffb380
 title: 'Integration test: sidecar diffs written by PostToolUse are read at Stop'
 ---
 ## What

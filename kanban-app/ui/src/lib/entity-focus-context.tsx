@@ -14,23 +14,6 @@ import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
 
-/** A predicate that a FocusScope uses to claim focus when a nav command fires. */
-export interface ClaimPredicate {
-  /** The command ID to match (e.g. "nav.right"). */
-  command: string;
-  /**
-   * Returns true if this scope should claim focus.
-   * @param focusedMoniker - The currently focused moniker
-   * @param isDescendantOf - Returns true if the focused element is a descendant
-   *   of the given ancestor moniker (walks the scope chain). Use this when a
-   *   field should respond to nav commands even when a child (e.g. a pill) is focused.
-   */
-  when: (
-    focusedMoniker: string | null,
-    isDescendantOf: (ancestor: string) => boolean,
-  ) => boolean;
-}
-
 // ---------------------------------------------------------------------------
 // Focus store: moniker-keyed subscriptions
 // ---------------------------------------------------------------------------
@@ -136,18 +119,17 @@ export interface FocusActions {
   unregisterScope: (moniker: string) => void;
   /** Look up a registered scope by moniker. */
   getScope: (moniker: string) => CommandScope | null;
-  /** Register claim predicates for a FocusScope moniker. */
-  registerClaimPredicates: (
-    moniker: string,
-    predicates: ClaimPredicate[],
-  ) => void;
-  /** Unregister claim predicates for a FocusScope moniker. */
-  unregisterClaimPredicates: (moniker: string) => void;
   /**
-   * Broadcast a navigation command to all registered claim predicates.
-   * Evaluates each predicate with the current focusedMoniker.
-   * First match wins -- calls setFocus(claimantMoniker) and stops.
-   * Returns true if a claim was made, false otherwise.
+   * Broadcast a navigation command. Retained as a stable callback in
+   * the actions bag so existing call sites (board-view, grid-view,
+   * inspector-focus-bridge, app-shell) compile without churn while the
+   * spatial-nav migration completes — but the function no longer walks
+   * a predicate registry. All real navigation now lives in the Rust
+   * spatial-nav kernel, with React-side directives expressed as
+   * `navOverride` props on `<Focusable>` / `<FocusZone>` /
+   * `<FocusScope>`. This callback is therefore a no-op that always
+   * returns `false`; callers that need to drive navigation should
+   * invoke `spatial_navigate` via `useSpatialFocusActions().navigate`.
    */
   broadcastNavCommand: (commandId: string) => boolean;
 }
@@ -209,9 +191,6 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
 
-  // Claim predicate registry: ref so registrations don't cause re-renders
-  const claimPredicatesRef = useRef<Map<string, ClaimPredicate[]>>(new Map());
-
   // Keep the latest dispatch in a ref so the actions bag below can stay
   // identity-stable across re-renders (matches the pre-refactor behavior
   // where setFocus was captured via useCallback with [dispatch]).
@@ -225,7 +204,6 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     actionsRef.current = buildFocusActions({
       store,
       registryRef,
-      claimPredicatesRef,
       dispatchRef,
     });
   }
@@ -288,7 +266,6 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
 interface FocusActionsDeps {
   store: FocusStore;
   registryRef: MutableRefObject<Map<string, CommandScope>>;
-  claimPredicatesRef: MutableRefObject<Map<string, ClaimPredicate[]>>;
   dispatchRef: MutableRefObject<PreboundDispatch>;
 }
 
@@ -301,7 +278,7 @@ interface FocusActionsDeps {
  * data and logic in `entity-store-context.tsx`.
  */
 function buildFocusActions(deps: FocusActionsDeps): FocusActions {
-  const { store, registryRef, claimPredicatesRef, dispatchRef } = deps;
+  const { store, registryRef, dispatchRef } = deps;
 
   const setFocus = (moniker: string | null): void => {
     store.set(moniker);
@@ -322,66 +299,27 @@ function buildFocusActions(deps: FocusActionsDeps): FocusActions {
   const getScope = (moniker: string): CommandScope | null =>
     registryRef.current.get(moniker) ?? null;
 
-  const registerClaimPredicates = (
-    moniker: string,
-    predicates: ClaimPredicate[],
-  ): void => {
-    claimPredicatesRef.current.set(moniker, predicates);
-  };
-
-  const unregisterClaimPredicates = (moniker: string): void => {
-    claimPredicatesRef.current.delete(moniker);
-  };
-
   /**
-   * Broadcast a navigation command to all registered claim predicates.
+   * No-op stand-in for the legacy predicate-broadcast entry point.
    *
-   * Evaluates each predicate with the current focusedMoniker (read from the
-   * store so it's never stale). First matching predicate claims focus via
-   * setFocus and evaluation stops (short-circuit).
+   * The pull-based predicate registry (`ClaimPredicate[]` per moniker)
+   * has been replaced by the spatial-nav kernel's per-direction
+   * `overrides` map plus beam-search resolution, both of which run in
+   * Rust. Production code that still calls this method does so as a
+   * dead branch — there is nothing to broadcast to. The callable
+   * remains in the actions bag so existing call sites compile without
+   * churn during the migration.
    *
-   * Evaluation order follows Map insertion order (ES6 spec), which corresponds
-   * to component mount order (React depth-first). Children register before
-   * parents, so more-specific scopes (pills) are checked before less-specific
-   * ones (field rows).
+   * Always returns `false`. Callers that need to drive navigation
+   * must invoke `spatial_navigate` via `useSpatialFocusActions`.
    */
-  const broadcastNavCommand = (commandId: string): boolean => {
-    const currentFocus = store.getSnapshot();
-
-    // Build isDescendantOf helper — walks the focused scope's parent chain
-    const isDescendantOf = (ancestor: string): boolean => {
-      if (!currentFocus) return false;
-      const scope = registryRef.current.get(currentFocus);
-      if (!scope) return false;
-      let current = scope.parent;
-      while (current !== null) {
-        if (current.moniker === ancestor) return true;
-        current = current.parent;
-      }
-      return false;
-    };
-
-    for (const [moniker, predicates] of claimPredicatesRef.current) {
-      for (const pred of predicates) {
-        if (
-          pred.command === commandId &&
-          pred.when(currentFocus, isDescendantOf)
-        ) {
-          setFocus(moniker);
-          return true;
-        }
-      }
-    }
-    return false;
-  };
+  const broadcastNavCommand = (_commandId: string): boolean => false;
 
   return {
     setFocus,
     registerScope,
     unregisterScope,
     getScope,
-    registerClaimPredicates,
-    unregisterClaimPredicates,
     broadcastNavCommand,
   };
 }
@@ -538,44 +476,6 @@ export function useIsFocused(moniker: string): boolean {
     current = current.parent;
   }
   return false;
-}
-
-/**
- * Saves the currently focused moniker on mount and restores it on unmount,
- * but only if the saved moniker still has a registered scope. If the
- * previously focused entity was deleted while this component was mounted,
- * focus is cleared to null instead of restoring a stale moniker.
- *
- * Use this in inspector panels that temporarily steal focus from the board.
- */
-export function useRestoreFocus(): void {
-  const { setFocus, getScope } = useFocusActions();
-  const focusRef = useFocusedMonikerRef();
-
-  // Capture the focused moniker at mount time only.
-  const prevFocusRef = useRef<string | null>(null);
-  const mountedRef = useRef(false);
-  if (!mountedRef.current) {
-    prevFocusRef.current = focusRef.current;
-    mountedRef.current = true;
-  }
-
-  // On unmount, restore focus — but only if the saved moniker still exists
-  // in the scope registry. If it was removed (e.g. entity deleted), clear
-  // focus to null to avoid pointing at a nonexistent entity.
-  useEffect(() => {
-    return () => {
-      const saved = prevFocusRef.current;
-      if (saved === null) {
-        setFocus(null);
-      } else if (getScope(saved) !== null) {
-        setFocus(saved);
-      } else {
-        setFocus(null);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup-only effect, must not re-run
-  }, []);
 }
 
 // ---------------------------------------------------------------------------

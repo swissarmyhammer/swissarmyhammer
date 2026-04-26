@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa480
+position_ordinal: ffffffffffffffffffffffffffffe680
 title: 'Bug: Virtual tags (#READY, #BLOCKED, #BLOCKING) not decorated in CM6 editors'
 ---
 ## What

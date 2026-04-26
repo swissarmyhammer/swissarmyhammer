@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9e80
+position_ordinal: ffffffffffffffffffffffffffffffff9980
 title: Tag ui-state-changed events with the UIStateChange variant; frontend ignores scope_chain echoes
 ---
 ## What

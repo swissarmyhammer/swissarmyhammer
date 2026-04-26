@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9480
+position_ordinal: ffffffffffffffffffffffffffffca80
 title: Add `perspective.next` and `perspective.prev` commands for cycling perspectives within a view
 ---
 ## What

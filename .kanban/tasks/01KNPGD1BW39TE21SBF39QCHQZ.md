@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNPGC2K0ETKC255A29PA4V0D
 position_column: review
-position_ordinal: '8180'
+position_ordinal: '80'
 title: 'Unify entity creation path: route board + column (+) buttons through `entity.add:{type}`, fix project view registration'
 ---
 ## What

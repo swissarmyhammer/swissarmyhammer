@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8880
+position_ordinal: ffffffffffffffffffffffffffffffff8280
 title: 'Commands: fix board entity.delete / entity.archive contract gap'
 ---
 ## What

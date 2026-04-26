@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM6CH612XPADMZ6QRTMA4EFV
 position_column: done
-position_ordinal: ffffffffffd380
+position_ordinal: ffffffffffffa280
 title: Wire grid-view entity commands from schema
 ---
 ## What

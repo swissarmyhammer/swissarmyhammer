@@ -32,7 +32,8 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+Shift+P": "app.palette",
     u: "app.undo",
     "Mod+r": "app.redo",
-    Escape: "app.dismiss",
+    Enter: "nav.drillIn",
+    Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
   },
   cua: {
@@ -40,12 +41,14 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+f": "app.search",
     "Mod+z": "app.undo",
     "Mod+Shift+Z": "app.redo",
-    Escape: "app.dismiss",
+    Enter: "nav.drillIn",
+    Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
-    Escape: "app.dismiss",
+    Enter: "nav.drillIn",
+    Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // Emacs navigation — Ctrl+ entries match macOS where Ctrl is distinct from
     // Cmd (Mod). Mod+ entries cover non-Mac where Ctrl normalises to Mod.
@@ -127,6 +130,15 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
   } else if (e.shiftKey && key.length === 1 && /[A-Z]/.test(key)) {
     // Already uppercase letter — add Shift (e.g. Mod+Shift+P)
     parts.push("Shift");
+  }
+
+  // Browsers report the spacebar as `e.key === " "` (literal space). The
+  // canonical form uses the symbolic name "Space" so command bindings can
+  // declare `keys: { cua: "Space" }` without embedding a single-character
+  // space literal in source — that would be invisible in code review and
+  // collide with how the rest of the binding table treats whitespace.
+  if (key === " ") {
+    key = "Space";
   }
 
   parts.push(key);

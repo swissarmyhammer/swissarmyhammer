@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff9280
+position_ordinal: '9e80'
 title: Collapse duplicate board_display_name between kanban-app and swissarmyhammer-kanban
 ---
 ## What

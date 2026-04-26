@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: f680
+position_ordinal: '9480'
 title: 'clippy: 3 unnecessary_sort_by violations in swissarmyhammer-code-context'
 ---
 Pre-existing clippy errors surfaced by `cargo clippy --workspace --all-targets -- -D warnings`. Not regressions from kanban project_commands deletion or cut transactional safety tests — files unchanged from merge-base.

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9b80
+position_ordinal: ffffffffffffffffffffffffffffffff9680
 title: Replace perspective.goto / view.switch indirection with direct .set commands
 ---
 ## What

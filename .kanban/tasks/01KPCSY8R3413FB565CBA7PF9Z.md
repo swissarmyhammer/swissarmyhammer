@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffe180
+position_ordinal: ffffffffffffffffffffffffffffffdc80
 title: Fix "New" so it works uniformly on every grid — prove via logs, fix stale view YAMLs, surface silent field-name drops
 ---
 ## What

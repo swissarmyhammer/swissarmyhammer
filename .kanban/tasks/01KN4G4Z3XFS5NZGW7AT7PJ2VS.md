@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4G3TDD6J4HR9FW33N15SRD
 position_column: done
-position_ordinal: ffffffffffffffffb480
+position_ordinal: ffffffffffffffffffaa80
 title: Remove kanban attachment commands — attachments are just entity fields
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffac80
+position_ordinal: fffffffffffffffffffffffffffff680
 project: expr-filter
 title: 'lang-filter: add Project token to Lezer grammar and highlight styling'
 ---

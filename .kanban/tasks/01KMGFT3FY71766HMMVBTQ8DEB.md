@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGFSHVGCZZPE563P6Y6R3TB
 position_column: done
-position_ordinal: ffffffffffffae80
+position_ordinal: fffffffffffffe80
 title: Wire board navigation commands into BoardView scope
 ---
 ## What

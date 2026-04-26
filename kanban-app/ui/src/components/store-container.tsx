@@ -18,7 +18,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { FocusScope } from "@/components/focus-scope";
+import { CommandScopeProvider } from "@/lib/command-scope";
 
 interface StoreContainerProps {
   /** The canonical filesystem path to the `.kanban` directory. */
@@ -27,21 +27,21 @@ interface StoreContainerProps {
 }
 
 /**
- * Provides a `store:{path}` FocusScope in the scope chain.
+ * Provides a `store:{path}` moniker in the scope chain.
  *
- * Uses `renderContainer={false}` to avoid adding a wrapping DOM element —
- * the store scope is purely structural, not visual.
+ * Uses {@link CommandScopeProvider} rather than `<FocusScope>` because the
+ * store scope is purely structural — it contributes a moniker to the
+ * scope chain so the backend can resolve the store path, and nothing
+ * more. There is no entity to focus, no spatial-nav rect to register,
+ * and no DOM surface to draw a focus bar around. Sibling structural
+ * containers (`AppModeContainer`, `WindowContainer`,
+ * `BoardContainer`) follow the same `<CommandScopeProvider>`-only
+ * pattern.
  */
 export function StoreContainer({ path, children }: StoreContainerProps) {
   const moniker = useMemo(() => `store:${path}`, [path]);
 
   return (
-    <FocusScope
-      moniker={moniker}
-      renderContainer={false}
-      showFocusBar={false}
-    >
-      {children}
-    </FocusScope>
+    <CommandScopeProvider moniker={moniker}>{children}</CommandScopeProvider>
   );
 }

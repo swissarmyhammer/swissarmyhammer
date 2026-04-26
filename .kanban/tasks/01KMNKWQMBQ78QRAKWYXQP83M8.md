@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMNKW4Y3JHWNN73J22HZJM7Y
 position_column: done
-position_ordinal: ffffffffffffcb80
+position_ordinal: ffffffffffffffa180
 title: Wire DropZones into ColumnView — replace midpoint computation
 ---
 ## What

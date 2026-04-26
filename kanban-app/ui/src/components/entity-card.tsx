@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, type LucideIcon } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
+import { asMoniker } from "@/types/spatial";
 import {
   Field,
   getDisplayIconOverride,
@@ -14,7 +15,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 import {
   useEntitySections,
@@ -30,8 +30,6 @@ interface EntityCardProps {
   onDragEnd?: (e: React.DragEvent) => void;
   /** Additional commands to append to the entity's context menu. */
   extraCommands?: CommandDef[];
-  /** Predicates for pull-based navigation via broadcastNavCommand. */
-  claimWhen?: ClaimPredicate[];
 }
 
 /**
@@ -57,17 +55,28 @@ export const EntityCard = memo(
       onDragStart,
       onDragEnd,
       extraCommands,
-      claimWhen,
       ...rest
     } = props;
     const cardSections = useCardSections(entity.entity_type);
 
+    // The card body registers as a `<FocusScope kind="zone">`. The
+    // composite wraps a `<FocusZone>` primitive when the surrounding tree
+    // mounts the spatial-nav stack (`<SpatialFocusProvider>` +
+    // `<FocusLayer>` — the production path in `App.tsx`) and falls back
+    // to a plain `<div>` outside that stack so isolated unit tests don't
+    // need to spin up the spatial providers. Either way the card carries
+    // the legacy entity-focus / command-scope / context-menu wiring
+    // shared with every other entity surface.
+    //
+    // Title, status, assignee pills, and tag pills inside the card render
+    // as default `Focusable` leaves whose `parent_zone` is this card's
+    // `task:{id}` moniker — drill-in / arrow-key navigation between leaves
+    // is handled by the spatial-nav primitives, not by per-card predicates.
     return (
       <FocusScope
-        moniker={entity.moniker}
+        moniker={asMoniker(entity.moniker)}
+        kind="zone"
         commands={extraCommands}
-        claimWhen={claimWhen}
-        className="entity-card-focus"
       >
         <div
           ref={ref}

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNC7NQA00AZNR027JPJTQKWD
 position_column: done
-position_ordinal: fffffffffffffffffff980
+position_ordinal: ffffffffffffffffffffffffec80
 title: Refactor NavBar to read from container contexts
 ---
 ## What

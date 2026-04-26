@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM14VK8C3ZJ301YEQHZN754W
 position_column: done
-position_ordinal: fffffffff380
+position_ordinal: ffffffffffb980
 title: Hot reload tool config on list_tools calls
 ---
 ## What

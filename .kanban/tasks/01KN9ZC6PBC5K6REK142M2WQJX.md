@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffbf80
+position_ordinal: ffffffffffffffffffffffe580
 title: Fix Enter key in command palette inserting newline instead of executing command (vim mode)
 ---
 ## What

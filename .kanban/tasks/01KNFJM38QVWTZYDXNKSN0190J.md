@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFJKD5E13JBPA3VRTKKKF2X
 position_column: done
-position_ordinal: ffffffffffffffffffffd180
+position_ordinal: ffffffffffffffffffffffffffff80
 title: 'Smoke test: grouped board end-to-end with drag across groups'
 ---
 ## What

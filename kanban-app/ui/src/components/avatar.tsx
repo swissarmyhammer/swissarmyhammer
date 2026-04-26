@@ -17,6 +17,7 @@ import { useEntityStore } from "@/lib/entity-store-context";
 import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
+import { asMoniker } from "@/types/spatial";
 import { getStr } from "@/types/kanban";
 
 const SIZES = {
@@ -56,7 +57,7 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const avatar = actor ? getStr(actor, "avatar") : undefined;
 
   const sizeClass = SIZES[size];
-  const scopeMoniker = actor?.moniker ?? moniker("actor", actorId);
+  const scopeMoniker = asMoniker(actor?.moniker ?? moniker("actor", actorId));
 
   const element = avatar ? (
     <img

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPEMYJV7BMTJB6GZ8MGTD04J
 position_column: done
-position_ordinal: ffffffffffffffffffffffea80
+position_ordinal: ffffffffffffffffffffffffffffffe380
 title: 'Commands: test — cross_cutting pass ignores commands whose primary param is from:args (not from:target)'
 ---
 ## What

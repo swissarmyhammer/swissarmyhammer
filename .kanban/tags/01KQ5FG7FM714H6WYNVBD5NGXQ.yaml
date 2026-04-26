@@ -1,0 +1,3 @@
+color: 3b82f6
+description: Collapse the duplicate per-entity .jsonl writers into one. Store layer is the only writer; field-level history is projected at read time.
+tag_name: single-changelog

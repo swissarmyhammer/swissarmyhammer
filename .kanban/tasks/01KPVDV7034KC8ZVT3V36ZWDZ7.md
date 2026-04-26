@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff8280
+position_ordinal: '9980'
 title: Drag-to-attach trips spatial-nav `focus_first_in_layer` stale-RAF guard — focus lost after paste completes
 ---
 ## What

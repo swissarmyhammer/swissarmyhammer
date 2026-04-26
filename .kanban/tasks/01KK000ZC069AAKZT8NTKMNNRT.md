@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff8c80
+position_ordinal: ffff9380
 title: 'UIState in Rust: inspector stack, active view, palette, keymap'
 ---
 Move all UI state from React contexts into a Rust-owned `UIState` struct that emits events on change.

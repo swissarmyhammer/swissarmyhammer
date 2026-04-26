@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffb180
 title: 'LSP-T2B: get_inbound_calls op'
 ---
 ## What

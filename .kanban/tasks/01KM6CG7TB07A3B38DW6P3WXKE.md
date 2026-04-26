@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffce80
+position_ordinal: ffffffffffff9c80
 title: Add `commands` field to EntityDef (Rust + YAML)
 ---
 ## What

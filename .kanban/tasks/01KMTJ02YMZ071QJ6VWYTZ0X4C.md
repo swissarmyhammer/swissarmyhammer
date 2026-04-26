@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffba80
+position_ordinal: ffffffffffffffff8d80
 title: Wire UndoStack into EntityContext write/delete paths
 ---
 ## What

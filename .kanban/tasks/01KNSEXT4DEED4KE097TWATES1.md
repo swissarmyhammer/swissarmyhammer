@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff9880
+position_ordinal: ffffffffffffffffffffffffffa780
 project: code-context-cli
 title: Deploy lsp skill alongside code-context skill in `code-context skill` command
 ---

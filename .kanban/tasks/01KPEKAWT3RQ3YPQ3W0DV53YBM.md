@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: da80
+position_ordinal: 8f80
 title: Decide fate of 5 filter-excluded embedding tests in default profile
 ---
 What: `.config/nextest.toml` sets `default-filter = "not (package(swissarmyhammer-embedding) & test(/(qwen_embedding|unixcoder_)/))"`, which silently excludes 5 tests from every default `cargo nextest run --workspace`. They are only run via `--profile embedding-models`.

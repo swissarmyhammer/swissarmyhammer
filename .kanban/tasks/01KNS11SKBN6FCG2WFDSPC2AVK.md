@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS10MMDVZG731XKM390C682
 position_column: done
-position_ordinal: ffffffffffffffffffffffc180
+position_ordinal: ffffffffffffffffffffffffffffffa380
 project: kanban-mcp
 title: 'kanban-cli: implement commands/serve.rs — KanbanMcpServer over stdio'
 ---

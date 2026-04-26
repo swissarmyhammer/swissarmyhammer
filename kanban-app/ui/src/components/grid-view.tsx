@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import {
-  useFocusActions,
-  useFocusedMoniker,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { useFocusActions, useFocusedMoniker } from "@/lib/entity-focus-context";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
@@ -20,111 +17,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { fieldMoniker } from "@/lib/moniker";
+import { FocusZone } from "@/components/focus-zone";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asMoniker } from "@/types/spatial";
+import { gridCellMoniker, parseGridCellMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
-
-/**
- * Build navigation claim predicates for a single grid cell.
- *
- * Returns an array of ClaimPredicate entries that let the cell claim focus
- * when adjacent cells are focused and a navigation command fires.
- */
-interface CellCtx {
-  ri: number;
-  ci: number;
-  cellMonikers: string[][];
-  cellMonikerMap: Map<string, { row: number; col: number }>;
-  rowCount: number;
-  colCount: number;
-}
-
-function orthogonalNavPredicates(c: CellCtx): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (c.ri > 0)
-    out.push({
-      command: "nav.down",
-      when: (f) => f === c.cellMonikers[c.ri - 1][c.ci],
-    });
-  if (c.ri < c.rowCount - 1)
-    out.push({
-      command: "nav.up",
-      when: (f) => f === c.cellMonikers[c.ri + 1][c.ci],
-    });
-  if (c.ci > 0)
-    out.push({
-      command: "nav.right",
-      when: (f) => f === c.cellMonikers[c.ri][c.ci - 1],
-    });
-  if (c.ci < c.colCount - 1)
-    out.push({
-      command: "nav.left",
-      when: (f) => f === c.cellMonikers[c.ri][c.ci + 1],
-    });
-  return out;
-}
-
-function rowEdgeNavPredicates(c: CellCtx): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  if (c.ci === 0)
-    out.push({
-      command: "nav.rowStart",
-      when: (f) => {
-        const pos = f ? c.cellMonikerMap.get(f) : undefined;
-        return pos !== undefined && pos.row === c.ri && pos.col !== 0;
-      },
-    });
-  if (c.ci === c.colCount - 1)
-    out.push({
-      command: "nav.rowEnd",
-      when: (f) => {
-        const pos = f ? c.cellMonikerMap.get(f) : undefined;
-        return (
-          pos !== undefined && pos.row === c.ri && pos.col !== c.colCount - 1
-        );
-      },
-    });
-  return out;
-}
-
-function gridEdgeNavPredicates(c: CellCtx): ClaimPredicate[] {
-  const out: ClaimPredicate[] = [];
-  const isGridCell = (mk: string | null) => !!mk && c.cellMonikerMap.has(mk);
-  if (c.ri === 0 && c.ci === 0)
-    out.push({
-      command: "nav.first",
-      when: (f) => isGridCell(f) && f !== c.cellMonikers[0][0],
-    });
-  if (c.ri === c.rowCount - 1 && c.ci === c.colCount - 1)
-    out.push({
-      command: "nav.last",
-      when: (f) =>
-        isGridCell(f) && f !== c.cellMonikers[c.rowCount - 1][c.colCount - 1],
-    });
-  return out;
-}
-
-function buildCellPredicates(
-  ri: number,
-  ci: number,
-  cellMonikers: string[][],
-  cellMonikerMap: Map<string, { row: number; col: number }>,
-  rowCount: number,
-  colCount: number,
-): ClaimPredicate[] {
-  const c: CellCtx = {
-    ri,
-    ci,
-    cellMonikers,
-    cellMonikerMap,
-    rowCount,
-    colCount,
-  };
-  return [
-    ...orthogonalNavPredicates(c),
-    ...rowEdgeNavPredicates(c),
-    ...gridEdgeNavPredicates(c),
-  ];
-}
 
 /**
  * Pattern for valid entity type identifiers.
@@ -265,27 +163,35 @@ function useGridData(view: ViewDef) {
 }
 
 /**
- * Build cell moniker matrices, cursor tracking, claim predicates, and grid state.
+ * Resolve the cell-cursor coordinates implied by the currently focused moniker.
  *
- * Handles the pull-based navigation system: each cell declares predicates
- * for which nav commands it should claim focus on.
+ * Returns `{ row, col }` (zero-based grid indices) when the focused moniker is
+ * a `grid_cell:R:K` whose `K` matches one of the grid's columns and `R` is
+ * within the row count. Returns `null` otherwise — focus is outside the grid
+ * (`ui:navbar`, an entity moniker, or no focus). The grid uses a `null`
+ * cursor to suppress its ring, instead of falling back to a stale `{0, 0}`
+ * default that would highlight the top-left cell whenever focus moves
+ * elsewhere.
+ *
+ * Reads:
+ *   - `focusedMoniker` — the currently focused entity-focus moniker.
+ *   - `columns` — the grid's column list, used to translate `colKey` to
+ *     a numeric column index for the `useGrid` cursor input.
+ *   - `rowCount` — the number of data rows in the grid; coordinates
+ *     beyond this range are rejected.
  */
-function useCellMonikers(entities: Entity[], columns: DataTableColumn[]) {
-  const cellMonikers = useMemo(
-    () =>
-      entities.map((e) =>
-        columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name)),
-      ),
-    [entities, columns],
-  );
-  const cellMonikerMap = useMemo(() => {
-    const map = new Map<string, { row: number; col: number }>();
-    cellMonikers.forEach((row, r) => {
-      row.forEach((mk, c) => map.set(mk, { row: r, col: c }));
-    });
-    return map;
-  }, [cellMonikers]);
-  return { cellMonikers, cellMonikerMap };
+function resolveCursorFromFocus(
+  focusedMoniker: string | null,
+  columns: DataTableColumn[],
+  rowCount: number,
+): { row: number; col: number } | null {
+  if (!focusedMoniker) return null;
+  const parsed = parseGridCellMoniker(focusedMoniker);
+  if (!parsed) return null;
+  const colIdx = columns.findIndex((c) => c.field.name === parsed.colKey);
+  if (colIdx === -1) return null;
+  if (parsed.row < 0 || parsed.row >= rowCount) return null;
+  return { row: parsed.row, col: colIdx };
 }
 
 function useInitialCellFocus(
@@ -311,45 +217,62 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
 
   const { setFocus, broadcastNavCommand } = useFocusActions();
   const focusedMoniker = useFocusedMoniker();
-  const { cellMonikers, cellMonikerMap } = useCellMonikers(entities, columns);
 
-  const derivedCursor = useMemo(
-    () =>
-      focusedMoniker ? (cellMonikerMap.get(focusedMoniker) ?? null) : null,
-    [focusedMoniker, cellMonikerMap],
+  // Cursor derivation: the focused moniker is the single source of truth.
+  // The two derived shapes below answer different questions and read the
+  // moniker independently:
+  //
+  //   - `gridCellCursor: {row, colKey}` — what the rendering layer needs
+  //     to stamp the `data-cell-cursor` debug/e2e attribute. Parsed
+  //     straight from the moniker; matches on column field name, no
+  //     numeric column index required. The visible focus decoration is
+  //     not driven from this — the cell's `<Focusable>` renders
+  //     `<FocusIndicator>` from its own React focus state.
+  //   - `derivedCursor: {row, col}` — what `useGrid` needs (a numeric
+  //     row/col cursor input). Built by mapping `colKey` to its column
+  //     index in the current `columns` array.
+  //
+  // When the focused moniker is not a `grid_cell:R:K` whose column key is
+  // present and whose row is in range, both shapes are `null` so the grid
+  // suppresses the `data-cell-cursor` attribute instead of falling back
+  // to the internal `{0, 0}` default.
+  const gridCellCursor = useMemo<{ row: number; colKey: string } | null>(() => {
+    if (!focusedMoniker) return null;
+    const parsed = parseGridCellMoniker(focusedMoniker);
+    if (!parsed) return null;
+    if (parsed.row < 0 || parsed.row >= entities.length) return null;
+    const exists = columns.some((c) => c.field.name === parsed.colKey);
+    if (!exists) return null;
+    return { row: parsed.row, colKey: parsed.colKey };
+  }, [focusedMoniker, columns, entities.length]);
+
+  const derivedCursor = useMemo<{ row: number; col: number } | null>(
+    () => resolveCursorFromFocus(focusedMoniker, columns, entities.length),
+    [focusedMoniker, columns, entities.length],
   );
+
   const grid = useGrid({
     rowCount: visibleRowCount,
     colCount: columns.length,
     cursor: derivedCursor ?? undefined,
   });
 
-  useInitialCellFocus(cellMonikers[0]?.[0] ?? null, derivedCursor, setFocus);
+  // Seed initial focus on the top-left cell once when the grid has rows but
+  // no grid_cell focus has been established yet. After this, focus is
+  // entirely driven by the spatial-nav layer.
+  const firstCellMoniker = useMemo<string | null>(() => {
+    if (entities.length === 0 || columns.length === 0) return null;
+    return gridCellMoniker(0, columns[0].field.name);
+  }, [entities.length, columns]);
 
-  const claimPredicates = useMemo(() => {
-    const rowCount = cellMonikers.length;
-    const colCount = columns.length;
-    return cellMonikers.map((row, ri) =>
-      row.map((_, ci) =>
-        buildCellPredicates(
-          ri,
-          ci,
-          cellMonikers,
-          cellMonikerMap,
-          rowCount,
-          colCount,
-        ),
-      ),
-    );
-  }, [cellMonikers, cellMonikerMap, columns.length]);
+  useInitialCellFocus(firstCellMoniker, derivedCursor, setFocus);
 
   return {
     setVisibleRowCount,
     grid,
-    cellMonikers,
-    claimPredicates,
     setFocus,
     broadcastNavCommand,
+    gridCellCursor,
   };
 }
 
@@ -553,15 +476,16 @@ function renderGridCellEditor(
 }
 
 function useGridCallbacks(
-  cellMonikers: string[][],
+  columns: DataTableColumn[],
   setFocus: (mk: string) => void,
 ) {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
-      const mk = cellMonikers[row]?.[col];
-      if (mk) setFocus(mk);
+      const colKey = columns[col]?.field.name;
+      if (!colKey) return;
+      setFocus(gridCellMoniker(row, colKey));
     },
-    [cellMonikers, setFocus],
+    [columns, setFocus],
   );
 
   return {
@@ -762,13 +686,11 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
           onContextMenu={containerContextMenu}
         />
       ) : (
-        <>
+        <GridSpatialZone>
           <DataTable
             columns={data.columns}
             rows={data.entities}
             grid={nav.grid}
-            cellMonikers={nav.cellMonikers}
-            claimPredicates={nav.claimPredicates}
             onCellClick={callbacks.handleCellClick}
             renderEditor={callbacks.renderEditor}
             grouping={data.grouping}
@@ -776,11 +698,50 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
             perspectiveSort={data.activePerspective?.sort}
             perspectiveId={data.activePerspective?.id}
             onContainerContextMenu={containerContextMenu}
+            gridCellCursor={nav.gridCellCursor}
           />
           <AddEntityBar entityType={data.entityType} dispatch={dispatch} />
-        </>
+        </GridSpatialZone>
       )}
     </main>
+  );
+}
+
+/**
+ * Wrap the grid body in a `<FocusZone moniker={asMoniker("ui:grid")}>` when
+ * the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every `GridView`
+ * unit test that doesn't care about spatial nav to set up the providers.
+ * Conditionally rendering the zone when both context lookups succeed keeps
+ * the strict contract intact for direct `<FocusZone>` usage while letting
+ * the existing test suite keep its narrow provider tree.
+ *
+ * Mirrors the `BoardSpatialZone` / `ViewSpatialZone` / `PerspectiveSpatialZone`
+ * pattern used elsewhere in the project. The zone renders inside the
+ * already-mounted `ui:view` zone so its `parent_zone` is `ui:view`. Cells
+ * register as `<Focusable>` leaves under this zone in `data-table.tsx`.
+ *
+ * The wrapper renders `<>` (a fragment) when the spatial stack is absent so
+ * the inner DOM tree (DataTable's scroll container + AddEntityBar) keeps the
+ * same flex sibling relationship it always had with `GridStatusBar`.
+ */
+function GridSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusZone
+      moniker={asMoniker("ui:grid")}
+      showFocusBar={false}
+      className="flex-1 flex flex-col min-h-0"
+    >
+      {children}
+    </FocusZone>
   );
 }
 
@@ -795,7 +756,7 @@ export function GridView({ view }: GridViewProps) {
     data.entityType,
     dispatch,
   );
-  const callbacks = useGridCallbacks(nav.cellMonikers, nav.setFocus);
+  const callbacks = useGridCallbacks(data.columns, nav.setFocus);
 
   // Guard on the sanitized `entityType`, not raw `view.entity_type`.
   // `useGridData` reduces invalid values to the empty string via

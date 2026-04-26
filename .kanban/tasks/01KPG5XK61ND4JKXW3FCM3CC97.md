@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPEMYJV7BMTJB6GZ8MGTD04J
 position_column: done
-position_ordinal: ffffffffffffffffffffffee80
+position_ordinal: ffffffffffffffffffffffffffffffe780
 title: 'Commands: generalize copy/cut to work on any entity type (CopyEntityCmd / CutEntityCmd)'
 ---
 ## What

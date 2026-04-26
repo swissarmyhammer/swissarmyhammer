@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff80
+position_ordinal: fffffffffffffffffffffffff580
 title: 'Coverage: config.rs — load_code_context_config and merge_config_stack edge cases'
 ---
 swissarmyhammer-code-context/src/config.rs

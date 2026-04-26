@@ -6,7 +6,7 @@ depends_on:
 - 01KN4CK12F6Y8NCJX186EF0003
 - 01KN4CK3YAFB7E4RDS179E9X40
 position_column: done
-position_ordinal: ffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffb780
 title: 'EXTRACT-5: Rewire kanban to depend on new crate'
 ---
 ## What

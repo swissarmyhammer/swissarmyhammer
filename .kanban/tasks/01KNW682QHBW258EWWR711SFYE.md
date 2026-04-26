@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffb180
+position_ordinal: fffffffffffffffffffffffffffffc80
 project: expr-filter
 title: Update stale highlight.ts docstring — Tag and Mention are no longer styled by styleTags
 ---

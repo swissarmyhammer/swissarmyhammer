@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffcd80
+position_ordinal: ffffffffffffffffffe380
 title: swissarmyhammer-store crate — TrackedStore trait, StoreHandle, undo stack, changelog
 ---
 ## What

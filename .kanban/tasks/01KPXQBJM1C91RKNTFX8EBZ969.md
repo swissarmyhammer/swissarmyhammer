@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9380
+position_ordinal: ffffffffffffffffffffffffffffffff8e80
 title: Context menu sort/filter/group commands don't use scope chain
 ---
 

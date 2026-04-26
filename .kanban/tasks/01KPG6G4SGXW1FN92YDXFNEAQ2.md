@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 position_column: done
-position_ordinal: ffffffffffffffffffffffef80
+position_ordinal: ffffffffffffffffffffffffffffffe880
 title: 'Commands: paste handler — task onto column'
 ---
 ## What

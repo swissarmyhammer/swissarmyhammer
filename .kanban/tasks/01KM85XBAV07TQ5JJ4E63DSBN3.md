@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85WRY04E2VAQEEZ23VBVKG
 position_column: done
-position_ordinal: ffffffffffe380
+position_ordinal: ffffffffffffb280
 title: 'Remove AppState: replace with UIState as single state owner'
 ---
 ## What

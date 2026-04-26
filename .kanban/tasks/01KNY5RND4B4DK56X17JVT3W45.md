@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffffffffb980
+position_ordinal: ffffffffffffffffffffffffffffff8880
 project: expr-filter
 title: 'Wire $project sigil into filter editor UX: placeholder, filter-sigil autocomplete, integration and scenario tests'
 ---

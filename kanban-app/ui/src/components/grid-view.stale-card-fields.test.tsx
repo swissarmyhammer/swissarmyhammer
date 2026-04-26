@@ -83,8 +83,6 @@ vi.mock("@/lib/entity-focus-context", () => ({
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
-    registerClaimPredicates: vi.fn(),
-    unregisterClaimPredicates: vi.fn(),
     broadcastNavCommand: vi.fn(),
   }),
   useFocusActions: () => ({
@@ -92,8 +90,6 @@ vi.mock("@/lib/entity-focus-context", () => ({
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
-    registerClaimPredicates: vi.fn(),
-    unregisterClaimPredicates: vi.fn(),
     broadcastNavCommand: vi.fn(),
   }),
   useFocusedMoniker: () => null,

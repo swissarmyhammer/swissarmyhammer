@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffb280
+position_ordinal: ffffffffffffffffffffffcb80
 title: Perspectives don't load — add integration test with sample data, debug end-to-end
 ---
 ## What

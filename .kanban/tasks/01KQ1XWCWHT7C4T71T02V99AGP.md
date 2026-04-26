@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffffa580
+position_ordinal: ffffffffffffffffffffffffffffffffa080
 title: Virtualize DataTable rows with @tanstack/react-virtual
 ---
 ## What

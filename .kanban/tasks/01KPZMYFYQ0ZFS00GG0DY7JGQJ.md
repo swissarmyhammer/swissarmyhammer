@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9a80
+position_ordinal: ffffffffffffffffffffffffffffffff9580
 title: Move build_dynamic_sources out of kanban-app into UIState (headless-testable)
 ---
 ## What

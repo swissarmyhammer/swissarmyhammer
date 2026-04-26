@@ -9,7 +9,7 @@ depends_on:
 - 01KPG6YDZDCPWGWKCC38TWM8AV
 - 01KPG6YN15ECCK9SP262BJKGK2
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8380
+position_ordinal: fffffffffffffffffffffffffffffffb80
 title: 'Commands: retire EntityCommand / EntityCommandKeys — drop EntityDef.commands, delete dead emitter'
 ---
 ## What

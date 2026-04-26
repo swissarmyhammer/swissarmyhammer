@@ -1,0 +1,17 @@
+[package]
+name = "swissarmyhammer-focus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Spatial focus and keyboard navigation engine — generic, no domain dependencies"
+
+[dependencies]
+serde = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

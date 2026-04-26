@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8c80
+position_ordinal: fffffffffffffffffffffc80
 title: 'Test code_context tool: operation dispatch and query execution'
 ---
 File: swissarmyhammer-tools/src/mcp/tools/code_context/mod.rs (33.1%, 342 uncovered lines)

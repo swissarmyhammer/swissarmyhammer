@@ -29,7 +29,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // Mock Tauri invoke before importing any module that uses it. Each call is
 // recorded so we can assert the refetch count after the undo event.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]): Promise<any> => Promise.resolve(null));
+const mockInvoke = vi.fn(
+  (..._args: any[]): Promise<any> => Promise.resolve(null),
+);
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -204,7 +206,10 @@ describe("PerspectiveTabBar delete-undo flow", () => {
     // perspective entity type. Prime the next `perspective.list` response to
     // reflect the post-delete state (only Survivor), then fire the event.
     mockInvoke.mockResolvedValue({
-      result: { perspectives: [makePerspective(survivorId, "Survivor")], count: 1 },
+      result: {
+        perspectives: [makePerspective(survivorId, "Survivor")],
+        count: 1,
+      },
       undoable: false,
     });
 

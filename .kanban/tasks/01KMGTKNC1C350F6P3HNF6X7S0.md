@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffb180
+position_ordinal: ffffffffffffff8480
 title: Fix typing lag in body CM6 editor — switch to uncontrolled mode while editing
 ---
 ## What

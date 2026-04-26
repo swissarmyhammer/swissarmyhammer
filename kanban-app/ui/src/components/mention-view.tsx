@@ -11,8 +11,10 @@
  * Two modes:
  * - Single mode (`entityType` + `id`): one FocusScope + one TextViewer.
  * - List mode (`items`): a flex-wrap container with one FocusScope +
- *   TextViewer per item. Per-pill focus monikers and claim predicates
- *   preserve keyboard navigation (nav.left/nav.right between pills).
+ *   TextViewer per item. Each pill is its own leaf in the spatial-nav
+ *   graph; within-list keyboard navigation (nav.left/nav.right) is
+ *   driven by the spatial beam search rule 1 (in-zone candidates) when
+ *   the pills sit inside a parent zone such as an inspector field row.
  *
  * Unknown entities fall back to `${prefix}${rawValue}` — the CM6 widget
  * pipeline renders these as muted raw-slug marks automatically.
@@ -20,9 +22,10 @@
 
 import { useMemo } from "react";
 import type { Extension } from "@codemirror/state";
-import { FocusScope, useParentFocusScope } from "@/components/focus-scope";
+import { FocusScope } from "@/components/focus-scope";
 import { TextViewer } from "@/components/text-viewer";
 import { useEntityStore } from "@/lib/entity-store-context";
+import { asMoniker } from "@/types/spatial";
 import { useSchema, type MentionableType } from "@/lib/schema-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
 import { buildMentionMetaMap } from "@/hooks/use-mention-extensions";
@@ -30,7 +33,6 @@ import type { MentionMeta } from "@/lib/mention-meta";
 import { moniker as buildMoniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -51,11 +53,6 @@ export interface MentionViewProps {
   items?: MentionItem[];
   /** Optional className passed through to each TextViewer. */
   className?: string;
-  /**
-   * Predicates the FocusScope uses to claim focus on nav commands.
-   * Single mode only — list mode generates per-item predicates automatically.
-   */
-  claimWhen?: ClaimPredicate[];
   /**
    * Override the FocusScope moniker (single mode only). When provided,
    * it replaces the default `${entityType}:${id}` moniker — use this to
@@ -212,16 +209,15 @@ function buildScopedExtensions(
 /**
  * Props for the inner single-mention renderer used by both modes.
  *
- * In list mode the parent `MentionView` builds per-item claim predicates
- * and focus monikers and passes them down; in single mode the caller's
- * props are forwarded directly.
+ * In list mode the parent `MentionView` mints a per-item moniker and
+ * passes it down so each pill is its own leaf in the spatial graph; in
+ * single mode the caller's props are forwarded directly.
  */
 interface SingleMentionProps {
   resolved: ResolvedMention;
   extensions: Extension[];
   className?: string;
   scopeMoniker: string;
-  claimWhen?: ClaimPredicate[];
   showFocusBar?: boolean;
   extraCommands?: CommandDef[];
 }
@@ -232,7 +228,6 @@ function SingleMention({
   extensions,
   className,
   scopeMoniker,
-  claimWhen,
   showFocusBar,
   extraCommands,
 }: SingleMentionProps) {
@@ -240,51 +235,14 @@ function SingleMention({
 
   return (
     <FocusScope
-      moniker={scopeMoniker}
+      moniker={asMoniker(scopeMoniker)}
       commands={extraCommands}
-      className="inline mention-pill-focus"
-      claimWhen={claimWhen}
+      className="inline"
       showFocusBar={showFocusBar}
     >
       <TextViewer text={doc} extensions={extensions} className={className} />
     </FocusScope>
   );
-}
-
-/**
- * Build per-item claim predicates so nav.left / nav.right moves focus
- * between sibling pills. The first pill also claims nav.right when the
- * parent field is focused (entering the list), matching BadgeListDisplay
- * behavior.
- */
-function buildListClaimPredicates(
-  pillMonikers: string[],
-  parentMoniker: string | null,
-): ClaimPredicate[][] {
-  return pillMonikers.map((_, i) => {
-    const predicates: ClaimPredicate[] = [];
-    // nav.right: claim when the previous sibling (or parent) is focused
-    if (i === 0 && parentMoniker) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === parentMoniker,
-      });
-    }
-    if (i > 0) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === pillMonikers[i - 1],
-      });
-    }
-    // nav.left: claim when the next sibling is focused
-    if (i < pillMonikers.length - 1) {
-      predicates.push({
-        command: "nav.left",
-        when: (f) => f === pillMonikers[i + 1],
-      });
-    }
-    return predicates;
-  });
 }
 
 /**
@@ -351,7 +309,6 @@ function MentionViewSingle({
       extensions={extensions}
       className={props.className}
       scopeMoniker={scopeMoniker}
-      claimWhen={props.claimWhen}
       showFocusBar={props.showFocusBar}
       extraCommands={props.extraCommands}
     />
@@ -363,14 +320,12 @@ function MentionViewList({
   resolved,
   extensions,
   pillMonikers,
-  listClaimPredicates,
   mode,
   props,
 }: {
   resolved: ResolvedMention[];
   extensions: Extension[];
   pillMonikers: string[];
-  listClaimPredicates: ClaimPredicate[][] | null;
   mode: "compact" | "full";
   props: MentionViewProps;
 }) {
@@ -383,7 +338,6 @@ function MentionViewList({
           extensions={extensions}
           className={props.className}
           scopeMoniker={pillMonikers[i]}
-          claimWhen={listClaimPredicates?.[i]}
           showFocusBar={mode === "full" ? props.showFocusBar : false}
           extraCommands={props.extraCommands}
         />
@@ -394,7 +348,6 @@ function MentionViewList({
 
 export function MentionView(props: MentionViewProps) {
   const { getEntities } = useEntityStore();
-  const parentMoniker = useParentFocusScope();
 
   const isListMode = props.items !== undefined;
   const mode = props.mode ?? "full";
@@ -409,14 +362,6 @@ export function MentionView(props: MentionViewProps) {
   const pillMonikers = useMemo(
     () => resolved.map((r) => buildMoniker(r.entityType, r.monikerId)),
     [resolved],
-  );
-
-  const listClaimPredicates = useMemo(
-    () =>
-      isListMode && mode === "full"
-        ? buildListClaimPredicates(pillMonikers, parentMoniker)
-        : null,
-    [isListMode, mode, pillMonikers, parentMoniker],
   );
 
   if (resolved.length === 0) return null;
@@ -437,7 +382,6 @@ export function MentionView(props: MentionViewProps) {
       resolved={resolved}
       extensions={extensions}
       pillMonikers={pillMonikers}
-      listClaimPredicates={listClaimPredicates}
       mode={mode}
       props={props}
     />

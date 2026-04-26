@@ -6,7 +6,7 @@ depends_on:
 - 01KPZPY5F5HPXDKKHGKDEW6FNZ
 - 01KPZQDAC6P0AHTQ5F08A170H4
 position_column: done
-position_ordinal: ffffffffffffffffffffffffa180
+position_ordinal: ffffffffffffffffffffffffffffffff9c80
 title: 'Stabilize useDispatchCommand: read scope/boardPath/setInflight from a ref so dispatch identity survives focus changes'
 ---
 ## What

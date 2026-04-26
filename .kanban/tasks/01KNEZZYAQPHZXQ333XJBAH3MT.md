@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNEZZ0PDQZHTGRY56Z2JCTBY
 position_column: done
-position_ordinal: ffffffffffffffffffffa280
+position_ordinal: ffffffffffffffffffffffffffba80
 title: Filter GroupSelector to only show `groupable` fields
 ---
 ## What

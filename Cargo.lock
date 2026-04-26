@@ -4007,6 +4007,7 @@ dependencies = [
  "swissarmyhammer-entity-search",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
+ "swissarmyhammer-focus",
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
@@ -8337,6 +8338,17 @@ version = "0.12.11"
 dependencies = [
  "chumsky",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "swissarmyhammer-focus"
+version = "0.12.11"
+dependencies = [
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

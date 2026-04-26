@@ -8,7 +8,7 @@ depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6GN9JQSCZKFER5ZJ5JC62
 position_column: done
-position_ordinal: fffffffffffffffffffffff980
+position_ordinal: fffffffffffffffffffffffffffffff280
 title: 'Commands: project.yaml cleanup — purge cross-cutting opt-ins'
 ---
 ## What

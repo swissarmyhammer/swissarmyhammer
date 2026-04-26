@@ -25,14 +25,16 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { Focusable } from "@/components/focusable";
+import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import {
-  useEntityFocus,
-  type ClaimPredicate,
-} from "@/lib/entity-focus-context";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { COMPACT_ROW_HEIGHT_PX } from "@/components/fields/displays/compact-cell-wrapper";
+import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
+import { asMoniker } from "@/types/spatial";
 
 /**
  * Body row height in pixels.
@@ -70,17 +72,6 @@ interface DataTableProps {
   columns: DataTableColumn[];
   rows: Entity[];
   grid: UseGridReturn;
-  /**
-   * 2D array of cell monikers: cellMonikers[row][col] = moniker string.
-   * When provided together with claimPredicates, each cell is wrapped
-   * in a FocusScope for pull-based navigation.
-   */
-  cellMonikers?: string[][];
-  /**
-   * 2D array of claim predicates: claimPredicates[row][col] = ClaimPredicate[].
-   * Must match dimensions of cellMonikers.
-   */
-  claimPredicates?: ClaimPredicate[][][];
   onCellClick?: (row: number, col: number) => void;
   onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
   renderEditor?: (
@@ -109,6 +100,21 @@ interface DataTableProps {
    * via `useContextMenu`, so this handler only fires from non-row areas.
    */
   onContainerContextMenu?: (e: React.MouseEvent) => void;
+  /**
+   * The grid-cell coordinates of the focused `grid_cell:R:K` moniker.
+   *
+   * `null` when the focused moniker is outside the grid (e.g. `ui:navbar`,
+   * an entity moniker, or no focus at all). The matching cell stamps a
+   * `data-cell-cursor="{row}:{colKey}"` attribute as an output-only
+   * debugging / e2e selector — no CSS rule reads it. A `null` cursor
+   * suppresses the attribute (and any e2e match) entirely, instead of
+   * falling back to the internal `{0, 0}` default. The visible focus
+   * decoration on the matching cell is the `<FocusIndicator>` rendered
+   * inside the cell's `<Focusable>` from React state — the previous
+   * cell-ring (`ring-2 ring-primary ring-inset`) was removed in
+   * `01KQ573XBT0GFQWVY6QEZQ74R6` to enforce "one decorator, one place".
+   */
+  gridCellCursor?: { row: number; colKey: string } | null;
 }
 
 export function DataTable(props: DataTableProps) {
@@ -118,8 +124,6 @@ export function DataTable(props: DataTableProps) {
     useDataTableState(props, cursorRef);
 
   const flatRows = table.getRowModel().rows;
-  const useClaimNav =
-    props.cellMonikers !== undefined && props.claimPredicates !== undefined;
 
   // Virtualize body rows. Header is a CSS-sticky `<thead>` outside the
   // virtualized list so it continues to pin to the scroll container's
@@ -178,13 +182,11 @@ export function DataTable(props: DataTableProps) {
                 grid={props.grid}
                 dataRowIndices={dataRowIndices}
                 showRowSelector={props.showRowSelector ?? true}
-                useClaimNav={useClaimNav}
-                cellMonikers={props.cellMonikers}
-                claimPredicates={props.claimPredicates}
                 handleCellClick={handleCellClick}
                 renderEditor={props.renderEditor}
                 onCellClick={props.onCellClick}
                 cursorRef={cursorRef}
+                gridCellCursor={props.gridCellCursor ?? null}
               />
             );
           })}
@@ -561,13 +563,18 @@ interface DataTableRowProps {
   grid: UseGridReturn;
   dataRowIndices: number[];
   showRowSelector: boolean;
-  useClaimNav: boolean;
-  cellMonikers: string[][] | undefined;
-  claimPredicates: ClaimPredicate[][][] | undefined;
   handleCellClick: (row: number, col: number) => void;
   renderEditor: DataTableProps["renderEditor"];
   onCellClick: DataTableProps["onCellClick"];
   cursorRef: React.RefObject<HTMLTableCellElement | null>;
+  /**
+   * Grid-cell cursor coordinates resolved from the focused moniker. When a
+   * cell's `(di, col.field.name)` matches, it stamps `data-cell-cursor` —
+   * `null` suppresses the attribute entirely. The visible focus decoration
+   * is rendered by the `<FocusIndicator>` inside the cell's `<Focusable>`,
+   * not by this attribute.
+   */
+  gridCellCursor: { row: number; colKey: string } | null;
 }
 
 /**
@@ -594,7 +601,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
   const entity = row.original;
   const entityMk = entity.moniker;
   return (
-    <FocusScope moniker={entityMk} renderContainer={false}>
+    <FocusScope moniker={asMoniker(entityMk)} renderContainer={false}>
       <EntityRow
         entityMk={entityMk}
         isCursorRow={di === grid.cursor.row}
@@ -607,23 +614,30 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
             onClick={() => props.handleCellClick(di, grid.cursor.col)}
           />
         )}
-        {columns.map((col, ci) => (
-          <DataBodyCell
-            key={col.field.id}
-            di={di}
-            ci={ci}
-            col={col}
-            entity={entity}
-            grid={grid}
-            useClaimNav={props.useClaimNav}
-            cellMonikers={props.cellMonikers}
-            claimPredicates={props.claimPredicates}
-            handleCellClick={props.handleCellClick}
-            renderEditor={props.renderEditor}
-            onCellClick={props.onCellClick}
-            cursorRef={props.cursorRef}
-          />
-        ))}
+        {columns.map((col, ci) => {
+          const cursorMatches =
+            props.gridCellCursor !== null &&
+            props.gridCellCursor.row === di &&
+            props.gridCellCursor.colKey === col.field.name;
+          const cellCursorAttr = cursorMatches
+            ? `${di}:${col.field.name}`
+            : undefined;
+          return (
+            <DataBodyCell
+              key={col.field.id}
+              di={di}
+              ci={ci}
+              col={col}
+              entity={entity}
+              grid={grid}
+              handleCellClick={props.handleCellClick}
+              renderEditor={props.renderEditor}
+              onCellClick={props.onCellClick}
+              cursorRef={props.cursorRef}
+              cellCursorAttr={cellCursorAttr}
+            />
+          );
+        })}
       </EntityRow>
     </FocusScope>
   );
@@ -673,9 +687,15 @@ interface DataBodyCellProps {
   col: DataTableColumn;
   entity: Entity;
   grid: UseGridReturn;
-  useClaimNav: boolean;
-  cellMonikers: string[][] | undefined;
-  claimPredicates: ClaimPredicate[][][] | undefined;
+  /**
+   * Value for the `data-cell-cursor` attribute when this cell is the
+   * grid-cell cursor target — `undefined` suppresses the attribute.
+   * Computed once per row in the parent so this cell's `React.memo`
+   * shallow comparison treats sibling cells' cursor flips as equal.
+   * Output-only: no CSS rule reads it; the visible focus bar is rendered
+   * by `<FocusIndicator>` inside the cell's `<Focusable>`.
+   */
+  cellCursorAttr: string | undefined;
   handleCellClick: (row: number, col: number) => void;
   renderEditor: DataTableProps["renderEditor"];
   onCellClick: DataTableProps["onCellClick"];
@@ -689,6 +709,15 @@ interface DataBodyCellProps {
  * the ~12k sibling cells skip their render entirely. React.memo's default
  * shallow comparison treats stable useMemo/useCallback/ref props as equal,
  * so only cells whose props actually changed re-render.
+ *
+ * Each cell mounts a `<GridCellFocusable>` that registers as a `<Focusable>`
+ * leaf in the spatial-nav graph (under the surrounding `ui:grid` zone) when
+ * the spatial stack is mounted. The leaf moniker is `grid_cell:{di}:{colKey}`
+ * — the canonical wire-shape consumed by `parseGridCellMoniker` in
+ * `grid-view.tsx`. When the spatial stack is absent (unit tests with a
+ * narrow provider tree), the focusable falls through to a plain
+ * `<TableCell>` so the table HTML stays valid without forcing tests to
+ * mount the full spatial provider stack.
  */
 const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
   const { di, ci, col, entity, grid, renderEditor, onCellClick } = props;
@@ -711,10 +740,20 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       editing={false}
     />
   );
+  // Visual focus decoration on a grid cell is rendered exclusively by the
+  // `<FocusIndicator>` mounted inside the cell's `<Focusable>` (see
+  // `GridCellFocusable` below). The previous implementation also painted a
+  // cell-spanning `ring-2 ring-primary ring-inset` border driven by
+  // `isCursor`, which double-decorated the focused cell — the bar AND the
+  // ring rendered together for the same focus state. The ring was removed
+  // to enforce the architectural rule "one decorator, one place"
+  // (`focus-architecture.guards.node.test.ts`); the bar is now the canonical
+  // grid-cell focus visual, identical to every other `<Focusable>` in the
+  // app. The selection-range tint (`isSel && !isCursor`) is unrelated to
+  // focus and stays.
   const cellClasses = cn(
     "px-3 py-1.5 align-middle max-w-[300px]",
     ci === 0 && "pl-4",
-    isCursor && "ring-2 ring-primary ring-inset",
     isSel && !isCursor && "bg-primary/10",
     // Strip cell padding during editing for editors that fill the entire cell.
     isEditing &&
@@ -724,32 +763,13 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       "p-0",
   );
 
-  if (props.useClaimNav) {
-    const mk = props.cellMonikers?.[di]?.[ci];
-    const preds = props.claimPredicates?.[di]?.[ci];
-    if (mk && preds) {
-      return (
-        <GridCellScope
-          moniker={mk}
-          claimWhen={preds}
-          isCursor={isCursor}
-          cursorRef={isCursor ? props.cursorRef : undefined}
-          className={cellClasses}
-          onClick={() => props.handleCellClick(di, ci)}
-          onDoubleClick={() => {
-            onCellClick?.(di, ci);
-            grid.enterEdit();
-          }}
-        >
-          {cellContent}
-        </GridCellScope>
-      );
-    }
-  }
   return (
-    <TableCell
-      ref={isCursor ? props.cursorRef : undefined}
+    <GridCellFocusable
+      di={di}
+      colKey={col.field.name}
+      cursorRef={isCursor ? props.cursorRef : undefined}
       className={cellClasses}
+      cellCursorAttr={props.cellCursorAttr}
       onClick={() => props.handleCellClick(di, ci)}
       onDoubleClick={() => {
         onCellClick?.(di, ci);
@@ -757,7 +777,7 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       }}
     >
       {cellContent}
-    </TableCell>
+    </GridCellFocusable>
   );
 });
 
@@ -774,52 +794,119 @@ function isCellSelected(
   );
 }
 
-interface GridCellScopeProps {
-  moniker: string;
-  claimWhen: ClaimPredicate[];
-  isCursor: boolean;
+interface GridCellFocusableProps {
+  di: number;
+  colKey: string;
   cursorRef?: React.Ref<HTMLTableCellElement>;
   className?: string;
+  /** Value for the `data-cell-cursor` attribute, or `undefined` to omit. */
+  cellCursorAttr?: string | undefined;
   onClick: () => void;
   onDoubleClick: () => void;
   children: React.ReactNode;
 }
 
 /**
- * Wraps a grid cell in a FocusScope with claimWhen predicates.
+ * Wraps `children` in a `<Focusable>` leaf mounted inside a `<TableCell>`.
  *
- * The FocusScope renders as a <td> element (via the underlying FocusHighlight).
- * This component bridges the FocusScope's div-based rendering with the table
- * structure by wrapping FocusScope inside a TableCell.
+ * The cell's moniker is the canonical `grid_cell:{di}:{colKey}` shape
+ * (built via {@link gridCellMoniker}). The leaf registers in the spatial-nav
+ * graph with `parent_zone = ui:grid` (the surrounding `<GridSpatialZone>`).
+ * When the spatial stack is absent (unit tests with a narrow provider
+ * tree), `<Focusable>` would throw because no `<FocusLayer>` ancestor is
+ * mounted, so we render a plain `<TableCell>` instead — keeping the table
+ * HTML valid without forcing every test to set up the spatial providers.
  *
- * @param moniker - Cell moniker (entityType:entityId.fieldName)
- * @param claimWhen - Predicates for pull-based navigation
- * @param isCursor - Whether this cell is the current cursor position
- * @param cursorRef - Ref to attach for scroll-into-view
- * @param className - CSS classes for the cell
- * @param onClick - Click handler
- * @param onDoubleClick - Double-click handler
+ * Click handler placement differs by branch:
+ *
+ *   - **Spatial path (production):** `Focusable.onClick` calls
+ *     `spatial_focus(key)` and then `e.stopPropagation()` (per the
+ *     long-standing FocusScope convention so a leaf click does not
+ *     re-fire on its enclosing zone). Because of that, an `onClick` on
+ *     the surrounding `<TableCell>` would never fire — the click is
+ *     swallowed before it bubbles to the cell. We therefore mount a
+ *     thin `<div>` *inside* the `<Focusable>`, attach `onClick` /
+ *     `onDoubleClick` to it, and rely on React's bubble order: the inner
+ *     wrapper sees the event before `Focusable`'s outer handler stops it.
+ *     This keeps both sides firing on a left-click — `Focusable` updates
+ *     spatial focus (Rust side), and the inner `onClick` runs the legacy
+ *     entity-focus `setFocus(gridCellMoniker(...))` so the
+ *     `data-cell-cursor` debug/e2e attribute (derived from entity-focus)
+ *     tracks click-to-move-cursor in production. The wrapper is local to
+ *     the data-table edge case — `<FocusScope>` itself attaches its
+ *     chrome directly to the spatial primitive's root, so most call sites
+ *     do not need this pattern.
+ *
+ *   - **Fallback path (tests without the spatial stack):** there is no
+ *     enclosing `<Focusable>`, so the click handlers attach directly to
+ *     the `<TableCell>` and behave exactly as a plain table cell.
+ *
+ * @param di - Zero-based data-row index.
+ * @param colKey - Column field name (the moniker's column key).
+ * @param cursorRef - Ref to attach for scroll-into-view.
+ * @param className - CSS classes for the cell.
+ * @param cellCursorAttr - Value for the `data-cell-cursor` attribute, or
+ *                         `undefined` to omit.
+ * @param onClick - Click handler — fires on left-click in both branches.
+ * @param onDoubleClick - Double-click handler — fires in both branches.
  */
-function GridCellScope({
-  moniker,
-  claimWhen,
-  isCursor: _isCursor,
+function GridCellFocusable({
+  di,
+  colKey,
   cursorRef,
   className,
+  cellCursorAttr,
   onClick,
   onDoubleClick,
   children,
-}: GridCellScopeProps) {
+}: GridCellFocusableProps) {
+  const moniker = useMemo(
+    () => asMoniker(gridCellMoniker(di, colKey)),
+    [di, colKey],
+  );
+  const layerKey = useOptionalLayerKey();
+  const actions = useOptionalSpatialFocusActions();
+  // The spatial-nav stack may be absent in unit tests with a narrow
+  // provider tree (the bare `<DataTable>` test harness deliberately
+  // omits `<SpatialFocusProvider>` + `<FocusLayer>` to keep its scope
+  // tight on table-row structure). Mounting `<Focusable>` in that case
+  // would throw `useCurrentLayerKey must be called inside a <FocusLayer>`.
+  // When either lookup returns nullish, fall through to a plain
+  // `<TableCell>` with click handlers attached directly — production
+  // renders the providers, so the leaf path is exercised end-to-end
+  // there and in `grid-view.cursor-ring.test.tsx` which spins up the
+  // full stack.
+  const inSpatialStack = layerKey !== null && actions !== null;
+
+  if (!inSpatialStack) {
+    return (
+      <TableCell
+        ref={cursorRef}
+        className={className}
+        data-cell-cursor={cellCursorAttr}
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+      >
+        {children}
+      </TableCell>
+    );
+  }
+
+  // Spatial path: handlers go on a wrapper INSIDE the `<Focusable>` so
+  // they fire before `Focusable.onClick` calls `e.stopPropagation()`. An
+  // `onClick` on the outer `<TableCell>` would never see the event in
+  // this branch — the leaf swallows it before it reaches the cell.
   return (
     <TableCell
       ref={cursorRef}
       className={className}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      data-cell-cursor={cellCursorAttr}
     >
-      <FocusScope moniker={moniker} claimWhen={claimWhen} showFocusBar={false}>
-        {children}
-      </FocusScope>
+      <Focusable moniker={moniker}>
+        <div onClick={onClick} onDoubleClick={onDoubleClick}>
+          {children}
+        </div>
+      </Focusable>
     </TableCell>
   );
 }

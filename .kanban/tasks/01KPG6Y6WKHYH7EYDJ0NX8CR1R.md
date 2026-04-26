@@ -9,7 +9,7 @@ depends_on:
 - 01KPG6G4SGXW1FN92YDXFNEAQ2
 - 01KPG6H74Z24N48DQR75CT7HP7
 position_column: done
-position_ordinal: fffffffffffffffffffffffa80
+position_ordinal: fffffffffffffffffffffffffffffff380
 title: 'Commands: column.yaml cleanup — move column.reorder declaration in, purge cross-cutting opt-ins'
 ---
 ## What

@@ -6,7 +6,7 @@ depends_on:
 - 01KPEMYJV7BMTJB6GZ8MGTD04J
 - 01KPG6HF1ZHWZ981PS3BEPP1HE
 position_column: done
-position_ordinal: fffffffffffffffffffffff780
+position_ordinal: fffffffffffffffffffffffffffffff080
 title: 'Commands: actor.yaml cleanup — purge cross-cutting opt-ins'
 ---
 ## What

@@ -2,7 +2,7 @@
 depends_on:
 - 01KKFEKNJVWK345BNYFVGG6S6C
 position_column: done
-position_ordinal: ffffffa080
+position_ordinal: ffffffa780
 title: Make non-embedding tests skip model loading
 ---
 ## What

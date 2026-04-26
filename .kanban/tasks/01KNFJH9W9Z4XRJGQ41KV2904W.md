@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffa980
+position_ordinal: ffffffffffffffffffffffffffc380
 title: Extend DropZoneDescriptor with optional group context
 ---
 ## What

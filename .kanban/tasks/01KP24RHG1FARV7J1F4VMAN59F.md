@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbf80
+position_ordinal: ffffffffffffffffffffffffffffff9d80
 title: Declarative field sections with separators on inspector and card
 ---
 ## What

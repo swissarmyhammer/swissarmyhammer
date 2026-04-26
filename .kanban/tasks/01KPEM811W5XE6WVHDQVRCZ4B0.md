@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPENGNDX2526DZCRYT9N1E9P
 position_column: done
-position_ordinal: ffffffffffffffffffffffe480
+position_ordinal: ffffffffffffffffffffffffffffffdf80
 title: 'Commands: document cross-cutting rule + YAML hygiene test (no cross-cutting in entity schemas)'
 ---
 ## What

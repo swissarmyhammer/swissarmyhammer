@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8a80
+position_ordinal: ffffffffffffffffffffffffffffffff8480
 title: 'Left-nav view buttons: add context menu with "Switch to <view>" — mirror perspective-tab pattern'
 ---
 ## What

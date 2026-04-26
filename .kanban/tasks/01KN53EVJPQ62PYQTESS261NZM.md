@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffe080
+position_ordinal: ffffffffffffffffffff9e80
 title: 'store.rs: nested objects are flattened on read but never re-nested on write -- round-trip data loss'
 ---
 swissarmyhammer-entity/src/store.rs:184-193 (flatten_into) vs store.rs:122-133 (serialize plain YAML)\n\nWhen deserializing, nested YAML objects like `metadata: {author: alice, version: 2}` are flattened to `metadata_author: alice` and `metadata_version: 2`. But on serialize, these are written back as top-level flat keys. The original nested structure is lost. A round-trip (deserialize then serialize) of a file containing nested objects will produce different output than the original.\n\nThe test_round_trip_plain_yaml test passes only because it starts from an already-flat entity. The test_nested_object_flattening test verifies flattening works but does NOT round-trip the result back through serialize to verify the output.\n\nThis matches io.rs behavior (same limitation), so it is not a regression. But it is a data fidelity concern for the TrackedStore use case, where the store handle will detect the diff and create spurious changelog entries on first read-then-write.\n\nSuggestion: Either (a) preserve the original nested structure alongside the flattened fields so serialize can reconstruct it, or (b) add a test documenting this as intentional behavior, or (c) if entities are always written by the system (never hand-edited with nesting), document that nesting is a read-only convenience. Severity: warning. #review-finding

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8e80
+position_ordinal: ffffffffffffffffffffffffffffffff8880
 title: 'Grid view: empty state and grid body need context menu + prominent "New <EntityType>" button'
 ---
 ## What

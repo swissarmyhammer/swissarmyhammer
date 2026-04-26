@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffffda80
+position_ordinal: ffffffffffffffffffffffff9e80
 title: Persist diffs across turn for Stop validators
 ---
 ## What

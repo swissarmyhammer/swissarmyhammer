@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   moniker,
   fieldMoniker,
+  gridCellMoniker,
   parseMoniker,
   parseFieldMoniker,
+  parseGridCellMoniker,
 } from "./moniker";
 
 describe("moniker", () => {
@@ -69,6 +71,55 @@ describe("parseMoniker", () => {
 
   it("throws on empty id", () => {
     expect(() => parseMoniker("task:")).toThrow("empty id");
+  });
+});
+
+describe("gridCellMoniker", () => {
+  it("builds grid_cell:row:colKey string", () => {
+    expect(gridCellMoniker(0, "title")).toBe("grid_cell:0:title");
+    expect(gridCellMoniker(7, "status")).toBe("grid_cell:7:status");
+  });
+
+  it("preserves underscores in colKey", () => {
+    expect(gridCellMoniker(2, "due_date")).toBe("grid_cell:2:due_date");
+  });
+});
+
+describe("parseGridCellMoniker", () => {
+  it("parses a valid grid_cell moniker", () => {
+    expect(parseGridCellMoniker("grid_cell:1:title")).toEqual({
+      row: 1,
+      colKey: "title",
+    });
+    expect(parseGridCellMoniker("grid_cell:0:status")).toEqual({
+      row: 0,
+      colKey: "status",
+    });
+  });
+
+  it("preserves colKey with underscores", () => {
+    expect(parseGridCellMoniker("grid_cell:5:due_date")).toEqual({
+      row: 5,
+      colKey: "due_date",
+    });
+  });
+
+  it("returns null for non-grid_cell monikers", () => {
+    expect(parseGridCellMoniker("ui:navbar")).toBeNull();
+    expect(parseGridCellMoniker("task:abc")).toBeNull();
+    expect(parseGridCellMoniker("field:task:abc.title")).toBeNull();
+  });
+
+  it("returns null when row or colKey is missing", () => {
+    expect(parseGridCellMoniker("grid_cell:")).toBeNull();
+    expect(parseGridCellMoniker("grid_cell:1:")).toBeNull();
+    expect(parseGridCellMoniker("grid_cell::title")).toBeNull();
+  });
+
+  it("returns null when row is not a non-negative integer", () => {
+    expect(parseGridCellMoniker("grid_cell:abc:title")).toBeNull();
+    expect(parseGridCellMoniker("grid_cell:-1:title")).toBeNull();
+    expect(parseGridCellMoniker("grid_cell:1.5:title")).toBeNull();
   });
 });
 

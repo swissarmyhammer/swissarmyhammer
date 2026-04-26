@@ -21,6 +21,7 @@ swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
+swissarmyhammer-focus = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-store = { workspace = true }
 swissarmyhammer-filter-expr = { workspace = true }

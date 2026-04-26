@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffc280
+position_ordinal: ffffffffffffffffffffffec80
 title: Fix context menu command ordering — innermost scope commands should appear first
 ---
 ## What

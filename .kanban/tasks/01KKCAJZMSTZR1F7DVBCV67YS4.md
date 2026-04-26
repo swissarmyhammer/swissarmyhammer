@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffb480
+position_ordinal: fffffffffffe80
 title: 'STATUSLINE-M4: cost module'
 ---
 ## What

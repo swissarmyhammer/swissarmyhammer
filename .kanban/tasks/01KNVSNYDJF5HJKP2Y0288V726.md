@@ -5,7 +5,7 @@ depends_on:
 - 01KNVSGJ7X7A95T8XV80E9M7Y3
 - 01KNVSK9V84X79TKGPP9XCYKFH
 position_column: done
-position_ordinal: ffffffffffffffffffffffaf80
+position_ordinal: fffffffffffffffffffffffffffff980
 project: expr-filter
 title: 'kanban skill: document $project filter syntax'
 ---

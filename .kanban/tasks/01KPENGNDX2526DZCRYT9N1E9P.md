@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffe280
+position_ordinal: ffffffffffffffffffffffffffffffdd80
 title: 'Commands: commit all WIP (entity.add generalization + SetActiveViewCmd fix) as plan baseline'
 ---
 ## What

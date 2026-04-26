@@ -10,7 +10,7 @@ depends_on:
 - 01KPG6HF1ZHWZ981PS3BEPP1HE
 - 01KPG6HQYRRWCP52VH1KNKR35B
 position_column: done
-position_ordinal: fffffffffffffffffffffffc80
+position_ordinal: fffffffffffffffffffffffffffffff580
 title: 'Commands: cut transactional safety — source deleted only after successful paste'
 ---
 ## What

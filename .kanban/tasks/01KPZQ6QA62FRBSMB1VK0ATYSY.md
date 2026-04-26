@@ -5,7 +5,7 @@ depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
 - 01KPZPY5F5HPXDKKHGKDEW6FNZ
 position_column: done
-position_ordinal: ffffffffffffffffffffffffa280
+position_ordinal: ffffffffffffffffffffffffffffffff9d80
 title: 'Grid is event-driven: zero backend data-fetches on navigation; fields subscribe via useFieldValue'
 ---
 ## What

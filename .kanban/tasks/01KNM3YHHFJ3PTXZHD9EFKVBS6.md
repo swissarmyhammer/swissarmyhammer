@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffffa680
+position_ordinal: ffffffffffffffffffffffffffffffffa180
 project: spatial-nav
 title: 'Focus claim registry: per-window, event-driven, Rust owns state (newtype-only signatures)'
 ---

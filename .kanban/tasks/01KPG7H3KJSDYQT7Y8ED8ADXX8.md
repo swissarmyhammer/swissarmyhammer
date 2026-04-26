@@ -10,7 +10,7 @@ depends_on:
 - 01KPG6YDZDCPWGWKCC38TWM8AV
 - 01KPG6YN15ECCK9SP262BJKGK2
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8480
+position_ordinal: fffffffffffffffffffffffffffffffd80
 title: 'Commands: undo verification for cross-cutting mutations (delete, archive, unarchive, paste)'
 ---
 ## What

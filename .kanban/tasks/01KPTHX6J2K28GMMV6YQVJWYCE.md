@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8c80
+position_ordinal: ffffffffffffffffffffffffffffffff8680
 title: 'Hide stray "Switch View" (`ui.view.set`) from command palette — missing `visible: false`'
 ---
 ## What

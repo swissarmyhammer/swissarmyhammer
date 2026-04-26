@@ -2,7 +2,7 @@
 depends_on:
 - 01KKCADZV71JJH01V5GVEPQTAX
 position_column: done
-position_ordinal: ffffffffffc180
+position_ordinal: ffffffffffff8e80
 title: 'STATUSLINE-M10: git_branch module'
 ---
 ## What

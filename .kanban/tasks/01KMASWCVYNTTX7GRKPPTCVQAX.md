@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMASVEQA7K7F1TKE3ACAWDXT
 position_column: done
-position_ordinal: fffffffffff280
+position_ordinal: ffffffffffffc180
 title: Data-driven field editor test harness — all editors × all keymaps × all exit paths
 ---
 ## What

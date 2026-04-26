@@ -8,7 +8,7 @@ depends_on:
 - 01KPG5YB7GTQ6Q3CEQAMXPJ58F
 - 01KPG6GYSNGTEJ42XA2QNB3VE0
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8180
+position_ordinal: fffffffffffffffffffffffffffffff980
 title: 'Commands: tag.yaml cleanup — move tag.update declaration in, purge cross-cutting opt-ins'
 ---
 ## What

@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{load_yaml_dir, Command, CommandsRegistry, UIState};
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
+use swissarmyhammer_focus::{SpatialRegistry, SpatialState};
 use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
 use tauri::menu::{CheckMenuItem, MenuItem};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
@@ -428,6 +429,19 @@ pub(crate) struct AppState {
     /// resurrecting previous-session windows on top of the one the deep-link
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
+    /// Headless spatial-navigation registry — stores every registered
+    /// `<Focusable>` / `<FocusZone>` along with its layer membership and
+    /// geometry. Wrapped in a `tokio::sync::Mutex` because spatial commands
+    /// hold both this and `spatial_state` together for transactional
+    /// register / unregister; using the async mutex matches the pattern
+    /// used by the rest of `AppState`'s shared state.
+    pub(crate) spatial_registry: TokioMutex<SpatialRegistry>,
+    /// Per-window focused [`swissarmyhammer_focus::SpatialKey`] tracker.
+    /// Mutated by every `spatial_focus`, `spatial_navigate`, and
+    /// `spatial_unregister_scope` command. Held under `tokio::sync::Mutex`
+    /// because spatial commands routinely take both `spatial_registry` and
+    /// `spatial_state` for the duration of a single transaction.
+    pub(crate) spatial_state: TokioMutex<SpatialState>,
 }
 
 impl AppState {
@@ -471,6 +485,8 @@ impl AppState {
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             deep_link_handled: AtomicBool::new(false),
+            spatial_registry: TokioMutex::new(SpatialRegistry::new()),
+            spatial_state: TokioMutex::new(SpatialState::new()),
         }
     }
 

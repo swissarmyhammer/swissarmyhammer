@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa680
+position_ordinal: ffffffffffffffffffffffffffffea80
 title: Wire perspective filter to task list_entities so filtering actually works
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8980
+position_ordinal: ffffffffffffffffffffffffffffffff8380
 title: 'Commands: migrate builtin_yaml_sources from include_str! list to include_dir! (memory-rule drift)'
 ---
 ## What

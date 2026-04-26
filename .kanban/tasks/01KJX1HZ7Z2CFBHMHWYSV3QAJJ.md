@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff8a80
+position_ordinal: ff9180
 title: Command palette UI — portal + CM6 input + fuzzy search
 ---
 Phase 1 deliverable from app-architecture.md.

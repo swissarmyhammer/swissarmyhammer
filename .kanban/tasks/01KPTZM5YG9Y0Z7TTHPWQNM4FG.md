@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: ff80
+position_ordinal: '9880'
 title: 'Grid empty-state copy: distinguish "no entities yet" from "filter matches nothing"'
 ---
 ## What

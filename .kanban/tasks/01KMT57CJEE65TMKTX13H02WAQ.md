@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9880
+position_ordinal: ffffffffffffffed80
 title: cross_board::transfer_task unreachable!() when both before_id and after_id are Some
 ---
 **Severity: Low (Robustness)**

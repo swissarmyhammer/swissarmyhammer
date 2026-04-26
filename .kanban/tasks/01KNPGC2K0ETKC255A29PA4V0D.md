@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffffffffda80
 title: Generic entity.add command — dynamic surfacing from view scope + field-default creation
 ---
 ## What

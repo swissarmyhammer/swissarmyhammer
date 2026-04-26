@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffe380
+position_ordinal: ffffffffffffffffffffffffffffffde80
 title: Decide on board-view "New Task" keybinding (was Mod+N pre-entity.add)
 ---
 ## What

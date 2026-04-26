@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMX2NJGVEVA175YBQZ6K88BC
 position_column: done
-position_ordinal: ffffffffffffffed80
+position_ordinal: ffffffffffffffffd180
 title: Update all menu item enabled state after every command dispatch
 ---
 ## What

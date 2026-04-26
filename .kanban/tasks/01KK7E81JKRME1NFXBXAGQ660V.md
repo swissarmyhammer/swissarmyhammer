@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: fffffb80
+position_ordinal: ffffff8380
 title: Double-click inspect + unified entity rendering
 ---
 Double-click on any entity (task card, tag pill, actor avatar) should open the inspector, mirroring the existing right-click → inspect behavior.

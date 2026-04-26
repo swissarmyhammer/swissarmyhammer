@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffe80
+position_ordinal: fffffffffffffffffffffffff380
 title: 'Coverage: daemon.rs read/send jsonrpc_message error paths'
 ---
 ## What

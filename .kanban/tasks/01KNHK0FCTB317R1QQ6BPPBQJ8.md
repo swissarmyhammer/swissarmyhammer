@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff680
+position_ordinal: ffffffffffffffffffffffffe580
 title: 'Coverage: enrich_location in layered_context.rs'
 ---
 crates/code-context/src/layered_context.rs

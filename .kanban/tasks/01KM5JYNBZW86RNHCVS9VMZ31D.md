@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffc980
+position_ordinal: ffffffffffff9680
 title: Add mention_prefix and mention_display_field to task entity
 ---
 ## What

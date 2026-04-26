@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFJJAVBBGNMBW83TDYEEF9E
 position_column: done
-position_ordinal: ffffffffffffffffffffb480
+position_ordinal: ffffffffffffffffffffffffffd780
 title: Extend Rust task.move to handle group field updates atomically
 ---
 ## What

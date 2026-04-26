@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff9980
+position_ordinal: ffffffffffffffffffffff9780
 title: Test code_context watcher and detect modules
 ---
 Files in swissarmyhammer-tools/src/mcp/tools/code_context/:

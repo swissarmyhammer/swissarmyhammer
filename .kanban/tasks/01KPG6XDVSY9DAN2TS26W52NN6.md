@@ -11,7 +11,7 @@ depends_on:
 - 01KPG6GN9JQSCZKFER5ZJ5JC62
 - 01KPG6GYSNGTEJ42XA2QNB3VE0
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8280
+position_ordinal: fffffffffffffffffffffffffffffffa80
 title: 'Commands: task.yaml cleanup — move task/attachment declarations in, purge cross-cutting opt-ins'
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffb580
+position_ordinal: ffffffffffffffffffffffd180
 title: 'Consolidate: multi-select-editor Escape — replace Prec.highest with buildSubmitCancelExtensions'
 ---
 ## What

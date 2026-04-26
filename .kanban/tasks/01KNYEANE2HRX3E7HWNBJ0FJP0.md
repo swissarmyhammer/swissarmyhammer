@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: b380
+position_ordinal: '8580'
 title: Introduce ChildHandle trait to unlock LspDaemon error-path coverage
 ---
 swissarmyhammer-lsp/src/daemon.rs

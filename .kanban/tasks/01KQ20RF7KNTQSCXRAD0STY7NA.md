@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffffa480
+position_ordinal: ffffffffffffffffffffffffffffffff9f80
 title: Normalize compact field-display heights for virtualized grid rows
 ---
 ## What

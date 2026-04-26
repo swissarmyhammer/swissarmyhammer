@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8b80
+position_ordinal: ffffffffffffffffffffffffffffffff8580
 title: 'Entity context menu: group Cut/Copy/Paste and Delete/Archive with stable ordering and separator'
 ---
 ## What

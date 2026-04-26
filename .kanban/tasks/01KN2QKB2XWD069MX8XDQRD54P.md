@@ -5,7 +5,7 @@ depends_on:
 - 01KN2Q6HQN1PYDEQ6XYEMCQSSP
 - 01KN2QJZXVSVSBJTNVM87QNWR6
 position_column: done
-position_ordinal: ffffffffffffffffad80
+position_ordinal: ffffffffffffffffff9c80
 title: 'PERSP-8: perspective.list command for left nav'
 ---
 ## What

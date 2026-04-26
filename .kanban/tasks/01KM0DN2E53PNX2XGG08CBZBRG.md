@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM0DBV4WE1N98MN80MTNZQPB
 position_column: done
-position_ordinal: ffffffffbb80
+position_ordinal: ffffffffcb80
 title: Flatten execute/ subfolder into shell/
 ---
 Remove the `execute/` nesting layer. Move `execute/mod.rs` content into `shell/mod.rs` and place `description.md` directly in `shell/`. Follow the `code_context` tool pattern where everything is flat under the tool module.

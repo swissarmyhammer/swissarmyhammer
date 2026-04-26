@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMAQTDF4HJJE6Y532EKXM4JK
 position_column: done
-position_ordinal: ffffffffffff9c80
+position_ordinal: ffffffffffffea80
 title: Inspector focus transfer — auto-focus on open, return focus on close
 ---
 ## What

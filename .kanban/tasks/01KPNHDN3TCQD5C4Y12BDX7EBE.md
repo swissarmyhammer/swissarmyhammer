@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff80
+position_ordinal: fffffffffffffffffffffffffffffff880
 title: 'Commands: actually generalize CopyCmd/CutCmd/PasteCmd to read ctx.target (blocks tag.yaml + task.yaml cleanup)'
 ---
 ## What

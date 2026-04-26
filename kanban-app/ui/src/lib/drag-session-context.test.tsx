@@ -68,9 +68,7 @@ function makeSession(overrides: Partial<DragSession> = {}): DragSession {
  * flat task fields empty; the `from.kind === "file"` envelope is the
  * authoritative source of truth for file drops.
  */
-function makeFileSession(
-  overrides: Partial<DragSession> = {},
-): DragSession {
+function makeFileSession(overrides: Partial<DragSession> = {}): DragSession {
   return {
     session_id: "file-sess-1",
     source_board_path: "",

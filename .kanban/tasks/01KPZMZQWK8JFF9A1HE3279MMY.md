@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9c80
+position_ordinal: ffffffffffffffffffffffffffffffff9780
 title: Move resolveFocusedColumnId out of the React UI into Rust UIState
 ---
 ## What

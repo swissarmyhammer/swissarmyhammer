@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffdc80
+position_ordinal: ffffffffffffffffffffffffa680
 title: 'LSP-T1A: get_definition + get_type_definition ops'
 ---
 ## What

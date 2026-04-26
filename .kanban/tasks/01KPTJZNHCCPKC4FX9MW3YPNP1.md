@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8f80
+position_ordinal: ffffffffffffffffffffffffffffffff8980
 title: Remove "Delete Attachment" from task context menu — fold into cross-cutting `entity.delete`
 ---
 ## What

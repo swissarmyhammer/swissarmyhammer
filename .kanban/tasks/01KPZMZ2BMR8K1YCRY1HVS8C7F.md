@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9980
+position_ordinal: ffffffffffffffffffffffffffffffff9480
 title: UIState must be self-loading without the GUI crate
 ---
 ## What

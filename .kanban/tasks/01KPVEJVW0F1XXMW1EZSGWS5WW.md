@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPVE8GGBX6Q5SEDGGTKKS4CB
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9280
+position_ordinal: ffffffffffffffffffffffffffffffff8d80
 title: 'Perspective delete undo: verify frontend restoration, add end-to-end test coverage'
 ---
 ## What

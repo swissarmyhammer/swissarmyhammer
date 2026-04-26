@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: d080
+position_ordinal: d780
 title: 'Add unit tests for instructions formatting: missing LSP, all present, no projects'
 ---
 ## What

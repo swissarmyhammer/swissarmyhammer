@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffd780
+position_ordinal: ffffffffffffffffffff8380
 title: 'VT-00: Remove per-tag task_count from get board response'
 ---
 ## What

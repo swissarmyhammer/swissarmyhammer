@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffd980
+position_ordinal: ffffffffffffffffffffffff9d80
 title: Enable file glob matching for Stop-triggered validators
 ---
 ## What

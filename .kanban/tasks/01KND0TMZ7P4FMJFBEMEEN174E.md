@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe480
+position_ordinal: ffffffffffffffffffffffffbd80
 title: 'Integration test: per-ruleset diff filtering end-to-end at Stop'
 ---
 ## What

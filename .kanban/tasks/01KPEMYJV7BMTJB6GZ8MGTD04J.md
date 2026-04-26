@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: done
-position_ordinal: ffffffffffffffffffffffe680
+position_ordinal: ffffffffffffffffffffffffffffffe180
 title: 'Commands: add emit_cross_cutting_commands pass driven by existing from:target params; migrate ui.inspect as pilot'
 ---
 ## What

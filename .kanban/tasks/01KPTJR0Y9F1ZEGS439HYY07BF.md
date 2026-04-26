@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8d80
+position_ordinal: ffffffffffffffffffffffffffffffff8780
 title: 'Perspective commands: resolve `perspective_id` from scope/UIState with first-perspective fallback; enforce "always a selected perspective" invariant'
 ---
 ## What

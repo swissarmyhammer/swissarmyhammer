@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffdd80
+position_ordinal: ffe480
 title: Replace typed Task/Tag/Column interfaces with schema-driven Entity rendering.
 ---
 #ui

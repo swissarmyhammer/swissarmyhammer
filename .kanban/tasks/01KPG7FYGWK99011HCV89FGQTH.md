@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPEMYJV7BMTJB6GZ8MGTD04J
 position_column: done
-position_ordinal: ffffffffffffffffffffffec80
+position_ordinal: ffffffffffffffffffffffffffffffe580
 title: 'Commands: menu bar dedupe for cross-cutting commands (Edit menu shows once, not per target)'
 ---
 ## What

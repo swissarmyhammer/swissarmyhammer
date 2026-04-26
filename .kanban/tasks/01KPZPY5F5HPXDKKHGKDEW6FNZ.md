@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KPZWP4YTYH76XTBH992RV2AS
 position_column: done
-position_ordinal: ffffffffffffffffffffffff9f80
+position_ordinal: ffffffffffffffffffffffffffffffff9a80
 title: Stop refetching perspectives on every focus change — use view scope + backend events
 ---
 ## What

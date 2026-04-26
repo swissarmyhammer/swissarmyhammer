@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffff8680
+position_ordinal: ffffffffffffffffffffffffffffffff80
 title: 'Commands: delete TypeScript EntityCommand / EntityCommandKeys and their consumers'
 ---
 ## What

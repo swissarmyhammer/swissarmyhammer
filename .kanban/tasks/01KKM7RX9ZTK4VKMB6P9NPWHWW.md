@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: fffffff380
+position_ordinal: fffffffa80
 title: 'Refactor DirectoryConfig: rename .swissarmyhammer → .sah, add XDG support'
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGFTK8C06Z59GCMVX3KQHG3
 position_column: done
-position_ordinal: ffffffffffffb080
+position_ordinal: ffffffffffffff8380
 title: Board cursor click-to-focus and mouse integration
 ---
 ## What
