@@ -3,6 +3,7 @@ assignees:
 - claude-code
 depends_on:
 - 01KNQXYC4RBQP1N2NQ33P8DPB9
+- 01KQ5PP55SAAVJ0V3HDJ1DGNBY
 position_column: doing
 position_ordinal: '80'
 project: spatial-nav
