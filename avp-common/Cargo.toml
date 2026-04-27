@@ -43,7 +43,12 @@ swissarmyhammer-templating = { workspace = true }
 swissarmyhammer-agent = { workspace = true }
 claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }
+agent-client-protocol-extras = { workspace = true }
 uuid = { workspace = true }
+
+# In-process MCP server backing the validator agent's tool surface
+# (always started in `AvpContext`; see `context::resolve_validator_mcp_config`).
+swissarmyhammer-tools = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -64,4 +69,3 @@ swissarmyhammer-build = { workspace = true }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-agent-client-protocol-extras = { workspace = true }

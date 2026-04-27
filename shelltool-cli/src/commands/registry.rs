@@ -188,27 +188,11 @@ impl Initializable for ShelltoolMcpRegistration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::path::PathBuf;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
     use swissarmyhammer_common::reporter::NullReporter;
     use tempfile::TempDir;
-
-    /// Serializes tests that mutate process-global environment state
-    /// (`env::current_dir`, `MIRDAN_AGENTS_CONFIG`). Tests that only
-    /// read these values are not protected — they tolerate both Ok and
-    /// Error outcomes and so are robust to races with the mutating tests.
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    /// Acquire the env lock, recovering from any prior poisoning.
-    ///
-    /// A poisoned lock just means a previous test panicked while holding
-    /// it; the guarded data is `()` so there is nothing to corrupt.
-    fn lock_env() -> MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     /// RAII guard that restores `env::current_dir` on drop.
     struct CwdGuard {
@@ -316,8 +300,8 @@ mod tests {
     /// the register call creates `.mcp.json`, and the subsequent deinit call
     /// removes the `shelltool` entry from it.
     #[test]
+    #[serial(env)]
     fn test_init_and_deinit_register_success_path() {
-        let _guard = lock_env();
         let _cwd = CwdGuard::capture();
         let _mirdan_env = MirdanConfigGuard::capture();
 

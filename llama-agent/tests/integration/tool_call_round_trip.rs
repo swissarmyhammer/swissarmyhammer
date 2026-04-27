@@ -203,11 +203,12 @@ async fn test_tool_call_round_trip_with_real_model() {
         .await
         .expect("add_message should succeed");
 
-    // Generate. We deliberately request a small token budget — the tool-call
-    // wrapper format Qwen3 emits is short, and capping max_tokens keeps the
-    // test runtime bounded.
+    // Generate. Qwen3 thinking-mode often emits a substantial `<think>...</think>`
+    // reasoning block before the tool-call wrapper, so we give the model enough
+    // headroom (1024 tokens) to finish reasoning *and* emit the call. Greedy
+    // sampling (`temperature: 0.0`) keeps the run deterministic for assertions.
     let request = GenerationRequest::new(session.id)
-        .with_max_tokens(256)
+        .with_max_tokens(1024)
         .with_temperature(0.0);
 
     let response = agent

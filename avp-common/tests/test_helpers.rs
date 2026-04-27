@@ -589,3 +589,129 @@ pub fn transform_chain_to_claude_output(
         }
     }
 }
+
+// ============================================================================
+// Recording / Playback Integration Helpers
+// ============================================================================
+//
+// Shared helpers for tests that drive the production chain against
+// `agent_client_protocol_extras::PlaybackAgent` over a checked-in
+// `RecordedSession` fixture. These are extracted from
+// `recording_replay_integration.rs` and `validator_block_e2e_integration.rs`
+// so the two suites stay in lockstep when the loader format or chain wiring
+// changes.
+
+/// Resolve the path to a recording fixture under
+/// `tests/fixtures/recordings/`.
+///
+/// Note this is distinct from [`fixtures_dir`], which points at
+/// `.fixtures/claude` (the Claude wire-format fixtures consumed by
+/// `create_context_with_playback`). Recording fixtures live alongside the
+/// integration tests because they are session-trace JSON, not raw responses.
+pub fn recording_fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("recordings")
+        .join(name)
+}
+
+/// Build a [`PlaybackAgent`]-backed [`AvpContext`] in a fresh git worktree.
+///
+/// Returns the temp dir (which must outlive the context — destroying it
+/// removes the `.git` directory) and the configured context.
+///
+/// `AvpContext::with_agent` looks for the git root from cwd, so this switches
+/// to the temp dir while constructing the context, then restores cwd so the
+/// helper does not leak directory changes into other tests.
+pub fn create_playback_context(fixture: &Path) -> (TempDir, AvpContext) {
+    let temp = TempDir::new().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+
+    let original_cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(temp.path()).expect("chdir to temp");
+
+    let agent = PlaybackAgent::new(fixture.to_path_buf(), "claude");
+    let notifications = agent.subscribe_notifications();
+    let agent_arc: Arc<dyn agent_client_protocol::Agent + Send + Sync> = Arc::new(agent);
+
+    let ctx = AvpContext::with_agent(agent_arc, notifications).expect("with_agent");
+
+    std::env::set_current_dir(original_cwd).expect("restore cwd");
+
+    (temp, ctx)
+}
+
+/// Drop a single-rule ruleset onto disk under
+/// `<temp>/.avp/validators/<ruleset>/` for the given hook trigger and
+/// severity. Mirrors the on-disk layout that `ValidatorLoader` expects.
+///
+/// Both `recording_replay_integration` and `validator_block_e2e_integration`
+/// use the same shape — Stop trigger, error severity — but the helper is
+/// parameterised so future tests can target other triggers without copying
+/// it again.
+pub fn write_ruleset_on_disk(
+    temp: &TempDir,
+    ruleset: &str,
+    rule: &str,
+    rule_body: &str,
+    trigger: &str,
+    severity: &str,
+) {
+    let ruleset_dir = temp.path().join(".avp").join("validators").join(ruleset);
+    let rules_dir = ruleset_dir.join("rules");
+    fs::create_dir_all(&rules_dir).expect("create rules dir");
+    fs::write(
+        ruleset_dir.join("VALIDATOR.md"),
+        format!(
+            "---\nname: {ruleset}\ndescription: Replay-fixture ruleset {ruleset}\nversion: 1.0.0\ntrigger: {trigger}\nseverity: {severity}\n---\n\n# {ruleset} RuleSet\n\nReplay-fixture ruleset.\n",
+        ),
+    )
+    .expect("write VALIDATOR.md");
+    fs::write(
+        rules_dir.join(format!("{rule}.md")),
+        format!("---\nname: {rule}\ndescription: {rule}\n---\n\n# {rule} Rule\n\n{rule_body}\n",),
+    )
+    .expect("write rule.md");
+}
+
+/// Drop a single-rule Stop ruleset onto disk with `severity: error`. Thin
+/// wrapper over [`write_ruleset_on_disk`] for the common case both replay
+/// integration suites use.
+pub fn write_stop_error_ruleset(temp: &TempDir, ruleset: &str, rule: &str, rule_body: &str) {
+    write_ruleset_on_disk(temp, ruleset, rule, rule_body, "Stop", "error");
+}
+
+/// RAII guard that clears `CLAUDE_ACP` for the lifetime of the test and
+/// restores its prior value on drop. Without this, `ValidatorContextStarter`
+/// short-circuits the chain when AVP is invoked from inside Claude Code.
+///
+/// This is RAII-correct: a panic in the test body still runs `Drop`, so the
+/// next serial test sees the env var in its original state.
+pub struct ClaudeAcpGuard {
+    saved: Option<String>,
+}
+
+impl ClaudeAcpGuard {
+    /// Save the current value of `CLAUDE_ACP` and clear it for the lifetime
+    /// of the guard.
+    pub fn new() -> Self {
+        let saved = std::env::var("CLAUDE_ACP").ok();
+        std::env::remove_var("CLAUDE_ACP");
+        Self { saved }
+    }
+}
+
+impl Default for ClaudeAcpGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ClaudeAcpGuard {
+    fn drop(&mut self) {
+        if let Some(val) = self.saved.take() {
+            std::env::set_var("CLAUDE_ACP", val);
+        }
+    }
+}

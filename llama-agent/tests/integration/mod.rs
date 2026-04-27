@@ -11,5 +11,8 @@ mod backward_compatibility;
 mod incremental_processing;
 mod long_conversation;
 mod long_conversation_unit;
+mod read_file_mcp_server;
 mod session_state_preservation;
 mod tool_call_round_trip;
+mod tool_call_round_trip_via_mcp;
+mod tool_use_multi_turn;

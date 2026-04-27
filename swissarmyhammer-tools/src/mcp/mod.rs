@@ -49,7 +49,7 @@
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register tool categories
-//! register_file_tools(&mut registry).await;
+//! register_file_tools(&mut registry);
 //! register_shell_tools(&mut registry);
 //!
 //! println!("Registered {} tools", registry.list_tools().len());

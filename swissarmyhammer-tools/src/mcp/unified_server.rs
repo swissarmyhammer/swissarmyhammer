@@ -1329,4 +1329,108 @@ mod tests {
         );
         server.shutdown().await.unwrap();
     }
+
+    /// Runtime tools/list audit (#3 in task 01KQ7G1R9KRQ8RDBKYVSNEN9V4).
+    ///
+    /// Boots an actual HTTP MCP server, opens an RMCP client against the
+    /// `/mcp/validator` sub-route, sends `tools/list`, and asserts the
+    /// returned tool names are exactly the validator allowlist —
+    /// `{"read_file", "glob_files", "grep_files", "code_context"}` —
+    /// no more, no less.
+    ///
+    /// The split file tools are exposed by name (rather than the unified
+    /// `files` tool with an `op` argument) so that Hermes-trained validator
+    /// models can call them directly with the natural `{"name": "read_file",
+    /// "arguments": {...}}` shape.
+    ///
+    /// This is the durable guard against tool-set drift. If anyone adds a
+    /// `register_kanban_tools(&mut registry)` call to `create_validator_server`
+    /// "because it seemed harmless", the runtime list won't match and this
+    /// test fails at the boundary the actual validator agent talks to. It
+    /// also catches reverting the split: if the unified `files` tool sneaks
+    /// back onto the validator surface, the assertion fails.
+    ///
+    /// Independent of `agent_mode` because validator tool filtering is
+    /// driven by `is_validator_tool()`, not `is_agent_tool()`.
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_validator_endpoint_lists_only_validator_tools() {
+        use crate::mcp::test_utils::create_test_client;
+        use std::collections::BTreeSet;
+
+        // Bind an in-process HTTP MCP server in a clean tempdir so its
+        // index does not walk the host monorepo.
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut server = start_mcp_server_with_options(
+            McpServerMode::Http { port: None },
+            None,
+            None,
+            Some(temp.path().to_path_buf()),
+            // agent_mode is irrelevant for the validator route — it filters
+            // by is_validator_tool(), not is_agent_tool(). Pass true so we
+            // explicitly verify the validator route stays minimal even when
+            // the full server has the maximal tool set.
+            true,
+        )
+        .await
+        .unwrap();
+
+        // The server's `connection_url` points at `/mcp`. The validator
+        // sub-route is `/mcp/validator` on the same port.
+        let port = server.port().expect("HTTP server must report a bound port");
+        let validator_url = format!("http://127.0.0.1:{}/mcp/validator", port);
+
+        let client = create_test_client(&validator_url).await;
+        let tools = client
+            .list_tools(Default::default())
+            .await
+            .expect("tools/list against /mcp/validator must succeed");
+
+        let actual: BTreeSet<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+        let expected: BTreeSet<String> = ["read_file", "glob_files", "grep_files", "code_context"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(
+            actual, expected,
+            "validator endpoint must expose exactly {{read_file, glob_files, grep_files, code_context}} — got: {:?}",
+            actual
+        );
+
+        // The unified `files` tool must not appear — its op-dispatched shape
+        // does not match what Hermes-trained validator models naturally emit.
+        assert!(
+            !actual.contains("files"),
+            "validator endpoint must NOT advertise the unified 'files' tool — got: {:?}",
+            actual
+        );
+
+        // Defense in depth: enumerate the categories the validator must
+        // never advertise. If any of these names appear, registration has
+        // leaked a forbidden tool through the validator route.
+        for forbidden in [
+            "shell",
+            "git",
+            "kanban",
+            "web",
+            "questions",
+            "ralph",
+            "skill",
+            "agent",
+            "write_file",
+            "edit_file",
+        ] {
+            assert!(
+                !actual.contains(forbidden),
+                "validator endpoint must NOT advertise '{}' — got: {:?}",
+                forbidden,
+                actual
+            );
+        }
+
+        client.cancel().await.unwrap();
+        server.shutdown().await.unwrap();
+    }
 }

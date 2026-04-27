@@ -150,12 +150,24 @@ const RULE_PROMPT_NAME: &str = ".system/rule";
 ///
 /// Uses the shared prompt rendering pipeline (PromptLibrary + Liquid templates).
 /// Falls back to a simple inline format if the template is unavailable.
+///
+/// # Arguments
+///
+/// * `rule_name` - Name of the rule
+/// * `rule_description` - Human-readable description
+/// * `rule_severity` - Severity level (`error`, `warn`, `info`)
+/// * `rule_body` - The rendered rule body (markdown)
+/// * `hook_context` - Optional hook event context as JSON
+/// * `changed_files` - Optional list of file paths changed during the turn.
+///   When present, the template renders a `## Files Changed This Turn` section
+///   so the validator can scope its analysis to those files.
 fn render_rule_prompt(
     rule_name: &str,
     rule_description: &str,
     rule_severity: &str,
     rule_body: &str,
     hook_context: Option<&serde_json::Value>,
+    changed_files: Option<&[String]>,
 ) -> String {
     use swissarmyhammer_config::TemplateContext;
 
@@ -181,19 +193,56 @@ fn render_rule_prompt(
             );
         }
 
+        // Surface the changed-files list to the template. The Liquid template
+        // (`builtin/prompts/.system/rule.md`) renders a `## Files Changed This
+        // Turn` section when this array is present and non-empty.
+        if let Some(files) = changed_files {
+            if !files.is_empty() {
+                ctx.set(
+                    "changed_files".to_string(),
+                    serde_json::Value::Array(
+                        files
+                            .iter()
+                            .map(|f| serde_json::Value::String(f.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+        }
+
         if let Ok(rendered) = prompt_library.render(RULE_PROMPT_NAME, &ctx) {
             return rendered;
         }
     }
 
-    // Fallback if template is unavailable
+    // Fallback if template is unavailable.
     let context_section = hook_context
         .map(|hc| format!("\n\n## Hook Context\n\n{}", extract_hook_context_string(hc)))
         .unwrap_or_default();
 
+    let changed_files_section = changed_files
+        .filter(|f| !f.is_empty())
+        .map(|files| {
+            let mut section = String::from("\n\n## Files Changed This Turn\n\n");
+            section.push_str(
+                "The following files were modified during this turn. \
+                 Focus your analysis on these:\n\n",
+            );
+            for f in files {
+                section.push_str(&format!("- {}\n", f));
+            }
+            section
+        })
+        .unwrap_or_default();
+
     format!(
-        "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n\n{}{}",
-        rule_name, rule_description, rule_severity, rule_body, context_section
+        "# Rule: {}\n\n**Description**: {}\n**Severity**: {}\n{}{}\n\n{}",
+        rule_name,
+        rule_description,
+        rule_severity,
+        context_section,
+        changed_files_section,
+        rule_body
     )
 }
 
@@ -348,16 +397,64 @@ where
         .render()
 }
 
+/// Maximum size in bytes of raw validator response text included in failure messages.
+///
+/// Larger responses are truncated and marked with a "[truncated]" suffix to keep failure
+/// messages bounded while still preserving enough context to diagnose the failure.
+const RAW_RESPONSE_TRUNCATION_BYTES: usize = 4096;
+
+/// Diagnostic sentence appended to unparseable-response failure messages.
+///
+/// Explains the most common reasons a validator response cannot be parsed, so that
+/// a user reading the failure message understands what went wrong without needing
+/// to consult the source code.
+const UNPARSEABLE_DIAGNOSTIC: &str = "Validator response was not valid JSON of the required \
+    schema; this typically means the model emitted a tool-call attempt the agent could not \
+    parse, or returned narrative without the required JSON object.";
+
+/// Truncate a raw response string to at most `RAW_RESPONSE_TRUNCATION_BYTES` bytes.
+///
+/// If the response is longer than the limit, returns the truncated prefix with a
+/// `" [truncated]"` marker appended. Truncation respects UTF-8 character boundaries
+/// to avoid producing invalid UTF-8 in the output.
+///
+/// # Arguments
+///
+/// * `response` - The raw response text to truncate
+fn truncate_raw_response(response: &str) -> String {
+    if response.len() <= RAW_RESPONSE_TRUNCATION_BYTES {
+        return response.to_string();
+    }
+
+    // Find the largest char boundary <= the byte limit so we don't split a UTF-8 codepoint.
+    let mut end = RAW_RESPONSE_TRUNCATION_BYTES;
+    while end > 0 && !response.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!("{} [truncated]", &response[..end])
+}
+
 /// Parse the LLM response into a ValidatorResult.
 ///
 /// Attempts to extract JSON from the response and parse it as a ValidatorResult.
-/// Falls back to creating a failed result if parsing fails.
+/// If no parser succeeds, returns a failure result that captures the raw response
+/// (truncated to a bounded size) along with the agent's `stop_reason` and a diagnostic
+/// sentence explaining the most common causes. This is a deliberate fail-closed
+/// policy: a validator whose output cannot be understood must fail loudly rather
+/// than silently passing.
 ///
 /// # Arguments
 ///
 /// * `response` - The raw response content from the agent
 /// * `stop_reason` - Why the agent stopped, used to provide better diagnostics for empty responses
-pub fn parse_validator_response(response: &str, stop_reason: &StopReason) -> ValidatorResult {
+/// * `rule_name` - The name of the rule whose response is being parsed, for log context.
+///   Use `"<unknown>"` or the validator name when not in a per-rule context.
+pub fn parse_validator_response(
+    response: &str,
+    stop_reason: &StopReason,
+    rule_name: &str,
+) -> ValidatorResult {
     if response.trim().is_empty() {
         return handle_empty_response(stop_reason);
     }
@@ -378,12 +475,17 @@ pub fn parse_validator_response(response: &str, stop_reason: &StopReason) -> Val
     }
 
     tracing::warn!(
-        "Validator returned unparseable response, passing with warning: {:?}",
+        rule = %rule_name,
+        stop_reason = ?stop_reason,
+        "Validator returned unparseable response, failing rule '{}': {:?}",
+        rule_name,
         response
     );
-    ValidatorResult::pass(format!(
-        "Validator returned unparseable response (fail-open): {}",
-        response
+    ValidatorResult::fail(format!(
+        "Validator returned unparseable response. {} stop_reason: {:?}. raw response: {}",
+        UNPARSEABLE_DIAGNOSTIC,
+        stop_reason,
+        truncate_raw_response(response)
     ))
 }
 
@@ -701,103 +803,6 @@ pub fn is_rate_limit_error(error: &str) -> bool {
 // RuleSet Execution (New Architecture)
 // ============================================================================
 
-/// Context for rendering a RuleSet session initialization prompt.
-///
-/// This context is used to create the initial system message that sets up
-/// the agent session for evaluating all rules in a RuleSet.
-pub struct RuleSetSessionContext<'a> {
-    /// The prompt library containing prompt templates.
-    pub prompt_library: &'a PromptLibrary,
-    /// The RuleSet being evaluated.
-    pub ruleset: &'a RuleSet,
-    /// The hook type that triggered validation.
-    pub hook_type: HookType,
-    /// The hook event context as JSON.
-    pub hook_context: &'a serde_json::Value,
-    /// Optional list of files changed during the turn (for Stop hooks).
-    pub changed_files: Option<&'a [String]>,
-}
-
-impl<'a> RuleSetSessionContext<'a> {
-    /// Create a new RuleSet session context.
-    pub fn new(
-        prompt_library: &'a PromptLibrary,
-        ruleset: &'a RuleSet,
-        hook_type: HookType,
-        hook_context: &'a serde_json::Value,
-    ) -> Self {
-        Self {
-            prompt_library,
-            ruleset,
-            hook_type,
-            hook_context,
-            changed_files: None,
-        }
-    }
-
-    /// Set the changed files for Stop hook validators.
-    pub fn with_changed_files(mut self, changed_files: Option<&'a [String]>) -> Self {
-        self.changed_files = changed_files;
-        self
-    }
-
-    /// Render the session initialization prompt.
-    ///
-    /// This creates the initial system message that explains the RuleSet
-    /// context and prepares the agent for sequential rule evaluation.
-    pub fn render_session_init(&self) -> Result<String, String> {
-        use swissarmyhammer_config::TemplateContext;
-
-        let mut template_context = TemplateContext::new();
-
-        // Required by the .system/validator template
-        template_context.set(
-            "validator_content".to_string(),
-            self.ruleset.description().to_string().into(),
-        );
-        template_context.set(
-            "validator_name".to_string(),
-            self.ruleset.name().to_string().into(),
-        );
-
-        // RuleSet-specific fields
-        template_context.set(
-            "ruleset_name".to_string(),
-            self.ruleset.name().to_string().into(),
-        );
-        template_context.set(
-            "rule_count".to_string(),
-            self.ruleset.rules.len().to_string().into(),
-        );
-
-        // Hook context — rendered as YAML with optional diff blocks
-        template_context.set(
-            "hook_context".to_string(),
-            extract_hook_context_string(self.hook_context).into(),
-        );
-        template_context.set("hook_type".to_string(), self.hook_type.to_string().into());
-
-        // Add changed files if provided (for Stop hooks)
-        if let Some(files) = self.changed_files {
-            if !files.is_empty() {
-                template_context.set(
-                    "changed_files".to_string(),
-                    serde_json::Value::Array(
-                        files
-                            .iter()
-                            .map(|f| serde_json::Value::String(f.clone()))
-                            .collect(),
-                    ),
-                );
-            }
-        }
-
-        self.prompt_library
-            .render(VALIDATOR_PROMPT_NAME, &template_context)
-            .map_err(|e| format!("Failed to render RuleSet session init prompt: {}", e))
-    }
-}
-
 /// Context for rendering an individual rule prompt within a RuleSet session.
 pub struct RulePromptContext<'a, P: PartialLoader + Clone + 'static = HashMapPartialLoader> {
     /// The rule being evaluated.
@@ -811,6 +816,14 @@ pub struct RulePromptContext<'a, P: PartialLoader + Clone + 'static = HashMapPar
     /// When provided, this JSON value is rendered into the rule prompt so the
     /// LLM can see what is being validated without relying on session history.
     pub hook_context: Option<&'a serde_json::Value>,
+    /// Optional list of file paths changed during the turn.
+    ///
+    /// When provided and non-empty, the rule prompt template renders a
+    /// `## Files Changed This Turn` section listing each path. This gives the
+    /// validator orientation about which files to focus on, especially for
+    /// Stop hooks where the diff content alone may not name every file
+    /// (e.g. when one file's diff is filtered out per-ruleset).
+    pub changed_files: Option<&'a [String]>,
 }
 
 impl<'a> RulePromptContext<'a, HashMapPartialLoader> {
@@ -821,6 +834,7 @@ impl<'a> RulePromptContext<'a, HashMapPartialLoader> {
             ruleset,
             partials: None,
             hook_context: None,
+            changed_files: None,
         }
     }
 }
@@ -833,6 +847,7 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
             ruleset,
             partials,
             hook_context: None,
+            changed_files: None,
         }
     }
 
@@ -856,6 +871,7 @@ impl<'a, P: PartialLoader + Clone + 'static> RulePromptContext<'a, P> {
             &severity.to_string(),
             &rendered_body,
             self.hook_context,
+            self.changed_files,
         )
     }
 }
@@ -957,7 +973,7 @@ mod tests {
     #[test]
     fn test_parse_validator_response_passed() {
         let response = r#"{"status": "passed", "message": "All checks passed"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
         assert_eq!(result.message(), "All checks passed");
     }
@@ -965,7 +981,7 @@ mod tests {
     #[test]
     fn test_parse_validator_response_failed() {
         let response = r#"{"status": "failed", "message": "Found a secret on line 42"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert_eq!(result.message(), "Found a secret on line 42");
     }
@@ -979,53 +995,208 @@ Here's my analysis:
 {"status": "passed", "message": "No issues found"}
 ```
 "#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
         assert_eq!(result.message(), "No issues found");
     }
 
     #[test]
-    fn test_parse_validator_response_unparseable_fails_open() {
-        // Unparseable responses should fail-open (pass with warning) to avoid
-        // blocking the user's workflow when the validator LLM is confused.
+    fn test_parse_validator_response_unparseable_fails_closed() {
+        // Unparseable responses MUST fail-closed (return Failed). A "pass with warning"
+        // policy produces silent false greens — the rule reports passed upstream while
+        // the model's actual output was, e.g., a malformed tool-call attempt or narrative
+        // text without the required JSON object.
         let response = "This is not JSON at all";
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(
-            result.passed(),
-            "Unparseable response should fail-open (pass)"
+            !result.passed(),
+            "Unparseable response should fail-closed (fail), got: {}",
+            result.message()
+        );
+        let msg = result.message();
+        assert!(
+            msg.contains("unparseable"),
+            "Message should indicate unparseable response: {}",
+            msg
         );
         assert!(
-            result.message().contains("unparseable"),
-            "Message should indicate unparseable response: {}",
-            result.message()
+            msg.contains("This is not JSON at all"),
+            "Message should include the raw response text: {}",
+            msg
+        );
+        assert!(
+            msg.contains("stop_reason"),
+            "Message should include the stop_reason: {}",
+            msg
+        );
+        assert!(
+            msg.contains("required JSON object"),
+            "Message should include the diagnostic sentence: {}",
+            msg
         );
     }
 
     #[test]
-    fn test_parse_validator_response_llm_confusion_fails_open() {
+    fn test_parse_validator_response_llm_confusion_fails_closed() {
         // When the LLM returns a conversational response instead of JSON,
-        // it should fail-open rather than blocking.
+        // it MUST fail-closed so the upstream hook treats this as a real failure
+        // rather than silently passing.
         let response = "I understand the input-validation rule. Let me check the command...";
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "input-validation");
         assert!(
-            result.passed(),
-            "Confused LLM response should fail-open (pass)"
-        );
-        assert!(
-            result.message().contains("fail-open"),
-            "Message should indicate fail-open: {}",
+            !result.passed(),
+            "Confused LLM response should fail-closed (fail), got: {}",
             result.message()
         );
+        let msg = result.message();
+        assert!(
+            msg.contains("unparseable"),
+            "Message should indicate unparseable response: {}",
+            msg
+        );
+        assert!(
+            msg.contains("Let me check the command"),
+            "Message should include the raw response text: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_validator_response_wrong_schema_json_fails_closed() {
+        // A response that is syntactically valid JSON but does not match the
+        // pass/fail schema (e.g. {"foo": "bar"}) is unparseable for our purposes
+        // and MUST fail-closed with the raw text and stop_reason captured.
+        let response = r#"{"foo": "bar", "baz": 42}"#;
+        let result = parse_validator_response(response, &test_stop_reason(), "wrong-schema-rule");
+        assert!(
+            !result.passed(),
+            "Wrong-schema JSON should fail-closed (fail), got: {}",
+            result.message()
+        );
+        let msg = result.message();
+        assert!(
+            msg.contains("unparseable"),
+            "Message should indicate unparseable response: {}",
+            msg
+        );
+        assert!(
+            msg.contains(r#""foo": "bar""#),
+            "Message should include the raw JSON text: {}",
+            msg
+        );
+        assert!(
+            msg.contains("stop_reason"),
+            "Message should include the stop_reason: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_validator_response_unparseable_truncates_long_response() {
+        // Raw response text included in the failure message must be bounded — large
+        // responses are truncated and marked with "[truncated]". This protects log
+        // sinks and downstream display from oversized payloads.
+        let huge_response = "X".repeat(8192); // 8 KB of garbage
+        let result =
+            parse_validator_response(&huge_response, &test_stop_reason(), "huge-response-rule");
+        assert!(!result.passed(), "Unparseable response should fail-closed");
+        let msg = result.message();
+        assert!(
+            msg.contains("[truncated]"),
+            "Message should mark large responses as truncated: {}",
+            &msg[..msg.len().min(200)]
+        );
+        // The full 8 KB should not appear in the message; the truncated prefix should
+        // be at most the truncation limit plus some envelope (diagnostic + stop_reason).
+        assert!(
+            !msg.contains(&"X".repeat(8000)),
+            "Message should not contain the full untruncated response"
+        );
+    }
+
+    #[test]
+    fn test_parse_validator_response_unparseable_short_response_not_truncated() {
+        // Short responses (under the truncation limit) must be included verbatim
+        // with no "[truncated]" marker.
+        let response = "narrative without JSON";
+        let result = parse_validator_response(response, &test_stop_reason(), "short-response-rule");
+        assert!(!result.passed());
+        let msg = result.message();
+        assert!(
+            !msg.contains("[truncated]"),
+            "Short responses should not be marked as truncated: {}",
+            msg
+        );
+        assert!(
+            msg.contains("narrative without JSON"),
+            "Short response should appear verbatim in failure message: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_unparseable_response_in_rule_result_preserves_severity() {
+        // Integration-level check: when the runner wraps the parse result into a
+        // RuleResult, the rule's severity flows through unchanged. This is the
+        // boundary that determines whether an unparseable response produces a
+        // blocking hook output (Severity::Error) or a non-blocking warning
+        // (Severity::Warn). The parse helper itself MUST NOT special-case severity.
+        use crate::validator::types::RuleResult;
+        let response = "I would call read_file but I cannot.";
+
+        for severity in [Severity::Error, Severity::Warn, Severity::Info] {
+            let result = parse_validator_response(response, &test_stop_reason(), "policy-rule");
+            assert!(
+                !result.passed(),
+                "Unparseable response should fail-closed at every severity"
+            );
+
+            // Mirror what runner.rs does at the call site: wrap into a RuleResult
+            // with the rule's effective severity.
+            let rule_result = RuleResult {
+                rule_name: "policy-rule".to_string(),
+                severity,
+                result,
+            };
+
+            assert!(
+                !rule_result.passed(),
+                "RuleResult.passed() should be false for unparseable response (severity={:?})",
+                severity
+            );
+            assert_eq!(
+                rule_result.severity, severity,
+                "Severity must be preserved untouched by the parse path"
+            );
+            assert!(
+                rule_result.result.message().contains("unparseable"),
+                "RuleResult message should still indicate unparseable response (severity={:?}): {}",
+                severity,
+                rule_result.result.message()
+            );
+
+            // The blast radius of the policy change: at Error severity, an unparseable
+            // response now produces a blocking RuleResult. Before this change, the same
+            // input produced RuleResult::passed() = true and was_blocking = false.
+            assert_eq!(
+                rule_result.is_blocking(),
+                severity == Severity::Error,
+                "Only Error-severity unparseable responses should be blocking, but \
+                 severity={:?} produced is_blocking={}",
+                severity,
+                rule_result.is_blocking()
+            );
+        }
     }
 
     #[test]
     fn test_parse_validator_response_empty() {
-        let result = parse_validator_response("", &test_stop_reason());
+        let result = parse_validator_response("", &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert!(result.message().contains("empty response"));
 
         // Whitespace-only should also be treated as empty
-        let result = parse_validator_response("   \n\t  ", &test_stop_reason());
+        let result = parse_validator_response("   \n\t  ", &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert!(result.message().contains("empty response"));
     }
@@ -1341,7 +1512,7 @@ Some text after
     #[test]
     fn test_parse_validator_response_with_escaped_quotes() {
         let response = r#"{"status": "failed", "message": "Found \"secret\" in code"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert!(result.message().contains("secret"));
     }
@@ -1350,11 +1521,11 @@ Some text after
     fn test_try_parse_status_from_text_with_extra_spacing() {
         // Test with various spacing around status values
         let response1 = r#"{"status":    "passed",   "message": "ok"}"#;
-        let result1 = parse_validator_response(response1, &test_stop_reason());
+        let result1 = parse_validator_response(response1, &test_stop_reason(), "test-rule");
         assert!(result1.passed());
 
         let response2 = r#"{ "status" : "failed" , "message" : "bad" }"#;
-        let result2 = parse_validator_response(response2, &test_stop_reason());
+        let result2 = parse_validator_response(response2, &test_stop_reason(), "test-rule");
         assert!(!result2.passed());
     }
 
@@ -1453,6 +1624,7 @@ Some text after
             ruleset: &ruleset,
             partials,
             hook_context: Some(&hook_context),
+            changed_files: None,
         };
         let rendered = ctx.render();
 
@@ -1543,6 +1715,7 @@ Some text after
             "error",
             "Validate the command is safe.",
             Some(&hook_context),
+            None,
         );
 
         eprintln!("=== RULE PROMPT OUTPUT ===\n{}\n=== END ===", output);
@@ -1602,6 +1775,7 @@ Some text after
             "warn",
             "Review the change.",
             Some(&hook_context),
+            None,
         );
 
         eprintln!("=== EDIT RULE PROMPT OUTPUT ===\n{}\n=== END ===", output);
@@ -1639,6 +1813,65 @@ Some text after
         assert!(
             !hook_section.contains("```json"),
             "Hook section should NOT contain ```json.\nFull output:\n{}",
+            output
+        );
+    }
+
+    /// Passing `changed_files` to `render_rule_prompt` produces a
+    /// `## Files Changed This Turn` section listing each path. This is the
+    /// regression test for the bug where the changed-files list never reached
+    /// the rule prompt — only the hook context (YAML + diff) did, leaving
+    /// validators with no explicit enumeration of the files to focus on.
+    #[test]
+    fn test_render_rule_prompt_includes_changed_files() {
+        let files = vec!["foo.rs".to_string(), "bar.rs".to_string()];
+
+        let output = render_rule_prompt(
+            "code-quality",
+            "Check code quality",
+            "warn",
+            "Review the change.",
+            None,
+            Some(&files),
+        );
+
+        eprintln!("=== CHANGED FILES OUTPUT ===\n{}\n=== END ===", output);
+
+        assert!(
+            output.contains("## Files Changed This Turn"),
+            "Should render the Files Changed section, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("foo.rs"),
+            "Should list foo.rs, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("bar.rs"),
+            "Should list bar.rs, got:\n{}",
+            output
+        );
+    }
+
+    /// An empty `changed_files` slice MUST NOT produce the `## Files Changed
+    /// This Turn` section — otherwise the validator sees an empty bullet list
+    /// that adds noise without information.
+    #[test]
+    fn test_render_rule_prompt_empty_changed_files_omits_section() {
+        let empty: Vec<String> = vec![];
+        let output = render_rule_prompt(
+            "code-quality",
+            "Check code quality",
+            "warn",
+            "Review the change.",
+            None,
+            Some(&empty),
+        );
+
+        assert!(
+            !output.contains("## Files Changed This Turn"),
+            "Empty changed_files should not render the section, got:\n{}",
             output
         );
     }
@@ -1694,7 +1927,7 @@ Some text after
     fn test_parse_validator_response_alternative_pass_format() {
         // "pass": true with "reason" field
         let response = r#"{"pass": true, "reason": "Code looks clean"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
         assert_eq!(result.message(), "Code looks clean");
     }
@@ -1703,7 +1936,7 @@ Some text after
     fn test_parse_validator_response_alternative_fail_format() {
         // "pass": false with "reason" field
         let response = r#"{"pass": false, "reason": "Secret found"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert_eq!(result.message(), "Secret found");
     }
@@ -1711,42 +1944,46 @@ Some text after
     #[test]
     fn test_parse_validator_response_alternative_pass_no_spaces() {
         let response = r#"{"pass":true,"reason":"ok"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
     }
 
     #[test]
     fn test_parse_validator_response_alternative_fail_no_spaces() {
         let response = r#"{"pass":false,"reason":"bad"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed());
     }
 
     #[test]
     fn test_parse_validator_response_plain_text_pass() {
-        let result = parse_validator_response("PASS", &test_stop_reason());
+        let result = parse_validator_response("PASS", &test_stop_reason(), "test-rule");
         assert!(result.passed());
         assert_eq!(result.message(), "Validation passed");
     }
 
     #[test]
     fn test_parse_validator_response_plain_text_pass_with_message() {
-        let result = parse_validator_response("PASS All checks passed", &test_stop_reason());
+        let result =
+            parse_validator_response("PASS All checks passed", &test_stop_reason(), "test-rule");
         assert!(result.passed());
         assert_eq!(result.message(), "All checks passed");
     }
 
     #[test]
     fn test_parse_validator_response_plain_text_fail() {
-        let result = parse_validator_response("FAIL", &test_stop_reason());
+        let result = parse_validator_response("FAIL", &test_stop_reason(), "test-rule");
         assert!(!result.passed());
         assert_eq!(result.message(), "Validation failed");
     }
 
     #[test]
     fn test_parse_validator_response_plain_text_fail_with_message() {
-        let result =
-            parse_validator_response("FAIL Secret detected on line 5", &test_stop_reason());
+        let result = parse_validator_response(
+            "FAIL Secret detected on line 5",
+            &test_stop_reason(),
+            "test-rule",
+        );
         assert!(!result.passed());
         assert_eq!(result.message(), "Secret detected on line 5");
     }
@@ -1754,14 +1991,14 @@ Some text after
     #[test]
     fn test_parse_validator_response_status_no_spaces() {
         let response = r#"{"status":"passed","message":"ok"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
     }
 
     #[test]
     fn test_parse_validator_response_status_failed_no_spaces() {
         let response = r#"{"status":"failed","message":"bad"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed());
     }
 
@@ -1769,7 +2006,7 @@ Some text after
     fn test_parse_validator_response_bare_code_block() {
         let response =
             "Here is my result:\n```\n{\"status\": \"passed\", \"message\": \"OK\"}\n```\n";
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
     }
 
@@ -1778,14 +2015,14 @@ Some text after
         // Streaming duplicates - first valid JSON object wins
         let response =
             r#"{"status": "failed", "message": "Bad"}{"status": "passed", "message": "OK"}"#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(!result.passed(), "First JSON object should win");
     }
 
     #[test]
     fn test_parse_validator_response_json_with_surrounding_text() {
         let response = r#"After analysis, my conclusion is: {"status": "passed", "message": "No issues"} That's my finding."#;
-        let result = parse_validator_response(response, &test_stop_reason());
+        let result = parse_validator_response(response, &test_stop_reason(), "test-rule");
         assert!(result.passed());
     }
 
@@ -1904,103 +2141,6 @@ Some text after
             &loader,
             "no-prefix"
         ));
-    }
-
-    // =========================================================================
-    // RuleSetSessionContext Tests
-    // =========================================================================
-
-    #[test]
-    fn test_ruleset_session_context_render() {
-        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
-
-        let prompt_library = create_prompt_library();
-        let ruleset = RuleSet {
-            manifest: RuleSetManifest {
-                name: "test-ruleset".to_string(),
-                description: "Test RuleSet for session context".to_string(),
-                metadata: RuleSetMetadata {
-                    version: "1.0.0".to_string(),
-                },
-                trigger: HookType::PreToolUse,
-                match_criteria: None,
-                trigger_matcher: None,
-                tags: vec![],
-                severity: Severity::Error,
-                timeout: 30,
-                once: false,
-            },
-            rules: vec![
-                crate::validator::Rule {
-                    name: "rule-1".to_string(),
-                    description: "First rule".to_string(),
-                    body: "Check first thing.".to_string(),
-                    severity: None,
-                    timeout: None,
-                },
-                crate::validator::Rule {
-                    name: "rule-2".to_string(),
-                    description: "Second rule".to_string(),
-                    body: "Check second thing.".to_string(),
-                    severity: None,
-                    timeout: None,
-                },
-            ],
-            source: ValidatorSource::Builtin,
-            base_path: PathBuf::from("/test"),
-        };
-
-        let context = serde_json::json!({"tool_name": "Write"});
-
-        let session_ctx =
-            RuleSetSessionContext::new(&prompt_library, &ruleset, HookType::PreToolUse, &context);
-        let result = session_ctx.render_session_init();
-        assert!(
-            result.is_ok(),
-            "RuleSet session init should render: {:?}",
-            result.err()
-        );
-        let rendered = result.unwrap();
-        assert!(
-            rendered.contains("test-ruleset") || rendered.contains("Test RuleSet"),
-            "Should contain ruleset info: {}",
-            rendered
-        );
-    }
-
-    #[test]
-    fn test_ruleset_session_context_with_changed_files() {
-        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
-
-        let prompt_library = create_prompt_library();
-        let ruleset = RuleSet {
-            manifest: RuleSetManifest {
-                name: "stop-ruleset".to_string(),
-                description: "Stop RuleSet".to_string(),
-                metadata: RuleSetMetadata {
-                    version: "1.0.0".to_string(),
-                },
-                trigger: HookType::Stop,
-                match_criteria: None,
-                trigger_matcher: None,
-                tags: vec![],
-                severity: Severity::Warn,
-                timeout: 30,
-                once: false,
-            },
-            rules: vec![],
-            source: ValidatorSource::Builtin,
-            base_path: PathBuf::from("/test"),
-        };
-
-        let context = serde_json::json!({"session_id": "sess"});
-        let changed = vec!["src/main.rs".to_string()];
-
-        let session_ctx =
-            RuleSetSessionContext::new(&prompt_library, &ruleset, HookType::Stop, &context)
-                .with_changed_files(Some(&changed));
-        let result = session_ctx.render_session_init();
-        assert!(result.is_ok());
     }
 
     // =========================================================================

@@ -1238,16 +1238,10 @@ impl AgentAPI for AgentServer {
     async fn discover_tools(&self, session: &mut Session) -> Result<(), AgentError> {
         debug!("Discovering tools for session: {}", session.id);
 
-        let tool_names = self.mcp_client.list_tools().await?;
-        session.available_tools = tool_names
-            .into_iter()
-            .map(|name| crate::types::ToolDefinition {
-                name: name.clone(),
-                description: format!("Tool: {}", name),
-                parameters: serde_json::Value::Object(serde_json::Map::new()),
-                server_name: "discovered".to_string(),
-            })
-            .collect();
+        // Use the schema-aware variant so the model receives real
+        // parameter schemas in the rendered system prompt, not placeholder
+        // empty objects. See `MCPClient::list_tools_with_schemas` for why.
+        session.available_tools = self.mcp_client.list_tools_with_schemas().await?;
         session.updated_at = SystemTime::now();
 
         info!(

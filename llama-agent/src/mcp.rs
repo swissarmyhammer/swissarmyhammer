@@ -4,6 +4,7 @@
 //! using the rmcp SDK without custom protocol implementations.
 
 use crate::types::errors::MCPError;
+use crate::types::tools::ToolDefinition;
 use async_trait::async_trait;
 use rmcp::{
     model::*,
@@ -21,6 +22,40 @@ use tokio::time::timeout;
 /// This needs to be long enough for shell commands that may run for extended periods
 /// (e.g., `cargo build`, `cargo test`, long-running scripts).
 const DEFAULT_MCP_TIMEOUT_SECS: u64 = 600;
+
+/// Convert an rmcp [`Tool`] returned from `tools/list` into a llama-agent
+/// [`ToolDefinition`].
+///
+/// The MCP `Tool` carries a JSON Schema (`input_schema`) and an optional
+/// `description`; both are required for a chat-template-friendly
+/// rendering of tools (e.g. the Qwen3 `# Tools` block, which serialises
+/// each `ToolDefinition` through `qwen3_tool_envelope`). Earlier
+/// implementations of `list_tools` discarded both — this conversion
+/// preserves them so the model sees the real parameter contract instead
+/// of a placeholder.
+///
+/// # Arguments
+///
+/// * `tool` — the rmcp `Tool` value returned by `tools/list`.
+/// * `server_name` — fallback server name to record on the
+///   [`ToolDefinition`]; the MCP protocol does not attach the server
+///   name to individual tools, so callers pass it from the connection
+///   context (e.g. the rmcp `peer_info()` server name, or a static
+///   label like `"mcp"`).
+fn tool_to_definition(tool: Tool, server_name: &str) -> ToolDefinition {
+    let parameters = serde_json::Value::Object((*tool.input_schema).clone());
+    let description = tool
+        .description
+        .map(|cow| cow.to_string())
+        .unwrap_or_else(|| format!("Tool: {}", tool.name));
+
+    ToolDefinition {
+        name: tool.name.to_string(),
+        description,
+        parameters,
+        server_name: server_name.to_string(),
+    }
+}
 
 /// Simple client handler for rmcp operations
 #[derive(Clone, Debug)]
@@ -192,6 +227,45 @@ impl UnifiedMCPClient {
             .collect())
     }
 
+    /// List available tools with full schema metadata.
+    ///
+    /// Unlike [`list_tools`], which returns only tool names, this method
+    /// preserves the full `description` and `input_schema` (JSON Schema)
+    /// returned by the MCP server's `tools/list` response and surfaces
+    /// each tool as a [`ToolDefinition`] ready to be dropped into a
+    /// [`crate::types::sessions::Session::available_tools`] vector.
+    ///
+    /// The JSON Schema is what `format_tools_for_qwen3` (and the legacy
+    /// default tool-rendering path) use to render the `# Tools` block in
+    /// the system prompt. Without it the model sees a placeholder schema
+    /// like `{}` and cannot infer parameter names — which silently
+    /// degrades tool calling for any agent that fetched tools through
+    /// the MCP path instead of injecting them manually.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MCPError::Timeout`] if the MCP server does not respond
+    /// within the configured `default_timeout`, or [`MCPError::Protocol`]
+    /// if the server returns a transport-level failure.
+    pub async fn list_tools_with_schemas(&self) -> Result<Vec<ToolDefinition>, MCPError> {
+        let result = timeout(self.default_timeout, self.service.list_tools(None))
+            .await
+            .map_err(|_| MCPError::Timeout("list_tools timed out".to_string()))?
+            .map_err(|e| MCPError::Protocol(format!("list_tools failed: {:?}", e)))?;
+
+        let server_name = self
+            .service
+            .peer_info()
+            .map(|info| info.server_info.name.to_string())
+            .unwrap_or_else(|| "mcp".to_string());
+
+        Ok(result
+            .tools
+            .into_iter()
+            .map(|tool| tool_to_definition(tool, &server_name))
+            .collect())
+    }
+
     /// Call a tool with arguments
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError> {
         let mut params = CallToolRequestParams::new(name.to_string());
@@ -340,6 +414,28 @@ impl Default for RetryConfig {
 #[async_trait]
 pub trait MCPClient: Send + Sync {
     async fn list_tools(&self) -> Result<Vec<String>, MCPError>;
+
+    /// List tools with full JSON Schema metadata.
+    ///
+    /// The default implementation calls [`list_tools`] and constructs
+    /// degraded [`ToolDefinition`]s with a placeholder description and
+    /// an empty parameter schema. Implementations that have access to
+    /// the underlying rmcp `Tool` (e.g. [`UnifiedMCPClient`]) override
+    /// this to preserve the real schema, which the chat-template
+    /// rendering path needs to produce a faithful `# Tools` block.
+    async fn list_tools_with_schemas(&self) -> Result<Vec<ToolDefinition>, MCPError> {
+        let names = self.list_tools().await?;
+        Ok(names
+            .into_iter()
+            .map(|name| ToolDefinition {
+                name: name.clone(),
+                description: format!("Tool: {}", name),
+                parameters: serde_json::Value::Object(serde_json::Map::new()),
+                server_name: "mcp".to_string(),
+            })
+            .collect())
+    }
+
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError>;
     async fn list_prompts(&self) -> Result<Vec<Prompt>, MCPError>;
     async fn get_prompt(
@@ -361,6 +457,10 @@ pub trait MCPClient: Send + Sync {
 impl MCPClient for UnifiedMCPClient {
     async fn list_tools(&self) -> Result<Vec<String>, MCPError> {
         self.list_tools().await
+    }
+
+    async fn list_tools_with_schemas(&self) -> Result<Vec<ToolDefinition>, MCPError> {
+        self.list_tools_with_schemas().await
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<String, MCPError> {

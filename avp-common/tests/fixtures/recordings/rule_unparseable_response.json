@@ -1,0 +1,80 @@
+{
+  "calls": [
+    {
+      "method": "initialize",
+      "request": {
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        },
+        "protocolVersion": 1
+      },
+      "response": {
+        "agentCapabilities": {
+          "_meta": { "streaming": true },
+          "loadSession": true,
+          "mcpCapabilities": { "http": true, "sse": false },
+          "promptCapabilities": {
+            "_meta": { "streaming": true },
+            "audio": true,
+            "embeddedContext": true,
+            "image": true
+          },
+          "sessionCapabilities": {}
+        },
+        "agentInfo": {
+          "name": "claude-agent",
+          "title": "Claude Agent (Playback)",
+          "version": "0.1.0"
+        },
+        "authMethods": [],
+        "protocolVersion": 1
+      },
+      "notifications": []
+    },
+    {
+      "method": "new_session",
+      "request": {
+        "cwd": "/tmp",
+        "mcpServers": []
+      },
+      "response": {
+        "sessionId": "rec-unparseable-session"
+      },
+      "notifications": []
+    },
+    {
+      "method": "prompt",
+      "request": {
+        "prompt": [
+          {
+            "text": "validator prompt",
+            "type": "text"
+          }
+        ],
+        "sessionId": "rec-unparseable-session"
+      },
+      "response": {
+        "_meta": {
+          "claude_response": "<think>Let me analyze this carefully…</think>\n\nThe code looks fine to me, no issues detected.",
+          "processed": true,
+          "session_messages": 3,
+          "streaming": false
+        },
+        "stopReason": "end_turn"
+      },
+      "notifications": [
+        {
+          "sessionId": "rec-unparseable-session",
+          "update": {
+            "content": {
+              "text": "<think>Let me analyze this carefully…</think>\n\nThe code looks fine to me, no issues detected.",
+              "type": "text"
+            },
+            "sessionUpdate": "agent_message_chunk"
+          }
+        }
+      ]
+    }
+  ]
+}

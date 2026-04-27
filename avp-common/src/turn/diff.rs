@@ -108,8 +108,17 @@ const STRIP_TOOL_INPUT_FIELDS: &[&str] = &["old_string", "new_string", "replace_
 
 /// Prepare a hook context JSON value for validators.
 ///
-/// For Edit/Write tools with diffs: strips bloated fields (originalFile, etc.)
-/// and embeds the diff text as `_diff_text`. For other tools: passes through as-is.
+/// Whenever the caller supplies non-empty `diffs`, the rendered diff text is
+/// embedded into the input as `_diff_text` so the renderer appends it as a
+/// fenced block after the YAML payload. This is universal — Stop hooks (which
+/// have no `tool_name`), PostToolUse Edit/Write hooks, and any other caller
+/// that prepared diffs upstream all benefit.
+///
+/// In addition, when the input is for an Edit/Write tool (i.e. `tool_name`
+/// is one of [`DIFF_TOOLS`]), the bloated `tool_input` / `tool_result` fields
+/// that duplicate the diff content are stripped. Stripping is conditional on
+/// the edit-tool shape because the field names being stripped are specific
+/// to those tool payloads; embedding the diff itself is not.
 ///
 /// The returned value is still a `serde_json::Value::Object` — the rendering
 /// layer converts it to YAML and appends diff blocks.
@@ -117,24 +126,26 @@ pub fn prepare_validator_context(
     mut input: serde_json::Value,
     diffs: Option<&[FileDiff]>,
 ) -> serde_json::Value {
+    // Caller didn't supply diffs (or supplied an empty slice): nothing to embed.
+    let Some(diffs) = diffs.filter(|d| !d.is_empty()) else {
+        return input;
+    };
+
+    // Edit/Write payloads carry duplicated old/new content alongside the diff;
+    // strip those so the prompt isn't padded with redundant text. Stop-hook
+    // and other inputs don't have those fields and don't need stripping.
     let tool_name = input
         .get("tool_name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
-    let has_diffs = diffs.is_some_and(|d| !d.is_empty());
-    let is_diff_tool = DIFF_TOOLS.contains(&tool_name.as_str());
-
-    if !(is_diff_tool && has_diffs) {
-        return input;
+    if DIFF_TOOLS.contains(&tool_name.as_str()) {
+        strip_object_fields(&mut input, "tool_result", STRIP_TOOL_RESULT_FIELDS);
+        strip_object_fields(&mut input, "tool_input", STRIP_TOOL_INPUT_FIELDS);
     }
 
-    strip_object_fields(&mut input, "tool_result", STRIP_TOOL_RESULT_FIELDS);
-    strip_object_fields(&mut input, "tool_input", STRIP_TOOL_INPUT_FIELDS);
-
-    // Embed diff text
-    let diff_text = format_diffs_fenced(diffs.unwrap());
+    // Embed diff text — universal across all callers that prepared diffs.
+    let diff_text = format_diffs_fenced(diffs);
     if let Some(map) = input.as_object_mut() {
         map.insert(
             DIFF_TEXT_KEY.to_string(),
@@ -459,7 +470,10 @@ mod tests {
         assert!(!output.contains("```diff"), "No diff block without diffs");
     }
 
-    /// Stop hook context with filtered diffs: only matching files appear.
+    /// Stop hook context with filtered diffs: diffs are embedded as `_diff_text`
+    /// even though there is no `tool_name` (Stop is a turn-end event, not a tool
+    /// event). The caller already filtered to .rs files; the renderer appends
+    /// only those.
     #[test]
     fn test_stop_hook_filtered_diffs_renders_only_matching() {
         // Simulate a Stop hook with mixed file type diffs (a.rs, b.py, c.rs)
@@ -478,37 +492,30 @@ mod tests {
             },
         ];
 
-        // Stop hook input (no tool_name, so prepare_validator_context passes through)
+        // Stop hook input (no tool_name) — caller-supplied diffs MUST still be
+        // embedded so the validator sees them.
         let input = serde_json::json!({
             "hook_event_name": "Stop",
             "cwd": "/project",
             "session_id": "test-session"
         });
 
-        // prepare_validator_context with filtered diffs (only .rs files)
         let prepared = prepare_validator_context(input, Some(&rs_diffs));
         let output = render_hook_context(&prepared);
 
-        // Stop hook input has no tool_name in DIFF_TOOLS, so diffs don't get
-        // embedded as _diff_text by prepare_validator_context. Instead, they are
-        // rendered separately via format_diffs_fenced and appended.
-        // For Stop hooks without a diff-tool name, prepare passes through as-is.
         assert!(output.contains("```yaml"));
         assert!(output.contains("hook_event_name: Stop"));
 
-        // Verify format_diffs_fenced works correctly with filtered diffs
-        let diff_output = format_diffs_fenced(&rs_diffs);
+        // Diff content must be present in the rendered output.
         assert!(
-            diff_output.contains("old_a"),
-            "Should contain a.rs diff content"
+            output.contains("```diff"),
+            "Stop hook should render a diff block"
         );
+        assert!(output.contains("old_a"), "a.rs diff content should appear");
+        assert!(output.contains("old_c"), "c.rs diff content should appear");
         assert!(
-            diff_output.contains("old_c"),
-            "Should contain c.rs diff content"
-        );
-        assert!(
-            !diff_output.contains("old_b"),
-            "Should NOT contain b.py diff content"
+            !output.contains("old_b"),
+            "b.py was filtered out by the caller"
         );
     }
 
@@ -527,6 +534,52 @@ mod tests {
         assert!(output.contains("```yaml"));
         assert!(output.contains("hook_event_name: Stop"));
         assert!(!output.contains("```diff"), "No diff block without diffs");
+    }
+
+    /// Stop-hook style input (no `tool_name`) plus non-empty diffs MUST embed
+    /// `_diff_text` containing the diff content. This is a regression test for
+    /// the bug where `prepare_validator_context` short-circuited on Stop hooks
+    /// because `tool_name` wasn't in `DIFF_TOOLS`, dropping the caller-supplied
+    /// diffs on the floor.
+    #[test]
+    fn test_prepare_validator_context_stop_hook_embeds_diff_text() {
+        let diffs = vec![FileDiff {
+            path: PathBuf::from("src/lib.rs"),
+            diff_text: "--- src/lib.rs\n+++ src/lib.rs\n@@ -1 +1 @@\n-old_line\n+new_line\n"
+                .to_string(),
+            is_new_file: false,
+            is_binary: false,
+        }];
+
+        // Stop-hook input has no tool_name field at all.
+        let input = serde_json::json!({
+            "hook_event_name": "Stop",
+            "cwd": "/project",
+            "session_id": "abc-123"
+        });
+
+        let prepared = prepare_validator_context(input, Some(&diffs));
+
+        // `_diff_text` must be present and contain the diff content.
+        let diff_text = prepared
+            .get(DIFF_TEXT_KEY)
+            .and_then(|v| v.as_str())
+            .expect("_diff_text should be embedded for Stop-hook inputs with diffs");
+        assert!(
+            diff_text.contains("-old_line"),
+            "_diff_text should contain removed line, got: {}",
+            diff_text
+        );
+        assert!(
+            diff_text.contains("+new_line"),
+            "_diff_text should contain added line, got: {}",
+            diff_text
+        );
+        assert!(
+            diff_text.contains("```diff"),
+            "_diff_text should be a fenced diff block, got: {}",
+            diff_text
+        );
     }
 
     /// All diffs pass through when no file patterns filter them.

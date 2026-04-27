@@ -242,13 +242,34 @@ impl Agent for ClaudeAgent {
         // Get session for prompt handling
         let updated_session = self.get_updated_session(&session_id)?;
 
+        // Optional per-request generation cap. The ACP `_meta` map is the
+        // documented extensibility channel — callers (e.g. the validator
+        // runner) attach a `"max_tokens"` key here to defend against runaway
+        // generation. The ACP spec lets agents ignore unknown `_meta` keys, so
+        // honoring it is a deliberate opt-in: this agent enforces the cap at
+        // the streaming layer below, narrowing — never widening — the
+        // configured `max_tokens_per_turn`. Hitting the cap surfaces as
+        // `StopReason::MaxTokens`.
+        let requested_max_tokens =
+            crate::agent_prompt_handling::extract_request_max_tokens(request.meta.as_ref());
+
         // Execute prompt (streaming or non-streaming)
         let response = if self.should_stream(&session, &request) {
-            self.handle_streaming_prompt(&session_id, &request, &updated_session)
-                .await?
+            self.handle_streaming_prompt(
+                &session_id,
+                &request,
+                &updated_session,
+                requested_max_tokens,
+            )
+            .await?
         } else {
-            self.handle_non_streaming_prompt(&session_id, &request, &updated_session)
-                .await?
+            self.handle_non_streaming_prompt(
+                &session_id,
+                &request,
+                &updated_session,
+                requested_max_tokens,
+            )
+            .await?
         };
 
         // Reset cancellation for next turn
