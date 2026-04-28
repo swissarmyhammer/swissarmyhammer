@@ -314,17 +314,22 @@ interface DrillRefs {
 /**
  * Build the `nav.drillIn` (Enter) and `nav.drillOut` (Escape) commands.
  *
- * Both read the currently-focused [`SpatialKey`] from the
- * `SpatialFocusProvider`, await the matching Tauri command
- * (`spatial_drill_in` / `spatial_drill_out`), and on a non-null
- * [`Moniker`] result dispatch `setFocus(moniker)` against the entity
- * focus store. On a `null` result:
+ * Both read the currently-focused `(SpatialKey, Moniker)` pair from
+ * the `SpatialFocusProvider`, await the matching Tauri command
+ * (`spatial_drill_in` / `spatial_drill_out`), and dispatch
+ * `setFocus(result)` against the entity focus store on every result.
+ * Under the no-silent-dropout contract the kernel always returns a
+ * [`Moniker`]; the caller compares the result to the focused moniker
+ * to detect the "no descent / no drill happened" case:
  *
- * - `nav.drillIn` is a no-op — there is nothing to descend into
- *   (leaf with no editor, empty zone, or unknown key).
- * - `nav.drillOut` falls through to `app.dismiss` so the existing
- *   Escape chain (close the topmost modal layer) still fires at a
- *   layer root.
+ * - `nav.drillIn` falls through implicitly — `setFocus(focusedMoniker)`
+ *   is idempotent on the entity-focus store, so a leaf without an
+ *   inline-edit affordance is a visible no-op. Leaves with an editor
+ *   handle Enter via their own scope-level command (e.g.
+ *   `inspector.edit`, card-name rename) which shadows this binding.
+ * - `nav.drillOut` falls through to `app.dismiss` when the result
+ *   equals the focused moniker, so the existing Escape chain (close
+ *   the topmost modal layer) still fires at a layer root.
  *
  * Mirrors the React contract documented on `SpatialFocusActions.drillIn`
  * / `drillOut` — purely a registry query, no focus-state mutation; the
@@ -339,15 +344,16 @@ function buildDrillCommands(refs: DrillRefs): CommandDef[] {
       execute: async () => {
         const actions = refs.spatialActionsRef.current;
         const key = actions.focusedKey();
-        if (key === null) return;
-        const moniker = await actions.drillIn(key);
-        if (moniker !== null) {
-          refs.setFocusRef.current(moniker);
-        }
-        // `null` → no-op. A leaf without an inline-edit affordance has
-        // nothing to drill into; leaves with an editor handle Enter via
-        // their own scope-level command (e.g. `inspector.edit`,
-        // card-name rename) which shadows this binding.
+        const focusedMoniker = actions.focusedMoniker();
+        if (key === null || focusedMoniker === null) return;
+        const result = await actions.drillIn(key, focusedMoniker);
+        // The kernel always returns a moniker. When `result === focusedMoniker`
+        // the caller's setFocus call is idempotent (entity-focus store
+        // detects identity-stable monikers and emits no event), which
+        // visually matches the legacy "null → no-op" behavior. When
+        // `result !== focusedMoniker` setFocus moves focus to the new
+        // target.
+        refs.setFocusRef.current(result);
       },
     },
     {
@@ -357,18 +363,22 @@ function buildDrillCommands(refs: DrillRefs): CommandDef[] {
       execute: async () => {
         const actions = refs.spatialActionsRef.current;
         const key = actions.focusedKey();
-        if (key === null) {
+        const focusedMoniker = actions.focusedMoniker();
+        if (key === null || focusedMoniker === null) {
           // No spatial focus → nothing to drill out of; honour the
           // existing Escape chain (close topmost modal layer).
           await refs.dismissRef.current();
           return;
         }
-        const moniker = await actions.drillOut(key);
-        if (moniker !== null) {
-          refs.setFocusRef.current(moniker);
-        } else {
-          // Layer root — fall through to `app.dismiss`.
+        const result = await actions.drillOut(key, focusedMoniker);
+        if (result === focusedMoniker) {
+          // Kernel echoed the focused moniker — layer-root edge or
+          // torn state. Fall through to `app.dismiss` to close the
+          // topmost modal layer; the user-observable behavior is
+          // identical to the legacy `null` fall-through.
           await refs.dismissRef.current();
+        } else {
+          refs.setFocusRef.current(result);
         }
       },
     },

@@ -9,6 +9,19 @@
 //! Identities are opaque [`Moniker`] strings produced by the consumer; the
 //! kernel only sees rectangles, layers, and zones.
 //!
+//! # No-silent-dropout contract
+//!
+//! Nav and drill APIs always return a [`Moniker`]. "No motion possible"
+//! is communicated by returning the focused entry's own moniker — the
+//! React side detects "stay put" by comparing the returned moniker to
+//! the previous focused moniker. Torn state (unknown key, orphan
+//! parent reference) emits `tracing::error!` and echoes the input
+//! moniker so the call site has a valid result. There is no [`Option`]
+//! or [`Result`] on these APIs; silence is impossible. See the
+//! [`navigate`] module docs for the full contract and the
+//! `tests/no_silent_none.rs` integration suite for the regression
+//! guard that pins each path.
+//!
 //! # Modules
 //!
 //! - [`types`] — newtype wrappers ([`WindowLabel`], [`SpatialKey`],

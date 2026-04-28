@@ -106,8 +106,23 @@ fn layer(key: &str, window: &str, parent: Option<&str>) -> FocusLayer {
 /// Run the default `BeamNavStrategy` and return the navigated-to
 /// `Moniker`. Centralized so test cases read top-to-bottom without
 /// repeating the boilerplate.
-fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(reg, &SpatialKey::from_string(from), dir)
+///
+/// Resolves the focused entry's moniker from the registry — under the
+/// no-silent-dropout contract every nav call needs the focused moniker
+/// alongside the focused key. For unknown `from`, falls back to a
+/// synthetic `ui:<from>` moniker so the test can still exercise the
+/// torn-state path; tests that care about the exact echoed moniker
+/// register a real scope first.
+fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Moniker {
+    let key = SpatialKey::from_string(from);
+    let focused_moniker = reg
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(reg.zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == key)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| Moniker::from_string(format!("ui:{from}")));
+    BeamNavStrategy::new().next(reg, &key, &focused_moniker, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,9 +157,13 @@ fn nav_never_crosses_layer_boundary_within_one_window() {
         rect(0.0, 100.0, 50.0, 40.0),
     ));
 
-    // No other inspector leaves to the right → must return None even
-    // though `card` is rect-wise the nearest right match.
-    assert_eq!(nav(&reg, "pill", Direction::Right), None);
+    // No other inspector leaves to the right → must return the
+    // focused moniker (semantic "stay put") even though `card` is
+    // rect-wise the nearest right match in another layer.
+    assert_eq!(
+        nav(&reg, "pill", Direction::Right),
+        Moniker::from_string("ui:pill")
+    );
 }
 
 /// Two windows, each with its own root layer and identical leaf rect
@@ -167,7 +186,10 @@ fn nav_never_crosses_layer_boundary_between_windows() {
         rect(100.0, 0.0, 50.0, 50.0),
     ));
 
-    assert_eq!(nav(&reg, "a1", Direction::Right), None);
+    assert_eq!(
+        nav(&reg, "a1", Direction::Right),
+        Moniker::from_string("ui:a1")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +231,7 @@ fn rule_1_within_zone_down_picks_sibling_leaf() {
 
     assert_eq!(
         nav(&reg, "title", Direction::Down),
-        Some(Moniker::from_string("ui:status"))
+        Moniker::from_string("ui:status")
     );
 }
 
@@ -245,7 +267,7 @@ fn rule_1_within_zone_up_picks_sibling_leaf() {
 
     assert_eq!(
         nav(&reg, "status", Direction::Up),
-        Some(Moniker::from_string("ui:title"))
+        Moniker::from_string("ui:title")
     );
 }
 
@@ -310,7 +332,7 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
     // card).
     assert_eq!(
         nav(&reg, "src", Direction::Down),
-        Some(Moniker::from_string("ui:aligned"))
+        Moniker::from_string("ui:aligned")
     );
 }
 
@@ -377,7 +399,7 @@ fn cross_zone_right_lands_on_next_column_zone() {
 
     assert_eq!(
         nav(&reg, "leaf0", Direction::Right),
-        Some(Moniker::from_string("ui:col1")),
+        Moniker::from_string("ui:col1"),
         "Right from a leaf with no in-zone peer must land on the next-column zone via the \
          unified cascade's iter-1 escalation"
     );
@@ -422,7 +444,7 @@ fn cross_zone_left_lands_on_previous_column_zone() {
 
     assert_eq!(
         nav(&reg, "leaf1", Direction::Left),
-        Some(Moniker::from_string("ui:col0")),
+        Moniker::from_string("ui:col0"),
         "Left from a leaf with no in-zone peer must land on the previous-column zone via the \
          unified cascade's iter-1 escalation"
     );
@@ -543,14 +565,14 @@ fn cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone() {
     // `ui:board`) finds `column:B` as the in-beam right neighbor.
     assert_eq!(
         nav(&reg, "task1A", Direction::Right),
-        Some(Moniker::from_string("column:B")),
+        Moniker::from_string("column:B"),
         "the unified cascade must take the right press from task:1A across into column B's zone"
     );
 
     // Mirror left from `task:1B` lands on `column:A`.
     assert_eq!(
         nav(&reg, "task1B", Direction::Left),
-        Some(Moniker::from_string("column:A")),
+        Moniker::from_string("column:A"),
         "the unified cascade must take the left press from task:1B across into column A's zone"
     );
 }
@@ -603,7 +625,7 @@ fn iter_0_preferred_over_iter_1_when_in_zone_match_exists() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Down),
-        Some(Moniker::from_string("ui:inzone")),
+        Moniker::from_string("ui:inzone"),
         "iter 0 (in-zone peer) must win even when an iter-1 candidate is closer"
     );
 }
@@ -617,12 +639,14 @@ fn iter_0_preferred_over_iter_1_when_in_zone_match_exists() {
 // "stuck" no-ops at any other level.
 // ---------------------------------------------------------------------------
 
-/// The only leaf in a layer has nothing to navigate to → `None`. The
-/// leaf sits at the layer root (`parent_zone == None`); there's no
-/// parent zone to drill out to and no peer to find. This is the only
-/// shape under the unified cascade where `None` is a valid answer.
+/// The only leaf in a layer has nothing to navigate to → returns its
+/// own moniker (semantic "stay put"). The leaf sits at the layer root
+/// (`parent_zone == None`); there's no parent zone to drill out to and
+/// no peer to find. Under the no-silent-dropout contract, this is the
+/// canonical "no motion" outcome — the kernel echoes the focused
+/// moniker, the React side detects "stay put" by equality.
 #[test]
-fn layer_root_lone_leaf_returns_none() {
+fn layer_root_lone_leaf_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
     reg.register_scope(leaf(
@@ -633,10 +657,11 @@ fn layer_root_lone_leaf_returns_none() {
         rect(0.0, 0.0, 50.0, 50.0),
     ));
 
-    assert_eq!(nav(&reg, "lonely", Direction::Down), None);
-    assert_eq!(nav(&reg, "lonely", Direction::Up), None);
-    assert_eq!(nav(&reg, "lonely", Direction::Left), None);
-    assert_eq!(nav(&reg, "lonely", Direction::Right), None);
+    let lonely = Moniker::from_string("ui:lonely");
+    assert_eq!(nav(&reg, "lonely", Direction::Down), lonely);
+    assert_eq!(nav(&reg, "lonely", Direction::Up), lonely);
+    assert_eq!(nav(&reg, "lonely", Direction::Left), lonely);
+    assert_eq!(nav(&reg, "lonely", Direction::Right), lonely);
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +698,7 @@ fn zone_nav_right_picks_sibling_zone() {
 
     assert_eq!(
         nav(&reg, "col0", Direction::Right),
-        Some(Moniker::from_string("ui:col1"))
+        Moniker::from_string("ui:col1")
     );
 }
 
@@ -708,7 +733,13 @@ fn zone_nav_up_with_only_horizontal_siblings_returns_none() {
         rect(10.0, -50.0, 30.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, "col0", Direction::Up), None);
+    // `col0` sits at the layer root (parent_zone = None); no zone
+    // peer is above it, escalation finds no parent, and the cascade
+    // echoes the focused moniker.
+    assert_eq!(
+        nav(&reg, "col0", Direction::Up),
+        Moniker::from_string("ui:col0")
+    );
 }
 
 /// `nav.right` from a zone never returns a leaf, even if a leaf inside
@@ -740,7 +771,7 @@ fn zone_nav_right_does_not_return_leaf_inside_neighbor_zone() {
         rect(110.0, 10.0, 30.0, 30.0),
     ));
 
-    let target = nav(&reg, "col0", Direction::Right).expect("zone nav must reach col1");
+    let target = nav(&reg, "col0", Direction::Right);
     assert_eq!(
         target,
         Moniker::from_string("ui:col1"),
@@ -782,7 +813,7 @@ fn inspector_pill_a_to_pill_b_in_zone() {
 
     assert_eq!(
         nav(&reg, "pill_a", Direction::Right),
-        Some(Moniker::from_string("ui:pill_b"))
+        Moniker::from_string("ui:pill_b")
     );
 }
 
@@ -833,16 +864,18 @@ fn cross_zone_inspector_down_lands_on_next_row_zone() {
 
     assert_eq!(
         nav(&reg, "label_1", Direction::Down),
-        Some(Moniker::from_string("ui:row2")),
+        Moniker::from_string("ui:row2"),
         "Down from the first row's lone leaf must land on the second row's zone via iter-1 \
          escalation under the unified cascade"
     );
 }
 
-/// The last leaf in the layer with `nav.down` returns `None` — there's
-/// no leaf below, and nav never escapes the layer.
+/// The last leaf in the layer with `nav.down` returns its own moniker
+/// — there's no leaf below, nav never escapes the layer, and the
+/// no-silent-dropout contract echoes the focused moniker rather than
+/// dropping focus to None.
 #[test]
-fn inspector_last_leaf_down_returns_none() {
+fn inspector_last_leaf_down_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
     reg.register_scope(leaf(
@@ -860,7 +893,10 @@ fn inspector_last_leaf_down_returns_none() {
         rect(0.0, 50.0, 50.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, "label_2", Direction::Down), None);
+    assert_eq!(
+        nav(&reg, "label_2", Direction::Down),
+        Moniker::from_string("ui:label_2")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -926,7 +962,7 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
     // Within a card: title → status (iter 0, same zone).
     assert_eq!(
         nav(&reg, "col0_card_a_title", Direction::Down),
-        Some(Moniker::from_string("ui:col0_card_a_status")),
+        Moniker::from_string("ui:col0_card_a_status"),
         "Down inside a card should find the in-zone status leaf at iter 0"
     );
 
@@ -934,7 +970,7 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
     // escalate to col0 and find col0_card_b at the parent's level).
     assert_eq!(
         nav(&reg, "col0_card_a_status", Direction::Down),
-        Some(Moniker::from_string("ui:col0_card_b")),
+        Moniker::from_string("ui:col0_card_b"),
         "Down from the bottom leaf of card A must land on card B's zone via iter-1 escalation"
     );
 
@@ -945,7 +981,7 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
     // the card zone to traverse to col1.
     assert_eq!(
         nav(&reg, "col0_card_a_title", Direction::Right),
-        Some(Moniker::from_string("ui:col0_card_a")),
+        Moniker::from_string("ui:col0_card_a"),
         "Right from a title leaf with no horizontal peer at iter 0 or iter 1 must drill out \
          to the enclosing card zone"
     );
@@ -995,7 +1031,7 @@ fn edge_first_for_leaf_scopes_to_parent_zone() {
     // leaf (`title`).
     assert_eq!(
         nav(&reg, "status", Direction::First),
-        Some(Moniker::from_string("ui:title"))
+        Moniker::from_string("ui:title")
     );
 }
 
@@ -1029,7 +1065,7 @@ fn edge_last_for_leaf_scopes_to_parent_zone() {
 
     assert_eq!(
         nav(&reg, "title", Direction::Last),
-        Some(Moniker::from_string("ui:status"))
+        Moniker::from_string("ui:status")
     );
 }
 
@@ -1063,7 +1099,7 @@ fn edge_first_for_zone_scopes_to_sibling_zones() {
 
     assert_eq!(
         nav(&reg, "col2", Direction::First),
-        Some(Moniker::from_string("ui:col0"))
+        Moniker::from_string("ui:col0")
     );
 }
 
@@ -1106,7 +1142,7 @@ fn edge_row_start_picks_leftmost_in_row_sibling() {
 
     assert_eq!(
         nav(&reg, "right", Direction::RowStart),
-        Some(Moniker::from_string("ui:left"))
+        Moniker::from_string("ui:left")
     );
 }
 
@@ -1140,7 +1176,7 @@ fn edge_row_end_picks_rightmost_in_row_sibling() {
 
     assert_eq!(
         nav(&reg, "left", Direction::RowEnd),
-        Some(Moniker::from_string("ui:right"))
+        Moniker::from_string("ui:right")
     );
 }
 
@@ -1182,7 +1218,7 @@ fn edge_first_at_boundary_returns_focused_self() {
     // moniker, and `state.focus()` will no-op the redundant move.
     assert_eq!(
         nav(&reg, "title", Direction::First),
-        Some(Moniker::from_string("ui:title"))
+        Moniker::from_string("ui:title")
     );
 }
 
@@ -1216,7 +1252,7 @@ fn edge_last_at_boundary_returns_focused_self() {
 
     assert_eq!(
         nav(&reg, "status", Direction::Last),
-        Some(Moniker::from_string("ui:status"))
+        Moniker::from_string("ui:status")
     );
 }
 
@@ -1251,7 +1287,7 @@ fn edge_row_start_at_boundary_returns_focused_self() {
 
     assert_eq!(
         nav(&reg, "left", Direction::RowStart),
-        Some(Moniker::from_string("ui:left"))
+        Moniker::from_string("ui:left")
     );
 }
 
@@ -1305,24 +1341,34 @@ fn layer_stress_dialog_focused_sees_only_dialog_entries() {
     // window_card (different layer).
     assert_eq!(
         nav(&reg, "dlg_btn_a", Direction::Right),
-        Some(Moniker::from_string("ui:dlg_btn_b"))
+        Moniker::from_string("ui:dlg_btn_b")
     );
     // From the dialog, `up` finds nothing — the only `up` rect-wise
-    // candidate is `inspector_pill`, but it's a different layer.
-    assert_eq!(nav(&reg, "dlg_btn_a", Direction::Up), None);
+    // candidate is `inspector_pill`, but it's a different layer. The
+    // cascade echoes the focused moniker (semantic "stay put").
+    assert_eq!(
+        nav(&reg, "dlg_btn_a", Direction::Up),
+        Moniker::from_string("ui:dlg_btn_a")
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Unknown-key contracts.
 // ---------------------------------------------------------------------------
 
-/// An unknown starting key returns `None` — no panic, no synthesized
-/// candidate. Mirrors the contract of `SpatialState::navigate` for
-/// stale keys arriving over IPC.
+/// An unknown starting key returns the input focused moniker (the
+/// `nav` helper synthesises `ui:ghost` for unregistered keys) — no
+/// panic, no synthesized candidate, but a `tracing::error!` does fire
+/// (verified separately in `tests/no_silent_none.rs`). Mirrors the
+/// torn-state path of `SpatialState::navigate` for stale keys arriving
+/// over IPC.
 #[test]
-fn unknown_starting_key_returns_none() {
+fn unknown_starting_key_echoes_input_moniker() {
     let reg = SpatialRegistry::new();
-    assert_eq!(nav(&reg, "ghost", Direction::Right), None);
+    assert_eq!(
+        nav(&reg, "ghost", Direction::Right),
+        Moniker::from_string("ui:ghost")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1388,7 +1434,7 @@ fn nav_down_uses_current_rect_not_stale_rect() {
     let pre_update = nav(&reg, "card_a", Direction::Down);
     assert_ne!(
         pre_update,
-        Some(Moniker::from_string("ui:card_b")),
+        Moniker::from_string("ui:card_b"),
         "with stale geometry, beam search must NOT return card B as the down-target"
     );
 
@@ -1403,6 +1449,6 @@ fn nav_down_uses_current_rect_not_stale_rect() {
     // is running on the post-update rect, not the registration rect.
     assert_eq!(
         nav(&reg, "card_a", Direction::Down),
-        Some(Moniker::from_string("ui:card_b"))
+        Moniker::from_string("ui:card_b")
     );
 }

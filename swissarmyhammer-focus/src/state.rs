@@ -619,18 +619,24 @@ impl SpatialState {
     /// "where do we go next?" decision to a pluggable [`NavStrategy`].
     ///
     /// The strategy is consulted with the supplied [`SpatialRegistry`]
-    /// (geometry / hierarchy backing store) and the focused
-    /// [`SpatialKey`]. If it returns a [`Moniker`], this method
-    /// resolves the matching registered scope (linear scan over the
-    /// registry's scopes) and emits a [`FocusChangedEvent`] in the same
-    /// shape [`Self::focus`] would.
+    /// (geometry / hierarchy backing store), the focused
+    /// [`SpatialKey`], and the focused entry's [`Moniker`] (read from
+    /// the registry by `from`). The strategy always returns a
+    /// [`Moniker`] (never `None` — see the no-silent-dropout contract
+    /// on [`crate::navigate`]). When that moniker resolves to a scope
+    /// distinct from `from`, this method emits a [`FocusChangedEvent`]
+    /// in the same shape [`Self::focus`] would. When it resolves back
+    /// to `from` (semantic "stay put") or fails to resolve at all, this
+    /// method returns `None` so the adapter does not emit a redundant
+    /// focus-changed event.
     ///
     /// Returns `None` when:
     /// - `from` is not registered in `registry`, or
-    /// - the strategy declines (returns `None`), or
     /// - the strategy returns a moniker for which no scope is
     ///   registered, or
-    /// - the resolved key is already focused in its window.
+    /// - the resolved key is already focused in its window (the
+    ///   common "stay put" outcome under the no-silent-dropout
+    ///   contract — the strategy echoed `focused_moniker`).
     ///
     /// This is the seam used by [`crate::navigate::BeamNavStrategy`] —
     /// adapters that want the default Android-beam-search behavior pass
@@ -645,14 +651,16 @@ impl SpatialState {
         from: SpatialKey,
         direction: Direction,
     ) -> Option<FocusChangedEvent> {
-        // Validate the starting point belongs to the registry. A strategy
-        // that returns Some for an unknown `from` would otherwise stamp
+        // Validate the starting point belongs to the registry. A
+        // strategy invocation on an unknown key would otherwise stamp
         // a focus event into a window that has no record of the move.
-        if !registry.is_registered(&from) {
-            return None;
-        }
+        // The strategy itself also handles unknown keys (echoes the
+        // input moniker with a tracing::error!), but at the
+        // `navigate_with` boundary we read the focused moniker from
+        // the registry, which requires a real entry.
+        let focused_moniker = registry.entry(&from)?.moniker().clone();
 
-        let target_moniker = strategy.next(registry, &from, direction)?;
+        let target_moniker = strategy.next(registry, &from, &focused_moniker, direction);
         // The strategy speaks in monikers; we focus by SpatialKey. The
         // registry is keyed by SpatialKey, so we walk values to find a
         // scope whose moniker matches. The scope set is small (one per
@@ -662,6 +670,10 @@ impl SpatialState {
             .entries_iter()
             .find(|s| s.moniker() == &target_moniker)
             .map(|s| s.key().clone())?;
+        // `focus` short-circuits when the resolved key already holds
+        // focus — that is the common "stay put" outcome under the new
+        // contract (the strategy returned `focused_moniker`). No
+        // additional check is required here.
         self.focus(registry, target_key)
     }
 

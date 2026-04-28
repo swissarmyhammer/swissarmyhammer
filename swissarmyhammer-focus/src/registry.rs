@@ -308,38 +308,64 @@ impl SpatialRegistry {
     ///   the first child by rect top-left ordering (topmost wins; ties
     ///   broken by leftmost). Matches `Direction::First` ordering so the
     ///   keyboard model stays consistent.
-    /// - **Zone with no children** — returns `None`. Frontend stays put.
-    /// - **[`FocusScope`] leaf** — returns `None`. Leaves do not have
-    ///   children to drill into; the React side decides separately
-    ///   whether the leaf has an inline-edit affordance to invoke.
-    /// - **Unknown `key`** — returns `None`. The frontend falls through
-    ///   to the next command in the chain.
+    /// - **Zone with no children** — returns `focused_moniker`. The
+    ///   caller compares the result against the focused moniker; equal
+    ///   means "no descent happened, fall through to edit / no-op".
+    /// - **[`FocusScope`] leaf** — returns `focused_moniker`. Leaves do
+    ///   not have children to drill into; the React side decides
+    ///   separately whether the leaf has an inline-edit affordance.
+    /// - **Unknown `key`** — emits `tracing::error!` and returns
+    ///   `focused_moniker`. The error is observable in logs; the React
+    ///   side stays put visually.
     ///
     /// Pure registry query — does not mutate state. The Tauri adapter
     /// translates the returned moniker into a `SpatialState::focus` call
-    /// (or back into `setFocus` on the React side).
-    pub fn drill_in(&self, key: SpatialKey) -> Option<Moniker> {
-        let zone = self.zone(&key)?;
+    /// (or back into `setFocus` on the React side). See the
+    /// [no-silent-dropout contract] on the `navigate` module for the
+    /// reasoning behind echoing `focused_moniker` rather than returning
+    /// `Option<Moniker>`.
+    ///
+    /// [no-silent-dropout contract]: crate::navigate
+    pub fn drill_in(&self, key: SpatialKey, focused_moniker: &Moniker) -> Moniker {
+        let Some(entry) = self.scopes.get(&key) else {
+            // Torn state: caller passed a key with no registry entry.
+            // Trace and echo the input moniker.
+            tracing::error!(
+                op = "drill_in",
+                focused_key = %key,
+                focused_moniker = %focused_moniker,
+                "unknown key passed to SpatialRegistry::drill_in"
+            );
+            return focused_moniker.clone();
+        };
+
+        let Some(zone) = entry.as_zone() else {
+            // Leaf focused — leaves have no children to descend into.
+            // Semantic "stay put"; React falls through to inline edit.
+            return focused_moniker.clone();
+        };
 
         // Honor the zone's remembered position when it still resolves to
         // a registered scope. A `last_focused` whose target was since
         // unregistered is treated the same as no memory at all.
         if let Some(remembered) = &zone.last_focused {
             if let Some(remembered_entry) = self.scopes.get(remembered) {
-                return Some(remembered_entry.moniker().clone());
+                return remembered_entry.moniker().clone();
             }
         }
 
         // Cold-start fallback: first child by rect top-left. Tie-break on
         // `left()` so two rows at the same `top` produce a deterministic
         // winner. Borrows from the registry; only the chosen moniker is
-        // cloned out.
+        // cloned out. When the zone has no children at all, echo the
+        // focused moniker so the caller's no-descent fall-through fires.
         self.child_entries_of_zone(&zone.key)
             .min_by(|a, b| {
                 pixels_cmp(a.rect().top(), b.rect().top())
                     .then(pixels_cmp(a.rect().left(), b.rect().left()))
             })
             .map(|s| s.moniker().clone())
+            .unwrap_or_else(|| focused_moniker.clone())
     }
 
     /// Pick the [`Moniker`] to focus when the user drills *out of* the
@@ -350,22 +376,54 @@ impl SpatialRegistry {
     /// containers — the result is always the enclosing zone, so a
     /// repeated drill-out walks the zone chain toward the layer root.
     ///
-    /// Returns `None` when:
-    /// - `key` is unknown — the frontend falls through to the next
-    ///   command in the chain (typically `app.dismiss`).
+    /// Returns `focused_moniker` when:
     /// - the scope at `key` has no `parent_zone` (sits directly under
-    ///   the layer root) — same fall-through behavior.
-    /// - the `parent_zone` reference points at a scope that is no longer
-    ///   registered (torn registry state) — degraded gracefully rather
-    ///   than panicking.
+    ///   the layer root) — semantic "stay put"; the React side compares
+    ///   the result against the focused moniker, equal means "fall
+    ///   through to `app.dismiss` (close topmost modal layer)". No
+    ///   tracing — this is a well-formed edge.
+    /// - `key` is unknown — torn registry state; emits
+    ///   `tracing::error!` and returns the input moniker.
+    /// - the `parent_zone` reference points at a scope that is no
+    ///   longer registered — torn state; emits `tracing::error!` and
+    ///   returns the input moniker.
     ///
-    /// Pure registry query — does not mutate state.
-    pub fn drill_out(&self, key: SpatialKey) -> Option<Moniker> {
-        let entry = self.scopes.get(&key)?;
-        let parent_zone_key = entry.parent_zone()?;
-        self.scopes
-            .get(parent_zone_key)
-            .map(|s| s.moniker().clone())
+    /// Pure registry query — does not mutate state. See the
+    /// [no-silent-dropout contract] on the `navigate` module for the
+    /// reasoning behind echoing `focused_moniker` rather than returning
+    /// `Option<Moniker>`.
+    ///
+    /// [no-silent-dropout contract]: crate::navigate
+    pub fn drill_out(&self, key: SpatialKey, focused_moniker: &Moniker) -> Moniker {
+        let Some(entry) = self.scopes.get(&key) else {
+            // Torn state: caller passed a key with no registry entry.
+            tracing::error!(
+                op = "drill_out",
+                focused_key = %key,
+                focused_moniker = %focused_moniker,
+                "unknown key passed to SpatialRegistry::drill_out"
+            );
+            return focused_moniker.clone();
+        };
+        let Some(parent_zone_key) = entry.parent_zone() else {
+            // Layer-root edge — no enclosing zone. Well-formed; the
+            // React adapter dispatches `app.dismiss` on the
+            // moniker-equality fall-through.
+            return focused_moniker.clone();
+        };
+        let Some(parent_entry) = self.scopes.get(parent_zone_key) else {
+            // `parent_zone` names a key, but nothing is registered
+            // there. Torn state.
+            tracing::error!(
+                op = "drill_out",
+                focused_key = %key,
+                focused_moniker = %focused_moniker,
+                parent_zone_key = %parent_zone_key,
+                "parent_zone references unregistered scope"
+            );
+            return focused_moniker.clone();
+        };
+        parent_entry.moniker().clone()
     }
 
     // ---------------------------------------------------------------------

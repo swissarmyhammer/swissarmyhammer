@@ -16,16 +16,23 @@ use swissarmyhammer_focus::{
 
 /// `NavStrategy` is object-safe: `Box<dyn NavStrategy>` compiles and
 /// dispatches its only method.
+///
+/// On an unknown focused key the kernel emits `tracing::error!` (torn
+/// state) and echoes the input moniker. Object-safety only cares about
+/// successful dispatch — the smoke test asserts the echoed moniker
+/// matches the input as a sanity check.
 #[test]
 fn nav_strategy_is_object_safe() {
     let strategy: Box<dyn NavStrategy> = Box::new(BeamNavStrategy::new());
     let registry = SpatialRegistry::new();
+    let focused_moniker = Moniker::from_string("ui:ghost");
     let result = strategy.next(
         &registry,
         &SpatialKey::from_string("ghost"),
+        &focused_moniker,
         Direction::Right,
     );
-    assert!(result.is_none());
+    assert_eq!(result, focused_moniker);
 }
 
 /// `FocusEventSink` is object-safe in both ready-made impls.

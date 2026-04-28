@@ -76,8 +76,20 @@ use fixtures::RealisticApp;
 /// registry from the named [`SpatialKey`] in the named [`Direction`].
 /// Centralised so each test reads top-to-bottom without repeating the
 /// boilerplate.
-fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(app.registry(), from, dir)
+///
+/// Resolves the focused entry's moniker from the fixture registry —
+/// under the no-silent-dropout contract every nav call needs the
+/// focused moniker alongside the focused key.
+fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Moniker {
+    let focused_moniker = app
+        .registry()
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(app.registry().zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == *from)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| panic!("nav called with unregistered key {from:?}"));
+    BeamNavStrategy::new().next(app.registry(), from, &focused_moniker, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +106,7 @@ fn down_from_t1a_lands_on_t2a() {
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        Some(Moniker::from_string("task:T2A")),
+        Moniker::from_string("task:T2A"),
         "down from task:T1A must land on task:T2A (iter 0, in-zone peer)"
     );
 }
@@ -107,7 +119,7 @@ fn down_from_t2a_lands_on_t3a() {
     let from = app.card_key(2, 0);
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        Some(Moniker::from_string("task:T3A")),
+        Moniker::from_string("task:T3A"),
         "down from task:T2A must land on task:T3A (iter 0, in-zone peer)"
     );
 }
@@ -129,7 +141,7 @@ fn down_from_t3a_drills_out_to_column_zone() {
     let from = app.card_key(3, 0);
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "down from task:T3A (bottom card) must drill out to column:TODO under the unified cascade"
     );
 }
@@ -147,7 +159,7 @@ fn up_from_t2a_lands_on_t1a() {
     let from = app.card_key(2, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("task:T1A")),
+        Moniker::from_string("task:T1A"),
         "up from task:T2A must land on task:T1A (iter 0, in-zone peer)"
     );
 }
@@ -169,7 +181,7 @@ fn up_from_t1a_lands_on_column_header() {
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("column:TODO.name")),
+        Moniker::from_string("column:TODO.name"),
         "up from task:T1A (top card) must land on the column-name header leaf"
     );
 }
@@ -195,7 +207,7 @@ fn right_from_t1a_lands_on_column_doing_zone() {
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("column:DOING")),
+        Moniker::from_string("column:DOING"),
         "right from task:T1A must land on column:DOING (peer at the parent's level under the \
          unified cascade)"
     );
@@ -215,7 +227,7 @@ fn right_from_t1c_drills_out_to_column_done_zone() {
     let from = app.card_key(1, 2);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("column:DONE")),
+        Moniker::from_string("column:DONE"),
         "right from task:T1C (rightmost column) must drill out to column:DONE under the unified \
          cascade"
     );
@@ -238,7 +250,7 @@ fn left_from_t1b_lands_on_column_todo_zone() {
     let from = app.card_key(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "left from task:T1B must land on column:TODO (peer at the parent's level under the \
          unified cascade)"
     );
@@ -260,7 +272,7 @@ fn left_from_t1a_drills_out_to_column_todo_zone() {
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "left from task:T1A (leftmost column) must drill out to column:TODO under the unified \
          cascade — the kernel never returns None when a parent zone exists in the same layer"
     );

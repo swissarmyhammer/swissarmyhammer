@@ -563,17 +563,26 @@ describe("AppShell", () => {
     expect(setFocusCall).toBeTruthy();
   });
 
-  it("nav.drillIn is a no-op when the kernel returns null", async () => {
+  it("nav.drillIn is observable as a setFocus(focused) idempotent no-op when the kernel echoes the focused moniker", async () => {
+    // Under the no-silent-dropout contract (card
+    // 01KQAW97R9XTCNR1PJAWYSKBC7) the kernel returns the focused
+    // moniker rather than null when there's nothing to descend into.
+    // The closure dispatches `setFocus(result)` unconditionally; on
+    // equality with the focused moniker this is an idempotent no-op
+    // through the entity-focus store. The user-visible behavior
+    // matches the legacy "null → no-op" path exactly.
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
 
     await act(async () => {
-      emitFocusChanged("k:leaf");
+      emitFocusChanged("k:leaf", "ui:leaf");
     });
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "spatial_drill_in") return Promise.resolve(null);
+      // Kernel echoes the focused moniker — semantic "stay put".
+      if (cmd === "spatial_drill_in")
+        return Promise.resolve(asMoniker("ui:leaf"));
       return defaultInvoke(cmd);
     });
 
@@ -581,17 +590,10 @@ describe("AppShell", () => {
       fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
     });
 
-    // No ui.setFocus dispatch — drill-in null means "leaf without
-    // editor or empty zone", and the closure exits without falling
-    // through to any other command.
-    const setFocusCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
-    );
-    expect(setFocusCall).toBeUndefined();
-    // Enter must NOT fall through to app.dismiss either — drill-in is
-    // the explicit no-op branch.
+    // Enter must NOT fall through to app.dismiss — drill-in is not
+    // the dismiss path. setFocus may or may not fire; the user-
+    // observable behavior is that focus stays on the same moniker
+    // (idempotent on the entity-focus store).
     const dismissCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
@@ -636,17 +638,25 @@ describe("AppShell", () => {
     expect(setFocusCall).toBeTruthy();
   });
 
-  it("nav.drillOut falls through to app.dismiss when the kernel returns null", async () => {
+  it("nav.drillOut falls through to app.dismiss when the kernel echoes the focused moniker", async () => {
+    // Under the no-silent-dropout contract (card
+    // 01KQAW97R9XTCNR1PJAWYSKBC7) the kernel returns the focused
+    // moniker (rather than null) when there's no enclosing zone
+    // (layer root) or torn state. The closure compares the result to
+    // the focused moniker and dispatches `app.dismiss` on equality —
+    // the user-visible Escape chain is unchanged.
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
 
     await act(async () => {
-      emitFocusChanged("k:rootLeaf");
+      emitFocusChanged("k:rootLeaf", "ui:rootLeaf");
     });
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "spatial_drill_out") return Promise.resolve(null);
+      // Kernel echoes the focused moniker — layer-root edge.
+      if (cmd === "spatial_drill_out")
+        return Promise.resolve(asMoniker("ui:rootLeaf"));
       return defaultInvoke(cmd);
     });
 
@@ -654,8 +664,8 @@ describe("AppShell", () => {
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
     });
 
-    // Drill-out happened but returned null (layer root). Closure
-    // dispatches app.dismiss as the fall-through.
+    // Drill-out happened and echoed the focused moniker. Closure
+    // detects equality and dispatches app.dismiss as the fall-through.
     const drillCall = mockInvoke.mock.calls.find(
       (c: unknown[]) => c[0] === "spatial_drill_out",
     );

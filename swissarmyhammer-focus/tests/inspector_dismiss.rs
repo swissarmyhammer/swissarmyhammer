@@ -4,9 +4,11 @@
 //! These tests pin the kernel-level contract that the React-side dismiss
 //! chain (`nav.drillOut` → `app.dismiss` → `DismissCmd::execute` →
 //! `inspector_close`) depends on: [`SpatialRegistry::drill_out`] returns
-//! `None` exactly when the focused scope has no `parent_zone` to walk to.
-//! At a layer-root scope the React adapter falls through to `app.dismiss`,
-//! which in turn pops the topmost inspector panel.
+//! `focused_moniker` (echoes the input) exactly when the focused scope
+//! has no `parent_zone` to walk to. The React adapter detects the
+//! moniker-equality and falls through to `app.dismiss`, which in turn
+//! pops the topmost inspector panel. See the no-silent-dropout contract
+//! on [`swissarmyhammer_focus::navigate`] for the reasoning.
 //!
 //! Built against the realistic-app fixture in [`fixtures::RealisticApp`],
 //! which constructs a [`SpatialRegistry`] mirroring the production tree:
@@ -29,9 +31,10 @@
 //!
 //! # Test cases
 //!
-//! - `drill_out_panel_zone_returns_none` — the panel zone IS the
-//!   layer-root scope of the inspector layer. Drilling out of it must
-//!   return `None` so the React adapter dispatches `app.dismiss`.
+//! - `drill_out_panel_zone_echoes_focused_moniker` — the panel zone IS
+//!   the layer-root scope of the inspector layer. Drilling out of it
+//!   must return the panel's own moniker so the React adapter detects
+//!   equality and dispatches `app.dismiss`.
 //! - `drill_out_field_inside_panel_returns_panel_moniker` — focus on a
 //!   field row inside the panel walks up to the panel zone first, not
 //!   straight to dismiss. The dismiss step happens on the *next* Escape.
@@ -55,23 +58,26 @@ use fixtures::RealisticApp;
 // ---------------------------------------------------------------------------
 
 /// The panel zone sits directly under the inspector layer with no parent
-/// zone — drill-out must return `None`.
+/// zone — drill-out must echo the focused moniker.
 ///
 /// This is the kernel half of the "Escape closes the inspector" chain.
 /// The React adapter (`nav.drillOut` in `app-shell.tsx`) interprets
-/// `None` as "fall through to `app.dismiss`", which in turn pops the
-/// inspector stack via `DismissCmd::execute`.
+/// the moniker-equality (result == focused_moniker) as "fall through
+/// to `app.dismiss`", which in turn pops the inspector stack via
+/// `DismissCmd::execute`.
 #[test]
-fn drill_out_panel_zone_returns_none() {
+fn drill_out_panel_zone_echoes_focused_moniker() {
     let app = RealisticApp::new();
     let panel_key = SpatialKey::from_string("k_panel_t1a");
+    let panel_moniker = Moniker::from_string("panel:task:T1A");
 
-    let target = app.registry().drill_out(panel_key);
+    let target = app.registry().drill_out(panel_key, &panel_moniker);
 
     assert_eq!(
-        target, None,
+        target, panel_moniker,
         "panel zone is a layer-root scope (parent_zone = None); drill_out \
-         must return None so the React adapter falls through to app.dismiss",
+         must echo the focused moniker so the React adapter detects equality \
+         and falls through to app.dismiss",
     );
 }
 
@@ -90,12 +96,13 @@ fn drill_out_panel_zone_returns_none() {
 fn drill_out_field_inside_panel_returns_panel_moniker() {
     let app = RealisticApp::new();
     let field_key = SpatialKey::from_string("k_field_t1a_title");
+    let field_moniker = Moniker::from_string("field:task:T1A.title");
 
-    let target = app.registry().drill_out(field_key);
+    let target = app.registry().drill_out(field_key, &field_moniker);
 
     assert_eq!(
         target,
-        Some(Moniker::from_string("panel:task:T1A")),
+        Moniker::from_string("panel:task:T1A"),
         "drill-out from a field row must walk to the panel zone first; \
          the dismiss fall-through happens on the next Escape from the panel",
     );
@@ -169,14 +176,16 @@ fn drill_out_panel_with_no_inspector_layer_does_not_collapse_to_window() {
     });
 
     // Drill-out from the board zone — the topmost board-side scope —
-    // must return `None`. The board zone has `parent_zone = None`,
-    // matching the panel-zone shape; the kernel must not synthesise a
-    // path back into a non-existent layer.
-    let target = reg.drill_out(SpatialKey::from_string("k_board"));
+    // must echo the focused moniker. The board zone has
+    // `parent_zone = None`, matching the panel-zone shape; the kernel
+    // must not synthesise a path back into a non-existent layer.
+    let board_moniker = Moniker::from_string("ui:board");
+    let target = reg.drill_out(SpatialKey::from_string("k_board"), &board_moniker);
     assert_eq!(
-        target, None,
-        "board zone has no parent_zone; drill_out must return None even \
-         when no inspector layer exists, so the React adapter dispatches \
-         app.dismiss (which is a no-op when nothing is open)",
+        target, board_moniker,
+        "board zone has no parent_zone; drill_out must echo the focused \
+         moniker even when no inspector layer exists, so the React adapter \
+         detects equality and dispatches app.dismiss (which is a no-op when \
+         nothing is open)",
     );
 }

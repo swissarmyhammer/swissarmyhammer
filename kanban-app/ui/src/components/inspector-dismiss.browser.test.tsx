@@ -174,11 +174,29 @@ const mockInvoke = vi.fn(
 
     if (cmd === "spatial_drill_out") {
       const key = (args?.key as string) ?? "";
-      // Default: unknown key returns null (matches kernel contract).
-      return drillOutResponses.has(key) ? drillOutResponses.get(key)! : null;
+      const focusedMoniker = (args?.focusedMoniker as string) ?? "";
+      // Under the no-silent-dropout contract the kernel always returns
+      // a moniker. Test entries with `null` mean "no zone-level drill
+      // happened (layer root or torn state)" — echo the focused
+      // moniker so the React closure detects equality and dispatches
+      // app.dismiss. Test entries with a string mean "drill walked to
+      // a parent zone" — return that string verbatim. Unknown keys
+      // also echo the focused moniker (the kernel does this for torn
+      // state, accompanied by tracing::error!).
+      if (drillOutResponses.has(key)) {
+        const v = drillOutResponses.get(key);
+        return v === null ? focusedMoniker : v;
+      }
+      return focusedMoniker;
     }
 
-    if (cmd === "spatial_drill_in") return null;
+    if (cmd === "spatial_drill_in") {
+      // Symmetric to drill_out: echo the focused moniker so the React
+      // closure's setFocus(result) is an idempotent no-op (the
+      // legacy `null → no-op` semantic carried into the new contract).
+      const focusedMoniker = (args?.focusedMoniker as string) ?? "";
+      return focusedMoniker;
+    }
 
     if (cmd === "spatial_navigate") return null;
 
@@ -310,7 +328,8 @@ vi.mock("@/components/rust-engine-container", () => ({
   useRefreshEntities: () => () => Promise.resolve(),
   useSetEntitiesByType: () => () => {},
   useEngineSetActiveBoardPath: () => () => {},
-  RustEngineContainer: ({ children }: { children: React.ReactNode }) => children,
+  RustEngineContainer: ({ children }: { children: React.ReactNode }) =>
+    children,
 }));
 
 vi.mock("@/components/inspector-focus-bridge", () => ({
@@ -431,7 +450,7 @@ async function flushSetup() {
  * latest focused [`SpatialKey`]. The chain reads `focusedKey()` from
  * the provider when Escape is pressed.
  */
-function emitFocusChanged(key: string | null) {
+function emitFocusChanged(key: string | null, moniker: string | null = key) {
   const cb = listenCallbacks["focus-changed"];
   if (!cb) throw new Error("focus-changed listener not captured");
   cb({
@@ -439,7 +458,11 @@ function emitFocusChanged(key: string | null) {
       window_label: "main",
       prev_key: null,
       next_key: key,
-      next_moniker: null,
+      // Default the moniker to the key so tests that don't care about
+      // the moniker still satisfy the no-silent-dropout contract — the
+      // app-shell drill closures need a focused moniker to thread into
+      // the kernel call.
+      next_moniker: moniker,
     },
   });
 }

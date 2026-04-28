@@ -53,8 +53,22 @@ use fixtures::{RealisticApp, INSPECTOR_LAYER_KEY, WINDOW_LAYER_KEY};
 /// registry from the named [`SpatialKey`] in the named [`Direction`].
 /// Centralised so each test reads top-to-bottom without repeating the
 /// boilerplate.
-fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(app.registry(), from, dir)
+///
+/// Resolves the focused entry's moniker from the fixture registry —
+/// under the no-silent-dropout contract every nav call needs the
+/// focused moniker alongside the focused key. Panics on unknown keys
+/// because every caller in this file already passes a registered key
+/// (the trajectory tests work against fixture-registered scopes).
+fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Moniker {
+    let focused_moniker = app
+        .registry()
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(app.registry().zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == *from)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| panic!("nav called with unregistered key {from:?}"));
+    BeamNavStrategy::new().next(app.registry(), from, &focused_moniker, dir)
 }
 
 /// Resolve a [`Moniker`] back to its [`SpatialKey`] via the fixture's
@@ -111,7 +125,7 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("column:TODO.name")),
+        Moniker::from_string("column:TODO.name"),
         "Up from task:T1A must land on column:TODO.name (in-zone peer above)"
     );
 
@@ -120,7 +134,7 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
     let from = key_for(&app, "column:TODO.name");
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "Up from column:TODO.name must land on column:TODO (drill out, no peer at parent's level)"
     );
 
@@ -129,7 +143,7 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
     let from = key_for(&app, "column:TODO");
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("ui:perspective-bar")),
+        Moniker::from_string("ui:perspective-bar"),
         "Up from column:TODO must land on ui:perspective-bar (peer at ui:board's level)"
     );
 
@@ -137,16 +151,18 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
     let from = key_for(&app, "ui:perspective-bar");
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        Some(Moniker::from_string("ui:navbar")),
+        Moniker::from_string("ui:navbar"),
         "Up from ui:perspective-bar must land on ui:navbar (peer at layer root)"
     );
 
-    // Step 5: ui:navbar → None (no peer, no parent zone).
+    // Step 5: ui:navbar → focused moniker (no peer, no parent zone).
+    // Under the no-silent-dropout contract the cascade echoes the
+    // focused moniker rather than returning None.
     let from = key_for(&app, "ui:navbar");
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        None,
-        "Up from ui:navbar must return None (at layer root with no Up peer)"
+        Moniker::from_string("ui:navbar"),
+        "Up from ui:navbar must echo the focused moniker (at layer root with no Up peer)"
     );
 }
 
@@ -177,7 +193,7 @@ fn unified_trajectory_b_right_from_card_in_column_a_returns_column_doing_zone() 
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("column:DOING")),
+        Moniker::from_string("column:DOING"),
         "Right from task:T1A must land on column:DOING (peer at parent's level)"
     );
 
@@ -185,7 +201,7 @@ fn unified_trajectory_b_right_from_card_in_column_a_returns_column_doing_zone() 
     let from = app.card_key(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "Left from task:T1B must land on column:TODO (mirror of trajectory B)"
     );
 }
@@ -221,7 +237,7 @@ fn unified_trajectory_c_left_from_leftmost_card_drills_out_to_column_zone() {
     let from = app.card_key(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("column:TODO")),
+        Moniker::from_string("column:TODO"),
         "Left from task:T1A in the leftmost column must drill out to column:TODO \
          (no peer at any level; the cascade returns the parent zone rather than None)"
     );
@@ -271,7 +287,7 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     let from = key_for(&app, "field:task:T1A.title");
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        Some(Moniker::from_string("field:task:T1A.status")),
+        Moniker::from_string("field:task:T1A.status"),
         "Down from field:task:T1A.title must land on field:task:T1A.status (peer below)"
     );
 
@@ -279,7 +295,7 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     let from = key_for(&app, "field:task:T1A.status");
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        Some(Moniker::from_string("field:task:T1A.assignees")),
+        Moniker::from_string("field:task:T1A.assignees"),
         "Down from field:task:T1A.status must land on field:task:T1A.assignees (peer below)"
     );
 
@@ -287,10 +303,10 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     // siblings within the inspector layer, so the cascade returns the
     // parent zone itself).
     let from = key_for(&app, "field:task:T1A.assignees");
-    let result = nav(&app, &from, Direction::Down);
+    let result_moniker = nav(&app, &from, Direction::Down);
     assert_eq!(
-        result,
-        Some(Moniker::from_string("panel:task:T1A")),
+        result_moniker,
+        Moniker::from_string("panel:task:T1A"),
         "Down from field:task:T1A.assignees must drill out to panel:task:T1A \
          (no peer at any inspector-layer level; cascade returns the parent zone)"
     );
@@ -299,7 +315,6 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     // from the window layer — the inspector is captured-focus. Iterate
     // every window-layer registration and confirm the navigator's
     // answer doesn't appear in that set.
-    let result_moniker = result.expect("step 3 returned Some(panel:task:T1A) above");
     let window_layer_key = swissarmyhammer_focus::LayerKey::from_string(WINDOW_LAYER_KEY);
     let window_monikers: Vec<&Moniker> = app
         .registry()
@@ -319,15 +334,18 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
         );
     }
 
-    // Step 4: panel:task:T1A → None (the panel sits at the inspector
-    // layer root with no siblings; escalation has nowhere to go without
-    // crossing the layer boundary, which the cascade refuses to do).
+    // Step 4: panel:task:T1A → focused moniker (the panel sits at the
+    // inspector layer root with no siblings; escalation has nowhere to
+    // go without crossing the layer boundary, which the cascade
+    // refuses to do). Under the no-silent-dropout contract this echoes
+    // the focused moniker rather than returning None.
     let from = key_for(&app, "panel:task:T1A");
     let result = nav(&app, &from, Direction::Down);
     assert_eq!(
-        result, None,
-        "Down from panel:task:T1A (alone at the inspector layer root) must return None — \
-         the cascade refuses to cross the layer boundary into the window layer"
+        result,
+        Moniker::from_string("panel:task:T1A"),
+        "Down from panel:task:T1A (alone at the inspector layer root) must echo the focused \
+         moniker — the cascade refuses to cross the layer boundary into the window layer"
     );
 
     // Confirm the inspector layer key resolves the panel's expected

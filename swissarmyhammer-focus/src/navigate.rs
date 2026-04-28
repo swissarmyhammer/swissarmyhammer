@@ -3,10 +3,36 @@
 //!
 //! [`NavStrategy`] abstracts the algorithm that picks the next focus
 //! target given the current registry state, the currently focused
-//! [`SpatialKey`], and the requested [`Direction`]. Consumers that
-//! want the default behavior use [`BeamNavStrategy`]; tests and
-//! specialised layouts can swap in a custom impl without touching
-//! [`SpatialState`].
+//! [`SpatialKey`] paired with its [`Moniker`], and the requested
+//! [`Direction`]. Consumers that want the default behavior use
+//! [`BeamNavStrategy`]; tests and specialised layouts can swap in a
+//! custom impl without touching [`SpatialState`].
+//!
+//! # No-silent-dropout contract
+//!
+//! Nav and drill APIs always return a [`Moniker`]. "No motion possible"
+//! is communicated by returning the focused entry's own moniker — the
+//! React side detects "stay put" by comparing the returned moniker to
+//! the previous focused moniker. Torn state (unknown key, orphan parent
+//! reference) emits `tracing::error!` and echoes the input moniker so
+//! the call site has a valid result. There is no `Option` or `Result`
+//! on these APIs; silence is impossible.
+//!
+//! Two principles distinguish the two non-motion paths:
+//!
+//! - **No motion → return focused moniker (no trace).** A semantic
+//!   "stay put" — wall override, layer-root edge, leaf with no
+//!   children, drill-out at root. The kernel returns the focused
+//!   entry's own moniker. Observable: focus stays where it was, no
+//!   `null` blip on the React side, no log noise.
+//! - **Torn state → trace error AND echo input.** A genuine error —
+//!   unknown [`SpatialKey`], orphan parent reference, registry
+//!   inconsistency. The kernel emits `tracing::error!` with the
+//!   operation, the relevant key(s), and the moniker being echoed
+//!   back, then returns the input moniker so the call site has a
+//!   valid value. User-observable behavior is identical to the "no
+//!   motion" case (focus stays put), but ops / devs can chase the
+//!   error in logs.
 //!
 //! The trait returns a [`Moniker`] rather than a [`SpatialKey`] so
 //! consumers that key off entity identity (the same reason
@@ -104,10 +130,12 @@ use crate::types::{pixels_cmp, Direction, LayerKey, Moniker, Pixels, Rect, Spati
 
 /// Pluggable navigation algorithm.
 ///
-/// Given the current registry state, the focused [`SpatialKey`], and a
-/// [`Direction`], return the [`Moniker`] of the next focus target —
-/// or `None` when no candidate exists in that direction (visual edge
-/// of the layout, or the strategy declines to navigate).
+/// Given the current registry state, the focused [`SpatialKey`] paired
+/// with its [`Moniker`], and a [`Direction`], return the [`Moniker`] of
+/// the next focus target. When motion is not possible (visual edge of
+/// the layout, override wall, layer root, or torn-state errors), the
+/// strategy returns `focused_moniker` itself — never `None`. See the
+/// module docs for the no-silent-dropout contract this enables.
 ///
 /// Implementations are `Send + Sync` so adapters can store them behind
 /// an `Arc<dyn NavStrategy>` shared across async tasks.
@@ -120,17 +148,27 @@ pub trait NavStrategy: Send + Sync {
     ///   and layer, then iterate [`SpatialRegistry::scopes_in_layer`]
     ///   for candidates.
     /// - `focused` — the [`SpatialKey`] of the currently focused scope.
+    /// - `focused_moniker` — the [`Moniker`] paired with `focused`.
+    ///   Echoed back when no motion is possible or torn state is
+    ///   detected, so the caller never sees a silent `None`.
     /// - `direction` — the direction the user pressed.
     ///
     /// # Returns
-    /// - `Some(Moniker)` when the strategy has a target.
-    /// - `None` when no candidate exists or the strategy declines.
+    /// The [`Moniker`] of the next focus target. When the strategy has
+    /// a real target (peer match, drill-out fallback to a parent zone,
+    /// override redirect), that target's moniker is returned. When the
+    /// strategy declines (override wall, layer root, unknown key, torn
+    /// parent reference) the returned moniker equals `focused_moniker`
+    /// — the call site detects "stay put" by equality comparison.
+    /// Torn-state paths additionally emit `tracing::error!` before
+    /// returning so the issue is observable in logs.
     fn next(
         &self,
         registry: &SpatialRegistry,
         focused: &SpatialKey,
+        focused_moniker: &Moniker,
         direction: Direction,
-    ) -> Option<Moniker>;
+    ) -> Moniker;
 }
 
 /// Default Android-beam-search navigation strategy.
@@ -165,31 +203,57 @@ impl NavStrategy for BeamNavStrategy {
     /// is filtered by `candidate.layer_key == focused.layer_key` before
     /// any scoring runs, and escalation refuses to cross from one
     /// `LayerKey` to another (the inspector layer is captured-focus).
+    ///
+    /// # No-silent-dropout contract
+    ///
+    /// Per the module docs, this method always returns a [`Moniker`]:
+    /// either the next focus target, or `focused_moniker` itself when
+    /// no motion is possible. An unknown `focused` key is treated as
+    /// torn state — `tracing::error!` fires and `focused_moniker` is
+    /// echoed back. See the module docs for the full distinction
+    /// between "no motion" (silent) and "torn state" (traced).
     fn next(
         &self,
         registry: &SpatialRegistry,
         focused: &SpatialKey,
+        focused_moniker: &Moniker,
         direction: Direction,
-    ) -> Option<Moniker> {
-        let entry = registry.entry(focused)?;
+    ) -> Moniker {
+        let Some(entry) = registry.entry(focused) else {
+            // Torn state: caller passed a key that has no registry
+            // entry. Trace the operation and echo the input moniker.
+            tracing::error!(
+                op = "nav",
+                focused_key = %focused,
+                focused_moniker = %focused_moniker,
+                ?direction,
+                "unknown focused key passed to BeamNavStrategy::next"
+            );
+            return focused_moniker.clone();
+        };
 
         // Rule 0: per-direction override on the focused scope.
         //
         // The outer `Option` distinguishes "did the override apply?":
-        //   - `Some(_)` → override fired; its inner value (target or
-        //     `None` wall) is the answer; the cascade does **not** run.
-        //   - `None`    → override did not apply; fall through to the
-        //     cascade below.
-        if let Some(result) = check_override(registry, entry, direction) {
-            return result;
+        //   - `Some(target)`  → redirect override; that target wins.
+        //   - `Some(None-ish)` (handled below) → wall; stay put.
+        //   - `None`          → override did not apply; fall through.
+        match check_override(registry, entry, direction) {
+            Some(Some(target)) => return target,
+            Some(None) => {
+                // Explicit wall — semantic "stay put", not torn state.
+                // Return focused_moniker without tracing.
+                return focused_moniker.clone();
+            }
+            None => {} // fall through to cascade
         }
 
         match direction {
             Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
-                cardinal_cascade(registry, entry, direction)
+                cardinal_cascade(registry, entry, focused_moniker, direction)
             }
             Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
-                edge_command(registry, entry, direction)
+                edge_command(registry, entry, focused_moniker, direction)
             }
         }
     }
@@ -276,8 +340,11 @@ fn check_override(
 ///    iter 0 nor iter 1 finds an in-beam peer, the cascade returns the
 ///    parent zone's moniker. The user never gets stuck on a key press
 ///    unless the focused entry sits at the very root of its layer
-///    (`focused.parent_zone == None`) — there is no parent to drill
-///    out to in that case, and the cascade returns `None`.
+///    (`focused.parent_zone == None`) — in that case the cascade
+///    returns `focused_moniker` (semantic "stay put"; not traced).
+///    A torn parent reference (`parent_zone` points at an unregistered
+///    or wrong-kind scope) is a kernel bug surface — the cascade
+///    returns `focused_moniker` AND emits `tracing::error!`.
 ///
 /// # Same-kind candidate filtering at iter 0
 ///
@@ -315,8 +382,9 @@ fn check_override(
 fn cardinal_cascade(
     reg: &SpatialRegistry,
     focused: &RegisteredScope,
+    focused_moniker: &Moniker,
     direction: Direction,
-) -> Option<Moniker> {
+) -> Moniker {
     let focused_is_zone = focused.is_zone();
 
     // Iter 0: same-kind peers of the focused entry sharing its
@@ -330,13 +398,39 @@ fn cardinal_cascade(
         focused_is_zone,
         direction,
     ) {
-        return Some(target);
+        return target;
     }
 
     // Escalate. The layer-boundary guard refuses to cross `LayerKey` —
     // an inspector layer's panel zone never lifts focus into the
     // window layer that hosts ui:board.
-    let parent = parent_zone_in_same_layer(reg, focused)?;
+    //
+    // Two distinct "no parent" cases here, distinguished for tracing:
+    //
+    // - Layer-root edge (`focused.parent_zone() == None`): well-formed,
+    //   the focused entry sits at the very top of its layer. Stay put.
+    // - Torn parent reference (`parent_zone == Some(k)` but no zone is
+    //   registered under `k`, or it's in a different layer): kernel
+    //   inconsistency. Trace and stay put.
+    let parent = match parent_zone_resolution(reg, focused) {
+        ParentResolution::Found(zone) => zone,
+        ParentResolution::LayerRoot => {
+            // Well-formed edge — no parent zone to drill out to. Stay
+            // put without tracing.
+            return focused_moniker.clone();
+        }
+        ParentResolution::Torn { parent_key } => {
+            tracing::error!(
+                op = "nav",
+                focused_key = %focused.key(),
+                focused_moniker = %focused_moniker,
+                parent_zone_key = %parent_key,
+                ?direction,
+                "parent_zone references unregistered or cross-layer scope"
+            );
+            return focused_moniker.clone();
+        }
+    };
 
     // Iter 1: same-kind peers of the parent zone sharing its
     // parent_zone. The parent is always a zone, so this is the
@@ -350,37 +444,67 @@ fn cardinal_cascade(
         true, /* parent is always a zone */
         direction,
     ) {
-        return Some(target);
+        return target;
     }
 
     // Drill-out fallback: return the parent zone itself. A single key
     // press moves at most one zone level out from the focused entry.
-    Some(parent.moniker.clone())
+    parent.moniker.clone()
+}
+
+/// Outcome of resolving a focused scope's parent zone, distinguishing
+/// the well-formed "no parent" edge from torn-state inconsistencies.
+///
+/// The cascade reads this to decide whether escalation is possible
+/// ([`ParentResolution::Found`]), to terminate silently at a layer root
+/// ([`ParentResolution::LayerRoot`]), or to terminate noisily on torn
+/// state ([`ParentResolution::Torn`]). The distinction is the kernel's
+/// no-silent-dropout principle in action: well-formed edges are silent,
+/// kernel-inconsistency edges trace.
+enum ParentResolution<'a> {
+    /// Parent zone resolved cleanly within the same layer.
+    Found(&'a FocusZone),
+    /// Focused scope sits at the layer root (`parent_zone = None`).
+    /// Well-formed; the cascade should stay put without tracing.
+    LayerRoot,
+    /// `parent_zone` references a key that is unregistered, registered
+    /// as a leaf rather than a zone, or in a different layer. The
+    /// cascade should stay put AND trace before returning, since this
+    /// is a kernel-inconsistency surface (race during virtualizer
+    /// remount, stale registration, layer-boundary violation).
+    Torn { parent_key: SpatialKey },
 }
 
 /// Resolve the focused entry's parent zone, enforcing the layer-
-/// boundary guard.
+/// boundary guard and distinguishing layer-root edges from torn state.
 ///
-/// Returns the parent [`FocusZone`] when:
-/// - `focused` has a `parent_zone` set, **and**
-/// - the registry has an entry under that key, **and**
-/// - the entry is a [`FocusZone`], **and**
-/// - the entry's `layer_key` matches `focused`'s `layer_key`.
-///
-/// Returns `None` in every other case — including the well-formed case
-/// where `focused` sits at the layer root (`parent_zone = None`). The
-/// cascade interprets `None` as "no escalation possible" and falls
-/// through to its terminal answer.
-fn parent_zone_in_same_layer<'a>(
+/// See [`ParentResolution`] for the variant semantics. Compared to a
+/// plain `Option<&FocusZone>`, this enum lets the cascade trace torn
+/// state without false-positive tracing on the well-formed layer-root
+/// edge (a leaf at the layer root is a normal shape, not a bug).
+fn parent_zone_resolution<'a>(
     reg: &'a SpatialRegistry,
     focused: &RegisteredScope,
-) -> Option<&'a FocusZone> {
-    let parent_key = focused.parent_zone()?;
-    let parent = reg.zone(parent_key)?;
+) -> ParentResolution<'a> {
+    let Some(parent_key) = focused.parent_zone() else {
+        return ParentResolution::LayerRoot;
+    };
+    let Some(parent) = reg.zone(parent_key) else {
+        // `parent_zone` names a key, but nothing is registered there
+        // (or it's registered as a leaf). Torn state.
+        return ParentResolution::Torn {
+            parent_key: parent_key.clone(),
+        };
+    };
     if parent.layer_key != *focused.layer_key() {
-        return None;
+        // `parent_zone` resolves but lives in a different layer — a
+        // layer-boundary violation. Treat as torn state so the
+        // discrepancy is logged.
+        return ParentResolution::Torn {
+            parent_key: parent_key.clone(),
+        };
     }
-    Some(parent)
+    ParentResolution::Found(parent)
 }
 
 /// Beam-search candidates that share `from_parent` (excluding `from_key`),
@@ -463,6 +587,13 @@ fn beam_among_siblings(
 /// "already focused → no event" check in
 /// [`crate::state::SpatialState::focus`].
 ///
+/// Edge commands always include the focused entry in their candidate
+/// pool, so the candidate set is non-empty whenever `focused` is
+/// registered. The cascade therefore always has a winner to return —
+/// `focused_moniker` is the fallback only when the helper fails
+/// internally (cardinal-direction guard short-circuit, vacuous
+/// candidate set).
+///
 /// The kind filter mirrors the cascade's iter-0 same-kind filter
 /// (`leaves only` for a leaf-focused entry, `zones only` for a zone-
 /// focused entry). See [`beam_among_siblings`] for the rationale on
@@ -470,8 +601,9 @@ fn beam_among_siblings(
 fn edge_command(
     reg: &SpatialRegistry,
     focused: &RegisteredScope,
+    focused_moniker: &Moniker,
     direction: Direction,
-) -> Option<Moniker> {
+) -> Moniker {
     let layer = focused.layer_key();
     let from_rect = focused.rect();
     let from_parent = focused.parent_zone();
@@ -488,6 +620,7 @@ fn edge_command(
         }
     });
     edge_command_from_candidates(from_rect, direction, candidates)
+        .unwrap_or_else(|| focused_moniker.clone())
 }
 
 /// Pick the boundary candidate from `candidates` per `direction`.
@@ -788,9 +921,10 @@ mod tests {
         }
     }
 
-    /// Lonely leaf — nothing else to navigate to.
+    /// Lonely leaf — nothing else to navigate to. Returns the
+    /// focused moniker (semantic "stay put" at the layer root).
     #[test]
-    fn beam_returns_none_for_known_start_with_no_neighbors() {
+    fn beam_returns_focused_moniker_for_known_start_with_no_neighbors() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(FocusLayer {
             key: LayerKey::from_string("L"),
@@ -809,20 +943,30 @@ mod tests {
         });
 
         let strategy = BeamNavStrategy::new();
-        assert!(strategy
-            .next(&reg, &SpatialKey::from_string("k"), Direction::Right)
-            .is_none());
+        let focused_moniker = Moniker::from_string("ui:k");
+        let result = strategy.next(
+            &reg,
+            &SpatialKey::from_string("k"),
+            &focused_moniker,
+            Direction::Right,
+        );
+        assert_eq!(result, focused_moniker);
     }
 
-    /// Unknown starting key yields `None` — same contract as
-    /// `SpatialState::navigate` for stale keys.
+    /// Unknown starting key echoes the input moniker — torn state is
+    /// surfaced to logs, not as `None`.
     #[test]
-    fn beam_returns_none_for_unknown_start() {
+    fn beam_returns_focused_moniker_for_unknown_start() {
         let reg = SpatialRegistry::new();
         let strategy = BeamNavStrategy::new();
-        assert!(strategy
-            .next(&reg, &SpatialKey::from_string("ghost"), Direction::Up)
-            .is_none());
+        let focused_moniker = Moniker::from_string("ui:ghost");
+        let result = strategy.next(
+            &reg,
+            &SpatialKey::from_string("ghost"),
+            &focused_moniker,
+            Direction::Up,
+        );
+        assert_eq!(result, focused_moniker);
     }
 
     /// `score_candidate` rejects candidates on the wrong side of the

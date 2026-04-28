@@ -8348,6 +8348,7 @@ dependencies = [
  "serde_json",
  "swissarmyhammer-common",
  "tracing",
+ "tracing-subscriber",
  "ulid",
 ]
 

@@ -94,8 +94,20 @@ use fixtures::RealisticApp;
 
 /// Convenience: run [`BeamNavStrategy::next`] against the fixture's
 /// registry from the named [`SpatialKey`] in the named [`Direction`].
-fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(app.registry(), from, dir)
+///
+/// Resolves the focused entry's moniker from the fixture registry —
+/// under the no-silent-dropout contract every nav call needs the
+/// focused moniker alongside the focused key.
+fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Moniker {
+    let focused_moniker = app
+        .registry()
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(app.registry().zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == *from)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| panic!("nav called with unregistered key {from:?}"));
+    BeamNavStrategy::new().next(app.registry(), from, &focused_moniker, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +125,7 @@ fn navbar_right_from_board_selector_lands_on_inspect() {
     let from = app.navbar_board_selector_key();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("ui:navbar.inspect")),
+        Moniker::from_string("ui:navbar.inspect"),
         "Right from ui:navbar.board-selector must land on ui:navbar.inspect \
          (in-zone leaf peer to the right)"
     );
@@ -139,7 +151,7 @@ fn navbar_right_from_inspect_lands_on_search() {
     let from = app.navbar_inspect_key();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("ui:navbar.search")),
+        Moniker::from_string("ui:navbar.search"),
         "Right from ui:navbar.inspect must land on ui:navbar.search \
          (next leaf to the right under the unified cascade's same-kind iter-0 filter; \
          the percent-complete field zone is skipped because cardinal nav stays within \
@@ -170,7 +182,7 @@ fn navbar_right_from_percent_field_zone_drills_out_to_navbar() {
     let from = app.navbar_percent_field_key();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("ui:navbar")),
+        Moniker::from_string("ui:navbar"),
         "Right from field:board:b1.percent_complete must drill out to ui:navbar \
          (zone-only iter 0 has no sibling zones inside ui:navbar; iter 1's parent \
          ui:navbar sits at the layer root with no Right peer at that level; the \
@@ -198,7 +210,7 @@ fn navbar_left_walks_symmetric_path() {
     let from = app.navbar_search_key();
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("ui:navbar.inspect")),
+        Moniker::from_string("ui:navbar.inspect"),
         "Left from ui:navbar.search must land on ui:navbar.inspect \
          (the next leaf to the left under same-kind iter-0 filter; the percent-complete \
          field zone is skipped — symmetric to the Right case)"
@@ -208,7 +220,7 @@ fn navbar_left_walks_symmetric_path() {
     let from = app.navbar_inspect_key();
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("ui:navbar.board-selector")),
+        Moniker::from_string("ui:navbar.board-selector"),
         "Left from ui:navbar.inspect must land on ui:navbar.board-selector \
          (in-zone leaf peer to the left)"
     );
@@ -243,23 +255,23 @@ fn navbar_right_from_rightmost_leaf_drills_out_to_navbar() {
     let from = app.navbar_search_key();
     let result = nav(&app, &from, Direction::Right);
 
-    // No-bounce-back: the answer must not be any previous navbar entry.
+    // No-bounce-back: the answer must not be any previous navbar
+    // entry, including search itself (the cascade must move, not echo
+    // the focused moniker, since `ui:navbar` is a registered parent).
     let forbidden = [
         "ui:navbar.search",
         "ui:navbar.inspect",
         "ui:navbar.board-selector",
         "field:board:b1.percent_complete",
     ];
-    if let Some(m) = result.as_ref() {
-        assert!(
-            !forbidden.contains(&m.as_str()),
-            "Right from ui:navbar.search must not bounce back to a navbar entry, got {m:?}",
-        );
-    }
+    assert!(
+        !forbidden.contains(&result.as_str()),
+        "Right from ui:navbar.search must not bounce back to a navbar entry, got {result:?}",
+    );
     // Pin the specific drill-out outcome under the unified cascade.
     assert_eq!(
         result,
-        Some(Moniker::from_string("ui:navbar")),
+        Moniker::from_string("ui:navbar"),
         "Right from ui:navbar.search must drill out to ui:navbar — iter 0 finds no \
          leaf peer right of search, iter 1's parent ui:navbar has no Right peer at \
          the layer root, and the cascade falls back to the parent zone itself rather \

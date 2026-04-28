@@ -46,7 +46,12 @@
  * "Decision: Option A" note in card `01KQ5QB6F4MTD35GBTARJH4JEW`.
  */
 
-import { useCallback, useMemo, type ComponentType, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { useEntityStore, useFieldValue } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { useDebouncedSave } from "@/lib/use-debounced-save";
@@ -507,24 +512,32 @@ export function Field({
         keys: { vim: "Enter", cua: "Enter" },
         execute: async () => {
           // Drill into spatial children first — pills (`<FocusScope>`
-          // leaves) win over edit mode. Read the focused key off the
-          // spatial provider: the command only fires when this field
-          // zone is the focused entity, so `focusedKey()` returns this
-          // field's `SpatialKey`.
+          // leaves) win over edit mode. Read the focused key + moniker
+          // off the spatial provider: the command only fires when this
+          // field zone is the focused entity, so `focusedKey()` /
+          // `focusedMoniker()` return this field's `(SpatialKey,
+          // Moniker)` pair.
+          //
+          // Under the no-silent-dropout contract the kernel always
+          // returns a moniker; we detect "no descent happened" by
+          // comparing the result to the focused moniker. Equality
+          // means the field has no spatial children — fall through to
+          // the editor.
           if (spatialActions && focusActions) {
             const key = spatialActions.focusedKey();
-            if (key !== null) {
-              const moniker = await spatialActions.drillIn(key);
-              if (moniker !== null) {
-                focusActions.setFocus(moniker);
+            const focusedMoniker = spatialActions.focusedMoniker();
+            if (key !== null && focusedMoniker !== null) {
+              const result = await spatialActions.drillIn(key, focusedMoniker);
+              if (result !== focusedMoniker) {
+                focusActions.setFocus(result);
                 return;
               }
             }
           }
-          // Kernel returned null (no spatial children) — fall through
-          // to the editor. `onEdit` is optional: a read-only field
-          // with no children produces a no-op, which matches the
-          // "Enter on a leaf with nothing to do" contract.
+          // Kernel echoed the focused moniker (no spatial children) —
+          // fall through to the editor. `onEdit` is optional: a
+          // read-only field with no children produces a no-op, which
+          // matches the "Enter on a leaf with nothing to do" contract.
           onEdit?.();
         },
       },

@@ -3,26 +3,36 @@
 //!
 //! Drill-in and drill-out are the explicit zone-descent / zone-ascent
 //! commands that complement the cardinal beam-search nav. The methods
-//! are pure registry queries — they take a [`SpatialKey`] and return
-//! [`Option<Moniker>`] without mutating state. The Tauri adapter layer
+//! are pure registry queries — they take a [`SpatialKey`] paired with
+//! a focused [`Moniker`] and return a non-optional [`Moniker`] under
+//! the no-silent-dropout contract documented in
+//! [`swissarmyhammer_focus::navigate`]. The Tauri adapter layer
 //! (`spatial_drill_in` / `spatial_drill_out`) decides what to do with
-//! the returned moniker.
+//! the returned moniker — typically `setFocus(result)` and a fall-
+//! through to edit / dismiss when `result == focused_moniker`.
 //!
 //! Coverage matches the acceptance criteria on the drill-in/out card:
 //!
-//! - `drill_in` on a Zone with a registered `last_focused` returns that
-//!   entry's [`Moniker`].
-//! - `drill_in` on a Zone whose `last_focused` is stale (the stored key
-//!   no longer resolves to a registered scope) falls back to the first
-//!   child by rect top-left ordering.
-//! - `drill_in` on a Zone with no `last_focused` returns the first child.
-//! - `drill_in` on a Zone with no children returns `None`.
-//! - `drill_in` on a FocusScope returns `None` (React handles inline edit).
-//! - `drill_in` on an unknown key returns `None`.
-//! - `drill_out` on a FocusScope returns its `parent_zone`'s [`Moniker`].
+//! - `drill_in` on a Zone with a registered `last_focused` returns
+//!   that entry's [`Moniker`].
+//! - `drill_in` on a Zone whose `last_focused` is stale (the stored
+//!   key no longer resolves to a registered scope) falls back to the
+//!   first child by rect top-left ordering.
+//! - `drill_in` on a Zone with no `last_focused` returns the first
+//!   child.
+//! - `drill_in` on a Zone with no children returns `focused_moniker`.
+//! - `drill_in` on a FocusScope returns `focused_moniker` (React
+//!   handles inline edit).
+//! - `drill_in` on an unknown key returns `focused_moniker` AND emits
+//!   `tracing::error!` (the trace is asserted in
+//!   `tests/no_silent_none.rs`).
+//! - `drill_out` on a FocusScope returns its `parent_zone`'s
+//!   [`Moniker`].
 //! - `drill_out` on a Zone returns its `parent_zone`'s [`Moniker`].
-//! - `drill_out` at the layer root (no `parent_zone`) returns `None`.
-//! - `drill_out` on an unknown key returns `None`.
+//! - `drill_out` at the layer root (no `parent_zone`) returns
+//!   `focused_moniker`.
+//! - `drill_out` on an unknown key returns `focused_moniker` AND emits
+//!   `tracing::error!`.
 
 use std::collections::HashMap;
 
@@ -110,8 +120,9 @@ fn drill_in_zone_with_live_last_focused_returns_remembered_moniker() {
         rect_at(20.0, 20.0),
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("z"));
-    assert_eq!(target, Some(Moniker::from_string("ui:leaf-b")));
+    let zone_moniker = Moniker::from_string("ui:zone");
+    let target = reg.drill_in(SpatialKey::from_string("z"), &zone_moniker);
+    assert_eq!(target, Moniker::from_string("ui:leaf-b"));
 }
 
 // ---------------------------------------------------------------------------
@@ -143,8 +154,9 @@ fn drill_in_zone_with_stale_last_focused_falls_back_to_first_child() {
         rect_at(0.0, 0.0),
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("z"));
-    assert_eq!(target, Some(Moniker::from_string("ui:leaf-b")));
+    let zone_moniker = Moniker::from_string("ui:zone");
+    let target = reg.drill_in(SpatialKey::from_string("z"), &zone_moniker);
+    assert_eq!(target, Moniker::from_string("ui:leaf-b"));
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +186,9 @@ fn drill_in_zone_with_no_last_focused_uses_first_child_by_rect() {
         rect_at(5.0, 0.0),
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("z"));
-    assert_eq!(target, Some(Moniker::from_string("ui:leaf-top")));
+    let zone_moniker = Moniker::from_string("ui:zone");
+    let target = reg.drill_in(SpatialKey::from_string("z"), &zone_moniker);
+    assert_eq!(target, Moniker::from_string("ui:leaf-top"));
 }
 
 // ---------------------------------------------------------------------------
@@ -183,44 +196,49 @@ fn drill_in_zone_with_no_last_focused_uses_first_child_by_rect() {
 // ---------------------------------------------------------------------------
 
 /// An empty zone — no `last_focused`, no children registered yet — returns
-/// `None`. The frontend interprets this as "stay where you are".
+/// the focused moniker. The frontend interprets the equality with the prior
+/// focus as "stay where you are" and falls through to onEdit / no-op.
 #[test]
-fn drill_in_empty_zone_returns_none() {
+fn drill_in_empty_zone_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.register_zone(zone("z", "ui:zone", "L", None, None));
 
-    let target = reg.drill_in(SpatialKey::from_string("z"));
-    assert_eq!(target, None);
+    let zone_moniker = Moniker::from_string("ui:zone");
+    let target = reg.drill_in(SpatialKey::from_string("z"), &zone_moniker);
+    assert_eq!(target, zone_moniker);
 }
 
 // ---------------------------------------------------------------------------
 // drill_in — FocusScope
 // ---------------------------------------------------------------------------
 
-/// Drill-in on a leaf returns `None` — leaves do not have children. The
-/// React side decides separately whether the leaf has an inline-edit
-/// affordance to invoke.
+/// Drill-in on a leaf returns the focused moniker — leaves do not have
+/// children. The React side detects the equality and falls through to
+/// the leaf's inline-edit affordance (or no-op for non-editable leaves).
 #[test]
-fn drill_in_focusable_returns_none() {
+fn drill_in_focusable_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.register_scope(leaf("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
 
-    let target = reg.drill_in(SpatialKey::from_string("leaf"));
-    assert_eq!(target, None);
+    let leaf_moniker = Moniker::from_string("ui:leaf");
+    let target = reg.drill_in(SpatialKey::from_string("leaf"), &leaf_moniker);
+    assert_eq!(target, leaf_moniker);
 }
 
 // ---------------------------------------------------------------------------
 // drill_in — Unknown key
 // ---------------------------------------------------------------------------
 
-/// Drill-in for an unknown key returns `None` — the registry has nothing
-/// to drill into, so the React side falls through to the next command in
-/// the chain.
+/// Drill-in for an unknown key echoes the input focused moniker. The
+/// kernel emits `tracing::error!` (verified in
+/// `tests/no_silent_none.rs`); the React side's user-visible behavior
+/// matches the no-children case (focus stays put).
 #[test]
-fn drill_in_unknown_key_returns_none() {
+fn drill_in_unknown_key_echoes_focused_moniker() {
     let reg = SpatialRegistry::new();
-    let target = reg.drill_in(SpatialKey::from_string("ghost"));
-    assert_eq!(target, None);
+    let focused_moniker = Moniker::from_string("ui:focused");
+    let target = reg.drill_in(SpatialKey::from_string("ghost"), &focused_moniker);
+    assert_eq!(target, focused_moniker);
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +252,9 @@ fn drill_out_focusable_returns_parent_zone_moniker() {
     reg.register_zone(zone("z", "ui:zone", "L", None, None));
     reg.register_scope(leaf("leaf", "ui:leaf", "L", Some("z"), rect_at(0.0, 0.0)));
 
-    let target = reg.drill_out(SpatialKey::from_string("leaf"));
-    assert_eq!(target, Some(Moniker::from_string("ui:zone")));
+    let leaf_moniker = Moniker::from_string("ui:leaf");
+    let target = reg.drill_out(SpatialKey::from_string("leaf"), &leaf_moniker);
+    assert_eq!(target, Moniker::from_string("ui:zone"));
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +269,9 @@ fn drill_out_zone_returns_parent_zone_moniker() {
     reg.register_zone(zone("outer", "ui:outer", "L", None, None));
     reg.register_zone(zone("inner", "ui:inner", "L", Some("outer"), None));
 
-    let target = reg.drill_out(SpatialKey::from_string("inner"));
-    assert_eq!(target, Some(Moniker::from_string("ui:outer")));
+    let inner_moniker = Moniker::from_string("ui:inner");
+    let target = reg.drill_out(SpatialKey::from_string("inner"), &inner_moniker);
+    assert_eq!(target, Moniker::from_string("ui:outer"));
 }
 
 // ---------------------------------------------------------------------------
@@ -259,28 +279,33 @@ fn drill_out_zone_returns_parent_zone_moniker() {
 // ---------------------------------------------------------------------------
 
 /// Drill-out on a scope that has no `parent_zone` (sits directly under the
-/// layer root) returns `None`. The frontend falls through to the next
-/// command in the Escape chain (typically `app.dismiss`).
+/// layer root) returns the focused moniker (semantic "stay put"). The
+/// frontend detects the equality and falls through to the next command in
+/// the Escape chain (typically `app.dismiss`).
 #[test]
-fn drill_out_at_layer_root_returns_none() {
+fn drill_out_at_layer_root_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.register_scope(leaf("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
 
-    let target = reg.drill_out(SpatialKey::from_string("leaf"));
-    assert_eq!(target, None);
+    let leaf_moniker = Moniker::from_string("ui:leaf");
+    let target = reg.drill_out(SpatialKey::from_string("leaf"), &leaf_moniker);
+    assert_eq!(target, leaf_moniker);
 }
 
 // ---------------------------------------------------------------------------
 // drill_out — Unknown key
 // ---------------------------------------------------------------------------
 
-/// Drill-out for an unknown key returns `None` — same fall-through
-/// semantics as `drill_in` for an unknown key.
+/// Drill-out for an unknown key echoes the input focused moniker. The
+/// kernel emits `tracing::error!` (verified in
+/// `tests/no_silent_none.rs`); same fall-through semantics as the
+/// well-formed layer-root case from the React side's perspective.
 #[test]
-fn drill_out_unknown_key_returns_none() {
+fn drill_out_unknown_key_echoes_focused_moniker() {
     let reg = SpatialRegistry::new();
-    let target = reg.drill_out(SpatialKey::from_string("ghost"));
-    assert_eq!(target, None);
+    let focused_moniker = Moniker::from_string("ui:focused");
+    let target = reg.drill_out(SpatialKey::from_string("ghost"), &focused_moniker);
+    assert_eq!(target, focused_moniker);
 }
 
 // ---------------------------------------------------------------------------
@@ -313,10 +338,11 @@ fn drill_in_after_remembered_position_returns_remembered_moniker() {
         rect_at(20.0, 20.0),
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("z"));
+    let zone_moniker = Moniker::from_string("ui:zone");
+    let target = reg.drill_in(SpatialKey::from_string("z"), &zone_moniker);
     assert_eq!(
         target,
-        Some(Moniker::from_string("ui:leaf-a")),
+        Moniker::from_string("ui:leaf-a"),
         "drill-in honors the remembered slot, even when other children exist",
     );
 }
@@ -378,10 +404,11 @@ fn drill_in_field_zone_with_pill_children_returns_first_pill_moniker() {
         rect_at(20.0, 0.0),
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("field-tags-key"));
+    let field_moniker = Moniker::from_string("field:task:T1.tags");
+    let target = reg.drill_in(SpatialKey::from_string("field-tags-key"), &field_moniker);
     assert_eq!(
         target,
-        Some(Moniker::from_string("tag:tag-bug")),
+        Moniker::from_string("tag:tag-bug"),
         "drill-in on a tags field zone returns the leftmost pill's moniker",
     );
 }
@@ -392,16 +419,17 @@ fn drill_in_field_zone_with_pill_children_returns_first_pill_moniker() {
 // Pin the "Enter falls through to edit mode" contract from card
 // `01KQ9ZJHRXCY8Z5YT6RF4SG6EK` (bug 3): when a field zone has no pill
 // children (e.g. an empty tags field, or an editable scalar like
-// `name`), drill-in returns None. The React side reads the null
-// response and falls through to `onEdit?.()` — opening the editor
-// for editable fields, no-op for read-only ones.
+// `name`), drill-in returns the field's own moniker. The React side
+// detects the equality and falls through to `onEdit?.()` — opening the
+// editor for editable fields, no-op for read-only ones.
 // ---------------------------------------------------------------------------
 
 /// A field zone with no spatial children — the canonical "scalar leaf
-/// without a click-into structure" case — returns None on drill-in.
-/// React falls through to `onEdit?.()`.
+/// without a click-into structure" case — returns the focused moniker
+/// on drill-in. React detects the equality (result == focused_moniker)
+/// and falls through to `onEdit?.()`.
 #[test]
-fn drill_in_field_zone_with_no_children_returns_none() {
+fn drill_in_field_zone_with_no_children_returns_focused_moniker() {
     let mut reg = SpatialRegistry::new();
 
     // Register the field zone but no pill children — mirrors an
@@ -414,9 +442,11 @@ fn drill_in_field_zone_with_no_children_returns_none() {
         None,
     ));
 
-    let target = reg.drill_in(SpatialKey::from_string("field-name-key"));
+    let field_moniker = Moniker::from_string("field:task:T1.name");
+    let target = reg.drill_in(SpatialKey::from_string("field-name-key"), &field_moniker);
     assert_eq!(
-        target, None,
-        "drill-in on a childless field zone returns None — React falls through to onEdit",
+        target, field_moniker,
+        "drill-in on a childless field zone echoes the focused moniker — \
+         React detects equality and falls through to onEdit",
     );
 }

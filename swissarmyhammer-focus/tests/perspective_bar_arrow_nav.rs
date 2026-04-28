@@ -94,8 +94,20 @@ use fixtures::RealisticApp;
 
 /// Convenience: run [`BeamNavStrategy::next`] against the fixture's
 /// registry from the named [`SpatialKey`] in the named [`Direction`].
-fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(app.registry(), from, dir)
+///
+/// Resolves the focused entry's moniker from the fixture registry —
+/// under the no-silent-dropout contract every nav call needs the
+/// focused moniker alongside the focused key.
+fn nav(app: &RealisticApp, from: &SpatialKey, dir: Direction) -> Moniker {
+    let focused_moniker = app
+        .registry()
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(app.registry().zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == *from)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| panic!("nav called with unregistered key {from:?}"));
+    BeamNavStrategy::new().next(app.registry(), from, &focused_moniker, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +125,7 @@ fn perspective_right_from_leftmost_tab_lands_on_middle_tab() {
     let from = app.perspective_tab_p1_key();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("perspective_tab:p2")),
+        Moniker::from_string("perspective_tab:p2"),
         "Right from perspective_tab:p1 must land on perspective_tab:p2 \
          (in-zone leaf peer to the right)"
     );
@@ -139,7 +151,7 @@ fn perspective_right_from_middle_active_tab_lands_on_rightmost_tab() {
     let from = app.perspective_tab_p2_key();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        Some(Moniker::from_string("perspective_tab:p3")),
+        Moniker::from_string("perspective_tab:p3"),
         "Right from perspective_tab:p2 must land on perspective_tab:p3 \
          (in-zone leaf peer to the right; the wider middle-tab rect does \
          not break left-edge ordering)"
@@ -161,7 +173,7 @@ fn perspective_left_walks_symmetric_path() {
     let from = app.perspective_tab_p3_key();
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("perspective_tab:p2")),
+        Moniker::from_string("perspective_tab:p2"),
         "Left from perspective_tab:p3 must land on perspective_tab:p2 \
          (in-zone leaf peer to the left)"
     );
@@ -170,7 +182,7 @@ fn perspective_left_walks_symmetric_path() {
     let from = app.perspective_tab_p2_key();
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        Some(Moniker::from_string("perspective_tab:p1")),
+        Moniker::from_string("perspective_tab:p1"),
         "Left from perspective_tab:p2 must land on perspective_tab:p1 \
          (in-zone leaf peer to the left)"
     );
@@ -219,6 +231,11 @@ fn perspective_right_from_rightmost_tab_drills_out_to_perspective_bar() {
     // No-bounce-back and no leak to non-spatial chrome: the answer must
     // not be any previous perspective tab nor the Add-perspective `+`
     // button (which is intentionally non-spatial).
+    // No-bounce-back: result must not be any previous perspective tab,
+    // and must not be the non-spatial Add-perspective button. Note that
+    // `perspective_tab:p3` (the focused entry) is also forbidden — the
+    // cascade must move (drill out), not echo the focused moniker, since
+    // `ui:perspective-bar` is a registered parent zone in the same layer.
     let forbidden = [
         "perspective_tab:p1",
         "perspective_tab:p2",
@@ -226,18 +243,16 @@ fn perspective_right_from_rightmost_tab_drills_out_to_perspective_bar() {
         "ui:perspective-bar.add",
         "ui:perspective-bar.add-perspective",
     ];
-    if let Some(m) = result.as_ref() {
-        assert!(
-            !forbidden.contains(&m.as_str()),
-            "Right from perspective_tab:p3 must not bounce back to a previous tab \
-             nor land on the non-spatial Add-perspective button, got {m:?}",
-        );
-    }
+    assert!(
+        !forbidden.contains(&result.as_str()),
+        "Right from perspective_tab:p3 must not bounce back to a previous tab \
+         nor land on the non-spatial Add-perspective button, got {result:?}",
+    );
 
     // Pin the specific drill-out outcome under the unified cascade.
     assert_eq!(
         result,
-        Some(Moniker::from_string("ui:perspective-bar")),
+        Moniker::from_string("ui:perspective-bar"),
         "Right from perspective_tab:p3 must drill out to ui:perspective-bar — iter 0 \
          finds no leaf peer right of p3, iter 1's parent ui:perspective-bar has no \
          Right peer at the layer root, and the cascade falls back to the parent zone \

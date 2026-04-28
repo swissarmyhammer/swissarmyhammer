@@ -374,7 +374,7 @@ describe("useFocusClaim listener identity", () => {
 /* ---- drillIn / drillOut / focusedKey ---- */
 
 describe("drillIn", () => {
-  it("invokes spatial_drill_in with the focused key and returns the moniker", async () => {
+  it("invokes spatial_drill_in with the focused (key, moniker) pair and returns the moniker", async () => {
     const targetMoniker: Moniker = asMoniker("ui:target");
     mockInvoke.mockImplementationOnce(() => Promise.resolve(targetMoniker));
 
@@ -384,38 +384,50 @@ describe("drillIn", () => {
     await flushListenSetup();
 
     const key: SpatialKey = asSpatialKey("zone-key");
-    let returned: Moniker | null | undefined;
+    const focusedMoniker: Moniker = asMoniker("ui:zone");
+    let returned: Moniker | undefined;
     await act(async () => {
-      returned = await result.current.drillIn(key);
+      returned = await result.current.drillIn(key, focusedMoniker);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_in", { key });
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_in", {
+      key,
+      focusedMoniker,
+    });
     expect(returned).toBe(targetMoniker);
 
     unmount();
   });
 
-  it("propagates a null result when the registry has nothing to descend into", async () => {
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(null));
+  it("echoes the focused moniker when the registry has nothing to descend into", async () => {
+    // Under the no-silent-dropout contract the kernel echoes the
+    // focused moniker (rather than returning null) when there's
+    // nothing to descend into. The React layer just passes that
+    // through verbatim.
+    const focusedMoniker: Moniker = asMoniker("ui:leaf");
+    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedMoniker));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    let returned: Moniker | null | undefined;
+    let returned: Moniker | undefined;
     await act(async () => {
-      returned = await result.current.drillIn(asSpatialKey("leaf"));
+      returned = await result.current.drillIn(
+        asSpatialKey("leaf"),
+        focusedMoniker,
+      );
     });
 
-    expect(returned).toBeNull();
+    expect(returned).toBe(focusedMoniker);
 
     unmount();
   });
 });
 
 describe("drillOut", () => {
-  it("invokes spatial_drill_out with the focused key and returns the parent moniker", async () => {
+  it("invokes spatial_drill_out with the focused (key, moniker) pair and returns the parent moniker", async () => {
     const parentMoniker: Moniker = asMoniker("ui:parent-zone");
     mockInvoke.mockImplementationOnce(() => Promise.resolve(parentMoniker));
 
@@ -425,31 +437,43 @@ describe("drillOut", () => {
     await flushListenSetup();
 
     const key: SpatialKey = asSpatialKey("leaf-key");
-    let returned: Moniker | null | undefined;
+    const focusedMoniker: Moniker = asMoniker("ui:leaf");
+    let returned: Moniker | undefined;
     await act(async () => {
-      returned = await result.current.drillOut(key);
+      returned = await result.current.drillOut(key, focusedMoniker);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_out", { key });
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_out", {
+      key,
+      focusedMoniker,
+    });
     expect(returned).toBe(parentMoniker);
 
     unmount();
   });
 
-  it("propagates a null result when the focused scope is at the layer root", async () => {
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(null));
+  it("echoes the focused moniker when the focused scope is at the layer root", async () => {
+    // Under the no-silent-dropout contract the kernel echoes the
+    // focused moniker (rather than returning null) at the layer root.
+    // The React caller compares the result against the focused moniker
+    // and dispatches `app.dismiss` on equality.
+    const focusedMoniker: Moniker = asMoniker("ui:root-leaf");
+    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedMoniker));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    let returned: Moniker | null | undefined;
+    let returned: Moniker | undefined;
     await act(async () => {
-      returned = await result.current.drillOut(asSpatialKey("root-leaf"));
+      returned = await result.current.drillOut(
+        asSpatialKey("root-leaf"),
+        focusedMoniker,
+      );
     });
 
-    expect(returned).toBeNull();
+    expect(returned).toBe(focusedMoniker);
 
     unmount();
   });

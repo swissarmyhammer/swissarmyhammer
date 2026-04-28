@@ -108,8 +108,22 @@ fn layer(key: &str, window: &str, parent: Option<&str>) -> FocusLayer {
 }
 
 /// Run the default `BeamNavStrategy` and return the navigated-to moniker.
-fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Option<Moniker> {
-    BeamNavStrategy::new().next(reg, &SpatialKey::from_string(from), dir)
+///
+/// Resolves the focused entry's moniker from the registry — under the
+/// no-silent-dropout contract every nav call needs the focused moniker
+/// alongside the focused key. For unknown `from`, falls back to a
+/// synthetic `ui:<from>` moniker so the test can still exercise the
+/// torn-state path.
+fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Moniker {
+    let key = SpatialKey::from_string(from);
+    let focused_moniker = reg
+        .leaves_iter()
+        .map(|f| (&f.key, &f.moniker))
+        .chain(reg.zones_iter().map(|z| (&z.key, &z.moniker)))
+        .find(|(k, _)| **k == key)
+        .map(|(_, m)| m.clone())
+        .unwrap_or_else(|| Moniker::from_string(format!("ui:{from}")));
+    BeamNavStrategy::new().next(reg, &key, &focused_moniker, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +173,7 @@ fn override_redirects_to_same_layer_target() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:override_target")),
+        Moniker::from_string("ui:override_target"),
         "override target in same layer must win over beam-search candidate"
     );
 }
@@ -205,7 +219,7 @@ fn override_redirects_to_same_layer_target_for_zone() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:override_zone"))
+        Moniker::from_string("ui:override_zone")
     );
 }
 
@@ -243,8 +257,10 @@ fn override_none_blocks_navigation() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        None,
-        "explicit None override must block navigation"
+        Moniker::from_string("ui:src"),
+        "explicit None override must block navigation — under the no-silent-dropout \
+         contract this echoes the focused moniker (the React side detects equality \
+         and stays put)"
     );
 }
 
@@ -283,10 +299,13 @@ fn override_none_only_blocks_named_direction() {
         overrides,
     ));
 
-    assert_eq!(nav(&reg, "src", Direction::Right), None);
+    assert_eq!(
+        nav(&reg, "src", Direction::Right),
+        Moniker::from_string("ui:src"),
+    );
     assert_eq!(
         nav(&reg, "src", Direction::Down),
-        Some(Moniker::from_string("ui:down_target")),
+        Moniker::from_string("ui:down_target"),
         "down has no override, beam search must run"
     );
 }
@@ -341,7 +360,7 @@ fn override_cross_layer_target_falls_through_to_beam_search() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:beam_target")),
+        Moniker::from_string("ui:beam_target"),
         "cross-layer override target must be ignored; beam search must run"
     );
 }
@@ -375,7 +394,7 @@ fn override_unknown_target_falls_through_to_beam_search() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:beam_target")),
+        Moniker::from_string("ui:beam_target"),
         "unknown override target must be ignored; beam search must run"
     );
 }
@@ -403,7 +422,7 @@ fn no_override_delegates_to_beam_search() {
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:right_target"))
+        Moniker::from_string("ui:right_target")
     );
 }
 
@@ -455,11 +474,11 @@ fn override_for_one_direction_does_not_affect_others() {
     // Right honors the override.
     assert_eq!(
         nav(&reg, "src", Direction::Right),
-        Some(Moniker::from_string("ui:right_override"))
+        Moniker::from_string("ui:right_override")
     );
     // Left is unconsidered by the override; beam search runs.
     assert_eq!(
         nav(&reg, "src", Direction::Left),
-        Some(Moniker::from_string("ui:left_target"))
+        Moniker::from_string("ui:left_target")
     );
 }

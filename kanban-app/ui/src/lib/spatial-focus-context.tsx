@@ -140,6 +140,17 @@ export interface SpatialFocusActions {
   updateRect: (key: SpatialKey, rect: Rect) => Promise<void>;
   /** Invoke `spatial_navigate` from `key` in `direction`. */
   navigate: (key: SpatialKey, direction: Direction) => Promise<void>;
+  /**
+   * Read the [`Moniker`] currently focused in the active window, or
+   * `null` if the window has no focus yet.
+   *
+   * Read on demand from the latest `focus-changed` event the provider
+   * has observed. Paired with [`focusedKey`] for callers that need to
+   * thread both into the kernel's nav / drill APIs (which take
+   * `(SpatialKey, Moniker)` under the no-silent-dropout contract).
+   * Safe to call from event handlers without re-rendering.
+   */
+  focusedMoniker: () => Moniker | null;
   /** Invoke `spatial_push_layer` for the given key/name/parent. */
   pushLayer: (
     key: LayerKey,
@@ -152,29 +163,34 @@ export interface SpatialFocusActions {
    * Invoke `spatial_drill_in` to compute the [`Moniker`] to focus when
    * the user drills *into* the scope at `key`.
    *
-   * Returns the new target's moniker, or `null` when the registry has
-   * nothing to descend into (drill-in on a leaf, an empty zone, or an
-   * unknown key). The caller then dispatches `setFocus(moniker)` on a
-   * `Moniker` result, or falls through to the next command in the
-   * chain on `null` (e.g. inline edit on a leaf with an editor).
+   * Under the no-silent-dropout contract the kernel always returns a
+   * [`Moniker`]; the caller detects "no descent happened" by comparing
+   * the result against `focusedMoniker`. Equality means the kernel had
+   * nothing to descend into (leaf, empty zone, unknown key) and the
+   * caller should fall through to the next behavior (e.g. inline
+   * edit on a leaf with an editor). Inequality means focus should
+   * move to the returned moniker.
    *
    * Mirrors `SpatialRegistry::drill_in` on the Rust side — purely a
    * registry query, no focus state mutation.
    */
-  drillIn: (key: SpatialKey) => Promise<Moniker | null>;
+  drillIn: (key: SpatialKey, focusedMoniker: Moniker) => Promise<Moniker>;
   /**
    * Invoke `spatial_drill_out` to compute the [`Moniker`] to focus when
    * the user drills *out of* the scope at `key`.
    *
-   * Returns the moniker of the scope's enclosing zone, or `null` when
-   * there is no enclosing zone (the scope sits at the layer root) or
-   * the key is unknown. On `null`, the React Escape chain falls
-   * through to `app.dismiss` (close the topmost modal layer).
+   * Under the no-silent-dropout contract the kernel always returns a
+   * [`Moniker`]; the caller detects "no zone-level drill happened" by
+   * comparing the result against `focusedMoniker`. Equality means the
+   * scope sits at the layer root (or is unknown) — the React Escape
+   * chain falls through to `app.dismiss` (close the topmost modal
+   * layer). Inequality means focus should move to the returned
+   * (parent zone's) moniker.
    *
    * Mirrors `SpatialRegistry::drill_out` on the Rust side — purely a
    * registry query, no focus state mutation.
    */
-  drillOut: (key: SpatialKey) => Promise<Moniker | null>;
+  drillOut: (key: SpatialKey, focusedMoniker: Moniker) => Promise<Moniker>;
   /**
    * Read the [`SpatialKey`] currently focused in the active window, or
    * `null` if the window has no focus yet.
@@ -204,9 +220,7 @@ export interface SpatialFocusActions {
    * the broadcast is unconditional, mirroring the all-windows reach of
    * Tauri's `emit`.
    */
-  subscribeFocusChanged: (
-    subscriber: FocusChangedSubscriber,
-  ) => () => void;
+  subscribeFocusChanged: (subscriber: FocusChangedSubscriber) => () => void;
 }
 
 const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
@@ -250,6 +264,13 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // window's React tree mounts the corresponding scope).
   const focusedKeyRef = useRef<SpatialKey | null>(null);
 
+  // Latest focused `Moniker` from `focus-changed` events. Paired with
+  // `focusedKeyRef` so callers can thread `(SpatialKey, Moniker)` into
+  // the kernel's nav / drill APIs without round-tripping through the
+  // entity-focus moniker store. The kernel emits the moniker alongside
+  // the key on every focus-changed event, so we capture both here.
+  const focusedMonikerRef = useRef<Moniker | null>(null);
+
   // Subscribe to the global `focus-changed` event exactly once for the
   // provider's lifetime. The cleanup is critical: an unmounted provider
   // that left its listener live would receive every focus-changed event
@@ -269,8 +290,11 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
       }
       // Record the latest focused key so `drillIn` / `drillOut` callers
       // can thread it through without consulting the entity-focus
-      // moniker store.
+      // moniker store. Capture the paired moniker too so the no-silent-
+      // dropout API contract has both halves of `(SpatialKey, Moniker)`
+      // available without an extra registry lookup.
       focusedKeyRef.current = payload.next_key;
+      focusedMonikerRef.current = payload.next_moniker;
       // Fan out the full payload to broad subscribers (e.g. the
       // entity-focus bridge in `EntityFocusProvider`). Iteration walks a
       // snapshot so subscriber callbacks that unsubscribe themselves
@@ -302,6 +326,7 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
       registryRef,
       subscribersRef,
       focusedKeyRef,
+      focusedMonikerRef,
     );
   }
 
@@ -323,6 +348,7 @@ function buildSpatialFocusActions(
   registryRef: React.MutableRefObject<Map<SpatialKey, FocusClaimListener>>,
   subscribersRef: React.MutableRefObject<Set<FocusChangedSubscriber>>,
   focusedKeyRef: React.MutableRefObject<SpatialKey | null>,
+  focusedMonikerRef: React.MutableRefObject<Moniker | null>,
 ): SpatialFocusActions {
   const registerClaim: SpatialFocusActions["registerClaim"] = (
     key,
@@ -414,16 +440,25 @@ function buildSpatialFocusActions(
     await invoke("spatial_pop_layer", { key });
   };
 
-  const drillIn: SpatialFocusActions["drillIn"] = async (key) => {
-    return await invoke<Moniker | null>("spatial_drill_in", { key });
+  const drillIn: SpatialFocusActions["drillIn"] = async (
+    key,
+    focusedMoniker,
+  ) => {
+    return await invoke<Moniker>("spatial_drill_in", { key, focusedMoniker });
   };
 
-  const drillOut: SpatialFocusActions["drillOut"] = async (key) => {
-    return await invoke<Moniker | null>("spatial_drill_out", { key });
+  const drillOut: SpatialFocusActions["drillOut"] = async (
+    key,
+    focusedMoniker,
+  ) => {
+    return await invoke<Moniker>("spatial_drill_out", { key, focusedMoniker });
   };
 
   const focusedKey: SpatialFocusActions["focusedKey"] = () =>
     focusedKeyRef.current;
+
+  const focusedMoniker: SpatialFocusActions["focusedMoniker"] = () =>
+    focusedMonikerRef.current;
 
   const subscribeFocusChanged: SpatialFocusActions["subscribeFocusChanged"] = (
     subscriber,
@@ -448,6 +483,7 @@ function buildSpatialFocusActions(
     drillIn,
     drillOut,
     focusedKey,
+    focusedMoniker,
     subscribeFocusChanged,
   };
 }

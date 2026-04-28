@@ -2513,10 +2513,13 @@ pub async fn spatial_focus(
 /// currently-focused scope (the React side passes its own focused key
 /// to keep this call symmetric across windows).
 ///
-/// Returns `Ok(())` whether or not focus actually moved — the kernel
-/// returns `None` when the strategy declines (no target in that
-/// direction), the strategy returns a moniker that no scope owns, or the
-/// resolved key is already focused. In all those cases nothing is emitted.
+/// Returns `Ok(())` whether or not focus actually moved — under the
+/// no-silent-dropout contract, the kernel always returns a moniker; if
+/// it equals the focused moniker (semantic "stay put" or torn-state
+/// echo), `navigate_with` short-circuits via the
+/// "already focused → no event" check in `SpatialState::focus` and
+/// nothing is emitted. Same outcome when the resolved moniker doesn't
+/// own any registered scope.
 #[tauri::command]
 pub async fn spatial_navigate(
     window: Window,
@@ -2588,17 +2591,19 @@ pub async fn spatial_pop_layer(state: State<'_, AppState>, key: LayerKey) -> Res
 /// Pure registry query — delegates to [`SpatialRegistry::drill_in`] and
 /// returns the result verbatim. Does not mutate focus state and does not
 /// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
-/// on a non-null result, falling through to the next command (typically
-/// inline edit) on `null`.
+/// on the result. Under the no-silent-dropout contract the kernel always
+/// returns a [`Moniker`]; the React side detects "no descent happened"
+/// by comparing the result against `focused_moniker`.
 ///
-/// `Some(Moniker)` — the zone has a registered `last_focused` (preferred)
-/// or at least one child entry, and that entry's moniker is returned for
-/// the caller to focus.
+/// Result equals `focused_moniker` when:
+/// - the scope is a leaf (no children to descend into) — React falls
+///   through to inline edit if the leaf has an editor;
+/// - the zone is empty (no children at all) — React falls through;
+/// - the key is unknown — torn state, kernel emits `tracing::error!`.
 ///
-/// `None` — the key is unknown, the scope is a leaf with no children to
-/// descend into, the zone is empty, or the `last_focused` slot is stale
-/// (the kernel falls back to first-child by rect top-left, but if the zone
-/// has no children at all, `None` propagates).
+/// Result is a different moniker when the zone has a registered
+/// `last_focused` (preferred) or at least one child entry; the caller
+/// dispatches `setFocus` against the entity-focus store.
 ///
 /// The `window` parameter is unused but kept in the signature for
 /// symmetry with the other spatial commands; lock acquisition still
@@ -2609,8 +2614,12 @@ pub async fn spatial_drill_in(
     _window: Window,
     state: State<'_, AppState>,
     key: SpatialKey,
-) -> Result<Option<Moniker>, String> {
-    let moniker = with_spatial(&state, |registry, _spatial_state| registry.drill_in(key)).await;
+    focused_moniker: Moniker,
+) -> Result<Moniker, String> {
+    let moniker = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_in(key, &focused_moniker)
+    })
+    .await;
     Ok(moniker)
 }
 
@@ -2620,16 +2629,21 @@ pub async fn spatial_drill_in(
 /// Pure registry query — delegates to [`SpatialRegistry::drill_out`] and
 /// returns the result verbatim. Does not mutate focus state and does not
 /// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
-/// on a non-null result, falling through to `app.dismiss` (close the
-/// topmost modal layer) on `null`.
+/// on the result. Under the no-silent-dropout contract the kernel always
+/// returns a [`Moniker`]; the React side compares the result against
+/// `focused_moniker` to detect "no zone-level drill happened" and falls
+/// through to `app.dismiss` (close the topmost modal layer).
 ///
-/// `Some(Moniker)` — the scope has a registered `parent_zone`, and that
-/// zone's moniker is returned for the caller to focus.
+/// Result equals `focused_moniker` when:
+/// - the scope sits at the layer root (no enclosing zone) — well-formed
+///   edge, no tracing;
+/// - the key is unknown — torn state, kernel emits `tracing::error!`;
+/// - the `parent_zone` reference points at an unregistered scope —
+///   torn state, kernel emits `tracing::error!`.
 ///
-/// `None` — the key is unknown, the scope sits directly at the layer
-/// root (no enclosing zone), or the `parent_zone` reference points at a
-/// scope that is no longer registered. In all cases the React side falls
-/// through to the next Escape handler.
+/// Result is a different moniker when the scope has a registered,
+/// resolvable `parent_zone`; the caller dispatches `setFocus` against
+/// the entity-focus store.
 ///
 /// The `window` parameter is unused but kept in the signature for
 /// symmetry with the other spatial commands; lock acquisition still
@@ -2640,8 +2654,12 @@ pub async fn spatial_drill_out(
     _window: Window,
     state: State<'_, AppState>,
     key: SpatialKey,
-) -> Result<Option<Moniker>, String> {
-    let moniker = with_spatial(&state, |registry, _spatial_state| registry.drill_out(key)).await;
+    focused_moniker: Moniker,
+) -> Result<Moniker, String> {
+    let moniker = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_out(key, &focused_moniker)
+    })
+    .await;
     Ok(moniker)
 }
 

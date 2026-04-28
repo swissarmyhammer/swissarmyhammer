@@ -213,9 +213,28 @@ async function defaultInvokeImpl(
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "spatial_drill_in") {
     const key = (args as { key?: string })?.key ?? "";
-    return drillInResponses.has(key) ? drillInResponses.get(key)! : null;
+    const focusedMoniker =
+      (args as { focusedMoniker?: string })?.focusedMoniker ?? "";
+    // Under the no-silent-dropout contract the kernel echoes the
+    // focused moniker when there's nothing to descend into. Test
+    // entries with non-null values mean "drill walked to a child" —
+    // return that string verbatim. Test entries with null mean
+    // "stay put" (no children, leaf, unknown) — echo the focused
+    // moniker so the React closure's compare-to-focused fall-through
+    // fires.
+    if (drillInResponses.has(key)) {
+      const v = drillInResponses.get(key);
+      return v === null ? focusedMoniker : v;
+    }
+    return focusedMoniker;
   }
-  if (cmd === "spatial_drill_out") return null;
+  if (cmd === "spatial_drill_out") {
+    // Same echo contract for drill-out — the layer-root edge returns
+    // the focused moniker so the React side dispatches app.dismiss.
+    const focusedMoniker =
+      (args as { focusedMoniker?: string })?.focusedMoniker ?? "";
+    return focusedMoniker;
+  }
   if (cmd === "spatial_navigate") return null;
   return undefined;
 }

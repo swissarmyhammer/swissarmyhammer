@@ -178,7 +178,16 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "list_commands_for_scope") return [];
   if (cmd === "dispatch_command") return undefined;
-  if (cmd === "spatial_drill_in") return null;
+  if (cmd === "spatial_drill_in") {
+    // Under the no-silent-dropout contract the kernel echoes the
+    // focused moniker when there's nothing to descend into. The field
+    // tests below never set up children for the field zones they
+    // exercise — drill-in must echo the focused moniker so the
+    // closure's compare-to-focused fall-through opens the editor.
+    return (
+      (args as { focusedMoniker?: string } | undefined)?.focusedMoniker ?? null
+    );
+  }
   return undefined;
 }
 
