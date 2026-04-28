@@ -13,6 +13,22 @@ title: 'Rust kernel: Focusable, FocusZone, FocusLayer, FocusScope types + Spatia
 
 Define the Rust kernel types for spatial focus inside the new `swissarmyhammer-focus` crate. These types **peer** with React components of the same names (see the React-primitives and FocusScope-refactor cards). UI is authoritative for structure — React declares the components and registers them via Tauri commands. Rust owns all computation (beam search, fallback, layer ops) and emits events.
 
+## Update — three peers, not four (kanban card 01KQ5PP55SAAVJ0V3HDJ1DGNBY)
+
+This card was authored when the spatial-nav kernel was planned to expose **four peers**: `Focusable` (leaf), `FocusZone` (container), `FocusLayer` (modal boundary), and a composite `FocusScope` enum that the registry stored per `SpatialKey`. After implementing it that way, the composite-vs-primitive split smeared `showFocusBar`, click handling, and indicator rendering across two layers and turned out to be the systemic root of why visible focus was missing on most components.
+
+Card `01KQ5PP55SAAVJ0V3HDJ1DGNBY` collapsed the model into **three peers**:
+
+| Concept | Role | React | Rust |
+|---|---|---|---|
+| Layer | Modal boundary, hard nav stop | `<FocusLayer>` | `FocusLayer` |
+| Zone | Navigable container | `<FocusZone>` | `FocusZone` |
+| Scope | Leaf — shows focus, takes clicks, navigates | `<FocusScope>` | `FocusScope` |
+
+The leaf struct that used to be named `Focusable` is now `FocusScope`. The public `FocusScope` enum is gone — the registry stores leaves and zones via an internal discriminator that is not part of the public API. Consumers iterate the registry through `leaves_in_layer`, `zones_in_layer`, `leaves_iter`, and `zones_iter`, which yield the typed structs directly. The Tauri command `spatial_register_focusable` was renamed to `spatial_register_scope`. `<Focusable>` is a transitional re-export of `<FocusScope>` until the per-component cards finish migrating their imports; the file gets deleted in card `01KQ5PSMYE3Q60SV8270S6K819`.
+
+The terminology section below was originally written against the four-peer model. Read the **three-peer rewrite** below as the live definition; the four-peer wording is preserved underneath for historical context.
+
 ### Crate placement
 
 **Lives in `swissarmyhammer-focus`** (created by card `01KQ2E7RPBPJ8T8KZX39N2SZ0A`). Spatial focus is generic — opaque `Moniker` strings, abstract `Rect`s, `WindowLabel`s. No kanban concepts, no Tauri, no domain types. Putting it in `swissarmyhammer-kanban` was wrong; the dedicated crate makes it reusable, easier to test, and keeps the kanban crate focused on board logic.
@@ -21,30 +37,25 @@ Define the Rust kernel types for spatial focus inside the new `swissarmyhammer-f
 swissarmyhammer-focus/src/
   lib.rs            (module declarations)
   types.rs          ← THIS CARD: newtypes (WindowLabel, SpatialKey, LayerKey, Moniker, LayerName, Pixels) + Rect + Direction
-  scope.rs          ← THIS CARD: Focusable, FocusZone, FocusScope enum
+  scope.rs          ← THIS CARD: FocusScope (leaf struct) + FocusZone struct + internal RegisteredScope enum
   layer.rs          ← THIS CARD: FocusLayer struct
-  registry.rs       ← THIS CARD: SpatialRegistry with scope + layer ops
+  registry.rs       ← THIS CARD: SpatialRegistry with scope + layer ops; ChildScope enum for variant-aware children
   state.rs          (SpatialState — card 01KNM3YHHFJ3...)
   navigate.rs       (BeamNavStrategy impl — card 01KNQXXF5W...)
   observer.rs       (FocusEventSink impls — card 01KQ2E7RPBPJ8...)
 ```
 
-The crate skeleton + traits exist before this card runs (per the `01KQ2E7RPBPJ8...` dependency). This card fills `types.rs`, `scope.rs`, `layer.rs`, and `registry.rs`.
-
-**`swissarmyhammer-kanban/src/focus.rs` is untouched** — that file holds `resolve_focused_column`, kanban-specific column resolver, which stays where it is. The earlier plan to migrate it to a `focus/` subdirectory is canceled.
-
-### The four peer types
+### The three peer types (live)
 
 | Role                | React component     | Rust type                                    |
 |---------------------|---------------------|----------------------------------------------|
-| Leaf focusable point| `Focusable`         | `swissarmyhammer_focus::Focusable`           |
-| Navigable container | `FocusZone`         | `swissarmyhammer_focus::FocusZone`           |
-| Modal layer boundary| `FocusLayer`        | `swissarmyhammer_focus::FocusLayer`          |
-| Entity-aware wrapper| `FocusScope`        | `swissarmyhammer_focus::FocusScope` (enum)   |
+| Leaf focus point    | `<FocusScope>`      | `swissarmyhammer_focus::FocusScope`          |
+| Navigable container | `<FocusZone>`       | `swissarmyhammer_focus::FocusZone`           |
+| Modal layer boundary| `<FocusLayer>`      | `swissarmyhammer_focus::FocusLayer`          |
 
-### Terminology — canonical definitions
+There is no public sum-type enum that conflates leaves and zones. The registry stores them via an internal `RegisteredScope` enum that is not exported.
 
-These four terms are used everywhere in the spatial-nav plan. Definitions are normative; if another card uses these words differently, this card wins.
+### Terminology — canonical definitions (three-peer rewrite)
 
 **Layer** (`FocusLayer`)
 - A **hard modal boundary**. Spatial nav, fallback resolution, and zone tree walks **never cross a layer**.
@@ -61,20 +72,17 @@ These four terms are used everywhere in the spatial-nav plan. Definitions are no
 - A zone *is* focusable — you can drill out to it, then nav between sibling zones (zone-level beam search).
 - Identified by `SpatialKey` (ULID per mount).
 
-**Focusable** (the primitive, lower-case "focusable" when used as a noun)
+**Scope** (`FocusScope`)
 - A **leaf focusable point** — atomic, no children, no zone-level features.
 - Examples: task title text, status pill, tag pill, mention pill, button, menu item, breadcrumb item.
 - Identified by `SpatialKey`.
+- The Rust struct `FocusScope` is the leaf. The React `<FocusScope>` is the same — a leaf primitive that registers via `spatial_register_scope`, subscribes to per-key focus claims, renders the visible focus indicator, takes click events, and pushes the entity-aware `CommandScope` / right-click / double-click chrome.
 
-**Scope** (`FocusScope`, the **umbrella term**)
-- On Rust: the sum type `enum FocusScope { Focusable(Focusable), Zone(FocusZone) }`. This is what the registry stores per `SpatialKey`.
-- On React: the **composite wrapper component** that adds entity plumbing (`CommandScope`, click-to-focus, context menu, focus bar, data-moniker) on top of one primitive (`<Focusable>` or `<FocusZone>`, picked via the `kind` prop).
-- A "scope" in spatial-nav speak = "any registered focus point" = either a Focusable or a FocusZone. Not a Layer.
-- "Scope chain" / `parent_zone` chain = walk from focused leaf up through ancestor zones to the layer root.
+The umbrella term "**any registered focus point**" still applies (a leaf or a zone, but never a layer); the internal `RegisteredScope` enum captures it for in-crate iteration. There is no public enum to navigate, by design.
 
 ### Disambiguation: `CommandScope` is a separate concept
 
-The existing kanban codebase has `CommandScope` (in `kanban-app/ui/src/lib/command-scope.tsx`) — that is the **command-dispatch** boundary used to resolve which scope handles a dispatched command (like `ui.inspect`). It is *not* the same as `FocusScope`. The composite `<FocusScope>` React component creates **both** a spatial entry (in `swissarmyhammer-focus`) **and** a `CommandScope` (in the kanban app). The two systems share the moniker but are otherwise independent.
+The existing kanban codebase has `CommandScope` (in `kanban-app/ui/src/lib/command-scope.tsx`) — that is the **command-dispatch** boundary used to resolve which scope handles a dispatched command (like `ui.inspect`). It is *not* the same as `FocusScope`. The React `<FocusScope>` component creates **both** a spatial entry (in `swissarmyhammer-focus`) **and** a `CommandScope` (in the kanban app). The two systems share the moniker but are otherwise independent.
 
 `swissarmyhammer-focus` itself has no concept of `CommandScope` — it's pure spatial-nav, generic across consumers.
 
@@ -84,7 +92,7 @@ The existing kanban codebase has `CommandScope` (in `kanban-app/ui/src/lib/comma
 use swissarmyhammer_common::define_id;
 
 define_id!(WindowLabel, "Tauri window label — which window a scope/layer lives in");
-define_id!(SpatialKey, "ULID per FocusScope/FocusZone/Focusable instance");
+define_id!(SpatialKey, "ULID per FocusLayer/FocusZone/FocusScope instance");
 define_id!(LayerKey,   "ULID per FocusLayer instance");
 define_id!(Moniker,    "Entity focus identity: \"task:01ABC\", \"ui:toolbar.new\"");
 define_id!(LayerName,  "Layer role: \"window\", \"inspector\", \"dialog\", \"palette\"");
@@ -118,11 +126,12 @@ impl Rect {
 }
 ```
 
-### The four types
+### The three peer types (live shape)
 
 ```rust
+/// Leaf — Rust peer of `<FocusScope>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Focusable {
+pub struct FocusScope {
     pub key: SpatialKey,
     pub moniker: Moniker,
     pub rect: Rect,
@@ -131,6 +140,7 @@ pub struct Focusable {
     pub overrides: HashMap<Direction, Option<Moniker>>,
 }
 
+/// Container — Rust peer of `<FocusZone>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FocusZone {
     pub key: SpatialKey,
@@ -142,6 +152,7 @@ pub struct FocusZone {
     pub overrides: HashMap<Direction, Option<Moniker>>,
 }
 
+/// Modal layer — Rust peer of `<FocusLayer>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FocusLayer {
     pub key: LayerKey,
@@ -150,43 +161,27 @@ pub struct FocusLayer {
     pub window_label: WindowLabel,
     pub last_focused: Option<SpatialKey>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum FocusScope {
-    Focusable(Focusable),
-    Zone(FocusZone),
-}
-
-impl FocusScope {
-    pub fn key(&self) -> &SpatialKey;
-    pub fn moniker(&self) -> &Moniker;
-    pub fn rect(&self) -> &Rect;
-    pub fn layer_key(&self) -> &LayerKey;
-    pub fn parent_zone(&self) -> Option<&SpatialKey>;
-    pub fn overrides(&self) -> &HashMap<Direction, Option<Moniker>>;
-    pub fn is_zone(&self) -> bool;
-    pub fn is_focusable(&self) -> bool;
-    pub fn as_zone(&self) -> Option<&FocusZone>;
-    pub fn as_zone_mut(&mut self) -> Option<&mut FocusZone>;
-}
 ```
 
 ### Registry
 
 ```rust
-pub struct SpatialRegistry {
-    scopes: HashMap<SpatialKey, FocusScope>,
-    layers: HashMap<LayerKey, FocusLayer>,
-}
+pub struct SpatialRegistry { /* opaque */ }
 
 impl SpatialRegistry {
-    pub fn register_focusable(&mut self, f: Focusable);
+    pub fn register_scope(&mut self, f: FocusScope);          // was register_focusable
     pub fn register_zone(&mut self, z: FocusZone);
     pub fn unregister_scope(&mut self, key: &SpatialKey);
     pub fn update_rect(&mut self, key: &SpatialKey, rect: Rect);
-    pub fn scope(&self, key: &SpatialKey) -> Option<&FocusScope>;
-    pub fn children_of_zone(&self, zone_key: &SpatialKey) -> impl Iterator<Item = &FocusScope>;
+
+    pub fn scope(&self, key: &SpatialKey) -> Option<&FocusScope>;     // leaf only
+    pub fn zone(&self, key: &SpatialKey) -> Option<&FocusZone>;       // zone only
+    pub fn is_registered(&self, key: &SpatialKey) -> bool;            // variant-blind
+    pub fn leaves_iter(&self) -> impl Iterator<Item = &FocusScope>;
+    pub fn zones_iter(&self) -> impl Iterator<Item = &FocusZone>;
+    pub fn leaves_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusScope>;
+    pub fn zones_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusZone>;
+    pub fn children_of_zone(&self, zone_key: &SpatialKey) -> impl Iterator<Item = ChildScope<'_>>;
     pub fn ancestor_zones(&self, key: &SpatialKey) -> Vec<&FocusZone>;
 
     pub fn push_layer(&mut self, l: FocusLayer);
@@ -195,16 +190,20 @@ impl SpatialRegistry {
     pub fn children_of_layer(&self, key: &LayerKey) -> Vec<&FocusLayer>;
     pub fn root_for_window(&self, label: &WindowLabel) -> Option<&FocusLayer>;
     pub fn ancestors_of_layer(&self, key: &LayerKey) -> Vec<&FocusLayer>;
+}
 
-    pub fn scopes_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusScope>;
+/// Variant-aware view returned by `children_of_zone`. Public, no internal-enum leak.
+pub enum ChildScope<'a> {
+    Leaf(&'a FocusScope),
+    Zone(&'a FocusZone),
 }
 ```
 
 ### Tauri commands — in `kanban-app/src/commands.rs`
 
-The headless registry lives in `swissarmyhammer-focus`. Tauri adapters live in `kanban-app/src/commands.rs`, each deriving `WindowLabel` from the `tauri::Window` parameter and delegating to the focus crate. Wiring of the actual `spatial_*` invoke handlers is owned by downstream cards (`01KNQXXF5W7G4JP73C6ZCMKYKX` for `spatial_navigate`, plus the per-feature cards this task `blocks`).
+The headless registry lives in `swissarmyhammer-focus`. Tauri adapters live in `kanban-app/src/commands.rs`, each deriving `WindowLabel` from the `tauri::Window` parameter and delegating to the focus crate. The leaf-scope command is `spatial_register_scope` (renamed from `spatial_register_focusable` in card `01KQ5PP55SAAVJ0V3HDJ1DGNBY`); the container command stays `spatial_register_zone`.
 
-### Tests — `swissarmyhammer-focus/tests/registry.rs`
+### Tests — `swissarmyhammer-focus/tests/`
 
 Pure-Rust, no Tauri, no jsdom, no kanban. Constructs synthetic `Rect`/`SpatialKey`/`Moniker` values with `::from_string` / `Pixels(..)`.
 
@@ -212,38 +211,38 @@ Pure-Rust, no Tauri, no jsdom, no kanban. Constructs synthetic `Rect`/`SpatialKe
 
 - **`swissarmyhammer-focus`, not `swissarmyhammer-kanban`**: spatial nav is generic — opaque monikers, abstract rects. Pulling it out keeps it reusable and keeps the kanban crate focused. (`swissarmyhammer-commands` stays Tier 0.)
 - **`define_id!` macro reuse**: consistent with `TaskId`/`ColumnId`/`TagId`; avoids hand-rolled boilerplate.
-- **Four peer types, not a `kind` field on one struct**: zone-only fields are type-checked.
-- **`FocusScope` as a Rust enum**: one map, pattern matching.
+- **Three peer types, not a `kind` field on one struct**: zone-only fields are type-checked.
+- **No public sum-type enum**: registry stores leaves and zones via an internal discriminator; consumers iterate through typed accessors.
 - **`Pixels` arithmetic**: prevents accidental mixing of pixel values with unrelated floats.
 
 ### Subtasks
 - [x] (Skeleton + traits exist already from `01KQ2E7RPBPJ8...`)
 - [x] Fill `swissarmyhammer-focus/src/types.rs`: `define_id!` newtypes; hand-roll `Pixels` + arithmetic; `Rect` + accessors; `Direction` enum
-- [x] Fill `swissarmyhammer-focus/src/scope.rs`: `Focusable`, `FocusZone`, `FocusScope` enum + helper methods
+- [x] Fill `swissarmyhammer-focus/src/scope.rs`: `FocusScope` (leaf), `FocusZone`, internal `RegisteredScope` enum + helper methods
 - [x] Fill `swissarmyhammer-focus/src/layer.rs`: `FocusLayer`
-- [x] Fill `swissarmyhammer-focus/src/registry.rs`: `SpatialRegistry` with all scope + layer + forest + zone-tree ops
+- [x] Fill `swissarmyhammer-focus/src/registry.rs`: `SpatialRegistry` with all scope + layer + forest + zone-tree ops; `ChildScope` variant-aware view
 - [x] Tauri commands in `kanban-app/src/commands.rs` import from `swissarmyhammer_focus::*`; derive `WindowLabel` from `tauri::Window` (deferred to downstream cards that wire actual `spatial_*` handlers — this card produces the kernel they delegate to)
 
 ## Acceptance Criteria
 - [x] All types live in `swissarmyhammer-focus` — NOT `swissarmyhammer-kanban`
 - [x] String-valued newtypes use `define_id!`; no hand-rolled `#[serde(transparent)]` String wrappers
 - [x] No bare `String` or `f64` on any public type / command signature
-- [x] `Focusable`, `FocusZone`, `FocusLayer` are distinct structs; `FocusScope` is an enum over `Focusable | Zone`
+- [x] `FocusScope` (leaf), `FocusZone`, `FocusLayer` are distinct structs; no public sum-type enum
 - [x] `Pixels` supports arithmetic without `.0` access
 - [x] `swissarmyhammer-kanban/src/focus.rs` (`resolve_focused_column`) untouched
 - [x] Tauri commands derive `WindowLabel` from `tauri::Window` (kernel design enforces this — concrete handlers wired by downstream cards)
 - [x] `cargo test -p swissarmyhammer-focus` passes; no Tauri or jsdom required
 
-## Tests (in `swissarmyhammer-focus/tests/registry.rs`)
+## Tests (in `swissarmyhammer-focus/tests/focus_registry.rs`)
 - [x] Each newtype JSON-round-trips as a bare primitive
 - [x] `Pixels` arithmetic is type-preserving
-- [x] `FocusScope::Focusable(_)` and `FocusScope::Zone(_)` round-trip with `"kind"` tag
-- [x] Registry: register a Focusable + a FocusZone; `scope(key)` returns the right variant
-- [x] Registry: `children_of_zone` direct children only
+- [x] `FocusScope` and `FocusZone` each round-trip independently (no public enum to round-trip)
+- [x] Registry: register a leaf + a zone; `scope(key)` returns `Some` only for leaves, `zone(key)` only for zones
+- [x] Registry: `children_of_zone` direct children only (returns `ChildScope` enum)
 - [x] Registry: `ancestor_zones` walks `parent_zone` up to layer root
 - [x] Registry: `children_of_layer` filtered by parent, not cross-window
 - [x] Registry: `ancestors_of_layer` walks `layer.parent`
-- [x] Registry: `scopes_in_layer` returns Focusables and Zones by `layer_key`
+- [x] Registry: `leaves_in_layer` / `zones_in_layer` typed iterators by `layer_key`
 - [x] Registry: 2 windows + 2 inspector layers + 1 dialog = 5 layers, 2 roots, correct chains
 
 ## Workflow
@@ -259,3 +258,13 @@ Ran in working tree:
 - `swissarmyhammer-kanban/src/focus.rs` (`resolve_focused_column`) last touched in unrelated refactor commit `b81336d42`; untouched for this card.
 
 All kernel-types acceptance criteria satisfied. Tauri command wiring belongs to the downstream cards this task `blocks`.
+
+## Verification (2026-04-26 — three-peer collapse)
+
+Card `01KQ5PP55SAAVJ0V3HDJ1DGNBY` rewrote the kernel as three peers:
+- `Focusable` struct → `FocusScope` struct (leaf).
+- Public `FocusScope` enum dropped; internal `RegisteredScope` enum stored in registry.
+- Tauri command `spatial_register_focusable` → `spatial_register_scope`.
+- Registry surface: `scope`/`zone` typed accessors, `leaves_in_layer`/`zones_in_layer` iterators, `ChildScope` view for variant-aware children.
+
+`cargo test -p swissarmyhammer-focus` — 89 tests pass.

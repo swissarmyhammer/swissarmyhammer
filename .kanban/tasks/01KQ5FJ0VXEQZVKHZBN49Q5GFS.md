@@ -1,92 +1,89 @@
 ---
 assignees:
 - claude-code
+depends_on:
+- 01KQ5FMAAJZVPC0RT4CVXAGQY9
 position_column: todo
-position_ordinal: '8880'
-title: 'single-changelog 1/2: stop the entity-layer JSONL writer; store layer becomes the only writer per item'
+position_ordinal: 7f8180
+project: single-changelog
+title: 'single-changelog: stop the entity dual-writer; delete orphaned entity-layer UndoStack module'
 ---
 #single-changelog #refactor #entity #tech-debt
 
-## Why
+## Goal
 
-Two writers currently append to the same per-entity JSONL file at `{root}/{type}s/{id}.jsonl`:
+After this card, the entity layer has exactly one changelog writer per `.jsonl` file (the store layer's `ChangelogEntry`), one undo stack module (`swissarmyhammer-store::stack::UndoStack`), and no orphan parallel implementations.
 
-1. `swissarmyhammer-store::Changelog::append` writes records carrying `forward_patch` / `reverse_patch` / `item_id` (used by `StoreHandle::undo` / `redo` — `swissarmyhammer-store/src/handle.rs:339`).
-2. `swissarmyhammer-entity::changelog::append_changelog` writes records carrying `entity_type` / `entity_id` / `changes` (used today by `EntityContext::read_changelog` for history surfacing and by the cache's computed-field inputs).
-
-The two shapes are mutually unparseable, so `read_changelog` had to grow a band-aid (`is_store_changelog_line`) to skip the other writer's lines without warning. The duplication is also wasteful at runtime: every entity write does two `OpenOptions::open + append + write_all` round-trips.
-
-The architectural answer (agreed in design discussion 2026-04-26): undo/redo stays at the store layer because it's generic across entity / view / perspective. Field-level info is a *projection* of the same text change — derivable, not worth persisting. The entity layer's runtime field-change events already flow through `EntityCache::subscribe()` (delivered in `entity-cache 4/4`, `01KP661D7CDKAAGTR51DX7CHM6`), so the on-disk entity-format log is purely persisted derived data.
-
-This card kills the second writer. The companion card (`single-changelog 2/2`) makes `read_changelog` project field-level history from store records on demand.
-
-## Scope: entities, perspectives, views — what's affected and what isn't
-
-Audited 2026-04-26. The dual-writer-to-the-same-file problem is **entity-only**.
-
-| Domain | Store-layer writer | Domain-layer writer | Same file? | In scope? |
-|---|---|---|---|---|
-| Entity (task / tag / column / actor / board) | `StoreHandle<EntityTypeStore>` writes `ChangelogEntry` (text patches) to `{type}s/{id}.jsonl` (`swissarmyhammer-store/src/handle.rs:52-58`) | `EntityContext` writes `ChangeEntry` (field diffs) to the same `{type}s/{id}.jsonl` (`swissarmyhammer-entity/src/context.rs:386: path.with_extension("jsonl")`) | **YES** | **YES** — this card fixes it |
-| Perspectives | `StoreHandle<PerspectiveStore>` writes `ChangelogEntry` to `perspectives/{id}.jsonl` (`PerspectiveStore::extension() = "yaml"`, store handle puts the changelog beside it) | None — `swissarmyhammer-perspectives` has no `append_changelog` function and no other changelog writer | n/a | **NO** — perspectives already has a single writer |
-| Views | None — `swissarmyhammer-views` has no `TrackedStore` impl, doesn't use `StoreHandle` | `swissarmyhammer-views::changelog::append_changelog` writes `ViewChangeEntry` (whole-document `previous`/`current` JSON snapshots) to a single shared `views.jsonl` (`ViewsChangelog::new(root.join("views.jsonl"))` at `swissarmyhammer-kanban/src/context.rs:120`); also implements its own undo via `views/changelog.rs::undo_entry:95` | n/a | **NO** — views has a single writer in a different file with its own undo machinery |
-
-So this card touches `swissarmyhammer-entity` only. Perspectives and views are out of scope; both already have one writer per file.
-
-A separate observation worth recording (not addressed here): views reinvent the changelog/undo wheel instead of using `swissarmyhammer-store`. That's a different smell — *redundant invention* rather than dual-writing — and a candidate for a future refactor card if anyone wants to unify undo/redo across all three domains. Not in the path of `single-changelog`.
+Depends on the projecting reader (`01KQ5FMAAJZVPC0RT4CVXAGQY9`) having landed — without it, turning off the entity-format writer would blank out the history pane and computed-field cache for every new edit, because the existing reader returns no entries for store-format records.
 
 ## What
 
-Stop calling `swissarmyhammer-entity::changelog::append_changelog` from the entity write path. Every entity mutation already produces a `swissarmyhammer-store::ChangelogEntry` via `StoreHandle::write/delete/archive/unarchive`; the second `ChangeEntry` write is now redundant.
+### Stop the duplicate writer
 
-### Production call sites to remove (4)
+Remove the four production call sites of `swissarmyhammer-entity::changelog::append_changelog`:
 
-- `swissarmyhammer-entity/src/context.rs:387` — entity create / update path (the helper that does `path.with_extension("jsonl")`)
-- `swissarmyhammer-entity/src/context.rs:461` — second call site
-- `swissarmyhammer-entity/src/context.rs:623` — third call site
-- `swissarmyhammer-entity/src/context.rs:699` — fourth call site
+- `swissarmyhammer-entity/src/context.rs:387` (create / update path)
+- `swissarmyhammer-entity/src/context.rs:461` (delete path)
+- `swissarmyhammer-entity/src/context.rs:623` (archive path)
+- `swissarmyhammer-entity/src/context.rs:699` (unarchive path)
 
-(Verify by grep at implementation time — the line numbers above are a 2026-04-26 snapshot. Use `grep -nE 'append_changelog\(' swissarmyhammer-entity/src/context.rs` to enumerate them fresh.)
+Verify with `grep -nE 'append_changelog\(' swissarmyhammer-entity/src/context.rs` — line numbers are a 2026-04-26 snapshot.
 
-### What stays
+`pub async fn append_changelog` itself stays exported with `#[deprecated(note = "single-changelog: write through StoreHandle instead")]` because tests use it as a fixture (`changelog.rs` test module, `cache.rs:1525, 2107, 2174, 2336`, `context.rs:3437, 3440`). The cleanup card removes both the function and those test fixtures.
 
-- `pub async fn append_changelog(path, entry)` itself stays defined and exported. It's used by tests (`swissarmyhammer-entity/src/changelog.rs` test module, `swissarmyhammer-entity/src/cache.rs:1525, 2107, 2174, 2336`, `context.rs:3437, 3440`) to set up legacy on-disk state. After both `single-changelog` cards land, `single-changelog 2/2` will mark it `#[deprecated]` and the next cleanup pass deletes it.
-- `is_store_changelog_line` (added 2026-04-26) stays. Pre-existing entity-format lines remain on disk forever; the reader still has to skip store-format lines until card 2 changes the reader.
-- `swissarmyhammer-views::changelog::append_changelog` and `swissarmyhammer-perspectives` are untouched — see scoping table above.
+### Delete the orphan UndoStack module
 
-### What about the runtime event path?
+`swissarmyhammer-entity/src/undo_stack.rs` is a ~600-line parallel implementation of `swissarmyhammer-store::stack::UndoStack`. It has its own `UndoStack`, `UndoEntry`, `pub fn load`, `save`, `push`, `undo`, `redo`, `trim`, plus a 7-test module — and is **not declared in `swissarmyhammer-entity/src/lib.rs`**. The `pub mod undo_stack;` line is missing, so the file is never compiled into the crate, never reached, never executed. Pure dead code.
 
-`EntityCache::write` already computes the field diff in memory and broadcasts it on the cache's channel — that's how the UI gets `entity-field-changed` today (per `entity-cache 4/4`). Stopping the on-disk write does not affect that channel. Verified by the watcher tests in `kanban-app/src/watcher.rs` (`bridge_end_to_end_*`): they subscribe to the cache, not to the file.
+Delete the file. No other changes needed — nothing references it.
 
-### Backwards compatibility
+### Backwards compat for existing on-disk data
 
-- Old on-disk entity-format records remain readable via `read_changelog` (no shape change in this card; card 2 changes the reader).
-- Mixed files (where some lines are entity-format and some are store-format) keep working — the band-aid skip already handles this.
-- Undo/redo continues to work — it reads only the store-format records.
+- Old `.kanban/{type}s/{id}.jsonl` files contain a mix of entity-format and store-format records. The projecting reader (card `01KQ5FMAAJZVPC0RT4CVXAGQY9`) handles both shapes.
+- Mixed files keep working; the band-aid `is_store_changelog_line` is already deleted by the projecting-reader card.
+- Per-edit disk writes drop from 2 to 1.
 
-## Acceptance criteria
+## Acceptance
 
-- [ ] No production code path in `swissarmyhammer-entity` calls `append_changelog`. Verify with `grep -nE 'append_changelog\(' swissarmyhammer-entity/src/*.rs | grep -v 'mod tests\|#\[cfg(test)\]\|#\[test\]\|#\[tokio::test\]'`.
+- [ ] No production code path in `swissarmyhammer-entity` calls `append_changelog`. Verify: `grep -nE 'append_changelog\(' swissarmyhammer-entity/src/*.rs | grep -v 'mod tests\|#\[cfg(test)\]\|#\[test\]\|#\[tokio::test\]'` returns empty.
 - [ ] After running the kanban app and editing a task, `wc -l .kanban/tasks/{id}.jsonl` grows by exactly 1 per edit (was: 2). Verify by tailing the file before and after a single command.
-- [ ] No new lines containing `"changes":[` appear in `.kanban/tasks/*.jsonl` after this card lands. Old lines remain.
-- [ ] No regression in perspectives or views: `.kanban/perspectives/*.jsonl` and `.kanban/views.jsonl` continue to be written by their respective single writers, with line counts unchanged from current behavior.
-- [ ] Frontend continues to receive `entity-field-changed` events with the same JSON shape — frontend tests in `kanban-app/ui` unchanged and green.
+- [ ] No new lines containing `"changes":[` appear in `.kanban/{type}s/*.jsonl` after this card lands. Old lines remain.
+- [ ] `swissarmyhammer-entity/src/undo_stack.rs` is deleted. `find swissarmyhammer-entity/src -name 'undo_stack.rs'` returns nothing.
+- [ ] `append_changelog` carries `#[deprecated]`; build is clean.
+- [ ] Frontend continues to receive `entity-created`, `entity-field-changed`, `entity-removed`, `attachment-changed` events with the same JSON shapes — frontend tests in `kanban-app/ui` unchanged and green.
+- [ ] No regression in undo/redo of entity create / update / delete / archive / unarchive — all four `ChangeOp` arms in `StoreHandle::undo` keep working.
+- [ ] **Perspective regression**: `swissarmyhammer-kanban/tests/undo_cross_cutting.rs::perspective_delete_undo_restores_cache_and_emits_event` (line 1031) passes unchanged. This card touches `swissarmyhammer-store::StoreContext::undo` and `sync_entity_cache_from_disk`, both shared with the perspective undo path. The perspective test is the canonical guard that perspective-create / perspective-deleted Tauri events still flow correctly.
+- [ ] No regression in perspectives' on-disk shape: `.kanban/perspectives/*.jsonl` continues to contain only store-format records, written by `StoreHandle<PerspectiveStore>` (single writer).
 - [ ] `cargo nextest run -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-app -p swissarmyhammer-perspectives -p swissarmyhammer-views` green.
-- [ ] No regression in undo/redo — `swissarmyhammer-kanban/tests/undo_cross_cutting.rs` passes unchanged.
+- [ ] `cargo nextest run -p swissarmyhammer-kanban --test undo_cross_cutting` green (the cross-cutting test suite covers entity + perspective delete-undo together).
 
-## Tests
+## Tests — focus on delete/undo-delete event roundtrips
 
-- [ ] `swissarmyhammer-entity/src/context.rs` — add `write_does_not_append_to_entity_changelog`: build an `EntityContext` against a tempdir, write an entity, verify the per-entity `.jsonl` file contains zero `"changes":[` lines (only store-format records). Locks the regression in.
-- [ ] `swissarmyhammer-entity/src/context.rs` — add `delete_does_not_append_to_entity_changelog`: same shape, for the delete path.
-- [ ] Update `read_changelog`-related tests as needed. The fixture for any test that previously assumed a write produced a `ChangeEntry` line on disk needs to either (a) call `append_changelog` directly to set up legacy state, or (b) be reframed to test card-2 projection (better deferred to that card).
+The most failure-prone path is "user deletes X, then undoes the delete, the UI must restore X." Lock this down at every layer for entities, and assert the perspective regression as a guard.
+
+### Entity layer (write these)
+
+- [ ] `swissarmyhammer-entity/src/context.rs` — `write_does_not_append_to_entity_changelog`: `EntityContext::write` against tempdir, assert per-entity `.jsonl` has zero `"changes":[` lines.
+- [ ] `swissarmyhammer-entity/src/context.rs` — `delete_does_not_append_to_entity_changelog`: `EntityContext::delete`, same assertion.
+- [ ] `swissarmyhammer-entity/src/context.rs` — `delete_then_undo_round_trip_emits_correct_events`: subscribe to `EntityCache::subscribe()`, write a task (`EntityChanged` fires), delete it (`EntityDeleted` fires), `StoreContext::undo()` to restore (`EntityChanged` fires via `sync_entity_cache_from_disk`), redo (`EntityDeleted` fires again). Assert the event sequence and that the entity is `read()`-able after undo and not after redo.
+- [ ] `swissarmyhammer-entity/src/context.rs` — `archive_then_undo_round_trip_emits_correct_events`: same shape for archive/unarchive paths.
+- [ ] `kanban-app/src/watcher.rs` — `bridge_routes_undo_of_delete_to_entity_created`: end-to-end through the bridge. Real `EntityCache`, real bridge, fake Tauri emitter. Write → delete → undo. Assert the emitter receives, in order: `entity-created`, `entity-removed`, `entity-created`. The third event is `entity-created` (not `entity-field-changed`) because the bridge's seen-set was cleared on delete and the post-undo `EntityChanged` finds the key absent.
+
+### Perspective layer (regression guards — already exist)
+
+- [ ] `swissarmyhammer-kanban/tests/undo_cross_cutting.rs::perspective_delete_undo_restores_cache_and_emits_event` (line 1031) passes unchanged. This is the test that proves perspective-create / perspective-deleted events still flow through the shared `StoreContext::undo` infrastructure. It walks: create perspective → assert cache + file present → delete → assert `PerspectiveDeleted` event + file gone + cache empty → undo → assert file restored + cache restored + `PerspectiveChanged { is_create: false }` event → redo → assert removal. The bridge maps these to `entity-created` / `entity-removed` / `entity-field-changed` Tauri events with `entity_type: "perspective"`.
+
+### Cross-cutting
+
 - [ ] `cargo nextest run -p swissarmyhammer-entity` green.
 - [ ] `cargo nextest run -p kanban-app` green.
-- [ ] `cargo nextest run -p swissarmyhammer-perspectives -p swissarmyhammer-views` green (sanity check that scoping held).
+- [ ] `cargo nextest run -p swissarmyhammer-kanban --test undo_cross_cutting` green.
 
 ## Workflow
 
-`/tdd` — start with the two regression tests above. They fail today (the writes produce two lines; the test asserts one matches the store format). Remove the four `append_changelog` call sites, watch the tests turn green, run the full nextest, run the app once and tail a `.jsonl` to confirm one-line-per-edit.
+`/tdd` — start with the round-trip tests in `EntityContext` (they characterize the contract). Then the bridge round-trip test. Then the two no-disk-write tests. Then delete the four `append_changelog` call sites and `undo_stack.rs`. Run the cross-cutting tests; the perspective regression should pass without modification — if it doesn't, the writer-off changes broke shared infrastructure.
 
-## Scope / depends_on
+## Scope
 
-- depends_on: nothing — `entity-cache 4/4` (`01KP661D7CDKAAGTR51DX7CHM6`) already moved UI events off the file-watching path.
-- Blocks: `single-changelog 2/2` — that card replaces the reader and depends on this card having silenced the writer first (otherwise the projection would double-count).
+- depends_on: `01KQ5FMAAJZVPC0RT4CVXAGQY9` (projecting reader).
+- Blocks: nothing strictly. Independent of the views card and the cleanup card.

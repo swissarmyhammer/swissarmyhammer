@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNQXW7HHHB8HW76K3PXH3G34
 - 01KQ5PP55SAAVJ0V3HDJ1DGNBY
-position_column: doing
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffc580
 project: spatial-nav
 title: 'Toolbar: wrap action groups as zones, strip legacy keyboard nav'
 ---

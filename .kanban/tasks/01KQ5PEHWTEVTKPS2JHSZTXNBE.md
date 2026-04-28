@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQ5PP55SAAVJ0V3HDJ1DGNBY
 - 01KQ5QB6F4MTD35GBTARJH4JEW
-position_column: todo
-position_ordinal: 9f80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffca80
 project: spatial-nav
 title: 'RELEASE BLOCKER: spatial-nav focus is not actually visible to users — verify every component end-to-end'
 ---

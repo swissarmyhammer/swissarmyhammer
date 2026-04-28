@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNQXW7HHHB8HW76K3PXH3G34
 - 01KQ5PP55SAAVJ0V3HDJ1DGNBY
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffbc80
 project: spatial-nav
 title: 'Perspective: wrap perspective bar + container + view as zones, strip legacy nav'
 ---
@@ -35,11 +35,15 @@ The user reports that **perspective tabs cannot be focused or selected**. Struct
 - [ ] Each container zone (`ui:perspective`, `ui:view`) with `showFocusBar={false}` has an inline comment explaining why
 - [ ] Integration test asserts visible indicator after click on each perspective tab
 - [ ] Existing perspective tests stay green
+- [ ] Browser test at `kanban-app/ui/src/components/perspective-bar.spatial.test.tsx` passes under `cd kanban-app/ui && npm test`
+- [ ] Browser test at `kanban-app/ui/src/components/perspective-view.spatial.test.tsx` passes under `cd kanban-app/ui && npm test`
 
 ## Tests
 
 - [ ] `perspective-tab-bar.spatial-nav.test.tsx` — click each tab → assert visible indicator
 - [ ] Run `cd kanban-app/ui && npx vitest run` — all pass
+- [ ] `kanban-app/ui/src/components/perspective-bar.spatial.test.tsx` — Vitest browser-mode test for the bar + tabs
+- [ ] `kanban-app/ui/src/components/perspective-view.spatial.test.tsx` — Vitest browser-mode test for the view container
 
 ## Workflow
 
@@ -58,3 +62,39 @@ Three components wrap themselves in spatial-nav primitives via the conditional-z
 - `view-container.tsx` — `ViewSpatialZone` wraps the active view in `<FocusZone moniker="ui:view" className="flex-1 flex flex-col min-h-0 min-w-0">`.
 
 All 1498 tests passed at completion.
+
+## Browser Tests (mandatory)
+
+These run under Vitest browser mode (`vitest-browser-react` + Playwright Chromium). They are the source of truth for acceptance — manual UI verification is **not** acceptable for this task.
+
+### Test files
+- `kanban-app/ui/src/components/perspective-bar.spatial.test.tsx` — covers the bar zone + tab leaves
+- `kanban-app/ui/src/components/perspective-view.spatial.test.tsx` — covers the view container zone
+
+### Setup
+- Mock `@tauri-apps/api/core` and `@tauri-apps/api/event` per the canonical pattern in `grid-view.nav-is-eventdriven.test.tsx` (`vi.hoisted` + `mockInvoke` + `mockListen` + `fireFocusChanged` helper).
+- For the bar test: render `<PerspectiveTabBar perspectives={…} />` (with at least 2 tabs) inside `<SpatialFocusProvider><FocusLayer name="test">…</FocusLayer></SpatialFocusProvider>`.
+- For the view test: render `<PerspectiveContainer>…</PerspectiveContainer>` similarly.
+
+### Required test cases — perspective bar
+1. **Registration (bar zone)** — `mockInvoke` is called with `["spatial_register_zone", { key, moniker: "ui:perspective.bar" | "ui:perspective-bar", … }]`. Capture barKey.
+2. **Registration (each tab)** — every tab registers via `spatial_register_scope` with moniker `/^perspective_tab:.+$/`. Capture each tabKey.
+3. **Click → focus (tab)** — clicking `[data-moniker^="perspective_tab:"]` dispatches exactly one `spatial_focus` for THAT tab's key, not for the bar zone.
+4. **Focus claim → visible bar on tab leaves (`showFocusBar={true}`)** — `fireFocusChanged(tabKey)` mounts `[data-testid="focus-indicator"]` inside that tab.
+5. **Focus claim → no indicator on bar zone (`showFocusBar={false}`)** — `fireFocusChanged(barKey)` flips `data-focused` but no indicator mounts.
+6. **Keystrokes → navigate** — ArrowLeft / `h` and ArrowRight / `l` while a tab is focused dispatch `spatial_navigate` with the tab's key. (Arrow handling on the bar itself).
+7. **Drill-in (Enter) → activate perspective** — on a focused tab, Enter dispatches `spatial_drill_in` for the tab key, which the perspective container will use to switch to that perspective's view.
+8. **Unmount** — each tab dispatches `spatial_unregister_scope` on unmount.
+9. **Legacy nav stripped** — no `entity_focus_*`, `claim_when_*`, `broadcast_nav_*`.
+
+### Required test cases — perspective view
+1. **Registration (view zone)** — `mockInvoke("spatial_register_zone", { key, moniker: "ui:perspective.view" | "ui:view", … })`. Capture viewKey.
+2. **Focus claim → no indicator (view is `showFocusBar={false}`)** — `fireFocusChanged(viewKey)` flips `data-focused` but does NOT mount `[data-testid="focus-indicator"]`. Inline-comment with the viewport-size rationale.
+3. **Drill-out from inner zone lands on view** — when an inner board/grid is focused and Escape is pressed at the top level (drill-out chain), the view zone's `data-focused` eventually becomes `"true"`.
+4. **Unmount** — `spatial_unregister_scope` fires.
+
+### How to run
+```
+cd kanban-app/ui && npm test
+```
+The test must pass headless on CI. The CI workflow `.github/workflows/*.yml` already runs this command.
