@@ -615,10 +615,18 @@ describe("EntityCard", () => {
 
   /**
    * Tests that mount the card inside the full spatial-focus stack so the
-   * underlying `<FocusZone>` primitive registers with the Rust-side
+   * underlying `<FocusScope>` primitive registers with the Rust-side
    * spatial graph via the mocked `invoke`.
+   *
+   * The card body is a `<FocusScope>` (leaf), NOT a `<FocusZone>`. This
+   * is what enables the unified cascade's iter-0 / iter-1 trajectory:
+   * pressing right on a card in column A runs iter 0 against in-column
+   * card peers, and when no peer satisfies the beam test the cascade
+   * escalates to iter 1 — the card's parent column zone — and lands on
+   * the neighbouring column zone (which the React adapter drills back
+   * into). See the docstring on `<EntityCard>`.
    */
-  describe("spatial registration as a FocusZone", () => {
+  describe("spatial registration as a FocusScope", () => {
     /** Render with the full spatial-focus + focus-layer stack. */
     function renderCardWithSpatial(ui: React.ReactElement) {
       return render(
@@ -648,43 +656,55 @@ describe("EntityCard", () => {
       return result;
     }
 
-    it('registers the card body as a FocusZone (kind="zone") with the entity moniker', async () => {
+    it("registers the card body as a FocusScope (leaf) with the entity moniker", async () => {
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const scopeCalls = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_scope")
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(scopeCalls.find((a) => a.moniker === "task:task-1")).toBeTruthy();
+    });
+
+    it("does not register the card root as a FocusZone — the card is a leaf, not a zone", async () => {
+      // Cards must register as leaves so the unified cascade's iter-0 /
+      // iter-1 trajectory works as the user expects: iter 0 finds
+      // in-column card peers; iter 1 escalates to the card's parent
+      // column zone and lands on the neighbouring column zone. If the
+      // card ever flips back to being a zone, iter 0 would consider
+      // sibling zones only and trap focus in the column. See the
+      // docstring on `<EntityCard>` and the kernel test
+      // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
       currentEntity = makeEntity();
       await renderWithSpatial(<EntityCard entity={currentEntity} />);
       const zoneCalls = mockInvoke.mock.calls
         .filter((c) => c[0] === "spatial_register_zone")
         .map((c) => c[1] as Record<string, unknown>);
-      expect(zoneCalls.find((a) => a.moniker === "task:task-1")).toBeTruthy();
-    });
-
-    it("does not register the card root as a Focusable leaf — the zone replaces the leaf", async () => {
-      currentEntity = makeEntity();
-      await renderWithSpatial(<EntityCard entity={currentEntity} />);
-      const leafCalls = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_register_focusable")
-        .map((c) => c[1] as Record<string, unknown>);
       expect(
-        leafCalls.find((a) => a.moniker === "task:task-1"),
+        zoneCalls.find((a) => a.moniker === "task:task-1"),
       ).toBeUndefined();
     });
 
-    it("the card zone is anchored at the surrounding window layer (parent_zone is null at the card level)", async () => {
-      // The card is the outermost spatial scope it owns — leaves and
-      // child zones inside the card register `parentZone = cardZone.key`
-      // via FocusZoneContext. The card itself has no enclosing zone in
-      // this test harness, so its own `parentZone` is null. This pins
-      // the contract that the card is the entry point to its sub-tree
-      // (descendant scopes will look up to it as their parent).
+    it("the card scope's parent_zone follows the enclosing FocusZone (null when none, here the layer root)", async () => {
+      // The card is a leaf (`<FocusScope>`) — it does NOT push a
+      // `FocusZoneContext.Provider`. Its own `parentZone` is whatever
+      // `useParentZoneKey()` returns at the call site. In this isolated
+      // harness there is no surrounding `<FocusZone>`, so the card's
+      // parent zone is null. In production the card is wrapped by a
+      // `column:` `<FocusZone>` and that zone's spatial key flows
+      // through here — pinning the column-as-parent contract that the
+      // unified cascade's iter-1 escalation relies on (iter 1 reads the
+      // card's `parentZone` to find the neighbouring column zone for
+      // cross-column nav).
       currentEntity = makeEntity();
       await renderWithSpatial(<EntityCard entity={currentEntity} />);
-      const cardZone = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_register_zone")
+      const cardScope = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_scope")
         .map((c) => c[1] as Record<string, unknown>)
         .find((a) => a.moniker === "task:task-1");
-      expect(cardZone).toBeTruthy();
-      expect(cardZone!.parentZone).toBeNull();
+      expect(cardScope).toBeTruthy();
+      expect(cardScope!.parentZone).toBeNull();
       // Anchored to the window layer the FocusLayer wrapper provides.
-      expect(cardZone!.layerKey).toBeTruthy();
+      expect(cardScope!.layerKey).toBeTruthy();
     });
 
     it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {

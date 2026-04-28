@@ -58,6 +58,24 @@ import type {
 export type FocusClaimListener = (focused: boolean) => void;
 
 /**
+ * Callback signature for a broad `focus-changed` subscriber.
+ *
+ * Unlike `FocusClaimListener` (which fires only when a specific
+ * `SpatialKey` gains or loses focus), this listener observes every
+ * `focus-changed` payload in full. Used by integrations that need to
+ * bridge spatial-focus into another store keyed by a different
+ * identity — most importantly, `EntityFocusProvider`, which mirrors
+ * `next_moniker` into its legacy moniker-keyed `FocusStore` so the
+ * `focusedMonikerRef` API stays in sync with spatial moves.
+ *
+ * Subscribers run synchronously on the same dispatch tick as
+ * per-key claim listeners, so the work they do should be cheap. Calling
+ * back into Tauri (e.g. dispatching `ui.setFocus` to forward the new
+ * scope chain) is acceptable — the bridge already does it.
+ */
+export type FocusChangedSubscriber = (payload: FocusChangedPayload) => void;
+
+/**
  * The set of imperative actions exposed by `SpatialFocusProvider`.
  *
  * Stored in a context whose value is set once and never changes — every
@@ -78,16 +96,16 @@ export interface SpatialFocusActions {
   /** Invoke `spatial_focus` for the given key in the current window. */
   focus: (key: SpatialKey) => Promise<void>;
   /**
-   * Invoke `spatial_register_focusable` with the full kernel-types record:
+   * Invoke `spatial_register_scope` with the full kernel-types record:
    * stable key, entity moniker, viewport rect, owning layer, optional
    * enclosing zone, and per-direction overrides.
    *
-   * Mirrors `Focusable` on the Rust side. Pass `null` for `parentZone`
-   * when the leaf is registered directly under the layer root, and an
-   * empty object for `overrides` when the leaf has no per-direction
-   * special cases.
+   * Mirrors [`FocusScope`] on the Rust side — the leaf primitive. Pass
+   * `null` for `parentZone` when the leaf is registered directly under
+   * the layer root, and an empty object for `overrides` when the leaf
+   * has no per-direction special cases.
    */
-  registerFocusable: (
+  registerScope: (
     key: SpatialKey,
     moniker: Moniker,
     rect: Rect,
@@ -99,7 +117,7 @@ export interface SpatialFocusActions {
    * Invoke `spatial_register_zone` with the full kernel-types record.
    *
    * Mirrors `FocusZone` on the Rust side. Same parameter shape as
-   * `registerFocusable`; the difference is the `Zone` variant in the
+   * `registerScope`; the difference is the `Zone` variant in the
    * registry, which owns a `last_focused` slot for drill-out / fallback
    * memory. The slot is always initialized to `None` on register — the
    * navigator populates it as focus moves through the zone.
@@ -168,6 +186,27 @@ export interface SpatialFocusActions {
    * through the entity-focus moniker store.
    */
   focusedKey: () => SpatialKey | null;
+  /**
+   * Subscribe to every `focus-changed` payload the provider observes.
+   *
+   * Returns an unsubscribe function — call it on unmount to remove the
+   * entry. Used by integrations that need to bridge spatial focus into
+   * a peer store: most notably `EntityFocusProvider`, which mirrors
+   * `payload.next_moniker` into its moniker-keyed `FocusStore` so
+   * `useFocusedMonikerRef` and `useFocusedScope` stay in sync with
+   * spatial moves — keeping `extractScopeBindings` (the keymap
+   * handler's scope-binding source) and downstream consumers honest.
+   *
+   * Subscribers fire synchronously alongside per-key claim listeners on
+   * the same dispatch tick, so the callback should keep its work cheap.
+   * The provider runs every registered subscriber regardless of whether
+   * `next_key` matches any `SpatialKey` in the local claim registry —
+   * the broadcast is unconditional, mirroring the all-windows reach of
+   * Tauri's `emit`.
+   */
+  subscribeFocusChanged: (
+    subscriber: FocusChangedSubscriber,
+  ) => () => void;
 }
 
 const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
@@ -193,6 +232,13 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // do not cause re-renders — the only thing that re-renders on a focus
   // change is the `<FocusScope>` whose listener fires.
   const registryRef = useRef<Map<SpatialKey, FocusClaimListener>>(new Map());
+
+  // Set of broad `focus-changed` subscribers. Kept in a `Set` (not an
+  // array) so unsubscribe is O(1) and accidental double-registration of
+  // the same listener identity is a no-op. Held in a ref for the same
+  // reason as `registryRef`: subscriber churn must not re-render the
+  // provider tree.
+  const subscribersRef = useRef<Set<FocusChangedSubscriber>>(new Set());
 
   // Latest focused `SpatialKey` from `focus-changed` events. Tracked in a
   // ref because the global keybinding handler needs to read it on every
@@ -225,6 +271,12 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
       // can thread it through without consulting the entity-focus
       // moniker store.
       focusedKeyRef.current = payload.next_key;
+      // Fan out the full payload to broad subscribers (e.g. the
+      // entity-focus bridge in `EntityFocusProvider`). Iteration walks a
+      // snapshot so subscriber callbacks that unsubscribe themselves
+      // (or each other) mid-fire don't perturb the visit order.
+      const snapshot = Array.from(subscribersRef.current);
+      for (const sub of snapshot) sub(payload);
     }).then((fn) => {
       if (cancelled) {
         // Provider unmounted before `listen` resolved — fire the unlisten
@@ -246,7 +298,11 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // registry ref, not React state.
   const actionsRef = useRef<SpatialFocusActions | null>(null);
   if (actionsRef.current === null) {
-    actionsRef.current = buildSpatialFocusActions(registryRef, focusedKeyRef);
+    actionsRef.current = buildSpatialFocusActions(
+      registryRef,
+      subscribersRef,
+      focusedKeyRef,
+    );
   }
 
   return (
@@ -265,6 +321,7 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
  */
 function buildSpatialFocusActions(
   registryRef: React.MutableRefObject<Map<SpatialKey, FocusClaimListener>>,
+  subscribersRef: React.MutableRefObject<Set<FocusChangedSubscriber>>,
   focusedKeyRef: React.MutableRefObject<SpatialKey | null>,
 ): SpatialFocusActions {
   const registerClaim: SpatialFocusActions["registerClaim"] = (
@@ -291,7 +348,7 @@ function buildSpatialFocusActions(
     await invoke("spatial_focus", { key });
   };
 
-  const registerFocusable: SpatialFocusActions["registerFocusable"] = async (
+  const registerScope: SpatialFocusActions["registerScope"] = async (
     key,
     moniker,
     rect,
@@ -303,7 +360,7 @@ function buildSpatialFocusActions(
     // Rust command signature, which uses snake_case. The TS callers use
     // camelCase locally; the conversion happens here so each consumer
     // stays in idiomatic JS land.
-    await invoke("spatial_register_focusable", {
+    await invoke("spatial_register_scope", {
       key,
       moniker,
       rect,
@@ -368,11 +425,20 @@ function buildSpatialFocusActions(
   const focusedKey: SpatialFocusActions["focusedKey"] = () =>
     focusedKeyRef.current;
 
+  const subscribeFocusChanged: SpatialFocusActions["subscribeFocusChanged"] = (
+    subscriber,
+  ) => {
+    subscribersRef.current.add(subscriber);
+    return () => {
+      subscribersRef.current.delete(subscriber);
+    };
+  };
+
   return {
     registerClaim,
     hasClaim,
     focus,
-    registerFocusable,
+    registerScope,
     registerZone,
     unregisterScope,
     updateRect,
@@ -382,6 +448,7 @@ function buildSpatialFocusActions(
     drillIn,
     drillOut,
     focusedKey,
+    subscribeFocusChanged,
   };
 }
 

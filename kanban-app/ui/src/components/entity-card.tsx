@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, type LucideIcon } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
 import { asMoniker } from "@/types/spatial";
 import {
   Field,
@@ -59,40 +60,69 @@ export const EntityCard = memo(
     } = props;
     const cardSections = useCardSections(entity.entity_type);
 
-    // The card body registers as a `<FocusScope kind="zone">`. The
-    // composite wraps a `<FocusZone>` primitive when the surrounding tree
-    // mounts the spatial-nav stack (`<SpatialFocusProvider>` +
-    // `<FocusLayer>` — the production path in `App.tsx`) and falls back
-    // to a plain `<div>` outside that stack so isolated unit tests don't
-    // need to spin up the spatial providers. Either way the card carries
-    // the legacy entity-focus / command-scope / context-menu wiring
-    // shared with every other entity surface.
+    // The card body registers as a `<FocusScope>` — a leaf in the
+    // spatial-nav graph. Cards are leaves (not zones) so the unified
+    // cascade's same-kind filtering produces the user-expected
+    // trajectory: iter 0 finds in-column card peers (leaf candidates),
+    // and when no leaf peer satisfies the beam test the cascade
+    // escalates to iter 1 and lands on the neighbouring column zone.
+    // If the card body were a zone, iter 0 would consider sibling
+    // zones only — same-column cards reachable as zones, never a card
+    // in another column — and the cross-column trajectory would never
+    // produce the column-zone moniker the React adapter drills back
+    // into. The card-as-leaf shape is what the kernel's
+    // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
+    // test pins (`swissarmyhammer-focus/tests/navigate.rs`).
     //
-    // Title, status, assignee pills, and tag pills inside the card render
-    // as default `Focusable` leaves whose `parent_zone` is this card's
-    // `task:{id}` moniker — drill-in / arrow-key navigation between leaves
-    // is handled by the spatial-nav primitives, not by per-card predicates.
+    // When the surrounding tree mounts the spatial-nav stack
+    // (`<SpatialFocusProvider>` + `<FocusLayer>` — the production path
+    // in `App.tsx`) the leaf registers via `spatial_register_scope`;
+    // outside that stack the scope falls back to a plain `<div>` so
+    // isolated unit tests don't need to spin up the spatial providers.
+    // Either way the card carries the entity-focus / command-scope /
+    // context-menu wiring shared with every other entity surface.
+    //
+    // Each field inside the card (`title`, `status`, multi-value badge
+    // fields like `assignees` / `tags`) is rendered through `<Field>`,
+    // which itself registers a nested `<FocusZone>` keyed
+    // `field:{type}:{id}.{name}` whose `parent_zone` is the column
+    // (the card's enclosing zone) — fields are zones because they
+    // contain pill leaves and need a navigable container of their own.
+    // Pills inside multi-value fields are leaves under their owning
+    // Field zone; drill-in / arrow-key navigation between fields and
+    // pills is handled by the spatial-nav primitives, not by per-card
+    // predicates.
     return (
-      <FocusScope
-        moniker={asMoniker(entity.moniker)}
-        kind="zone"
-        commands={extraCommands}
-      >
-        <div
-          ref={ref}
-          style={style}
-          data-entity-card={entity.id}
-          draggable={draggable}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
-          {...rest}
+      // The card wraps an entity (`task:` / `tag:` moniker), so a
+      // double-click on the card body should open the inspector for
+      // that entity. The `<Inspectable>` wrapper owns the
+      // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
+      // handler; the spatial primitive `<FocusScope>` stays pure-spatial.
+      // UI-chrome scopes (`ui:*` / `perspective_tab:`) are NOT wrapped
+      // in `<Inspectable>`. The architectural guard
+      // (`focus-architecture.guards.node.test.ts`, Guards B + C)
+      // enforces both directions.
+      <Inspectable moniker={asMoniker(entity.moniker)}>
+        <FocusScope
+          moniker={asMoniker(entity.moniker)}
+          commands={extraCommands}
         >
-          <DragHandle dragHandleProps={dragHandleProps} />
-          <CardFields sections={cardSections} entity={entity} />
-          <InspectButton moniker={entity.moniker} />
-        </div>
-      </FocusScope>
+          <div
+            ref={ref}
+            style={style}
+            data-entity-card={entity.id}
+            draggable={draggable}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
+            {...rest}
+          >
+            <DragHandle dragHandleProps={dragHandleProps} />
+            <CardFields sections={cardSections} entity={entity} />
+            <InspectButton moniker={entity.moniker} />
+          </div>
+        </FocusScope>
+      </Inspectable>
     );
   }),
 );
@@ -235,6 +265,18 @@ function CardField({
         tooltipOverride={tooltipOverrideResult}
       />
       <div className="flex-1 min-w-0">
+        {/*
+         * `showFocusBar={true}` makes the field zone render a visible
+         * `<FocusIndicator>` when its `SpatialKey` becomes the focused
+         * key for the window. Without this, a click on a single-value
+         * field inside the card (title, status, plain text fields) would
+         * fire `spatial_focus` and flip `data-focused`, but no visible
+         * decoration would appear — leaving the user without feedback
+         * that they had selected the field. The card body itself owns
+         * a separate focus bar at the zone level; the per-field bar
+         * sits at the inner leaf so the user can tell which atom of the
+         * card carries focus.
+         */}
         <Field
           fieldDef={field}
           entityType={entity.entity_type}
@@ -244,6 +286,7 @@ function CardField({
           onEdit={onEdit}
           onDone={onDone}
           onCancel={onCancel}
+          showFocusBar
         />
       </div>
     </div>

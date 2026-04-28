@@ -1,10 +1,16 @@
 /**
  * `<FocusIndicator>` — the single visible focus decorator.
  *
- * Renders a small absolutely-positioned bar to the left of its host when
- * `focused` is true; renders nothing when `focused` is false. The host
- * primitive must establish a containing block (the spatial primitives mark
- * themselves `position: relative` so this works without consumer effort).
+ * Renders the cursor-bar when `focused` is true; renders nothing when
+ * `focused` is false. The host primitive must establish a containing block
+ * (the spatial primitives mark themselves `position: relative` so this
+ * works without consumer effort).
+ *
+ * The bar is a small absolutely-positioned vertical stripe to the left of
+ * the host (`-left-2 w-1`) so it occupies the gap between siblings rather
+ * than the host's content area. Hosts arranged in a column-strip layout
+ * (rows, tabs, cells, navbar buttons) all share this single visual — the
+ * one focus decoration the architecture admits.
  *
  * This component is the ONE PLACE the focus visual lives. CSS no longer
  * reads `[data-focused]` to draw a bar — focus state flows from Rust →
@@ -15,8 +21,8 @@
  *
  * Single source of truth: a regression that adds a second focus
  * decorator (a copy of the bar elsewhere, a CSS rule reading
- * `[data-focused]`) is caught by the source-level guard test in
- * `focus-architecture.guards.node.test.ts`.
+ * `[data-focused]`, a parallel "ring" / "outline" variant) is caught by
+ * the source-level guards in `focus-architecture.guards.node.test.ts`.
  */
 import { memo } from "react";
 
@@ -31,10 +37,10 @@ interface FocusIndicatorProps {
 }
 
 /**
- * Renders the visible focus bar when `focused` is true; renders nothing
- * otherwise. The bar is `pointer-events-none` so it never intercepts a
- * click; it's `aria-hidden` so screen readers don't announce a duplicate
- * focus signal.
+ * Renders the visible focus decoration when `focused` is true; renders
+ * nothing otherwise. The decoration is `pointer-events-none` so it never
+ * intercepts a click; it's `aria-hidden` so screen readers don't announce
+ * a duplicate focus signal.
  */
 export const FocusIndicator = memo(function FocusIndicator({
   focused,

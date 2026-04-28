@@ -11,7 +11,7 @@
  *     derives the cursor from the focused moniker via `resolveCursorFromFocus`,
  *     and no longer threads pull-based predicate machinery (`buildCellPredicates`,
  *     `cellMonikerMap`, `claimPredicates`, `ClaimPredicate`).
- *   - `data-table.tsx` — each cell registers as `<Focusable moniker="grid_cell:R:K">`,
+ *   - `data-table.tsx` — each cell registers as `<FocusScope moniker="grid_cell:R:K">`,
  *     and no longer accepts `cellMonikers` / `claimPredicates` / `claimWhen` props.
  *
  * Node-only because they read source files from disk; lives under the
@@ -108,9 +108,9 @@ describe("DataTable source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("imports the Focusable primitive from @/components/focusable", () => {
-    expect(SRC).toMatch(/from\s+["']@\/components\/focusable["']/);
-    expect(SRC).toMatch(/\bFocusable\b/);
+  it("imports the FocusScope primitive from @/components/focus-scope", () => {
+    expect(SRC).toMatch(/from\s+["']@\/components\/focus-scope["']/);
+    expect(SRC).toMatch(/\bFocusScope\b/);
   });
 
   it("imports gridCellMoniker from @/lib/moniker", () => {
@@ -121,10 +121,10 @@ describe("DataTable source-level guards", () => {
     expect(SRC).toMatch(/\bgridCellMoniker\b/);
   });
 
-  it("uses asMoniker on the cell moniker before passing to Focusable", () => {
+  it("uses asMoniker on the cell moniker before passing to FocusScope", () => {
     // Mirrors the convention in `nav-bar.tsx` and other call sites: the
     // `asMoniker(...)` brand helper applies at the boundary, not inside
-    // the `Focusable` props elsewhere.
+    // the `FocusScope` props elsewhere.
     expect(SRC).toMatch(/asMoniker\(gridCellMoniker\(/);
   });
 });

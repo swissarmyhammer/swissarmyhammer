@@ -12,7 +12,11 @@ import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
-import { useDispatchCommand, CommandScopeProvider } from "@/lib/command-scope";
+import {
+  useDispatchCommand,
+  CommandScopeProvider,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import {
@@ -34,8 +38,8 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
+import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
-import { Focusable } from "@/components/focusable";
 import { useOptionalLayerKey } from "@/components/focus-layer";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { asMoniker } from "@/types/spatial";
@@ -204,8 +208,19 @@ export function PerspectiveTabBar() {
 
   return (
     <PerspectiveBarSpatialZone>
-      {/* Left: scrollable perspective tabs + add button */}
-      <div className="flex items-center gap-0.5 overflow-x-auto shrink-0 max-w-[60%]">
+      {/*
+        Left: scrollable perspective tabs + add button.
+
+        `pl-2` and `gap-2` are load-bearing — each tab is a `<FocusScope>`
+        leaf and `<FocusIndicator>` paints an absolutely-positioned bar at
+        `-left-2` (8px) of its host. The inner `overflow-x-auto` clips
+        anything that overflows horizontally, so without `pl-2` the
+        leftmost tab's indicator is clipped (and without `gap-2` the
+        indicator on tabs 2..N would overlap the previous tab). Same
+        pattern as the board's column strip — see `BoardDndWrapper` in
+        `board-view.tsx` for the analogous `overflow-x-auto pl-2`.
+      */}
+      <div className="flex items-center gap-2 overflow-x-auto shrink-0 max-w-[60%] pl-2">
         {filteredPerspectives.map((p) => (
           <ScopedPerspectiveTab
             key={p.id}
@@ -267,6 +282,12 @@ function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
   return (
     <FocusZone
       moniker={asMoniker("ui:perspective-bar")}
+      // The bar is viewport-spanning chrome (full window width × 32px high) —
+      // a focus indicator running across its entire row would be visual
+      // noise. The bar's job in the spatial graph is to be the parent zone
+      // for its tab leaves; the leaves themselves render the visible bar
+      // when claimed. `data-focused` still flips on the wrapper for e2e
+      // selectors / debugging.
       showFocusBar={false}
       className={PERSPECTIVE_BAR_LAYOUT}
     >
@@ -304,15 +325,37 @@ interface ScopedPerspectiveTabProps {
 }
 
 /**
+ * Frozen empty-array reference used by inactive perspective tabs so the
+ * `useMemo` dependency in `ScopedPerspectiveTab` has a stable identity when
+ * `isActive === false`. Without this, every inactive-tab render would mint a
+ * fresh `[]` and re-trigger the downstream `CommandScopeProvider`'s scope
+ * memo, evicting the per-scope command map for no behavioural reason.
+ */
+const EMPTY_PERSPECTIVE_SCOPE_COMMANDS: readonly CommandDef[] = Object.freeze(
+  [],
+);
+
+/**
  * Wraps a single perspective tab in its CommandScopeProvider.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  *
  * The tab's render also goes through `<PerspectiveTabFocusable>`, which adds a
- * `<Focusable moniker={asMoniker(`perspective_tab:${id}`)}>` leaf when the
+ * `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>` leaf when the
  * spatial-nav stack is mounted. That makes each tab a peer leaf in the
  * surrounding `ui:perspective-bar` zone so beam-search picks them up as
  * sibling navigation targets.
+ *
+ * Active-tab-only rename binding: when this tab is the active perspective,
+ * the wrapping `CommandScopeProvider` carries a `ui.entity.startRename`
+ * `CommandDef` whose `keys` block (Enter for cua / vim / emacs) is picked up
+ * by `extractScopeBindings` when this tab is the spatial focus. That binding
+ * shadows the global `nav.drillIn: Enter` for the perspective scope only,
+ * matching the YAML `scope: "entity:perspective"` filter on the same id in
+ * `swissarmyhammer-commands/builtin/commands/ui.yaml`. Inactive tabs receive
+ * no command, so Enter on a focused inactive tab falls through to the global
+ * drill-in (a no-op for a leaf scope) — keystroke renaming therefore only
+ * fires when the focused tab and the active perspective coincide.
  */
 function ScopedPerspectiveTab({
   perspective,
@@ -324,15 +367,37 @@ function ScopedPerspectiveTab({
   onRenameCancel,
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
+  const isActive = activePerspectiveId === perspective.id;
+  const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
+    if (!isActive) return EMPTY_PERSPECTIVE_SCOPE_COMMANDS;
+    // The execute path delegates to the same module-level broadcaster that
+    // the AppShell global `ui.entity.startRename` command uses. The
+    // broadcaster's `if (activePerspective) startRename(activePerspective.id)`
+    // guard keeps the no-active-perspective branch a no-op without us
+    // duplicating the check at the call site.
+    return [
+      {
+        id: "ui.entity.startRename",
+        name: "Rename Perspective",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        execute: () => {
+          triggerStartRename();
+        },
+      },
+    ];
+  }, [isActive]);
   return (
-    <CommandScopeProvider moniker={moniker("perspective", perspective.id)}>
+    <CommandScopeProvider
+      moniker={moniker("perspective", perspective.id)}
+      commands={startRenameCommands}
+    >
       <PerspectiveTabFocusable id={perspective.id}>
         <PerspectiveTab
           id={perspective.id}
           name={perspective.name}
           filter={perspective.filter}
           group={perspective.group}
-          isActive={activePerspectiveId === perspective.id}
+          isActive={isActive}
           isRenaming={renamingId === perspective.id}
           onSelect={onSelect}
           onDoubleClick={onDoubleClick}
@@ -346,7 +411,7 @@ function ScopedPerspectiveTab({
 }
 
 /**
- * Wrap a perspective tab in `<Focusable moniker={asMoniker(`perspective_tab:${id}`)}>`
+ * Wrap a perspective tab in `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>`
  * when the spatial-nav stack is mounted; otherwise fall through.
  *
  * Same conditional pattern as `PerspectiveBarSpatialZone` and
@@ -366,9 +431,9 @@ function PerspectiveTabFocusable({
     return <>{children}</>;
   }
   return (
-    <Focusable moniker={asMoniker(`perspective_tab:${id}`)}>
+    <FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>
       {children}
-    </Focusable>
+    </FocusScope>
   );
 }
 

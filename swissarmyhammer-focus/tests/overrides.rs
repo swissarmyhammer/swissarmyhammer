@@ -2,7 +2,7 @@
 //!
 //! Overrides are a per-direction directive map that runs as **rule 0**
 //! before the beam-search cascade in [`BeamNavStrategy`]. They live on
-//! [`Focusable::overrides`] and [`FocusZone::overrides`] as
+//! [`FocusScope::overrides`] and [`FocusZone::overrides`] as
 //! `HashMap<Direction, Option<Moniker>>` and have three states:
 //!
 //! - **No entry for the direction** — the override does not apply; the
@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusZone, Focusable, LayerKey, LayerName, Moniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker,
     NavStrategy, Pixels, Rect, SpatialKey, SpatialRegistry, WindowLabel,
 };
 
@@ -44,15 +44,9 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-/// Build a `Focusable` with empty overrides.
-fn focusable(
-    key: &str,
-    moniker: &str,
-    layer: &str,
-    parent_zone: Option<&str>,
-    r: Rect,
-) -> Focusable {
-    Focusable {
+/// Build a `FocusScope` leaf with empty overrides.
+fn leaf(key: &str, moniker: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
+    FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: r,
@@ -62,16 +56,16 @@ fn focusable(
     }
 }
 
-/// Build a `Focusable` carrying the supplied overrides map.
-fn focusable_with_overrides(
+/// Build a `FocusScope` leaf carrying the supplied overrides map.
+fn leaf_with_overrides(
     key: &str,
     moniker: &str,
     layer: &str,
     parent_zone: Option<&str>,
     r: Rect,
     overrides: HashMap<Direction, Option<Moniker>>,
-) -> Focusable {
-    Focusable {
+) -> FocusScope {
+    FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: r,
@@ -131,7 +125,7 @@ fn override_redirects_to_same_layer_target() {
     reg.push_layer(layer("L", "main", None));
 
     // Beam-search candidate: a leaf directly to the right of `src`.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "beam_target",
         "ui:beam_target",
         "L",
@@ -140,7 +134,7 @@ fn override_redirects_to_same_layer_target() {
     ));
     // Override candidate: a leaf far below — nothing beam search would
     // pick for `Direction::Right`.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "override_target",
         "ui:override_target",
         "L",
@@ -154,7 +148,7 @@ fn override_redirects_to_same_layer_target() {
         Direction::Right,
         Some(Moniker::from_string("ui:override_target")),
     );
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L",
@@ -228,7 +222,7 @@ fn override_none_blocks_navigation() {
 
     // A beam-search candidate exists to the right — but the override
     // wall must override it.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "beam_target",
         "ui:beam_target",
         "L",
@@ -238,7 +232,7 @@ fn override_none_blocks_navigation() {
 
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, None);
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L",
@@ -262,14 +256,14 @@ fn override_none_only_blocks_named_direction() {
     reg.push_layer(layer("L", "main", None));
 
     // Candidates to both right and down.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right_target",
         "ui:right_target",
         "L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "down_target",
         "ui:down_target",
         "L",
@@ -280,7 +274,7 @@ fn override_none_only_blocks_named_direction() {
     // Wall right; leave down untouched.
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, None);
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L",
@@ -314,7 +308,7 @@ fn override_cross_layer_target_falls_through_to_beam_search() {
     reg.push_layer(layer("L_inspector", "main", Some("L_window")));
 
     // Cross-layer target — exists, but in a different layer.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "cross_layer",
         "ui:cross_layer",
         "L_inspector",
@@ -322,7 +316,7 @@ fn override_cross_layer_target_falls_through_to_beam_search() {
         rect(0.0, 0.0, 50.0, 50.0),
     ));
     // Beam-search candidate in the same layer as `src`.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "beam_target",
         "ui:beam_target",
         "L_window",
@@ -336,7 +330,7 @@ fn override_cross_layer_target_falls_through_to_beam_search() {
         Direction::Right,
         Some(Moniker::from_string("ui:cross_layer")),
     );
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L_window",
@@ -360,7 +354,7 @@ fn override_unknown_target_falls_through_to_beam_search() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
 
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "beam_target",
         "ui:beam_target",
         "L",
@@ -370,7 +364,7 @@ fn override_unknown_target_falls_through_to_beam_search() {
 
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, Some(Moniker::from_string("ui:ghost")));
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L",
@@ -398,20 +392,14 @@ fn no_override_delegates_to_beam_search() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
 
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right_target",
         "ui:right_target",
         "L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
-    reg.register_focusable(focusable(
-        "src",
-        "ui:src",
-        "L",
-        None,
-        rect(0.0, 0.0, 50.0, 50.0),
-    ));
+    reg.register_scope(leaf("src", "ui:src", "L", None, rect(0.0, 0.0, 50.0, 50.0)));
 
     assert_eq!(
         nav(&reg, "src", Direction::Right),
@@ -427,14 +415,14 @@ fn override_for_one_direction_does_not_affect_others() {
     reg.push_layer(layer("L", "main", None));
 
     // Two candidates, one to the left and one to the right.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "left_target",
         "ui:left_target",
         "L",
         None,
         rect(-100.0, 0.0, 50.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right_target",
         "ui:right_target",
         "L",
@@ -442,7 +430,7 @@ fn override_for_one_direction_does_not_affect_others() {
         rect(100.0, 0.0, 50.0, 50.0),
     ));
     // Override target for Right only.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right_override",
         "ui:right_override",
         "L",
@@ -455,7 +443,7 @@ fn override_for_one_direction_does_not_affect_others() {
         Direction::Right,
         Some(Moniker::from_string("ui:right_override")),
     );
-    reg.register_focusable(focusable_with_overrides(
+    reg.register_scope(leaf_with_overrides(
         "src",
         "ui:src",
         "L",

@@ -131,7 +131,7 @@
 }
 
 /* Focus decoration is rendered by the React `<FocusIndicator>` component
- * embedded in the spatial primitives (`<Focusable>` and `<FocusZone>`).
+ * embedded in the spatial primitives (`<FocusScope>` and `<FocusZone>`).
  * No CSS rule reads `[data-focused]`: focus state flows from Rust
  * (`SpatialState::focus_by_window`) through `useFocusClaim` into React
  * state, and the indicator's className paints the visible bar. The

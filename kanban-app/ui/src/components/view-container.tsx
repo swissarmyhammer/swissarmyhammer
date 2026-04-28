@@ -92,6 +92,12 @@ function ViewSpatialZone({ children }: { children: ReactNode }) {
   return (
     <FocusZone
       moniker={asMoniker("ui:view")}
+      // Viewport-sized chrome zone — a visible focus bar around the entire
+      // active view (board, grid, …) would surround the whole content
+      // region and add no information. Drilling into the view advances
+      // focus to the body's first leaf; that leaf renders the indicator.
+      // `data-focused` still flips on the wrapper so drill-out tests can
+      // observe focus landing on the view zone.
       showFocusBar={false}
       className="flex-1 flex flex-col min-h-0 min-w-0"
     >

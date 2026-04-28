@@ -138,7 +138,7 @@ describe("SpatialFocusProvider", () => {
     unmount();
   });
 
-  it("invokes spatial_register_focusable with the full kernel-types record", async () => {
+  it("invokes spatial_register_scope with the full kernel-types record", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
@@ -154,7 +154,7 @@ describe("SpatialFocusProvider", () => {
     };
     const layerKey: LayerKey = asLayerKey("L1");
     await act(async () => {
-      await result.current.registerFocusable(
+      await result.current.registerScope(
         key,
         moniker,
         rect,
@@ -164,7 +164,7 @@ describe("SpatialFocusProvider", () => {
       );
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_register_focusable", {
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_register_scope", {
       key,
       moniker,
       rect,
@@ -513,6 +513,106 @@ describe("focusedKey", () => {
       });
     });
     expect(result.current.focusedKey()).toBeNull();
+
+    unmount();
+  });
+});
+
+/* ---- subscribeFocusChanged ---- */
+
+describe("subscribeFocusChanged", () => {
+  it("delivers each focus-changed payload to every registered subscriber", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const subscriberA = vi.fn();
+    const subscriberB = vi.fn();
+    const unsubA = result.current.subscribeFocusChanged(subscriberA);
+    const unsubB = result.current.subscribeFocusChanged(subscriberB);
+
+    const payload = makePayload({
+      prev_key: asSpatialKey("a"),
+      next_key: asSpatialKey("b"),
+      next_moniker: asMoniker("task:b"),
+    });
+    act(() => {
+      listenHandlers["focus-changed"]?.({ payload });
+    });
+
+    expect(subscriberA).toHaveBeenCalledWith(payload);
+    expect(subscriberB).toHaveBeenCalledWith(payload);
+
+    unsubA();
+    unsubB();
+    unmount();
+  });
+
+  it("stops calling a subscriber after its unsubscribe runs", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const subscriber = vi.fn();
+    const unsub = result.current.subscribeFocusChanged(subscriber);
+
+    act(() => {
+      listenHandlers["focus-changed"]?.({
+        payload: makePayload({ next_key: asSpatialKey("a") }),
+      });
+    });
+    expect(subscriber).toHaveBeenCalledTimes(1);
+
+    unsub();
+
+    act(() => {
+      listenHandlers["focus-changed"]?.({
+        payload: makePayload({ next_key: asSpatialKey("b") }),
+      });
+    });
+    expect(subscriber).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("delivers payloads with next_moniker so consumers can bridge to entity-focus", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const seen: Array<{
+      key: SpatialKey | null;
+      moniker: Moniker | null;
+    }> = [];
+    result.current.subscribeFocusChanged((payload) => {
+      seen.push({ key: payload.next_key, moniker: payload.next_moniker });
+    });
+
+    act(() => {
+      listenHandlers["focus-changed"]?.({
+        payload: makePayload({
+          next_key: asSpatialKey("k1"),
+          next_moniker: asMoniker("task:01ABC"),
+        }),
+      });
+    });
+    act(() => {
+      listenHandlers["focus-changed"]?.({
+        payload: makePayload({
+          prev_key: asSpatialKey("k1"),
+          next_key: null,
+          next_moniker: null,
+        }),
+      });
+    });
+
+    expect(seen).toEqual([
+      { key: asSpatialKey("k1"), moniker: asMoniker("task:01ABC") },
+      { key: null, moniker: null },
+    ]);
 
     unmount();
   });

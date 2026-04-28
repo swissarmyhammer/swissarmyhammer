@@ -2156,8 +2156,8 @@ pub async fn show_context_menu(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use swissarmyhammer_focus::{
-    BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusZone,
-    Focusable, LayerKey, LayerName, Moniker, Rect, RegisterEntry, SpatialKey, SpatialRegistry,
+    BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope,
+    FocusZone, LayerKey, LayerName, Moniker, Rect, RegisterEntry, SpatialKey, SpatialRegistry,
     SpatialState, WindowLabel,
 };
 
@@ -2214,12 +2214,12 @@ fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), 
 // canonical order, dispatch to one of these helpers, and emit the resulting
 // `FocusChangedEvent` (when any) on the calling window.
 
-/// Register a [`Focusable`] leaf into `registry`.
+/// Register a [`FocusScope`] leaf into `registry`.
 ///
-/// Pulled out of [`spatial_register_focusable`] so unit tests can exercise
+/// Pulled out of [`spatial_register_scope`] so unit tests can exercise
 /// the same body without constructing a Tauri runtime.
 #[allow(clippy::too_many_arguments)]
-fn spatial_register_focusable_inner(
+fn spatial_register_scope_inner(
     registry: &mut SpatialRegistry,
     key: SpatialKey,
     moniker: Moniker,
@@ -2228,7 +2228,7 @@ fn spatial_register_focusable_inner(
     parent_zone: Option<SpatialKey>,
     overrides: HashMap<Direction, Option<Moniker>>,
 ) {
-    registry.register_focusable(Focusable {
+    registry.register_scope(FocusScope {
         key,
         moniker,
         rect,
@@ -2254,10 +2254,7 @@ fn spatial_register_zone_inner(
     parent_zone: Option<SpatialKey>,
     overrides: HashMap<Direction, Option<Moniker>>,
 ) {
-    let last_focused = registry
-        .scope(&key)
-        .and_then(|s| s.as_zone())
-        .and_then(|z| z.last_focused.clone());
+    let last_focused = registry.zone(&key).and_then(|z| z.last_focused.clone());
     registry.register_zone(FocusZone {
         key,
         moniker,
@@ -2323,20 +2320,20 @@ fn spatial_push_layer_inner(
     });
 }
 
-/// Register a `<Focusable>` leaf with the spatial registry.
+/// Register a `<FocusScope>` leaf with the spatial registry.
 ///
-/// Mirrors `Focusable` on the kernel side. `parent_zone` is `None` when the
-/// leaf sits directly under its layer root; `overrides` is empty when the
-/// leaf has no per-direction special cases. Replacing a registration with
-/// the same key is intentionally allowed (idempotent re-mount); the kernel
-/// preserves the per-key overwrite semantics described on
-/// `SpatialRegistry::register_focusable`.
+/// Mirrors [`FocusScope`] on the kernel side. `parent_zone` is `None` when
+/// the leaf sits directly under its layer root; `overrides` is empty when
+/// the leaf has no per-direction special cases. Replacing a registration
+/// with the same key is intentionally allowed (idempotent re-mount); the
+/// kernel preserves the per-key overwrite semantics described on
+/// `SpatialRegistry::register_scope`.
 ///
 /// Returns `Ok(())` on success. Registration is purely structural — no
 /// `focus-changed` event is emitted.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub async fn spatial_register_focusable(
+pub async fn spatial_register_scope(
     _window: Window,
     state: State<'_, AppState>,
     key: SpatialKey,
@@ -2347,7 +2344,7 @@ pub async fn spatial_register_focusable(
     overrides: HashMap<Direction, Option<Moniker>>,
 ) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
-        spatial_register_focusable_inner(
+        spatial_register_scope_inner(
             registry,
             key,
             moniker,
@@ -2404,7 +2401,7 @@ pub async fn spatial_register_zone(
 /// The React-side virtualizer ships a `Vec<RegisterEntry>` for off-screen
 /// rows whenever the visible window changes — twenty placeholder mounts
 /// collapse into a single IPC round-trip and a single registry lock,
-/// rather than twenty independent `spatial_register_focusable` /
+/// rather than twenty independent `spatial_register_scope` /
 /// `spatial_register_zone` calls.
 ///
 /// Atomic at the registry boundary: `SpatialRegistry::apply_batch`
@@ -3151,7 +3148,7 @@ mod spatial_command_tests {
     ) -> (SpatialKey, Moniker) {
         let k = SpatialKey::from_string(key);
         let m = Moniker::from_string(moniker);
-        spatial_register_focusable_inner(
+        spatial_register_scope_inner(
             registry,
             k.clone(),
             m.clone(),
@@ -3191,12 +3188,12 @@ mod spatial_command_tests {
         assert_eq!(event.next_moniker, Some(moniker));
     }
 
-    /// Registering a focusable leaf inserts it into the registry and the
+    /// Registering a leaf scope inserts it into the registry and the
     /// scope is reachable via `scope()`. Mirrors the wire path
-    /// `spatial_register_focusable` → `register_focusable_inner` →
-    /// `SpatialRegistry::register_focusable`.
+    /// `spatial_register_scope` → `register_scope_inner` →
+    /// `SpatialRegistry::register_scope`.
     #[test]
-    fn spatial_register_focusable_round_trips() {
+    fn spatial_register_scope_round_trips() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
         let (key, moniker) = register_leaf(
@@ -3208,10 +3205,9 @@ mod spatial_command_tests {
         );
 
         let scope = registry.scope(&key).expect("scope was registered");
-        assert!(scope.is_focusable());
-        assert_eq!(scope.moniker(), &moniker);
-        assert_eq!(scope.layer_key(), &layer);
-        assert_eq!(scope.parent_zone(), None);
+        assert_eq!(scope.moniker, moniker);
+        assert_eq!(scope.layer_key, layer);
+        assert_eq!(scope.parent_zone, None);
     }
 
     /// Registering a zone with the same key as a previous zone preserves
@@ -3264,8 +3260,7 @@ mod spatial_command_tests {
             HashMap::new(),
         );
 
-        let scope = registry.scope(&zone_key).expect("zone still registered");
-        let zone = scope.as_zone().expect("scope is a zone");
+        let zone = registry.zone(&zone_key).expect("zone still registered");
         assert_eq!(
             zone.last_focused.as_ref(),
             Some(&leaf_key),
@@ -3428,14 +3423,14 @@ mod spatial_command_tests {
         let new_rect = rect_at(50.0, 60.0, 70.0, 80.0);
         registry.update_rect(&key, new_rect);
         let scope = registry.scope(&key).unwrap();
-        assert_eq!(*scope.rect(), new_rect);
+        assert_eq!(scope.rect, new_rect);
 
         // Unknown key: pure no-op.
         registry.update_rect(
             &SpatialKey::from_string("ghost"),
             rect_at(1.0, 2.0, 3.0, 4.0),
         );
-        assert!(registry.scope(&SpatialKey::from_string("ghost")).is_none());
+        assert!(!registry.is_registered(&SpatialKey::from_string("ghost")));
     }
 
     /// `spatial_pop_layer` removes the layer from the registry.
@@ -3470,7 +3465,7 @@ mod spatial_command_tests {
                 parent_zone: None,
                 overrides: HashMap::new(),
             },
-            RegisterEntry::Focusable {
+            RegisterEntry::Scope {
                 key: SpatialKey::from_string("k1"),
                 moniker: Moniker::from_string("ui:button"),
                 rect: rect_at(20.0, 0.0, 10.0, 10.0),
@@ -3483,17 +3478,17 @@ mod spatial_command_tests {
         spatial_register_batch_inner(&mut registry, entries).expect("batch apply succeeds");
 
         assert!(
-            registry.scope(&SpatialKey::from_string("z1")).is_some(),
+            registry.is_registered(&SpatialKey::from_string("z1")),
             "zone entry registered"
         );
         assert!(
-            registry.scope(&SpatialKey::from_string("k1")).is_some(),
-            "focusable entry registered"
+            registry.is_registered(&SpatialKey::from_string("k1")),
+            "leaf scope entry registered"
         );
     }
 
     /// A kind-mismatch (zone entry for a key already registered as a
-    /// focusable) bubbles up as `BatchRegisterError::KindMismatch` and
+    /// leaf scope) bubbles up as `BatchRegisterError::KindMismatch` and
     /// leaves the registry unchanged. Verifies the inner helper does not
     /// silently swallow the error — the Tauri command stringifies it for
     /// the wire, so the kernel error must reach the helper boundary.
@@ -3524,8 +3519,15 @@ mod spatial_command_tests {
             matches!(result, Err(BatchRegisterError::KindMismatch { .. })),
             "kind-mismatch must surface as BatchRegisterError",
         );
-        // Registry unchanged — the original focusable still wins.
-        let scope = registry.scope(&existing).expect("original entry preserved");
-        assert!(scope.is_focusable(), "kind preserved on rejected batch");
+        // Registry unchanged — the original leaf scope still wins, and
+        // the zone accessor returns `None` because the kind never flipped.
+        assert!(
+            registry.scope(&existing).is_some(),
+            "original leaf entry preserved",
+        );
+        assert!(
+            registry.zone(&existing).is_none(),
+            "kind preserved on rejected batch",
+        );
     }
 }

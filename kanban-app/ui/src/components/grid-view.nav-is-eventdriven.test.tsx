@@ -117,7 +117,7 @@ vi.mock("@/hooks/use-grid", () => ({
 }));
 
 // Render DataTable as a thin div so the grid's CommandScope + spatial-nav
-// wiring still runs (each cell registers as a `<Focusable>` leaf through
+// wiring still runs (each cell registers as a `<FocusScope>` leaf through
 // the real GridView path), but we skip the virtualized row machinery that
 // is orthogonal to the fetch contract. The mock receives the same props
 // the real `<DataTable>` does; this stub renders only the test-id marker

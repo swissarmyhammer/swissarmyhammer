@@ -12,7 +12,7 @@ export interface UseInspectorNavReturn {
  * Hook for managing inspector edit mode.
  *
  * Field navigation is handled by the spatial-nav graph: each field row
- * registers as a `<FocusScope kind="zone">` and beam-search rules 1 and 2
+ * registers as a `<FocusZone>` and beam-search rules 1 and 2
  * drive within-field and cross-field movement. This hook only manages the
  * normal/edit mode toggle.
  *

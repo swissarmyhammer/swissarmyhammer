@@ -22,7 +22,7 @@ import {
 import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
 import { FocusLayer, useCurrentLayerKey } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import { asLayerName, type Direction } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
 
 /**
@@ -206,11 +206,13 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
   { id: "app.about", name: "About" },
 ];
 
-/** Type of the broadcaster ref used by nav command handlers. */
-type NavBroadcaster = (id: string) => void;
-
 /**
  * Key binding + display metadata for each universal navigation command.
+ *
+ * The `direction` field is the wire-shape literal that `spatial_navigate`
+ * accepts (matches `Direction` in `types/spatial.ts`). Each command's
+ * `execute` closure threads the currently-focused [`SpatialKey`] plus this
+ * direction string into `spatial_navigate` via the spatial-actions ref.
  *
  * Kept as a data table so `buildNavCommands` can produce the CommandDef[] in
  * a single pass without repetitive object literals.
@@ -219,60 +221,76 @@ const NAV_COMMAND_SPEC: ReadonlyArray<{
   id: string;
   name: string;
   keys: CommandDef["keys"];
+  direction: Direction;
 }> = [
   {
     id: "nav.up",
     name: "Navigate Up",
     keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
+    direction: "up",
   },
   {
     id: "nav.down",
     name: "Navigate Down",
     keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
+    direction: "down",
   },
   {
     id: "nav.left",
     name: "Navigate Left",
     keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
+    direction: "left",
   },
   {
     id: "nav.right",
     name: "Navigate Right",
     keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
+    direction: "right",
   },
   {
     id: "nav.first",
     name: "Navigate to First",
     keys: { cua: "Home", emacs: "Alt+<" },
+    direction: "first",
   },
   {
     id: "nav.last",
     name: "Navigate to Last",
     keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
+    direction: "last",
   },
 ];
 
 /**
- * Build universal navigation CommandDefs that fire through
- * `broadcastNavCommand`.
+ * Build universal navigation CommandDefs that dispatch `spatial_navigate`.
+ *
+ * Each command reads the currently-focused [`SpatialKey`] from the
+ * `SpatialFocusProvider`, then awaits the matching Tauri command
+ * (`spatial_navigate`) with the per-spec `direction` literal. When the
+ * registry has nothing focused (`focusedKey() === null`) the command is a
+ * no-op — there is nothing to navigate from.
  *
  * Historically this was the entry point for the pull-based predicate
- * registry: each FocusScope with a matching `claimWhen` predicate
- * would claim focus when these commands fired. The predicate registry
- * has been replaced by the Rust spatial-nav kernel (beam search plus
- * per-direction `overrides`), so `broadcastNavCommand` is now a no-op
- * stub that always returns `false`. The CommandDefs remain so the
- * existing key bindings (`vim` j/k/h/l, arrows, Home/End, Ctrl-p/n/b/f
- * in emacs) continue to register at the global scope; their `execute`
- * closures simply land on a no-op until a follow-up wires them to
- * `useSpatialFocusActions().navigate`.
+ * registry: each FocusScope with a matching `claimWhen` predicate would
+ * claim focus when these commands fired. The predicate registry has been
+ * replaced by the Rust spatial-nav kernel (beam search plus per-direction
+ * `overrides`), so the React side now pushes the focused key + direction
+ * into the kernel and the kernel emits `focus-changed` for the new
+ * target, which the React tree picks up via `useFocusClaim`.
  */
 function buildNavCommands(
-  broadcastRef: React.MutableRefObject<NavBroadcaster>,
+  spatialActionsRef: React.MutableRefObject<SpatialFocusActions>,
 ): CommandDef[] {
   return NAV_COMMAND_SPEC.map((spec) => ({
-    ...spec,
-    execute: () => broadcastRef.current(spec.id),
+    id: spec.id,
+    name: spec.name,
+    keys: spec.keys,
+    execute: async () => {
+      const actions = spatialActionsRef.current;
+      const key = actions.focusedKey();
+      if (key === null) return;
+      await actions.navigate(key, spec.direction);
+    },
   }));
 }
 
@@ -373,13 +391,10 @@ function buildDrillCommands(refs: DrillRefs): CommandDef[] {
  * AppShell prepends to the static batch in the spread — orders them
  * correctly.
  */
-function buildDynamicGlobalCommands(
-  broadcastRef: React.MutableRefObject<NavBroadcaster>,
-  drillRefs: DrillRefs,
-): CommandDef[] {
+function buildDynamicGlobalCommands(drillRefs: DrillRefs): CommandDef[] {
   return [
     ...buildDrillCommands(drillRefs),
-    ...buildNavCommands(broadcastRef),
+    ...buildNavCommands(drillRefs.spatialActionsRef),
     {
       id: "ui.entity.startRename",
       name: "Rename Perspective",
@@ -451,20 +466,17 @@ interface AppShellProps {
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
-  const { broadcastNavCommand, setFocus } = useFocusActions();
+  const { setFocus } = useFocusActions();
   const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
 
-  // Drill commands need read-on-demand access to spatial focus, entity
-  // setFocus, and the `app.dismiss` dispatcher. Holding each in a ref
-  // keeps the `globalCommands` memo dependency list empty while still
-  // letting the closures see the latest context values at keystroke
-  // time. The actions bag from `useSpatialFocusActions` is itself
-  // identity-stable (built once per provider lifetime), so the ref is
-  // belt-and-braces — a future refactor that turns it into a per-render
-  // value still survives.
+  // Drill + nav commands need read-on-demand access to spatial focus, entity
+  // setFocus, and the `app.dismiss` dispatcher. Holding each in a ref keeps
+  // the `globalCommands` memo dependency list empty while still letting the
+  // closures see the latest context values at keystroke time. The actions
+  // bag from `useSpatialFocusActions` is itself identity-stable (built once
+  // per provider lifetime), so the ref is belt-and-braces — a future
+  // refactor that turns it into a per-render value still survives.
   const spatialActionsRef = useRef(spatialActions);
   spatialActionsRef.current = spatialActions;
   const setFocusRef = useRef(setFocus);
@@ -482,8 +494,9 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   usePaletteModeSync(paletteOpen);
 
-  // Static commands come from module scope; dynamic ones close over
-  // broadcastRef. Both are stable, so the memo has no dependencies.
+  // Static commands come from module scope; dynamic ones close over the
+  // spatial-actions / setFocus / dismiss refs. Both batches are stable, so
+  // the memo has no dependencies.
   //
   // Dynamic commands precede static ones in the array so the drill
   // commands' `keys: { cua: "Escape" }` reaches the `CommandScope` map
@@ -496,7 +509,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   // root is preserved.
   const globalCommands: CommandDef[] = useMemo(
     () => [
-      ...buildDynamicGlobalCommands(broadcastRef, {
+      ...buildDynamicGlobalCommands({
         spatialActionsRef,
         setFocusRef,
         dismissRef,

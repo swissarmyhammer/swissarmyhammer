@@ -7,8 +7,9 @@ import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusZone, useParentZoneKey } from "@/components/focus-zone";
+import { Inspectable } from "@/components/inspectable";
 import { useOptionalLayerKey } from "@/components/focus-layer";
-import { useParentZoneKey } from "@/components/focus-zone";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -35,13 +36,20 @@ import {
  * callbacks the parent board uses to route drops through the command layer.
  *
  * Cross-column keyboard navigation now lives in the spatial-nav layer: each
- * column body wraps in a `<FocusScope kind="zone">` (parent zone =
- * `ui:board`), the column header is a leaf inside that zone, and each task
- * card is its own `<FocusScope kind="zone">` parented at the column. The
- * spatial graph computes nav.up / nav.down / nav.left / nav.right from the
- * registered rectangles, so the legacy neighbor-moniker plumbing and the
- * pull-based claim-predicate threading that used to live here are gone —
- * the column receives only structural / drag-drop wiring now.
+ * column body wraps in a `<FocusZone>` (parent zone = `ui:board`), the
+ * column-name header is a leaf inside that zone, and each task card body
+ * is its own `<FocusScope>` leaf parented at the column. Cards must be
+ * leaves so the unified cascade produces the cross-column trajectory:
+ * iter 0 scores in-column card peers (leaf candidates), and when no
+ * peer satisfies the beam test the cascade escalates to iter 1 — the
+ * card's parent column zone — and lands on the neighbouring column
+ * zone. Making cards zones would collapse iter 0 into sibling-zones
+ * only (same-column cards reachable as zones), trapping focus inside
+ * the column. The spatial graph computes nav.up / nav.down / nav.left /
+ * nav.right from the registered rectangles, so the legacy
+ * neighbor-moniker plumbing and the pull-based claim-predicate
+ * threading that used to live here are gone — the column receives only
+ * structural / drag-drop wiring now.
  */
 interface ColumnViewProps {
   column: Entity;
@@ -198,12 +206,13 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
  *
  * The virtualized column registers two flavours of spatial scope per task:
  *   - The real-mounted `EntityCard` (when the task is in the visible window)
- *     mints its own `SpatialKey` inside `<FocusZone>`.
- *   - The off-screen placeholder (registered via `spatial_register_batch`)
- *     uses a stable per-id key from this map so re-registers across
- *     scroll-window changes are idempotent — the kernel's `apply_batch`
- *     overwrites the rect for an existing key without disturbing
- *     `last_focused`.
+ *     mints its own `SpatialKey` inside `<FocusScope>` (the card body is
+ *     a leaf — see the docstring on `<EntityCard>`).
+ *   - The off-screen placeholder (registered via `spatial_register_batch`
+ *     with `kind: "scope"`) uses a stable per-id key from this map so
+ *     re-registers across scroll-window changes are idempotent — the
+ *     kernel's `apply_batch` overwrites the rect for an existing key
+ *     without disturbing `last_focused`.
  *
  * Stale entries (tasks that have since been removed from the column) are
  * pruned so the map cannot grow without bound across long-lived columns.
@@ -309,15 +318,21 @@ interface PlaceholderRegistrationInputs {
 }
 
 /**
- * Wire-shape companion to the Rust `RegisterEntry::Zone` enum variant.
+ * Wire-shape companion to the Rust `RegisterEntry::Scope` enum variant.
  *
  * Mirrors the kernel-side `#[serde(tag = "kind", rename_all = "snake_case")]`
- * discriminator. Task placeholders register as `Zone` (matching the kind that
- * `EntityCard` uses for its own `<FocusScope kind="zone">`) so kind-stability
- * holds when the real mount eventually overwrites the placeholder.
+ * discriminator. Task placeholders register as `Scope` (matching the
+ * kind that `EntityCard` uses for its own `<FocusScope>` leaf) so
+ * kind-stability holds when the real mount eventually overwrites the
+ * placeholder. Cards must be leaves so the unified cascade's iter-0 /
+ * iter-1 trajectory works as the user expects (iter 0 finds in-column
+ * card peers; iter 1 escalates to the card's parent column zone and
+ * lands on the neighbouring column zone). See the docstring on
+ * `<EntityCard>` and the kernel test
+ * `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
  */
-interface ZoneRegisterEntry {
-  kind: "zone";
+interface ScopeRegisterEntry {
+  kind: "scope";
   key: SpatialKey;
   moniker: string;
   rect: { x: number; y: number; width: number; height: number };
@@ -380,7 +395,7 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
     // Build the placeholder set for the current off-screen tasks, plus
     // the wire-format batch entries to ship across the IPC boundary.
     const wantPlaceholder = new Map<string, SpatialKey>();
-    const offScreen: ZoneRegisterEntry[] = [];
+    const offScreen: ScopeRegisterEntry[] = [];
 
     // Skip entirely when we don't have a real scroll element to anchor
     // off — the next render will refire this effect once the ref
@@ -410,7 +425,7 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
         if (!key) continue;
         wantPlaceholder.set(task.id, key);
         offScreen.push({
-          kind: "zone",
+          kind: "scope",
           key,
           moniker: task.moniker,
           rect: {
@@ -506,7 +521,7 @@ interface ColumnBodyProps {
  * Renders the column header and the virtualized card list as siblings.
  *
  * The flex chain (`flex flex-col` parent + `flex-1 overflow-y-auto` on the
- * scroll container) is established by the outer `<FocusScope kind="zone">`
+ * scroll container) is established by the outer `<FocusScope>`
  * directly — its `className` lands on the spatial primitive's root and
  * children render as direct layout children. ColumnBody therefore returns
  * a `<>` fragment so its children participate in that flex chain without
@@ -574,32 +589,55 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 
-  // FocusScope's `className` lands on its outer primitive `<div>` and the
+  // FocusZone's `className` lands on its outer primitive `<div>` and the
   // primitive renders children as direct layout children — the `flex flex-col`
   // chain established here propagates straight into ColumnHeader (header at
   // top) and VirtualizedCardList (`flex-1 overflow-y-auto` fills the rest).
   // `flex-1 min-h-0` participates in the SortableColumn parent's flex chain
   // so the column takes its share of the board's width and gets a bounded
   // scroll height for `useVirtualizer`'s windowing.
+  //
+  // The column body is a zone (parent of cards), not a leaf — descendants
+  // (`task:{id}` zones, the column-name `<FocusScope>` leaf in the header)
+  // register `parentZone = column-zone-key` via `FocusZoneContext`, so beam
+  // search treats the column's children as in-zone candidates.
+  //
+  // `showFocusBar` defaults to `true`. The column is a sized, distinct entity
+  // — when the user clicks its body or drills out from a card with Escape,
+  // they need a visible indicator on the column itself. Container zones that
+  // are viewport-sized chrome (board, perspective, view, navbar) suppress the
+  // bar because a focus rectangle around the entire viewport would be visual
+  // noise; columns are bounded boxes inside the board, so they advertise
+  // their focus the same way cards and field rows do. The
+  // `<FocusIndicator>` renders along the left edge of the column box at full
+  // height — see `kanban-app/ui/src/components/focus-indicator.tsx`.
+  // The column body wraps a real entity (`column:<id>` moniker), so
+  // double-clicking the column whitespace should open the inspector
+  // for that column. The `<Inspectable>` wrapper owns the
+  // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
+  // handler; the spatial primitive `<FocusZone>` stays pure-spatial.
+  // The architectural guard
+  // (`focus-architecture.guards.node.test.ts`, Guards B + C) enforces
+  // this for every entity-monikered zone.
   return (
-    <FocusScope
-      moniker={asMoniker(columnMoniker)}
-      kind="zone"
-      showFocusBar={false}
-      className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
-    >
-      <ColumnBody
-        props={props}
-        columnMoniker={columnMoniker}
-        columnNameMoniker={columnNameMoniker}
-        layout={layout}
-        dragScroll={dragScroll}
-        nameFieldDef={nameFieldDef}
-        editingName={editingName}
-        setEditingName={setEditingName}
-        setFocus={setFocus}
-      />
-    </FocusScope>
+    <Inspectable moniker={asMoniker(columnMoniker)}>
+      <FocusZone
+        moniker={asMoniker(columnMoniker)}
+        className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
+      >
+        <ColumnBody
+          props={props}
+          columnMoniker={columnMoniker}
+          columnNameMoniker={columnNameMoniker}
+          layout={layout}
+          dragScroll={dragScroll}
+          nameFieldDef={nameFieldDef}
+          editingName={editingName}
+          setEditingName={setEditingName}
+          setFocus={setFocus}
+        />
+      </FocusZone>
+    </Inspectable>
   );
 });
 
@@ -670,6 +708,11 @@ function ColumnHeader({
       className="px-3 py-2 flex items-center gap-2 rounded"
       onClickCapture={() => setFocus(columnNameMoniker)}
     >
+      {/* inspect:exempt — `column:<id>.name` is a synthetic navigation
+          leaf wrapping a `<Field>` zone (which itself owns the
+          per-field inspect opt-in via `fields/field.tsx`). Double-click
+          on the column name routes to the field editor's `onEdit`, not
+          to the inspector. */}
       <FocusScope moniker={asMoniker(columnNameMoniker)} className="inline">
         <ColumnNameField
           column={column}

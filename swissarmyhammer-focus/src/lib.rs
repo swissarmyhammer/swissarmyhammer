@@ -17,10 +17,10 @@
 //!   surface. Every public signature uses these newtypes — never bare
 //!   `String` or `f64`.
 //!
-//! - [`scope`] — the three peer types that describe a registered point in
-//!   the spatial-nav tree: [`Focusable`] leaves, [`FocusZone`] containers,
-//!   and the [`FocusScope`] enum that the registry stores per
-//!   [`SpatialKey`].
+//! - [`scope`] — the two registered struct types that describe a point in
+//!   the spatial-nav tree: [`FocusScope`] leaves and [`FocusZone`]
+//!   containers. There is no public sum-type enum; the registry stores
+//!   them via an internal discriminator and exposes typed accessors.
 //!
 //! - [`layer`] — the modal-boundary primitive [`FocusLayer`]. Layers form
 //!   a per-window forest; spatial nav, fallback resolution, and zone tree
@@ -47,7 +47,7 @@
 //!
 //! All public types use `serde` with stable JSON shapes — string newtypes
 //! serialize transparently as bare strings, [`Pixels`] serializes as a
-//! bare number, [`FocusScope`] uses a `kind` discriminator with
+//! bare number, [`RegisterEntry`] uses a `kind` discriminator with
 //! `snake_case` rename. The frontend mirrors these as branded TypeScript
 //! types so a `WindowLabel` and a `Moniker` cannot be mixed up at the
 //! Tauri boundary.
@@ -63,7 +63,7 @@ pub mod types;
 pub use layer::FocusLayer;
 pub use navigate::{BeamNavStrategy, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
-pub use registry::{BatchRegisterError, RegisterEntry, ScopeKind, SpatialRegistry};
-pub use scope::{FocusScope, FocusZone, Focusable};
+pub use registry::{BatchRegisterError, ChildScope, RegisterEntry, ScopeKind, SpatialRegistry};
+pub use scope::{FocusScope, FocusZone};
 pub use state::{FallbackResolution, FocusChangedEvent, SpatialState};
 pub use types::{Direction, LayerKey, LayerName, Moniker, Pixels, Rect, SpatialKey, WindowLabel};

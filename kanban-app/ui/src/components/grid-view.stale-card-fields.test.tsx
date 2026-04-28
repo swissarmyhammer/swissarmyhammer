@@ -76,27 +76,33 @@ vi.mock("@/lib/entity-store-context", () => ({
   useFieldValue: () => undefined,
 }));
 
-vi.mock("@/lib/entity-focus-context", () => ({
-  useEntityFocus: () => ({
-    focusedMoniker: null,
+vi.mock("@/lib/entity-focus-context", () => {
+  const actions = {
     setFocus: vi.fn(),
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
     broadcastNavCommand: vi.fn(),
-  }),
-  useFocusActions: () => ({
-    setFocus: vi.fn(),
-    registerScope: vi.fn(),
-    unregisterScope: vi.fn(),
-    getScope: vi.fn(),
-    broadcastNavCommand: vi.fn(),
-  }),
-  useFocusedMoniker: () => null,
-  useFocusedMonikerRef: () => ({ current: null }),
-  useIsFocused: () => false,
-  useIsDirectFocus: () => false,
-}));
+  };
+  return {
+    useEntityFocus: () => ({
+      focusedMoniker: null,
+      setFocus: vi.fn(),
+      registerScope: vi.fn(),
+      unregisterScope: vi.fn(),
+      getScope: vi.fn(),
+      broadcastNavCommand: vi.fn(),
+    }),
+    useFocusActions: () => actions,
+    useOptionalFocusActions: () => actions,
+    useEntityScopeRegistration: () => {},
+    useFocusedMoniker: () => null,
+    useFocusedMonikerRef: () => ({ current: null }),
+    useIsFocused: () => false,
+    useIsDirectFocus: () => false,
+    useOptionalIsDirectFocus: () => false,
+  };
+});
 
 vi.mock("@/hooks/use-grid", () => ({
   useGrid: () => ({

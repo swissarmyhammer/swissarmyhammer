@@ -652,6 +652,68 @@ mod tests {
     }
 
     #[test]
+    fn ui_entity_start_rename_carries_perspective_scope_and_enter_keys() {
+        // `ui.entity.startRename` is the canonical "begin inline rename"
+        // command. The user-facing entry points are:
+        //
+        //   1. The command palette (`Rename Perspective` row).
+        //   2. Mouse double-click on a perspective tab (calls `startRename`
+        //      directly, not the registry).
+        //   3. Keyboard Enter while a perspective tab is the spatial focus —
+        //      added in 01KQ7GE3KY91X2YR6BX5AY40VK to fix the "Enter on
+        //      focused perspective tab does nothing" bug.
+        //
+        // Entry point #3 needs the YAML to advertise:
+        //
+        //   - `keys.cua = "Enter"`, `keys.vim = "Enter"`, `keys.emacs = "Enter"`
+        //     so the React `extractScopeBindings` walk at the perspective tab's
+        //     CommandScopeProvider picks Enter up out of the merged scope chain.
+        //   - `scope: "entity:perspective"` so the command is filtered out of
+        //     non-perspective focus contexts (board / column / card), where
+        //     the global `nav.drillIn: Enter` should keep firing.
+        //
+        // The React mirror in
+        // `kanban-app/ui/src/components/perspective-tab-bar.tsx` carries the
+        // same `keys` block on the `<CommandScopeProvider>` it wraps each
+        // perspective tab in; the source-level guard in
+        // `kanban-app/ui/src/lib/keybindings.test.ts` pins the React side. This
+        // test pins the YAML side so the two cannot drift.
+        let ui = include_str!("../builtin/commands/ui.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("ui", ui)]);
+
+        let cmd = registry
+            .get("ui.entity.startRename")
+            .expect("ui.entity.startRename must be registered by ui.yaml");
+
+        assert_eq!(
+            cmd.scope.as_deref(),
+            Some("entity:perspective"),
+            "ui.entity.startRename must carry `scope: \"entity:perspective\"` \
+             so the binding is filtered out of non-perspective focus contexts"
+        );
+
+        let keys = cmd
+            .keys
+            .as_ref()
+            .expect("ui.entity.startRename must declare a `keys` block");
+        assert_eq!(
+            keys.cua.as_deref(),
+            Some("Enter"),
+            "ui.entity.startRename.keys.cua must be `Enter`"
+        );
+        assert_eq!(
+            keys.vim.as_deref(),
+            Some("Enter"),
+            "ui.entity.startRename.keys.vim must be `Enter`"
+        );
+        assert_eq!(
+            keys.emacs.as_deref(),
+            Some("Enter"),
+            "ui.entity.startRename.keys.emacs must be `Enter`"
+        );
+    }
+
+    #[test]
     fn merge_yaml_sources_invalid_yaml_skipped() {
         let base = vec![("base", "- id: foo.add\n  name: Add Foo\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);

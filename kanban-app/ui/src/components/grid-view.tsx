@@ -226,7 +226,7 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   //     to stamp the `data-cell-cursor` debug/e2e attribute. Parsed
   //     straight from the moniker; matches on column field name, no
   //     numeric column index required. The visible focus decoration is
-  //     not driven from this — the cell's `<Focusable>` renders
+  //     not driven from this — the cell's `<FocusScope>` renders
   //     `<FocusIndicator>` from its own React focus state.
   //   - `derivedCursor: {row, col}` — what `useGrid` needs (a numeric
   //     row/col cursor input). Built by mapping `colKey` to its column
@@ -722,7 +722,7 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
  * Mirrors the `BoardSpatialZone` / `ViewSpatialZone` / `PerspectiveSpatialZone`
  * pattern used elsewhere in the project. The zone renders inside the
  * already-mounted `ui:view` zone so its `parent_zone` is `ui:view`. Cells
- * register as `<Focusable>` leaves under this zone in `data-table.tsx`.
+ * register as `<FocusScope>` leaves under this zone in `data-table.tsx`.
  *
  * The wrapper renders `<>` (a fragment) when the spatial stack is absent so
  * the inner DOM tree (DataTable's scroll container + AddEntityBar) keeps the
@@ -737,6 +737,14 @@ function GridSpatialZone({ children }: { children: ReactNode }) {
   return (
     <FocusZone
       moniker={asMoniker("ui:grid")}
+      // Suppress the visible focus bar around the grid body. The grid is a
+      // viewport-filling zone — every cell already advertises its own focus
+      // via the per-cell `<FocusIndicator>`, and rendering a second bar
+      // around the entire scroll container would be visual noise wrapped
+      // around (and competing with) the cell-level decoration. The
+      // `data-focused` attribute on the zone still flips so e2e selectors
+      // and debugging tooling can observe the zone-level claim; only the
+      // visible bar is suppressed.
       showFocusBar={false}
       className="flex-1 flex flex-col min-h-0"
     >

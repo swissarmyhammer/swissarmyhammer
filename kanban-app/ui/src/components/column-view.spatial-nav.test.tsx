@@ -3,10 +3,10 @@
  *
  * Mounts a column inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the column's
- * `<FocusScope kind="zone">` and the inner column-name-field `<FocusScope>`
+ * `<FocusScope>` and the inner column-name-field `<FocusScope>`
  * register through the live spatial primitives. The Tauri `invoke` boundary
  * is mocked at the module level so we can inspect the `spatial_register_zone`
- * and `spatial_register_focusable` calls each emits on mount.
+ * and `spatial_register_scope` calls each emits on mount.
  *
  * Companion file: `column-view.guards.node.test.ts` pins the source-level
  * invariants (no `ClaimPredicate` import, no neighbor-moniker plumbing, no
@@ -18,7 +18,11 @@
  *     under the layer root.
  *   - The column header registers as a leaf with `parentZone` equal to the
  *     column's zone key.
- *   - Each task card registers as a zone parented at the column zone.
+ *   - Each task card registers as a leaf (`<FocusScope>`) parented at
+ *     the column zone — cards must be leaves so the unified cascade's
+ *     iter-0 / iter-1 trajectory works as the user expects (iter 0
+ *     finds in-column card peers; iter 1 escalates to the card's parent
+ *     column zone and lands on the neighbouring column zone).
  *   - No claim-predicate registration calls are emitted for the column or
  *     its header.
  */
@@ -112,7 +116,7 @@ function makeTask(id: string, column = "col-1"): Entity {
 /**
  * Flush microtasks queued by the spatial-primitive register effects.
  *
- * `<FocusZone>` / `<Focusable>` perform their `spatial_register_*` invocations
+ * `<FocusZone>` / `<FocusScope>` perform their `spatial_register_*` invocations
  * inside `useEffect`, which React flushes asynchronously. Without this nudge
  * the assertions run before the register calls land in the mock.
  */
@@ -169,8 +173,8 @@ function registeredZones(): Array<{
     );
 }
 
-/** Pull every `spatial_register_focusable` call as a typed record. */
-function registeredFocusables(): Array<{
+/** Pull every `spatial_register_scope` call as a typed record. */
+function registeredScopes(): Array<{
   key: string;
   moniker: string;
   rect: unknown;
@@ -178,7 +182,7 @@ function registeredFocusables(): Array<{
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_focusable")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map(
       (c) =>
         c[1] as {
@@ -200,10 +204,11 @@ function unregisteredScopeKeys(): string[] {
 
 /**
  * Shape of one entry inside a `spatial_register_batch` invoke. Mirrors
- * the Rust `RegisterEntry::Zone` variant the column ships across the
- * IPC boundary.
+ * the Rust `RegisterEntry::Scope` variant the column ships across the
+ * IPC boundary — task placeholders register with `kind: "scope"` to
+ * match the on-screen card kind (cards are leaves).
  */
-interface BatchZoneEntry {
+interface BatchScopeEntry {
   kind: string;
   key: string;
   moniker: string;
@@ -215,13 +220,13 @@ interface BatchZoneEntry {
 
 /**
  * Pull every `spatial_register_batch` call's `entries` argument flattened
- * into one list of zone entries — convenient when assertions only care
+ * into one list of scope entries — convenient when assertions only care
  * about whether a particular task ever had a placeholder shipped.
  */
-function batchEntries(): BatchZoneEntry[] {
+function batchEntries(): BatchScopeEntry[] {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_register_batch")
-    .flatMap((c) => (c[1] as { entries: BatchZoneEntry[] }).entries ?? []);
+    .flatMap((c) => (c[1] as { entries: BatchScopeEntry[] }).entries ?? []);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +281,7 @@ describe("ColumnView (spatial-nav)", () => {
     );
     expect(columnZone).toBeTruthy();
 
-    const headerLeaf = registeredFocusables().find(
+    const headerLeaf = registeredScopes().find(
       (f) => f.moniker === "column:col-doing.name",
     );
     expect(headerLeaf).toBeTruthy();
@@ -285,7 +290,16 @@ describe("ColumnView (spatial-nav)", () => {
     unmount();
   });
 
-  it("registers each task card as a zone parented at the column zone", async () => {
+  it("registers each task card as a leaf parented at the column zone", async () => {
+    // Cards register as `<FocusScope>` leaves — NOT zones — so the
+    // unified cascade's iter-0 / iter-1 trajectory works as the user
+    // expects: iter 0 finds in-column card peers, and when no peer
+    // satisfies the beam test the cascade escalates to iter 1 — the
+    // card's parent column zone — and lands on the neighbouring column
+    // zone (which the React adapter drills back into). The card's
+    // `parentZone` must be the enclosing column's zone key so the
+    // kernel can group cards by column when computing same-level peers
+    // for iter 0.
     const tasks = [makeTask("t1"), makeTask("t2")];
     const { unmount } = renderColumnInBoard(
       <ColumnView column={makeColumn("col-doing")} tasks={tasks} />,
@@ -298,11 +312,21 @@ describe("ColumnView (spatial-nav)", () => {
     expect(columnZone).toBeTruthy();
 
     for (const id of ["t1", "t2"]) {
+      const taskScope = registeredScopes().find(
+        (s) => s.moniker === `task:${id}`,
+      );
+      expect(taskScope, `task:${id} leaf registered`).toBeTruthy();
+      expect(taskScope!.parentZone).toBe(columnZone!.key);
+
+      // And no `task:${id}` is registered as a zone — the card is a
+      // leaf, never a zone.
       const taskZone = registeredZones().find(
         (z) => z.moniker === `task:${id}`,
       );
-      expect(taskZone, `task:${id} zone registered`).toBeTruthy();
-      expect(taskZone!.parentZone).toBe(columnZone!.key);
+      expect(
+        taskZone,
+        `task:${id} must NOT be registered as a zone`,
+      ).toBeUndefined();
     }
 
     unmount();
@@ -341,8 +365,12 @@ describe("ColumnView (spatial-nav)", () => {
     // Above the virtualization threshold (25), the column delegates to
     // TanStack Virtual which mounts only the visible window. Off-screen
     // rows have no real-mounted primitives, so the column registers
-    // placeholder zones via `spatial_register_batch` so the spatial graph
-    // has candidate rectangles for nav.down past the visible window.
+    // placeholder leaves via `spatial_register_batch` so the spatial
+    // graph has candidate rectangles for nav.down past the visible
+    // window. Placeholders register with `kind: "scope"` to match the
+    // on-screen card's `<FocusScope>` kind — kind-stability is required
+    // so the kernel can overwrite the placeholder with the real-mount
+    // entry without disturbing the registry shape.
     const N = 60;
     const tasks: Entity[] = [];
     for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
@@ -379,8 +407,10 @@ describe("ColumnView (spatial-nav)", () => {
       (c) => c[0] === "spatial_register_batch",
     );
 
-    // Sanity-check the wire shape — entries are an array of zone-kind
-    // RegisterEntry records with newtyped fields.
+    // Sanity-check the wire shape — entries are an array of scope-kind
+    // RegisterEntry records with newtyped fields. Cards are leaves
+    // (`<FocusScope>`), so their placeholder companions ship as
+    // `kind: "scope"` too — matching the kind the real-mount uses.
     const lastBatch = batchCalls[batchCalls.length - 1];
     const args = lastBatch[1] as { entries: unknown[] };
     expect(Array.isArray(args.entries)).toBe(true);
@@ -394,7 +424,7 @@ describe("ColumnView (spatial-nav)", () => {
       parent_zone: string | null;
       overrides: Record<string, unknown>;
     };
-    expect(first.kind).toBe("zone");
+    expect(first.kind).toBe("scope");
     expect(typeof first.key).toBe("string");
     expect(first.moniker).toMatch(/^task:/);
     expect(typeof first.rect.x).toBe("number");

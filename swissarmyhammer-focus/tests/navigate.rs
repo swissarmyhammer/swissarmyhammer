@@ -1,32 +1,50 @@
-//! Integration tests for the Android-style beam-search navigator.
+//! Integration tests for the Android-style beam-search navigator
+//! under the **unified cascade** policy.
 //!
 //! Headless pattern matching `tests/focus_state.rs` and
 //! `tests/focus_registry.rs` — pure Rust, no Tauri runtime, no jsdom.
 //! Every navigation runs through [`BeamNavStrategy`] (the default
 //! [`NavStrategy`] impl) and asserts on the returned [`Moniker`].
 //!
-//! These tests cover the algorithm card (`01KNQXXF5W...`):
+//! These tests originally pinned the per-direction tactical rules
+//! (rule 1 within-zone, rule 2 cross-zone leaf fallback, rule 3 no-op,
+//! plus the zone-only `navigate_zone` path). The unified-policy
+//! supersession card [`01KQ7S6WHK9RCCG2R4FN474EFD`] collapsed all three
+//! into one cascade — these tests have been updated to assert on the
+//! observable outcome of that cascade rather than on the now-removed
+//! mechanism. See [`tests/unified_trajectories.rs`] for the source-of-
+//! truth user trajectories the policy must satisfy; this file
+//! complements that by stressing edge cases and the layer-boundary
+//! contracts that the trajectories don't enumerate explicitly.
 //!
 //! - **Layer isolation** — nav never crosses a `LayerKey`. Two windows,
 //!   two inspectors, a dialog: each is its own layer; nav stays put.
-//! - **Rule 1: within-zone beam** — candidates restricted to siblings
-//!   sharing `parent_zone` with the focused leaf.
-//! - **Rule 2: cross-zone leaf fallback** — when no in-zone candidate
-//!   matches the direction, the navigator falls back to all `Focusable`
-//!   entries in the same layer.
-//! - **Rule 3: no-op** — both rules empty → return `None`.
-//! - **Zone-level nav** — when focus is on a `FocusZone`, only sibling
-//!   zones are candidates; leaves are invisible.
-//! - **Beam scoring** — Android scoring `13 * major² + minor²` prefers
-//!   aligned candidates over closer-but-diagonal ones (13:1 ratio).
+//! - **Iter 0 in-zone beam** — candidates restricted to scopes sharing
+//!   `parent_zone` with the focused entry; both leaves and zones are
+//!   eligible at this level.
+//! - **Iter 1 cross-zone escalation** — when no in-zone match exists,
+//!   the cascade escalates to the focused entry's parent zone and
+//!   searches at the parent's level. Cross-column horizontal nav from
+//!   a card lands on the next-column zone moniker (the React adapter
+//!   handles drill-back-in if a specific leaf is desired).
+//! - **Drill-out fallback** — when no peer matches at iter 0 or iter
+//!   1, the cascade returns the parent zone itself rather than `None`.
+//!   `None` is reserved for the focused entry sitting at the very root
+//!   of its layer.
+//! - **Beam scoring** — Android scoring `13 * major² + minor²` selects
+//!   the closest aligned candidate among in-beam peers (the cross-axis
+//!   projection is a hard filter, not a soft preference).
 //! - **Edge commands** — `First`, `Last`, `RowStart`, `RowEnd` scope
-//!   their candidate sets by level (leaf → in-zone siblings, zone →
-//!   sibling zones).
+//!   their candidate sets to the focused entry's siblings only — no
+//!   escalation cascade for the level-bounded commands.
+//!
+//! [`01KQ7S6WHK9RCCG2R4FN474EFD`]: # "unified-policy supersession card"
+//! [`tests/unified_trajectories.rs`]: # "source-of-truth trajectories"
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusZone, Focusable, LayerKey, LayerName, Moniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker,
     NavStrategy, Pixels, Rect, SpatialKey, SpatialRegistry, WindowLabel,
 };
 
@@ -45,17 +63,11 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-/// Build a `Focusable` with the given identity, rect, layer, and
+/// Build a `FocusScope` leaf with the given identity, rect, layer, and
 /// optional parent zone. Overrides are intentionally empty for the
 /// algorithm tests — override resolution lives in another card.
-fn focusable(
-    key: &str,
-    moniker: &str,
-    layer: &str,
-    parent_zone: Option<&str>,
-    r: Rect,
-) -> Focusable {
-    Focusable {
+fn leaf(key: &str, moniker: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
+    FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: r,
@@ -114,7 +126,7 @@ fn nav_never_crosses_layer_boundary_within_one_window() {
 
     // Card on the window layer — would be rect-wise to the right of the
     // inspector pill, but lives in a different layer.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "card",
         "ui:card",
         "L_window",
@@ -122,7 +134,7 @@ fn nav_never_crosses_layer_boundary_within_one_window() {
         rect(200.0, 100.0, 80.0, 40.0),
     ));
     // Pill in the inspector — focused.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "pill",
         "ui:pill",
         "L_inspector",
@@ -146,14 +158,8 @@ fn nav_never_crosses_layer_boundary_between_windows() {
 
     // Two leaves at the same rect but in different windows. From `a1`'s
     // perspective, `b2` does not exist; the nav has nothing to land on.
-    reg.register_focusable(focusable(
-        "a1",
-        "ui:a1",
-        "L_a",
-        None,
-        rect(0.0, 0.0, 50.0, 50.0),
-    ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf("a1", "ui:a1", "L_a", None, rect(0.0, 0.0, 50.0, 50.0)));
+    reg.register_scope(leaf(
         "b2",
         "ui:b2",
         "L_b",
@@ -165,7 +171,11 @@ fn nav_never_crosses_layer_boundary_between_windows() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule 1: within-zone beam search.
+// Iter 0 — in-zone peer search.
+//
+// The unified cascade's first iteration searches scopes sharing the
+// focused entry's `parent_zone`. Both leaves and zones are eligible
+// candidates; the in-beam Android score picks the winner.
 // ---------------------------------------------------------------------------
 
 /// Card with two leaves (title above, status below) inside the same
@@ -182,14 +192,14 @@ fn rule_1_within_zone_down_picks_sibling_leaf() {
         None,
         rect(0.0, 0.0, 200.0, 100.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -218,14 +228,14 @@ fn rule_1_within_zone_up_picks_sibling_leaf() {
         None,
         rect(0.0, 0.0, 200.0, 100.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -240,11 +250,11 @@ fn rule_1_within_zone_up_picks_sibling_leaf() {
 }
 
 /// Aligned candidate beats closer-but-diagonal candidate. The in-beam
-/// tier wins regardless of raw score: a candidate whose rect overlaps
-/// the source's cross-axis projection always beats a non-overlapping
-/// candidate, even when the diagonal one would score lower under the
-/// raw `13 * major² + minor²` formula. See the assertion comment for
-/// the worked-out numbers.
+/// test is a hard filter for cardinal directions: a candidate whose
+/// rect does not overlap the source's cross-axis projection is dropped
+/// before scoring, even when its raw `13 * major² + minor²` distance
+/// would otherwise have made it the winner. See the assertion comment
+/// for the worked-out numbers.
 #[test]
 fn rule_1_aligned_candidate_beats_closer_diagonal() {
     let mut reg = SpatialRegistry::new();
@@ -257,7 +267,7 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
         rect(0.0, 0.0, 400.0, 200.0),
     ));
     // Focused: small box at top-left.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "src",
         "ui:src",
         "L",
@@ -265,7 +275,7 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
         rect(0.0, 0.0, 20.0, 20.0),
     ));
     // Aligned: directly below `src`, far away.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "aligned",
         "ui:aligned",
         "L",
@@ -273,7 +283,7 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
         rect(0.0, 100.0, 20.0, 20.0),
     ));
     // Diagonal: closer in raw distance but offset to the right.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "diagonal",
         "ui:diagonal",
         "L",
@@ -281,19 +291,23 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
         rect(50.0, 30.0, 20.0, 20.0),
     ));
 
-    // The in-beam tier wins regardless of raw score. `aligned`
-    // overlaps the source rect's vertical projection (x: 0..20 vs
-    // 0..20), so it is in-beam. `diagonal` (x: 50..70) does not
-    // overlap, so it is out-of-beam.
+    // The in-beam test is a hard filter. `aligned` overlaps the
+    // source rect's vertical projection (x: 0..20 vs 0..20), so it
+    // is in-beam and survives. `diagonal` (x: 50..70) does not
+    // overlap, so it is filtered out before scoring runs.
     //
     // For reference, the raw Android scores would actually favor the
     // diagonal candidate:
     //   score(aligned)  = 13 * 80²  + 0²   = 83_200
     //   score(diagonal) = 13 * 10²  + 50²  = 1_300 + 2_500 = 3_800
-    // But `pick_best_candidate` applies the beam test as a hard tier
-    // strictly above raw score: an in-beam candidate beats every
-    // out-of-beam candidate, so `aligned` wins despite the worse raw
-    // score. This is Android FocusFinder's beam preference.
+    // The kernel ignores those numbers when the candidate is
+    // out-of-beam — see `pick_best_candidate` in
+    // `swissarmyhammer-focus/src/navigate.rs` for the rationale on
+    // the hard filter. The directional-nav card
+    // `01KQ7STZN3G5N2WB3FF4PM4DKX` motivated the move from a soft
+    // tier preference to a hard filter (out-of-beam fallbacks were
+    // letting the navbar steal `right` presses from the rightmost
+    // card).
     assert_eq!(
         nav(&reg, "src", Direction::Down),
         Some(Moniker::from_string("ui:aligned"))
@@ -301,14 +315,35 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
 }
 
 // ---------------------------------------------------------------------------
-// Rule 2: cross-zone leaf fallback.
+// Cross-zone navigation under the unified cascade.
+//
+// The unified-policy supersession card (`01KQ7S6WHK9RCCG2R4FN474EFD`)
+// replaced the old leaf-level "rule 2 cross-zone leaf fallback" with a
+// two-level cascade: when no in-zone peer matches, the navigator
+// escalates to the parent zone and searches at that level. Cross-zone
+// horizontal nav now lands on the **next-column zone moniker** rather
+// than a leaf inside the next column; the React adapter handles drill-
+// back-in if the user wants to land on a specific leaf.
+//
+// The observable contract these tests pin: from a leaf with no
+// horizontal in-zone peer, pressing Right / Left lands focus on the
+// next-column zone (or returns the parent zone via drill-out when no
+// peer exists at any level — see the leftmost-column test).
 // ---------------------------------------------------------------------------
 
-/// Two cards laid out side-by-side, each with a single leaf. From the
-/// left card's leaf, `nav.right` has no in-zone candidate → falls back
-/// to the leaf in the right card (rule 2).
+/// Two columns laid out side-by-side, each with a single leaf inside.
+/// From the left column's leaf, `nav.right` finds no in-zone peer; the
+/// cascade escalates to the column zone and finds the right column zone
+/// as a peer at the parent's level. Returns `ui:col1` (the next-column
+/// zone moniker).
+///
+/// Pre-supersession this test asserted on the leaf inside the next
+/// column (`ui:leaf1`) — the old rule-2 cross-zone leaf fallback.
+/// Under the unified cascade the kernel's answer is the zone moniker;
+/// the React adapter is responsible for drilling back into a specific
+/// leaf if the consumer wants that behavior.
 #[test]
-fn rule_2_cross_zone_right_falls_back_to_leaf_in_neighbor_zone() {
+fn cross_zone_right_lands_on_next_column_zone() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
     reg.register_zone(zone(
@@ -325,14 +360,14 @@ fn rule_2_cross_zone_right_falls_back_to_leaf_in_neighbor_zone() {
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf0",
         "ui:leaf0",
         "L",
         Some("col0"),
         rect(10.0, 10.0, 80.0, 40.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf1",
         "ui:leaf1",
         "L",
@@ -342,16 +377,18 @@ fn rule_2_cross_zone_right_falls_back_to_leaf_in_neighbor_zone() {
 
     assert_eq!(
         nav(&reg, "leaf0", Direction::Right),
-        Some(Moniker::from_string("ui:leaf1"))
+        Some(Moniker::from_string("ui:col1")),
+        "Right from a leaf with no in-zone peer must land on the next-column zone via the \
+         unified cascade's iter-1 escalation"
     );
 }
 
-/// Mirror of `rule_2_cross_zone_right_falls_back_to_leaf_in_neighbor_zone`
-/// for `nav.left`. From the right column's leaf, `nav.left` falls back
-/// to the leaf in the left column via rule 2 — guards against a sign
-/// flip in the `Direction::Left` arm of `score_candidate`.
+/// Mirror of `cross_zone_right_lands_on_next_column_zone` for
+/// `nav.left`. Guards the unified cascade's symmetry across the
+/// horizontal axis — and, secondarily, against a sign flip in the
+/// `Direction::Left` arm of `score_candidate`.
 #[test]
-fn rule_2_cross_zone_left_falls_back_to_leaf_in_neighbor_zone() {
+fn cross_zone_left_lands_on_previous_column_zone() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
     reg.register_zone(zone(
@@ -368,14 +405,14 @@ fn rule_2_cross_zone_left_falls_back_to_leaf_in_neighbor_zone() {
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf0",
         "ui:leaf0",
         "L",
         Some("col0"),
         rect(10.0, 10.0, 80.0, 40.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf1",
         "ui:leaf1",
         "L",
@@ -385,14 +422,145 @@ fn rule_2_cross_zone_left_falls_back_to_leaf_in_neighbor_zone() {
 
     assert_eq!(
         nav(&reg, "leaf1", Direction::Left),
-        Some(Moniker::from_string("ui:leaf0"))
+        Some(Moniker::from_string("ui:col0")),
+        "Left from a leaf with no in-zone peer must land on the previous-column zone via the \
+         unified cascade's iter-1 escalation"
+    );
+}
+
+/// Production-shape regression: a board with two columns, three card
+/// leaves per column, and a column-name leaf in each column header.
+/// Pressing right on the top card of column A must land on the
+/// next-column zone via the unified cascade's iter-1 escalation —
+/// this is the kanban board layout the React side actually mounts,
+/// so this test pins the kernel against the real production graph
+/// rather than the synthetic one-leaf-per-zone shape
+/// [`cross_zone_right_lands_on_next_column_zone`] uses. Without this
+/// guard, regressions that interact with header leaves or stacked-
+/// card siblings only surface in browser tests.
+///
+/// Pre-supersession this test asserted on a card-leaf moniker in
+/// column B (`task:1B`) — the old rule-2 cross-zone leaf fallback.
+/// Under the unified cascade the kernel returns the column zone
+/// (`column:B`); the React adapter handles drill-back-in to a card.
+#[test]
+fn cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone() {
+    let mut reg = SpatialRegistry::new();
+    reg.push_layer(layer("L", "main", None));
+
+    // Outer board chrome zone — every column lives under it. Mirrors the
+    // `ui:board` `<FocusZone>` in `board-view.tsx`.
+    reg.register_zone(zone(
+        "board",
+        "ui:board",
+        "L",
+        None,
+        rect(0.0, 0.0, 600.0, 400.0),
+    ));
+
+    // Two column zones inside the board, side-by-side.
+    reg.register_zone(zone(
+        "colA",
+        "column:A",
+        "L",
+        Some("board"),
+        rect(0.0, 0.0, 300.0, 400.0),
+    ));
+    reg.register_zone(zone(
+        "colB",
+        "column:B",
+        "L",
+        Some("board"),
+        rect(300.0, 0.0, 300.0, 400.0),
+    ));
+
+    // Column A — header leaf at the top, three card leaves stacked
+    // beneath it. The header lives inside the column zone (parent =
+    // column zone) — same shape `column-view.tsx` produces via the
+    // `<FocusScope moniker="column:<id>.name">` wrapping the header.
+    reg.register_scope(leaf(
+        "headerA",
+        "column:A.name",
+        "L",
+        Some("colA"),
+        rect(10.0, 10.0, 280.0, 30.0),
+    ));
+    reg.register_scope(leaf(
+        "task1A",
+        "task:1A",
+        "L",
+        Some("colA"),
+        rect(10.0, 50.0, 280.0, 60.0),
+    ));
+    reg.register_scope(leaf(
+        "task2A",
+        "task:2A",
+        "L",
+        Some("colA"),
+        rect(10.0, 120.0, 280.0, 60.0),
+    ));
+    reg.register_scope(leaf(
+        "task3A",
+        "task:3A",
+        "L",
+        Some("colA"),
+        rect(10.0, 190.0, 280.0, 60.0),
+    ));
+
+    // Column B — same shape.
+    reg.register_scope(leaf(
+        "headerB",
+        "column:B.name",
+        "L",
+        Some("colB"),
+        rect(310.0, 10.0, 280.0, 30.0),
+    ));
+    reg.register_scope(leaf(
+        "task1B",
+        "task:1B",
+        "L",
+        Some("colB"),
+        rect(310.0, 50.0, 280.0, 60.0),
+    ));
+    reg.register_scope(leaf(
+        "task2B",
+        "task:2B",
+        "L",
+        Some("colB"),
+        rect(310.0, 120.0, 280.0, 60.0),
+    ));
+    reg.register_scope(leaf(
+        "task3B",
+        "task:3B",
+        "L",
+        Some("colB"),
+        rect(310.0, 190.0, 280.0, 60.0),
+    ));
+
+    // From `task:1A`, iter 0 (peers inside `column:A`) finds no
+    // horizontal candidate — every sibling is stacked above or below.
+    // Iter 1 (peers at the parent's level — i.e. column zones under
+    // `ui:board`) finds `column:B` as the in-beam right neighbor.
+    assert_eq!(
+        nav(&reg, "task1A", Direction::Right),
+        Some(Moniker::from_string("column:B")),
+        "the unified cascade must take the right press from task:1A across into column B's zone"
+    );
+
+    // Mirror left from `task:1B` lands on `column:A`.
+    assert_eq!(
+        nav(&reg, "task1B", Direction::Left),
+        Some(Moniker::from_string("column:A")),
+        "the unified cascade must take the left press from task:1B across into column A's zone"
     );
 }
 
 /// In-zone candidate is preferred over a closer cross-zone candidate.
-/// Rule 1 fires first; rule 2 only runs when rule 1 finds nothing.
+/// Iter 0 (peer search at the focused entry's level) fires first; iter
+/// 1 (escalation to the parent's level) only runs when iter 0 finds
+/// nothing.
 #[test]
-fn rule_1_preferred_over_rule_2_when_in_zone_match_exists() {
+fn iter_0_preferred_over_iter_1_when_in_zone_match_exists() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
     reg.register_zone(zone(
@@ -409,7 +577,7 @@ fn rule_1_preferred_over_rule_2_when_in_zone_match_exists() {
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "src",
         "ui:src",
         "L",
@@ -417,7 +585,7 @@ fn rule_1_preferred_over_rule_2_when_in_zone_match_exists() {
         rect(10.0, 10.0, 30.0, 30.0),
     ));
     // In-zone but far below.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "inzone",
         "ui:inzone",
         "L",
@@ -425,7 +593,7 @@ fn rule_1_preferred_over_rule_2_when_in_zone_match_exists() {
         rect(10.0, 150.0, 30.0, 30.0),
     ));
     // Cross-zone but closer (raw rect distance is smaller).
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "crosszone",
         "ui:crosszone",
         "L",
@@ -436,21 +604,28 @@ fn rule_1_preferred_over_rule_2_when_in_zone_match_exists() {
     assert_eq!(
         nav(&reg, "src", Direction::Down),
         Some(Moniker::from_string("ui:inzone")),
-        "rule 1 (in-zone) must win even when rule 2 candidate is closer"
+        "iter 0 (in-zone peer) must win even when an iter-1 candidate is closer"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Rule 3: no-op.
+// Layer-root termination — `None` is reserved for the very root.
+//
+// Under the unified cascade, a single key press always returns
+// **something** unless the focused entry sits at the layer root with
+// no parent zone to drill out to. The drill-out fallback prevents
+// "stuck" no-ops at any other level.
 // ---------------------------------------------------------------------------
 
-/// The only leaf in a layer has nothing to navigate to → `None`. This
-/// is the rule-3 termination of the three-rule cascade.
+/// The only leaf in a layer has nothing to navigate to → `None`. The
+/// leaf sits at the layer root (`parent_zone == None`); there's no
+/// parent zone to drill out to and no peer to find. This is the only
+/// shape under the unified cascade where `None` is a valid answer.
 #[test]
-fn rule_3_no_candidate_returns_none() {
+fn layer_root_lone_leaf_returns_none() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lonely",
         "ui:lonely",
         "L",
@@ -525,7 +700,7 @@ fn zone_nav_up_with_only_horizontal_siblings_returns_none() {
     ));
     // Leaf inside col0 — would be rect-wise above col0 if zones saw
     // leaves, but at zone level it is invisible.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf",
         "ui:leaf",
         "L",
@@ -557,7 +732,7 @@ fn zone_nav_right_does_not_return_leaf_inside_neighbor_zone() {
         rect(200.0, 0.0, 100.0, 200.0),
     ));
     // Leaf in col1 sits closer to col0 than col1's left edge.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf1",
         "ui:leaf1",
         "L",
@@ -590,14 +765,14 @@ fn inspector_pill_a_to_pill_b_in_zone() {
         None,
         rect(0.0, 0.0, 200.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "pill_a",
         "ui:pill_a",
         "L",
         Some("group"),
         rect(0.0, 0.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "pill_b",
         "ui:pill_b",
         "L",
@@ -611,14 +786,22 @@ fn inspector_pill_a_to_pill_b_in_zone() {
     );
 }
 
-/// Two field-row leaves in different rows, no enclosing zone — `nav.down`
-/// finds the next row's leaf via rule 2.
+/// Two field-row leaves stacked vertically, each in its own zone.
+/// `nav.down` from the first leaf finds no in-zone peer (the row zone
+/// holds only one leaf), so the unified cascade escalates and finds
+/// `ui:row2` (the next row's zone) at the parent level. The kernel
+/// returns the row zone moniker; the React adapter handles drill-
+/// back-in to the row's leaf if desired.
+///
+/// Pre-supersession this test asserted on `ui:label_2` — the old
+/// rule-2 cross-zone leaf fallback. Under the unified cascade the
+/// kernel's answer at iter 1 is the next-row zone moniker.
 #[test]
-fn inspector_label_1_to_label_2_via_cross_zone_fallback() {
+fn cross_zone_inspector_down_lands_on_next_row_zone() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
-    // Each label sits in its own zone (one zone per row), so rule 1
-    // finds nothing and rule 2 walks across.
+    // Each label sits in its own zone (one zone per row), so iter 0
+    // finds nothing and iter 1 picks up the next row's zone.
     reg.register_zone(zone(
         "row1",
         "ui:row1",
@@ -633,14 +816,14 @@ fn inspector_label_1_to_label_2_via_cross_zone_fallback() {
         None,
         rect(0.0, 50.0, 200.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "label_1",
         "ui:label_1",
         "L",
         Some("row1"),
         rect(0.0, 0.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "label_2",
         "ui:label_2",
         "L",
@@ -650,7 +833,9 @@ fn inspector_label_1_to_label_2_via_cross_zone_fallback() {
 
     assert_eq!(
         nav(&reg, "label_1", Direction::Down),
-        Some(Moniker::from_string("ui:label_2"))
+        Some(Moniker::from_string("ui:row2")),
+        "Down from the first row's lone leaf must land on the second row's zone via iter-1 \
+         escalation under the unified cascade"
     );
 }
 
@@ -660,14 +845,14 @@ fn inspector_label_1_to_label_2_via_cross_zone_fallback() {
 fn inspector_last_leaf_down_returns_none() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "label_1",
         "ui:label_1",
         "L",
         None,
         rect(0.0, 0.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "label_2",
         "ui:label_2",
         "L",
@@ -683,10 +868,20 @@ fn inspector_last_leaf_down_returns_none() {
 // ---------------------------------------------------------------------------
 
 /// 3 columns × 2 cards, each card a Zone with title + status leaves.
-/// Verifies the navigator handles a realistic layout: in-card nav,
-/// cross-card nav, cross-column nav, all within one layer.
+/// Verifies the unified cascade handles a realistic layout: in-card
+/// nav (iter 0 peer match), cross-card nav (iter 1 peer match after
+/// escalating to the column zone), cross-column nav (iter 1 peer
+/// match after escalating to the column zone).
+///
+/// The pre-supersession version of this test asserted on leaf
+/// monikers in neighboring cards (`ui:col0_card_b_title`,
+/// `ui:col1_card_a_title`) — the old rule-2 cross-zone leaf fallback.
+/// Under the unified cascade the kernel returns the next-card zone
+/// or next-column zone moniker; the React adapter handles drill-back-
+/// in if the consumer wants a specific leaf inside the destination
+/// zone. The test pins the new observable outcomes.
 #[test]
-fn realistic_board_nav_walks_through_cards() {
+fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None));
 
@@ -710,7 +905,7 @@ fn realistic_board_nav_walks_through_cards() {
                 rect(i as f64 * 100.0 + 5.0, j as f64 * 80.0 + 10.0, 90.0, 70.0),
             ));
             // Title leaf (top half).
-            reg.register_focusable(focusable(
+            reg.register_scope(leaf(
                 &format!("{card_key}_title"),
                 &format!("ui:{card_key}_title"),
                 "L",
@@ -718,7 +913,7 @@ fn realistic_board_nav_walks_through_cards() {
                 rect(i as f64 * 100.0 + 10.0, j as f64 * 80.0 + 15.0, 80.0, 25.0),
             ));
             // Status leaf (bottom half).
-            reg.register_focusable(focusable(
+            reg.register_scope(leaf(
                 &format!("{card_key}_status"),
                 &format!("ui:{card_key}_status"),
                 "L",
@@ -728,24 +923,31 @@ fn realistic_board_nav_walks_through_cards() {
         }
     }
 
-    // Within a card: title → status (rule 1, same zone).
+    // Within a card: title → status (iter 0, same zone).
     assert_eq!(
         nav(&reg, "col0_card_a_title", Direction::Down),
-        Some(Moniker::from_string("ui:col0_card_a_status"))
+        Some(Moniker::from_string("ui:col0_card_a_status")),
+        "Down inside a card should find the in-zone status leaf at iter 0"
     );
 
-    // Status of card A → title of card B (rule 2 — different zones,
-    // same layer).
+    // Status of card A → card B's zone (no peer below in card A;
+    // escalate to col0 and find col0_card_b at the parent's level).
     assert_eq!(
         nav(&reg, "col0_card_a_status", Direction::Down),
-        Some(Moniker::from_string("ui:col0_card_b_title"))
+        Some(Moniker::from_string("ui:col0_card_b")),
+        "Down from the bottom leaf of card A must land on card B's zone via iter-1 escalation"
     );
 
-    // Title of col0 card_a → title of col1 card_a (rule 2 — across
-    // columns).
+    // Title of col0 card_a → Right: no peer right inside the card,
+    // escalate to col0_card_a, no right peer at col0's child level
+    // (col0_card_b is stacked below, not to the right). Drill out:
+    // return col0_card_a itself. The user can press Right again from
+    // the card zone to traverse to col1.
     assert_eq!(
         nav(&reg, "col0_card_a_title", Direction::Right),
-        Some(Moniker::from_string("ui:col1_card_a_title"))
+        Some(Moniker::from_string("ui:col0_card_a")),
+        "Right from a title leaf with no horizontal peer at iter 0 or iter 1 must drill out \
+         to the enclosing card zone"
     );
 }
 
@@ -767,21 +969,21 @@ fn edge_first_for_leaf_scopes_to_parent_zone() {
         rect(0.0, 0.0, 200.0, 200.0),
     ));
     // Three leaves laid out vertically.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "body",
         "ui:body",
         "L",
         Some("card"),
         rect(10.0, 60.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -810,14 +1012,14 @@ fn edge_last_for_leaf_scopes_to_parent_zone() {
         None,
         rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -880,21 +1082,21 @@ fn edge_row_start_picks_leftmost_in_row_sibling() {
         rect(0.0, 0.0, 300.0, 50.0),
     ));
     // Three leaves on the same row.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "left",
         "ui:left",
         "L",
         Some("row"),
         rect(0.0, 10.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "middle",
         "ui:middle",
         "L",
         Some("row"),
         rect(100.0, 10.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right",
         "ui:right",
         "L",
@@ -921,14 +1123,14 @@ fn edge_row_end_picks_rightmost_in_row_sibling() {
         None,
         rect(0.0, 0.0, 300.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "left",
         "ui:left",
         "L",
         Some("row"),
         rect(0.0, 10.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right",
         "ui:right",
         "L",
@@ -961,14 +1163,14 @@ fn edge_first_at_boundary_returns_focused_self() {
         None,
         rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -997,14 +1199,14 @@ fn edge_last_at_boundary_returns_focused_self() {
         None,
         rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "title",
         "ui:title",
         "L",
         Some("card"),
         rect(10.0, 10.0, 180.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "status",
         "ui:status",
         "L",
@@ -1032,14 +1234,14 @@ fn edge_row_start_at_boundary_returns_focused_self() {
         None,
         rect(0.0, 0.0, 300.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "left",
         "ui:left",
         "L",
         Some("row"),
         rect(0.0, 10.0, 50.0, 30.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "right",
         "ui:right",
         "L",
@@ -1068,7 +1270,7 @@ fn layer_stress_dialog_focused_sees_only_dialog_entries() {
     reg.push_layer(layer("L_dialog", "main", Some("L_inspector")));
 
     // Window leaf — would be rect-wise to the right of the dialog leaf.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "window_card",
         "ui:window_card",
         "L_window",
@@ -1076,7 +1278,7 @@ fn layer_stress_dialog_focused_sees_only_dialog_entries() {
         rect(500.0, 100.0, 50.0, 50.0),
     ));
     // Inspector leaf — would be rect-wise above the dialog leaf.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "inspector_pill",
         "ui:inspector_pill",
         "L_inspector",
@@ -1084,14 +1286,14 @@ fn layer_stress_dialog_focused_sees_only_dialog_entries() {
         rect(100.0, 0.0, 50.0, 50.0),
     ));
     // Dialog leaves — focused on the first; only the second is visible.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "dlg_btn_a",
         "ui:dlg_btn_a",
         "L_dialog",
         None,
         rect(100.0, 100.0, 50.0, 50.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "dlg_btn_b",
         "ui:dlg_btn_b",
         "L_dialog",
@@ -1121,4 +1323,86 @@ fn layer_stress_dialog_focused_sees_only_dialog_entries() {
 fn unknown_starting_key_returns_none() {
     let reg = SpatialRegistry::new();
     assert_eq!(nav(&reg, "ghost", Direction::Right), None);
+}
+
+// ---------------------------------------------------------------------------
+// Rect freshness — beam search must read the current rect, not the rect
+// recorded at registration time.
+// ---------------------------------------------------------------------------
+
+/// Beam search runs on the **latest** rect a scope has received via
+/// `update_rect`, not on the mount-time rect captured at registration.
+///
+/// Regression guard for the scroll-staleness bug: when `<FocusZone>` and
+/// `<FocusScope>` register their bounding-client rect on mount and only
+/// refresh it via `ResizeObserver`, an ancestor scroll would shift every
+/// descendant's viewport-y while the kernel kept the mount-time rect.
+/// Beam-search would then run on stale geometry and pick the wrong
+/// candidate (or no candidate). The React side now also re-publishes
+/// rects on ancestor scroll; this test pins the kernel half of the
+/// contract — that those updates actually steer beam search.
+///
+/// Setup: two leaves in a single zone. Card A is focused at y=100; card
+/// B is initially at y=50 (above A). With those mount-time rects,
+/// `nav.down(A)` would find no in-beam candidate below A and return
+/// `None` (after iter-0 escalates and iter-1 finds no peers either —
+/// the focused leaf has no parent zone to bubble to). After
+/// `update_rect` moves B to y=200 (below A — mimicking the post-scroll
+/// layout the user sees), `nav.down(A)` must return B.
+#[test]
+fn nav_down_uses_current_rect_not_stale_rect() {
+    let mut reg = SpatialRegistry::new();
+    reg.push_layer(layer("L", "main", None));
+    reg.register_zone(zone(
+        "col",
+        "ui:col",
+        "L",
+        None,
+        rect(0.0, 0.0, 200.0, 400.0),
+    ));
+    // Focused: card A.
+    reg.register_scope(leaf(
+        "card_a",
+        "ui:card_a",
+        "L",
+        Some("col"),
+        rect(10.0, 100.0, 180.0, 40.0),
+    ));
+    // Card B starts ABOVE card A — `nav.down(A)` cannot reach it from
+    // here.
+    reg.register_scope(leaf(
+        "card_b",
+        "ui:card_b",
+        "L",
+        Some("col"),
+        rect(10.0, 50.0, 180.0, 40.0),
+    ));
+
+    // Sanity: with the mount-time rects, `down` finds no in-zone
+    // candidate below card A. The cascade escalates to card A's parent
+    // zone (`col`), but `col` itself is at the top of the layer — there
+    // are no zones below it on the same layer — so the cascade falls
+    // through to a drill-out fallback that returns the parent zone's
+    // own moniker. Test against that observable outcome rather than
+    // hand-waving the cascade rules.
+    let pre_update = nav(&reg, "card_a", Direction::Down);
+    assert_ne!(
+        pre_update,
+        Some(Moniker::from_string("ui:card_b")),
+        "with stale geometry, beam search must NOT return card B as the down-target"
+    );
+
+    // Simulate a scroll that moves card B from above to below card A.
+    // The new viewport-y is 200; card A still sits at y=100.
+    reg.update_rect(
+        &SpatialKey::from_string("card_b"),
+        rect(10.0, 200.0, 180.0, 40.0),
+    );
+
+    // Now `nav.down(card_a)` must pick card B — proving beam search
+    // is running on the post-update rect, not the registration rect.
+    assert_eq!(
+        nav(&reg, "card_a", Direction::Down),
+        Some(Moniker::from_string("ui:card_b"))
+    );
 }

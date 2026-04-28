@@ -5,10 +5,10 @@
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
  * spatial-nav branches light up:
  *   - the tab-bar root becomes a `<FocusZone moniker={asMoniker("ui:perspective-bar")}>`
- *   - each tab becomes a `<Focusable moniker={asMoniker(`perspective_tab:${id}`)}>` leaf
+ *   - each tab becomes a `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>` leaf
  *
  * The Tauri `invoke` boundary is mocked so we can inspect the
- * `spatial_register_zone` and `spatial_register_focusable` calls each
+ * `spatial_register_zone` and `spatial_register_scope` calls each
  * primitive makes on mount.
  */
 
@@ -161,10 +161,10 @@ function registerZoneCalls(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Collect every `spatial_register_focusable` call in order. */
-function registerFocusableCalls(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` call in order. */
+function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_focusable")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -248,7 +248,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const { unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const calls = registerFocusableCalls();
+    const calls = registerScopeCalls();
     const monikers = calls.map((c) => c.moniker as string);
     expect(monikers).toContain("perspective_tab:p1");
     expect(monikers).toContain("perspective_tab:p2");
@@ -271,7 +271,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const barZone = registerZoneCalls().find(
       (c) => c.moniker === "ui:perspective-bar",
     )!;
-    const tabFocusable = registerFocusableCalls().find(
+    const tabFocusable = registerScopeCalls().find(
       (c) => c.moniker === "perspective_tab:p1",
     )!;
     expect(tabFocusable.parentZone).toBe(barZone.key);

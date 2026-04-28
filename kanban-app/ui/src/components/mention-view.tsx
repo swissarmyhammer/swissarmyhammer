@@ -23,6 +23,7 @@
 import { useMemo } from "react";
 import type { Extension } from "@codemirror/state";
 import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
 import { TextViewer } from "@/components/text-viewer";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { asMoniker } from "@/types/spatial";
@@ -59,13 +60,29 @@ export interface MentionViewProps {
    * make a pill uniquely focusable in a specific context.
    */
   focusMoniker?: string;
-  /** When false, suppresses the focus bar on click (still participates in commands). */
+  /**
+   * When false, suppresses the visible focus bar on the pill (still
+   * participates in commands and registers in the spatial graph). Each
+   * pill defaults to `<FocusScope>`'s default of `true`, i.e. the pill
+   * advertises focus when clicked or navigated to.
+   *
+   * Pass `false` only when an enclosing primitive already supplies the
+   * visual cue for the pill's region (and the per-pill bar would be
+   * redundant noise). Both compact and full modes honour this prop the
+   * same way — there is no implicit per-mode override.
+   */
   showFocusBar?: boolean;
   /** Extra commands (e.g. task.untag) added to the context menu. */
   extraCommands?: CommandDef[];
   /**
-   * Rendering mode — `"full"` enables keyboard navigation between list items.
-   * Defaults to `"full"` in list mode.
+   * Rendering mode — informational only at this layer. Spatial-nav
+   * keyboard navigation between pills is driven by the Rust beam-search
+   * graph (rule 1 in-zone candidates) regardless of this prop, and the
+   * focus bar is no longer gated on mode (see `showFocusBar` above).
+   *
+   * Retained on the props surface so callers can still thread their
+   * mode through (`badge-list-display` does), and so future
+   * mode-specific tweaks at this layer have a place to land.
    */
   mode?: "full" | "compact";
 }
@@ -234,14 +251,25 @@ function SingleMention({
   const doc = `${resolved.prefix}${resolved.slug}`;
 
   return (
-    <FocusScope
-      moniker={asMoniker(scopeMoniker)}
-      commands={extraCommands}
-      className="inline"
-      showFocusBar={showFocusBar}
-    >
-      <TextViewer text={doc} extensions={extensions} className={className} />
-    </FocusScope>
+    // A mention pill represents a real entity reference (`task:<id>`,
+    // `tag:<id>`, etc.). Double-clicking the pill opens the inspector
+    // for that entity, matching the contract on `<EntityCard>` and
+    // `<ColumnView>`. The `<Inspectable>` wrapper owns inspector
+    // dispatch; the spatial primitive `<FocusScope>` stays
+    // pure-spatial. The architectural guard
+    // (`focus-architecture.guards.node.test.ts`, Guards B + C)
+    // enforces every entity-prefixed wrapper has an `<Inspectable>`
+    // ancestor.
+    <Inspectable moniker={asMoniker(scopeMoniker)}>
+      <FocusScope
+        moniker={asMoniker(scopeMoniker)}
+        commands={extraCommands}
+        className="inline"
+        showFocusBar={showFocusBar}
+      >
+        <TextViewer text={doc} extensions={extensions} className={className} />
+      </FocusScope>
+    </Inspectable>
   );
 }
 
@@ -320,15 +348,21 @@ function MentionViewList({
   resolved,
   extensions,
   pillMonikers,
-  mode,
   props,
 }: {
   resolved: ResolvedMention[];
   extensions: Extension[];
   pillMonikers: string[];
-  mode: "compact" | "full";
   props: MentionViewProps;
 }) {
+  // Pass `props.showFocusBar` through unchanged for both compact and full
+  // modes. An earlier revision hard-suppressed the focus bar in compact
+  // mode here, but that broke the contract that every leaf in the spatial
+  // graph (including a card-body pill) is a focusable item with a visible
+  // indicator. Callers that genuinely need suppression — e.g. a context
+  // where a parent zone already provides the visual cue — pass
+  // `showFocusBar={false}` explicitly. `<FocusScope>`'s default of `true`
+  // covers the common case without per-call-site boilerplate.
   return (
     <div className="flex flex-wrap gap-1.5">
       {resolved.map((r, i) => (
@@ -338,7 +372,7 @@ function MentionViewList({
           extensions={extensions}
           className={props.className}
           scopeMoniker={pillMonikers[i]}
-          showFocusBar={mode === "full" ? props.showFocusBar : false}
+          showFocusBar={props.showFocusBar}
           extraCommands={props.extraCommands}
         />
       ))}
@@ -350,7 +384,6 @@ export function MentionView(props: MentionViewProps) {
   const { getEntities } = useEntityStore();
 
   const isListMode = props.items !== undefined;
-  const mode = props.mode ?? "full";
 
   const resolved = useResolvedMentions(props, isListMode);
 
@@ -382,7 +415,6 @@ export function MentionView(props: MentionViewProps) {
       resolved={resolved}
       extensions={extensions}
       pillMonikers={pillMonikers}
-      mode={mode}
       props={props}
     />
   );

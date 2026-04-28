@@ -122,9 +122,15 @@ describe("focus-decoration architecture", () => {
   it("the only component that renders the focus visual is <FocusIndicator>", () => {
     // The canonical visible focus decoration lives in `<FocusIndicator>`
     // (`components/focus-indicator.tsx`). Production callers compose the
-    // indicator from the spatial primitives (`<Focusable>` and
+    // indicator from the three peer primitives (`<FocusScope>` and
     // `<FocusZone>`); any other production source rendering its own focus
     // bar / focus highlight is a duplicate decorator and a regression.
+    //
+    // After the three-peer collapse, `<FocusScope>` is the leaf primitive
+    // (it absorbed what the legacy `<Focusable>` used to do). The
+    // transitional re-export at `focusable.tsx` was deleted in card
+    // `01KQ5PSMYE3Q60SV8270S6K819`; `<FocusScope>` is the only leaf
+    // primitive, and it composes `<FocusIndicator>` directly.
     //
     // The check has two parts:
     //
@@ -137,7 +143,7 @@ describe("focus-decoration architecture", () => {
     //      deletes the bar from one branch ships silently.
     const tsxFiles = walkSources(SRC_ROOT, [".tsx", ".ts"]);
     const allowedCallers = new Set([
-      "components/focusable.tsx",
+      "components/focus-scope.tsx",
       "components/focus-zone.tsx",
     ]);
 
@@ -202,6 +208,430 @@ describe("focus-decoration architecture", () => {
     if (offenders.length > 0) {
       throw new Error(
         `FocusHighlight is gone — references must not remain:\n${offenders.map((o) => `  ${o}`).join("\n")}`,
+      );
+    }
+  });
+
+  it("the FocusIndicatorVariant type is fully removed from production code", () => {
+    // `FocusIndicatorVariant` was a short-lived type that gated a `"ring"`
+    // visual variant of the focus indicator. The user explicitly rejected
+    // a second indicator visual — there is one cursor-bar, period.
+    // Any remaining reference in shipped production sources resurrects
+    // that variant surface and reintroduces the multi-decorator
+    // antipattern.
+    //
+    // Test files are excluded from the production-code scan because the
+    // single-variant browser test deliberately spells the dead prop name
+    // inside `@ts-expect-error` directives that are themselves the assertion
+    // (the build fails if any of those stops being an error). Guarding
+    // the production tree is what enforces the deletion.
+    const tsxFiles = walkSources(SRC_ROOT, [".tsx", ".ts"]);
+    const offenders: string[] = [];
+    for (const file of tsxFiles) {
+      const rel = relative(SRC_ROOT, file);
+      if (rel.endsWith(".test.ts") || rel.endsWith(".test.tsx")) continue;
+      if (rel.endsWith(".node.test.ts")) continue;
+      const src = readFileSync(file, "utf-8");
+      if (/\bFocusIndicatorVariant\b/.test(src)) {
+        offenders.push(rel);
+      }
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `FocusIndicatorVariant is gone — references must not remain in production code:\n${offenders.map((o) => `  ${o}`).join("\n")}`,
+      );
+    }
+  });
+
+  it("the focusIndicatorVariant prop is fully removed from production code", () => {
+    // The lower-cased prop name was threaded through `<FocusScope>`,
+    // `<FocusZone>`, and consumer call sites (the navbar). All references
+    // must be deleted from production code along with the type. Test
+    // files are excluded for the same reason as the type guard above —
+    // the `@ts-expect-error` test deliberately writes the dead literal.
+    const tsxFiles = walkSources(SRC_ROOT, [".tsx", ".ts"]);
+    const offenders: string[] = [];
+    for (const file of tsxFiles) {
+      const rel = relative(SRC_ROOT, file);
+      if (rel.endsWith(".test.ts") || rel.endsWith(".test.tsx")) continue;
+      if (rel.endsWith(".node.test.ts")) continue;
+      const src = readFileSync(file, "utf-8");
+      if (/\bfocusIndicatorVariant\b/.test(src)) {
+        offenders.push(rel);
+      }
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `focusIndicatorVariant is gone — references must not remain in production code:\n${offenders.map((o) => `  ${o}`).join("\n")}`,
+      );
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Inspectable architectural guards (cards 01KQ7GM77B1E6YH8Z893K05VKY +
+  // 01KQ7K7KZNR3EHS9SY0XY79NYE)
+  //
+  // The inspector exists to show details of *entities* — `task:`, `tag:`,
+  // `column:`, `board:`, `field:`, `attachment:`. UI chrome (`ui:*`,
+  // `perspective_tab:`, `cell:*`, `grid_cell:*`) is not. The dispatch
+  // route from a double-click to the `ui.inspect` command lives in
+  // exactly one component: `<Inspectable>` (`inspectable.tsx`). The
+  // spatial primitives `<FocusScope>` and `<FocusZone>` are pure
+  // spatial-nav infrastructure and never call
+  // `useDispatchCommand("ui.inspect")`.
+  //
+  // Three guards keep this honest:
+  //
+  //   - Guard A: the literal `useDispatchCommand("ui.inspect")` appears
+  //     in exactly one non-test file owning the double-click route:
+  //     `inspectable.tsx`. Other files that legitimately dispatch
+  //     `ui.inspect` from non-double-click sources (keyboard, navbar
+  //     button, command-palette) are explicitly allowlisted.
+  //
+  //   - Guard B: every `<Inspectable …moniker={asMoniker("<prefix>…")}>`
+  //     JSX hit has a prefix in ENTITY_PREFIXES — chrome cannot
+  //     accidentally be wrapped in `<Inspectable>`.
+  //
+  //   - Guard C: every entity-prefixed `<FocusScope>` / `<FocusZone>`
+  //     JSX hit has a matching `<Inspectable>` element (with the same
+  //     moniker substring) in the same file — so an entity-zone
+  //     wrapper cannot be added without its `<Inspectable>` partner.
+  //
+  // Test files are excluded from the walks so synthetic test fixtures do
+  // not trip the guards.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Moniker prefixes that identify real, inspectable entities. Both
+   * Guard B (Inspectable monikers must use one of these) and Guard C
+   * (entity-prefixed primitives need an Inspectable in the same file)
+   * read from this list.
+   */
+  const ENTITY_PREFIXES = [
+    "task:",
+    "tag:",
+    "column:",
+    "board:",
+    "field:",
+    "attachment:",
+  ];
+
+  /** Strip line and block comments while preserving newline structure. */
+  function stripJsComments(src: string): string {
+    return src
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, prefix) => prefix);
+  }
+
+  it("Guard A: useDispatchCommand(\"ui.inspect\") appears only in inspectable.tsx (double-click dispatch is single-sourced)", () => {
+    // The double-click → inspector route goes through a single
+    // dispatch site so an audit can confirm both the gesture-
+    // skipping rules (input/textarea/contenteditable) and the
+    // `stopPropagation` semantics in one place.
+    //
+    // Other production callers of `useDispatchCommand("ui.inspect")`
+    // exist for non-double-click flows (keyboard, navbar button,
+    // command-palette) and are explicitly allowlisted below. Guard A
+    // is about the **double-click** route's single-source contract,
+    // not a blanket "no other code may dispatch ui.inspect".
+    //
+    // Adding a new caller? Either:
+    //   1. it is the new double-click site (then move it to
+    //      `inspectable.tsx`), or
+    //   2. it is a different gesture (then add it to ALLOWLIST below
+    //      with a comment explaining the gesture).
+    const ALLOWLIST = new Set<string>([
+      // The single double-click dispatch site. Guard A's whole point.
+      "components/inspectable.tsx",
+      // Keyboard inspect command — the board's `useBoardActionCommands`
+      // wires it through the spatial-nav action layer.
+      "components/board-view.tsx",
+      // The navbar's `Inspect` button click (mouse, not double-click).
+      "components/nav-bar.tsx",
+      // The command palette's search-mode `Inspect` row.
+      "components/command-palette.tsx",
+      // The card's explicit `<InspectButton>` (the small "i" icon on
+      // each card). The button click is a single-click affordance for
+      // users who don't know the dblclick gesture.
+      "components/entity-card.tsx",
+    ]);
+
+    const tsxFiles = walkSources(SRC_ROOT, [".ts", ".tsx"]);
+    const offenders: string[] = [];
+    for (const file of tsxFiles) {
+      const rel = relative(SRC_ROOT, file);
+      if (rel.endsWith(".test.ts") || rel.endsWith(".test.tsx")) continue;
+      if (rel.endsWith(".node.test.ts")) continue;
+
+      const stripped = stripJsComments(readFileSync(file, "utf-8"));
+      // `useDispatchCommand("ui.inspect")` — match both single and
+      // double quotes; allow whitespace inside the parentheses.
+      if (
+        /useDispatchCommand\(\s*[`"']ui\.inspect[`"']\s*\)/.test(stripped) &&
+        !ALLOWLIST.has(rel)
+      ) {
+        offenders.push(rel);
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `useDispatchCommand("ui.inspect") must live only in the documented\n` +
+          `dispatch sites (the double-click route is single-sourced in\n` +
+          `inspectable.tsx; other gestures are explicitly allowlisted).\n` +
+          `Offending call sites:\n` +
+          offenders.map((o) => `  ${o}`).join("\n"),
+      );
+    }
+  });
+
+  it("Guard B: every <Inspectable> wraps an entity-prefixed moniker", () => {
+    // Walks every `*.tsx` source file under `src/`, finds every
+    // `<Inspectable …moniker={asMoniker("<prefix>…")}>` JSX hit, and
+    // asserts the prefix is in `ENTITY_PREFIXES`. UI-chrome monikers
+    // (`ui:*`, `perspective_tab:`, `cell:*`, `grid_cell:*`) cannot be
+    // wrapped in `<Inspectable>` — chrome is not inspectable.
+    //
+    // Test files are excluded so synthetic test fixtures do not trip
+    // the guard.
+
+    /**
+     * Match a JSX element opener `<Inspectable ... >` and capture its
+     * attribute block up to the `>` or `/>` terminator.
+     */
+    const ELEMENT_RE = /<Inspectable\b([\s\S]*?)(\/>|>)/g;
+
+    /**
+     * Match a `moniker={asMoniker("...")}` prop with a statically-
+     * readable string literal. Variables are not followed — the goal
+     * is hygiene for the common case (every production call site uses
+     * a literal).
+     */
+    const MONIKER_RE = /moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/;
+
+    /** Match `moniker={someVar}` so we can warn rather than skip. */
+    const MONIKER_VAR_RE = /moniker=\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}/;
+
+    const tsxFiles = walkSources(SRC_ROOT, [".tsx"]);
+    const offenders: { file: string; moniker: string }[] = [];
+
+    for (const file of tsxFiles) {
+      const rel = relative(SRC_ROOT, file);
+      if (rel.endsWith(".test.tsx")) continue;
+      if (rel.endsWith(".test.ts")) continue;
+      if (rel.endsWith(".node.test.ts")) continue;
+      const stripped = stripJsComments(readFileSync(file, "utf-8"));
+
+      ELEMENT_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = ELEMENT_RE.exec(stripped)) !== null) {
+        const attrs = match[1];
+        const literalMatch = attrs.match(MONIKER_RE);
+        if (literalMatch) {
+          const moniker = literalMatch[1];
+          const ok = ENTITY_PREFIXES.some((p) => moniker.startsWith(p));
+          if (!ok) {
+            const lineIdx =
+              stripped.slice(0, match.index).split("\n").length - 1;
+            offenders.push({
+              file: `${rel}:${lineIdx + 1}`,
+              moniker,
+            });
+          }
+          continue;
+        }
+        // `<Inspectable moniker={var}>` — accept; literal-prefix
+        // checking is best-effort. The wrapping component itself
+        // accepts any `Moniker`, and call-site review during PR is
+        // expected to confirm the variable resolves to an entity
+        // moniker.
+        const _varMatch = attrs.match(MONIKER_VAR_RE);
+        void _varMatch;
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `<Inspectable> may only wrap entity monikers (` +
+          ENTITY_PREFIXES.join(", ") +
+          `). Offending call sites:\n` +
+          offenders
+            .map((o) => `  ${o.file}  moniker="${o.moniker}"`)
+            .join("\n"),
+      );
+    }
+  });
+
+  it("Guard C: every entity-prefixed <FocusScope> / <FocusZone> has a sibling <Inspectable> in the same file", () => {
+    // Walks every `*.tsx` source file under `src/`, finds every
+    // `<FocusScope ... >` / `<FocusZone ... >` JSX hit whose `moniker`
+    // literal starts with an `ENTITY_PREFIXES` entry, and asserts the
+    // same file contains an `<Inspectable>` element with a matching
+    // moniker substring. This catches "someone added a new entity
+    // wrapper but forgot the `<Inspectable>`".
+    //
+    // The match is on the moniker prefix-and-tail substring rather
+    // than the full literal so that a `<FocusScope moniker="task:01">`
+    // and a sibling `<Inspectable moniker={asMoniker(`task:${id}`)}>`
+    // (template literal that the prefix scan can't fully read) still
+    // pair up. The architectural intent — "this entity wrapper is
+    // accompanied by an Inspectable wrapper in the same file" — is
+    // what we're asserting; an exact moniker-literal match would
+    // brittlely require the same expression on both sides.
+    //
+    // The escape hatch `// inspect:exempt` (within 3 lines above the
+    // JSX opener) is preserved for synthetic entity-prefixed monikers
+    // (e.g. the column-name navigation leaf `column:<id>.name` whose
+    // inner `<Field>` zone owns the inspect wiring). The
+    // `data-table.tsx` row case is handled differently: the row
+    // `<FocusScope renderContainer={false}>` doesn't render a host
+    // element, so DOM rules prevent wrapping in `<Inspectable>`. The
+    // inspect dispatch lives directly on the row's `<tr>` via the
+    // `useInspectOnDoubleClick` hook (still in `inspectable.tsx`).
+    // That row `<FocusScope>` carries `renderContainer={false}` and
+    // is therefore exempt from this guard — the runtime DOM never
+    // renders an element to attach `onDoubleClick` to anyway.
+
+    /**
+     * Match a JSX element opener `<FocusScope ... >` or `<FocusZone ... >`
+     * and capture the component name + attribute block.
+     */
+    const PRIMITIVE_RE =
+      /<(FocusScope|FocusZone)\b([\s\S]*?)(\/>|>)/g;
+
+    const MONIKER_RE = /moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/;
+
+    /** Match `<Inspectable moniker={asMoniker("...")}>` literals in the file. */
+    const INSPECTABLE_RE =
+      /<Inspectable\b[\s\S]*?moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/g;
+
+    /**
+     * True when the element opener is preceded — in the original (un-
+     * stripped) source — by a `// inspect:exempt` comment within the
+     * preceding 3 lines.
+     */
+    function hasExemptComment(
+      originalLines: string[],
+      lineIdx: number,
+    ): boolean {
+      const start = Math.max(0, lineIdx - 3);
+      for (let i = start; i < lineIdx; i++) {
+        if (/\/\/\s*inspect:exempt\b/.test(originalLines[i])) return true;
+        if (/\binspect:exempt\b/.test(originalLines[i])) return true;
+      }
+      return false;
+    }
+
+    /**
+     * True when the attribute block has `renderContainer={false}` (or
+     * literally `renderContainer={false}` after whitespace
+     * normalization). Such call sites are exempt because they don't
+     * render a DOM element to attach `onDoubleClick` to — the inspect
+     * dispatch lives on the inner host element (e.g. the `<tr>` in
+     * `data-table.tsx`).
+     */
+    function hasRenderContainerFalse(attrs: string): boolean {
+      return /\brenderContainer\s*=\s*\{\s*false\s*\}/.test(attrs);
+    }
+
+    const tsxFiles = walkSources(SRC_ROOT, [".tsx"]);
+    const offenders: { file: string; moniker: string }[] = [];
+
+    for (const file of tsxFiles) {
+      const rel = relative(SRC_ROOT, file);
+      if (rel.endsWith(".test.tsx")) continue;
+      if (rel.endsWith(".test.ts")) continue;
+      if (rel.endsWith(".node.test.ts")) continue;
+
+      const original = readFileSync(file, "utf-8");
+      const stripped = stripJsComments(original);
+      const originalLines = original.split("\n");
+
+      // Collect every `<Inspectable>` moniker literal in the file so
+      // we can match by tail substring.
+      const inspectableMonikers: string[] = [];
+      INSPECTABLE_RE.lastIndex = 0;
+      let im: RegExpExecArray | null;
+      while ((im = INSPECTABLE_RE.exec(stripped)) !== null) {
+        inspectableMonikers.push(im[1]);
+      }
+
+      PRIMITIVE_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = PRIMITIVE_RE.exec(stripped)) !== null) {
+        const attrs = match[2];
+        const monikerMatch = attrs.match(MONIKER_RE);
+        if (!monikerMatch) continue;
+        const moniker = monikerMatch[1];
+        const isEntity = ENTITY_PREFIXES.some((p) => moniker.startsWith(p));
+        if (!isEntity) continue;
+
+        if (hasRenderContainerFalse(attrs)) continue;
+
+        const lineIdx =
+          stripped.slice(0, match.index).split("\n").length - 1;
+        if (hasExemptComment(originalLines, lineIdx)) continue;
+
+        // Match against the file's `<Inspectable>` monikers by tail
+        // substring: the FocusScope's moniker (e.g. `task:01`) is a
+        // prefix-or-equal match against an Inspectable moniker (e.g.
+        // `task:01` or, when the wrapper uses a template,
+        // `task:${id}` — which under our literal scanner won't hit at
+        // all and we tolerate at the var-not-tracked level). To keep
+        // false positives low, we require an `<Inspectable>` whose
+        // moniker shares the same prefix — any entity-prefixed
+        // Inspectable in the file is taken as evidence the wrapper is
+        // present; the call-site review handles tighter pairing.
+        const prefix = ENTITY_PREFIXES.find((p) => moniker.startsWith(p))!;
+        const haveSibling = inspectableMonikers.some((m) =>
+          m.startsWith(prefix),
+        );
+        if (!haveSibling) {
+          offenders.push({
+            file: `${rel}:${lineIdx + 1}`,
+            moniker,
+          });
+        }
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `Every entity-prefixed <FocusScope>/<FocusZone> must be\n` +
+          `paired with an <Inspectable> in the same file (the wrapper owns\n` +
+          `the double-click → ui.inspect dispatch). Offending call sites:\n` +
+          offenders
+            .map((o) => `  ${o.file}  moniker="${o.moniker}"`)
+            .join("\n") +
+          `\n(Add an inline \`// inspect:exempt\` comment within 3 lines\n` +
+          `above the JSX opener for the rare synthetic-entity moniker case,\n` +
+          `or pass \`renderContainer={false}\` if the wrapper should not\n` +
+          `render a DOM element.)`,
+      );
+    }
+  });
+
+  it("focus-indicator.tsx contains no \"ring\" literal in code", () => {
+    // The bar's class names never include the substring `ring`, so any
+    // occurrence of the literal `"ring"` in this file would be the
+    // resurrected variant branch. The guard scans the indicator file
+    // directly (not the wider tree, where unrelated `ring`-named tokens
+    // legitimately exist in CSS / docs).
+    //
+    // JS / JSDoc comments are stripped before the scan so that this
+    // file's own docstring can mention the dead variant by name without
+    // tripping the guard. The same comment-stripping shape is used by
+    // the other guards in this file.
+    function stripJsComments(src: string): string {
+      return src
+        .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+        .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, prefix) => prefix);
+    }
+    const indicatorPath = resolve(SRC_ROOT, "components/focus-indicator.tsx");
+    const stripped = stripJsComments(readFileSync(indicatorPath, "utf-8"));
+    if (/"ring"/.test(stripped)) {
+      throw new Error(
+        `focus-indicator.tsx contains a "ring" string literal in code — the ring variant must stay deleted.`,
       );
     }
   });

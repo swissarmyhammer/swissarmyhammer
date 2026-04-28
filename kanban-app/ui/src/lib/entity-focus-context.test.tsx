@@ -13,7 +13,14 @@ import {
   useIsDirectFocus,
   useIsFocused,
 } from "./entity-focus-context";
+import { SpatialFocusProvider } from "./spatial-focus-context";
 import { type CommandScope } from "./command-scope";
+import {
+  asMoniker,
+  asSpatialKey,
+  asWindowLabel,
+  type FocusChangedPayload,
+} from "@/types/spatial";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
@@ -21,8 +28,24 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({ label: "main" })),
 }));
+
+/**
+ * Captured `focus-changed` handler so bridge tests can fire synthetic
+ * payloads through the `SpatialFocusProvider`'s single global listener.
+ * The non-bridge tests rely on the noop unsubscribe behavior — they
+ * neither register a handler nor inspect this slot.
+ */
+const listenCallbacks: Record<string, (event: { payload: unknown }) => void> =
+  {};
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: vi.fn(
+    (eventName: string, cb: (event: { payload: unknown }) => void) => {
+      listenCallbacks[eventName] = cb;
+      return Promise.resolve(() => {
+        delete listenCallbacks[eventName];
+      });
+    },
+  ),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
@@ -672,6 +695,157 @@ describe("broadcastNavCommand", () => {
 
     act(() => {
       result.current.broadcastNavCommand("nav.right");
+    });
+    expect(result.current.focusedMoniker).toBe("task:abc");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spatial → entity-focus bridge
+//
+// The spatial-nav kernel emits `focus-changed` events whenever a
+// `<FocusScope>` click or arrow-key navigation moves focus, and
+// `EntityFocusProvider` is responsible for mirroring `payload.next_moniker`
+// into its own moniker-keyed `FocusStore` so downstream consumers — most
+// importantly the `focusedMonikerRef` API and the `useFocusedScope`
+// chain that drives `extractScopeBindings` — stay in sync without each
+// click handler having to double-write entity-focus and spatial-focus.
+//
+// The bridge subscribes to `SpatialFocusActions.subscribeFocusChanged`
+// from inside the entity-focus provider, so the integration only fires
+// when both providers are mounted (production always mounts both; isolated
+// unit-test harnesses that skip `<SpatialFocusProvider>` get the legacy
+// behavior unchanged).
+// ---------------------------------------------------------------------------
+
+/** Wait one microtask for `SpatialFocusProvider`'s `listen()` setup. */
+async function flushListenSetup() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+/**
+ * Push a synthetic `focus-changed` payload through the captured listener
+ * so consumers of `subscribeFocusChanged` (notably the entity-focus
+ * bridge) observe the wire-shape event Tauri would deliver from a
+ * `spatial_focus` / `spatial_navigate` invocation.
+ */
+function emitFocusChanged(payload: FocusChangedPayload): void {
+  const cb = listenCallbacks["focus-changed"];
+  expect(cb).toBeTruthy();
+  cb({ payload });
+}
+
+function bridgeWrapper({ children }: { children: ReactNode }) {
+  return (
+    <SpatialFocusProvider>
+      <EntityFocusProvider>{children}</EntityFocusProvider>
+    </SpatialFocusProvider>
+  );
+}
+
+describe("EntityFocusProvider — spatial focus bridge", () => {
+  it("mirrors focus-changed.next_moniker into the entity-focus store", async () => {
+    const { result } = renderHook(() => useEntityFocus(), {
+      wrapper: bridgeWrapper,
+    });
+    await flushListenSetup();
+
+    expect(result.current.focusedMoniker).toBeNull();
+
+    await act(async () => {
+      emitFocusChanged({
+        window_label: asWindowLabel("main"),
+        prev_key: null,
+        next_key: asSpatialKey("k1"),
+        next_moniker: asMoniker("task:01ABC"),
+      });
+    });
+
+    expect(result.current.focusedMoniker).toBe("task:01ABC");
+  });
+
+  it("clears focus when next_key is null", async () => {
+    const { result } = renderHook(() => useEntityFocus(), {
+      wrapper: bridgeWrapper,
+    });
+    await flushListenSetup();
+
+    await act(async () => {
+      emitFocusChanged({
+        window_label: asWindowLabel("main"),
+        prev_key: null,
+        next_key: asSpatialKey("k1"),
+        next_moniker: asMoniker("task:01ABC"),
+      });
+    });
+    expect(result.current.focusedMoniker).toBe("task:01ABC");
+
+    await act(async () => {
+      emitFocusChanged({
+        window_label: asWindowLabel("main"),
+        prev_key: asSpatialKey("k1"),
+        next_key: null,
+        next_moniker: null,
+      });
+    });
+
+    expect(result.current.focusedMoniker).toBeNull();
+  });
+
+  it("keeps focusedMonikerRef in sync with successive spatial moves", async () => {
+    let capturedRef: React.MutableRefObject<string | null> | null = null;
+    let capturedActions: ReturnType<typeof useEntityFocus> | null = null;
+
+    function Probe() {
+      capturedActions = useEntityFocus();
+      capturedRef = useFocusedMonikerRef();
+      return null;
+    }
+
+    render(
+      <SpatialFocusProvider>
+        <EntityFocusProvider>
+          <Probe />
+        </EntityFocusProvider>
+      </SpatialFocusProvider>,
+    );
+    await flushListenSetup();
+    // Touch the actions bag so eslint/TS see the variable as used and
+    // future test refactors that read it find a populated handle.
+    expect(capturedActions).not.toBeNull();
+    expect(capturedRef!.current).toBeNull();
+
+    await act(async () => {
+      emitFocusChanged({
+        window_label: asWindowLabel("main"),
+        prev_key: null,
+        next_key: asSpatialKey("ka"),
+        next_moniker: asMoniker("column:todo"),
+      });
+    });
+    expect(capturedRef!.current).toBe("column:todo");
+
+    await act(async () => {
+      emitFocusChanged({
+        window_label: asWindowLabel("main"),
+        prev_key: asSpatialKey("ka"),
+        next_key: asSpatialKey("kb"),
+        next_moniker: asMoniker("task:01"),
+      });
+    });
+    expect(capturedRef!.current).toBe("task:01");
+  });
+
+  it("is a no-op when SpatialFocusProvider is absent", () => {
+    // The legacy `<EntityFocusProvider>`-only contract still has to work for
+    // unit-test harnesses that don't wrap in `<SpatialFocusProvider>`. The
+    // bridge degrades silently — `setFocus` from React still drives the
+    // store as before.
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+    act(() => {
+      result.current.setFocus("task:abc");
     });
     expect(result.current.focusedMoniker).toBe("task:abc");
   });

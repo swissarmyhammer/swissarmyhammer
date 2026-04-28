@@ -4,12 +4,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand } from "@/lib/command-scope";
+import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { useEntitiesByType } from "@/components/rust-engine-container";
 import { InspectorFocusBridge } from "@/components/inspector-focus-bridge";
 import { SlidePanel } from "@/components/slide-panel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { FocusLayer, useCurrentLayerKey } from "@/components/focus-layer";
-import { FocusScope } from "@/components/focus-scope";
+import { FocusZone, useParentZoneKey } from "@/components/focus-zone";
 import type { Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
 import { asLayerName, asMoniker } from "@/types/spatial";
@@ -67,18 +68,37 @@ function parsePanelStack(inspectorStack: string[] | undefined): PanelEntry[] {
  * React ancestor — the inspector layer is itself a sibling of the
  * board content, so the explicit parent is required to avoid the layer
  * being mistaken for a second window root). Each `InspectorPanel`
- * inside that layer is wrapped in a `<FocusScope kind="zone">` whose
- * moniker is `panel:${entityType}:${entityId}` — that's the zone the
- * Rust spatial graph tracks per panel for `last_focused` memory and
+ * registers a `<FocusZone>` *inside* its `<SlidePanel>` whose moniker
+ * is `panel:${entityType}:${entityId}` — that's the zone the Rust
+ * spatial graph tracks per panel for `last_focused` memory and
  * cross-zone leaf fallback between adjacent panels.
+ *
+ * The panel zone wrap lives **inside** the SlidePanel rather than around
+ * it because `SlidePanel` is `position: fixed`: a wrapper outside it
+ * collapses to zero size and the `<FocusIndicator>` painted inside that
+ * wrapper has no visible box to anchor to. Putting the zone inside the
+ * panel body lets the indicator paint at the panel's own left edge, which
+ * is the affordance users see when drill-out lands focus on the panel.
+ *
+ * Focus claim on mount: a `<ClaimPanelFocusOnMount>` helper rendered
+ * inside each panel's `<FocusZone>` calls `spatial_focus(panelKey)` once
+ * on first mount, advancing the kernel's focused key from the source
+ * element (the navbar Inspect button, a card, a perspective tab, …)
+ * into the new panel zone. Without this, drill-out from Escape walks
+ * the source element's zone chain (e.g. `task:T1A` → `column:TODO` →
+ * `ui:board` → null → dismiss) before dismiss fires — three Escapes
+ * for a card-driven open, two for a navbar-driven open. With it, the
+ * panel zone is at the layer root, drill-out returns null, and the
+ * first Escape dismisses. See card 01KQ9Z9VN6EXM9JWJRNM5T7T19.
  *
  * Owns:
  * - panelStack state synced from UIState inspector_stack
  * - Close handlers dispatching ui.inspector.close and ui.inspector.close_all
  * - Backdrop overlay rendering
  * - Inspector layer mount when any panel is open
- * - Panel stack rendering with offset, each wrapped as its own zone
- * - InspectorPanel component (entity resolution + SlidePanel)
+ * - Panel stack rendering with offset
+ * - InspectorPanel component (entity resolution + SlidePanel + per-panel
+ *   FocusZone registration + ClaimPanelFocusOnMount helper)
  */
 export function InspectorsContainer() {
   const uiState = useUIState();
@@ -126,30 +146,24 @@ export function InspectorsContainer() {
   const hasPanels = panelStack.length > 0;
 
   /**
-   * The rendered panel list, with each panel wrapped in a
-   * `<FocusScope kind="zone">` so it becomes a navigable zone inside the
-   * inspector layer. Cross-zone leaf fallback (beam rule 2) handles
-   * arrowing between adjacent open panels — no special case needed.
+   * The rendered panel list. Each `<InspectorPanel>` mounts its own
+   * `<FocusZone moniker="panel:${entityType}:${entityId}">` *inside*
+   * the SlidePanel, so the zone becomes a navigable container inside
+   * the inspector layer with a visible indicator anchored to the
+   * panel body's left edge (see `InspectorPanel` for the rationale).
+   * Cross-zone leaf fallback (beam rule 2) handles arrowing between
+   * adjacent open panels — no special case needed.
    */
   const panelNodes = panelStack.map((entry, index) => {
     const rightOffset = (panelStack.length - 1 - index) * PANEL_WIDTH;
-    const panelMoniker = asMoniker(
-      `panel:${entry.entityType}:${entry.entityId}`,
-    );
     return (
-      <FocusScope
+      <InspectorPanel
         key={`${entry.entityType}-${entry.entityId}`}
-        kind="zone"
-        moniker={panelMoniker}
-        showFocusBar={false}
-      >
-        <InspectorPanel
-          entry={entry}
-          entityStore={entityStore}
-          onClose={closeTopPanel}
-          style={{ right: rightOffset }}
-        />
-      </FocusScope>
+        entry={entry}
+        entityStore={entityStore}
+        onClose={closeTopPanel}
+        style={{ right: rightOffset }}
+      />
     );
   });
 
@@ -188,12 +202,33 @@ interface InspectorPanelProps {
  * Resolves an entity for the inspector panel. Tries the local entity store
  * first, then falls back to fetching from the backend via get_entity.
  *
- * Focus restore on unmount is now handled by the enclosing inspector
+ * Spatial-nav: registers the per-panel `<FocusZone>` *inside* the
+ * `<SlidePanel>` so it has a real layout box and the panel-edge focus
+ * indicator can paint against the panel body's left edge. The
+ * SlidePanel itself is `position: fixed` — wrapping it from outside
+ * collapses the wrapper to zero size, leaving the indicator without a
+ * visible host. The zone moniker is `panel:${entityType}:${entityId}`,
+ * the same identity the inspector layer's panel stack uses for
+ * `last_focused` memory and the cross-zone leaf fallback that picks up
+ * an adjacent panel when the topmost one closes.
+ *
+ * The zone wrap is rendered identically in the loading and resolved
+ * branches so the panel zone exists from the moment the panel mounts —
+ * drill-out / cross-panel fallback never sees a window where the zone
+ * is missing while the entity is being fetched.
+ *
+ * Focus claim on mount: a `<ClaimPanelFocusOnMount>` helper rendered
+ * inside the `<FocusZone>` calls `spatial_focus(panelKey)` once on
+ * first mount. See its component-level doc for the rationale and the
+ * timing argument; see card 01KQ9Z9VN6EXM9JWJRNM5T7T19 for the bug it
+ * pins.
+ *
+ * Focus restore on unmount is handled by the enclosing inspector
  * `<FocusLayer>` (which pops in the Rust registry and emits the parent
- * layer's `last_focused`) and by each panel's `<FocusScope kind="zone">`
- * wrapper (per-panel `last_focused` memory). The legacy
- * `useRestoreFocus()` hook that this component used to call is therefore
- * no longer needed — see card 01KNQXYC4RBQP1N2NQ33P8DPB9.
+ * layer's `last_focused`) and by each panel's own `<FocusZone>` wrapper
+ * (per-panel `last_focused` memory). The legacy `useRestoreFocus()`
+ * hook that this component used to call is therefore no longer needed —
+ * see card 01KNQXYC4RBQP1N2NQ33P8DPB9.
  */
 function InspectorPanel({
   entry,
@@ -205,6 +240,16 @@ function InspectorPanel({
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const fetchedRef = useRef<string | null>(null);
+
+  // Per-panel zone moniker — identifies this panel's slot in the
+  // inspector layer's child list for `last_focused` memory and
+  // cross-zone leaf fallback. Memoised so the brand cast does not mint
+  // a fresh-identity Moniker on every render (which would churn the
+  // FocusZone's register effect).
+  const panelMoniker = useMemo(
+    () => asMoniker(`panel:${entry.entityType}:${entry.entityId}`),
+    [entry.entityType, entry.entityId],
+  );
 
   // Try local store first — match by ID, then by search_display_field from schema
   const entities = entityStore[entry.entityType];
@@ -250,21 +295,110 @@ function InspectorPanel({
       });
   }, [resolved, fetchKey, entry.entityType, entry.entityId]);
 
-  if (!resolved) {
-    return (
-      <SlidePanel open={true} onClose={onClose} style={style}>
-        <p className="text-sm text-muted-foreground">
-          {fetchError ? `Entity not found` : "Loading\u2026"}
-        </p>
-      </SlidePanel>
-    );
-  }
+  // Body content \u2014 either the loading/error message or the inspector
+  // bridge. Both branches render inside the same FocusZone so the
+  // panel zone is registered for the panel's full lifetime, not just
+  // after the entity resolves.
+  const body = !resolved ? (
+    <p className="text-sm text-muted-foreground">
+      {fetchError ? `Entity not found` : "Loading\u2026"}
+    </p>
+  ) : (
+    <ErrorBoundary>
+      <InspectorFocusBridge entity={resolved} />
+    </ErrorBoundary>
+  );
 
   return (
     <SlidePanel open={true} onClose={onClose} style={style}>
-      <ErrorBoundary>
-        <InspectorFocusBridge entity={resolved} />
-      </ErrorBoundary>
+      {/* `min-h-full` lets the zone fill the SlidePanel body so a
+          click anywhere on the panel content focuses the panel zone,
+          not just where the inspector body itself paints. */}
+      <FocusZone moniker={panelMoniker} className="min-h-full">
+        <ClaimPanelFocusOnMount />
+        {body}
+      </FocusZone>
     </SlidePanel>
   );
+}
+
+/**
+ * Side-effect-only child of an `<InspectorPanel>`'s `<FocusZone>` that
+ * moves spatial focus to the enclosing panel zone once on first mount.
+ *
+ * Without this, dispatching `ui.inspect` from a source element (a card,
+ * the navbar Inspect button, a perspective tab, …) leaves the kernel's
+ * focused key on the source. Pressing Escape then walks the source
+ * element's zone chain via drill-out before the chain falls through to
+ * `app.dismiss` — three Escapes for a card-driven open, two for a
+ * navbar-driven open. With this helper, the kernel's focused key
+ * advances to the panel zone immediately after the panel mounts, so the
+ * very first Escape's drill-out lands at the layer root (returns null)
+ * and dismiss fires.
+ *
+ * # Why a child of the zone, not a sibling
+ *
+ * `<FocusZone>` mints its `SpatialKey` internally and exposes it only
+ * via the `FocusZoneContext` it pushes around its children. A descendant
+ * therefore reads the panel zone's `SpatialKey` through
+ * `useParentZoneKey()`. A *sibling* would have no way to discover the
+ * key.
+ *
+ * # Why the focus call is deferred via `queueMicrotask`
+ *
+ * React's effect ordering on mount is bottom-up: child effects fire
+ * **before** parent effects. The parent `<FocusZone>` registers itself
+ * with the spatial registry from its own `useEffect` (which calls
+ * `invoke("spatial_register_zone", …)`). If this child effect were to
+ * call `focus(panelKey)` synchronously, the resulting
+ * `invoke("spatial_focus", …)` IPC message would be queued **before**
+ * the register IPC, and the kernel would see a focus call for an
+ * unknown key (no-op).
+ *
+ * `queueMicrotask` defers the focus call to the microtask queue. By the
+ * time that microtask drains, every effect in the current commit phase
+ * has fired — including the parent zone's register effect, which
+ * synchronously enqueues `invoke("spatial_register_zone", …)` before
+ * suspending at its first `await`. The focus IPC therefore lands on
+ * Tauri's serial command channel **after** the register IPC, and the
+ * Rust kernel processes them in order under the same `with_spatial`
+ * mutex.
+ *
+ * # First-mount only
+ *
+ * The `useEffect` body fires once per mount (the dep list captures
+ * stable identities — the panel zone's `SpatialKey` is minted once and
+ * `useSpatialFocusActions()` returns an identity-stable bag for the
+ * provider's lifetime). `<InspectorsContainer>` keys each panel
+ * `<InspectorPanel>` by `${entityType}-${entityId}`, so opening a
+ * different entity remounts a fresh panel and this helper fires again
+ * for the new zone — which is exactly the behavior we want when the
+ * user drills from one inspector panel to another. Re-renders that
+ * don't change the panel identity (a UIState delta unrelated to the
+ * inspector stack, an entity-store refresh, etc.) leave focus alone,
+ * so the kernel's `last_focused` memory inside the panel is preserved
+ * across them.
+ */
+function ClaimPanelFocusOnMount(): null {
+  const panelKey = useParentZoneKey();
+  const { focus } = useSpatialFocusActions();
+
+  useEffect(() => {
+    // No enclosing zone means we are mounted outside the spatial-nav
+    // stack (degraded test or a misconfigured tree). Nothing to focus.
+    if (!panelKey) return;
+
+    // Defer to the next microtask so the parent `<FocusZone>`'s register
+    // effect — which fires AFTER this child effect — has a chance to
+    // synchronously enqueue `spatial_register_zone(panelKey, …)` before
+    // we enqueue `spatial_focus(panelKey)`. See the component-level doc
+    // comment for the full ordering argument.
+    queueMicrotask(() => {
+      focus(panelKey).catch((err) =>
+        console.error("[InspectorPanel] focus on mount failed:", err),
+      );
+    });
+  }, [panelKey, focus]);
+
+  return null;
 }

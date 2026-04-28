@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::registry::SpatialRegistry;
-use super::scope::FocusScope;
+use super::scope::RegisteredScope;
 use super::types::{
     pixels_cmp, Direction, LayerKey, Moniker, Pixels, Rect, SpatialKey, WindowLabel,
 };
@@ -150,8 +150,8 @@ fn nearest_in_zone(
     origin_rect: Rect,
     prefer_variant: Option<ScopeVariant>,
 ) -> Option<(SpatialKey, Moniker)> {
-    let candidates: Vec<&FocusScope> = registry
-        .scopes_in_layer(layer_key)
+    let candidates: Vec<&RegisteredScope> = registry
+        .entries_in_layer(layer_key)
         .filter(|s| s.key() != lost_key)
         .filter(|s| match zone_key {
             Some(zk) => s.parent_zone() == Some(zk),
@@ -160,8 +160,8 @@ fn nearest_in_zone(
         .collect();
 
     if let Some(preferred) = prefer_variant {
-        let matches_preferred = |s: &&FocusScope| match preferred {
-            ScopeVariant::Focusable => s.is_focusable(),
+        let matches_preferred = |s: &&RegisteredScope| match preferred {
+            ScopeVariant::Scope => s.is_scope(),
             ScopeVariant::Zone => s.is_zone(),
         };
         if let Some(best) = candidates
@@ -210,7 +210,7 @@ fn nearest_in_layer(
     origin_rect: Rect,
 ) -> Option<(SpatialKey, Moniker)> {
     registry
-        .scopes_in_layer(layer_key)
+        .entries_in_layer(layer_key)
         .filter(|s| s.key() != lost_key)
         .min_by(|a, b| {
             let da = squared_distance(origin_rect, *a.rect());
@@ -224,13 +224,14 @@ fn nearest_in_layer(
 
 /// Variant tag for [`nearest_in_zone`]'s "prefer matching variant" knob.
 ///
-/// Mirrors the [`FocusScope`] variants but as a tag-only enum so the
-/// resolver can compare without holding a borrow.
+/// Tag-only counterpart of the internal [`RegisteredScope`] variants so
+/// the resolver can carry "what variant did we lose?" through nested
+/// borrows without holding a reference into the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScopeVariant {
-    /// A leaf (`FocusScope::Focusable`).
-    Focusable,
-    /// A zone (`FocusScope::Zone`).
+    /// A leaf (`RegisteredScope::Scope`).
+    Scope,
+    /// A zone (`RegisteredScope::Zone`).
     Zone,
 }
 
@@ -251,7 +252,7 @@ fn squared_distance(a: Rect, b: Rect) -> Pixels {
 /// candidate the fallback resolver returns.
 fn same_window(
     registry: &SpatialRegistry,
-    scope: &FocusScope,
+    scope: &RegisteredScope,
     expected_window: &WindowLabel,
 ) -> bool {
     registry
@@ -303,10 +304,10 @@ impl SpatialState {
         registry: &SpatialRegistry,
         key: SpatialKey,
     ) -> Option<FocusChangedEvent> {
-        let scope = registry.scope(&key)?;
-        let layer = registry.layer(scope.layer_key())?;
+        let entry = registry.entry(&key)?;
+        let layer = registry.layer(entry.layer_key())?;
         let window = layer.window_label.clone();
-        let moniker = scope.moniker().clone();
+        let moniker = entry.moniker().clone();
 
         let prev_key = self.focus_by_window.get(&window).cloned();
         if prev_key.as_ref() == Some(&key) {
@@ -454,7 +455,7 @@ impl SpatialState {
         // the walk; degrade to NoFocus. Adapters that want a meaningful
         // fallback must call this before `unregister_scope`.
         let (lost_layer, lost_parent_zone, lost_rect, lost_variant) = {
-            let Some(lost) = registry.scope(lost_key) else {
+            let Some(lost) = registry.entry(lost_key) else {
                 return FallbackResolution::NoFocus;
             };
             (
@@ -464,7 +465,7 @@ impl SpatialState {
                 if lost.is_zone() {
                     ScopeVariant::Zone
                 } else {
-                    ScopeVariant::Focusable
+                    ScopeVariant::Scope
                 },
             )
         };
@@ -501,10 +502,10 @@ impl SpatialState {
             // to consult, so this step is also skipped.
             if !on_lost_zone {
                 if let Some(zone_key) = &current_zone {
-                    if let Some(zone) = registry.scope(zone_key).and_then(|s| s.as_zone()) {
+                    if let Some(zone) = registry.zone(zone_key) {
                         if let Some(remembered) = &zone.last_focused {
                             if remembered != lost_key {
-                                if let Some(scope) = registry.scope(remembered) {
+                                if let Some(scope) = registry.entry(remembered) {
                                     if same_window(registry, scope, &lost_window) {
                                         return FallbackResolution::FallbackParentZoneLastFocused(
                                             scope.key().clone(),
@@ -554,10 +555,7 @@ impl SpatialState {
             let Some(zone_key) = current_zone else {
                 break;
             };
-            let parent = registry
-                .scope(&zone_key)
-                .and_then(|s| s.as_zone())
-                .and_then(|z| z.parent_zone.clone());
+            let parent = registry.zone(&zone_key).and_then(|z| z.parent_zone.clone());
             current_zone = parent;
             is_first_iteration = false;
         }
@@ -583,7 +581,7 @@ impl SpatialState {
             // Prefer the layer's `last_focused` if still registered.
             if let Some(remembered) = &parent_layer.last_focused {
                 if remembered != lost_key {
-                    if let Some(scope) = registry.scope(remembered) {
+                    if let Some(scope) = registry.entry(remembered) {
                         if same_window(registry, scope, &lost_window) {
                             return FallbackResolution::FallbackParentLayerLastFocused(
                                 scope.key().clone(),
@@ -650,7 +648,9 @@ impl SpatialState {
         // Validate the starting point belongs to the registry. A strategy
         // that returns Some for an unknown `from` would otherwise stamp
         // a focus event into a window that has no record of the move.
-        registry.scope(&from)?;
+        if !registry.is_registered(&from) {
+            return None;
+        }
 
         let target_moniker = strategy.next(registry, &from, direction)?;
         // The strategy speaks in monikers; we focus by SpatialKey. The
@@ -659,7 +659,7 @@ impl SpatialState {
         // mounted scope per window), so a linear scan is cheap relative
         // to a Tauri IPC round-trip.
         let target_key = registry
-            .scopes_iter()
+            .entries_iter()
             .find(|s| s.moniker() == &target_moniker)
             .map(|s| s.key().clone())?;
         self.focus(registry, target_key)
@@ -682,7 +682,7 @@ mod tests {
 
     use super::*;
     use crate::layer::FocusLayer;
-    use crate::scope::Focusable;
+    use crate::scope::FocusScope;
     use crate::types::{LayerKey, LayerName, Pixels, Rect};
     use std::collections::HashMap;
 
@@ -695,14 +695,9 @@ mod tests {
         }
     }
 
-    /// Build a single-layer registry with one focusable leaf bound to
+    /// Build a single-layer registry with one focus scope leaf bound to
     /// `(window, moniker)`.
-    fn registry_with_focusable(
-        window: &str,
-        layer: &str,
-        key: &str,
-        moniker: &str,
-    ) -> SpatialRegistry {
+    fn registry_with_scope(window: &str, layer: &str, key: &str, moniker: &str) -> SpatialRegistry {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(FocusLayer {
             key: LayerKey::from_string(layer),
@@ -711,7 +706,7 @@ mod tests {
             window_label: WindowLabel::from_string(window),
             last_focused: None,
         });
-        reg.register_focusable(Focusable {
+        reg.register_scope(FocusScope {
             key: SpatialKey::from_string(key),
             moniker: Moniker::from_string(moniker),
             rect: rect_zero(),
@@ -724,7 +719,7 @@ mod tests {
 
     #[test]
     fn focus_returns_event_with_window_and_moniker() {
-        let registry = registry_with_focusable("main", "L", "k1", "task:01");
+        let registry = registry_with_scope("main", "L", "k1", "task:01");
         let mut state = SpatialState::new();
         let key = SpatialKey::from_string("k1");
 
@@ -748,7 +743,7 @@ mod tests {
 
     #[test]
     fn focus_same_key_twice_emits_once() {
-        let registry = registry_with_focusable("main", "L", "k1", "task:01");
+        let registry = registry_with_scope("main", "L", "k1", "task:01");
         let mut state = SpatialState::new();
         let key = SpatialKey::from_string("k1");
 

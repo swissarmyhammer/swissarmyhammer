@@ -3,6 +3,7 @@ import {
   useContext,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useSyncExternalStore,
   type ReactNode,
@@ -10,6 +11,7 @@ import {
 } from "react";
 import type { CommandScope, DispatchOptions } from "./command-scope";
 import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
+import { useOptionalSpatialFocusActions } from "./spatial-focus-context";
 
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
@@ -126,8 +128,8 @@ export interface FocusActions {
    * spatial-nav migration completes — but the function no longer walks
    * a predicate registry. All real navigation now lives in the Rust
    * spatial-nav kernel, with React-side directives expressed as
-   * `navOverride` props on `<Focusable>` / `<FocusZone>` /
-   * `<FocusScope>`. This callback is therefore a no-op that always
+   * `navOverride` props on `<FocusScope>` / `<FocusZone>`.
+   * This callback is therefore a no-op that always
    * returns `false`; callers that need to drive navigation should
    * invoke `spatial_navigate` via `useSpatialFocusActions().navigate`.
    */
@@ -227,6 +229,47 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [store]);
+
+  // Bridge spatial-focus → entity-focus.
+  //
+  // The spatial-nav kernel (`SpatialFocusProvider`) is the source of truth
+  // for which scope owns focus in the active window: every leaf click and
+  // every arrow-key navigation flows through `spatial_focus` /
+  // `spatial_navigate`, which in turn emits a `focus-changed` event with
+  // the new `SpatialKey` and the resolved `Moniker`. The legacy entity-
+  // focus store (this file) used to be driven directly by click handlers
+  // calling `setFocus`, but post-spatial-nav not every leaf does that —
+  // some only call `spatial_focus` and leave entity-focus stale, which
+  // historically caused `focusedMonikerRef.current` to fall to `null`
+  // after clicks and made the now-removed `board.inspect` look like a
+  // no-op on Space. Inspect is now scope-resolved through the
+  // per-entity `<Inspectable>` wrapper, but the bridge below still
+  // matters: it keeps `useFocusedScope()` aligned with the spatial
+  // kernel so `extractScopeBindings` and friends see the right scope
+  // chain on every keydown.
+  //
+  // The bridge fixes that by mirroring `payload.next_moniker` straight
+  // into the entity-focus store via `setFocus`. Calling the full
+  // `setFocus` action (rather than `store.set` directly) is intentional:
+  // we also want the backend's `scope_chain` to reflect the new focus,
+  // and `setFocus` already encapsulates the chain-build + dispatch step.
+  // No feedback loop: `ui.setFocus` is a one-way request and does not
+  // re-emit `focus-changed`.
+  //
+  // Degrades silently when no `<SpatialFocusProvider>` ancestor is
+  // mounted (`useOptionalSpatialFocusActions` returns `null`) — older
+  // tests that wrap only in `<EntityFocusProvider>` keep their pre-
+  // bridge behavior, where `setFocus` is the only way state changes.
+  const spatialFocus = useOptionalSpatialFocusActions();
+  useEffect(() => {
+    if (!spatialFocus) return;
+    return spatialFocus.subscribeFocusChanged((payload) => {
+      // `next_moniker` is null when focus clears (window lost focus,
+      // focused scope unregistered without a fallback). `setFocus(null)`
+      // matches the React-side contract for a cleared focus state.
+      actions.setFocus(payload.next_moniker);
+    });
+  }, [spatialFocus, actions]);
 
   // Stable ref tracking the focused CommandScope. Published via
   // `FocusedScopeRefContext` so `useDispatchCommand` can read it at dispatch
@@ -345,6 +388,66 @@ export function useFocusActions(): FocusActions {
 }
 
 /**
+ * Returns the focus action bag, or `null` when no `EntityFocusProvider`
+ * ancestor is mounted.
+ *
+ * Use this from primitives (`<FocusScope>` / `<FocusZone>`) that must
+ * tolerate isolated unit-test harnesses that skip the entity-focus
+ * provider stack. Production trees always mount `<EntityFocusProvider>`,
+ * so call sites that genuinely require the actions should keep using
+ * the throwing `useFocusActions` variant.
+ */
+export function useOptionalFocusActions(): FocusActions | null {
+  return useContext(FocusActionsContext);
+}
+
+/**
+ * Registers an entity-focus scope for the given moniker, with the same
+ * lifecycle the spatial primitives (`<FocusScope>` / `<FocusZone>`) need.
+ *
+ * The registration runs both inline during render *and* inside a
+ * cleanup-only `useEffect`. Why both:
+ *
+ * - Inline `Map.set` is cheaper than re-firing a `useEffect` whenever the
+ *   `scope` object's identity churns. The scope object's identity changes
+ *   whenever the parent `CommandScopeContext` rebuilds, which happens on
+ *   every ancestor-scope rebuild. Re-firing an effect on every such churn
+ *   produces 12k unregister/register pairs per grid render on a 2000-row
+ *   board, flooding React's commit phase with cleanups and freezing the UI.
+ *   So we hold the latest scope in a ref (updated every render) and
+ *   re-register inline — registration is a plain `Map.set`, not a React
+ *   effect, so it does not pay React's per-effect overhead.
+ *
+ * - The effect re-registers on mount (and when `moniker` changes) to cover
+ *   the initial paint path where the inline call above has already run but
+ *   React may have discarded the render in StrictMode. Cleanup still runs
+ *   on real unmount.
+ *
+ * When no `EntityFocusProvider` ancestor is mounted, both the inline call
+ * and the effect become no-ops — the spatial primitives still flow the
+ * scope through `CommandScopeContext` for descendants, but the entity-focus
+ * dispatcher cannot resolve scope chains through this moniker (which is
+ * fine — there is no dispatcher either when the actions bag is null).
+ */
+export function useEntityScopeRegistration(
+  moniker: string,
+  scope: CommandScope,
+): void {
+  const focusActions = useOptionalFocusActions();
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  if (focusActions) {
+    focusActions.registerScope(moniker, scope);
+  }
+  useEffect(() => {
+    if (!focusActions) return;
+    const { registerScope, unregisterScope } = focusActions;
+    registerScope(moniker, scopeRef.current);
+    return () => unregisterScope(moniker);
+  }, [moniker, focusActions]);
+}
+
+/**
  * Returns the underlying `FocusStore` handle.
  *
  * Useful when a consumer needs to read the current focus inside an event
@@ -386,6 +489,49 @@ export function useIsDirectFocus(moniker: string): boolean {
   );
 
   const current = useSyncExternalStore(subscribe, store.getSnapshot);
+  return current === moniker;
+}
+
+/**
+ * Selective focus subscription that tolerates a missing `EntityFocusProvider`.
+ *
+ * Behaves identically to `useIsDirectFocus` when an `EntityFocusProvider`
+ * ancestor is mounted; returns `false` permanently otherwise. Used by the
+ * `<FocusScope>` and `<FocusZone>` primitives so they keep working in
+ * isolated unit-test harnesses that skip the entity-focus provider stack
+ * — the legacy `<Focusable>` primitive never required `EntityFocusProvider`,
+ * and the collapsed primitives must preserve that contract.
+ *
+ * Hook order is constant per render: when the store is absent, the
+ * pseudo-subscribe / pseudo-getSnapshot pair below is identity-stable so
+ * `useSyncExternalStore` does not resubscribe spuriously.
+ */
+export function useOptionalIsDirectFocus(moniker: string): boolean {
+  const store = useContext(FocusStoreContext);
+
+  // Identity-stable noop subscribe / getSnapshot for the no-provider branch.
+  // Defined inside `useMemo` so the references survive across renders without
+  // forcing `useSyncExternalStore` to resubscribe.
+  const noop = useMemo(
+    () => ({
+      subscribe: (_cb: () => void) => () => {},
+      getSnapshot: () => null as string | null,
+    }),
+    [],
+  );
+
+  const subscribe = useCallback(
+    (cb: () => void) =>
+      store ? store.subscribe(moniker, cb) : noop.subscribe(cb),
+    [store, moniker, noop],
+  );
+
+  const getSnapshot = useCallback(
+    () => (store ? store.getSnapshot() : noop.getSnapshot()),
+    [store, noop],
+  );
+
+  const current = useSyncExternalStore(subscribe, getSnapshot);
   return current === moniker;
 }
 

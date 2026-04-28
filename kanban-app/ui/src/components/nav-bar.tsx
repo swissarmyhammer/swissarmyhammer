@@ -1,8 +1,8 @@
 import { Info, Search } from "lucide-react";
 import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
+import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
-import { Focusable } from "@/components/focusable";
 import {
   Tooltip,
   TooltipTrigger,
@@ -27,9 +27,38 @@ import { asMoniker } from "@/types/spatial";
  * The container renders as a `<FocusZone moniker="ui:navbar">` so the spatial
  * navigator can drill into the bar and remember a last-focused leaf for
  * fallback. Each actionable child (board selector, inspect button, search
- * button) registers as a `<Focusable>` leaf with a `ui:navbar.{name}` moniker
+ * button) registers as a `<FocusScope>` leaf with a `ui:navbar.{name}` moniker
  * — but only when its content is actually rendered, so we never publish a
  * zero-rect leaf for a button that is currently hidden behind a conditional.
+ *
+ * # Focus indicator layout
+ *
+ * The single `<FocusIndicator>` cursor-bar paints a 4px-wide vertical stripe
+ * 8px to the LEFT of its host (`-left-2 w-1`). For that stripe to read as
+ * "this nav button has focus" the bar needs room to live without colliding
+ * with the previous sibling — the failure mode the historic ring variant
+ * was reaching for. The layout addresses that here without a second variant:
+ *
+ *   - The row uses `gap-2` (8px between siblings), which matches the bar's
+ *     `-left-2` offset. The bar lands in the gap immediately to the right
+ *     of the previous sibling, visually pointing at the focused button —
+ *     the same pattern `<PerspectiveTabBar>` ships.
+ *   - The row's `px-4` provides 16px of left padding before the leftmost
+ *     leaf, well over the 8px the bar needs to remain on-screen.
+ *   - Each leaf wraps its child in a `<FocusScope>` with no extra padding —
+ *     the cursor-bar lives at `-left-2` outside the wrapper's box, in the
+ *     gap region, exactly the way every other column-strip consumer lays
+ *     it out.
+ *
+ * # Zone-level focus
+ *
+ * `<FocusZone moniker="ui:navbar">` keeps `showFocusBar={false}`: the bar
+ * spans the entire viewport width, so a focus indicator covering the whole
+ * row would be visual noise without telling the user anything they don't
+ * already know. The zone exists to be the parent of its leaves and to
+ * remember a last-focused leaf for drill-out fallback — its leaves own the
+ * visible focus signal. `data-focused` still flips on the wrapper so e2e
+ * selectors and debugging tooling can observe the claim.
  *
  * No keyboard listeners live here: arrow-key traversal is owned by the Rust
  * spatial navigator. The buttons keep their click handlers so mouse / pointer
@@ -51,9 +80,9 @@ export function NavBar() {
       moniker={asMoniker("ui:navbar")}
       showFocusBar={false}
       role="banner"
-      className="relative flex h-12 items-center border-b px-4 gap-3"
+      className="relative flex h-12 items-center border-b px-4 gap-2"
     >
-      <Focusable moniker={asMoniker("ui:navbar.board-selector")}>
+      <FocusScope moniker={asMoniker("ui:navbar.board-selector")}>
         <BoardSelector
           boards={openBoards}
           selectedPath={
@@ -63,9 +92,9 @@ export function NavBar() {
           boardEntity={board?.board}
           showTearOff
         />
-      </Focusable>
+      </FocusScope>
       {board && (
-        <Focusable moniker={asMoniker("ui:navbar.inspect")}>
+        <FocusScope moniker={asMoniker("ui:navbar.inspect")}>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -83,12 +112,14 @@ export function NavBar() {
             </TooltipTrigger>
             <TooltipContent side="bottom">Inspect board</TooltipContent>
           </Tooltip>
-        </Focusable>
+        </FocusScope>
       )}
       {/*
-        Field is a composite that owns its own focus model — not wrapped as a
-        Focusable leaf here. Field-as-a-spatial-nav citizen is covered by a
-        separate spatial-nav card.
+        `<Field>` is itself a `<FocusZone>` keyed by
+        `field:{type}:{id}.{name}` (see `fields/field.tsx`), so the
+        percent-complete Field already participates in the spatial graph
+        as a peer zone of the navbar's leaf scopes — no extra `<FocusScope>`
+        wrap is needed here.
       */}
       {board && percentFieldDef && (
         <Field
@@ -99,7 +130,10 @@ export function NavBar() {
           editing={false}
         />
       )}
-      <Focusable moniker={asMoniker("ui:navbar.search")} className="ml-auto">
+      <FocusScope
+        moniker={asMoniker("ui:navbar.search")}
+        className="ml-auto"
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -113,7 +147,7 @@ export function NavBar() {
           </TooltipTrigger>
           <TooltipContent side="bottom">Search</TooltipContent>
         </Tooltip>
-      </Focusable>
+      </FocusScope>
       {isBusy && (
         <div
           role="progressbar"

@@ -430,7 +430,7 @@ pub(crate) struct AppState {
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
     /// Headless spatial-navigation registry — stores every registered
-    /// `<Focusable>` / `<FocusZone>` along with its layer membership and
+    /// `<FocusScope>` / `<FocusZone>` along with its layer membership and
     /// geometry. Wrapped in a `tokio::sync::Mutex` because spatial commands
     /// hold both this and `spatial_state` together for transactional
     /// register / unregister; using the async mutex matches the pattern

@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FallbackResolution, FocusLayer, FocusZone, Focusable, LayerKey, LayerName, Moniker, Pixels,
+    FallbackResolution, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker, Pixels,
     Rect, SpatialKey, SpatialRegistry, SpatialState, WindowLabel,
 };
 
@@ -46,16 +46,10 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-/// Build a [`Focusable`] with the given identity, rect, layer, and
+/// Build a [`FocusScope`] leaf with the given identity, rect, layer, and
 /// optional parent zone.
-fn focusable(
-    key: &str,
-    moniker: &str,
-    layer: &str,
-    parent_zone: Option<&str>,
-    r: Rect,
-) -> Focusable {
-    Focusable {
+fn leaf(key: &str, moniker: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
+    FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: r,
@@ -117,21 +111,21 @@ fn fallback_returns_sibling_in_zone() {
         rect(0.0, 0.0, 200.0, 200.0),
     ));
     // Two sibling leaves in the same zone, plus the lost focused leaf.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
         Some("z"),
         rect(0.0, 0.0, 10.0, 10.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "sib-near",
         "ui:sib-near",
         "L",
         Some("z"),
         rect(20.0, 0.0, 10.0, 10.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "sib-far",
         "ui:sib-far",
         "L",
@@ -177,7 +171,7 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
         Some("remembered"),
         rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
@@ -186,7 +180,7 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
     ));
     // Closest sibling — should win even though "remembered" is the
     // zone's recorded last-focused slot.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "sib-near",
         "ui:sib-near",
         "L",
@@ -198,7 +192,7 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
     // `last_focused`, this test would surface
     // `FallbackParentZoneLastFocused` instead of the expected
     // `FallbackSiblingInZone`.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "remembered",
         "ui:remembered",
         "L",
@@ -252,7 +246,7 @@ fn fallback_returns_parent_zone_last_focused() {
         rect(0.0, 0.0, 100.0, 100.0),
     ));
     // Sole leaf in the inner zone.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
@@ -260,7 +254,7 @@ fn fallback_returns_parent_zone_last_focused() {
         rect(0.0, 0.0, 10.0, 10.0),
     ));
     // The remembered scope sits in the outer zone (parent of inner).
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "remembered",
         "ui:remembered",
         "L",
@@ -269,7 +263,7 @@ fn fallback_returns_parent_zone_last_focused() {
     ));
     // Another sibling in outer for variety, but rule 2 should still pick
     // the remembered slot.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "other-in-outer",
         "ui:other",
         "L",
@@ -294,7 +288,7 @@ fn fallback_returns_parent_zone_last_focused() {
     // Re-register and try again below.
     let _ = resolution;
     // Re-register so we can run resolution before unregister:
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
@@ -346,7 +340,7 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
         None,
         rect(400.0, 400.0, 100.0, 100.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
@@ -354,14 +348,14 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
         rect(0.0, 0.0, 10.0, 10.0),
     ));
     // Two leaves in the outer zone — the nearest by top-left wins.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "near",
         "ui:near",
         "L",
         Some("outer"),
         rect(20.0, 0.0, 10.0, 10.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "far",
         "ui:far",
         "L",
@@ -399,7 +393,7 @@ fn fallback_returns_parent_layer_last_focused() {
     // Child layer (e.g. inspector overlay). The lost focused entry
     // lives here; when it goes the layer has no entries left.
     reg.push_layer(layer("child", "main", Some("root"), None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "child",
@@ -407,7 +401,7 @@ fn fallback_returns_parent_layer_last_focused() {
         rect(0.0, 0.0, 10.0, 10.0),
     ));
     // Live entry in the parent layer.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "root-leaf",
         "ui:root-leaf",
         "root",
@@ -446,7 +440,7 @@ fn fallback_returns_parent_layer_nearest_includes_zone_nested_leaves() {
     reg.push_layer(layer("root", "main", None, None));
     // Child layer (e.g. inspector overlay) holds the lost entry alone.
     reg.push_layer(layer("child", "main", Some("root"), None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "child",
@@ -467,7 +461,7 @@ fn fallback_returns_parent_layer_nearest_includes_zone_nested_leaves() {
         None,
         rect(500.0, 500.0, 100.0, 100.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "nested",
         "ui:nested",
         "root",
@@ -500,7 +494,7 @@ fn fallback_returns_parent_layer_nearest_includes_zone_nested_leaves() {
 fn fallback_returns_no_focus_at_lone_window_root() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("root", "main", None, None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "root",
@@ -543,7 +537,7 @@ fn fallback_never_crosses_window_boundary() {
     // its `parent` points into window B's layer, exercising the barrier
     // branch in `resolve_fallback`'s phase 2.
     reg.push_layer(layer("La", "win-a", Some("Lb"), None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "La",
@@ -553,7 +547,7 @@ fn fallback_never_crosses_window_boundary() {
     // Window B: fully populated. If the barrier were not enforced, the
     // resolver would land on `b-leaf` (via `Lb`'s `last_focused`).
     reg.push_layer(layer("Lb", "win-b", None, Some("b-leaf")));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "b-leaf",
         "ui:b-leaf",
         "Lb",
@@ -593,14 +587,14 @@ fn handle_unregister_emits_event_with_fallback_target() {
         None,
         rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
         Some("z"),
         rect(0.0, 0.0, 10.0, 10.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "sibling",
         "ui:sibling",
         "L",
@@ -636,7 +630,7 @@ fn handle_unregister_emits_event_with_fallback_target() {
 fn handle_unregister_clears_focus_when_no_fallback() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None, None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "lost",
         "ui:lost",
         "L",
@@ -666,14 +660,14 @@ fn handle_unregister_clears_focus_when_no_fallback() {
 fn handle_unregister_unfocused_key_is_noop() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("L", "main", None, None));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "focused",
         "ui:focused",
         "L",
         None,
         rect(0.0, 0.0, 10.0, 10.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "other",
         "ui:other",
         "L",

@@ -73,7 +73,7 @@ fn run_app(app_state: AppState) {
             commands::get_undo_state,
             commands::create_window,
             commands::save_dropped_file,
-            commands::spatial_register_focusable,
+            commands::spatial_register_scope,
             commands::spatial_register_zone,
             commands::spatial_register_batch,
             commands::spatial_unregister_scope,

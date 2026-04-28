@@ -450,92 +450,12 @@ describe("FocusScope", () => {
     );
   });
 
-  it("double-click executes ui.inspect command", () => {
-    const execute = vi.fn();
-    const { getByText } = renderWithFocus(
-      <FocusScope
-        moniker={asMoniker("task:abc")}
-        commands={[
-          { id: "ui.inspect", name: "Inspect", contextMenu: true, execute },
-        ]}
-      >
-        <span>card</span>
-      </FocusScope>,
-    );
-    fireEvent.doubleClick(getByText("card"));
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("double-click on INPUT does not trigger ui.inspect", () => {
-    const execute = vi.fn();
-    const { getByRole } = renderWithFocus(
-      <FocusScope
-        moniker={asMoniker("task:abc")}
-        commands={[
-          { id: "ui.inspect", name: "Inspect", contextMenu: true, execute },
-        ]}
-      >
-        <input type="text" />
-      </FocusScope>,
-    );
-    fireEvent.doubleClick(getByRole("textbox"));
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("double-click propagation stops at innermost FocusScope", () => {
-    const outerExec = vi.fn();
-    const innerExec = vi.fn();
-    const { getByText } = renderWithFocus(
-      <FocusScope
-        moniker={asMoniker("task:abc")}
-        commands={[
-          {
-            id: "ui.inspect",
-            name: "Inspect task",
-            contextMenu: true,
-            execute: outerExec,
-          },
-        ]}
-      >
-        <span>card</span>
-        <FocusScope
-          moniker={asMoniker("tag:xyz")}
-          commands={[
-            {
-              id: "ui.inspect",
-              name: "Inspect tag",
-              contextMenu: true,
-              execute: innerExec,
-            },
-          ]}
-        >
-          <span>tag</span>
-        </FocusScope>
-      </FocusScope>,
-    );
-    fireEvent.doubleClick(getByText("tag"));
-    // Inner scope's ui.inspect fires (resolveCommand finds nearest)
-    expect(innerExec).toHaveBeenCalledTimes(1);
-    // Outer does NOT fire because stopPropagation prevents the event from reaching it
-    expect(outerExec).not.toHaveBeenCalled();
-  });
-
-  it("double-click does nothing when no ui.inspect command exists", () => {
-    const execute = vi.fn();
-    const { getByText } = renderWithFocus(
-      <FocusScope
-        moniker={asMoniker("task:abc")}
-        commands={[
-          { id: "other.command", name: "Other", contextMenu: true, execute },
-        ]}
-      >
-        <span>card</span>
-      </FocusScope>,
-    );
-    // Should not throw
-    fireEvent.doubleClick(getByText("card"));
-    expect(execute).not.toHaveBeenCalled();
-  });
+  // Double-click → `ui.inspect` is no longer a `<FocusScope>` concern.
+  // It moved to the `<Inspectable>` wrapper component (see
+  // `inspectable.tsx`); the unit tests for the dispatch contract live
+  // alongside it in `inspectable.spatial.test.tsx`. `<FocusScope>` is
+  // a pure spatial primitive — it owns click → spatial focus and
+  // right-click → context menu, nothing more.
 
   it("data-focused attribute set when focused", () => {
     const { container, getByText } = renderWithFocus(
@@ -882,9 +802,8 @@ describe("FocusScope", () => {
   });
 
   /**
-   * Composition tests — verify FocusScope wraps the correct primitive
-   * (`<Focusable>` for `kind="leaf"`, `<FocusZone>` for `kind="zone"`),
-   * forwards `navOverride` through to the primitive, and routes click
+   * Composition tests — verify FocusScope is the leaf primitive,
+   * forwards `navOverride` through to the registration call, and routes click
    * to the primitive's `spatial_focus` invoke (not the legacy
    * `setFocus(moniker)` path) when a `<FocusLayer>` ancestor is mounted.
    *
@@ -894,8 +813,8 @@ describe("FocusScope", () => {
    * exercise the no-spatial-context fallback path that drives entity
    * focus directly via `setFocus(moniker)` — both paths matter.
    */
-  describe("primitive composition", () => {
-    it("renders <Focusable> when kind is omitted (default leaf)", async () => {
+  describe("spatial-context registration", () => {
+    it("registers via spatial_register_scope as a leaf when wrapped in <FocusLayer>", async () => {
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asLayerName("window")}>
@@ -908,11 +827,12 @@ describe("FocusScope", () => {
         </SpatialFocusProvider>,
       );
 
-      // The primitive registers via spatial_register_focusable (not
-      // spatial_register_zone) — that is the leaf path.
+      // The primitive registers via spatial_register_scope (the leaf
+      // command) — never as a zone. `<FocusScope>` is the leaf primitive
+      // after the three-peer collapse; containers use `<FocusZone>` directly.
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_register_focusable",
+          "spatial_register_scope",
           expect.objectContaining({ moniker: "task:abc" }),
         );
       });
@@ -926,12 +846,15 @@ describe("FocusScope", () => {
       expect(node).not.toBeNull();
     });
 
-    it('renders <FocusZone> when kind="zone"', async () => {
+    it("registers as a leaf scope (never as a zone) — `<FocusScope>` is the leaf primitive", async () => {
+      // After collapsing `<Focusable>` into `<FocusScope>`, the latter is
+      // always the leaf primitive — there is no `kind="zone"` escape hatch.
+      // Containers that want zone semantics use `<FocusZone>` directly.
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asLayerName("window")}>
             <EntityFocusProvider>
-              <FocusScope moniker={asMoniker("column:doing")} kind="zone">
+              <FocusScope moniker={asMoniker("column:doing")}>
                 <span>body</span>
               </FocusScope>
             </EntityFocusProvider>
@@ -939,15 +862,14 @@ describe("FocusScope", () => {
         </SpatialFocusProvider>,
       );
 
-      // The primitive registers via spatial_register_zone (not focusable)
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_register_zone",
+          "spatial_register_scope",
           expect.objectContaining({ moniker: "column:doing" }),
         );
       });
       expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_focusable",
+        "spatial_register_zone",
         expect.anything(),
       );
 
@@ -975,7 +897,7 @@ describe("FocusScope", () => {
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_register_focusable",
+          "spatial_register_scope",
           expect.objectContaining({
             moniker: "task:abc",
             overrides: { left: null },
@@ -1001,12 +923,12 @@ describe("FocusScope", () => {
       // of the register call args.
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_register_focusable",
+          "spatial_register_scope",
           expect.anything(),
         );
       });
       const registerCall = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
-        (c) => c[0] === "spatial_register_focusable",
+        (c) => c[0] === "spatial_register_scope",
       );
       const registeredKey = (registerCall![1] as { key: string }).key;
 
@@ -1034,7 +956,7 @@ describe("FocusScope", () => {
       expect(node).not.toBeNull();
       // No primitive registration happened
       expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_focusable",
+        "spatial_register_scope",
         expect.anything(),
       );
       expect(invoke).not.toHaveBeenCalledWith(
@@ -1046,29 +968,28 @@ describe("FocusScope", () => {
     /**
      * Layout regression guard for the FocusScope chrome composition.
      *
-     * Earlier revisions wrapped children in an internal `<FocusScopeBody>`
-     * div whose default block layout broke the flex chain when consumers
-     * passed `<FocusScope className="flex …">`. The fix routes the chrome
-     * (right-click / double-click / scrollIntoView) through the spatial
-     * primitive itself, so the consumer's `className` lands on the same
-     * element that hosts the children — they become direct layout
-     * children of that element.
+     * Earlier revisions wrapped children in an internal body div whose
+     * default block layout broke the flex chain when consumers passed
+     * `<FocusScope className="flex …">`. The collapse landed the chrome
+     * (right-click / double-click / scrollIntoView) on the same `<div>`
+     * the spatial primitive registers with, so the consumer's
+     * `className` lands on a single element that hosts the children —
+     * they become direct layout children of that element.
      *
      * The assertion below pins that contract: when the consumer asks for
      * `flex flex-row`, the children must be direct DOM children of the
-     * single primitive `<div>` (`data-moniker='zone:row'`). A
-     * regression that re-introduces an inner wrapper would push the
-     * children one layer deeper and this test would catch it before any
-     * call site re-grew its `outer-flex + inner-flex` workaround.
+     * single `<div>` (`data-moniker='task:row'`). A regression that
+     * re-introduces an inner wrapper would push the children one layer
+     * deeper and this test would catch it before any call site re-grew
+     * its `outer-flex + inner-flex` workaround.
      */
-    it("kind=zone with flex className lays children as direct flex items (no inner wrapper)", async () => {
+    it("flex className lays children as direct flex items (no inner wrapper)", async () => {
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asLayerName("window")}>
             <EntityFocusProvider>
               <FocusScope
-                moniker={asMoniker("zone:row")}
-                kind="zone"
+                moniker={asMoniker("task:row")}
                 className="flex flex-row"
               >
                 <span data-testid="child-a">a</span>
@@ -1079,35 +1000,35 @@ describe("FocusScope", () => {
         </SpatialFocusProvider>,
       );
 
-      // Wait for the primitive to mount so the zone div carries its
-      // className (registration is async but the JSX render is sync).
+      // Wait for the primitive to mount so the div carries its className
+      // (registration is async but the JSX render is sync).
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
-          "spatial_register_zone",
-          expect.objectContaining({ moniker: "zone:row" }),
+          "spatial_register_scope",
+          expect.objectContaining({ moniker: "task:row" }),
         );
       });
 
-      const zoneNode = container.querySelector(
-        "[data-moniker='zone:row']",
+      const node = container.querySelector(
+        "[data-moniker='task:row']",
       ) as HTMLElement | null;
-      expect(zoneNode).not.toBeNull();
+      expect(node).not.toBeNull();
       // Consumer's className lands on the primitive's root div.
-      expect(zoneNode!.className).toContain("flex");
-      expect(zoneNode!.className).toContain("flex-row");
+      expect(node!.className).toContain("flex");
+      expect(node!.className).toContain("flex-row");
 
-      // Both children must be DIRECT DOM children of the zone div — no
+      // Both children must be DIRECT DOM children of the scope div — no
       // intervening wrapper element. If a future refactor re-introduces
       // an inner div, the children's parentElement would be that wrapper
-      // instead of the zone, and the assertions below would fail.
+      // instead of the scope, and the assertions below would fail.
       const childA = container.querySelector(
         '[data-testid="child-a"]',
       ) as HTMLElement | null;
       const childB = container.querySelector(
         '[data-testid="child-b"]',
       ) as HTMLElement | null;
-      expect(childA?.parentElement).toBe(zoneNode);
-      expect(childB?.parentElement).toBe(zoneNode);
+      expect(childA?.parentElement).toBe(node);
+      expect(childB?.parentElement).toBe(node);
     });
   });
 });

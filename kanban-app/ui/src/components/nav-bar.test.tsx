@@ -111,9 +111,10 @@ const WINDOW_LAYER_NAME = asLayerName("window");
  * Render `NavBar` inside the spatial-focus + window-root layer providers
  * that the production tree mounts in `App.tsx`.
  *
- * `NavBar` is wrapped in a `<FocusZone>`, which throws when mounted outside
- * a `<FocusLayer>` — so every render in this file sits under
- * `SpatialFocusProvider` + `FocusLayer name="window"` to mirror production.
+ * `NavBar` is wrapped in a `<FocusZone>`, which registers via
+ * `spatial_register_zone` only inside a `<FocusLayer>` — production wraps
+ * everything in one, so we mirror that here to exercise the spatial-context
+ * path.
  */
 function renderNavBar() {
   return render(
@@ -253,7 +254,7 @@ describe("NavBar", () => {
   // Spatial-nav wiring
   //
   // The nav bar mounts as `<FocusZone moniker="ui:navbar">` with each
-  // actionable child registered as a `<Focusable>` leaf whose `parent_zone`
+  // actionable child registered as a `<FocusScope>` leaf whose `parent_zone`
   // is the navbar zone. These tests assert the structural wiring — the
   // spatial-graph contract the rest of the app relies on for arrow nav.
   // -------------------------------------------------------------------------
@@ -285,7 +286,7 @@ describe("NavBar", () => {
     expect(navbarZone!.layerKey).toBeTruthy();
   });
 
-  it("registers ui:navbar.board-selector as a Focusable child of the navbar zone", async () => {
+  it("registers ui:navbar.board-selector as a FocusScope child of the navbar zone", async () => {
     mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
 
@@ -296,7 +297,7 @@ describe("NavBar", () => {
     const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
-    const focusableCalls = callsFor("spatial_register_focusable");
+    const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find(
       (c) => c.moniker === "ui:navbar.board-selector",
     );
@@ -304,7 +305,7 @@ describe("NavBar", () => {
     expect(leaf!.parentZone).toBe(navbarZone!.key);
   });
 
-  it("registers ui:navbar.inspect as a Focusable child only when a board is loaded", async () => {
+  it("registers ui:navbar.inspect as a FocusScope child only when a board is loaded", async () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
     renderNavBar();
@@ -314,7 +315,7 @@ describe("NavBar", () => {
     const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
-    const focusableCalls = callsFor("spatial_register_focusable");
+    const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.inspect");
     expect(leaf).toBeDefined();
     expect(leaf!.parentZone).toBe(navbarZone!.key);
@@ -326,13 +327,13 @@ describe("NavBar", () => {
     renderNavBar();
     await flushSetup();
 
-    const focusableCalls = callsFor("spatial_register_focusable");
+    const focusableCalls = callsFor("spatial_register_scope");
     expect(
       focusableCalls.find((c) => c.moniker === "ui:navbar.inspect"),
     ).toBeUndefined();
   });
 
-  it("registers ui:navbar.search as a Focusable child of the navbar zone", async () => {
+  it("registers ui:navbar.search as a FocusScope child of the navbar zone", async () => {
     renderNavBar();
     await flushSetup();
 
@@ -340,7 +341,7 @@ describe("NavBar", () => {
     const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
-    const focusableCalls = callsFor("spatial_register_focusable");
+    const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.search");
     expect(leaf).toBeDefined();
     expect(leaf!.parentZone).toBe(navbarZone!.key);

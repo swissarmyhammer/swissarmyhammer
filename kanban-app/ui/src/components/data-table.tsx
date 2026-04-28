@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
-import { Focusable } from "@/components/focusable";
+import { useInspectOnDoubleClick } from "@/components/inspectable";
 import { useOptionalLayerKey } from "@/components/focus-layer";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Field } from "@/components/fields/field";
@@ -110,7 +110,7 @@ interface DataTableProps {
    * suppresses the attribute (and any e2e match) entirely, instead of
    * falling back to the internal `{0, 0}` default. The visible focus
    * decoration on the matching cell is the `<FocusIndicator>` rendered
-   * inside the cell's `<Focusable>` from React state — the previous
+   * inside the cell's `<FocusScope>` from React state — the previous
    * cell-ring (`ring-2 ring-primary ring-inset`) was removed in
    * `01KQ573XBT0GFQWVY6QEZQ74R6` to enforce "one decorator, one place".
    */
@@ -393,6 +393,16 @@ function useTanstackColumns(columns: DataTableColumn[]) {
               entityId={entity.id}
               mode="compact"
               editing={false}
+              // The enclosing `grid_cell:R:K` `<FocusScope>` leaf is the
+              // cursor target — clicking it
+              // moves the cursor ring. Field's inner `<FocusZone>` would
+              // otherwise intercept the click via stopPropagation and
+              // claim focus on the field-zone moniker instead, so disable
+              // its event handling here. The zone still registers in the
+              // spatial graph (Option A in card
+              // `01KQ5QB6F4MTD35GBTARJH4JEW`) for command-scope and
+              // entity-focus chrome.
+              handleEvents={false}
             />
           );
         },
@@ -571,7 +581,7 @@ interface DataTableRowProps {
    * Grid-cell cursor coordinates resolved from the focused moniker. When a
    * cell's `(di, col.field.name)` matches, it stamps `data-cell-cursor` —
    * `null` suppresses the attribute entirely. The visible focus decoration
-   * is rendered by the `<FocusIndicator>` inside the cell's `<Focusable>`,
+   * is rendered by the `<FocusIndicator>` inside the cell's `<FocusScope>`,
    * not by this attribute.
    */
   gridCellCursor: { row: number; colKey: string } | null;
@@ -601,7 +611,24 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
   const entity = row.original;
   const entityMk = entity.moniker;
   return (
-    <FocusScope moniker={asMoniker(entityMk)} renderContainer={false}>
+    // The row carries the row entity's moniker (`task:<id>` or
+    // `tag:<id>`). `renderContainer={false}` means the FocusScope
+    // pushes the moniker into the command-scope chain (so right-click
+    // resolves the row's context menu) without rendering a wrapping
+    // `<div>` — the table layout requires `<tr>` to be a direct child
+    // of `<tbody>`, which a `<div>` parent would break.
+    //
+    // Because of that DOM constraint, the standard `<Inspectable>`
+    // wrapper (which renders a `<div className="contents">`) cannot
+    // wrap the row. Instead, `<EntityRow>` calls
+    // `useInspectOnDoubleClick(entityMk)` directly and attaches the
+    // resulting handler to its `<tr>`. Both paths share the same
+    // hook, so Guard A continues to hold (the inspect dispatch site
+    // is still `inspectable.tsx`).
+    <FocusScope
+      moniker={asMoniker(entityMk)}
+      renderContainer={false}
+    >
       <EntityRow
         entityMk={entityMk}
         isCursorRow={di === grid.cursor.row}
@@ -693,7 +720,7 @@ interface DataBodyCellProps {
    * Computed once per row in the parent so this cell's `React.memo`
    * shallow comparison treats sibling cells' cursor flips as equal.
    * Output-only: no CSS rule reads it; the visible focus bar is rendered
-   * by `<FocusIndicator>` inside the cell's `<Focusable>`.
+   * by `<FocusIndicator>` inside the cell's `<FocusScope>`.
    */
   cellCursorAttr: string | undefined;
   handleCellClick: (row: number, col: number) => void;
@@ -710,7 +737,7 @@ interface DataBodyCellProps {
  * shallow comparison treats stable useMemo/useCallback/ref props as equal,
  * so only cells whose props actually changed re-render.
  *
- * Each cell mounts a `<GridCellFocusable>` that registers as a `<Focusable>`
+ * Each cell mounts a `<GridCellFocusable>` that registers as a `<FocusScope>`
  * leaf in the spatial-nav graph (under the surrounding `ui:grid` zone) when
  * the spatial stack is mounted. The leaf moniker is `grid_cell:{di}:{colKey}`
  * — the canonical wire-shape consumed by `parseGridCellMoniker` in
@@ -738,17 +765,21 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       entityId={entity.id}
       mode="compact"
       editing={false}
+      // See note in `useTanstackColumns` above — the enclosing
+      // `grid_cell:R:K` `<FocusScope>` is the cursor target, so the
+      // Field's inner `<FocusZone>` must not steal clicks from it.
+      handleEvents={false}
     />
   );
   // Visual focus decoration on a grid cell is rendered exclusively by the
-  // `<FocusIndicator>` mounted inside the cell's `<Focusable>` (see
+  // `<FocusIndicator>` mounted inside the cell's `<FocusScope>` (see
   // `GridCellFocusable` below). The previous implementation also painted a
   // cell-spanning `ring-2 ring-primary ring-inset` border driven by
   // `isCursor`, which double-decorated the focused cell — the bar AND the
   // ring rendered together for the same focus state. The ring was removed
   // to enforce the architectural rule "one decorator, one place"
   // (`focus-architecture.guards.node.test.ts`); the bar is now the canonical
-  // grid-cell focus visual, identical to every other `<Focusable>` in the
+  // grid-cell focus visual, identical to every other `<FocusScope>` in the
   // app. The selection-range tint (`isSel && !isCursor`) is unrelated to
   // focus and stays.
   const cellClasses = cn(
@@ -807,28 +838,28 @@ interface GridCellFocusableProps {
 }
 
 /**
- * Wraps `children` in a `<Focusable>` leaf mounted inside a `<TableCell>`.
+ * Wraps `children` in a `<FocusScope>` leaf mounted inside a `<TableCell>`.
  *
  * The cell's moniker is the canonical `grid_cell:{di}:{colKey}` shape
  * (built via {@link gridCellMoniker}). The leaf registers in the spatial-nav
  * graph with `parent_zone = ui:grid` (the surrounding `<GridSpatialZone>`).
  * When the spatial stack is absent (unit tests with a narrow provider
- * tree), `<Focusable>` would throw because no `<FocusLayer>` ancestor is
+ * tree), `<FocusScope>` would throw because no `<FocusLayer>` ancestor is
  * mounted, so we render a plain `<TableCell>` instead — keeping the table
  * HTML valid without forcing every test to set up the spatial providers.
  *
  * Click handler placement differs by branch:
  *
- *   - **Spatial path (production):** `Focusable.onClick` calls
+ *   - **Spatial path (production):** `FocusScope.onClick` calls
  *     `spatial_focus(key)` and then `e.stopPropagation()` (per the
  *     long-standing FocusScope convention so a leaf click does not
  *     re-fire on its enclosing zone). Because of that, an `onClick` on
  *     the surrounding `<TableCell>` would never fire — the click is
  *     swallowed before it bubbles to the cell. We therefore mount a
- *     thin `<div>` *inside* the `<Focusable>`, attach `onClick` /
+ *     thin `<div>` *inside* the `<FocusScope>`, attach `onClick` /
  *     `onDoubleClick` to it, and rely on React's bubble order: the inner
- *     wrapper sees the event before `Focusable`'s outer handler stops it.
- *     This keeps both sides firing on a left-click — `Focusable` updates
+ *     wrapper sees the event before `FocusScope`'s outer handler stops it.
+ *     This keeps both sides firing on a left-click — `FocusScope` updates
  *     spatial focus (Rust side), and the inner `onClick` runs the legacy
  *     entity-focus `setFocus(gridCellMoniker(...))` so the
  *     `data-cell-cursor` debug/e2e attribute (derived from entity-focus)
@@ -838,7 +869,7 @@ interface GridCellFocusableProps {
  *     do not need this pattern.
  *
  *   - **Fallback path (tests without the spatial stack):** there is no
- *     enclosing `<Focusable>`, so the click handlers attach directly to
+ *     enclosing `<FocusScope>`, so the click handlers attach directly to
  *     the `<TableCell>` and behave exactly as a plain table cell.
  *
  * @param di - Zero-based data-row index.
@@ -869,7 +900,7 @@ function GridCellFocusable({
   // The spatial-nav stack may be absent in unit tests with a narrow
   // provider tree (the bare `<DataTable>` test harness deliberately
   // omits `<SpatialFocusProvider>` + `<FocusLayer>` to keep its scope
-  // tight on table-row structure). Mounting `<Focusable>` in that case
+  // tight on table-row structure). Mounting `<FocusScope>` in that case
   // would throw `useCurrentLayerKey must be called inside a <FocusLayer>`.
   // When either lookup returns nullish, fall through to a plain
   // `<TableCell>` with click handlers attached directly — production
@@ -892,8 +923,8 @@ function GridCellFocusable({
     );
   }
 
-  // Spatial path: handlers go on a wrapper INSIDE the `<Focusable>` so
-  // they fire before `Focusable.onClick` calls `e.stopPropagation()`. An
+  // Spatial path: handlers go on a wrapper INSIDE the `<FocusScope>` so
+  // they fire before `FocusScope.onClick` calls `e.stopPropagation()`. An
   // `onClick` on the outer `<TableCell>` would never see the event in
   // this branch — the leaf swallows it before it reaches the cell.
   return (
@@ -902,11 +933,11 @@ function GridCellFocusable({
       className={className}
       data-cell-cursor={cellCursorAttr}
     >
-      <Focusable moniker={moniker}>
+      <FocusScope moniker={moniker}>
         <div onClick={onClick} onDoubleClick={onDoubleClick}>
           {children}
         </div>
-      </Focusable>
+      </FocusScope>
     </TableCell>
   );
 }
@@ -921,9 +952,18 @@ interface EntityRowProps {
 /**
  * Table row rendered inside a FocusScope(renderContainer=false).
  *
- * Mirrors FocusScopeInner behavior on a <tr>: click sets entity focus,
- * double-click dispatches ui.inspect, right-click opens context menu.
- * All hooks read from the per-row FocusScope that wraps this component.
+ * Mirrors FocusScope's behavior on a `<tr>`: right-click opens the
+ * context menu, double-click dispatches `ui.inspect` against the row's
+ * entity moniker. Per-cell click semantics live on the grid-cell
+ * `<FocusScope>` leaves; the row itself does not own click → focus.
+ *
+ * Inspector dispatch on double-click would normally live in the
+ * `<Inspectable>` wrapper, but DOM table rules forbid `<div>` between
+ * `<tbody>` and `<tr>`. The row therefore calls
+ * `useInspectOnDoubleClick(entityMk)` directly and attaches the
+ * handler to the `<tr>`. The hook lives in `inspectable.tsx`
+ * alongside `<Inspectable>`, so the inspect dispatch is still
+ * single-sourced.
  */
 function EntityRow({
   entityMk,
@@ -933,6 +973,7 @@ function EntityRow({
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
+  const onDoubleClick = useInspectOnDoubleClick(asMoniker(entityMk));
 
   return (
     <TableRow
@@ -945,6 +986,7 @@ function EntityRow({
         setFocus(entityMk);
         contextMenuHandler(e);
       }}
+      onDoubleClick={onDoubleClick}
     >
       {children}
     </TableRow>

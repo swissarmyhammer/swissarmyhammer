@@ -63,9 +63,13 @@ describe("InspectorsContainer source-level guards", () => {
     expect(src).toMatch(/useCurrentLayerKey\s*\(\s*\)/);
   });
 
-  it("wraps each panel in a FocusScope kind=zone with a panel:<type>:<id> moniker", () => {
+  it("wraps each panel in a FocusZone with a panel:<type>:<id> moniker", () => {
+    // Three-peer architecture: zones (containers) use `<FocusZone>` directly;
+    // the legacy `<FocusScope kind="zone">` composite is gone. Each panel
+    // body is the parent of the field rows inside it, so it registers as
+    // a zone via `spatial_register_zone` rather than as a leaf scope.
     const src = readSource();
-    expect(src).toMatch(/<FocusScope\b[\s\S]*?kind="zone"/);
+    expect(src).toMatch(/<FocusZone\b[\s\S]*?/);
     expect(src).toMatch(/panel:\$\{entry\.entityType\}:\$\{entry\.entityId\}/);
   });
 

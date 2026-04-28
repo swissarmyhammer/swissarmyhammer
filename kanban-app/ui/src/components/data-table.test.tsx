@@ -164,7 +164,7 @@ describe("DataTable row structure", () => {
     // The legacy pull-based navigation props (`cellMonikers`,
     // `claimPredicates`) and the lower-level `claimWhen` predicate that
     // wrapped each cell's `<FocusScope>` were deleted as part of the
-    // spatial-nav migration. Cells are now `<Focusable>` leaves whose
+    // spatial-nav migration. Cells are now `<FocusScope>` leaves whose
     // moniker is computed from `(di, colKey)` directly. We cannot prove
     // the absence at the type level here, but rendering with only the
     // new prop surface and asserting the table mounts is the runtime

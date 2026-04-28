@@ -161,6 +161,120 @@ describe("normalizeKeyEvent", () => {
       }
     }
   });
+
+  it("prefixes Shift on Space to distinguish Shift+Space from Space", () => {
+    // The browser delivers the spacebar as `e.key === " "` (literal
+    // space) regardless of whether Shift is held — same disambiguation
+    // problem as Tab/Shift+Tab. The normalizer rewrites `" "` to the
+    // canonical `"Space"` token *before* the Shift-prefix check, so
+    // when Shift is held the result is `"Shift+Space"` rather than
+    // `"Shift+ "` (which would be invisible in code review and would
+    // never match a binding declared as `Shift+Space`).
+    expect(normalizeKeyEvent(fakeKeyEvent(" ", { shiftKey: true }))).toBe(
+      "Shift+Space",
+    );
+    expect(normalizeKeyEvent(fakeKeyEvent(" "))).toBe("Space");
+  });
+
+  /* ---------- Shift on symbolic keys ---------- */
+  //
+  // Symbolic keys (Tab, Enter, Escape, arrows, Home/End/PageUp/PageDown,
+  // Insert/Delete/Backspace, F1–F12) report the same `e.key` whether
+  // Shift is held or not — the only signal is `e.shiftKey`. Without an
+  // explicit `Shift+` prefix, Shift+Tab and Tab hash to the same
+  // canonical string and cannot bind to distinct commands. The
+  // normalizer prepends `Shift+` for these keys when shiftKey is true.
+  // Letter keys keep the existing uppercase-and-prefix behaviour;
+  // punctuation produced by Shift (`:`, `?`, etc.) keeps no prefix
+  // because `e.key` is already the shifted character.
+
+  it("prefixes Shift on Tab to distinguish Shift+Tab from Tab", () => {
+    expect(normalizeKeyEvent(fakeKeyEvent("Tab", { shiftKey: true }))).toBe(
+      "Shift+Tab",
+    );
+    expect(normalizeKeyEvent(fakeKeyEvent("Tab", { shiftKey: false }))).toBe(
+      "Tab",
+    );
+  });
+
+  it("prefixes Shift on Enter and Escape", () => {
+    expect(normalizeKeyEvent(fakeKeyEvent("Enter", { shiftKey: true }))).toBe(
+      "Shift+Enter",
+    );
+    expect(normalizeKeyEvent(fakeKeyEvent("Enter"))).toBe("Enter");
+    expect(normalizeKeyEvent(fakeKeyEvent("Escape", { shiftKey: true }))).toBe(
+      "Shift+Escape",
+    );
+    expect(normalizeKeyEvent(fakeKeyEvent("Escape"))).toBe("Escape");
+  });
+
+  it("prefixes Shift on the four arrow keys", () => {
+    for (const arrow of [
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+    ] as const) {
+      expect(normalizeKeyEvent(fakeKeyEvent(arrow, { shiftKey: true }))).toBe(
+        `Shift+${arrow}`,
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(arrow))).toBe(arrow);
+    }
+  });
+
+  it("prefixes Shift on Home/End/PageUp/PageDown", () => {
+    for (const key of ["Home", "End", "PageUp", "PageDown"] as const) {
+      expect(normalizeKeyEvent(fakeKeyEvent(key, { shiftKey: true }))).toBe(
+        `Shift+${key}`,
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(key))).toBe(key);
+    }
+  });
+
+  it("prefixes Shift on Insert/Delete/Backspace", () => {
+    for (const key of ["Insert", "Delete", "Backspace"] as const) {
+      expect(normalizeKeyEvent(fakeKeyEvent(key, { shiftKey: true }))).toBe(
+        `Shift+${key}`,
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(key))).toBe(key);
+    }
+  });
+
+  it("prefixes Shift on F1–F12", () => {
+    for (let n = 1; n <= 12; n++) {
+      const key = `F${n}`;
+      expect(normalizeKeyEvent(fakeKeyEvent(key, { shiftKey: true }))).toBe(
+        `Shift+${key}`,
+      );
+      expect(normalizeKeyEvent(fakeKeyEvent(key))).toBe(key);
+    }
+  });
+
+  it("does NOT prefix Shift on punctuation produced by Shift", () => {
+    // Real keyboard: `?` is Shift+`/`, but `e.key` is already `?`.
+    // Adding `Shift+` would break the punctuation binding lookup.
+    expect(normalizeKeyEvent(fakeKeyEvent("?", { shiftKey: true }))).toBe("?");
+    // `:` from Shift+`;` — also already covered by an earlier test, but
+    // pinned again here alongside the broader shift-on-symbolic
+    // contract for documentation.
+    expect(normalizeKeyEvent(fakeKeyEvent(":", { shiftKey: true }))).toBe(":");
+  });
+
+  it("combines Mod+Shift+Tab correctly on Mac", () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      const e = fakeKeyEvent("Tab", { metaKey: true, shiftKey: true });
+      expect(normalizeKeyEvent(e)).toBe("Mod+Shift+Tab");
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, "platform", original);
+      }
+    }
+  });
 });
 
 /* ---------- BINDING_TABLES ---------- */
@@ -199,6 +313,12 @@ describe("BINDING_TABLES", () => {
     // through to `app.dismiss` on a null kernel result.
     expect(cua["Escape"]).toBe("nav.drillOut");
     expect(cua["Enter"]).toBe("nav.drillIn");
+    // Tab / Shift+Tab cycle siblings via `nav.right`/`nav.left`.
+    // Inspector scopes can shadow these via `inspector.nextField` /
+    // `inspector.prevField` to keep the form-style "Tab moves between
+    // fields" behaviour where it matters; everywhere else Tab cycles.
+    expect(cua["Tab"]).toBe("nav.right");
+    expect(cua["Shift+Tab"]).toBe("nav.left");
   });
 
   it("emacs bindings include expected commands", () => {
@@ -603,6 +723,78 @@ describe("extractScopeBindings", () => {
 
   it("returns empty for null scope", () => {
     expect(extractScopeBindings(null, "cua")).toEqual({});
+  });
+
+  /* ---------- ui.entity.startRename — perspective-scoped Enter binding ---------- */
+  //
+  // The active perspective tab's `<CommandScopeProvider>` (in
+  // `kanban-app/ui/src/components/perspective-tab-bar.tsx`) registers
+  // `ui.entity.startRename` with `keys: { cua: "Enter", vim: "Enter", emacs: "Enter" }`
+  // when the tab is the currently active perspective. The YAML mirror
+  // (`swissarmyhammer-commands/builtin/commands/ui.yaml`) carries the same
+  // `keys` block plus `scope: "entity:perspective"` so the palette / context
+  // menu sees the binding too.
+  //
+  // These three guards pin the React-side contract: from any perspective scope
+  // that surfaces the command, `extractScopeBindings` must return
+  // `{ Enter: "ui.entity.startRename" }` for cua, vim, AND emacs. The
+  // cross-cutting tests below pin the dispatch side; here we pin the
+  // extraction side independently so a future regression that drops one of
+  // the three modes from the React-side `keys` block fails this assertion
+  // before any browser test runs.
+
+  it("ui.entity.startRename surfaces Enter on a perspective scope (cua)", () => {
+    const scope = makeScope([
+      {
+        id: "ui.entity.startRename",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+      },
+    ]);
+    const bindings = extractScopeBindings(scope, "cua");
+    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+  });
+
+  it("ui.entity.startRename surfaces Enter on a perspective scope (vim)", () => {
+    const scope = makeScope([
+      {
+        id: "ui.entity.startRename",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+      },
+    ]);
+    const bindings = extractScopeBindings(scope, "vim");
+    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+  });
+
+  it("ui.entity.startRename surfaces Enter on a perspective scope (emacs)", () => {
+    const scope = makeScope([
+      {
+        id: "ui.entity.startRename",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+      },
+    ]);
+    const bindings = extractScopeBindings(scope, "emacs");
+    expect(bindings).toEqual({ Enter: "ui.entity.startRename" });
+  });
+
+  it("ui.entity.startRename's Enter shadows a parent nav.drillIn: Enter", () => {
+    // The global drill-in binding lives at the AppShell root — a perspective
+    // scope that registers `ui.entity.startRename: Enter` must shadow it so
+    // Enter inside the perspective scope chain triggers rename, not drill-in.
+    // `extractScopeBindings` walks innermost-first with first-key-wins
+    // semantics, so the inner perspective scope's command claims `Enter`
+    // before the parent scope's nav.drillIn is reached.
+    const outer = makeScope([{ id: "nav.drillIn", keys: { cua: "Enter" } }]);
+    const inner = makeScope(
+      [
+        {
+          id: "ui.entity.startRename",
+          keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        },
+      ],
+      outer,
+    );
+    const bindings = extractScopeBindings(inner, "cua");
+    expect(bindings.Enter).toBe("ui.entity.startRename");
   });
 });
 

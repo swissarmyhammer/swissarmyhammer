@@ -1,42 +1,74 @@
 /**
- * Structural tests for pill navigation after the spatial-nav zone migration.
+ * Tests for badge-list pill navigation after the spatial-nav zone
+ * migration.
  *
- * Before the migration, pill nav was driven by `claimWhen` predicates that
- * the pills registered with the entity-focus context. After the migration,
- * within-field pill navigation flows from beam-search rule 1 in the Rust
- * spatial graph (the field row is a `<FocusScope kind="zone">` and the
- * pills are leaves inside it). The actual navigation is therefore driven
- * by the spatial focus state on the Rust side; these tests verify the
- * React-side structural surface that the navigator relies on.
+ * Two layers of coverage:
  *
- * Concretely:
- *   - Each pill renders as its own `FocusScope` whose `data-moniker`
- *     follows `${entityType}:${entityId}` (computed-tag fields) or
- *     `${entityType}:${rawId}` (reference fields with no slug
- *     resolution).
- *   - The pills are descendants of the parent field row scope, so the
- *     spatial-nav graph treats them as in-zone candidates of that zone.
- *   - No `claimWhen` predicates remain on the pills.
+ * 1. **Structural** (no spatial provider stack) — pins the per-pill
+ *    `<FocusScope>` shape that the spatial graph relies on. Each pill
+ *    renders with `data-moniker = "${entityType}:${id|slug}"` nested
+ *    under the parent field-row scope. These tests run against the
+ *    `<FocusScope>` fallback branch (no `<FocusLayer>` ancestor) — they
+ *    do not exercise `spatial_register_*` IPCs, only the React-side
+ *    DOM shape.
  *
- * Cross-zone behaviour (rule 2) is exercised by the Rust spatial-nav
- * unit tests, not here.
+ * 2. **Click → indicator chain** (production-shaped spatial provider
+ *    stack) — pins the user-visible affordance the parent card
+ *    `01KNQY0P9J03T24FSM8AVPFPZ9` reopened on: clicking a pill must
+ *    dispatch `spatial_focus` for that pill's `SpatialKey`, and when
+ *    the kernel echoes a matching `focus-changed` event the per-pill
+ *    `useFocusClaim` subscription mounts a visible `<FocusIndicator>`.
+ *    The earlier `MentionView` revision hard-suppressed `showFocusBar`
+ *    in `mode="compact"`; this block exercises both modes so any
+ *    re-introduction of that suppression surfaces here.
+ *
+ * Cross-zone navigation (beam-search rule 2 — moving from a pill in
+ * one row to a pill in another) lives in the Rust spatial-nav unit
+ * tests, not here.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
-import { render, act } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
-// Mocks — Tauri APIs and heavy dependencies that aren't relevant to nav
+// Tauri API mocks — must come before component imports.
 // ---------------------------------------------------------------------------
+
+type ListenCallback = (event: { payload: unknown }) => void;
+
+const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
+  const listeners = new Map<string, ListenCallback[]>();
+  const mockInvoke = vi.fn(
+    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
+  );
+  const mockListen = vi.fn(
+    (eventName: string, cb: ListenCallback): Promise<() => void> => {
+      const cbs = listeners.get(eventName) ?? [];
+      cbs.push(cb);
+      listeners.set(eventName, cbs);
+      return Promise.resolve(() => {
+        const arr = listeners.get(eventName);
+        if (arr) {
+          const idx = arr.indexOf(cb);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+      });
+    },
+  );
+  return { mockInvoke, mockListen, listeners };
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("ok")),
+  invoke: (...a: unknown[]) => mockInvoke(...(a as [string, unknown?])),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({ label: "main" })),
+  getCurrentWindow: vi.fn(() => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  })),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
@@ -113,9 +145,18 @@ vi.mock("@/components/window-container", () => ({
 
 import { BadgeListDisplay } from "./badge-list-display";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusZone } from "@/components/focus-zone";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { asMoniker } from "@/types/spatial";
+import {
+  asLayerName,
+  asMoniker,
+  type FocusChangedPayload,
+  type SpatialKey,
+  type WindowLabel,
+} from "@/types/spatial";
 
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -152,9 +193,67 @@ async function flush() {
   });
 }
 
+/** Wait two ticks so mount-time spatial-register effects flush. */
+async function flushSetup() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+}
+
+/**
+ * Drive a `focus-changed` event into the React tree as if the Rust
+ * kernel had emitted one for the current window.
+ */
+async function fireFocusChanged({
+  prev_key = null,
+  next_key = null,
+  next_moniker = null,
+}: {
+  prev_key?: SpatialKey | null;
+  next_key?: SpatialKey | null;
+  next_moniker?: string | null;
+}) {
+  const payload: FocusChangedPayload = {
+    window_label: "main" as WindowLabel,
+    prev_key,
+    next_key,
+    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+  };
+  const handlers = listeners.get("focus-changed") ?? [];
+  await act(async () => {
+    for (const handler of handlers) handler({ payload });
+    await Promise.resolve();
+  });
+}
+
+/** Collect every `spatial_register_zone` invocation argument bag. */
+function registerZoneArgs(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_register_zone")
+    .map((c) => c[1] as Record<string, unknown>);
+}
+
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_register_scope")
+    .map((c) => c[1] as Record<string, unknown>);
+}
+
+/** Collect every `spatial_focus` call's args, in order. */
+function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_focus")
+    .map((c) => c[1] as { key: SpatialKey });
+}
+
+// ---------------------------------------------------------------------------
+// Structural harnesses (no spatial provider stack)
+// ---------------------------------------------------------------------------
+
 /**
  * Full provider tree with a parent FocusScope (simulating a field row)
- * containing BadgeListDisplay. The parent is `kind="zone"` to mirror the
+ * containing BadgeListDisplay. The parent is `` to mirror the
  * real `FieldRow`, which registers as a navigable zone in the spatial-nav
  * graph.
  */
@@ -170,7 +269,7 @@ function NavHarness({
       <TooltipProvider>
         <FocusScope
           moniker={asMoniker(parentMoniker)}
-          kind="zone"
+
           commands={[]}
         >
           <BadgeListDisplay
@@ -187,7 +286,7 @@ function NavHarness({
 
 /**
  * Harness for reference-field navigation (entity ID values, no slug resolution).
- * The parent is `kind="zone"` to mirror the real `FieldRow`.
+ * The parent is `` to mirror the real `FieldRow`.
  */
 function RefNavHarness({
   values,
@@ -201,7 +300,7 @@ function RefNavHarness({
       <TooltipProvider>
         <FocusScope
           moniker={asMoniker(parentMoniker)}
-          kind="zone"
+
           commands={[]}
         >
           <BadgeListDisplay
@@ -216,7 +315,58 @@ function RefNavHarness({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Spatial-stack harness (production-shaped)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render `BadgeListDisplay` inside the production-shaped spatial-nav
+ * stack so each pill's `<FocusScope>` registers via
+ * `spatial_register_scope` and subscribes to per-key claims. The parent
+ * `<FocusZone>` mirrors the real `<Field>` zone that wraps the display
+ * in production. `mode` is parameterised so tests can pin both compact
+ * (card body) and full (inspector row) variants.
+ */
+function SpatialHarness({
+  values,
+  parentMoniker,
+  mode,
+}: {
+  values: string[];
+  parentMoniker: string;
+  mode: "compact" | "full";
+}) {
+  return (
+    <SpatialFocusProvider>
+      <FocusLayer name={asLayerName("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>
+            <FocusZone moniker={asMoniker(parentMoniker)}>
+              <BadgeListDisplay
+                field={tagField}
+                value={values}
+                entity={taskEntity}
+                mode={mode}
+              />
+            </FocusZone>
+          </TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tests — structural
+// ---------------------------------------------------------------------------
+
 describe("BadgeListDisplay pill scope structure", () => {
+  beforeEach(() => {
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    listeners.clear();
+  });
+
   it("each tag pill renders as a FocusScope nested inside the parent field row", async () => {
     const { container } = render(
       <NavHarness
@@ -258,6 +408,12 @@ describe("BadgeListDisplay pill scope structure", () => {
 });
 
 describe("BadgeListDisplay reference-field pill structure", () => {
+  beforeEach(() => {
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    listeners.clear();
+  });
+
   it("monikers use buildMoniker(entityType, entityId) directly — no slug resolution", async () => {
     const { container } = render(
       <RefNavHarness
@@ -282,5 +438,186 @@ describe("BadgeListDisplay reference-field pill structure", () => {
       p.getAttribute("data-moniker"),
     );
     expect(monikers).toEqual(["task:task-dep-A", "task:task-dep-B"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — click → spatial_focus → focus-changed → <FocusIndicator>
+// ---------------------------------------------------------------------------
+
+describe("BadgeListDisplay pill click → visible focus indicator", () => {
+  beforeEach(() => {
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    listeners.clear();
+    mockInvoke.mockImplementation(
+      async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
+    );
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("clicking a pill in mode=full dispatches spatial_focus for THAT pill's leaf key", async () => {
+    const { container } = render(
+      <SpatialHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+        mode="full"
+      />,
+    );
+    await flushSetup();
+
+    const fieldZone = registerZoneArgs().find(
+      (a) => a.moniker === "field:tags",
+    );
+    expect(fieldZone).toBeTruthy();
+
+    const bugPill = registerScopeArgs().find(
+      (a) => a.moniker === "tag:tag-1",
+    );
+    expect(bugPill).toBeTruthy();
+
+    mockInvoke.mockClear();
+    const pillNode = container.querySelector(
+      "[data-moniker='tag:tag-1']",
+    ) as HTMLElement | null;
+    expect(pillNode).not.toBeNull();
+    fireEvent.click(pillNode!);
+
+    const focusCalls = spatialFocusCalls();
+    // The leaf's click handler stops propagation, so only one focus
+    // call fires — for the leaf's key, not the parent zone's.
+    expect(focusCalls).toHaveLength(1);
+    expect(focusCalls[0].key).toBe(bugPill!.key);
+    expect(focusCalls[0].key).not.toBe(fieldZone!.key);
+  });
+
+  it("focus claim mounts <FocusIndicator> on a pill in mode=full", async () => {
+    const { container } = render(
+      <SpatialHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+        mode="full"
+      />,
+    );
+    await flushSetup();
+
+    const bugPill = registerScopeArgs().find(
+      (a) => a.moniker === "tag:tag-1",
+    )!;
+    const pillNode = container.querySelector(
+      "[data-moniker='tag:tag-1']",
+    ) as HTMLElement;
+    expect(pillNode).not.toBeNull();
+    // Before the focus claim, no indicator descendant.
+    expect(
+      pillNode.querySelector("[data-testid='focus-indicator']"),
+    ).toBeNull();
+
+    await fireFocusChanged({
+      next_key: bugPill.key as SpatialKey,
+      next_moniker: "tag:tag-1",
+    });
+
+    expect(pillNode.getAttribute("data-focused")).toBe("true");
+    expect(
+      pillNode.querySelector("[data-testid='focus-indicator']"),
+    ).not.toBeNull();
+  });
+
+  it("focus claim mounts <FocusIndicator> on a pill in mode=compact (regression: MentionView used to hard-suppress this)", async () => {
+    // Pre-fix, `MentionView` set `showFocusBar={false}` for every pill
+    // when `mode === "compact"`. That broke the entity-card flow:
+    // clicking an assignee or tag pill on a card body produced no
+    // visible focus feedback. The fix: stop overriding showFocusBar
+    // based on mode — pills default to showing the bar in both modes,
+    // and explicit `showFocusBar={false}` from a caller still wins.
+    const { container } = render(
+      <SpatialHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+        mode="compact"
+      />,
+    );
+    await flushSetup();
+
+    const bugPill = registerScopeArgs().find(
+      (a) => a.moniker === "tag:tag-1",
+    )!;
+    const pillNode = container.querySelector(
+      "[data-moniker='tag:tag-1']",
+    ) as HTMLElement;
+    expect(pillNode).not.toBeNull();
+    expect(
+      pillNode.querySelector("[data-testid='focus-indicator']"),
+    ).toBeNull();
+
+    await fireFocusChanged({
+      next_key: bugPill.key as SpatialKey,
+      next_moniker: "tag:tag-1",
+    });
+
+    expect(pillNode.getAttribute("data-focused")).toBe("true");
+    expect(
+      pillNode.querySelector("[data-testid='focus-indicator']"),
+    ).not.toBeNull();
+  });
+
+  it("indicator follows focus from one pill to a sibling — only one bar visible at a time", async () => {
+    // Drive the focus-changed event from pill A to pill B and verify
+    // pill A's indicator unmounts as pill B's mounts. This pins the
+    // per-key claim subscription's cross-talk: the previous claim
+    // listener fires `false`, the new listener fires `true`, and the
+    // visible bar tracks both atomically.
+    const { container } = render(
+      <SpatialHarness
+        values={["bugfix", "feature", "docs"]}
+        parentMoniker="field:tags"
+        mode="compact"
+      />,
+    );
+    await flushSetup();
+
+    const pillA = registerScopeArgs().find(
+      (a) => a.moniker === "tag:tag-1",
+    )!;
+    const pillB = registerScopeArgs().find(
+      (a) => a.moniker === "tag:tag-2",
+    )!;
+
+    const aNode = container.querySelector(
+      "[data-moniker='tag:tag-1']",
+    ) as HTMLElement;
+    const bNode = container.querySelector(
+      "[data-moniker='tag:tag-2']",
+    ) as HTMLElement;
+
+    // Step 1: focus on pill A.
+    await fireFocusChanged({
+      next_key: pillA.key as SpatialKey,
+      next_moniker: "tag:tag-1",
+    });
+    expect(
+      aNode.querySelector("[data-testid='focus-indicator']"),
+    ).not.toBeNull();
+    expect(
+      bNode.querySelector("[data-testid='focus-indicator']"),
+    ).toBeNull();
+
+    // Step 2: focus moves to pill B. A's indicator must unmount; B's
+    // must mount.
+    await fireFocusChanged({
+      prev_key: pillA.key as SpatialKey,
+      next_key: pillB.key as SpatialKey,
+      next_moniker: "tag:tag-2",
+    });
+    expect(
+      aNode.querySelector("[data-testid='focus-indicator']"),
+    ).toBeNull();
+    expect(
+      bNode.querySelector("[data-testid='focus-indicator']"),
+    ).not.toBeNull();
   });
 });

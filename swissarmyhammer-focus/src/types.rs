@@ -34,7 +34,7 @@ define_id!(
 );
 define_id!(
     SpatialKey,
-    "ULID per FocusScope/FocusZone/Focusable instance"
+    "ULID per FocusLayer/FocusZone/FocusScope instance"
 );
 define_id!(LayerKey, "ULID per FocusLayer instance");
 define_id!(

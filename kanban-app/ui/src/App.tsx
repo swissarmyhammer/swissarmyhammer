@@ -14,6 +14,7 @@ import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
 import { CommandBusyProvider } from "@/lib/command-scope";
+import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { asLayerName } from "@/types/spatial";
@@ -68,34 +69,36 @@ if (IS_QUICK_CAPTURE) {
 function App() {
   return (
     <DiagErrorBoundary>
-      <SpatialFocusProvider>
-        <FocusLayer name={WINDOW_LAYER_NAME}>
-          <CommandBusyProvider>
-            <RustEngineContainer>
-              <WindowContainer>
-                <AppModeContainer>
-                  <BoardContainer>
-                    <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
-                      <NavBar />
-                      <ViewsContainer>
-                        <PerspectivesContainer>
-                          <PerspectiveContainer>
-                            <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                              <ViewContainer />
-                            </div>
-                          </PerspectiveContainer>
-                        </PerspectivesContainer>
-                      </ViewsContainer>
-                      <ModeIndicator />
-                    </div>
-                    <InspectorsContainer />
-                  </BoardContainer>
-                </AppModeContainer>
-              </WindowContainer>
-            </RustEngineContainer>
-          </CommandBusyProvider>
-        </FocusLayer>
-      </SpatialFocusProvider>
+      <FocusDebugProvider enabled>
+        <SpatialFocusProvider>
+          <FocusLayer name={WINDOW_LAYER_NAME}>
+            <CommandBusyProvider>
+              <RustEngineContainer>
+                <WindowContainer>
+                  <AppModeContainer>
+                    <BoardContainer>
+                      <div className="h-screen bg-background text-foreground flex flex-col overflow-hidden">
+                        <NavBar />
+                        <ViewsContainer>
+                          <PerspectivesContainer>
+                            <PerspectiveContainer>
+                              <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                                <ViewContainer />
+                              </div>
+                            </PerspectiveContainer>
+                          </PerspectivesContainer>
+                        </ViewsContainer>
+                        <ModeIndicator />
+                      </div>
+                      <InspectorsContainer />
+                    </BoardContainer>
+                  </AppModeContainer>
+                </WindowContainer>
+              </RustEngineContainer>
+            </CommandBusyProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>
+      </FocusDebugProvider>
     </DiagErrorBoundary>
   );
 }
@@ -121,13 +124,15 @@ function QuickCaptureApp() {
   document.body.style.background = "transparent";
 
   return (
-    <SpatialFocusProvider>
-      <FocusLayer name={WINDOW_LAYER_NAME}>
-        <RustEngineContainer>
-          <QuickCapture />
-        </RustEngineContainer>
-      </FocusLayer>
-    </SpatialFocusProvider>
+    <FocusDebugProvider enabled>
+      <SpatialFocusProvider>
+        <FocusLayer name={WINDOW_LAYER_NAME}>
+          <RustEngineContainer>
+            <QuickCapture />
+          </RustEngineContainer>
+        </FocusLayer>
+      </SpatialFocusProvider>
+    </FocusDebugProvider>
   );
 }
 

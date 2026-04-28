@@ -9,25 +9,26 @@
 //! Coverage:
 //!
 //! - **Wire shape** — `RegisterEntry` serializes with a `"kind"` tag
-//!   discriminator (`"focusable"` / `"zone"`) and `snake_case` rename to
-//!   match the rest of the kernel's enums.
+//!   discriminator (`"scope"` / `"zone"`) and `snake_case` rename to
+//!   match the rest of the kernel's enums. `"scope"` names a leaf
+//!   [`FocusScope`].
 //! - **All fields newtyped** — `key`, `moniker`, `rect`, `layer_key`,
 //!   `parent_zone`, `overrides` use the existing newtypes; no bare
 //!   `String` or `f64` on the wire.
 //! - **Atomic application** — `SpatialRegistry::apply_batch` registers
 //!   N entries in one pass without splitting across multiple calls.
-//! - **Idempotent on key** — a focusable registered twice with the same
-//!   key keeps the focusable variant; subsequent rect overwrites the
-//!   prior value.
+//! - **Idempotent on key** — a leaf scope registered twice with the same
+//!   key keeps the leaf variant; subsequent rect overwrites the prior
+//!   value.
 //! - **Kind mismatch is an error** — registering a zone for a key that
-//!   was previously a focusable (or vice versa) is rejected so a
+//!   was previously a leaf scope (or vice versa) is rejected so a
 //!   placeholder/real-mount swap can't silently change the variant.
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BatchRegisterError, FocusScope, FocusZone, Focusable, LayerKey, Moniker, Pixels, Rect,
-    RegisterEntry, ScopeKind, SpatialKey, SpatialRegistry,
+    BatchRegisterError, FocusScope, FocusZone, LayerKey, Moniker, Pixels, Rect, RegisterEntry,
+    ScopeKind, SpatialKey, SpatialRegistry,
 };
 
 // ---------------------------------------------------------------------------
@@ -43,14 +44,14 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-fn focusable_entry(
+fn scope_entry(
     key: &str,
     moniker: &str,
     layer: &str,
     parent_zone: Option<&str>,
     r: Rect,
 ) -> RegisterEntry {
-    RegisterEntry::Focusable {
+    RegisterEntry::Scope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: r,
@@ -81,13 +82,13 @@ fn zone_entry(
 // Wire shape
 // ---------------------------------------------------------------------------
 
-/// `RegisterEntry::Focusable` round-trips through JSON with a `"kind"
-/// = "focusable"` tag and snake-cased field names.
+/// `RegisterEntry::Scope` round-trips through JSON with a `"kind"
+/// = "scope"` tag and snake-cased field names.
 #[test]
-fn register_entry_focusable_serializes_with_kind_tag() {
-    let entry = focusable_entry("k", "ui:k", "L", Some("zone"), rect(1.0, 2.0, 3.0, 4.0));
+fn register_entry_scope_serializes_with_kind_tag() {
+    let entry = scope_entry("k", "ui:k", "L", Some("zone"), rect(1.0, 2.0, 3.0, 4.0));
     let json = serde_json::to_value(&entry).expect("serialize");
-    assert_eq!(json["kind"], "focusable");
+    assert_eq!(json["kind"], "scope");
     assert_eq!(json["key"], "k");
     assert_eq!(json["moniker"], "ui:k");
     assert_eq!(json["layer_key"], "L");
@@ -109,9 +110,9 @@ fn register_entry_zone_serializes_with_kind_tag() {
 /// virtualizer constructs a `Vec<RegisterEntry>` and ships it through
 /// the Tauri IPC, where serde matches on the `kind` tag.
 #[test]
-fn register_entry_deserializes_focusable_via_kind_tag() {
+fn register_entry_deserializes_scope_via_kind_tag() {
     let json = serde_json::json!({
-        "kind": "focusable",
+        "kind": "scope",
         "key": "k",
         "moniker": "ui:k",
         "rect": { "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 },
@@ -121,11 +122,11 @@ fn register_entry_deserializes_focusable_via_kind_tag() {
     });
     let entry: RegisterEntry = serde_json::from_value(json).expect("deserialize");
     match entry {
-        RegisterEntry::Focusable { key, moniker, .. } => {
+        RegisterEntry::Scope { key, moniker, .. } => {
             assert_eq!(key, SpatialKey::from_string("k"));
             assert_eq!(moniker, Moniker::from_string("ui:k"));
         }
-        other => panic!("expected Focusable, got {other:?}"),
+        other => panic!("expected Scope, got {other:?}"),
     }
 }
 
@@ -150,34 +151,34 @@ fn register_entry_deserializes_zone_via_kind_tag() {
 // ---------------------------------------------------------------------------
 
 /// `apply_batch` registers N entries under the same registry call —
-/// the test exercises the contract by handing it a mixed
-/// focusable/zone vector and verifying every key resolves afterward.
+/// the test exercises the contract by handing it a mixed scope/zone
+/// vector and verifying every key resolves afterward.
 #[test]
 fn apply_batch_registers_all_entries() {
     let mut reg = SpatialRegistry::new();
     let entries = vec![
         zone_entry("z1", "ui:z1", "L", None, rect(0.0, 0.0, 100.0, 100.0)),
-        focusable_entry("f1", "ui:f1", "L", Some("z1"), rect(0.0, 0.0, 10.0, 10.0)),
-        focusable_entry("f2", "ui:f2", "L", Some("z1"), rect(20.0, 0.0, 10.0, 10.0)),
+        scope_entry("f1", "ui:f1", "L", Some("z1"), rect(0.0, 0.0, 10.0, 10.0)),
+        scope_entry("f2", "ui:f2", "L", Some("z1"), rect(20.0, 0.0, 10.0, 10.0)),
     ];
 
     reg.apply_batch(entries).expect("batch apply succeeds");
 
-    assert!(reg.scope(&SpatialKey::from_string("z1")).is_some());
-    assert!(reg.scope(&SpatialKey::from_string("f1")).is_some());
-    assert!(reg.scope(&SpatialKey::from_string("f2")).is_some());
+    assert!(reg.is_registered(&SpatialKey::from_string("z1")));
+    assert!(reg.is_registered(&SpatialKey::from_string("f1")));
+    assert!(reg.is_registered(&SpatialKey::from_string("f2")));
 }
 
 // ---------------------------------------------------------------------------
 // Idempotent on key
 // ---------------------------------------------------------------------------
 
-/// Registering the same focusable key twice with a different rect
-/// overwrites the rect and keeps the `Focusable` variant.
+/// Registering the same leaf scope key twice with a different rect
+/// overwrites the rect and keeps the leaf variant.
 #[test]
-fn re_register_same_focusable_key_overwrites_rect_keeps_variant() {
+fn re_register_same_scope_key_overwrites_rect_keeps_variant() {
     let mut reg = SpatialRegistry::new();
-    reg.apply_batch(vec![focusable_entry(
+    reg.apply_batch(vec![scope_entry(
         "k",
         "ui:k",
         "L",
@@ -186,7 +187,7 @@ fn re_register_same_focusable_key_overwrites_rect_keeps_variant() {
     )])
     .expect("first batch");
 
-    reg.apply_batch(vec![focusable_entry(
+    reg.apply_batch(vec![scope_entry(
         "k",
         "ui:k",
         "L",
@@ -197,9 +198,8 @@ fn re_register_same_focusable_key_overwrites_rect_keeps_variant() {
 
     let scope = reg
         .scope(&SpatialKey::from_string("k"))
-        .expect("key still registered");
-    assert!(matches!(scope, FocusScope::Focusable(_)));
-    let r = scope.rect();
+        .expect("key still registered as a leaf scope");
+    let r = scope.rect;
     assert_eq!(r.left(), Pixels::new(50.0));
     assert_eq!(r.top(), Pixels::new(50.0));
     assert_eq!(r.right(), Pixels::new(70.0));
@@ -210,13 +210,13 @@ fn re_register_same_focusable_key_overwrites_rect_keeps_variant() {
 // Kind mismatch
 // ---------------------------------------------------------------------------
 
-/// Registering a zone for a key previously registered as a focusable
+/// Registering a zone for a key previously registered as a leaf scope
 /// returns an error — the kind on a stable `SpatialKey` must not change
 /// between the placeholder mount and the real-mount swap.
 #[test]
-fn batch_register_zone_for_existing_focusable_key_errors() {
+fn batch_register_zone_for_existing_scope_key_errors() {
     let mut reg = SpatialRegistry::new();
-    reg.apply_batch(vec![focusable_entry(
+    reg.apply_batch(vec![scope_entry(
         "k",
         "ui:k",
         "L",
@@ -234,7 +234,7 @@ fn batch_register_zone_for_existing_focusable_key_errors() {
     )]);
     assert!(
         result.is_err(),
-        "registering a zone for a focusable key must fail",
+        "registering a zone for a leaf scope key must fail",
     );
 }
 
@@ -242,19 +242,19 @@ fn batch_register_zone_for_existing_focusable_key_errors() {
 // Single-entry idempotency (the placeholder/real-mount swap path)
 // ---------------------------------------------------------------------------
 
-/// `register_focusable` called with the same `SpatialKey` twice
+/// `register_scope` called with the same `SpatialKey` twice
 /// overwrites the rect on the existing entry while keeping the
 /// variant unchanged. This is the contract the placeholder/real-mount
 /// swap depends on: the virtualizer registers a placeholder under
 /// `SpatialKey("k")`, the row scrolls into view, the real
-/// `<Focusable>` mounts and re-registers under the same key with the
+/// `<FocusScope>` mounts and re-registers under the same key with the
 /// freshly-measured rect — the registry overwrites, no churn.
 #[test]
-fn register_focusable_twice_overwrites_rect_keeps_variant() {
+fn register_scope_twice_overwrites_rect_keeps_variant() {
     let mut reg = SpatialRegistry::new();
     let key = SpatialKey::from_string("k");
 
-    reg.register_focusable(Focusable {
+    reg.register_scope(FocusScope {
         key: key.clone(),
         moniker: Moniker::from_string("ui:k"),
         rect: rect(0.0, 0.0, 10.0, 10.0),
@@ -263,7 +263,7 @@ fn register_focusable_twice_overwrites_rect_keeps_variant() {
         overrides: HashMap::new(),
     });
 
-    reg.register_focusable(Focusable {
+    reg.register_scope(FocusScope {
         key: key.clone(),
         moniker: Moniker::from_string("ui:k"),
         rect: rect(50.0, 50.0, 20.0, 20.0),
@@ -272,13 +272,12 @@ fn register_focusable_twice_overwrites_rect_keeps_variant() {
         overrides: HashMap::new(),
     });
 
-    let scope = reg.scope(&key).expect("key still registered");
-    assert!(matches!(scope, FocusScope::Focusable(_)));
-    assert_eq!(scope.rect().left(), Pixels::new(50.0));
-    assert_eq!(scope.rect().top(), Pixels::new(50.0));
+    let scope = reg.scope(&key).expect("key still registered as a leaf");
+    assert_eq!(scope.rect.left(), Pixels::new(50.0));
+    assert_eq!(scope.rect.top(), Pixels::new(50.0));
 }
 
-/// `register_focusable` called for a key currently registered as a
+/// `register_scope` called for a key currently registered as a
 /// `Zone` — the standalone `register_*` methods overwrite without
 /// validating the kind. The kind-stability check lives on the
 /// **batch** entry point (where the placeholder/real-mount swap goes
@@ -287,10 +286,10 @@ fn register_focusable_twice_overwrites_rect_keeps_variant() {
 /// likely a bug worth surfacing rather than silently coercing.
 ///
 /// Documenting the asymmetry as a test so future contributors don't
-/// reflexively add a `panic!` to `register_focusable` and break hot-
+/// reflexively add a `panic!` to `register_scope` and break hot-
 /// reload semantics.
 #[test]
-fn register_focusable_overwrites_existing_zone_silently() {
+fn register_scope_overwrites_existing_zone_silently() {
     let mut reg = SpatialRegistry::new();
     let key = SpatialKey::from_string("k");
 
@@ -304,7 +303,7 @@ fn register_focusable_overwrites_existing_zone_silently() {
         overrides: HashMap::new(),
     });
 
-    reg.register_focusable(Focusable {
+    reg.register_scope(FocusScope {
         key: key.clone(),
         moniker: Moniker::from_string("ui:k"),
         rect: rect(50.0, 50.0, 10.0, 10.0),
@@ -313,14 +312,16 @@ fn register_focusable_overwrites_existing_zone_silently() {
         overrides: HashMap::new(),
     });
 
-    let scope = reg.scope(&key).expect("key still registered");
-    assert!(scope.is_focusable());
+    // After the silent overwrite, the key resolves as a leaf scope and
+    // no longer as a zone.
+    assert!(reg.scope(&key).is_some());
+    assert!(reg.zone(&key).is_none());
 }
 
-/// Symmetric: registering a focusable for a key previously registered
-/// as a zone returns an error.
+/// Symmetric: registering a leaf scope for a key previously registered
+/// as a zone returns an error through the batch path.
 #[test]
-fn batch_register_focusable_for_existing_zone_key_errors() {
+fn batch_register_scope_for_existing_zone_key_errors() {
     let mut reg = SpatialRegistry::new();
     reg.apply_batch(vec![zone_entry(
         "k",
@@ -331,7 +332,7 @@ fn batch_register_focusable_for_existing_zone_key_errors() {
     )])
     .expect("first batch");
 
-    let result = reg.apply_batch(vec![focusable_entry(
+    let result = reg.apply_batch(vec![scope_entry(
         "k",
         "ui:k",
         "L",
@@ -340,7 +341,7 @@ fn batch_register_focusable_for_existing_zone_key_errors() {
     )]);
     assert!(
         result.is_err(),
-        "registering a focusable for a zone key must fail",
+        "registering a leaf scope for a zone key must fail",
     );
 }
 
@@ -355,14 +356,14 @@ fn batch_register_focusable_for_existing_zone_key_errors() {
 /// kind mismatch leaves the registry in a torn state.
 ///
 /// The batch placed before the bad entry would otherwise overwrite a
-/// previously-registered focusable's rect (a benign update) — asserting
+/// previously-registered leaf scope's rect (a benign update) — asserting
 /// the rect didn't move is what proves the rollback was atomic.
 #[test]
 fn apply_batch_rolls_back_when_any_entry_fails_kind_check() {
     let mut reg = SpatialRegistry::new();
     let baseline_rect = rect(0.0, 0.0, 10.0, 10.0);
-    // Pre-existing focusable that the bad zone entry will collide with.
-    reg.apply_batch(vec![focusable_entry(
+    // Pre-existing leaf scope that the bad zone entry will collide with.
+    reg.apply_batch(vec![scope_entry(
         "collide",
         "ui:collide",
         "L",
@@ -371,16 +372,16 @@ fn apply_batch_rolls_back_when_any_entry_fails_kind_check() {
     )])
     .expect("seed batch");
 
-    // Batch order: a brand-new focusable (would succeed), the bad zone
-    // entry that flips a focusable into a zone (must fail), then a
-    // recovery focusable (would also succeed). Atomic semantics demand
-    // that *neither* the leading nor the trailing good entry is applied
-    // and that `collide`'s rect stays at the baseline.
+    // Batch order: a brand-new leaf scope (would succeed), the bad zone
+    // entry that flips a leaf into a zone (must fail), then a recovery
+    // leaf scope (would also succeed). Atomic semantics demand that
+    // *neither* the leading nor the trailing good entry is applied and
+    // that `collide`'s rect stays at the baseline.
     let bumped_rect = rect(99.0, 99.0, 5.0, 5.0);
     let result = reg.apply_batch(vec![
-        focusable_entry("first-good", "ui:first-good", "L", None, bumped_rect),
+        scope_entry("first-good", "ui:first-good", "L", None, bumped_rect),
         zone_entry("collide", "ui:collide", "L", None, bumped_rect),
-        focusable_entry("trailing-good", "ui:trailing-good", "L", None, bumped_rect),
+        scope_entry("trailing-good", "ui:trailing-good", "L", None, bumped_rect),
     ]);
 
     match result {
@@ -390,7 +391,7 @@ fn apply_batch_rolls_back_when_any_entry_fails_kind_check() {
             requested_kind,
         }) => {
             assert_eq!(key, SpatialKey::from_string("collide"));
-            assert_eq!(existing_kind, ScopeKind::Focusable);
+            assert_eq!(existing_kind, ScopeKind::Scope);
             assert_eq!(requested_kind, ScopeKind::Zone);
         }
         other => panic!("expected KindMismatch error, got {other:?}"),
@@ -398,12 +399,11 @@ fn apply_batch_rolls_back_when_any_entry_fails_kind_check() {
 
     // Neither of the would-be-good entries landed.
     assert!(
-        reg.scope(&SpatialKey::from_string("first-good")).is_none(),
+        !reg.is_registered(&SpatialKey::from_string("first-good")),
         "leading good entry must not be applied when a later entry fails",
     );
     assert!(
-        reg.scope(&SpatialKey::from_string("trailing-good"))
-            .is_none(),
+        !reg.is_registered(&SpatialKey::from_string("trailing-good")),
         "trailing good entry must not be applied when an earlier entry fails",
     );
 
@@ -411,12 +411,11 @@ fn apply_batch_rolls_back_when_any_entry_fails_kind_check() {
     // overwrite leaked through the rollback.
     let collide = reg
         .scope(&SpatialKey::from_string("collide"))
-        .expect("pre-existing scope still registered");
-    assert!(matches!(collide, FocusScope::Focusable(_)));
-    assert_eq!(collide.rect().left(), baseline_rect.left());
-    assert_eq!(collide.rect().top(), baseline_rect.top());
-    assert_eq!(collide.rect().right(), baseline_rect.right());
-    assert_eq!(collide.rect().bottom(), baseline_rect.bottom());
+        .expect("pre-existing leaf still registered");
+    assert_eq!(collide.rect.left(), baseline_rect.left());
+    assert_eq!(collide.rect.top(), baseline_rect.top());
+    assert_eq!(collide.rect.right(), baseline_rect.right());
+    assert_eq!(collide.rect.bottom(), baseline_rect.bottom());
 }
 
 // ---------------------------------------------------------------------------
@@ -463,10 +462,9 @@ fn apply_batch_preserves_zone_last_focused_across_re_registration() {
     )])
     .expect("re-register batch succeeds");
 
-    let scope = reg
-        .scope(&zone_key)
+    let zone = reg
+        .zone(&zone_key)
         .expect("zone still registered after batch");
-    let zone = scope.as_zone().expect("scope is still a zone");
     assert_eq!(
         zone.last_focused,
         Some(remembered),

@@ -8,7 +8,8 @@
  *  - Calling `spatial_unregister_scope` on unmount.
  *  - Publishing its key via `FocusZoneContext` so descendants pick it up
  *    as their `parent_zone`.
- *  - Throwing if used outside a `<FocusLayer>`.
+ *  - Falling back to a plain `<div>` (no spatial registration) when
+ *    mounted outside a `<FocusLayer>` — same contract `<FocusScope>` has.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -252,18 +253,24 @@ describe("<FocusZone>", () => {
     unmount();
   });
 
-  it("throws when mounted outside any FocusLayer", () => {
-    // The error from `useCurrentLayerKey` reaches the renderer; suppress
-    // the noisy console output React emits when an error escapes a render.
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() =>
-      render(
-        <SpatialFocusProvider>
-          <FocusZone moniker={asMoniker("ui:orphan")}>{null}</FocusZone>
-        </SpatialFocusProvider>,
-      ),
-    ).toThrow(/<FocusLayer>/);
-    spy.mockRestore();
+  it("renders a fallback div when mounted outside any FocusLayer (no spatial registration)", () => {
+    // Three-peer architecture: `<FocusZone>` is an entity-aware composite
+    // that needs to keep working in unit tests that omit the spatial
+    // provider stack — same fallback contract `<FocusScope>` exposes.
+    // The plain `<div>` carries `data-moniker` for selector-based test
+    // assertions, but no `spatial_register_zone` call fires and there is
+    // no `<FocusIndicator>` because there is no Rust-side focus state to
+    // follow.
+    const { container, unmount } = render(
+      <FocusZone moniker={asMoniker("ui:orphan")}>{null}</FocusZone>,
+    );
+    const node = container.querySelector("[data-moniker='ui:orphan']");
+    expect(node).not.toBeNull();
+    const registers = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "spatial_register_zone",
+    );
+    expect(registers).toHaveLength(0);
+    unmount();
   });
 
   it("FocusZoneContext default is null when no zone wraps the consumer", () => {
@@ -411,7 +418,7 @@ describe("<FocusZone>", () => {
 
   it("renders <FocusIndicator> from React state when the zone is focused", async () => {
     // FocusZone owns its own focus claim, so it shows the same visible
-    // decoration as `<Focusable>` when the Rust kernel marks it as the
+    // decoration as `<FocusScope>` when the Rust kernel marks it as the
     // focused key. State path: Rust event → useFocusClaim → React state →
     // <FocusIndicator>. CSS plays no role — there is no [data-focused]
     // selector to draw the bar.
@@ -489,4 +496,5 @@ describe("<FocusZone>", () => {
 
     unmount();
   });
+
 });

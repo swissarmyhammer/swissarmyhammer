@@ -470,8 +470,22 @@ describe("AppShell", () => {
    * `spatial_focus` / `spatial_navigate`; in the test environment the
    * `listen` mock keeps the callback in `listenCallbacks` and we drive
    * it directly.
+   *
+   * The drill-in / drill-out tests don't care which moniker the
+   * spatially-focused key resolves to — those tests gate on
+   * `focusedKeyRef`, which is keyed on the SpatialKey, not the
+   * Moniker. They pass `nextKey` straight through as `next_moniker`
+   * so the bridge in `EntityFocusProvider` (which mirrors
+   * `payload.next_moniker` into the entity-focus store) doesn't fire
+   * spurious `setFocus` calls; the moniker spy in those tests asserts
+   * only on `dispatch_command` payloads, not the bridge side effect.
+   * The Space-on-leaf bridge test below passes a real moniker via
+   * the `nextMoniker` argument.
    */
-  function emitFocusChanged(nextKey: string | null): void {
+  function emitFocusChanged(
+    nextKey: string | null,
+    nextMoniker: string | null = nextKey,
+  ): void {
     const cb = listenCallbacks["focus-changed"];
     expect(cb).toBeTruthy();
     cb({
@@ -479,7 +493,7 @@ describe("AppShell", () => {
         window_label: "main",
         prev_key: null,
         next_key: nextKey,
-        next_moniker: nextKey,
+        next_moniker: nextMoniker,
       },
     });
   }
@@ -687,12 +701,13 @@ describe("AppShell", () => {
   // ─────────────────────────────────────────────────────────────────────────
   // ui.inspect — Space binding
   //
-  // The CUA `keys.cua: "Space"` rebind on `board.inspect`
-  // (board-view.tsx) requires `normalizeKeyEvent` to canonicalise the
-  // physical spacebar (`e.key === " "`) to the string `"Space"`. The
-  // app-shell-level test below verifies that the round-trip works for
-  // an arbitrary scope-level command keyed to Space — the same code
-  // path `board.inspect` will take when a card is focused.
+  // The CUA `keys.cua: "Space"` binding on the per-Inspectable
+  // `entity.inspect` command (inspectable.tsx) requires
+  // `normalizeKeyEvent` to canonicalise the physical spacebar
+  // (`e.key === " "`) to the string `"Space"`. The app-shell-level
+  // test below verifies that the round-trip works for an arbitrary
+  // scope-level command keyed to Space — the same code path
+  // Inspectable uses when a focused entity is on the board.
   // ─────────────────────────────────────────────────────────────────────────
 
   it("Space pressed on a focused scope dispatches a command with keys.cua=Space", async () => {
@@ -727,6 +742,66 @@ describe("AppShell", () => {
       // Browsers emit `e.key === " "` (a literal space) for the
       // spacebar; `normalizeKeyEvent` is responsible for turning that
       // into `"Space"` so scope-level `keys: { cua: "Space" }` matches.
+      fireEvent.keyDown(document, { key: " ", code: "Space" });
+    });
+
+    expect(inspectFn).toHaveBeenCalled();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Spatial → entity-focus bridge — the "Space does not trigger inspect" fix
+  //
+  // After the spatial-nav refactor, leaf clicks call `spatial_focus(key)`
+  // and let the kernel emit `focus-changed`. The bridge in
+  // `EntityFocusProvider` mirrors `payload.next_moniker` into the
+  // entity-focus store so `useFocusedScope()` — the data source the
+  // global keymap handler reads via `extractScopeBindings` — stays in
+  // sync. Without the bridge, Space would look like a no-op because
+  // the focused-scope ref would be `null` even though the spatial
+  // kernel had a focused scope, so `extractScopeBindings` would not
+  // see the per-Inspectable `entity.inspect` binding.
+  //
+  // The test below drives the spatial-only flow (which is the
+  // regression this card fixes): focus is established by emitting a
+  // `focus-changed` event and never calling `setFocus` from React, then
+  // Space is pressed and the FocusScope's command must fire.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it("Space dispatches inspect for a moniker focused only via spatial-focus", async () => {
+    const inspectFn = vi.fn();
+
+    // Mount a FocusScope whose Space binding inspects the focused entity
+    // by reading from the entity-focus store. The component does NOT
+    // call `setFocus` itself — focus is established only through a
+    // synthetic `focus-changed` event from the spatial-nav kernel,
+    // which is exactly the production flow for spatial-only leaves
+    // (column header, status pill, navbar button, etc.).
+    function FocusedCard() {
+      return (
+        <FocusScope
+          moniker={asMoniker("task:t-bridge")}
+          commands={[
+            {
+              id: "ui.inspect",
+              name: "Inspect",
+              keys: { vim: "Enter", cua: "Space" },
+              execute: inspectFn,
+            },
+          ]}
+        >
+          <span>Card</span>
+        </FocusScope>
+      );
+    }
+
+    renderShell(<FocusedCard />);
+
+    // Drive focus through the spatial-nav kernel only.
+    await act(async () => {
+      emitFocusChanged("k:t-bridge", "task:t-bridge");
+    });
+
+    await act(async () => {
       fireEvent.keyDown(document, { key: " ", code: "Space" });
     });
 

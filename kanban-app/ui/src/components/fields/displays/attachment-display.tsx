@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
 import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { FieldDef } from "@/types/kanban";
@@ -204,13 +205,23 @@ export function getFileIcon(
 export function AttachmentItem({ attachment }: AttachmentItemProps) {
   const Icon = getFileIcon(attachment.mime_type, attachment.name);
 
+  // An attachment item wraps a real entity moniker
+  // (`attachment:<path>`) so the architectural guard
+  // (`focus-architecture.guards.node.test.ts`, Guards B + C) requires
+  // a wrapping `<Inspectable>` for every entity zone/scope. The inner
+  // `<AttachmentItemInner>` owns its own `onDoubleClick` that
+  // dispatches `attachment.open` — the inner gesture does NOT call
+  // `e.stopPropagation()`, so a double-click both opens the file and
+  // inspects the attachment. To suppress inspect at the outer wrapper,
+  // the inner handler would need to stop the event itself; that is a
+  // separate UX decision and out of scope for this refactor.
+  const moniker = asMoniker(`attachment:${attachment.path}`);
   return (
-    <FocusScope
-      moniker={asMoniker(`attachment:${attachment.path}`)}
-      className="min-w-0"
-    >
-      <AttachmentItemInner attachment={attachment} Icon={Icon} />
-    </FocusScope>
+    <Inspectable moniker={moniker}>
+      <FocusScope moniker={moniker} className="min-w-0">
+        <AttachmentItemInner attachment={attachment} Icon={Icon} />
+      </FocusScope>
+    </Inspectable>
   );
 }
 

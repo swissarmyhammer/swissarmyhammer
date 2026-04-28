@@ -13,40 +13,93 @@
 //! [`crate::state::FocusChangedEvent::next_moniker`] exists) can act on
 //! the result without an extra reverse-lookup through the registry.
 //!
-//! # Algorithm — three-rule cascade plus zone-level nav
+//! # Algorithm — unified edge drill-out cascade
+//!
+//! The unified-policy supersession card
+//! [`01KQ7S6WHK9RCCG2R4FN474EFD`] replaced the old per-direction tactical
+//! rules (rule-1 within-zone, rule-2 cross-zone leaf fallback, plus a
+//! separate `navigate_zone` for zone-level focus) with **one** cascade
+//! that applies to leaves and zones alike.
 //!
 //! Within a single layer (the focused entry's `layer_key` is the hard
-//! boundary — nav never crosses it), beam search runs in priority
-//! order:
+//! boundary — nav never crosses it), the cascade runs:
 //!
-//! 1. **Within-zone beam** — candidates restricted to siblings whose
-//!    `parent_zone` matches the focused leaf's `parent_zone`. Beam
-//!    test + Android scoring (`13 * major² + minor²`).
-//! 2. **Cross-zone leaf fallback** — when rule 1 finds nothing, every
-//!    [`Focusable`] in the same layer becomes a candidate. Same beam
-//!    test + scoring.
-//! 3. **No-op** — when both fail, return `None`.
+//! 1. **Iter 0 — same-kind peer search** at the focused entry's level:
+//!    candidates are scopes of the same kind as `focused` (leaf for
+//!    leaf, zone for zone) sharing its `parent_zone`. If a candidate
+//!    satisfies the in-beam Android score (`13 * major² + minor²`),
+//!    return it.
+//! 2. **Escalate** to the focused entry's `parent_zone` (with a
+//!    layer-boundary guard — escalation never crosses `LayerKey`). If
+//!    the focused entry has no parent zone (it sits at the layer
+//!    root), the cascade returns `None`.
+//! 3. **Iter 1 — sibling-zone peer search** at the parent's level:
+//!    candidates are zones (the parent is itself a zone, so iter 1's
+//!    same-kind filter restricts to zones) sharing the parent's
+//!    `parent_zone` — i.e. the focused entry's grandparent in the
+//!    zone tree. Same beam scoring. If a candidate matches, return it.
+//! 4. **Drill-out fallback**: when no peer matches at iter 0 *or* iter
+//!    1, return the parent zone itself. A single key press moves at
+//!    most one zone level out from the focused entry; the user is
+//!    never "stuck" returning `None` unless the focused entry sits at
+//!    the very root of its layer.
 //!
-//! When the focused entry is itself a [`FocusZone`] (the user drilled
-//! out), the candidate set is **sibling zones only** — leaves are
-//! invisible at this level. Same beam test + scoring against the
-//! restricted set.
+//! Same-kind filtering at iter 0 is intentional. In production, a
+//! `<Field>` zone mounted inside a `<FocusScope>` card body inherits
+//! the card's enclosing `parent_zone` (the column), so the field zone
+//! and the card leaf are sibling-registered even though visually the
+//! field is *inside* the card. Pulling both kinds into iter 0 would
+//! let pressing Down from a focused card land on a field zone inside
+//! the next card (vertically aligned because the field is inside the
+//! card), stealing the press from the card-leaf neighbor. Same-kind
+//! filtering keeps "Down from a card" landing on the next card; users
+//! cross the kind boundary via drill-in / drill-out, not via cardinal
+//! nav.
 //!
 //! Edge commands ([`Direction::First`], [`Direction::Last`],
-//! [`Direction::RowStart`], [`Direction::RowEnd`]) bypass beam search
-//! and instead pick the boundary candidate from a level-aware set.
+//! [`Direction::RowStart`], [`Direction::RowEnd`]) keep their
+//! level-bounded behavior — no escalation cascade. They pick the
+//! boundary candidate from the focused entry's siblings only. The
+//! drill-out semantics are specific to cardinal directions where the
+//! user is steering visually; row/page commands stay where they are.
+//!
+//! Override (rule 0) still runs first — the focused scope's
+//! per-direction `overrides` map short-circuits the cascade entirely.
+//!
+//! # Why one cascade replaces the per-direction rules
+//!
+//! The old split (leaf rule 1 / leaf rule 2 / zone-only nav) treated
+//! each surface independently and accumulated five distinct user-
+//! reported bugs (each a symptom of "navigation in direction X has no
+//! in-beam candidate at the focused entry's level"). The unified cascade
+//! is one rule: when there's no peer at the current level, escalate;
+//! if escalation finds a peer at the parent's level take that, else
+//! drill out to the parent zone itself. Cross-column horizontal nav
+//! works because escalation lands on the column-zone level and finds
+//! the next column zone as a peer; vertical nav out of a card body
+//! works because escalation surfaces the column header (a leaf at the
+//! focused entry's iter-0 level) when the focused entry is the topmost
+//! card. The same cascade handles both without per-direction
+//! special-casing.
 //!
 //! # Scoring rationale
 //!
-//! Android's FocusFinder weights `major² * 13 + minor²` so a perfectly
-//! aligned candidate (zero minor) beats a closer-but-diagonal one. The
-//! beam test (a candidate's rect must overlap the focused rect's
-//! cross-axis projection) acts as the primary filter; in-beam
-//! candidates always beat out-of-beam candidates regardless of raw
-//! distance.
+//! For cardinal directions the beam test is a **hard filter** — a
+//! candidate's rect must overlap the focused rect's cross-axis
+//! projection, otherwise it is dropped from consideration entirely.
+//! Among the in-beam candidates, the Android-derived score
+//! `13 * major² + minor²` selects the closest aligned target (zero
+//! minor wins ties; lateral drift breaks them in favor of the closer
+//! one). See [`pick_best_candidate`] for the rationale on why in-beam
+//! is a hard filter — short answer: out-of-beam fallbacks let the
+//! navigator pick a navbar leaf when the user pressed `right` from the
+//! rightmost card on the board, which is jarring and not what a
+//! cardinal direction is meant to do.
+//!
+//! [`01KQ7S6WHK9RCCG2R4FN474EFD`]: # "unified-policy supersession card"
 
 use crate::registry::SpatialRegistry;
-use crate::scope::{FocusScope, FocusZone, Focusable};
+use crate::scope::{FocusZone, RegisteredScope};
 use crate::types::{pixels_cmp, Direction, LayerKey, Moniker, Pixels, Rect, SpatialKey};
 
 /// Pluggable navigation algorithm.
@@ -82,10 +135,13 @@ pub trait NavStrategy: Send + Sync {
 
 /// Default Android-beam-search navigation strategy.
 ///
-/// Implements the three-rule cascade described in the module docs:
-/// within-zone beam first, cross-zone leaf fallback second, no-op
-/// third. Zone-level nav (focused entry is a `FocusZone`) restricts
-/// candidates to sibling zones in the same layer.
+/// Implements the unified cascade described in the module docs:
+/// override (rule 0) → iter-0 peer search at the focused entry's
+/// level → iter-1 peer search at the parent's level → drill-out to
+/// the parent zone itself when no peer matches at either level.
+/// Edge commands ([`Direction::First`], [`Direction::Last`],
+/// [`Direction::RowStart`], [`Direction::RowEnd`]) keep their
+/// level-bounded behavior — no escalation cascade for those.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BeamNavStrategy;
 
@@ -101,34 +157,40 @@ impl BeamNavStrategy {
 impl NavStrategy for BeamNavStrategy {
     /// Run the override-first cascade: rule 0 consults the focused
     /// scope's per-direction `overrides` map; on no-op fall-through, the
-    /// three-rule beam-search cascade fires (within-zone, then cross-
-    /// zone leaf fallback for leaves; sibling-zone beam for zones).
+    /// unified two-level cascade with drill-out fallback fires for
+    /// cardinal directions, and the level-bounded edge command fires
+    /// for `First` / `Last` / `RowStart` / `RowEnd`.
+    ///
     /// Layer is the absolute boundary throughout — every candidate set
     /// is filtered by `candidate.layer_key == focused.layer_key` before
-    /// any scoring runs.
+    /// any scoring runs, and escalation refuses to cross from one
+    /// `LayerKey` to another (the inspector layer is captured-focus).
     fn next(
         &self,
         registry: &SpatialRegistry,
         focused: &SpatialKey,
         direction: Direction,
     ) -> Option<Moniker> {
-        let scope = registry.scope(focused)?;
-        let layer = scope.layer_key();
+        let entry = registry.entry(focused)?;
 
         // Rule 0: per-direction override on the focused scope.
         //
         // The outer `Option` distinguishes "did the override apply?":
         //   - `Some(_)` → override fired; its inner value (target or
-        //     `None` wall) is the answer; beam search does **not** run.
+        //     `None` wall) is the answer; the cascade does **not** run.
         //   - `None`    → override did not apply; fall through to the
-        //     beam-search cascade below.
-        if let Some(result) = check_override(registry, scope, direction) {
+        //     cascade below.
+        if let Some(result) = check_override(registry, entry, direction) {
             return result;
         }
 
-        match scope {
-            FocusScope::Focusable(f) => navigate_leaf(registry, f, direction, layer),
-            FocusScope::Zone(z) => navigate_zone(registry, z, direction, layer),
+        match direction {
+            Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
+                cardinal_cascade(registry, entry, direction)
+            }
+            Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
+                edge_command(registry, entry, direction)
+            }
         }
     }
 }
@@ -139,7 +201,7 @@ impl NavStrategy for BeamNavStrategy {
 
 /// Resolve the per-direction override on `focused`, if any.
 ///
-/// Each [`FocusScope`] carries a `HashMap<Direction, Option<Moniker>>`
+/// Each registered scope carries a `HashMap<Direction, Option<Moniker>>`
 /// of navigation overrides. The outer [`Option`] of the return value
 /// encodes "did an override apply?", and the inner [`Option<Moniker>`]
 /// encodes the answer when it did:
@@ -159,11 +221,10 @@ impl NavStrategy for BeamNavStrategy {
 /// Layer scoping is enforced here, not at registration: a target that
 /// names a moniker registered in a *different* layer is treated as
 /// "unresolved" and the override falls through to beam search. Cross-
-/// layer teleportation is never allowed, even via override — see the
-/// rationale on [`SpatialRegistry::scopes_in_layer`].
+/// layer teleportation is never allowed, even via override.
 fn check_override(
     registry: &SpatialRegistry,
-    focused: &FocusScope,
+    focused: &RegisteredScope,
     direction: Direction,
 ) -> Option<Option<Moniker>> {
     let entry = focused.overrides().get(&direction)?;
@@ -175,7 +236,7 @@ fn check_override(
         // the override fall through to beam search.
         Some(target) => {
             let target_in_layer = registry
-                .scopes_in_layer(focused.layer_key())
+                .entries_in_layer(focused.layer_key())
                 .any(|s| s.moniker() == target);
             if target_in_layer {
                 Some(Some(target.clone()))
@@ -187,165 +248,246 @@ fn check_override(
 }
 
 // ---------------------------------------------------------------------------
-// Leaf-level navigation: three-rule cascade.
+// Cardinal-direction navigation: unified two-level cascade with drill-out.
 // ---------------------------------------------------------------------------
 
-/// Run leaf-level navigation from `from` in `direction`.
+/// Run the unified cardinal-direction cascade from `focused` in
+/// `direction`.
 ///
-/// Cardinal directions execute the three-rule cascade (within-zone
-/// beam, then cross-zone leaf fallback, then `None`). Edge commands
-/// pick the boundary candidate from the leaf's `parent_zone` siblings.
-fn navigate_leaf(
+/// The cascade has three observable outcomes:
+///
+/// 1. **Iter 0 — peer match at the focused entry's level.** A scope
+///    of the **same kind as `focused`** (leaf for leaf, zone for zone)
+///    sharing `focused`'s `parent_zone` and matching the beam test for
+///    `direction` wins. This is the common case for in-zone moves
+///    (vim's `j`/`k` between cards stacked in a column, the field-row
+///    chain inside an inspector panel, the navbar buttons laid out
+///    left-to-right).
+///
+/// 2. **Iter 1 — peer match at the parent's level.** When iter 0 finds
+///    nothing, the cascade escalates to `focused.parent_zone` (with a
+///    layer-boundary guard — escalation refuses to cross `LayerKey`).
+///    The parent is always a zone, so iter 1 searches sibling zones
+///    sharing the parent's `parent_zone`. This handles cross-column
+///    nav: `Right` from a card lands on the next column zone because
+///    the column-zone level is where the horizontal peer chain lives.
+///
+/// 3. **Drill-out — return the parent zone itself.** When neither
+///    iter 0 nor iter 1 finds an in-beam peer, the cascade returns the
+///    parent zone's moniker. The user never gets stuck on a key press
+///    unless the focused entry sits at the very root of its layer
+///    (`focused.parent_zone == None`) — there is no parent to drill
+///    out to in that case, and the cascade returns `None`.
+///
+/// # Same-kind candidate filtering at iter 0
+///
+/// At iter 0 the candidate set is filtered to the same kind as
+/// `focused`. The reason is concrete: in production, a `<FocusScope>`
+/// leaf card and a `<FocusZone>` field can both be registered with the
+/// **same `parent_zone`** (the enclosing column), because field zones
+/// mounted inside the card body inherit the same enclosing zone — the
+/// card body is a leaf and so is invisible to the `parent_zone` walk.
+/// If the cascade pulled both kinds into iter 0, pressing Down from a
+/// focused card could land on a field zone inside the next card
+/// (vertically aligned because the field is *inside* the card),
+/// stealing the press from the card-leaf neighbor. Same-kind filtering
+/// preserves the user's mental model: pressing Down from a card lands
+/// on the next card, not on a zone *inside* the next card. If a
+/// consumer wants to descend into a card's contents, they drill in
+/// (Enter / `<spatial_drill_in>`) instead.
+///
+/// At iter 1 the candidates are inherently zones because the parent of
+/// any registered scope is a `FocusZone`. The same-kind filter still
+/// applies (zones only) but is a no-op against a zone-only candidate
+/// pool.
+///
+/// # Why one cascade, not separate leaf / zone paths
+///
+/// The unified-policy supersession card
+/// [`01KQ7S6WHK9RCCG2R4FN474EFD`] collapsed three previously separate
+/// rules — leaf rule 1 (in-zone leaves), leaf rule 2 (cross-zone leaf
+/// fallback), zone-only sibling-zone beam — into this single cascade.
+/// All three are subsumed by "search same-kind peers, escalate, search
+/// parent's same-kind peers, fall back to parent". See the module docs
+/// for the full rationale.
+///
+/// [`01KQ7S6WHK9RCCG2R4FN474EFD`]: # "unified-policy supersession card"
+fn cardinal_cascade(
     reg: &SpatialRegistry,
-    from: &Focusable,
+    focused: &RegisteredScope,
     direction: Direction,
-    layer: &LayerKey,
 ) -> Option<Moniker> {
-    match direction {
-        Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
-            if let Some(m) = beam_in_zone(reg, from, direction, layer) {
-                return Some(m);
-            }
-            beam_all_leaves_in_layer(reg, from, direction, layer)
-        }
-        Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
-            edge_command_for_leaf(reg, from, direction, layer)
-        }
+    let focused_is_zone = focused.is_zone();
+
+    // Iter 0: same-kind peers of the focused entry sharing its
+    // parent_zone.
+    if let Some(target) = beam_among_siblings(
+        reg,
+        focused.layer_key(),
+        focused.rect(),
+        focused.parent_zone(),
+        focused.key(),
+        focused_is_zone,
+        direction,
+    ) {
+        return Some(target);
     }
-}
 
-/// Rule 1: within-zone beam search.
-///
-/// Candidates are [`Focusable`] entries with matching `layer_key` and
-/// matching `parent_zone` (same enclosing zone as the focused leaf).
-/// `FocusZone` entries are not candidates at leaf level.
-fn beam_in_zone(
-    reg: &SpatialRegistry,
-    from: &Focusable,
-    direction: Direction,
-    layer: &LayerKey,
-) -> Option<Moniker> {
-    pick_best_candidate(
-        &from.rect,
+    // Escalate. The layer-boundary guard refuses to cross `LayerKey` —
+    // an inspector layer's panel zone never lifts focus into the
+    // window layer that hosts ui:board.
+    let parent = parent_zone_in_same_layer(reg, focused)?;
+
+    // Iter 1: same-kind peers of the parent zone sharing its
+    // parent_zone. The parent is always a zone, so this is the
+    // sibling-zone beam.
+    if let Some(target) = beam_among_siblings(
+        reg,
+        &parent.layer_key,
+        &parent.rect,
+        parent.parent_zone.as_ref(),
+        &parent.key,
+        true, /* parent is always a zone */
         direction,
-        reg.scopes_in_layer(layer).filter_map(|s| match s {
-            FocusScope::Focusable(f) if f.parent_zone == from.parent_zone && f.key != from.key => {
-                Some((&f.moniker, f.rect))
-            }
-            _ => None,
-        }),
-    )
-}
-
-/// Rule 2: cross-zone leaf fallback.
-///
-/// Candidates are every [`Focusable`] in the same layer (regardless of
-/// `parent_zone`). Used when rule 1 finds nothing — makes
-/// `nav.right` across columns work naturally.
-fn beam_all_leaves_in_layer(
-    reg: &SpatialRegistry,
-    from: &Focusable,
-    direction: Direction,
-    layer: &LayerKey,
-) -> Option<Moniker> {
-    pick_best_candidate(
-        &from.rect,
-        direction,
-        reg.scopes_in_layer(layer).filter_map(|s| match s {
-            FocusScope::Focusable(f) if f.key != from.key => Some((&f.moniker, f.rect)),
-            _ => None,
-        }),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Zone-level navigation: sibling zones only.
-// ---------------------------------------------------------------------------
-
-/// Run zone-level navigation from `from` in `direction`.
-///
-/// Candidates are restricted to **sibling zones** — `FocusZone` entries
-/// in the same layer with matching `parent_zone`. Leaves are invisible
-/// at this level. Edge commands operate on the same restricted set.
-fn navigate_zone(
-    reg: &SpatialRegistry,
-    from: &FocusZone,
-    direction: Direction,
-    layer: &LayerKey,
-) -> Option<Moniker> {
-    match direction {
-        Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
-            beam_sibling_zones(reg, from, direction, layer)
-        }
-        Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
-            edge_command_for_zone(reg, from, direction, layer)
-        }
+    ) {
+        return Some(target);
     }
+
+    // Drill-out fallback: return the parent zone itself. A single key
+    // press moves at most one zone level out from the focused entry.
+    Some(parent.moniker.clone())
 }
 
-/// Beam search restricted to sibling zones — same `layer_key`, same
-/// `parent_zone` as the focused zone.
-fn beam_sibling_zones(
+/// Resolve the focused entry's parent zone, enforcing the layer-
+/// boundary guard.
+///
+/// Returns the parent [`FocusZone`] when:
+/// - `focused` has a `parent_zone` set, **and**
+/// - the registry has an entry under that key, **and**
+/// - the entry is a [`FocusZone`], **and**
+/// - the entry's `layer_key` matches `focused`'s `layer_key`.
+///
+/// Returns `None` in every other case — including the well-formed case
+/// where `focused` sits at the layer root (`parent_zone = None`). The
+/// cascade interprets `None` as "no escalation possible" and falls
+/// through to its terminal answer.
+fn parent_zone_in_same_layer<'a>(
+    reg: &'a SpatialRegistry,
+    focused: &RegisteredScope,
+) -> Option<&'a FocusZone> {
+    let parent_key = focused.parent_zone()?;
+    let parent = reg.zone(parent_key)?;
+    if parent.layer_key != *focused.layer_key() {
+        return None;
+    }
+    Some(parent)
+}
+
+/// Beam-search candidates that share `from_parent` (excluding `from_key`),
+/// filtered by `layer` and by kind matching `expect_zone`.
+///
+/// The cascade calls this twice: once for the focused entry's level
+/// (iter 0) and, on no match, once for the parent zone's level (iter 1
+/// after escalation). At each level the candidate set is restricted to
+/// scopes of the same kind as the search origin (`expect_zone == true`
+/// → zones only, `expect_zone == false` → leaves only).
+///
+/// # Why same-kind filtering
+///
+/// Mixing leaves and zones in a single candidate pool produces
+/// surprising results in production: a `<Field>` zone mounted inside
+/// a `<FocusScope>` card body inherits the card's enclosing
+/// `parent_zone` (the column), so the field zone and the card leaf are
+/// registered as siblings even though visually the field is *inside*
+/// the card. Pressing Down from the focused card would land on a field
+/// zone in the *next* card rather than the next card itself, stealing
+/// the press from the card-leaf neighbor. Same-kind filtering keeps
+/// in-zone leaf navigation moving between leaves and in-zone zone
+/// navigation moving between zones; consumers cross the kind boundary
+/// via drill-in / drill-out, not via cardinal-direction nav.
+///
+/// # Layer boundary
+///
+/// Layer is the absolute boundary: every candidate must satisfy
+/// `candidate.layer_key == layer`. This filter applies even when
+/// `from_parent` is `None` (the layer root): only scopes at the same
+/// root level in the same layer are candidates.
+///
+/// `from_key` is the candidate to exclude from the result set — when
+/// the cascade calls this from iter 1 with the parent's identity, the
+/// parent zone itself is not a peer of itself and must not be
+/// considered.
+fn beam_among_siblings(
     reg: &SpatialRegistry,
-    from: &FocusZone,
-    direction: Direction,
     layer: &LayerKey,
+    from_rect: &Rect,
+    from_parent: Option<&SpatialKey>,
+    from_key: &SpatialKey,
+    expect_zone: bool,
+    direction: Direction,
 ) -> Option<Moniker> {
     pick_best_candidate(
-        &from.rect,
+        from_rect,
         direction,
-        reg.scopes_in_layer(layer).filter_map(|s| match s {
-            FocusScope::Zone(z) if z.parent_zone == from.parent_zone && z.key != from.key => {
-                Some((&z.moniker, z.rect))
+        reg.entries_in_layer(layer).filter_map(|s| {
+            if s.is_zone() != expect_zone {
+                return None;
             }
-            _ => None,
+            if s.parent_zone() == from_parent && s.key() != from_key {
+                Some((s.moniker(), *s.rect()))
+            } else {
+                None
+            }
         }),
     )
 }
 
 // ---------------------------------------------------------------------------
 // Edge commands: First / Last / RowStart / RowEnd.
+//
+// Edge commands keep their level-bounded behavior — no escalation
+// cascade for those. The drill-out semantics are specific to cardinal
+// directions where the user is steering visually; row/page commands
+// stay where they are.
 // ---------------------------------------------------------------------------
 
-/// Edge command for a leaf. Candidates are in-zone siblings (same
-/// `parent_zone`) **including the focused leaf itself**; the chosen
-/// candidate is the boundary one per `direction`.
+/// Run an edge command from `focused` in `direction`.
 ///
-/// Including `from` in the candidate set makes "already at boundary" a
-/// no-op: when the focused leaf is itself the topmost-leftmost in its
-/// zone, `Direction::First` picks it, and the resolver in
+/// Candidates are same-kind scopes sharing `focused`'s `parent_zone`
+/// **including the focused entry itself**; the chosen candidate is the
+/// boundary one per `direction`. Including the focused entry in the
+/// candidate set makes "already at boundary" a no-op: when the focused
+/// scope is itself the topmost-leftmost in its zone,
+/// [`Direction::First`] picks it, and the resolver in
 /// [`crate::state::SpatialState::navigate_with`] short-circuits via the
-/// "already focused → no event" check in [`crate::state::SpatialState::focus`].
-fn edge_command_for_leaf(
-    reg: &SpatialRegistry,
-    from: &Focusable,
-    direction: Direction,
-    layer: &LayerKey,
-) -> Option<Moniker> {
-    let candidates = reg.scopes_in_layer(layer).filter_map(|s| match s {
-        FocusScope::Focusable(f) if f.parent_zone == from.parent_zone => Some((&f.moniker, f.rect)),
-        _ => None,
-    });
-    edge_command_from_candidates(&from.rect, direction, candidates)
-}
-
-/// Edge command for a zone. Candidates are sibling zones (same
-/// `parent_zone`) **including the focused zone itself**; the chosen
-/// candidate is the boundary one per `direction`.
+/// "already focused → no event" check in
+/// [`crate::state::SpatialState::focus`].
 ///
-/// Including `from` in the candidate set makes "already at boundary" a
-/// no-op: see [`edge_command_for_leaf`] for the same rationale.
-fn edge_command_for_zone(
+/// The kind filter mirrors the cascade's iter-0 same-kind filter
+/// (`leaves only` for a leaf-focused entry, `zones only` for a zone-
+/// focused entry). See [`beam_among_siblings`] for the rationale on
+/// why mixing kinds in a single candidate pool surprises users.
+fn edge_command(
     reg: &SpatialRegistry,
-    from: &FocusZone,
+    focused: &RegisteredScope,
     direction: Direction,
-    layer: &LayerKey,
 ) -> Option<Moniker> {
-    let candidates = reg.scopes_in_layer(layer).filter_map(|s| match s {
-        FocusScope::Zone(z) if z.parent_zone == from.parent_zone => Some((&z.moniker, z.rect)),
-        _ => None,
+    let layer = focused.layer_key();
+    let from_rect = focused.rect();
+    let from_parent = focused.parent_zone();
+    let expect_zone = focused.is_zone();
+
+    let candidates = reg.entries_in_layer(layer).filter_map(|s| {
+        if s.is_zone() != expect_zone {
+            return None;
+        }
+        if s.parent_zone() == from_parent {
+            Some((s.moniker(), *s.rect()))
+        } else {
+            None
+        }
     });
-    edge_command_from_candidates(&from.rect, direction, candidates)
+    edge_command_from_candidates(from_rect, direction, candidates)
 }
 
 /// Pick the boundary candidate from `candidates` per `direction`.
@@ -404,10 +546,12 @@ fn edge_command_from_candidates<'a>(
 ///   `from` along the major axis.
 /// - `Some((in_beam, score))` otherwise. Lower `score` is better.
 ///
-/// The beam test (`in_beam`) is a tie-break **strictly above** raw
-/// score: every in-beam candidate beats every out-of-beam candidate
-/// regardless of distance — see the docs on
-/// [`pick_best_candidate`].
+/// The `in_beam` flag reports whether the candidate overlaps `from`
+/// on the cross axis (horizontal extent for `Up`/`Down`, vertical
+/// extent for `Left`/`Right`). [`pick_best_candidate`] uses it as a
+/// **hard filter**: out-of-beam candidates are dropped before any
+/// score comparison runs. See [`pick_best_candidate`] for the
+/// rationale on hard-filtering rather than tier-preferring.
 fn score_candidate(from: &Rect, cand: &Rect, direction: Direction) -> Option<(bool, f64)> {
     let (major, minor, in_beam) = match direction {
         Direction::Down => {
@@ -491,37 +635,83 @@ fn score_candidate(from: &Rect, cand: &Rect, direction: Direction) -> Option<(bo
 
 /// Pick the best candidate from `candidates` for `direction`.
 ///
-/// Two-tier comparison: in-beam candidates always beat out-of-beam
-/// candidates regardless of raw score, then within each tier the
-/// lower-scored candidate wins. This implements Android's beam-test
-/// preference — an aligned candidate beats a closer-but-diagonal one.
+/// Cardinal-direction navigation **requires the in-beam test to pass** —
+/// out-of-beam candidates are dropped on the floor. The in-beam test is
+/// rect projection on the cross axis: a `Down` candidate must overlap
+/// the focused rect's horizontal extent, a `Right` candidate must
+/// overlap the focused rect's vertical extent, and so on. Among the
+/// remaining in-beam candidates, the one with the lowest score
+/// (`13 * major² + minor²`) wins — Android's preference for aligned
+/// targets, applied as a tie-break inside the in-beam tier.
+///
+/// # Why in-beam is a hard filter, not a soft tie-break
+///
+/// The directional-nav card [`01KQ7STZN3G5N2WB3FF4PM4DKX`] surfaced this
+/// rule at the realistic-app fixture in
+/// `swissarmyhammer-focus/tests/card_directional_nav.rs`: from the top
+/// card in the rightmost column (`task:T1C`), pressing `right` should
+/// return `None`, but the kernel was instead picking up an out-of-beam
+/// `ui:navbar.search` leaf far above and to the right because it was
+/// the only direction-valid candidate in the same layer. Letting an
+/// out-of-beam candidate win when no in-beam candidate exists creates
+/// jarring visual jumps — pressing `right` lifts the user out of the
+/// board and into the navbar, which violates the user's mental model
+/// of cardinal navigation as "move within the visually-aligned strip".
+///
+/// The previous version of this helper applied in-beam as a soft
+/// preference (in-beam tier wins, out-of-beam tier as fallback). That
+/// matched Android's FocusFinder, but for the kanban-app's denser-than-
+/// Android layouts (a navbar above a board, both on the same focus
+/// layer) the soft preference let visually disconnected candidates win.
+/// Tightening to a hard filter is the minimal kernel change that fixes
+/// the user-visible bug without disturbing any other test in the suite —
+/// every existing test that asserts a specific cardinal-direction target
+/// already places that target in-beam, so the assertions hold unchanged.
+///
+/// # No effect on edge commands
+///
+/// Edge commands ([`Direction::First`], [`Direction::Last`],
+/// [`Direction::RowStart`], [`Direction::RowEnd`]) take a different
+/// helper ([`edge_command_from_candidates`]) and are unaffected. This
+/// helper is only reached for cardinal directions; the direction
+/// parameter is plumbed through so the score formula picks the right
+/// axis but the in-beam filter applies uniformly to all four cardinals.
 ///
 /// Candidates carry borrowed [`Moniker`] references so the helper does
 /// not allocate per-candidate; only the winning moniker is cloned.
+///
+/// [`01KQ7STZN3G5N2WB3FF4PM4DKX`]: # "directional-nav supersession card"
 fn pick_best_candidate<'a>(
     from_rect: &Rect,
     direction: Direction,
     candidates: impl Iterator<Item = (&'a Moniker, Rect)>,
 ) -> Option<Moniker> {
-    let mut best: Option<(&Moniker, bool, f64)> = None;
+    let mut best: Option<(&Moniker, f64)> = None;
     for (moniker, rect) in candidates {
         let Some((in_beam, score)) = score_candidate(from_rect, &rect, direction) else {
             continue;
         };
+        // Hard in-beam filter for cardinal directions: an out-of-beam
+        // candidate is never a valid answer, even when it is the only
+        // direction-valid candidate. The cross-axis projection test
+        // (horizontal overlap for Up/Down, vertical overlap for
+        // Left/Right) is the kernel's notion of "visually aligned in
+        // the requested direction". See the function docs for why this
+        // is a hard filter rather than the soft tier preference the
+        // implementation used to apply.
+        if !in_beam {
+            continue;
+        }
         match best.as_ref() {
-            None => best = Some((moniker, in_beam, score)),
-            Some((_, best_in_beam, best_score)) => {
-                // Tier 1: in-beam beats out-of-beam.
-                if in_beam && !best_in_beam {
-                    best = Some((moniker, in_beam, score));
-                } else if in_beam == *best_in_beam && score < *best_score {
-                    // Tier 2: within the same beam tier, lower score wins.
-                    best = Some((moniker, in_beam, score));
+            None => best = Some((moniker, score)),
+            Some((_, best_score)) => {
+                if score < *best_score {
+                    best = Some((moniker, score));
                 }
             }
         }
     }
-    best.map(|(m, _, _)| m.clone())
+    best.map(|(m, _)| m.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -585,7 +775,7 @@ fn cross_axis_minor(from: &Rect, cand: &Rect, minor_axis: MinorAxis) -> Pixels {
 mod tests {
     use super::*;
     use crate::layer::FocusLayer;
-    use crate::scope::Focusable;
+    use crate::scope::FocusScope;
     use crate::types::{LayerKey, LayerName, Pixels, Rect, WindowLabel};
     use std::collections::HashMap;
 
@@ -609,7 +799,7 @@ mod tests {
             window_label: WindowLabel::from_string("main"),
             last_focused: None,
         });
-        reg.register_focusable(Focusable {
+        reg.register_scope(FocusScope {
             key: SpatialKey::from_string("k"),
             moniker: Moniker::from_string("ui:k"),
             rect: rect_zero(),

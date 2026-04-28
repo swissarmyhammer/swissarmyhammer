@@ -33,7 +33,7 @@
 export type WindowLabel = string & { readonly __brand: "WindowLabel" };
 
 /**
- * Unique key per `<FocusScope>` / `<FocusZone>` / `<Focusable>` instance.
+ * Unique key per `<FocusScope>` / `<FocusZone>` instance.
  *
  * Mirrors `swissarmyhammer_kanban::focus::types::SpatialKey`. Each component
  * mints exactly one of these on mount via `crypto.randomUUID()` and
@@ -179,7 +179,7 @@ export interface Rect {
 }
 
 /**
- * Per-direction navigation overrides for a `<Focusable>` or `<FocusZone>`.
+ * Per-direction navigation overrides for a `<FocusScope>` or `<FocusZone>`.
  *
  * Mirrors `HashMap<Direction, Option<Moniker>>` on the Rust side. Missing
  * keys mean "fall through to beam search"; an explicit `null` value is a

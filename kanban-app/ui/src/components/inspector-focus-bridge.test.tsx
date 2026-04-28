@@ -177,10 +177,19 @@ describe("InspectorFocusBridge", () => {
     const { container } = await renderBridge(
       makeEntity({ title: "T", body: "B" }),
     );
+    // After card `01KQ5QB6F4MTD35GBTARJH4JEW` the row's outer `<div>` is
+    // plain — the focus-bearing element is the Field's `<FocusZone>`
+    // (a descendant of the row).
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    expect(titleRow?.hasAttribute("data-focused")).toBe(true);
+    const titleFocusZone = titleRow?.querySelector(
+      "[data-moniker='field:task:test-id.title']",
+    );
+    expect(titleFocusZone?.hasAttribute("data-focused")).toBe(true);
     const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-    expect(bodyRow?.hasAttribute("data-focused")).toBe(false);
+    const bodyFocusZone = bodyRow?.querySelector(
+      "[data-moniker='field:task:test-id.body']",
+    );
+    expect(bodyFocusZone?.hasAttribute("data-focused")).toBe(false);
   });
 
   it("claims entity focus on mount", async () => {

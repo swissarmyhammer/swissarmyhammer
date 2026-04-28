@@ -18,7 +18,7 @@
  * Plus the architectural rule from `01KQ573XBT0GFQWVY6QEZQ74R6`:
  *
  *   3. A focused grid cell renders EXACTLY ONE visible focus decoration —
- *      the `<FocusIndicator>` rendered by the cell's `<Focusable>`. The
+ *      the `<FocusIndicator>` rendered by the cell's `<FocusScope>`. The
  *      previous implementation also painted a `ring-2 ring-primary
  *      ring-inset` border on the same cell driven by `isCursor`, which
  *      double-decorated the same focus state. Removed in favour of the
@@ -343,13 +343,13 @@ describe("GridView -- cursor-ring suppression outside ui:grid", () => {
  * entity-focus moniker in the spatial-stack-mounted production harness.
  *
  * This pins the warning from the review of
- * `01KNQXZZ9VQBHFX091P0K4F4YC`: `Focusable.onClick` calls
+ * `01KNQXZZ9VQBHFX091P0K4F4YC`: `FocusScope.onClick` calls
  * `e.stopPropagation()` (per the long-standing FocusScope convention so
  * leaf clicks don't re-fire on enclosing zones). Before the fix, the
  * click handler attached to the surrounding `<TableCell>` was swallowed
  * before it could run `setFocus(gridCellMoniker(...))`, so the cursor
  * ring (derived from entity-focus) regressed click-to-move-cursor in
- * production. The fix mounts the click handler INSIDE the `<Focusable>`
+ * production. The fix mounts the click handler INSIDE the `<FocusScope>`
  * via a thin wrapper `<div>`, so the inner handler fires before the
  * primitive's `stopPropagation()` — both spatial focus AND entity
  * focus update on a single click.
@@ -398,9 +398,9 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
     );
 
     // Find the cell at (row=1, col=`status`) — the second row's status
-    // column. We target the inner `<Focusable>` wrapper (where the new
+    // column. We target the inner `<FocusScope>` wrapper (where the new
     // click handler lives in the spatial path). The data-table renders
-    // `<Focusable>` with `data-moniker="grid_cell:1:status"`.
+    // `<FocusScope>` with `data-moniker="grid_cell:1:status"`.
     const targetMoniker = "grid_cell:1:status";
     const focusableEl = result.container.querySelector(
       `[data-moniker="${targetMoniker}"]`,
@@ -409,7 +409,7 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
 
     // Click an element INSIDE the focusable's subtree — that's where the
     // inner click wrapper is. Bubble order: target → inner div onClick
-    // (legacy entity-focus) → Focusable's outer onClick (spatial focus
+    // (legacy entity-focus) → FocusScope's outer onClick (spatial focus
     // + stopPropagation). Both fire on one click.
     await act(async () => {
       fireEvent.click(focusableEl!.firstElementChild ?? focusableEl!);
@@ -417,7 +417,7 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
 
     // The cursor ring (driven by entity-focus → moniker → grid-cell
     // cursor → `data-cell-cursor`) must now mark exactly the clicked
-    // cell. If `Focusable.onClick`'s `stopPropagation()` regressed back
+    // cell. If `FocusScope.onClick`'s `stopPropagation()` regressed back
     // to swallowing the entity-focus update, this assertion catches it
     // — zero rings would render instead.
     const ringedCells = result.container.querySelectorAll("[data-cell-cursor]");
@@ -435,7 +435,7 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
  * focused cell:
  *
  *   - `<FocusIndicator>` — bar to the left of the cell, rendered by the
- *     cell's `<Focusable>` from its `useFocusClaim` React state.
+ *     cell's `<FocusScope>` from its `useFocusClaim` React state.
  *   - `ring-2 ring-primary ring-inset` — cell-spanning border, applied to
  *     the surrounding `<TableCell>` via `cellClasses` whenever
  *     `isCursor === true` (i.e. the same focus state the bar already
@@ -446,7 +446,7 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
  * 3 from `01KQ573XBT0GFQWVY6QEZQ74R6` ("the visible focus indicator
  * renders in exactly one component"). The cell ring was removed; the bar
  * is now the sole focus decoration on grid cells, identical to every
- * other `<Focusable>` in the app.
+ * other `<FocusScope>` in the app.
  *
  * This test asserts:
  *
@@ -482,7 +482,7 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
 
     // Wait for the spatial-nav stack and `useInitialCellFocus` to settle —
     // by this point every grid cell has registered via
-    // `spatial_register_focusable` and we can recover its `SpatialKey`
+    // `spatial_register_scope` and we can recover its `SpatialKey`
     // from the mocked invoke history.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
@@ -501,11 +501,11 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
     // Dispatch a `focus-changed` event for the targeted cell's
     // `SpatialKey`. In production the Rust spatial layer fires this in
     // response to the click → `spatial_focus` → kernel update path; in
-    // the test we drive it directly off the `spatial_register_focusable`
+    // the test we drive it directly off the `spatial_register_scope`
     // call recorded for the targeted moniker. Without this, the cell's
     // `useFocusClaim` callback never flips and the bar is never rendered.
     const registerCalls = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_register_focusable",
+      (c) => c[0] === "spatial_register_scope",
     );
     const targetRegistration = registerCalls.find(
       (c) => (c[1] as { moniker?: string })?.moniker === targetMoniker,
@@ -526,7 +526,7 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
     const { container } = result;
 
     // 1. Exactly one `<FocusIndicator>` is rendered as a descendant of
-    //    the focused cell's `<Focusable>` — and that's the only one in
+    //    the focused cell's `<FocusScope>` — and that's the only one in
     //    the grid (no second decorator on a sibling element).
     const indicators = container.querySelectorAll(
       "[data-testid='focus-indicator']",

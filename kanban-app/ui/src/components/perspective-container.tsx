@@ -160,6 +160,11 @@ function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
   return (
     <FocusZone
       moniker={asMoniker("ui:perspective")}
+      // Viewport-sized chrome zone — a visible focus bar around the entire
+      // perspective body would frame the whole window and add no signal.
+      // The zone exists so the navigator can drill *into* it from the bar
+      // and remember a last-focused inner leaf; the leaves it contains
+      // (board columns, grid cells, etc.) render their own indicator.
       showFocusBar={false}
       className="flex flex-col flex-1 min-h-0 min-w-0"
     >

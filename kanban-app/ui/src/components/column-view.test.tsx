@@ -389,7 +389,7 @@ describe("ColumnView — Do This Next command", () => {
  * column scrollable and the virtualizer windowing functional.
  *
  * Background: the spatial-nav refactor wrapped the column body in
- * `<FocusScope kind="zone">`. An earlier revision routed the entity
+ * `<FocusScope>`. An earlier revision routed the entity
  * chrome through an inner non-styled `<FocusScopeBody>` div which broke
  * the `flex flex-col flex-1 min-h-0` chain the column relies on for
  * vertical sizing and overflow scroll. The current FocusScope attaches

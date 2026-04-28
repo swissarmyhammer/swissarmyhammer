@@ -85,23 +85,29 @@ vi.mock("@/lib/schema-context", () => ({
   useSchemaOptional: () => undefined,
 }));
 
-vi.mock("@/lib/entity-focus-context", () => ({
-  useEntityFocus: () => ({
-    focusedMoniker: null,
-    setFocusedMoniker: vi.fn(),
-  }),
-  useFocusActions: () => ({
+vi.mock("@/lib/entity-focus-context", () => {
+  const actions = {
     setFocus: vi.fn(),
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
     broadcastNavCommand: vi.fn(),
-  }),
-  useFocusedMoniker: () => null,
-  useFocusedMonikerRef: () => ({ current: null }),
-  useIsFocused: () => false,
-  useIsDirectFocus: () => false,
-}));
+  };
+  return {
+    useEntityFocus: () => ({
+      focusedMoniker: null,
+      setFocusedMoniker: vi.fn(),
+    }),
+    useFocusActions: () => actions,
+    useOptionalFocusActions: () => actions,
+    useEntityScopeRegistration: () => {},
+    useFocusedMoniker: () => null,
+    useFocusedMonikerRef: () => ({ current: null }),
+    useIsFocused: () => false,
+    useIsDirectFocus: () => false,
+    useOptionalIsDirectFocus: () => false,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock RustEngineContainer hook — provides entity store.
@@ -386,10 +392,13 @@ describe("InspectorsContainer", () => {
   // ---------------------------------------------------------------------
   // Spatial-nav: inspector layer + per-panel zones
   //
-  // The container now mounts a single `<FocusLayer name="inspector">` when
-  // the panel stack is non-empty, and wraps each panel in a
-  // `<FocusScope kind="zone" moniker="panel:<entityType>:<entityId>">`.
-  // These tests pin that wiring.
+  // The container mounts a single `<FocusLayer name="inspector">` when the
+  // panel stack is non-empty. Each panel registers a
+  // `<FocusZone moniker="panel:<entityType>:<entityId>">` *inside* its
+  // `<SlidePanel>` so the zone has a real layout box (the SlidePanel is
+  // `position: fixed`, which would collapse an outer wrapper to zero size
+  // and leave the focus indicator without a visible host). These tests
+  // pin that wiring at the registration / unregistration layer.
   // ---------------------------------------------------------------------
 
   it("does not push an inspector layer when no panels are open", async () => {

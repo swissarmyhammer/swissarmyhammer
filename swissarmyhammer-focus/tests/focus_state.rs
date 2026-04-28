@@ -24,13 +24,13 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusChangedEvent, FocusLayer, Focusable, LayerKey, LayerName, Moniker, Pixels, Rect,
+    FocusChangedEvent, FocusLayer, FocusScope, LayerKey, LayerName, Moniker, Pixels, Rect,
     SpatialKey, SpatialRegistry, SpatialState, WindowLabel,
 };
 
-/// Build a single-window registry with a focusable leaf bound to
+/// Build a single-window registry with a leaf scope bound to
 /// `(window, moniker)`.
-fn registry_with_focusable(window: &str, layer: &str, key: &str, moniker: &str) -> SpatialRegistry {
+fn registry_with_scope(window: &str, layer: &str, key: &str, moniker: &str) -> SpatialRegistry {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(FocusLayer {
         key: LayerKey::from_string(layer),
@@ -39,7 +39,7 @@ fn registry_with_focusable(window: &str, layer: &str, key: &str, moniker: &str) 
         window_label: WindowLabel::from_string(window),
         last_focused: None,
     });
-    reg.register_focusable(Focusable {
+    reg.register_scope(FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: Rect {
@@ -55,10 +55,10 @@ fn registry_with_focusable(window: &str, layer: &str, key: &str, moniker: &str) 
     reg
 }
 
-/// Add a second focusable to an existing registry under the same layer.
+/// Add a second leaf scope to an existing registry under the same layer.
 /// Used to set up "focus transfer within window" scenarios.
-fn add_focusable(reg: &mut SpatialRegistry, layer: &str, key: &str, moniker: &str) {
-    reg.register_focusable(Focusable {
+fn add_scope(reg: &mut SpatialRegistry, layer: &str, key: &str, moniker: &str) {
+    reg.register_scope(FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect: Rect {
@@ -77,7 +77,7 @@ fn add_focusable(reg: &mut SpatialRegistry, layer: &str, key: &str, moniker: &st
 /// whose `window_label` matches the focused scope's window.
 #[test]
 fn focus_updates_per_window_state_and_emits_with_window_label() {
-    let registry = registry_with_focusable("main", "L", "scope-1", "task:01ABC");
+    let registry = registry_with_scope("main", "L", "scope-1", "task:01ABC");
     let mut state = SpatialState::new();
     let key = SpatialKey::from_string("scope-1");
 
@@ -119,9 +119,9 @@ fn focus_in_a_does_not_affect_focus_in_b() {
         window_label: WindowLabel::from_string("window-b"),
         last_focused: None,
     });
-    add_focusable(&mut reg, "La", "a-1", "task:A");
-    add_focusable(&mut reg, "Lb", "b-1", "task:B");
-    add_focusable(&mut reg, "La", "a-2", "task:A2");
+    add_scope(&mut reg, "La", "a-1", "task:A");
+    add_scope(&mut reg, "Lb", "b-1", "task:B");
+    add_scope(&mut reg, "La", "a-2", "task:A2");
 
     let a_key = SpatialKey::from_string("a-1");
     let b_key = SpatialKey::from_string("b-1");
@@ -169,8 +169,8 @@ fn unregister_of_focused_key_clears_only_that_windows_focus() {
         window_label: WindowLabel::from_string("window-b"),
         last_focused: None,
     });
-    add_focusable(&mut reg, "La", "a-1", "task:A");
-    add_focusable(&mut reg, "Lb", "b-1", "task:B");
+    add_scope(&mut reg, "La", "a-1", "task:A");
+    add_scope(&mut reg, "Lb", "b-1", "task:B");
 
     let a_key = SpatialKey::from_string("a-1");
     let b_key = SpatialKey::from_string("b-1");
@@ -203,8 +203,8 @@ fn unregister_of_focused_key_clears_only_that_windows_focus() {
 /// is emitted because no claim callback needs to fire.
 #[test]
 fn unregister_of_unfocused_key_emits_no_event() {
-    let mut reg = registry_with_focusable("main", "L", "focused", "task:F");
-    add_focusable(&mut reg, "L", "other", "task:O");
+    let mut reg = registry_with_scope("main", "L", "focused", "task:F");
+    add_scope(&mut reg, "L", "other", "task:O");
 
     let focused = SpatialKey::from_string("focused");
     let other = SpatialKey::from_string("other");
@@ -228,7 +228,7 @@ fn unregister_of_unfocused_key_emits_no_event() {
 /// moniker-keyed effects without an extra IPC round-trip.
 #[test]
 fn next_moniker_matches_scope_moniker_when_next_key_is_some() {
-    let registry = registry_with_focusable("main", "L", "scope-1", "task:01XYZ");
+    let registry = registry_with_scope("main", "L", "scope-1", "task:01XYZ");
     let mut state = SpatialState::new();
     let key = SpatialKey::from_string("scope-1");
 
@@ -242,7 +242,7 @@ fn next_moniker_matches_scope_moniker_when_next_key_is_some() {
 /// layer rather than relying on adapter-side coalescing.
 #[test]
 fn focus_no_op_when_already_focused_in_that_window() {
-    let registry = registry_with_focusable("main", "L", "k", "task:01");
+    let registry = registry_with_scope("main", "L", "k", "task:01");
     let mut state = SpatialState::new();
     let key = SpatialKey::from_string("k");
 
@@ -256,8 +256,8 @@ fn focus_no_op_when_already_focused_in_that_window() {
 /// to the new one in a single payload.
 #[test]
 fn focus_transfer_within_window_carries_prev_key() {
-    let mut reg = registry_with_focusable("main", "L", "first", "task:1");
-    add_focusable(&mut reg, "L", "second", "task:2");
+    let mut reg = registry_with_scope("main", "L", "first", "task:1");
+    add_scope(&mut reg, "L", "second", "task:2");
 
     let first = SpatialKey::from_string("first");
     let second = SpatialKey::from_string("second");

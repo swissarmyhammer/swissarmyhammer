@@ -2,9 +2,14 @@
  * Tests for `<DraggableTaskCard>` — the HTML5-draggable wrapper around
  * `<EntityCard>`.
  *
- * The card itself registers as a `<FocusScope kind="zone">` (verified
- * in entity-card.test.tsx); these tests assert the wrapper preserves
- * that shape and continues to wire the drag handle.
+ * The card itself registers as a `<FocusScope>` (leaf, NOT a zone — see
+ * the docstring on `<EntityCard>` for why); these tests assert the
+ * wrapper preserves that shape and continues to wire the drag handle.
+ * The leaf shape is what enables the unified cascade's iter-0 / iter-1
+ * trajectory for cross-column right/left navigation: iter 0 finds
+ * in-column card peers, and when no peer satisfies the beam test the
+ * cascade escalates to iter 1 — the card's parent column zone — and
+ * lands on the neighbouring column zone.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -135,20 +140,28 @@ describe("DraggableTaskCard", () => {
     currentEntity = makeEntity();
   });
 
-  it("registers the card body as a FocusZone with the entity moniker", async () => {
+  it("registers the card body as a FocusScope (leaf) with the entity moniker", async () => {
+    await renderWith(<DraggableTaskCard entity={currentEntity} />);
+    const scopeCalls = mockInvoke.mock.calls
+      .filter((c) => c[0] === "spatial_register_scope")
+      .map((c) => c[1] as Record<string, unknown>);
+    expect(scopeCalls.find((a) => a.moniker === "task:task-7")).toBeTruthy();
+  });
+
+  it("does not register the card root as a FocusZone (the card is a leaf, not a zone)", async () => {
+    // Cards must register as leaves so the unified cascade's iter-0 /
+    // iter-1 trajectory works as the user expects: iter 0 finds
+    // in-column card peers; iter 1 escalates to the card's parent
+    // column zone and lands on the neighbouring column zone. If the
+    // wrapper ever forwards a `kind="zone"` flag through `<EntityCard>`,
+    // iter 0 would consider sibling zones only and trap focus in the
+    // column. See the docstring on `<EntityCard>` and the kernel test
+    // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
     await renderWith(<DraggableTaskCard entity={currentEntity} />);
     const zoneCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_zone")
       .map((c) => c[1] as Record<string, unknown>);
-    expect(zoneCalls.find((a) => a.moniker === "task:task-7")).toBeTruthy();
-  });
-
-  it("does not register the card root as a Focusable leaf (the zone replaces the leaf)", async () => {
-    await renderWith(<DraggableTaskCard entity={currentEntity} />);
-    const leafCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_register_focusable")
-      .map((c) => c[1] as Record<string, unknown>);
-    expect(leafCalls.find((a) => a.moniker === "task:task-7")).toBeUndefined();
+    expect(zoneCalls.find((a) => a.moniker === "task:task-7")).toBeUndefined();
   });
 
   it("renders the drag handle button", async () => {

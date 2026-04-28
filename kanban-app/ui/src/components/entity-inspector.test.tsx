@@ -308,7 +308,7 @@ async function renderViaInspectorBridge(
  * icon-and-content row layout.
  *
  * Use this helper for tests that depend on the production DOM shape produced
- * by `<FocusScope kind="zone">`. Other tests that only need the inspector's
+ * by `<FocusScope>`. Other tests that only need the inspector's
  * data-binding behaviour can keep using `renderInspector`.
  */
 async function renderInspectorWithSpatial(
@@ -477,21 +477,34 @@ describe("EntityInspector", () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "B", tags: [] }),
     );
-    // First navigable field (title, in header) should be focused
+    // First navigable field (title, in header) should be focused. After
+    // card `01KQ5QB6F4MTD35GBTARJH4JEW` the row's outer `<div>` is plain;
+    // the moniker-bearing FocusZone (driven by Field) lives inside it.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+    const titleFocusZone = titleRow!.querySelector(
+      "[data-moniker='field:task:test-id.title']",
+    );
+    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
     // Second field should not be focused
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-    expect(tagsRow!.getAttribute("data-focused")).toBeNull();
+    const tagsFocusZone = tagsRow!.querySelector(
+      "[data-moniker='field:task:test-id.tags']",
+    );
+    expect(tagsFocusZone!.getAttribute("data-focused")).toBeNull();
   });
 
   it("clicking a field syncs the inspector nav cursor to that field", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "Click me", tags: [] }),
     );
-    // Initially first field (title) is focused
+    // Initially first field (title) is focused. After card
+    // `01KQ5QB6F4MTD35GBTARJH4JEW` the focus-bearing element is the
+    // Field's FocusZone (a descendant of the row), not the row itself.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+    const titleFocusZone = titleRow!.querySelector(
+      "[data-moniker='field:task:test-id.title']",
+    );
+    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
     // Click on the body field's display wrapper (the div that Field
     // renders with `cursor-text min-h-[1.25rem]` around its Display).
@@ -508,17 +521,25 @@ describe("EntityInspector", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
+    const bodyFocusZone = bodyRow!.querySelector(
+      "[data-moniker='field:task:test-id.body']",
+    );
     // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
-    expect(bodyRow!.getAttribute("data-focused")).toBe("true");
+    expect(bodyFocusZone!.getAttribute("data-focused")).toBe("true");
     // Title should no longer be focused
-    expect(titleRow!.getAttribute("data-focused")).toBeNull();
+    expect(titleFocusZone!.getAttribute("data-focused")).toBeNull();
   });
 
   it("only one field has data-focused at a time", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "B", tags: [], assignees: [] }),
     );
-    const focused = container.querySelectorAll("[data-focused]");
+    // Filter to field-zone monikers so we don't count nested pill scopes.
+    const focused = Array.from(
+      container.querySelectorAll("[data-focused]"),
+    ).filter((el) =>
+      el.getAttribute("data-moniker")?.startsWith("field:"),
+    );
     expect(focused.length).toBe(1);
   });
 
@@ -593,7 +614,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-moniker='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
       // The hidden progress row is not rendered, so it never registers as
       // a zone in the spatial graph.
@@ -626,7 +650,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-moniker='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
       // Header order is title → tags → progress; all three rows render.
       expect(
@@ -1175,7 +1202,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-moniker='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
       // All four navigable rows render and live in the right sections.
       const headerSection = container.querySelector(
@@ -1203,10 +1233,14 @@ describe("EntityInspector", () => {
   });
 
   describe("field rows as zones", () => {
-    it("each field row carries the entity's field moniker as its data-moniker", async () => {
-      // After the spatial-nav migration, each field row renders as a
-      // <FocusScope kind="zone"> whose moniker uniquely identifies it
-      // inside the inspector layer. Verify the moniker shape per row.
+    it("each field row contains a FocusZone with the entity's field moniker", async () => {
+      // After card `01KQ5QB6F4MTD35GBTARJH4JEW`, `<Field>` itself
+      // registers as a `<FocusZone>` keyed by
+      // `field:<entityType>:<entityId>.<fieldName>` — the inspector row
+      // no longer wraps the field in its own outer FocusZone. The row's
+      // outer `<div>` carries the `data-testid` and the icon-and-content
+      // layout; the moniker-bearing FocusZone lives inside it (around
+      // the field's display content). Verify the moniker shape per row.
       const { container } = await renderInspector(
         makeEntity({ title: "T", body: "B", tags: [] }),
       );
@@ -1219,30 +1253,33 @@ describe("EntityInspector", () => {
 
       // Field monikers follow the `field:<entityType>:<entityId>.<fieldName>`
       // convention from `lib/moniker.ts`. The exact entity type / id come
-      // from `makeEntity()` (task, test-id).
-      expect(titleRow!.getAttribute("data-moniker")).toBe(
-        "field:task:test-id.title",
-      );
-      expect(tagsRow!.getAttribute("data-moniker")).toBe(
-        "field:task:test-id.tags",
-      );
-      expect(bodyRow!.getAttribute("data-moniker")).toBe(
-        "field:task:test-id.body",
-      );
+      // from `makeEntity()` (task, test-id). The element bearing the
+      // moniker is a descendant of the row (the Field's FocusZone div).
+      expect(
+        titleRow!
+          .querySelector("[data-moniker='field:task:test-id.title']"),
+      ).toBeTruthy();
+      expect(
+        tagsRow!.querySelector("[data-moniker='field:task:test-id.tags']"),
+      ).toBeTruthy();
+      expect(
+        bodyRow!.querySelector("[data-moniker='field:task:test-id.body']"),
+      ).toBeTruthy();
     });
 
     it("field row outer element has flex row layout classes (icon + content stay horizontal)", async () => {
-      // Regression guard: the `<FocusScope kind="zone">` wrap around each
-      // FieldRow must not collapse the icon | content layout into a vertical
-      // stack. The outer field-row element (the FocusZone div carrying the
-      // data-testid) must carry `flex` and `items-start` so the row joins
-      // the parent layout chain horizontally; the icon span and content div
-      // are direct children of the same FocusZone div, so the consumer's
-      // flex classes are sufficient to lay them out side-by-side.
+      // Regression guard: the icon | content layout inside the field row
+      // must not collapse to a vertical stack. After card
+      // `01KQ9ZJHRXCY8Z5YT6RF4SG6EK`, the icon and the content live
+      // *inside* the field's `<FocusZone>` (so a click on the icon
+      // bubbles to the zone's spatial-focus handler and the focus bar
+      // paints to the LEFT of the icon). The flex-row container is now
+      // a child of the zone wrapper; the outer `data-testid` div is a
+      // plain pass-through whose only job is to make the row queryable.
       //
       // CRITICAL: this test must mount inside the spatial-focus provider
       // stack (`<SpatialFocusProvider>` + `<FocusLayer>`). Without it,
-      // `<FocusScope>` short-circuits to its no-spatial-context fallback
+      // `<FocusZone>` short-circuits to its no-spatial-context fallback
       // (a plain `<div>`) instead of mounting the spatial primitive, so
       // any regression that manifests only against the primitive path
       // would slip past.
@@ -1252,18 +1289,13 @@ describe("EntityInspector", () => {
 
       const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
       expect(tagsRow).toBeTruthy();
-      // Outer field-row element carries the row's flex layout classes.
-      expect(tagsRow!.className).toContain("flex");
-      expect(tagsRow!.className).toContain("items-start");
-      expect(tagsRow!.className).toContain("gap-2");
-      // Critical: the row must NOT be a column — that's the regression.
-      expect(tagsRow!.className).not.toContain("flex-col");
 
       // The icon span and the content div must share a single flex-row
-      // ancestor so they lay out side-by-side rather than stacking. Walk
-      // up from the icon span until we hit a flex container; verify the
-      // content div is also a descendant of the same container, and that
-      // the container is row-direction (no `flex-col`).
+      // ancestor — inside the field zone, which itself sits inside the
+      // testid'd outer div. Walk up from the icon span until we hit a
+      // flex container; verify the content div is also a descendant of
+      // the same container, and that the container is row-direction
+      // (no `flex-col`).
       const iconSpan = tagsRow!.querySelector(
         'span[data-slot="tooltip-trigger"]',
       ) as HTMLElement | null;
@@ -1280,7 +1312,20 @@ describe("EntityInspector", () => {
         flexAncestor,
         "icon span has no flex ancestor inside the field row",
       ).toBeTruthy();
+      expect(flexAncestor!.className).toContain("flex");
+      expect(flexAncestor!.className).toContain("items-start");
+      expect(flexAncestor!.className).toContain("gap-2");
+      // Critical: the flex container must NOT be a column.
       expect(flexAncestor!.className).not.toContain("flex-col");
+      // The flex container lives inside the field zone (data-moniker
+      // marker), not at the outer testid wrapper.
+      const fieldZone = tagsRow!.querySelector(
+        '[data-moniker="field:task:test-id.tags"]',
+      );
+      expect(
+        fieldZone!.contains(flexAncestor),
+        "flex row must live inside the field zone so the icon and content share the zone's containing block",
+      ).toBe(true);
       // The content's `flex-1 min-w-0` div is a sibling of the icon span
       // inside that flex container.
       const contentDiv = flexAncestor!.querySelector(

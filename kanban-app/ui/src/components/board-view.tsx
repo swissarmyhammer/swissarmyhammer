@@ -26,13 +26,13 @@ import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
+import { Inspectable } from "@/components/inspectable";
 import { useOptionalLayerKey } from "@/components/focus-layer";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { asMoniker } from "@/types/spatial";
 import {
   useFocusActions,
   useFocusedMoniker,
-  useFocusedMonikerRef,
 } from "@/lib/entity-focus-context";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -587,24 +587,9 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
 /** Shared dependencies passed to each board-action command factory. */
 interface BoardActionDeps {
   columns: Entity[];
-  focusedMonikerRef: React.RefObject<string | null>;
   broadcastRef: React.RefObject<(cmd: string) => void>;
-  dispatchInspect: ReturnType<typeof useDispatchCommand>;
   dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>;
   setFocus: (moniker: string) => void;
-}
-
-/** Factory for the "inspect focused entity" command. */
-function makeInspectCommand(deps: BoardActionDeps): CommandDef {
-  return {
-    id: "board.inspect",
-    name: "Inspect",
-    keys: { vim: "Enter", cua: "Space" },
-    execute: () => {
-      const fm = deps.focusedMonikerRef.current;
-      if (fm) deps.dispatchInspect({ target: fm }).catch(console.error);
-    },
-  };
 }
 
 /** Factory for the "create task in focused column" command.
@@ -664,30 +649,29 @@ function makeNavBroadcastCommand(
 }
 
 /**
- * Board-level action commands: inspect, new task, first/last column navigation.
+ * Board-level action commands: new task, first/last column navigation.
  *
- * Uses refs for focused moniker and broadcast callback to avoid rebuilding
- * the command list on every focus change.
+ * Uses a ref for the broadcast callback to avoid rebuilding the command
+ * list on every focus change. Inspect is no longer a board-scope
+ * concern — it lives on each `<Inspectable>` wrapper (see
+ * `inspectable.tsx`), so every inspectable entity carries its own
+ * scope-level Space binding regardless of which layer it is rendered
+ * in (board, inspector, palette result list).
  */
 function useBoardActionCommands(
   columns: Entity[],
-  focusedMonikerRef: React.RefObject<string | null>,
   broadcastRef: React.RefObject<(cmd: string) => void>,
-  dispatchInspect: ReturnType<typeof useDispatchCommand>,
   dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>,
   setFocus: (moniker: string) => void,
 ): CommandDef[] {
   return useMemo<CommandDef[]>(() => {
     const deps: BoardActionDeps = {
       columns,
-      focusedMonikerRef,
       broadcastRef,
-      dispatchInspect,
       dispatchEntityAddTask,
       setFocus,
     };
     return [
-      makeInspectCommand(deps),
       makeNewTaskCommand(deps),
       makeNavBroadcastCommand(
         deps,
@@ -706,9 +690,7 @@ function useBoardActionCommands(
     ];
   }, [
     columns,
-    dispatchInspect,
     dispatchEntityAddTask,
-    focusedMonikerRef,
     broadcastRef,
     setFocus,
   ]);
@@ -941,26 +923,22 @@ function BoardDndWrapper({
 
 /** Mutable refs BoardView threads into its action-command factories. */
 interface BoardCommandRefs {
-  focusedMonikerRef: React.RefObject<string | null>;
   broadcastRef: React.RefObject<(cmd: string) => void>;
 }
 
 /**
  * Allocate and keep up-to-date the refs used by board action commands.
  *
- * Focus is read through `useFocusedMonikerRef` — a subscribeAll-backed ref —
- * so BoardView does not re-render on every focus move just to keep this
- * ref current. The broadcast callback comes from the stable actions bag,
- * but we wrap it in a ref too for API symmetry with action-command
- * factories downstream that expect a mutable ref.
+ * The broadcast callback comes from the stable actions bag, but we wrap
+ * it in a ref so the board action factories receive a mutable handle —
+ * keeping the command list memo stable across BoardView renders.
  */
 function useBoardCommandRefs(
   broadcastNavCommand: (cmd: string) => void,
 ): BoardCommandRefs {
-  const focusedMonikerRef = useFocusedMonikerRef();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
-  return { focusedMonikerRef, broadcastRef };
+  return { broadcastRef };
 }
 
 /**
@@ -975,13 +953,11 @@ function useBoardCommandRefs(
  * selection; every subsequent move belongs to the navigator.
  */
 export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
-  const dispatchInspect = useDispatchCommand("ui.inspect");
   const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
   const { broadcastNavCommand, setFocus } = useFocusActions();
   const focusedMoniker = useFocusedMoniker();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { focusedMonikerRef, broadcastRef } =
-    useBoardCommandRefs(broadcastNavCommand);
+  const { broadcastRef } = useBoardCommandRefs(broadcastNavCommand);
 
   const layout = useBoardLayout(board, tasks, groupValue);
   const dragDrop = useBoardDragDrop(
@@ -992,9 +968,7 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
 
   const boardActionCommands = useBoardActionCommands(
     layout.columns,
-    focusedMonikerRef,
     broadcastRef,
-    dispatchInspect,
     dispatchEntityAddTask,
     setFocus,
   );
@@ -1004,22 +978,30 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
 
   const handleAddTask = useAddTaskHandler(setFocus);
 
+  // The outer wrapper carries the real `board:<id>` entity moniker.
+  // The `<Inspectable>` wrapper owns inspector dispatch on double-click;
+  // the spatial primitive `<FocusScope>` stays pure-spatial. The inner
+  // `ui:board` chrome zone (in `BoardSpatialZone`) is NOT wrapped in
+  // `<Inspectable>` — only this entity wrapper is — so a double-click
+  // on the board surface inspects the board.
   return (
-    <FocusScope
-      moniker={asMoniker(board.board.moniker)}
-      className="flex flex-col flex-1 min-h-0 relative"
-    >
-      <CommandScopeProvider commands={boardActionCommands}>
-        <BoardSpatialZone>
-          <BoardDndWrapper
-            scrollContainerRef={scrollContainerRef}
-            dragDrop={dragDrop}
-            layout={layout}
-            handleAddTask={handleAddTask}
-          />
-        </BoardSpatialZone>
-      </CommandScopeProvider>
-    </FocusScope>
+    <Inspectable moniker={asMoniker(board.board.moniker)}>
+      <FocusScope
+        moniker={asMoniker(board.board.moniker)}
+        className="flex flex-col flex-1 min-h-0 relative"
+      >
+        <CommandScopeProvider commands={boardActionCommands}>
+          <BoardSpatialZone>
+            <BoardDndWrapper
+              scrollContainerRef={scrollContainerRef}
+              dragDrop={dragDrop}
+              layout={layout}
+              handleAddTask={handleAddTask}
+            />
+          </BoardSpatialZone>
+        </CommandScopeProvider>
+      </FocusScope>
+    </Inspectable>
   );
 }
 
@@ -1032,14 +1014,14 @@ interface BoardSpatialZoneProps {
  * Wrap the board content in a `<FocusZone moniker={asMoniker("ui:board")}>`
  * when the surrounding tree mounts the spatial-nav stack.
  *
- * `<FocusZone>` enforces a strict contract — it throws when no
- * `<FocusLayer>` ancestor is present. That contract is correct for the
- * production tree (`App.tsx` always mounts the providers) but would force
- * every BoardView unit test that doesn't care about spatial nav to set up
- * the providers. Conditionally rendering the zone when both context
- * lookups succeed keeps the strict contract intact for direct
- * `<FocusZone>` usage while letting the board's existing test suite keep
- * its narrow provider tree.
+ * `<FocusZone>` itself tolerates a missing `<FocusLayer>` ancestor by
+ * falling back to a plain `<div>` (post-architecture-fix behaviour), but
+ * that fallback still emits a `data-moniker="ui:board"` attribute. The
+ * board's pre-spatial-nav unit tests assert there is no `ui:board`
+ * marker on the DOM when they mount only `<EntityFocusProvider>` etc.,
+ * so we shortcut the wrap entirely when the provider stack is absent —
+ * existing tests stay green, and production (which always mounts the
+ * providers) takes the zone-emitting branch unchanged.
  */
 function BoardSpatialZone({ children }: BoardSpatialZoneProps) {
   const layerKey = useOptionalLayerKey();
@@ -1047,6 +1029,18 @@ function BoardSpatialZone({ children }: BoardSpatialZoneProps) {
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
+  // The board fills the viewport — drawing a focus rectangle around the
+  // entire board body would be visually noisy, so `showFocusBar={false}`
+  // suppresses the visible `<FocusIndicator>` here. The zone still
+  // registers, still flips its `data-focused` attribute on focus claim,
+  // and still owns drill-in/out + click-to-focus through the spatial-nav
+  // graph — only the visible bar is muted. Sized container zones
+  // (column, card, field row) keep `showFocusBar={true}` because they
+  // are bounded boxes whose users need a visible "here is focus" hint;
+  // viewport-sized chrome zones (board, perspective, view, navbar)
+  // suppress it for the same reason. See
+  // `kanban-app/ui/src/components/perspective-view.spatial.test.tsx`
+  // for the matching contract on the perspective and view zones.
   return (
     <FocusZone
       moniker={asMoniker("ui:board")}

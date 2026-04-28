@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
     BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, FocusLayer, FocusScope,
-    FocusZone, Focusable, LayerKey, LayerName, Moniker, NavStrategy, NoopSink, Pixels,
-    RecordingSink, Rect, SpatialKey, SpatialRegistry, SpatialState, WindowLabel,
+    FocusZone, LayerKey, LayerName, Moniker, NavStrategy, NoopSink, Pixels, RecordingSink, Rect,
+    SpatialKey, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Touch every public type so the import block above is not dead code.
@@ -37,7 +37,8 @@ fn every_public_type_is_constructible_or_referenced() {
     let _name = LayerName::from_string("window");
     let _window = WindowLabel::from_string("main");
 
-    let _focusable = Focusable {
+    // The leaf scope primitive — the Rust peer of React's `<FocusScope>`.
+    let _scope = FocusScope {
         key: SpatialKey::from_string("k"),
         moniker: Moniker::from_string("ui:k"),
         rect: _rect,
@@ -54,7 +55,6 @@ fn every_public_type_is_constructible_or_referenced() {
         last_focused: None,
         overrides: HashMap::new(),
     };
-    let _scope = FocusScope::Focusable(_focusable.clone());
     let _flayer = FocusLayer {
         key: LayerKey::from_string("L"),
         name: LayerName::from_string("window"),

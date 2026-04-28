@@ -14,7 +14,7 @@
  *   - Unmount: invokes `spatial_pop_layer` to clean up the Rust-side stack.
  *
  * The mounted key is published via `FocusLayerContext.Provider` so descendant
- * primitives (`<FocusZone>`, `<Focusable>`) read it through `useCurrentLayerKey`
+ * primitives (`<FocusZone>`, `<FocusScope>`) read it through `useCurrentLayerKey`
  * and pass it to their own register calls.
  *
  * ## What is and is not a layer
@@ -76,7 +76,9 @@ import {
   type ReactNode,
 } from "react";
 import { asLayerKey, type LayerKey, type LayerName } from "@/types/spatial";
+import { useFocusDebug } from "@/lib/focus-debug-context";
 import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
 
 // ---------------------------------------------------------------------------
 // FocusLayerContext — descendants discover their owning layer
@@ -95,7 +97,7 @@ export const FocusLayerContext = createContext<LayerKey | null>(null);
  * Read the `LayerKey` of the enclosing `<FocusLayer>`.
  *
  * Throws when called outside any layer — the spatial-nav contract requires
- * every `<FocusZone>` / `<Focusable>` to be hosted by a layer so the Rust
+ * every `<FocusZone>` / `<FocusScope>` to be hosted by a layer so the Rust
  * side can route navigation correctly.
  */
 export function useCurrentLayerKey(): LayerKey {
@@ -182,9 +184,27 @@ export function FocusLayer({
     };
   }, [key, name, parent, pushLayer, popLayer]);
 
+  // Debug-overlay branch — see `lib/focus-debug-context.tsx`. When the
+  // flag is on, wrap children in a `<div className="relative">` so the
+  // absolutely-positioned dashed border + label have a containing block
+  // to paint against. When the flag is off, render children directly so
+  // production layout is byte-identical to the pre-overlay tree.
+  const debugEnabled = useFocusDebug();
+  // Ref outside the conditional so the hook count is stable across
+  // debug-on / debug-off renders. The host element is only attached when
+  // debug is enabled; when off, the ref simply never receives a node.
+  const debugHostRef = useRef<HTMLDivElement | null>(null);
+
   return (
     <FocusLayerContext.Provider value={key}>
-      {children}
+      {debugEnabled ? (
+        <div ref={debugHostRef} className="relative">
+          <FocusDebugOverlay kind="layer" label={name} hostRef={debugHostRef} />
+          {children}
+        </div>
+      ) : (
+        children
+      )}
     </FocusLayerContext.Provider>
   );
 }

@@ -2,8 +2,11 @@
 //!
 //! The registry holds two flat maps:
 //!
-//! - `scopes: HashMap<SpatialKey, FocusScope>` — every registered leaf or
-//!   container, keyed by its stable mount key.
+//! - `scopes: HashMap<SpatialKey, RegisteredScope>` — every registered leaf
+//!   or container, keyed by its stable mount key. The discriminator
+//!   between leaves and zones lives on an internal enum
+//!   ([`super::scope::RegisteredScope`]); the public API exposes the two
+//!   typed structs ([`FocusScope`], [`FocusZone`]) directly.
 //! - `layers: HashMap<LayerKey, FocusLayer>` — every registered layer
 //!   node, keyed by its stable mount key.
 //!
@@ -13,6 +16,21 @@
 //! and makes the structural queries (`children_of_zone`, `ancestor_zones`,
 //! `children_of_layer`, `ancestors_of_layer`) the source of truth for
 //! "what's inside what".
+//!
+//! ## Three peers, not four
+//!
+//! The kernel exposes three peer types: [`super::layer::FocusLayer`],
+//! [`FocusZone`], and [`FocusScope`]. There is no public sum-type enum
+//! that conflates leaves and zones — consumers iterate the registry via
+//! the variant-aware helpers ([`leaves_in_layer`], [`zones_in_layer`],
+//! [`leaves_iter`], [`zones_iter`]) which yield the typed structs. This
+//! mirrors the React side, where `<FocusLayer>`, `<FocusZone>`, and
+//! `<FocusScope>` are the three components.
+//!
+//! [`leaves_in_layer`]: SpatialRegistry::leaves_in_layer
+//! [`zones_in_layer`]: SpatialRegistry::zones_in_layer
+//! [`leaves_iter`]: SpatialRegistry::leaves_iter
+//! [`zones_iter`]: SpatialRegistry::zones_iter
 //!
 //! ## Threading model
 //!
@@ -26,17 +44,16 @@
 //! [`super::state::SpatialState`] tracks per-window focus (the
 //! `focus_by_window` map) and emits [`super::state::FocusChangedEvent`]s.
 //! `SpatialRegistry` tracks the geometry / layer / zone structure that
-//! the navigator (separate card `01KNQXXF5W...`) reads to compute the
-//! next focus target. The two are intentionally separate: focus state
-//! mutates frequently (every keystroke), structural data mutates only
-//! on mount / unmount / resize.
+//! the navigator reads to compute the next focus target. The two are
+//! intentionally separate: focus state mutates frequently (every
+//! keystroke), structural data mutates only on mount / unmount / resize.
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use super::layer::FocusLayer;
-use super::scope::{FocusScope, FocusZone, Focusable};
+use super::scope::{FocusScope, FocusZone, RegisteredScope};
 use super::types::{pixels_cmp, Direction, LayerKey, Moniker, Rect, SpatialKey, WindowLabel};
 
 /// Headless store for spatial scopes and layers.
@@ -47,9 +64,10 @@ use super::types::{pixels_cmp, Direction, LayerKey, Moniker, Rect, SpatialKey, W
 #[derive(Debug, Default, Clone)]
 pub struct SpatialRegistry {
     /// All registered focus points keyed by [`SpatialKey`]. Both
-    /// [`Focusable`] leaves and [`FocusZone`] containers live here behind
-    /// the [`FocusScope`] enum.
-    scopes: HashMap<SpatialKey, FocusScope>,
+    /// [`FocusScope`] leaves and [`FocusZone`] containers live here behind
+    /// the internal [`RegisteredScope`] enum — the public API exposes the
+    /// typed structs only.
+    scopes: HashMap<SpatialKey, RegisteredScope>,
     /// All registered layers keyed by [`LayerKey`]. Layer hierarchy is
     /// derived from each layer's `parent` field, not stored here.
     layers: HashMap<LayerKey, FocusLayer>,
@@ -65,23 +83,23 @@ impl SpatialRegistry {
     // Scope ops
     // ---------------------------------------------------------------------
 
-    /// Register a [`Focusable`] leaf.
+    /// Register a [`FocusScope`] leaf.
     ///
     /// Replaces any prior scope under the same key. Replacement semantics
     /// are intentional: a hot-reload that reuses a key cannot strand
     /// stale metadata, and re-mounting the same component is idempotent.
-    pub fn register_focusable(&mut self, f: Focusable) {
-        self.scopes.insert(f.key.clone(), FocusScope::Focusable(f));
+    pub fn register_scope(&mut self, f: FocusScope) {
+        self.scopes.insert(f.key.clone(), RegisteredScope::Scope(f));
     }
 
     /// Register a [`FocusZone`] container.
     ///
     /// Replaces any prior scope under the same key. Same semantics as
-    /// [`register_focusable`].
+    /// [`register_scope`].
     ///
-    /// [`register_focusable`]: SpatialRegistry::register_focusable
+    /// [`register_scope`]: SpatialRegistry::register_scope
     pub fn register_zone(&mut self, z: FocusZone) {
-        self.scopes.insert(z.key.clone(), FocusScope::Zone(z));
+        self.scopes.insert(z.key.clone(), RegisteredScope::Zone(z));
     }
 
     /// Remove a scope from the registry.
@@ -114,30 +132,97 @@ impl SpatialRegistry {
         }
     }
 
-    /// Borrow a scope by key.
+    /// Borrow a leaf [`FocusScope`] by key, or `None` if the key is
+    /// unregistered or registered as a zone.
+    ///
+    /// Use [`zone`](Self::zone) to look up zones, [`is_registered`](Self::is_registered)
+    /// for variant-blind presence checks.
     pub fn scope(&self, key: &SpatialKey) -> Option<&FocusScope> {
+        self.scopes.get(key).and_then(RegisteredScope::as_scope)
+    }
+
+    /// Borrow a [`FocusZone`] by key, or `None` if the key is
+    /// unregistered or registered as a leaf.
+    ///
+    /// `last_focused` is populated at registration (the kernel preserves
+    /// it across re-registers via [`apply_batch`](Self::apply_batch));
+    /// the registry does not mutate it after the fact.
+    pub fn zone(&self, key: &SpatialKey) -> Option<&FocusZone> {
+        self.scopes.get(key).and_then(RegisteredScope::as_zone)
+    }
+
+    /// `true` when **any** scope (leaf or zone) is registered under
+    /// `key`. Convenience for callers that don't care which variant —
+    /// the navigator uses this to validate a starting key before
+    /// consulting a strategy.
+    pub fn is_registered(&self, key: &SpatialKey) -> bool {
+        self.scopes.contains_key(key)
+    }
+
+    /// Crate-internal accessor returning the discriminated entry.
+    ///
+    /// External callers should use [`scope`](Self::scope) or
+    /// [`zone`](Self::zone). The internal navigator and focus-state code
+    /// pattern-match on the entry variant; rather than expose that enum
+    /// publicly (the kernel has three peers, not four), we keep the
+    /// match site inside the crate.
+    pub(crate) fn entry(&self, key: &SpatialKey) -> Option<&RegisteredScope> {
         self.scopes.get(key)
     }
 
     /// Iterate over every registered scope in the registry, regardless
-    /// of layer. Used by the navigator when resolving a moniker the
-    /// strategy returned back to the [`SpatialKey`] it was registered
-    /// under.
-    pub fn scopes_iter(&self) -> impl Iterator<Item = &FocusScope> + '_ {
+    /// of variant or layer. Used by the navigator when resolving a
+    /// moniker the strategy returned back to the [`SpatialKey`] it was
+    /// registered under.
+    ///
+    /// Crate-internal because the iterator yields the discriminated
+    /// entry; public iteration uses [`leaves_iter`](Self::leaves_iter) /
+    /// [`zones_iter`](Self::zones_iter).
+    pub(crate) fn entries_iter(&self) -> impl Iterator<Item = &RegisteredScope> + '_ {
         self.scopes.values()
+    }
+
+    /// Iterate every registered [`FocusScope`] leaf in the registry,
+    /// regardless of layer.
+    pub fn leaves_iter(&self) -> impl Iterator<Item = &FocusScope> + '_ {
+        self.scopes.values().filter_map(RegisteredScope::as_scope)
+    }
+
+    /// Iterate every registered [`FocusZone`] container in the registry,
+    /// regardless of layer.
+    pub fn zones_iter(&self) -> impl Iterator<Item = &FocusZone> + '_ {
+        self.scopes.values().filter_map(RegisteredScope::as_zone)
     }
 
     /// Iterate over the direct children of a zone — scopes whose
     /// `parent_zone` equals `zone_key`.
     ///
     /// Direct children only; grandchildren whose `parent_zone` points at
-    /// some other zone are excluded. The returned iterator borrows from
-    /// the registry; clone the keys you care about if you need to outlive
-    /// the borrow.
+    /// some other zone are excluded. Yields a small variant-aware view
+    /// (`ChildScope::Leaf` or `ChildScope::Zone`) so callers that need
+    /// to distinguish leaf vs container do so without pattern-matching
+    /// a public enum.
     pub fn children_of_zone(
         &self,
         zone_key: &SpatialKey,
-    ) -> impl Iterator<Item = &FocusScope> + '_ {
+    ) -> impl Iterator<Item = ChildScope<'_>> + '_ {
+        let zone_key = zone_key.clone();
+        self.scopes.values().filter_map(move |s| {
+            if s.parent_zone() == Some(&zone_key) {
+                Some(child_scope_from_entry(s))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Crate-internal version of [`children_of_zone`](Self::children_of_zone)
+    /// that yields the discriminated entry directly. Used by the
+    /// navigator and state, which already pattern-match internally.
+    pub(crate) fn child_entries_of_zone(
+        &self,
+        zone_key: &SpatialKey,
+    ) -> impl Iterator<Item = &RegisteredScope> + '_ {
         let zone_key = zone_key.clone();
         self.scopes
             .values()
@@ -175,13 +260,34 @@ impl SpatialRegistry {
         chain
     }
 
-    /// Iterate over every scope in `key`'s layer.
+    /// Iterate every leaf [`FocusScope`] in `key`'s layer.
     ///
-    /// Returns both `Focusable` and `Zone` variants whose `layer_key`
-    /// matches the queried layer. Used by the navigator when computing
-    /// beam-search candidate sets — candidates outside the active layer
-    /// are filtered out at this boundary rather than during scoring.
-    pub fn scopes_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusScope> + '_ {
+    /// Used by the navigator when computing beam-search candidate sets
+    /// — leaves outside the active layer are filtered out at this
+    /// boundary rather than during scoring.
+    pub fn leaves_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusScope> + '_ {
+        let key = key.clone();
+        self.scopes.values().filter_map(move |s| match s {
+            RegisteredScope::Scope(f) if f.layer_key == key => Some(f),
+            _ => None,
+        })
+    }
+
+    /// Iterate every [`FocusZone`] in `key`'s layer.
+    pub fn zones_in_layer(&self, key: &LayerKey) -> impl Iterator<Item = &FocusZone> + '_ {
+        let key = key.clone();
+        self.scopes.values().filter_map(move |s| match s {
+            RegisteredScope::Zone(z) if z.layer_key == key => Some(z),
+            _ => None,
+        })
+    }
+
+    /// Crate-internal: iterate every entry (leaf or zone) in `key`'s
+    /// layer.
+    pub(crate) fn entries_in_layer(
+        &self,
+        key: &LayerKey,
+    ) -> impl Iterator<Item = &RegisteredScope> + '_ {
         let key = key.clone();
         self.scopes.values().filter(move |s| s.layer_key() == &key)
     }
@@ -203,7 +309,7 @@ impl SpatialRegistry {
     ///   broken by leftmost). Matches `Direction::First` ordering so the
     ///   keyboard model stays consistent.
     /// - **Zone with no children** — returns `None`. Frontend stays put.
-    /// - **`Focusable` leaf** — returns `None`. Leaves do not have
+    /// - **[`FocusScope`] leaf** — returns `None`. Leaves do not have
     ///   children to drill into; the React side decides separately
     ///   whether the leaf has an inline-edit affordance to invoke.
     /// - **Unknown `key`** — returns `None`. The frontend falls through
@@ -213,15 +319,14 @@ impl SpatialRegistry {
     /// translates the returned moniker into a `SpatialState::focus` call
     /// (or back into `setFocus` on the React side).
     pub fn drill_in(&self, key: SpatialKey) -> Option<Moniker> {
-        let scope = self.scope(&key)?;
-        let zone = scope.as_zone()?;
+        let zone = self.zone(&key)?;
 
         // Honor the zone's remembered position when it still resolves to
         // a registered scope. A `last_focused` whose target was since
         // unregistered is treated the same as no memory at all.
         if let Some(remembered) = &zone.last_focused {
-            if let Some(remembered_scope) = self.scope(remembered) {
-                return Some(remembered_scope.moniker().clone());
+            if let Some(remembered_entry) = self.scopes.get(remembered) {
+                return Some(remembered_entry.moniker().clone());
             }
         }
 
@@ -229,7 +334,7 @@ impl SpatialRegistry {
         // `left()` so two rows at the same `top` produce a deterministic
         // winner. Borrows from the registry; only the chosen moniker is
         // cloned out.
-        self.children_of_zone(&zone.key)
+        self.child_entries_of_zone(&zone.key)
             .min_by(|a, b| {
                 pixels_cmp(a.rect().top(), b.rect().top())
                     .then(pixels_cmp(a.rect().left(), b.rect().left()))
@@ -241,7 +346,7 @@ impl SpatialRegistry {
     /// scope at `key`.
     ///
     /// Returns the [`Moniker`] of the scope's `parent_zone`. Works the
-    /// same for both [`Focusable`] leaves and nested [`FocusZone`]
+    /// same for both [`FocusScope`] leaves and nested [`FocusZone`]
     /// containers — the result is always the enclosing zone, so a
     /// repeated drill-out walks the zone chain toward the layer root.
     ///
@@ -256,9 +361,11 @@ impl SpatialRegistry {
     ///
     /// Pure registry query — does not mutate state.
     pub fn drill_out(&self, key: SpatialKey) -> Option<Moniker> {
-        let scope = self.scope(&key)?;
-        let parent_zone_key = scope.parent_zone()?;
-        self.scope(parent_zone_key).map(|s| s.moniker().clone())
+        let entry = self.scopes.get(&key)?;
+        let parent_zone_key = entry.parent_zone()?;
+        self.scopes
+            .get(parent_zone_key)
+            .map(|s| s.moniker().clone())
     }
 
     // ---------------------------------------------------------------------
@@ -388,7 +495,7 @@ impl SpatialRegistry {
     /// - [`BatchRegisterError::KindMismatch`] when an entry's variant
     ///   disagrees with the variant already registered under the same
     ///   `SpatialKey`. The placeholder/real-mount swap relies on
-    ///   `register_focusable` and `register_zone` being **idempotent on
+    ///   `register_scope` and `register_zone` being **idempotent on
     ///   key but not silently variant-changing**, so the error surface
     ///   is the kernel's contract enforcement point.
     pub fn apply_batch(&mut self, entries: Vec<RegisterEntry>) -> Result<(), BatchRegisterError> {
@@ -407,12 +514,12 @@ impl SpatialRegistry {
                         existing_kind: if existing_is_zone {
                             ScopeKind::Zone
                         } else {
-                            ScopeKind::Focusable
+                            ScopeKind::Scope
                         },
                         requested_kind: if entry_is_zone {
                             ScopeKind::Zone
                         } else {
-                            ScopeKind::Focusable
+                            ScopeKind::Scope
                         },
                     });
                 }
@@ -426,7 +533,7 @@ impl SpatialRegistry {
         // virtualizer pass) so drill-out memory survives the swap.
         for entry in entries {
             match entry {
-                RegisterEntry::Focusable {
+                RegisterEntry::Scope {
                     key,
                     moniker,
                     rect,
@@ -434,7 +541,7 @@ impl SpatialRegistry {
                     parent_zone,
                     overrides,
                 } => {
-                    self.register_focusable(Focusable {
+                    self.register_scope(FocusScope {
                         key,
                         moniker,
                         rect,
@@ -477,14 +584,64 @@ impl SpatialRegistry {
     }
 }
 
+/// Variant-aware view returned by [`SpatialRegistry::children_of_zone`].
+///
+/// Provides the leaf vs container split without exposing the internal
+/// [`RegisteredScope`] enum. Consumers that only need the shared fields
+/// (`key`, `moniker`, `rect`, `parent_zone`) can use the accessor methods;
+/// consumers that need a typed view of one variant pattern-match on the
+/// enum.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChildScope<'a> {
+    /// A leaf [`FocusScope`] child.
+    Leaf(&'a FocusScope),
+    /// A nested [`FocusZone`] child.
+    Zone(&'a FocusZone),
+}
+
+impl<'a> ChildScope<'a> {
+    /// Stable identity of the child, regardless of variant.
+    pub fn key(&self) -> &SpatialKey {
+        match self {
+            Self::Leaf(f) => &f.key,
+            Self::Zone(z) => &z.key,
+        }
+    }
+
+    /// Entity-identity moniker of the child, regardless of variant.
+    pub fn moniker(&self) -> &Moniker {
+        match self {
+            Self::Leaf(f) => &f.moniker,
+            Self::Zone(z) => &z.moniker,
+        }
+    }
+
+    /// Bounding rect of the child, regardless of variant.
+    pub fn rect(&self) -> Rect {
+        match self {
+            Self::Leaf(f) => f.rect,
+            Self::Zone(z) => z.rect,
+        }
+    }
+}
+
+/// Adapter from the internal [`RegisteredScope`] enum to the public
+/// [`ChildScope`] variant-aware view. Crate-private so the internal
+/// enum stays hidden.
+fn child_scope_from_entry(entry: &RegisteredScope) -> ChildScope<'_> {
+    match entry {
+        RegisteredScope::Scope(f) => ChildScope::Leaf(f),
+        RegisteredScope::Zone(z) => ChildScope::Zone(z),
+    }
+}
+
 /// One entry in a batch registration.
 ///
-/// The wire-shape companion to [`Focusable`] / [`FocusZone`] —
+/// The wire-shape companion to [`FocusScope`] / [`FocusZone`] —
 /// reuses the same fields and the same newtypes so the IPC boundary
 /// can be a single `Vec<RegisterEntry>` payload. The discriminator
 /// uses a `kind` tag with `snake_case` rename so the React side reads
-/// the variant the same way it reads `FocusScope` (which uses the
-/// same shape).
+/// the variant the same way it reads other tagged enums in the kernel.
 ///
 /// `last_focused` is intentionally **not** carried on the wire for
 /// the `Zone` variant: registration is the React side's "this scope
@@ -496,8 +653,8 @@ impl SpatialRegistry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RegisterEntry {
-    /// A leaf focusable point — see [`Focusable`].
-    Focusable {
+    /// A leaf focus scope — see [`FocusScope`].
+    Scope {
         /// Stable identity for this mount.
         key: SpatialKey,
         /// Entity-identity moniker for the leaf.
@@ -532,7 +689,7 @@ impl RegisterEntry {
     /// Read the entry's [`SpatialKey`] regardless of variant.
     pub fn key(&self) -> &SpatialKey {
         match self {
-            Self::Focusable { key, .. } | Self::Zone { key, .. } => key,
+            Self::Scope { key, .. } | Self::Zone { key, .. } => key,
         }
     }
 }
@@ -543,9 +700,9 @@ impl RegisterEntry {
 /// it can stay in PascalCase for ergonomic `match` arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
-    /// Matches [`RegisterEntry::Focusable`] and [`FocusScope::Focusable`].
-    Focusable,
-    /// Matches [`RegisterEntry::Zone`] and [`FocusScope::Zone`].
+    /// Matches [`RegisterEntry::Scope`] — a leaf [`FocusScope`].
+    Scope,
+    /// Matches [`RegisterEntry::Zone`] — a [`FocusZone`].
     Zone,
 }
 
@@ -610,8 +767,8 @@ mod tests {
         }
     }
 
-    fn focusable(key: &str, layer: &str, parent_zone: Option<&str>) -> Focusable {
-        Focusable {
+    fn focus_scope(key: &str, layer: &str, parent_zone: Option<&str>) -> FocusScope {
+        FocusScope {
             key: SpatialKey::from_string(key),
             moniker: Moniker::from_string(format!("ui:{key}")),
             rect: rect(),
@@ -646,7 +803,7 @@ mod tests {
     #[test]
     fn register_and_lookup() {
         let mut reg = SpatialRegistry::new();
-        reg.register_focusable(focusable("k", "L", None));
+        reg.register_scope(focus_scope("k", "L", None));
         assert!(reg.scope(&SpatialKey::from_string("k")).is_some());
     }
 
@@ -655,7 +812,7 @@ mod tests {
         let mut reg = SpatialRegistry::new();
         reg.register_zone(zone("outer", "L", None));
         reg.register_zone(zone("inner", "L", Some("outer")));
-        reg.register_focusable(focusable("leaf", "L", Some("inner")));
+        reg.register_scope(focus_scope("leaf", "L", Some("inner")));
 
         let chain: Vec<_> = reg
             .ancestor_zones(&SpatialKey::from_string("leaf"))

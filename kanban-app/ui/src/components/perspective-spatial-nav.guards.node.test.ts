@@ -8,7 +8,7 @@
  *
  * Files under guard:
  *   - `perspective-tab-bar.tsx` — registers as `ui:perspective-bar` zone;
- *     each tab is a `perspective_tab:{id}` Focusable leaf.
+ *     each tab is a `perspective_tab:{id}` FocusScope leaf.
  *   - `perspective-container.tsx` — registers as `ui:perspective` zone with
  *     the canonical `flex flex-col flex-1 min-h-0 min-w-0` layout.
  *   - `view-container.tsx` — registers as `ui:view` zone with the canonical
@@ -58,9 +58,9 @@ describe("PerspectiveTabBar source-level guards", () => {
     );
   });
 
-  it("wraps each tab in Focusable with moniker perspective_tab:${id}", () => {
+  it("wraps each tab in FocusScope with moniker perspective_tab:${id}", () => {
     expect(SRC).toMatch(
-      /<Focusable\s+moniker=\{asMoniker\(`perspective_tab:\$\{id\}`\)/,
+      /<FocusScope\s+moniker=\{asMoniker\(`perspective_tab:\$\{id\}`\)/,
     );
   });
 

@@ -31,6 +31,15 @@
 
 - id: ui.entity.startRename
   name: Rename Perspective
+  # Scope-pinned to perspective entities — the only renameable entity today
+  # is a perspective tab. The `entity:perspective` filter keeps the keyboard
+  # binding from claiming Enter on board / column / card focus, where the
+  # global `nav.drillIn` should still fire.
+  scope: "entity:perspective"
+  keys:
+    cua: Enter
+    vim: Enter
+    emacs: Enter
 
 - id: ui.mode.set
   name: Set App Mode

@@ -12,6 +12,16 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// `EntityFocusProvider` now imports the optional spatial-focus actions
+// hook, which pulls in `spatial-focus-context.tsx`, which uses
+// `@tauri-apps/api/event`. That module re-exports `transformCallback`
+// from `core` — so when `core` is mocked with just `invoke`, the real
+// `event` module fails to import. Mock `event` here too so this test
+// stays self-contained and never reaches the real Tauri runtime.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 // Import after mocks
 import { StoreContainer } from "./store-container";
 

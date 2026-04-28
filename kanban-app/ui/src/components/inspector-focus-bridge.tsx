@@ -14,10 +14,12 @@ interface InspectorFocusBridgeProps {
 /**
  * Wraps EntityInspector in a CommandScopeProvider with inspector navigation commands.
  *
- * Structural focus: each field row is a `<FocusScope kind="zone">` registered
- * in the spatial-nav graph, and the Rust kernel's beam search picks the next
- * focus — within-field nav (e.g. between pills) flows from rule 1 (in-zone
- * candidates); cross-field nav flows from rule 2 (cross-zone leaf fallback).
+ * Structural focus: each field row is a `<FocusZone>` registered
+ * in the spatial-nav graph, and the Rust kernel's unified cascade picks
+ * the next focus — within-field nav (e.g. between pills) is iter 0
+ * (same-level peers inside the field zone); cross-field nav is iter 1
+ * (the cascade escalates to the parent zone and lands on the
+ * neighbouring field zone, which the React adapter drills back into).
  * There are no per-row claimWhen predicates.
  *
  * Migration state — vim/arrow/tab nav: the `inspector.move{Up,Down,ToFirst,ToLast}`

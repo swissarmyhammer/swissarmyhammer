@@ -17,9 +17,9 @@
 //!   child by rect top-left ordering.
 //! - `drill_in` on a Zone with no `last_focused` returns the first child.
 //! - `drill_in` on a Zone with no children returns `None`.
-//! - `drill_in` on a Focusable returns `None` (React handles inline edit).
+//! - `drill_in` on a FocusScope returns `None` (React handles inline edit).
 //! - `drill_in` on an unknown key returns `None`.
-//! - `drill_out` on a Focusable returns its `parent_zone`'s [`Moniker`].
+//! - `drill_out` on a FocusScope returns its `parent_zone`'s [`Moniker`].
 //! - `drill_out` on a Zone returns its `parent_zone`'s [`Moniker`].
 //! - `drill_out` at the layer root (no `parent_zone`) returns `None`.
 //! - `drill_out` on an unknown key returns `None`.
@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusZone, Focusable, LayerKey, Moniker, Pixels, Rect, SpatialKey, SpatialRegistry,
+    FocusScope, FocusZone, LayerKey, Moniker, Pixels, Rect, SpatialKey, SpatialRegistry,
 };
 
 // ---------------------------------------------------------------------------
@@ -47,15 +47,15 @@ fn rect_at(x: f64, y: f64) -> Rect {
     }
 }
 
-/// Construct a [`Focusable`] at the given rect with no overrides.
-fn focusable(
+/// Construct a [`FocusScope`] leaf at the given rect with no overrides.
+fn leaf(
     key: &str,
     moniker: &str,
     layer: &str,
     parent_zone: Option<&str>,
     rect: Rect,
-) -> Focusable {
-    Focusable {
+) -> FocusScope {
+    FocusScope {
         key: SpatialKey::from_string(key),
         moniker: Moniker::from_string(moniker),
         rect,
@@ -95,14 +95,14 @@ fn zone(
 fn drill_in_zone_with_live_last_focused_returns_remembered_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.register_zone(zone("z", "ui:zone", "L", None, Some("leaf-b")));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-a",
         "ui:leaf-a",
         "L",
         Some("z"),
         rect_at(0.0, 0.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-b",
         "ui:leaf-b",
         "L",
@@ -128,14 +128,14 @@ fn drill_in_zone_with_stale_last_focused_falls_back_to_first_child() {
     // leaf-a is at (10, 0), leaf-b is at (0, 0). Top-left ordering ranks
     // by (top, left) — leaf-b (top=0, left=0) wins over leaf-a (top=0,
     // left=10).
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-a",
         "ui:leaf-a",
         "L",
         Some("z"),
         rect_at(10.0, 0.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-b",
         "ui:leaf-b",
         "L",
@@ -159,14 +159,14 @@ fn drill_in_zone_with_no_last_focused_uses_first_child_by_rect() {
     reg.register_zone(zone("z", "ui:zone", "L", None, None));
     // Two children: one at (5, 5), one at (5, 0). Top-left ordering ranks
     // (top=0, left=5) over (top=5, left=5) since `top` is the primary key.
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-bottom",
         "ui:leaf-bottom",
         "L",
         Some("z"),
         rect_at(5.0, 5.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-top",
         "ui:leaf-top",
         "L",
@@ -194,7 +194,7 @@ fn drill_in_empty_zone_returns_none() {
 }
 
 // ---------------------------------------------------------------------------
-// drill_in — Focusable
+// drill_in — FocusScope
 // ---------------------------------------------------------------------------
 
 /// Drill-in on a leaf returns `None` — leaves do not have children. The
@@ -203,7 +203,7 @@ fn drill_in_empty_zone_returns_none() {
 #[test]
 fn drill_in_focusable_returns_none() {
     let mut reg = SpatialRegistry::new();
-    reg.register_focusable(focusable("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
+    reg.register_scope(leaf("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
 
     let target = reg.drill_in(SpatialKey::from_string("leaf"));
     assert_eq!(target, None);
@@ -224,7 +224,7 @@ fn drill_in_unknown_key_returns_none() {
 }
 
 // ---------------------------------------------------------------------------
-// drill_out — Focusable to its parent zone
+// drill_out — FocusScope to its parent zone
 // ---------------------------------------------------------------------------
 
 /// Drill-out on a leaf returns the moniker of its enclosing zone.
@@ -232,13 +232,7 @@ fn drill_in_unknown_key_returns_none() {
 fn drill_out_focusable_returns_parent_zone_moniker() {
     let mut reg = SpatialRegistry::new();
     reg.register_zone(zone("z", "ui:zone", "L", None, None));
-    reg.register_focusable(focusable(
-        "leaf",
-        "ui:leaf",
-        "L",
-        Some("z"),
-        rect_at(0.0, 0.0),
-    ));
+    reg.register_scope(leaf("leaf", "ui:leaf", "L", Some("z"), rect_at(0.0, 0.0)));
 
     let target = reg.drill_out(SpatialKey::from_string("leaf"));
     assert_eq!(target, Some(Moniker::from_string("ui:zone")));
@@ -270,7 +264,7 @@ fn drill_out_zone_returns_parent_zone_moniker() {
 #[test]
 fn drill_out_at_layer_root_returns_none() {
     let mut reg = SpatialRegistry::new();
-    reg.register_focusable(focusable("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
+    reg.register_scope(leaf("leaf", "ui:leaf", "L", None, rect_at(0.0, 0.0)));
 
     let target = reg.drill_out(SpatialKey::from_string("leaf"));
     assert_eq!(target, None);
@@ -304,14 +298,14 @@ fn drill_in_after_remembered_position_returns_remembered_moniker() {
     // Pre-populate `last_focused` so the test does not depend on the
     // navigator's update path.
     reg.register_zone(zone("z", "ui:zone", "L", None, Some("leaf-a")));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-a",
         "ui:leaf-a",
         "L",
         Some("z"),
         rect_at(0.0, 0.0),
     ));
-    reg.register_focusable(focusable(
+    reg.register_scope(leaf(
         "leaf-b",
         "ui:leaf-b",
         "L",
@@ -324,5 +318,105 @@ fn drill_in_after_remembered_position_returns_remembered_moniker() {
         target,
         Some(Moniker::from_string("ui:leaf-a")),
         "drill-in honors the remembered slot, even when other children exist",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// drill_in — Field zone with pill children
+//
+// Pin the inspector-specific contract from card
+// `01KQ9ZJHRXCY8Z5YT6RF4SG6EK` (bug 3): a field zone whose pill scopes
+// are laid out left-to-right (e.g. a `tags` field rendering badge
+// pills) drills in to the leftmost pill. The pills' monikers follow
+// the entity convention `tag:<id>` rather than the synthetic `ui:`
+// monikers above, but the geometric ordering rule is the same — the
+// first child by rect (top, left) wins when no `last_focused` is set.
+// ---------------------------------------------------------------------------
+
+/// A field zone whose pill children are laid out horizontally returns the
+/// leftmost pill's moniker on drill-in. Pins the inspector contract that
+/// "Enter on a focused pill field drills into the first pill" maps to a
+/// kernel response that the React side can dispatch `setFocus` against.
+#[test]
+fn drill_in_field_zone_with_pill_children_returns_first_pill_moniker() {
+    let mut reg = SpatialRegistry::new();
+
+    // The field zone (`field:task:T1.tags`) sits inside the inspector
+    // panel zone in production; here we anchor it directly in the
+    // layer for simplicity. The contract under test is the in-zone
+    // ordering, which doesn't depend on the parent chain.
+    reg.register_zone(zone(
+        "field-tags-key",
+        "field:task:T1.tags",
+        "L",
+        None,
+        None,
+    ));
+
+    // Three pill scopes, horizontally progressing on the same row.
+    // Top-left ordering ranks (top=0, left=0) before (top=0, left=10)
+    // before (top=0, left=20) — `tag:tag-bug` wins.
+    reg.register_scope(leaf(
+        "pill-bug-key",
+        "tag:tag-bug",
+        "L",
+        Some("field-tags-key"),
+        rect_at(0.0, 0.0),
+    ));
+    reg.register_scope(leaf(
+        "pill-ui-key",
+        "tag:tag-ui",
+        "L",
+        Some("field-tags-key"),
+        rect_at(10.0, 0.0),
+    ));
+    reg.register_scope(leaf(
+        "pill-docs-key",
+        "tag:tag-docs",
+        "L",
+        Some("field-tags-key"),
+        rect_at(20.0, 0.0),
+    ));
+
+    let target = reg.drill_in(SpatialKey::from_string("field-tags-key"));
+    assert_eq!(
+        target,
+        Some(Moniker::from_string("tag:tag-bug")),
+        "drill-in on a tags field zone returns the leftmost pill's moniker",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// drill_in — Field zone with no children
+//
+// Pin the "Enter falls through to edit mode" contract from card
+// `01KQ9ZJHRXCY8Z5YT6RF4SG6EK` (bug 3): when a field zone has no pill
+// children (e.g. an empty tags field, or an editable scalar like
+// `name`), drill-in returns None. The React side reads the null
+// response and falls through to `onEdit?.()` — opening the editor
+// for editable fields, no-op for read-only ones.
+// ---------------------------------------------------------------------------
+
+/// A field zone with no spatial children — the canonical "scalar leaf
+/// without a click-into structure" case — returns None on drill-in.
+/// React falls through to `onEdit?.()`.
+#[test]
+fn drill_in_field_zone_with_no_children_returns_none() {
+    let mut reg = SpatialRegistry::new();
+
+    // Register the field zone but no pill children — mirrors an
+    // editable scalar field (e.g. `name`) or an empty pill field.
+    reg.register_zone(zone(
+        "field-name-key",
+        "field:task:T1.name",
+        "L",
+        None,
+        None,
+    ));
+
+    let target = reg.drill_in(SpatialKey::from_string("field-name-key"));
+    assert_eq!(
+        target, None,
+        "drill-in on a childless field zone returns None — React falls through to onEdit",
     );
 }
