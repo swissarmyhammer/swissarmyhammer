@@ -41,7 +41,7 @@ pub use hook_config::{
     HookOutput, HookRegistration, HookSpecificOutput, MatcherGroup, PromptHookResponse,
     SessionSource, UnsupportedEventKind,
 };
-pub use hookable_agent::HookableAgent;
+pub use hookable_agent::{hookable_agent_from_config, HookableAgent};
 pub use playback::PlaybackAgent;
 // NOTE: The A3 task acceptance criteria mentioned `RecordedEvent` alongside
 // `RecordedCall`/`RecordedSession`, but no `RecordedEvent` type ever existed

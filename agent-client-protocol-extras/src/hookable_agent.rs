@@ -206,10 +206,7 @@ impl<A> HookableAgent<A> {
     ///
     /// `AllowWithContext` decisions cause the hook context strings to be
     /// prepended as a `TextContent` block at the front of `request.prompt`.
-    pub async fn run_user_prompt_submit(
-        &self,
-        request: PromptRequest,
-    ) -> AcpResult<PromptRequest> {
+    pub async fn run_user_prompt_submit(&self, request: PromptRequest) -> AcpResult<PromptRequest> {
         let session_id = request.session_id.to_string();
         let cwd = self.get_cwd(&session_id);
         let event = HookEvent::UserPromptSubmit {
@@ -227,11 +224,7 @@ impl<A> HookableAgent<A> {
     /// Returns the (possibly-annotated) response. If any hook returned
     /// `ShouldContinue`, the response's `meta` is annotated with
     /// `hook_should_continue: true` and `hook_reason: <reason>`.
-    pub async fn run_stop(
-        &self,
-        session_id: String,
-        response: PromptResponse,
-    ) -> PromptResponse {
+    pub async fn run_stop(&self, session_id: String, response: PromptResponse) -> PromptResponse {
         let cwd = self.get_cwd(&session_id);
         let stop_hook_active = self.in_stop_hook.load(std::sync::atomic::Ordering::SeqCst);
         self.in_stop_hook
@@ -408,6 +401,30 @@ impl<A> HookableAgent<A> {
         );
         response
     }
+}
+
+/// Convenience: build a [`HookableAgent`] from a parsed [`crate::HookConfig`]
+/// and an inner ACP component.
+///
+/// Translates each matcher group + handler in the config into a runtime
+/// [`HookRegistration`] (via [`crate::HookConfig::build_registrations`]) and
+/// attaches it to a fresh [`HookableAgent`] wrapping `inner`.
+///
+/// # Errors
+/// Returns [`crate::HookConfigError`] if the config contains an empty hook
+/// list, an invalid matcher regex, or a `prompt`/`agent` handler without a
+/// corresponding `evaluator`.
+pub fn hookable_agent_from_config<A>(
+    inner: A,
+    config: &crate::HookConfig,
+    evaluator: Option<Arc<dyn crate::HookEvaluator>>,
+) -> Result<HookableAgent<A>, crate::HookConfigError> {
+    let registrations = config.build_registrations(evaluator)?;
+    let mut agent = HookableAgent::new(inner);
+    for reg in registrations {
+        agent = agent.with_registration(reg);
+    }
+    Ok(agent)
 }
 
 impl<A> ConnectTo<Client> for HookableAgent<A>
@@ -1335,8 +1352,11 @@ mod tests {
             }
         }
 
-        let agent =
-            HookableAgent::new(DummyInner).with_hook(&[HookEventKind::UserPromptSubmit], None, CancelHook);
+        let agent = HookableAgent::new(DummyInner).with_hook(
+            &[HookEventKind::UserPromptSubmit],
+            None,
+            CancelHook,
+        );
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
@@ -1422,8 +1442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hookable_agent_with_transcript_path() {
-        let agent =
-            HookableAgent::new(DummyInner).with_transcript_path("/tmp/transcript.jsonl");
+        let agent = HookableAgent::new(DummyInner).with_transcript_path("/tmp/transcript.jsonl");
         assert_eq!(
             agent.command_context().transcript_path,
             "/tmp/transcript.jsonl"
@@ -1507,10 +1526,8 @@ mod tests {
             "c1",
             ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         );
-        let notification = SessionNotification::new(
-            SessionId::from("s1"),
-            SessionUpdate::ToolCallUpdate(update),
-        );
+        let notification =
+            SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
@@ -1527,10 +1544,8 @@ mod tests {
             "c1",
             ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
         );
-        let notification = SessionNotification::new(
-            SessionId::from("s1"),
-            SessionUpdate::ToolCallUpdate(update),
-        );
+        let notification =
+            SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
@@ -1546,10 +1561,8 @@ mod tests {
             "unknown-id",
             ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         );
-        let notification = SessionNotification::new(
-            SessionId::from("s1"),
-            SessionUpdate::ToolCallUpdate(update),
-        );
+        let notification =
+            SessionNotification::new(SessionId::from("s1"), SessionUpdate::ToolCallUpdate(update));
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
