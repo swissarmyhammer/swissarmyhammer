@@ -32,9 +32,9 @@ import { evaluateSort } from "@/lib/perspective-eval";
 import { CommandScopeProvider, useActiveBoardPath } from "@/lib/command-scope";
 import { useRefreshEntities } from "@/components/rust-engine-container";
 import { FocusZone } from "@/components/focus-zone";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import type { Entity, PerspectiveDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
 }
 
 /**
- * Wrap the active perspective body in a `<FocusZone moniker={asMoniker("ui:perspective")}>`
+ * Wrap the active perspective body in a `<FocusZone moniker={asSegment("ui:perspective")}>`
  * when the surrounding tree mounts the spatial-nav stack.
  *
  * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
@@ -152,14 +152,14 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
  * filling the available space when the spatial-nav stack is present.
  */
 function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
     <FocusZone
-      moniker={asMoniker("ui:perspective")}
+      moniker={asSegment("ui:perspective")}
       // Viewport-sized chrome zone — a visible focus bar around the entire
       // perspective body would frame the whole window and add no signal.
       // The zone exists so the navigator can drill *into* it from the bar

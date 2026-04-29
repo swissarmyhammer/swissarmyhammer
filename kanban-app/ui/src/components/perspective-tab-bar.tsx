@@ -40,9 +40,9 @@ import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ const PERSPECTIVE_BAR_LAYOUT =
   "flex items-center border-b bg-muted/20 px-1 h-8 shrink-0";
 
 /**
- * Wrap the perspective tab bar in a `<FocusZone moniker={asMoniker("ui:perspective-bar")}>`
+ * Wrap the perspective tab bar in a `<FocusZone moniker={asSegment("ui:perspective-bar")}>`
  * when the surrounding tree mounts the spatial-nav stack.
  *
  * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
@@ -274,14 +274,14 @@ const PERSPECTIVE_BAR_LAYOUT =
  * present.
  */
 function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   if (!layerKey || !actions) {
     return <div className={PERSPECTIVE_BAR_LAYOUT}>{children}</div>;
   }
   return (
     <FocusZone
-      moniker={asMoniker("ui:perspective-bar")}
+      moniker={asSegment("ui:perspective-bar")}
       // The bar is viewport-spanning chrome (full window width × 32px high) —
       // a focus indicator running across its entire row would be visual
       // noise. The bar's job in the spatial graph is to be the parent zone
@@ -341,7 +341,7 @@ const EMPTY_PERSPECTIVE_SCOPE_COMMANDS: readonly CommandDef[] = Object.freeze(
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  *
  * The tab's render also goes through `<PerspectiveTabFocusable>`, which adds a
- * `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>` leaf when the
+ * `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>` leaf when the
  * spatial-nav stack is mounted. That makes each tab a peer leaf in the
  * surrounding `ui:perspective-bar` zone so beam-search picks them up as
  * sibling navigation targets.
@@ -411,7 +411,7 @@ function ScopedPerspectiveTab({
 }
 
 /**
- * Wrap a perspective tab in `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>`
+ * Wrap a perspective tab in `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>`
  * when the spatial-nav stack is mounted; otherwise fall through.
  *
  * Same conditional pattern as `PerspectiveBarSpatialZone` and
@@ -425,13 +425,13 @@ function PerspectiveTabFocusable({
   id: string;
   children: ReactNode;
 }) {
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
-    <FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>
+    <FocusScope moniker={asSegment(`perspective_tab:${id}`)}>
       {children}
     </FocusScope>
   );

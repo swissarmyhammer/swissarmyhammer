@@ -123,7 +123,7 @@ import {
   useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
-import type { Moniker } from "@/types/spatial";
+import type { SegmentMoniker } from "@/types/spatial";
 
 /** Reference type for `useDispatchCommand("ui.inspect")` — preset dispatcher. */
 type InspectDispatcher = ReturnType<typeof useDispatchCommand>;
@@ -148,7 +148,7 @@ type InspectDispatcher = ReturnType<typeof useDispatchCommand>;
  */
 function useInspectDoubleClickHandler(
   dispatch: InspectDispatcher,
-  moniker: Moniker,
+  moniker: SegmentMoniker,
 ): (e: React.MouseEvent) => void {
   return useCallback(
     (e: React.MouseEvent) => {
@@ -188,7 +188,7 @@ function useInspectDoubleClickHandler(
  *   `onDoubleClick` on any host element.
  */
 export function useInspectOnDoubleClick(
-  moniker: Moniker,
+  moniker: SegmentMoniker,
 ): (e: React.MouseEvent) => void {
   const dispatch = useDispatchCommand("ui.inspect");
   return useInspectDoubleClickHandler(dispatch, moniker);
@@ -203,7 +203,7 @@ export interface InspectableProps {
    * `focus-architecture.guards.node.test.ts`) enforces the prefix at
    * the call site.
    */
-  moniker: Moniker;
+  moniker: SegmentMoniker;
   /** Children rendered inside the layout-transparent wrapper. */
   children: ReactNode;
 }

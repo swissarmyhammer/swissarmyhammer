@@ -28,7 +28,7 @@ import { Inspectable } from "@/components/inspectable";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
 import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { FieldDef } from "@/types/kanban";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -215,7 +215,7 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
   // inspects the attachment. To suppress inspect at the outer wrapper,
   // the inner handler would need to stop the event itself; that is a
   // separate UX decision and out of scope for this refactor.
-  const moniker = asMoniker(`attachment:${attachment.path}`);
+  const moniker = asSegment(`attachment:${attachment.path}`);
   return (
     <Inspectable moniker={moniker}>
       <FocusScope moniker={moniker} className="min-w-0">

@@ -26,7 +26,7 @@ import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
 import { useInspectOnDoubleClick } from "@/components/inspectable";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
@@ -34,7 +34,7 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
 import { COMPACT_ROW_HEIGHT_PX } from "@/components/fields/displays/compact-cell-wrapper";
 import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 /**
  * Body row height in pixels.
@@ -626,7 +626,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
     // hook, so Guard A continues to hold (the inspect dispatch site
     // is still `inspectable.tsx`).
     <FocusScope
-      moniker={asMoniker(entityMk)}
+      moniker={asSegment(entityMk)}
       renderContainer={false}
     >
       <EntityRow
@@ -892,10 +892,10 @@ function GridCellFocusable({
   children,
 }: GridCellFocusableProps) {
   const moniker = useMemo(
-    () => asMoniker(gridCellMoniker(di, colKey)),
+    () => asSegment(gridCellMoniker(di, colKey)),
     [di, colKey],
   );
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   // The spatial-nav stack may be absent in unit tests with a narrow
   // provider tree (the bare `<DataTable>` test harness deliberately
@@ -973,7 +973,7 @@ function EntityRow({
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
-  const onDoubleClick = useInspectOnDoubleClick(asMoniker(entityMk));
+  const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
 
   return (
     <TableRow

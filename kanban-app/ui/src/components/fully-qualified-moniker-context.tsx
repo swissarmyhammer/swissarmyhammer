@@ -24,8 +24,12 @@
  * reaching into a primitive's namespace.
  */
 
-import { createContext, useContext } from "react";
-import type { FullyQualifiedMoniker } from "@/types/spatial";
+import { createContext, useContext, useMemo } from "react";
+import {
+  composeFq,
+  type FullyQualifiedMoniker,
+  type SegmentMoniker,
+} from "@/types/spatial";
 
 /**
  * The branded `FullyQualifiedMoniker` of the nearest ancestor spatial
@@ -67,4 +71,20 @@ export function useFullyQualifiedMoniker(): FullyQualifiedMoniker {
  */
 export function useOptionalFullyQualifiedMoniker(): FullyQualifiedMoniker | null {
   return useContext(FullyQualifiedMonikerContext);
+}
+
+/**
+ * Compose a child FQM under the enclosing spatial primitive's FQM.
+ *
+ * Convenience wrapper around `composeFq(useFullyQualifiedMoniker(), segment)`
+ * for callsites that need to dispatch focus against a not-yet-mounted
+ * descendant (e.g. `setFocus` inside a parent zone targeting a leaf
+ * mounted by the same render).
+ *
+ * Throws when called outside any spatial primitive — callers must have
+ * a `<FocusLayer>` / `<FocusZone>` / `<FocusScope>` ancestor.
+ */
+export function useChildFq(segment: SegmentMoniker): FullyQualifiedMoniker {
+  const parent = useFullyQualifiedMoniker();
+  return useMemo(() => composeFq(parent, segment), [parent, segment]);
 }

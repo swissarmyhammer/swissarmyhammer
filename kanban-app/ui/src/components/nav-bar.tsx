@@ -16,7 +16,7 @@ import {
   useActiveBoardPath,
   useHandleSwitchBoard,
 } from "@/components/window-container";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 /**
  * Top-level navigation bar.
@@ -77,12 +77,12 @@ export function NavBar() {
 
   return (
     <FocusZone
-      moniker={asMoniker("ui:navbar")}
+      moniker={asSegment("ui:navbar")}
       showFocusBar={false}
       role="banner"
       className="relative flex h-12 items-center border-b px-4 gap-2"
     >
-      <FocusScope moniker={asMoniker("ui:navbar.board-selector")}>
+      <FocusScope moniker={asSegment("ui:navbar.board-selector")}>
         <BoardSelector
           boards={openBoards}
           selectedPath={
@@ -94,7 +94,7 @@ export function NavBar() {
         />
       </FocusScope>
       {board && (
-        <FocusScope moniker={asMoniker("ui:navbar.inspect")}>
+        <FocusScope moniker={asSegment("ui:navbar.inspect")}>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -131,7 +131,7 @@ export function NavBar() {
         />
       )}
       <FocusScope
-        moniker={asMoniker("ui:navbar.search")}
+        moniker={asSegment("ui:navbar.search")}
         className="ml-auto"
       >
         <Tooltip>

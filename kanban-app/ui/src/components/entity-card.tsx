@@ -2,7 +2,7 @@ import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, type LucideIcon } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import {
   Field,
   getDisplayIconOverride,
@@ -102,9 +102,9 @@ export const EntityCard = memo(
       // in `<Inspectable>`. The architectural guard
       // (`focus-architecture.guards.node.test.ts`, Guards B + C)
       // enforces both directions.
-      <Inspectable moniker={asMoniker(entity.moniker)}>
+      <Inspectable moniker={asSegment(entity.moniker)}>
         <FocusScope
-          moniker={asMoniker(entity.moniker)}
+          moniker={asSegment(entity.moniker)}
           commands={extraCommands}
         >
           <div

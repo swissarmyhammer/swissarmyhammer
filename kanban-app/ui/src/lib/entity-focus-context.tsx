@@ -43,10 +43,12 @@ import {
   type SpatialFocusActions,
 } from "./spatial-focus-context";
 import {
+  composeFq,
   fqLastSegment,
   type FullyQualifiedMoniker,
   type SegmentMoniker,
 } from "@/types/spatial";
+import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
@@ -665,4 +667,41 @@ export function useEntityFocus(): EntityFocusContextValue {
  */
 export function useFocusedMoniker(): FullyQualifiedMoniker | null {
   return useFocusedFq();
+}
+
+/**
+ * Build a `setFocus`-compatible callback that composes a tail of
+ * `SegmentMoniker` segments under the enclosing spatial primitive's
+ * FQM, then dispatches the focus mutation through the kernel.
+ *
+ * Use when the caller knows the relative path of the target relative
+ * to the current primitive's FQM. Single-segment callers (immediate
+ * child) pass one segment; multi-segment callers (e.g. board-zone
+ * targeting a not-yet-mounted card under a known column) pass the
+ * full chain.
+ *
+ * Falls back to a `console.error` no-op when called outside any
+ * spatial primitive — production trees always wrap everything in a
+ * window-root layer, so the no-context branch is reachable only in
+ * pre-spatial-nav unit tests.
+ */
+export function useFocusBySegmentPath(): (...segments: SegmentMoniker[]) => void {
+  const parent = useOptionalFullyQualifiedMoniker();
+  const { setFocus } = useFocusActions();
+  return useCallback(
+    (...segments: SegmentMoniker[]) => {
+      if (parent === null) {
+        console.error(
+          "useFocusBySegmentPath called outside any spatial primitive",
+        );
+        return;
+      }
+      let fq = parent;
+      for (const seg of segments) {
+        fq = composeFq(fq, seg);
+      }
+      setFocus(fq);
+    },
+    [parent, setFocus],
+  );
 }

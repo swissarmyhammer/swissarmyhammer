@@ -7,9 +7,10 @@ import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
-import { FocusZone, useParentZoneKey } from "@/components/focus-zone";
+import { FocusZone, useParentZoneFq } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -22,11 +23,10 @@ import { useFocusActions } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 import {
-  asMoniker,
   asPixels,
-  asSpatialKey,
-  type LayerKey,
-  type SpatialKey,
+  asSegment,
+  composeFq,
+  type FullyQualifiedMoniker,
 } from "@/types/spatial";
 
 /**
@@ -197,60 +197,33 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
 }
 
 // ---------------------------------------------------------------------------
-// useStableSpatialKeys — stable per-task SpatialKey for virtualizer placeholders
+// Placeholder FQMs — composed from each task's segment under the column FQ
 // ---------------------------------------------------------------------------
 
 /**
- * Mint and reuse a stable [`SpatialKey`] per task ID for the lifetime of the
- * column.
+ * Compute the placeholder FQM for each off-screen task.
  *
- * The virtualized column registers two flavours of spatial scope per task:
- *   - The real-mounted `EntityCard` (when the task is in the visible window)
- *     mints its own `SpatialKey` inside `<FocusScope>` (the card body is
- *     a leaf — see the docstring on `<EntityCard>`).
- *   - The off-screen placeholder (registered via `spatial_register_batch`
- *     with `kind: "scope"`) uses a stable per-id key from this map so
- *     re-registers across scroll-window changes are idempotent — the
- *     kernel's `apply_batch` overwrites the rect for an existing key
- *     without disturbing `last_focused`.
+ * Path-monikers identity makes per-task `SpatialKey` minting unnecessary:
+ * the FQM IS the kernel's identifier, derived deterministically from the
+ * task's segment and the enclosing column zone's FQM. Re-registration
+ * across scroll-window changes hits the same key, so the kernel's
+ * `apply_batch` overwrites the rect without disturbing `last_focused`.
  *
- * Stale entries (tasks that have since been removed from the column) are
- * pruned so the map cannot grow without bound across long-lived columns.
- * Returns the live map by reference; callers should not mutate it.
- *
- * **Commit-order caveat for callers.** Because `useStableSpatialKeys` is
- * declared first in `VirtualColumn`, its prune effect runs *before* any
- * later effect (e.g. `usePlaceholderRegistration`'s) in the same commit
- * pass. A consumer that needs the deleted-task key during cleanup must
- * keep its own copy of the keys it has registered against — the live
- * map will already have forgotten them by the time the consumer's effect
- * runs.
+ * Returns a map of `taskId → FullyQualifiedMoniker`. Callers should not
+ * mutate it.
  */
-function useStableSpatialKeys(tasks: Entity[]): Map<string, SpatialKey> {
-  const mapRef = useRef<Map<string, SpatialKey>>(new Map());
-  const map = mapRef.current;
-
-  // Mint missing keys. Done in render — `crypto.randomUUID()` is sync and
-  // safe; we only insert when absent so identity is stable across renders.
-  for (const task of tasks) {
-    if (!map.has(task.id)) {
-      map.set(task.id, asSpatialKey(crypto.randomUUID()));
+function useTaskPlaceholderFqs(
+  tasks: Entity[],
+  columnFq: FullyQualifiedMoniker | null,
+): Map<string, FullyQualifiedMoniker> {
+  return useMemo(() => {
+    const map = new Map<string, FullyQualifiedMoniker>();
+    if (columnFq === null) return map;
+    for (const task of tasks) {
+      map.set(task.id, composeFq(columnFq, asSegment(task.moniker)));
     }
-  }
-
-  // Prune entries whose tasks no longer exist (post-render to avoid
-  // mid-render mutation surprises).
-  useEffect(() => {
-    const live = new Set(tasks.map((t) => t.id));
-    for (const id of Array.from(map.keys())) {
-      if (!live.has(id)) map.delete(id);
-    }
-    // Including `tasks` in the dep list keeps the prune in sync with the
-    // task list. The map ref itself never changes identity, so we don't
-    // include it in the deps.
-  }, [tasks, map]);
-
-  return map;
+    return map;
+  }, [tasks, columnFq]);
 }
 
 // ---------------------------------------------------------------------------
@@ -291,14 +264,15 @@ function useVisibleIndexSet<T extends Element>(
 /** Inputs for `usePlaceholderRegistration`. */
 interface PlaceholderRegistrationInputs {
   tasks: Entity[];
-  stableKeys: Map<string, SpatialKey>;
+  /** FQM map keyed by task ID — composed once per task list. */
+  taskFqs: Map<string, FullyQualifiedMoniker>;
   /** Set of indices currently in the virtualizer's visible window. */
   visibleIndices: Set<number>;
   /** Layer this column lives in, or `null` outside the spatial-nav stack. */
-  layerKey: LayerKey | null;
+  layerFq: FullyQualifiedMoniker | null;
   /** Enclosing zone (the column's own zone), or `null` when the column is
    *  at the layer root. */
-  parentZone: SpatialKey | null;
+  parentZone: FullyQualifiedMoniker | null;
   /** The scrollable container — used to derive a sensible placeholder rect. */
   scrollEl: HTMLDivElement | null;
   /**
@@ -333,11 +307,11 @@ interface PlaceholderRegistrationInputs {
  */
 interface ScopeRegisterEntry {
   kind: "scope";
-  key: SpatialKey;
-  moniker: string;
+  fq: FullyQualifiedMoniker;
+  segment: string;
   rect: { x: number; y: number; width: number; height: number };
-  layer_key: LayerKey;
-  parent_zone: SpatialKey | null;
+  layer_fq: FullyQualifiedMoniker;
+  parent_zone: FullyQualifiedMoniker | null;
   overrides: Record<string, never>;
 }
 
@@ -367,34 +341,30 @@ interface ScopeRegisterEntry {
 function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
   const {
     tasks,
-    stableKeys,
+    taskFqs,
     visibleIndices,
-    layerKey,
+    layerFq,
     parentZone,
     scrollEl,
     scrollOffset,
   } = inputs;
   const spatial = useOptionalSpatialFocusActions();
 
-  // Track each registered placeholder as `(taskId → SpatialKey)` so the
-  // unregister path is self-contained: it does NOT depend on the live
-  // `stableKeys` map having an entry for the id. That decoupling is
-  // load-bearing — `useStableSpatialKeys`'s prune effect runs first in
-  // commit order (declared earlier in the parent component), so by the
-  // time this hook's effect runs after a task has been deleted the
-  // `stableKeys` map has already forgotten the deleted task's key. The
-  // map ref remembers it so we can still unregister.
-  const registeredRef = useRef<Map<string, SpatialKey>>(new Map());
+  // Track each registered placeholder as `(taskId → FullyQualifiedMoniker)`
+  // so the unregister path is self-contained even if the surrounding
+  // `taskFqs` map has dropped a deleted task's entry by the time this
+  // effect runs.
+  const registeredRef = useRef<Map<string, FullyQualifiedMoniker>>(new Map());
 
   useEffect(() => {
     // Outside the spatial-nav stack — nothing to register against. Bail
     // out early; the tests that mount column-view without a provider hit
     // this path and stay quiet.
-    if (!spatial || !layerKey) return;
+    if (!spatial || !layerFq) return;
 
     // Build the placeholder set for the current off-screen tasks, plus
     // the wire-format batch entries to ship across the IPC boundary.
-    const wantPlaceholder = new Map<string, SpatialKey>();
+    const wantPlaceholder = new Map<string, FullyQualifiedMoniker>();
     const offScreen: ScopeRegisterEntry[] = [];
 
     // Skip entirely when we don't have a real scroll element to anchor
@@ -421,20 +391,20 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
       for (let i = 0; i < tasks.length; i++) {
         if (visibleIndices.has(i)) continue;
         const task = tasks[i];
-        const key = stableKeys.get(task.id);
-        if (!key) continue;
-        wantPlaceholder.set(task.id, key);
+        const fq = taskFqs.get(task.id);
+        if (!fq) continue;
+        wantPlaceholder.set(task.id, fq);
         offScreen.push({
           kind: "scope",
-          key,
-          moniker: task.moniker,
+          fq,
+          segment: task.moniker,
           rect: {
             x: asPixels(baseX),
             y: asPixels(baseY + i * ESTIMATED_ITEM_HEIGHT - offset),
             width: asPixels(width),
             height: asPixels(ESTIMATED_ITEM_HEIGHT),
           },
-          layer_key: layerKey,
+          layer_fq: layerFq,
           parent_zone: parentZone,
           overrides: {},
         });
@@ -442,20 +412,13 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
     }
 
     // Unregister placeholders that should no longer exist — IDs that
-    // either became visible (real card now owns the moniker) or left
-    // the task list. Done before the batch register so the kernel sees
-    // the unregisters first if the same key is being recycled.
-    //
-    // The unregister key comes from `registeredRef`, NOT from the live
-    // `stableKeys` map: the parent component's `useStableSpatialKeys`
-    // effect prunes deleted-task keys *before* this effect runs (it is
-    // declared earlier in commit order), so a `stableKeys.get(id)`
-    // lookup here would silently miss the deleted task and leak its
-    // placeholder.
+    // either became visible (real card now owns the FQM) or left the
+    // task list. Done before the batch register so the kernel sees the
+    // unregisters first if the same FQM is being recycled.
     const previouslyRegistered = registeredRef.current;
-    for (const [id, key] of previouslyRegistered) {
+    for (const [id, fq] of previouslyRegistered) {
       if (wantPlaceholder.has(id)) continue;
-      spatial.unregisterScope(key).catch((err) => {
+      spatial.unregisterScope(fq).catch((err) => {
         console.error("[column-view] placeholder unregister failed", err);
       });
     }
@@ -472,9 +435,9 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
     registeredRef.current = wantPlaceholder;
   }, [
     tasks,
-    stableKeys,
+    taskFqs,
     visibleIndices,
-    layerKey,
+    layerFq,
     parentZone,
     scrollEl,
     scrollOffset,
@@ -487,8 +450,8 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
     const registered = registeredRef;
     return () => {
       if (!spatial) return;
-      for (const [, key] of registered.current) {
-        spatial.unregisterScope(key).catch((err) => {
+      for (const [, fq] of registered.current) {
+        spatial.unregisterScope(fq).catch((err) => {
           console.error("[column-view] placeholder cleanup failed", err);
         });
       }
@@ -514,7 +477,7 @@ interface ColumnBodyProps {
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
-  setFocus: (moniker: string) => void;
+  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }
 
 /**
@@ -620,9 +583,9 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   // (`focus-architecture.guards.node.test.ts`, Guards B + C) enforces
   // this for every entity-monikered zone.
   return (
-    <Inspectable moniker={asMoniker(columnMoniker)}>
+    <Inspectable moniker={asSegment(columnMoniker)}>
       <FocusZone
-        moniker={asMoniker(columnMoniker)}
+        moniker={asSegment(columnMoniker)}
         className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
       >
         <ColumnBody
@@ -654,7 +617,7 @@ interface ColumnHeaderProps {
   setEditingName: (v: boolean) => void;
   taskCount: number;
   onAddTask?: (columnId: string) => void;
-  setFocus: (moniker: string) => void;
+  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }
 
 /** Renders the column header row with name, task count badge, and add button. */
@@ -694,7 +657,6 @@ function ColumnNameField({
 
 function ColumnHeader({
   column,
-  columnMoniker,
   columnNameMoniker,
   nameFieldDef,
   editingName,
@@ -703,17 +665,28 @@ function ColumnHeader({
   onAddTask,
   setFocus,
 }: ColumnHeaderProps) {
+  // Inside the column's `<FocusZone>` body — `useOptionalFullyQualifiedMoniker`
+  // returns the column's FQM. Compose the column-name leaf FQM and the
+  // column-zone FQM (for the AddTaskButton's setFocus call) by appending
+  // segments under it.
+  const columnFq = useOptionalFullyQualifiedMoniker();
+  const columnNameFq =
+    columnFq !== null
+      ? composeFq(columnFq, asSegment(columnNameMoniker))
+      : null;
   return (
     <div
       className="px-3 py-2 flex items-center gap-2 rounded"
-      onClickCapture={() => setFocus(columnNameMoniker)}
+      onClickCapture={() => {
+        if (columnNameFq) setFocus(columnNameFq);
+      }}
     >
       {/* inspect:exempt — `column:<id>.name` is a synthetic navigation
           leaf wrapping a `<Field>` zone (which itself owns the
           per-field inspect opt-in via `fields/field.tsx`). Double-click
           on the column name routes to the field editor's `onEdit`, not
           to the inspector. */}
-      <FocusScope moniker={asMoniker(columnNameMoniker)} className="inline">
+      <FocusScope moniker={asSegment(columnNameMoniker)} className="inline">
         <ColumnNameField
           column={column}
           nameFieldDef={nameFieldDef}
@@ -727,7 +700,7 @@ function ColumnHeader({
         <AddTaskButton
           columnId={column.id}
           columnName={getStr(column, "name") ?? ""}
-          columnMoniker={columnMoniker}
+          columnFq={columnFq}
           onAddTask={onAddTask}
           setFocus={setFocus}
         />
@@ -740,15 +713,15 @@ function ColumnHeader({
 function AddTaskButton({
   columnId,
   columnName,
-  columnMoniker,
+  columnFq,
   onAddTask,
   setFocus,
 }: {
   columnId: string;
   columnName: string;
-  columnMoniker: string;
+  columnFq: FullyQualifiedMoniker | null;
   onAddTask: (columnId: string) => void;
-  setFocus: (moniker: string) => void;
+  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }) {
   return (
     <Tooltip>
@@ -758,7 +731,7 @@ function AddTaskButton({
           aria-label={`Add task to ${columnName}`}
           className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
           onClick={() => {
-            setFocus(columnMoniker);
+            if (columnFq) setFocus(columnFq);
             onAddTask(columnId);
           }}
         >
@@ -972,24 +945,26 @@ function VirtualColumn(props: VirtualColumnProps) {
 
   // Spatial-nav placeholder wiring. Off-screen rows have no mounted
   // primitives, so without placeholders the spatial graph dead-ends at the
-  // visible window. `useStableSpatialKeys` mints a stable key per task so
-  // the kernel's idempotent re-register path can refresh placeholder rects
-  // across scroll without losing drill-out memory; `usePlaceholderRegistration`
-  // ships the off-screen entries through `spatial_register_batch`.
+  // visible window. The placeholder FQMs are composed deterministically
+  // from each task's segment under the column's FQM, so re-registers
+  // across scroll-window changes hit the same key and the kernel's
+  // idempotent `apply_batch` overwrites the rect without losing drill-
+  // out memory.
   //
   // Hooks live deep inside the column body (here, not on `<ColumnView>`)
   // so they sit alongside the virtualizer they depend on — keeping the
   // outer `<FocusScope>` wrap untouched (the FocusScope wrap was rewritten
   // when `FocusScopeBody` was removed).
-  const stableKeys = useStableSpatialKeys(tasks);
-  const layerKey = useOptionalLayerKey();
-  const parentZone = useParentZoneKey();
+  const layerFq = useOptionalEnclosingLayerFq();
+  const parentZone = useParentZoneFq();
+  const columnFq = useOptionalFullyQualifiedMoniker();
+  const taskFqs = useTaskPlaceholderFqs(tasks, columnFq);
   const visibleIndices = useVisibleIndexSet(virtualizer, tasks.length);
   usePlaceholderRegistration({
     tasks,
-    stableKeys,
+    taskFqs,
     visibleIndices,
-    layerKey,
+    layerFq,
     parentZone,
     scrollEl: scrollRef.current,
     scrollOffset: virtualizer.scrollOffset,

@@ -26,7 +26,7 @@ import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import { TextViewer } from "@/components/text-viewer";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { useSchema, type MentionableType } from "@/lib/schema-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
 import { buildMentionMetaMap } from "@/hooks/use-mention-extensions";
@@ -260,9 +260,9 @@ function SingleMention({
     // (`focus-architecture.guards.node.test.ts`, Guards B + C)
     // enforces every entity-prefixed wrapper has an `<Inspectable>`
     // ancestor.
-    <Inspectable moniker={asMoniker(scopeMoniker)}>
+    <Inspectable moniker={asSegment(scopeMoniker)}>
       <FocusScope
-        moniker={asMoniker(scopeMoniker)}
+        moniker={asSegment(scopeMoniker)}
         commands={extraCommands}
         className="inline"
         showFocusBar={showFocusBar}

@@ -20,15 +20,16 @@
  * The simulator captures the full payload of every IPC call shaped by
  * `lib/spatial-focus-context.tsx`'s actions bag:
  *
- *   - `spatial_push_layer(key, name, parent)` — appends a `LayerRecord`
- *     and remembers which layer keys were pushed in order.
- *   - `spatial_pop_layer(key)` — drops the layer; downstream queries
+ *   - `spatial_push_layer(fq, segment, name, parent)` — appends a
+ *     `LayerRecord` and remembers which layer FQMs were pushed in
+ *     order.
+ *   - `spatial_pop_layer(fq)` — drops the layer; downstream queries
  *     will not find it.
  *   - `spatial_register_zone` / `spatial_register_scope` — appends a
- *     `RegistrationRecord` with the captured rect, layer key, parent
+ *     `RegistrationRecord` with the captured rect, layer FQM, parent
  *     zone, kind ("zone" or "scope"), and overrides.
- *   - `spatial_unregister_scope(key)` — drops the registration.
- *   - `spatial_update_rect(key, rect)` — refreshes the live rect for an
+ *   - `spatial_unregister_scope(fq)` — drops the registration.
+ *   - `spatial_update_rect(fq, rect)` — refreshes the live rect for an
  *     existing registration (the registration order remains intact).
  *
  * # Cascade simulation tradeoff
@@ -47,18 +48,17 @@
  *
  * On a stay-put cascade (layer-root edge with no peer in the chosen
  * direction), the simulator emits a synthetic `focus-changed` event
- * carrying the focused moniker echoed back as `next_moniker` (with
- * `prev_key === next_key === fromKey`). This mirrors the real Rust
- * kernel's emit-after-write behavior — `cardinal_cascade` returns
- * `focused_moniker.clone()` on stay-put, which the adapter wires
- * through to a focus-changed emit so the IPC trace always shows the
- * end-state for every nav dispatch. See
- * `01KQAW97R9XTCNR1PJAWYSKBC7` for the contract; see
- * `swissarmyhammer-focus/src/navigate.rs` (fn `cardinal_cascade`) for
- * the kernel implementation. Without this emit, tests that count
- * focus-changed events or assert on a moniker echo during a no-motion
- * case would behave differently against the simulator vs. the real
- * kernel.
+ * carrying the focused FQM echoed back as `next_fq` (with
+ * `prev_fq === next_fq === fromFq`). This mirrors the real Rust
+ * kernel's emit-after-write behavior — `cardinal_cascade` returns the
+ * focused FQM on stay-put, which the adapter wires through to a
+ * focus-changed emit so the IPC trace always shows the end-state for
+ * every nav dispatch. See `01KQAW97R9XTCNR1PJAWYSKBC7` for the
+ * contract; see `swissarmyhammer-focus/src/navigate.rs` (fn
+ * `cardinal_cascade`) for the kernel implementation. Without this
+ * emit, tests that count focus-changed events or assert on a moniker
+ * echo during a no-motion case would behave differently against the
+ * simulator vs. the real kernel.
  *
  * # Mount-ordering history
  *
@@ -72,9 +72,9 @@
 import { vi } from "vitest";
 import type {
   FocusChangedPayload,
-  LayerKey,
+  FullyQualifiedMoniker,
   LayerName,
-  SpatialKey,
+  SegmentMoniker,
   WindowLabel,
 } from "@/types/spatial";
 import {
@@ -92,18 +92,19 @@ import {
 
 /** One layer push captured from `spatial_push_layer`. */
 export interface LayerRecord {
-  key: LayerKey;
+  fq: FullyQualifiedMoniker;
+  segment: SegmentMoniker;
   name: LayerName;
-  parent: LayerKey | null;
+  parent: FullyQualifiedMoniker | null;
 }
 
 /** One zone or scope registration captured from `spatial_register_*`. */
 export interface RegistrationRecord {
   kind: ShadowKind;
-  key: SpatialKey;
-  moniker: string;
-  layerKey: LayerKey;
-  parentZone: SpatialKey | null;
+  fq: FullyQualifiedMoniker;
+  segment: SegmentMoniker;
+  layerFq: FullyQualifiedMoniker;
+  parentZone: FullyQualifiedMoniker | null;
   rect: RectLike;
   overrides: Record<string, unknown>;
 }
@@ -119,18 +120,20 @@ export type HistoryEntry =
 
 /** The handle a test holds onto for the lifetime of one render. */
 export interface KernelSimulator {
-  /** All currently-pushed layers, keyed by `LayerKey`. */
-  layers: Map<LayerKey, LayerRecord>;
-  /** All currently-registered zones/scopes, keyed by `SpatialKey`. */
-  registrations: Map<SpatialKey, RegistrationRecord>;
+  /** All currently-pushed layers, keyed by FQM. */
+  layers: Map<FullyQualifiedMoniker, LayerRecord>;
+  /** All currently-registered zones/scopes, keyed by FQM. */
+  registrations: Map<FullyQualifiedMoniker, RegistrationRecord>;
   /** Push + register events in the order they arrived (for ordering assertions). */
   history: HistoryEntry[];
-  /** The currently focused `SpatialKey`, mutated by `spatial_focus` / `spatial_navigate`. */
-  currentFocus: { key: SpatialKey | null };
-  /** Find a registration by moniker. Returns the most-recent live entry. */
-  findByMoniker(moniker: string): RegistrationRecord | undefined;
-  /** Find every registration whose moniker has the given prefix. */
-  findByMonikerPrefix(prefix: string): RegistrationRecord[];
+  /** The currently focused FQM, mutated by `spatial_focus` / `spatial_navigate`. */
+  currentFocus: { fq: FullyQualifiedMoniker | null };
+  /** Find a registration by segment. Returns the most-recent live entry. */
+  findBySegment(segment: string): RegistrationRecord | undefined;
+  /** Find every registration whose segment has the given prefix. */
+  findBySegmentPrefix(prefix: string): RegistrationRecord[];
+  /** Find a registration by FQM. */
+  findByFq(fq: FullyQualifiedMoniker): RegistrationRecord | undefined;
 }
 
 /**
@@ -165,21 +168,21 @@ export function installKernelSimulator(
   listeners: Map<string, Array<(event: { payload: unknown }) => void>>,
   fallback: FallbackInvoke = async () => undefined,
 ): KernelSimulator {
-  const layers = new Map<LayerKey, LayerRecord>();
-  const registrations = new Map<SpatialKey, RegistrationRecord>();
+  const layers = new Map<FullyQualifiedMoniker, LayerRecord>();
+  const registrations = new Map<FullyQualifiedMoniker, RegistrationRecord>();
   const history: HistoryEntry[] = [];
-  const currentFocus: { key: SpatialKey | null } = { key: null };
+  const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
 
   const emitFocusChanged = (
-    prev: SpatialKey | null,
-    next: SpatialKey | null,
-    nextMoniker: string | null,
+    prev: FullyQualifiedMoniker | null,
+    next: FullyQualifiedMoniker | null,
+    nextSegment: SegmentMoniker | null,
   ) => {
     const payload: FocusChangedPayload = {
       window_label: "main" as WindowLabel,
-      prev_key: prev,
-      next_key: next,
-      next_moniker: nextMoniker as FocusChangedPayload["next_moniker"],
+      prev_fq: prev,
+      next_fq: next,
+      next_segment: nextSegment,
     };
     queueMicrotask(() => {
       const handlers = listeners.get("focus-changed") ?? [];
@@ -189,10 +192,10 @@ export function installKernelSimulator(
 
   const shadowFor = (rec: RegistrationRecord): ShadowEntry => ({
     kind: rec.kind,
-    key: rec.key,
-    moniker: rec.moniker,
+    fq: rec.fq,
+    segment: rec.segment,
     rect: rec.rect,
-    layerKey: rec.layerKey,
+    layerFq: rec.layerFq,
     parentZone: rec.parentZone,
     overrides: rec.overrides,
   });
@@ -202,100 +205,69 @@ export function installKernelSimulator(
 
     if (cmd === "spatial_push_layer") {
       const record: LayerRecord = {
-        key: a.key as LayerKey,
+        fq: a.fq as FullyQualifiedMoniker,
+        segment: a.segment as SegmentMoniker,
         name: a.name as LayerName,
-        parent: (a.parent ?? null) as LayerKey | null,
+        parent: (a.parent ?? null) as FullyQualifiedMoniker | null,
       };
-      layers.set(record.key, record);
+      layers.set(record.fq, record);
       history.push({ type: "push_layer", record });
       return undefined;
     }
     if (cmd === "spatial_pop_layer") {
-      layers.delete(a.key as LayerKey);
+      layers.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
     if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
       const record: RegistrationRecord = {
         kind: cmd === "spatial_register_zone" ? "zone" : "scope",
-        key: a.key as SpatialKey,
-        moniker: String(a.moniker),
-        layerKey: a.layerKey as LayerKey,
-        parentZone: (a.parentZone ?? null) as SpatialKey | null,
+        fq: a.fq as FullyQualifiedMoniker,
+        segment: a.segment as SegmentMoniker,
+        layerFq: a.layerFq as FullyQualifiedMoniker,
+        parentZone: (a.parentZone ?? null) as FullyQualifiedMoniker | null,
         rect: rectFromWire(a.rect),
         overrides: (a.overrides ?? {}) as Record<string, unknown>,
       };
-      registrations.set(record.key, record);
+      registrations.set(record.fq, record);
       history.push({ type: "register", record });
       return undefined;
     }
     if (cmd === "spatial_unregister_scope") {
-      registrations.delete(a.key as SpatialKey);
+      registrations.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
     if (cmd === "spatial_update_rect") {
-      const existing = registrations.get(a.key as SpatialKey);
+      const existing = registrations.get(a.fq as FullyQualifiedMoniker);
       if (existing) existing.rect = rectFromWire(a.rect);
       return undefined;
     }
     if (cmd === "spatial_focus") {
-      const nextKey = a.key as SpatialKey;
-      const prev = currentFocus.key;
-      currentFocus.key = nextKey;
-      const entry = registrations.get(nextKey);
-      emitFocusChanged(prev, nextKey, entry?.moniker ?? null);
-      return undefined;
-    }
-    if (cmd === "spatial_focus_by_moniker") {
-      // Moniker-keyed counterpart of `spatial_focus`. The kernel's
-      // `SpatialState::focus_by_moniker` resolves the moniker via
-      // `SpatialRegistry::find_by_moniker`, advances the per-window
-      // focus map, and emits `focus-changed`. Mirror that here so
-      // tests pinning the kernel-projection invariant see the same
-      // wire shape they would in production.
-      //
-      // Under the no-silent-dropout contract, an unknown moniker
-      // produces an error response (the kernel logs `tracing::error!`
-      // and the Tauri adapter returns `Err(_)` to the React caller).
-      // The React `setFocus` dispatch surfaces that as
-      // `console.error`, which kernel-projection tests assert on.
-      const moniker = String(a.moniker);
-      let resolved: RegistrationRecord | undefined;
-      for (const r of registrations.values()) {
-        if (r.moniker === moniker) {
-          resolved = r;
-          break;
-        }
-      }
-      if (!resolved) {
-        throw new Error(`unknown moniker: ${moniker}`);
-      }
-      const prev = currentFocus.key;
-      if (prev === resolved.key) {
+      const nextFq = a.fq as FullyQualifiedMoniker;
+      const prev = currentFocus.fq;
+      if (prev === nextFq) {
         // Idempotent — no event emitted, just like the real kernel's
         // "already focused" short-circuit.
         return undefined;
       }
-      currentFocus.key = resolved.key;
-      emitFocusChanged(prev, resolved.key, resolved.moniker);
+      currentFocus.fq = nextFq;
+      const entry = registrations.get(nextFq);
+      emitFocusChanged(prev, nextFq, entry?.segment ?? null);
       return undefined;
     }
     if (cmd === "spatial_clear_focus") {
-      // Explicit-clear counterpart of `spatial_focus_by_moniker`.
-      // Mirrors `SpatialState::clear_focus`: when the window had
-      // focus, drop the slot and emit a `Some(prev) → None`
-      // `focus-changed` event so the React-side bridge can flip the
-      // entity-focus store back to `null`. Idempotent when the
-      // window had no prior focus.
-      const prev = currentFocus.key;
-      if (prev === null) {
-        return undefined;
-      }
-      currentFocus.key = null;
+      // Explicit-clear counterpart of `spatial_focus`. Mirrors
+      // `SpatialState::clear_focus`: when the window had focus, drop the
+      // slot and emit a `Some(prev) → None` `focus-changed` event so the
+      // React-side bridge can flip the entity-focus store back to
+      // `null`. Idempotent when the window had no prior focus.
+      const prev = currentFocus.fq;
+      if (prev === null) return undefined;
+      currentFocus.fq = null;
       emitFocusChanged(prev, null, null);
       return undefined;
     }
     if (cmd === "spatial_navigate") {
-      const fromKey = a.key as SpatialKey;
+      const fromFq = a.focusedFq as FullyQualifiedMoniker;
       const direction = a.direction as string;
       // The shadow navigator only handles cardinal directions
       // (up/down/left/right). The kernel's `first` / `last` directions
@@ -309,39 +281,39 @@ export function installKernelSimulator(
       ) {
         return undefined;
       }
-      const shadowRegistry = new Map<SpatialKey, ShadowEntry>();
+      const shadowRegistry = new Map<FullyQualifiedMoniker, ShadowEntry>();
       for (const [k, v] of registrations) shadowRegistry.set(k, shadowFor(v));
       const result = navigateInShadow(
         shadowRegistry,
-        fromKey,
+        fromFq,
         direction as CardinalDirection,
       );
       if (!result) {
         // No-silent-dropout contract: the real Rust kernel echoes the
-        // focused moniker on a stay-put cascade (layer-root edge with
-        // no peer in the chosen direction) and emits a focus-changed
-        // event carrying that moniker. Mirror that emit here so tests
-        // that count `focus-changed` events or assert on a moniker
-        // echo during a no-motion case see the same IPC trace as
-        // production. See `01KQAW97R9XTCNR1PJAWYSKBC7` for the
-        // contract; see `swissarmyhammer-focus/src/navigate.rs` (fn
+        // focused FQM on a stay-put cascade (layer-root edge with no
+        // peer in the chosen direction) and emits a focus-changed
+        // event carrying that FQM. Mirror that emit here so tests that
+        // count `focus-changed` events or assert on an FQM echo during
+        // a no-motion case see the same IPC trace as production. See
+        // `01KQAW97R9XTCNR1PJAWYSKBC7` for the contract; see
+        // `swissarmyhammer-focus/src/navigate.rs` (fn
         // `cardinal_cascade`) for the kernel implementation.
-        const focusedEntry = registrations.get(fromKey);
+        const focusedEntry = registrations.get(fromFq);
         if (focusedEntry) {
-          emitFocusChanged(fromKey, fromKey, focusedEntry.moniker);
+          emitFocusChanged(fromFq, fromFq, focusedEntry.segment);
         }
         return undefined;
       }
-      currentFocus.key = result.nextKey;
-      emitFocusChanged(fromKey, result.nextKey, result.nextMoniker);
+      currentFocus.fq = result.nextFq;
+      emitFocusChanged(fromFq, result.nextFq, result.nextSegment);
       return undefined;
     }
     if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-      // No-silent-dropout contract: kernel echoes the focused moniker
+      // No-silent-dropout contract: kernel echoes the focused FQM
       // when there's nothing to descend / drill-out into. Tests that
       // assert against drill-in / drill-out behavior should stub these
       // explicitly via the fallback.
-      return (a.focusedMoniker ?? "") as string;
+      return (a.focusedFq ?? "") as FullyQualifiedMoniker;
     }
     return fallback(cmd, args);
   });
@@ -351,18 +323,21 @@ export function installKernelSimulator(
     registrations,
     history,
     currentFocus,
-    findByMoniker(moniker) {
+    findBySegment(segment) {
       for (const r of registrations.values()) {
-        if (r.moniker === moniker) return r;
+        if (r.segment === segment) return r;
       }
       return undefined;
     },
-    findByMonikerPrefix(prefix) {
+    findBySegmentPrefix(prefix) {
       const out: RegistrationRecord[] = [];
       for (const r of registrations.values()) {
-        if (r.moniker.startsWith(prefix)) out.push(r);
+        if (r.segment.startsWith(prefix)) out.push(r);
       }
       return out;
+    },
+    findByFq(fq) {
+      return registrations.get(fq);
     },
   };
 }

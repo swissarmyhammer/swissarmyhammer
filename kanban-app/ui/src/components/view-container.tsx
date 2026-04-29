@@ -24,9 +24,9 @@ import { GridView } from "@/components/grid-view";
 import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
 import { FocusZone } from "@/components/focus-zone";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ export function ViewContainer({ children }: ViewContainerProps) {
 }
 
 /**
- * Wrap the rendered view in a `<FocusZone moniker={asMoniker("ui:view")}>`
+ * Wrap the rendered view in a `<FocusZone moniker={asSegment("ui:view")}>`
  * when the surrounding tree mounts the spatial-nav stack.
  *
  * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
@@ -84,14 +84,14 @@ export function ViewContainer({ children }: ViewContainerProps) {
  * spatial-nav stack is present.
  */
 function ViewSpatialZone({ children }: { children: ReactNode }) {
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
     <FocusZone
-      moniker={asMoniker("ui:view")}
+      moniker={asSegment("ui:view")}
       // Viewport-sized chrome zone — a visible focus bar around the entire
       // active view (board, grid, …) would surround the whole content
       // region and add no information. Drilling into the view advances

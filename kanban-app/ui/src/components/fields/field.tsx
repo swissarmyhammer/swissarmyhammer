@@ -61,7 +61,7 @@ import { FocusZone } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
 import { EMPTY_COMMANDS, type CommandDef } from "@/lib/command-scope";
 import { fieldMoniker } from "@/lib/moniker";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { FieldIconBadge } from "@/components/fields/field-icon-badge";
 import { useOptionalFocusActions } from "@/lib/entity-focus-context";
@@ -617,7 +617,7 @@ export function Field({
   // primitive `<FocusZone>` stays pure-spatial. Per the architectural
   // guard (`focus-architecture.guards.node.test.ts`, Guards B + C),
   // every entity zone — including `field:` — must be wrapped.
-  const fmk = asMoniker(fieldMoniker(entityType, entityId, fieldDef.name));
+  const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
   return (
     <Inspectable moniker={fmk}>
       <FocusZone

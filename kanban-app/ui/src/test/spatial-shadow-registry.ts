@@ -27,27 +27,14 @@
  * port of `BeamNavStrategy` — when the kernel's beam-search rules change,
  * exactly one file in the React test suite needs to follow.
  *
- * # Why the JS port mirrors the Rust kernel
+ * # Path-monikers identity model
  *
- * These tests live one layer below the Rust integration tests in
- * `swissarmyhammer-focus/tests/`. Those Rust tests are the source of
- * truth for the algorithm itself — see
- * [`swissarmyhammer-focus/tests/unified_trajectories.rs`] for the
- * canonical user trajectories the cascade must satisfy and
- * [`swissarmyhammer-focus/src/navigate.rs`] for the implementation of
- * the in-beam hard filter and the `13 * major² + minor²` scoring
- * formula. The unified-policy supersession card
- * `01KQ7S6WHK9RCCG2R4FN474EFD` collapsed the previous per-direction
- * tactical rules (within-zone beam, cross-zone leaf fallback, zone-
- * only nav) into a single two-level cascade with drill-out fallback;
- * the JS port below mirrors that cascade.
- *
- * The React side's job is to produce the *right shape* of
- * registrations and route the *right `spatial_navigate` calls* at the
- * right time. The shadow navigator answers
- * `spatial_navigate(key, direction)` deterministically against
- * whatever the production code registered, so the React-side wiring
- * can be exercised end-to-end without booting a real Tauri runtime.
+ * Card `01KQD6064G1C1RAXDFPJVT1F46` collapsed `SpatialKey` and the flat
+ * `Moniker` newtypes into a single `FullyQualifiedMoniker`. The shadow
+ * registry uses the FQM as its sole key. Every captured registration
+ * carries the FQM (`fq`), the relative segment the consumer declared
+ * (`segment`), the owning layer's FQM (`layerFq`), and the parent
+ * zone's FQM (`parentZone`).
  *
  * # vi.mock is file-scoped — consumers declare their own
  *
@@ -90,11 +77,12 @@
 
 import { vi } from "vitest";
 import { act } from "@testing-library/react";
-import type {
-  FocusChangedPayload,
-  LayerKey,
-  SpatialKey,
-  WindowLabel,
+import {
+  asFq,
+  type FocusChangedPayload,
+  type FullyQualifiedMoniker,
+  type SegmentMoniker,
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -144,25 +132,6 @@ export const mockListen = hoisted.mockListen;
 export const listeners = hoisted.listeners;
 
 // ---------------------------------------------------------------------------
-// Tauri-API mocks live in the consumer test file
-//
-// Vitest's `vi.mock` is **file-scoped** — the call is hoisted to the top
-// of the file it appears in, and from there it applies to the consuming
-// file's transitive imports. A `vi.mock` call inside this helper would
-// only apply to the helper module's own imports, not to a test file's
-// `import App from "@/App"` statement.
-//
-// Each consuming test file declares its own `vi.mock` calls and forwards
-// to the spies exported from this module via a `vi.hoisted` factory that
-// dynamically imports this module. See:
-//
-//   - `board-view.cross-column-nav.spatial.test.tsx`
-//   - `spatial-nav-end-to-end.spatial.test.tsx`
-//
-// for the canonical pattern.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Shadow-registry data shapes
 // ---------------------------------------------------------------------------
 
@@ -189,11 +158,11 @@ export type ShadowKind = "scope" | "zone";
 /** One entry in the JS shadow registry mirroring the kernel's `RegisteredScope`. */
 export interface ShadowEntry {
   kind: ShadowKind;
-  key: SpatialKey;
-  moniker: string;
+  fq: FullyQualifiedMoniker;
+  segment: SegmentMoniker;
   rect: RectLike;
-  layerKey: LayerKey;
-  parentZone: SpatialKey | null;
+  layerFq: FullyQualifiedMoniker;
+  parentZone: FullyQualifiedMoniker | null;
   overrides: Record<string, unknown>;
 }
 
@@ -266,59 +235,58 @@ export function rectFromWire(r: unknown): RectLike {
  * filtering keeps "Down from a card" landing on the next card, not on
  * a zone *inside* the next card.
  *
- * Returns the moniker of the next focus target, or `null` when the
- * navigator declines to navigate. Matches the `Option<Moniker>` shape
- * the Rust strategy returns.
+ * Returns the FQM of the next focus target, or `null` when the
+ * navigator declines to navigate.
  */
 export function navigateInShadow(
-  registry: Map<SpatialKey, ShadowEntry>,
-  fromKey: SpatialKey,
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  fromFq: FullyQualifiedMoniker,
   direction: Direction,
-): { nextKey: SpatialKey; nextMoniker: string } | null {
-  const from = registry.get(fromKey);
+): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
+  const from = registry.get(fromFq);
   if (!from) return null;
 
   // Iter 0: same-kind peers sharing from.parentZone.
   const iter0 = beamAmongSiblings(
     registry,
-    from.layerKey,
+    from.layerFq,
     from.rect,
     from.parentZone,
-    from.key,
+    from.fq,
     from.kind,
     direction,
   );
   if (iter0) return iter0;
 
-  // Escalate. The layer-boundary guard refuses to cross `LayerKey` —
+  // Escalate. The layer-boundary guard refuses to cross layer FQMs —
   // an inspector layer's panel zone never lifts focus into the window
   // layer that hosts ui:board.
   if (from.parentZone === null) return null;
   const parent = registry.get(from.parentZone);
   if (!parent) return null;
-  if (parent.layerKey !== from.layerKey) return null;
+  if (parent.layerFq !== from.layerFq) return null;
   if (parent.kind !== "zone") return null; // parent of any scope must be a zone
 
   // Iter 1: same-kind peers of the parent zone sharing its parentZone.
   // The parent is always a zone, so this is the sibling-zone beam.
   const iter1 = beamAmongSiblings(
     registry,
-    parent.layerKey,
+    parent.layerFq,
     parent.rect,
     parent.parentZone,
-    parent.key,
+    parent.fq,
     "zone",
     direction,
   );
   if (iter1) return iter1;
 
   // Drill-out fallback: return the parent zone itself.
-  return { nextKey: parent.key, nextMoniker: parent.moniker };
+  return { nextFq: parent.fq, nextSegment: parent.segment };
 }
 
 /**
  * Beam-search candidates of the named kind sharing `fromParent`
- * (excluding `fromKey`), filtered by `layer`. Matches
+ * (excluding `fromFq`), filtered by `layer`. Matches
  * `beam_among_siblings` in the Rust kernel.
  *
  * The kind filter is the cascade's same-kind matching: leaf-focused
@@ -327,21 +295,21 @@ export function navigateInShadow(
  * for the rationale.
  */
 function beamAmongSiblings(
-  registry: Map<SpatialKey, ShadowEntry>,
-  layer: LayerKey,
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  layer: FullyQualifiedMoniker,
   fromRect: RectLike,
-  fromParent: SpatialKey | null,
-  fromKey: SpatialKey,
+  fromParent: FullyQualifiedMoniker | null,
+  fromFq: FullyQualifiedMoniker,
   expectKind: ShadowKind,
   direction: Direction,
-): { nextKey: SpatialKey; nextMoniker: string } | null {
+): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
   const candidates: ShadowEntry[] = [];
   for (const e of registry.values()) {
     if (
       e.kind === expectKind &&
-      e.layerKey === layer &&
+      e.layerFq === layer &&
       e.parentZone === fromParent &&
-      e.key !== fromKey
+      e.fq !== fromFq
     ) {
       candidates.push(e);
     }
@@ -363,13 +331,13 @@ function beamAmongSiblings(
  *
  * Takes a `RectLike` rather than a `ShadowEntry` for `from` so the
  * cascade's iter-1 step can pass the parent zone's rect (the parent
- * is identified by key, not by the focused entry's `ShadowEntry`).
+ * is identified by FQM, not by the focused entry's `ShadowEntry`).
  */
 function pickBestRect(
   fromRect: RectLike,
   candidates: ShadowEntry[],
   direction: Direction,
-): { nextKey: SpatialKey; nextMoniker: string } | null {
+): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
   let bestEntry: ShadowEntry | null = null;
   let bestScore = Infinity;
 
@@ -385,7 +353,7 @@ function pickBestRect(
     }
   }
   if (!bestEntry) return null;
-  return { nextKey: bestEntry.key, nextMoniker: bestEntry.moniker };
+  return { nextFq: bestEntry.fq, nextSegment: bestEntry.segment };
 }
 
 /**
@@ -467,19 +435,19 @@ function scoreCandidate(
  * state updates flush before the caller asserts on post-update DOM.
  */
 export async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: SegmentMoniker | null;
 }): Promise<void> {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -494,19 +462,22 @@ export async function fireFocusChanged({
 
 /** Bundle returned by `installShadowNavigator`. */
 export interface ShadowHarness {
-  /** The live JS shadow registry — keyed by `SpatialKey`. */
-  registry: Map<SpatialKey, ShadowEntry>;
-  /** Currently focused key (mutated by `spatial_focus` / `spatial_navigate`). */
-  currentFocus: { key: SpatialKey | null };
+  /** The live JS shadow registry — keyed by `FullyQualifiedMoniker`. */
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>;
+  /** Currently focused FQM (mutated by `spatial_focus` / `spatial_navigate`). */
+  currentFocus: { fq: FullyQualifiedMoniker | null };
   /**
-   * Look up the registered `SpatialKey` by moniker.
+   * Look up the registered FQM by trailing segment.
    *
-   * Returns `null` when no registration with that moniker exists, even
-   * if a non-matching one was registered with the same prefix. Useful
-   * for translating fixture-defined moniker strings into the runtime-
-   * minted keys after the production components mount.
+   * Returns `null` when no registration with that segment exists.
+   * Useful for translating fixture-defined segment strings into the
+   * runtime-composed FQMs after the production components mount.
+   *
+   * When multiple registrations share a segment (e.g. duplicate
+   * `card:T1` mounts in different columns), returns the most recent
+   * live entry.
    */
-  getRegisteredKeyByMoniker(moniker: string): SpatialKey | null;
+  getRegisteredFqBySegment(segment: string): FullyQualifiedMoniker | null;
 }
 
 /**
@@ -525,16 +496,16 @@ export type DefaultInvokeImpl = (
  *     call into a JS shadow registry,
  *   - drops entries on `spatial_unregister_scope`,
  *   - refreshes rects on `spatial_update_rect`,
- *   - on `spatial_navigate(key, direction)` runs the in-test
+ *   - on `spatial_navigate(focusedFq, direction)` runs the in-test
  *     BeamNavStrategy port against the shadow registry and emits a
- *     `focus-changed` event with the resulting key + moniker,
- *   - on `spatial_focus` echoes the given key back as a `focus-changed`
+ *     `focus-changed` event with the resulting FQM + segment,
+ *   - on `spatial_focus` echoes the given FQM back as a `focus-changed`
  *     emit so the React tree picks up the new focus claim.
  *
  * Every other IPC falls through to `defaultInvokeImpl`. Returns a
  * `ShadowHarness` whose `registry` is the live mutable map and whose
- * `getRegisteredKeyByMoniker` walks the captured registrations to map
- * fixture monikers onto runtime-minted keys.
+ * `getRegisteredFqBySegment` walks the captured registrations to map
+ * fixture segments onto runtime-composed FQMs.
  *
  * @param defaultInvokeImpl - Fallback for non-spatial commands. The
  *   end-to-end test uses this to serve `kanban_state_snapshot` and the
@@ -543,22 +514,22 @@ export type DefaultInvokeImpl = (
 export function installShadowNavigator(
   defaultInvokeImpl: DefaultInvokeImpl = async () => undefined,
 ): ShadowHarness {
-  const registry = new Map<SpatialKey, ShadowEntry>();
-  const currentFocus: { key: SpatialKey | null } = { key: null };
+  const registry = new Map<FullyQualifiedMoniker, ShadowEntry>();
+  const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
 
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
     if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
       const a = (args ?? {}) as Record<string, unknown>;
       const entry: ShadowEntry = {
         kind: cmd === "spatial_register_zone" ? "zone" : "scope",
-        key: a.key as SpatialKey,
-        moniker: String(a.moniker),
+        fq: a.fq as FullyQualifiedMoniker,
+        segment: a.segment as SegmentMoniker,
         rect: rectFromWire(a.rect),
-        layerKey: a.layerKey as LayerKey,
-        parentZone: (a.parentZone ?? null) as SpatialKey | null,
+        layerFq: a.layerFq as FullyQualifiedMoniker,
+        parentZone: (a.parentZone ?? null) as FullyQualifiedMoniker | null,
         overrides: (a.overrides ?? {}) as Record<string, unknown>,
       };
-      registry.set(entry.key, entry);
+      registry.set(entry.fq, entry);
       return undefined;
     }
     if (cmd === "spatial_register_batch") {
@@ -572,44 +543,58 @@ export function installShadowNavigator(
           (e.kind as string) === "zone" ? "zone" : "scope";
         const entry: ShadowEntry = {
           kind,
-          key: e.key as SpatialKey,
-          moniker: String(e.moniker),
+          fq: e.fq as FullyQualifiedMoniker,
+          segment: e.segment as SegmentMoniker,
           rect: rectFromWire(e.rect),
-          layerKey: e.layer_key as LayerKey,
-          parentZone: (e.parent_zone ?? null) as SpatialKey | null,
+          layerFq: e.layer_fq as FullyQualifiedMoniker,
+          parentZone: (e.parent_zone ?? null) as FullyQualifiedMoniker | null,
           overrides: (e.overrides ?? {}) as Record<string, unknown>,
         };
-        registry.set(entry.key, entry);
+        registry.set(entry.fq, entry);
       }
       return undefined;
     }
     if (cmd === "spatial_unregister_scope") {
       const a = (args ?? {}) as Record<string, unknown>;
-      registry.delete(a.key as SpatialKey);
+      registry.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
     if (cmd === "spatial_update_rect") {
       const a = (args ?? {}) as Record<string, unknown>;
-      const e = registry.get(a.key as SpatialKey);
+      const e = registry.get(a.fq as FullyQualifiedMoniker);
       if (e) e.rect = rectFromWire(a.rect);
       return undefined;
     }
     if (cmd === "spatial_focus") {
       const a = (args ?? {}) as Record<string, unknown>;
-      const nextKey = a.key as SpatialKey;
-      const entry = registry.get(nextKey);
-      const prev = currentFocus.key;
-      currentFocus.key = nextKey;
+      const nextFq = a.fq as FullyQualifiedMoniker;
+      const entry = registry.get(nextFq);
+      const prev = currentFocus.fq;
+      currentFocus.fq = nextFq;
       // Emit focus-changed asynchronously so the kernel's emit-after-write
       // ordering is preserved. Listeners run synchronously inside `act()`
       // by the caller; here we just queue.
       const payload: FocusChangedPayload = {
         window_label: "main" as WindowLabel,
-        prev_key: prev,
-        next_key: nextKey,
-        next_moniker: (entry?.moniker ?? null) as
-          | FocusChangedPayload["next_moniker"]
-          | null,
+        prev_fq: prev,
+        next_fq: nextFq,
+        next_segment: entry?.segment ?? null,
+      };
+      queueMicrotask(() => {
+        const handlers = listeners.get("focus-changed") ?? [];
+        for (const h of handlers) h({ payload });
+      });
+      return undefined;
+    }
+    if (cmd === "spatial_clear_focus") {
+      const prev = currentFocus.fq;
+      if (prev === null) return undefined;
+      currentFocus.fq = null;
+      const payload: FocusChangedPayload = {
+        window_label: "main" as WindowLabel,
+        prev_fq: prev,
+        next_fq: null,
+        next_segment: null,
       };
       queueMicrotask(() => {
         const handlers = listeners.get("focus-changed") ?? [];
@@ -619,24 +604,23 @@ export function installShadowNavigator(
     }
     if (cmd === "spatial_navigate") {
       const a = (args ?? {}) as Record<string, unknown>;
-      const fromKey = a.key as SpatialKey;
+      const fromFq = a.focusedFq as FullyQualifiedMoniker;
       const direction = a.direction as Direction;
-      const result = navigateInShadow(registry, fromKey, direction);
+      const result = navigateInShadow(registry, fromFq, direction);
       if (!result) return undefined;
-      // The prev_key carried in the focus-changed payload must be the
-      // key the kernel is moving AWAY from — which is `fromKey`, the
+      // The prev_fq carried in the focus-changed payload must be the
+      // FQM the kernel is moving AWAY from — which is `fromFq`, the
       // argument the navigator was called with. The SpatialFocusProvider
-      // routes this prev_key through to the focus-claim listener that
+      // routes this prev_fq through to the focus-claim listener that
       // owns the prior `data-focused` attribute, so without this the
       // outgoing leaf keeps `data-focused="true"` and the next assertion
       // sees both old and new candidates marked focused.
-      currentFocus.key = result.nextKey;
+      currentFocus.fq = result.nextFq;
       const payload: FocusChangedPayload = {
         window_label: "main" as WindowLabel,
-        prev_key: fromKey,
-        next_key: result.nextKey,
-        next_moniker:
-          result.nextMoniker as FocusChangedPayload["next_moniker"],
+        prev_fq: fromFq,
+        next_fq: result.nextFq,
+        next_segment: result.nextSegment,
       };
       queueMicrotask(() => {
         const handlers = listeners.get("focus-changed") ?? [];
@@ -647,15 +631,15 @@ export function installShadowNavigator(
     if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
       // Drill-in/out are kernel state changes; the React side dispatches
       // them but the test harness does not need to model the resulting
-      // focus move (the production `useDrillStack`-style hooks emit
-      // `focus-changed` after the kernel resolves, which the test can
-      // simulate via `fireFocusChanged` if it cares).
-      return undefined;
+      // focus move. Echo `focusedFq` back to satisfy the no-silent-dropout
+      // contract that the kernel always returns an FQM.
+      const a = (args ?? {}) as Record<string, unknown>;
+      return (a.focusedFq ?? "") as FullyQualifiedMoniker;
     }
-    if (cmd === "spatial_register_layer") {
-      // Layer registration is a kernel bookkeeping operation — accept and
-      // record nothing; tests audit `spatial_register_layer` calls
-      // separately via `mockInvoke.mock.calls`.
+    if (cmd === "spatial_push_layer" || cmd === "spatial_pop_layer") {
+      // Layer push/pop are kernel bookkeeping operations — accept and
+      // record nothing; tests audit `spatial_push_layer` calls separately
+      // via `mockInvoke.mock.calls`.
       return undefined;
     }
     return defaultInvokeImpl(cmd, args);
@@ -664,25 +648,27 @@ export function installShadowNavigator(
   return {
     registry,
     currentFocus,
-    getRegisteredKeyByMoniker(moniker: string): SpatialKey | null {
+    getRegisteredFqBySegment(segment: string): FullyQualifiedMoniker | null {
       // Walk the live registry first — it is post-unregister-aware.
+      let mostRecent: FullyQualifiedMoniker | null = null;
       for (const e of registry.values()) {
-        if (e.moniker === moniker) return e.key;
+        if (e.segment === segment) mostRecent = e.fq;
       }
+      if (mostRecent) return mostRecent;
       // Fall back to the captured invoke calls — covers the case where a
       // scope was registered then unregistered (e.g. virtualized cards
-      // scrolled out) and the test wants to find the most recent key for
-      // a moniker that isn't currently mounted.
+      // scrolled out) and the test wants to find the most recent FQM for
+      // a segment that isn't currently mounted.
       for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
         const [cmd, args] = mockInvoke.mock.calls[i];
         if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
           const a = (args ?? {}) as Record<string, unknown>;
-          if (a.moniker === moniker) return a.key as SpatialKey;
+          if (a.segment === segment) return a.fq as FullyQualifiedMoniker;
         } else if (cmd === "spatial_register_batch") {
           const a = (args ?? {}) as Record<string, unknown>;
           const entries = (a.entries ?? []) as Array<Record<string, unknown>>;
           for (const e of entries) {
-            if (e.moniker === moniker) return e.key as SpatialKey;
+            if (e.segment === segment) return e.fq as FullyQualifiedMoniker;
           }
         }
       }
@@ -701,9 +687,9 @@ export interface SpatialHarness extends ShadowHarness {
   mockInvoke: typeof mockInvoke;
   /** Drive a `focus-changed` event into the React tree. */
   fireFocusChanged: (payload: {
-    prev_key?: SpatialKey | null;
-    next_key?: SpatialKey | null;
-    next_moniker?: string | null;
+    prev_fq?: FullyQualifiedMoniker | null;
+    next_fq?: FullyQualifiedMoniker | null;
+    next_segment?: SegmentMoniker | null;
   }) => Promise<void>;
 }
 
@@ -717,9 +703,9 @@ export interface SpatialHarness extends ShadowHarness {
  * ```ts
  * const harness = setupSpatialHarness({ defaultInvokeImpl });
  * harness.mockInvoke           // raw spy
- * harness.fireFocusChanged(act, { ... })
+ * harness.fireFocusChanged({ ... })
  * harness.registry             // live JS shadow registry
- * harness.getRegisteredKeyByMoniker("task:T1") // moniker → SpatialKey
+ * harness.getRegisteredFqBySegment("card:T1") // segment → FullyQualifiedMoniker
  * ```
  *
  * @param defaultInvokeImpl - Fallback for non-spatial Tauri commands.
@@ -739,3 +725,7 @@ export function setupSpatialHarness(opts?: {
     fireFocusChanged,
   };
 }
+
+// Re-export `asFq` so test files can build FQM literals without importing
+// from `@/types/spatial` directly.
+export { asFq };

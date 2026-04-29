@@ -18,9 +18,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { FocusZone } from "@/components/focus-zone";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { gridCellMoniker, parseGridCellMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
@@ -708,7 +708,7 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
 }
 
 /**
- * Wrap the grid body in a `<FocusZone moniker={asMoniker("ui:grid")}>` when
+ * Wrap the grid body in a `<FocusZone moniker={asSegment("ui:grid")}>` when
  * the surrounding tree mounts the spatial-nav stack.
  *
  * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
@@ -729,14 +729,14 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
  * same flex sibling relationship it always had with `GridStatusBar`.
  */
 function GridSpatialZone({ children }: { children: ReactNode }) {
-  const layerKey = useOptionalLayerKey();
+  const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
     <FocusZone
-      moniker={asMoniker("ui:grid")}
+      moniker={asSegment("ui:grid")}
       // Suppress the visible focus bar around the grid body. The grid is a
       // viewport-filling zone — every cell already advertises its own focus
       // via the per-cell `<FocusIndicator>`, and rendering a second bar
