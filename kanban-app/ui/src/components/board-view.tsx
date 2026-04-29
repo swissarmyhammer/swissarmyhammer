@@ -27,13 +27,10 @@ import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
-import { useOptionalLayerKey } from "@/components/focus-layer";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asMoniker } from "@/types/spatial";
-import {
-  useFocusActions,
-  useFocusedMoniker,
-} from "@/lib/entity-focus-context";
+import { asSegment } from "@/types/spatial";
+import { useFocusActions, useFocusedMoniker } from "@/lib/entity-focus-context";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -688,12 +685,7 @@ function useBoardActionCommands(
         "nav.last",
       ),
     ];
-  }, [
-    columns,
-    dispatchEntityAddTask,
-    broadcastRef,
-    setFocus,
-  ]);
+  }, [columns, dispatchEntityAddTask, broadcastRef, setFocus]);
 }
 
 /**
@@ -703,17 +695,17 @@ function useBoardActionCommands(
  */
 function useScrollFocusedIntoView(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
-  focusedMoniker: string | null,
+  focusedFq: string | null,
 ): void {
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container || !focusedMoniker) return;
+    if (!container || !focusedFq) return;
     const el = container.querySelector<HTMLElement>(
-      `[data-moniker="${CSS.escape(focusedMoniker)}"]`,
+      `[data-moniker="${CSS.escape(focusedFq)}"]`,
     );
     if (el?.scrollIntoView)
       el.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [scrollContainerRef, focusedMoniker]);
+  }, [scrollContainerRef, focusedFq]);
 }
 
 /**

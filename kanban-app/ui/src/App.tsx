@@ -17,7 +17,7 @@ import { CommandBusyProvider } from "@/lib/command-scope";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { DiagErrorBoundary } from "@/components/diag-error-boundary";
 
 /**
@@ -27,7 +27,7 @@ import { DiagErrorBoundary } from "@/components/diag-error-boundary";
  * `<FocusLayer>` push effect depends on `name`, and a fresh literal in JSX
  * would force an unnecessary tear-down / re-push of the window root layer.
  */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);

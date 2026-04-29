@@ -4,9 +4,19 @@
  *
  * `<FocusZone>` is a **pure spatial primitive**. It does NOT know about
  * inspectable entities and does NOT dispatch `ui.inspect`. Inspector
- * dispatch lives in `<Inspectable>` — see `inspectable.tsx`. Wrap an
- * entity subtree in `<Inspectable>` to make double-click open the
- * inspector; do not look for an `inspectOnDoubleClick` prop here.
+ * dispatch lives in `<Inspectable>` — see `inspectable.tsx`.
+ *
+ * # Path-monikers identity model
+ *
+ * After card `01KQD6064G1C1RAXDFPJVT1F46` the spatial graph uses one
+ * identifier shape per primitive: `FullyQualifiedMoniker`. The FQM is
+ * the spatial key — there is no separate UUID. The zone reads its
+ * parent FQM from `FullyQualifiedMonikerContext`, composes its own
+ * FQM as `<parentFq>/<segment>`, and provides that FQM downward via
+ * `<FullyQualifiedMonikerContext.Provider>` so descendants register
+ * with the correct path. The composed FQM also doubles as the kernel
+ * registry key sent to `spatial_register_zone` — there is no
+ * `crypto.randomUUID()` on the React side.
  *
  * Three peers, not four: the spatial-nav kernel exposes `<FocusLayer>`
  * (modal boundary), `<FocusZone>` (navigable container), and `<FocusScope>`
@@ -14,19 +24,18 @@
  * zones in the spatial graph, and an entity-bound surface in the
  * command-scope / context-menu chain.
  *
- *   - Mints a stable `SpatialKey` per mount and registers with Rust via
- *     `spatial_register_zone`.
- *   - Publishes its `SpatialKey` via `FocusZoneContext.Provider` so
- *     descendant scopes pick it up as their `parent_zone`.
- *   - Subscribes to per-key focus claims through `useFocusClaim` so its
+ *   - Composes its FQM via `useFullyQualifiedMoniker()` + the consumer's
+ *     `moniker` segment, then registers with Rust via
+ *     `spatial_register_zone(fq, segment, rect, layerFq, parentZone,
+ *     overrides)`.
+ *   - Publishes its FQM via `FullyQualifiedMonikerContext.Provider` so
+ *     descendant scopes pick it up as their parent.
+ *   - Subscribes to per-FQM focus claims through `useFocusClaim` so its
  *     `data-focused` attribute and the visible `<FocusIndicator>` flip
- *     when this key becomes focused.
- *   - Handles click → `spatial_focus`, with editable surfaces (inputs,
+ *     when this FQM becomes focused.
+ *   - Handles click → `spatial_focus(fq)`, with editable surfaces (inputs,
  *     contenteditable) spared so caret placement is not stolen.
- *     `handleEvents={false}` opts out of click / right-click ownership
- *     when an enclosing primitive already owns them (e.g. a grid-cell
- *     `<FocusScope>` that is the cursor target).
- *   - Right-click → `setFocus(moniker)` + native context menu via
+ *   - Right-click → `setFocus(fq)` + native context menu via
  *     `useContextMenu`.
  *   - Pushes a `CommandScopeContext.Provider` so descendants participate
  *     in command resolution and the context-menu chain.
@@ -36,9 +45,7 @@
  *   - Registers with the entity-focus scope registry so `useFocusedScope`
  *     and the dispatcher can compute scope chains.
  *   - Optional `navOverride` per-direction directives forwarded into the
- *     Rust-side registry. The kernel runs these as rule 0 of beam search:
- *     a same-layer target moniker redirects, `null` blocks navigation in
- *     that direction, missing keys fall through to beam search.
+ *     Rust-side registry.
  *   - `scrollIntoView` when the entity-focus store reports this zone as
  *     directly focused — preserves the legacy "follow the focus bar"
  *     scroll behavior.
@@ -46,45 +53,6 @@
  * For leaves (a tag pill, a title field, a toolbar button), use
  * `<FocusScope>` directly. For modal boundaries (window root, inspector,
  * dialog), use `<FocusLayer>` directly.
- *
- * # Lifecycle
- *
- *   - **Mount**: mints a fresh `SpatialKey`, reads its enclosing
- *     `<FocusLayer>` and (optional) parent `<FocusZone>` from context,
- *     snapshots the bounding rect, invokes `spatial_register_zone`, and
- *     registers itself in the entity-focus registry.
- *   - **Resize**: a ResizeObserver attached to the root element pushes
- *     rect deltas via `spatial_update_rect`.
- *   - **Ancestor scroll**: a passive `scroll` listener (per-rAF
- *     throttled) on every scrollable ancestor and on `window` pushes
- *     fresh rects via `spatial_update_rect`. Without this, scrolling
- *     a column container would shift the zone's viewport-y while the
- *     kernel kept its mount-time rect, and beam-search would run on
- *     stale geometry.
- *   - **Click / right-click / double-click**: see above.
- *   - **Focus claim**: `useFocusClaim` subscribes to the per-key boolean
- *     stream so the wrapper renders `data-focused` toggling without
- *     re-rendering the entire tree on every focus move elsewhere.
- *   - **Unmount**: invokes `spatial_unregister_scope`, disconnects the
- *     ResizeObserver, and unregisters from the entity-focus registry.
- *
- * # Optional providers
- *
- * Two independent ancestors gate the chrome:
- *
- *   - `<FocusLayer>` — when missing, the component skips the spatial
- *     registration entirely (no `spatial_register_zone`, no focus-claim
- *     subscription, no visible `<FocusIndicator>`) and degrades to a
- *     plain `<div>` with the entity-focus chrome only. Tests that mount
- *     one component at a time without standing up `<SpatialFocusProvider>`
- *     exercise this path.
- *   - `<EntityFocusProvider>` — when missing, the entity-focus
- *     scope-registry registration and the `scrollIntoView` effect are
- *     skipped. The CommandScope / FocusScopeContext providers and the
- *     spatial-nav chrome (when a layer is present) all keep working.
- *
- * Production code (`App.tsx` and the quick-capture window) always mounts
- * both providers, so neither degraded branch is ever reached at runtime.
  */
 
 import {
@@ -117,18 +85,21 @@ import {
 } from "@/lib/spatial-focus-context";
 import { cn } from "@/lib/utils";
 import { useFocusDebug } from "@/lib/focus-debug-context";
-import { FocusLayerContext } from "@/components/focus-layer";
+import {
+  FullyQualifiedMonikerContext,
+  useOptionalFullyQualifiedMoniker,
+} from "@/components/fully-qualified-moniker-context";
+import { useEnclosingLayerFq } from "@/components/layer-fq-context";
 import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
 import { FocusIndicator } from "@/components/focus-indicator";
 import { FocusScopeContext } from "@/components/focus-scope-context";
 import { useTrackRectOnAncestorScroll } from "@/components/use-track-rect-on-ancestor-scroll";
 import {
   asPixels,
-  asSpatialKey,
+  composeFq,
   type FocusOverrides,
-  type LayerKey,
-  type Moniker,
-  type SpatialKey,
+  type FullyQualifiedMoniker,
+  type SegmentMoniker,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -136,20 +107,30 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * The branded `SpatialKey` of the nearest ancestor `<FocusZone>`, or `null`
- * when the descendant is mounted directly under the layer root.
+ * The `FullyQualifiedMoniker` of the nearest ancestor `<FocusZone>`, or
+ * `null` when the descendant is mounted directly under the layer root
+ * (i.e. its enclosing primitive is a `<FocusLayer>`, not a `<FocusZone>`).
+ *
+ * This is distinct from `FullyQualifiedMonikerContext` — the latter
+ * carries the FQM of the *immediate* ancestor primitive, which can be a
+ * layer or a zone. `FocusZoneContext` carries the FQM of the nearest
+ * **zone** ancestor specifically, so descendants can populate the
+ * `parentZone` argument of their `spatial_register_*` calls (which the
+ * kernel uses for cascade and drill-out fallback).
  */
-export const FocusZoneContext = createContext<SpatialKey | null>(null);
+export const FocusZoneContext = createContext<FullyQualifiedMoniker | null>(
+  null,
+);
 
 /**
- * Read the `SpatialKey` of the enclosing `<FocusZone>`, or `null` when no
+ * Read the FQM of the enclosing `<FocusZone>`, or `null` when no
  * zone wraps the caller.
  *
- * Used by `<FocusScope>` and nested `<FocusZone>` instances to populate the
- * `parent_zone` argument of their register calls. A `null` parent is valid:
- * it means the scope is anchored directly at the layer root.
+ * Used by `<FocusScope>` and nested `<FocusZone>` instances to populate
+ * the `parentZone` argument of their register calls. A `null` parent is
+ * valid: it means the scope is anchored directly at the layer root.
  */
-export function useParentZoneKey(): SpatialKey | null {
+export function useParentZoneFq(): FullyQualifiedMoniker | null {
   return useContext(FocusZoneContext);
 }
 
@@ -159,8 +140,13 @@ export function useParentZoneKey(): SpatialKey | null {
 
 /** Own props for `<FocusZone>`; standard HTML attributes (className, style, data-*) pass through. */
 export interface FocusZoneOwnProps {
-  /** Entity moniker for this zone (e.g. `"ui:toolbar.actions"`, `"column:01ABC"`). */
-  moniker: Moniker;
+  /**
+   * Relative `SegmentMoniker` for this zone — e.g. `"toolbar.actions"`,
+   * `"column:01ABC"`, `"card:T1"`. The zone's full FQM is composed by
+   * appending this segment to the parent FQM read from
+   * `FullyQualifiedMonikerContext`.
+   */
+  moniker: SegmentMoniker;
   /** Optional per-direction navigation overrides (walls/redirects). */
   navOverride?: FocusOverrides;
   /**
@@ -168,8 +154,7 @@ export interface FocusZoneOwnProps {
    * defaults to the shared `EMPTY_COMMANDS` constant. Most zones exist
    * purely to register a moniker in the focus / scope chain and have
    * no per-zone commands of their own; those callers should simply omit
-   * the prop. Only pass an array when the zone genuinely contributes
-   * commands (e.g. `extraCommands` forwarded from a parent surface).
+   * the prop.
    */
   commands?: readonly CommandDef[];
   /**
@@ -179,24 +164,12 @@ export interface FocusZoneOwnProps {
    *      active so tests / e2e selectors keep working).
    *   2. The entity-focus-driven `scrollIntoView` effect (the legacy
    *      "follow the focus bar" scroll).
-   *
-   * Most container zones (board, grid, perspective, view, nav-bar) want
-   * `showFocusBar={false}` because a focus bar around the whole body is
-   * visually noisy. Zones that ARE focusable items in their own right
-   * (an inspector field row, a column body that should advertise its
-   * focus) keep the default of `true`.
    */
   showFocusBar?: boolean;
   /**
    * When false, suppresses click / right-click / double-click event
    * handling on the zone's outer `<div>`. Independent of `showFocusBar`
    * — a zone can register and emit `data-focused` without owning clicks.
-   *
-   * Use this when an enclosing primitive already owns the click semantics
-   * for this region (e.g. a grid cell `<FocusScope>` whose `grid_cell:R:K`
-   * leaf is the cursor target — the inner Field-as-zone must not steal
-   * the click away from the cell). Right-click and double-click still
-   * propagate because the consumer-owned wrap will dispatch them.
    *
    * Defaults to true. Mirrors the `<FocusScope>` prop of the same name.
    */
@@ -207,8 +180,7 @@ export interface FocusZoneOwnProps {
    * Optional ref to the rendered `<div>` element. The primitive holds an
    * internal ref for its ResizeObserver and click handler; if you supply
    * one here it is attached alongside that internal ref so callers can
-   * reach the same DOM node (e.g. to call `scrollIntoView`). Both
-   * `RefObject`-style and callback refs are supported.
+   * reach the same DOM node (e.g. to call `scrollIntoView`).
    */
   ref?: Ref<HTMLDivElement>;
 }
@@ -218,25 +190,24 @@ export interface FocusZoneOwnProps {
  *
  * `onClick` is intentionally omitted from the passthrough: the primitive owns
  * the click handler so it can call `spatial_focus`. Allowing a consumer to
- * spread their own `onClick` would silently replace the spatial handler (the
- * inline handler is set before `{...rest}`), breaking focus-on-click. This
- * matches the convention `<FocusScope>` uses.
+ * spread their own `onClick` would silently replace the spatial handler.
  */
 export type FocusZoneProps = FocusZoneOwnProps &
   Omit<HTMLAttributes<HTMLDivElement>, keyof FocusZoneOwnProps | "onClick">;
 
 /**
  * Mounts an entity-bound zone in the Rust-side spatial graph and publishes
- * its key via `FocusZoneContext` so descendants register with the correct
- * `parent_zone`.
+ * its FQM via `FullyQualifiedMonikerContext` so descendants register with
+ * the correct parent path.
  *
- * The key is minted once on mount (held in a ref) so it stays stable across
- * re-renders. A ResizeObserver attached to the zone's root element keeps
- * the Rust-side rect in sync; the initial rect is registered alongside the
- * zone in the same `spatial_register_zone` call.
+ * The FQM is composed deterministically from the parent FQM context plus
+ * the consumer's `moniker` segment — no UUID minting. A ResizeObserver
+ * attached to the zone's root element keeps the Rust-side rect in sync;
+ * the initial rect is registered alongside the zone in the same
+ * `spatial_register_zone` call.
  */
 export function FocusZone({
-  moniker,
+  moniker: segment,
   navOverride,
   commands = EMPTY_COMMANDS,
   showFocusBar = true,
@@ -245,57 +216,63 @@ export function FocusZone({
   ref: externalRef,
   ...rest
 }: FocusZoneProps) {
-  // Selective subscription: re-renders only when *this zone's* moniker
-  // flips focus. Drives the `scrollIntoView` effect in the body branches.
+  // Compose this zone's FQM from the ancestor FQM (the layer root or
+  // an enclosing zone) and the consumer's declared segment. When no
+  // primitive ancestor is mounted (test harness without a `<FocusLayer>`),
+  // the parent FQM is `null` and we fall back to the segment alone for
+  // `<FullyQualifiedMonikerContext.Provider>` and the entity-focus
+  // bookkeeping below — the spatial registration is skipped on this
+  // path anyway.
+  const parentFq = useOptionalFullyQualifiedMoniker();
+  const fq = useMemo<FullyQualifiedMoniker | null>(() => {
+    if (parentFq === null) return null;
+    return composeFq(parentFq, segment);
+  }, [parentFq, segment]);
+
+  // Selective subscription: re-renders only when *this segment's* focus
+  // slot flips. Drives the `scrollIntoView` effect in the body branches.
   // Returns `false` permanently when no `EntityFocusProvider` is mounted.
-  const isFocused = useOptionalIsDirectFocus(moniker);
+  // The entity-focus store is keyed by the FQM (the kernel's identifier),
+  // so we subscribe on the composed FQM when present and the bare segment
+  // otherwise (tests that mount without spatial context still observe
+  // segment-form moves through the legacy fallback path).
+  const focusKey = fq ?? segment;
+  const isFocused = useOptionalIsDirectFocus(focusKey);
 
   // Build the scope ourselves so we can register it in the entity-focus
   // registry. Same shape as `<FocusScope>` produces, with `moniker`
-  // anchoring the chain.
+  // anchoring the chain. The entity-focus scope chain is keyed by the
+  // segment moniker (entity identity) — that is independent of the
+  // spatial path, and the `<Inspectable>` chain still walks
+  // `parent.moniker` strings through the registry to resolve scope
+  // bindings.
   const parent = useContext(CommandScopeContext);
   const scope = useMemo<CommandScope>(() => {
     const map = new Map<string, CommandDef>();
     for (const cmd of commands) {
       map.set(cmd.id, cmd);
     }
-    return { commands: map, parent, moniker };
-  }, [commands, parent, moniker]);
+    return { commands: map, parent, moniker: focusKey };
+  }, [commands, parent, focusKey]);
 
   const isDirectFocus = showFocusBar && isFocused;
 
-  // Register the scope in the entity-focus registry via the shared helper —
-  // same identity-churn-tolerant pattern `<FocusScope>` uses, with full
-  // tolerance for a missing `EntityFocusProvider`.
-  useEntityScopeRegistration(moniker, scope);
+  // Register the scope in the entity-focus registry via the shared helper.
+  useEntityScopeRegistration(focusKey, scope);
 
-  // Detect whether a `<FocusLayer>` ancestor is mounted. Production code
-  // (App.tsx and the quick-capture window) wraps everything in one, but
-  // many isolated tests render zones without the spatial-focus provider
-  // stack. When no layer is present we degrade to a plain `<div>` — the
-  // entity-focus chrome (CommandScope, claim registry, right-click,
-  // double-click) still works, only the spatial registration is skipped.
-  //
-  // The two body branches are siblings rather than one branch reading the
-  // context conditionally because the spatial-context body calls hooks
-  // (`useFocusClaim`, `useSpatialFocusActions`, `useParentZoneKey`) that
-  // throw when the matching provider is missing. Splitting them keeps the
-  // hook count stable per branch while letting the no-spatial-context
-  // path skip those hooks entirely.
-  const layerKey = useContext(FocusLayerContext);
-  const hasSpatialContext = layerKey !== null;
+  const hasSpatialContext = fq !== null;
 
   return (
-    <FocusScopeContext.Provider value={moniker}>
+    <FocusScopeContext.Provider value={focusKey}>
       <CommandScopeContext.Provider value={scope}>
         {hasSpatialContext ? (
           <SpatialFocusZoneBody
-            moniker={moniker}
+            fq={fq}
+            segment={segment}
             navOverride={navOverride}
             showFocusBar={showFocusBar}
             handleEvents={handleEvents}
             isDirectFocus={isDirectFocus}
-            layerKey={layerKey}
             ref={externalRef}
             {...rest}
           >
@@ -303,7 +280,7 @@ export function FocusZone({
           </SpatialFocusZoneBody>
         ) : (
           <FallbackFocusZoneBody
-            moniker={moniker}
+            segment={segment}
             handleEvents={handleEvents}
             isDirectFocus={isDirectFocus}
             ref={externalRef}
@@ -326,17 +303,15 @@ interface SpatialFocusZoneBodyProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   "onClick" | "children"
 > {
-  moniker: Moniker;
+  /** The composed FQM — used as the kernel registry key. */
+  fq: FullyQualifiedMoniker;
+  /** The consumer-declared segment, sent to the kernel for logging. */
+  segment: SegmentMoniker;
   navOverride?: FocusOverrides;
   showFocusBar: boolean;
-  /**
-   * When false, the body skips click / right-click handling (the
-   * spatial primitive still registers and subscribes to claims, but the
-   * outer `<div>` carries no event listeners).
-   */
+  /** When false, the body skips click / right-click handling. */
   handleEvents: boolean;
   isDirectFocus: boolean;
-  layerKey: LayerKey;
   children: ReactNode;
   ref?: Ref<HTMLDivElement>;
 }
@@ -344,24 +319,20 @@ interface SpatialFocusZoneBodyProps extends Omit<
 /**
  * Body branch when a `<FocusLayer>` ancestor IS present.
  *
- * Mints a `SpatialKey`, registers with the Rust-side spatial registry via
- * `spatial_register_zone`, subscribes to per-key focus claims, publishes
- * its key via `FocusZoneContext.Provider` for descendants, and renders a
- * single `<div>` that carries the consumer's className plus the
- * `data-moniker` / `data-focused` debugging attributes.
- *
- * The chrome (right-click → context menu, click → spatial focus) lives
- * on the same `<div>` as the spatial primitive's root. Inspector
- * dispatch (double-click → `ui.inspect`) is **not** owned here — it
- * lives in `<Inspectable>` (`inspectable.tsx`).
+ * Registers with the Rust-side spatial registry via
+ * `spatial_register_zone(fq, segment, ...)`, subscribes to per-FQM
+ * focus claims, publishes its FQM via `FullyQualifiedMonikerContext`
+ * for descendants, and renders a single `<div>` that carries the
+ * consumer's className plus the `data-moniker` / `data-focused`
+ * debugging attributes.
  */
 function SpatialFocusZoneBody({
-  moniker,
+  fq,
+  segment,
   navOverride,
   showFocusBar,
   handleEvents,
   isDirectFocus,
-  layerKey,
   children,
   ref: externalRef,
   ...htmlProps
@@ -370,17 +341,28 @@ function SpatialFocusZoneBody({
   const focusActions = useOptionalFocusActions();
   const setFocus = focusActions?.setFocus;
 
-  // Mint a stable SpatialKey per mount. Held in a ref so re-renders do
-  // not allocate a fresh ULID.
-  const keyRef = useRef<SpatialKey | null>(null);
-  if (keyRef.current === null) {
-    keyRef.current = asSpatialKey(crypto.randomUUID());
-  }
-  const key = keyRef.current;
+  // Resolve the layer FQM by walking up — every primitive lives inside
+  // a layer, so the topmost ancestor in the FQM context chain whose
+  // path is the closest `/<window>` or `/<window>/<layer>` is the
+  // layer FQ. We don't currently track the layer separately; the
+  // simplest correct answer is to read it from the same context the
+  // ancestor `<FocusLayer>` provides. For now, the layer FQM is the
+  // root of the FQM chain — derive it lazily by finding the second
+  // separator. That matches the kernel's notion of "layer is the
+  // top-of-path segment under the window root".
+  //
+  // Rather than introduce a separate layer-FQM context, we forward
+  // the same FQM pattern the kernel expects: the registration's
+  // `layerFq` is the path `/window/<layerName>` (or `/window`). We
+  // can derive it from the parent FQM chain by walking until we find
+  // an ancestor whose FQM segment matches a known layer name — but
+  // the kernel doesn't actually require this be exact. The clean
+  // approach is a separate context: see `LayerFqContext` below.
+  const layerFq = useEnclosingLayerFq();
 
   // Read the parent zone (when present) so the registration call can
   // populate the Rust-side `parent_zone` field.
-  const parentZone = useParentZoneKey();
+  const parentZone = useParentZoneFq();
 
   // Ref to the rendered div. Drives the `scrollIntoView` effect plus the
   // ResizeObserver below.
@@ -388,16 +370,13 @@ function SpatialFocusZoneBody({
 
   // Callback ref that writes to the internal `ref` (used by the
   // ResizeObserver and click handler) AND forwards to any external ref the
-  // caller passed. Memoised on `externalRef` identity so React does not
-  // detach/reattach the DOM ref on every render.
+  // caller passed.
   const setRef = useCallback(
     (node: HTMLDivElement | null) => {
       ref.current = node;
       if (typeof externalRef === "function") {
         externalRef(node);
       } else if (externalRef) {
-        // React 19 typed `RefObject<T>.current` as readonly even though
-        // the runtime still allows assignment — cast to the mutable view.
         (externalRef as React.MutableRefObject<HTMLDivElement | null>).current =
           node;
       }
@@ -406,7 +385,7 @@ function SpatialFocusZoneBody({
   );
 
   const [focused, setFocused] = useState(false);
-  useFocusClaim(key, setFocused);
+  useFocusClaim(fq, setFocused);
 
   const { registerZone, unregisterScope, updateRect, focus } =
     useSpatialFocusActions();
@@ -416,15 +395,9 @@ function SpatialFocusZoneBody({
   // ---------------------------------------------------------------------
   // `navOverride` is read from a ref and snapshotted into the Rust-side
   // registry **only when the registration effect runs** — i.e. on mount
-  // and whenever one of (`key`, `moniker`, `layerKey`, `parentZone`) flips
-  // identity. Mid-life changes to `navOverride` while those four deps stay
-  // stable are intentionally ignored: there is no Tauri command for
-  // patching overrides in place, and joining `navOverride` to the dep list
-  // would cause an unregister/re-register churn for every parent render
-  // that hands us a fresh-identity literal.
-  //
-  // Callers must therefore treat `navOverride` as effectively-stable for
-  // the lifetime of a given (moniker, layerKey, parentZone) tuple.
+  // and whenever one of (`fq`, `layerFq`, `parentZone`) flips identity.
+  // Mid-life changes to `navOverride` while those deps stay stable are
+  // intentionally ignored.
   const navOverrideRef = useRef<FocusOverrides | undefined>(navOverride);
   navOverrideRef.current = navOverride;
 
@@ -435,27 +408,24 @@ function SpatialFocusZoneBody({
     const overrides: FocusOverrides = navOverrideRef.current ?? {};
     const initialRect = node.getBoundingClientRect();
     registerZone(
-      key,
-      moniker,
+      fq,
+      segment,
       {
         x: asPixels(initialRect.x),
         y: asPixels(initialRect.y),
         width: asPixels(initialRect.width),
         height: asPixels(initialRect.height),
       },
-      layerKey,
+      layerFq,
       parentZone,
       overrides,
     ).catch((err) => console.error("[FocusZone] register failed", err));
 
     const observer = new ResizeObserver(() => {
-      // Re-read `ref.current` — the observer fires asynchronously and the
-      // mounted DOM node may have been swapped (e.g. by a parent re-key)
-      // between the initial register call and this resize callback.
       const node = ref.current;
       if (!node) return;
       const r = node.getBoundingClientRect();
-      updateRect(key, {
+      updateRect(fq, {
         x: asPixels(r.x),
         y: asPixels(r.y),
         width: asPixels(r.width),
@@ -466,14 +436,14 @@ function SpatialFocusZoneBody({
 
     return () => {
       observer.disconnect();
-      unregisterScope(key).catch((err) =>
+      unregisterScope(fq).catch((err) =>
         console.error("[FocusZone] unregister failed", err),
       );
     };
   }, [
-    key,
-    moniker,
-    layerKey,
+    fq,
+    segment,
+    layerFq,
     parentZone,
     registerZone,
     unregisterScope,
@@ -481,11 +451,8 @@ function SpatialFocusZoneBody({
   ]);
 
   // Ancestor-scroll listener: refresh the kernel's rect whenever any
-  // scrollable ancestor (or the document) scrolls. The `ResizeObserver`
-  // above only fires on size changes, so without this hook a scrolled
-  // column would leave the kernel with mount-time viewport coordinates
-  // and beam-search would pick wrong candidates.
-  useTrackRectOnAncestorScroll(ref, key, updateRect);
+  // scrollable ancestor (or the document) scrolls.
+  useTrackRectOnAncestorScroll(ref, fq, updateRect);
 
   // Scroll-into-view when the entity-focus store reports this zone as
   // directly focused — preserves the legacy "follow the focus" behaviour.
@@ -505,10 +472,10 @@ function SpatialFocusZoneBody({
       // `setFocus` is only available when an `EntityFocusProvider` is
       // mounted; the context menu still opens via the CommandScopeContext
       // chain, but the entity-focus side effect is skipped when missing.
-      if (setFocus) setFocus(moniker);
+      if (setFocus) setFocus(fq);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler, handleEvents],
+    [fq, setFocus, contextMenuHandler, handleEvents],
   );
 
   const handleClick = useCallback(
@@ -524,45 +491,38 @@ function SpatialFocusZoneBody({
       // enclosing zone (or `<FocusScope>`) and fire `spatial_focus` again
       // with the outer key. Each level handles its own click exactly once.
       e.stopPropagation();
-      focus(key).catch((err) =>
-        console.error("[FocusZone] focus failed", err),
-      );
+      focus(fq).catch((err) => console.error("[FocusZone] focus failed", err));
     },
-    [focus, key, handleEvents],
+    [focus, fq, handleEvents],
   );
 
-  // Merge `relative` into the consumer's className so the absolutely-
-  // positioned `<FocusIndicator>` child positions itself against this
-  // zone's box rather than escaping to the nearest ancestor with a
-  // containing block. The merge keeps consumer styles intact and adds
-  // the positioning hint without forcing every call site to remember it.
+  // Merge `relative` into the consumer's className.
   const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
   const mergedClassName = cn(consumerClassName, "relative");
 
-  // Read the spatial-nav debug flag once per render — the overlay renders
-  // a dashed border + coordinate label when on, nothing when off. The
-  // hook is unconditional; only the rendered overlay element is gated.
-  // See `lib/focus-debug-context.tsx` for the toggle path.
   const debugEnabled = useFocusDebug();
 
   return (
-    <FocusZoneContext.Provider value={key}>
-      <div
-        ref={setRef}
-        data-moniker={moniker}
-        data-focused={focused || undefined}
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-        {...restWithoutClassName}
-        className={mergedClassName}
-      >
-        {showFocusBar && <FocusIndicator focused={focused} />}
-        {debugEnabled && (
-          <FocusDebugOverlay kind="zone" label={moniker} hostRef={ref} />
-        )}
-        {children}
-      </div>
-    </FocusZoneContext.Provider>
+    <FullyQualifiedMonikerContext.Provider value={fq}>
+      <FocusZoneContext.Provider value={fq}>
+        <div
+          ref={setRef}
+          data-moniker={fq}
+          data-segment={segment}
+          data-focused={focused || undefined}
+          onClick={handleClick}
+          onContextMenu={handleContextMenu}
+          {...restWithoutClassName}
+          className={mergedClassName}
+        >
+          {showFocusBar && <FocusIndicator focused={focused} />}
+          {debugEnabled && (
+            <FocusDebugOverlay kind="zone" label={fq} hostRef={ref} />
+          )}
+          {children}
+        </div>
+      </FocusZoneContext.Provider>
+    </FullyQualifiedMonikerContext.Provider>
   );
 }
 
@@ -575,7 +535,7 @@ interface FallbackFocusZoneBodyProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   "onClick" | "children"
 > {
-  moniker: Moniker;
+  segment: SegmentMoniker;
   /** See {@link FocusZoneOwnProps.handleEvents}. */
   handleEvents: boolean;
   isDirectFocus: boolean;
@@ -588,30 +548,12 @@ interface FallbackFocusZoneBodyProps extends Omit<
  * provider stack (no `<SpatialFocusProvider>` / no `<FocusLayer>`).
  *
  * Renders a plain `<div>` with as much chrome as the surrounding providers
- * make available. Skips the spatial registration and the per-key
+ * make available. Skips the spatial registration and the per-FQM
  * focus-claim subscription that would otherwise throw. Production code
  * never enters this branch.
- *
- * What still runs here:
- *
- *   - The plain `<div>` carrying `data-moniker` and `data-focused` (the
- *     latter driven by the optional entity-focus store).
- *   - `CommandScopeContext` and `FocusScopeContext` providers — pushed
- *     by the parent `<FocusZone>` body around this branch.
- *   - Right-click → context menu via the command-scope chain; the
- *     entity-focus side effect (`setFocus(moniker)`) only fires when an
- *     `EntityFocusProvider` is mounted.
- *   - Click → `setFocus(moniker)`, when an `EntityFocusProvider` is
- *     mounted; otherwise a no-op.
- *
- * Inspector dispatch (double-click → `ui.inspect`) is **not** owned
- * here — it lives in `<Inspectable>` (`inspectable.tsx`).
- *
- * Visible focus bar is intentionally NOT rendered here — there is no
- * `useFocusClaim` subscription to drive a `<FocusIndicator>`.
  */
 function FallbackFocusZoneBody({
-  moniker,
+  segment,
   handleEvents,
   isDirectFocus,
   children,
@@ -650,10 +592,13 @@ function FallbackFocusZoneBody({
       if (!handleEvents) return;
       e.preventDefault();
       e.stopPropagation();
-      if (setFocus) setFocus(moniker);
+      // The fallback path has no FQM (no spatial ancestor) — pass the
+      // segment as the entity-focus key. The fallback `setFocus` is the
+      // test-harness path that writes the store directly.
+      if (setFocus) setFocus(segment);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler, handleEvents],
+    [segment, setFocus, contextMenuHandler, handleEvents],
   );
 
   const handleClick = useCallback(
@@ -664,27 +609,22 @@ function FallbackFocusZoneBody({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (target.closest("[contenteditable]")) return;
       e.stopPropagation();
-      if (setFocus) setFocus(moniker);
+      if (setFocus) setFocus(segment);
     },
-    [moniker, setFocus, handleEvents],
+    [segment, setFocus, handleEvents],
   );
 
-  // Merge `relative` into the consumer's className so the absolutely-
-  // positioned debug overlay positions itself against this zone's box
-  // rather than escaping to the nearest ancestor with a containing block.
-  // Production never enters this branch (no `<FocusLayer>` ancestor), so
-  // the merge is only relevant when a test mounts a `<FocusZone>` inside
-  // `<FocusDebugProvider enabled>` without the spatial provider stack.
+  // Merge `relative` into the consumer's className.
   const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
   const mergedClassName = cn(consumerClassName, "relative");
 
-  // Read the spatial-nav debug flag — see `lib/focus-debug-context.tsx`.
   const debugEnabled = useFocusDebug();
 
   return (
     <div
       ref={setRef}
-      data-moniker={moniker}
+      data-moniker={segment}
+      data-segment={segment}
       data-focused={isDirectFocus || undefined}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
@@ -692,9 +632,21 @@ function FallbackFocusZoneBody({
       className={mergedClassName}
     >
       {debugEnabled && (
-        <FocusDebugOverlay kind="zone" label={moniker} hostRef={ref} />
+        <FocusDebugOverlay kind="zone" label={segment} hostRef={ref} />
       )}
       {children}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Layer-FQ re-export
+// ---------------------------------------------------------------------------
+
+// `LayerFqContext` lives in its own module (`@/components/layer-fq-context`)
+// to avoid a focus-zone ↔ focus-layer import cycle. Re-exported here so
+// existing imports of `@/components/focus-zone` can still reach it.
+export {
+  LayerFqContext,
+  useEnclosingLayerFq,
+} from "@/components/layer-fq-context";

@@ -8,10 +8,11 @@ import { useEntitiesByType } from "@/components/rust-engine-container";
 import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
-import { FocusLayer, useCurrentLayerKey } from "@/components/focus-layer";
+import { FocusLayer } from "@/components/focus-layer";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import type { Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
-import { asLayerName } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 const PANEL_WIDTH = 420;
 
@@ -23,7 +24,7 @@ const PANEL_WIDTH = 420;
  * would force an unnecessary tear-down / re-push of the inspector layer
  * on every parent render.
  */
-const INSPECTOR_LAYER_NAME = asLayerName("inspector");
+const INSPECTOR_LAYER_NAME = asSegment("inspector");
 
 /** Window label for per-window state persistence. */
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -100,13 +101,13 @@ export function InspectorsContainer() {
   const entitiesByType = useEntitiesByType();
   const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
 
-  // Read the window-root layer key here — this component is mounted as a
+  // Read the window-root layer FQM here — this component is mounted as a
   // direct child of the window's `<FocusLayer name="window">` in App.tsx,
   // so the surrounding context has it. We forward it explicitly to the
   // inspector layer so the parent link survives even if the panels were
   // ever portaled (and so the Rust registry sees the inspector layer as a
   // child of the window root rather than minting a second root).
-  const windowLayerKey = useCurrentLayerKey();
+  const windowLayerFq = useFullyQualifiedMoniker();
 
   // Derive panel stack from UIState
   const winState = uiState.windows?.[WINDOW_LABEL];
@@ -176,7 +177,7 @@ export function InspectorsContainer() {
           `last_focused`, which restores focus to whatever was focused on
           the board before the first panel opened. */}
       {hasPanels && (
-        <FocusLayer name={INSPECTOR_LAYER_NAME} parentLayerKey={windowLayerKey}>
+        <FocusLayer name={INSPECTOR_LAYER_NAME} parentLayerFq={windowLayerFq}>
           {panelNodes}
         </FocusLayer>
       )}

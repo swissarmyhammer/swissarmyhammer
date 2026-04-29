@@ -10,31 +10,40 @@
  *    branded slot. We assert that with `// @ts-expect-error` markers; if
  *    TypeScript ever stops flagging the bad call, the file will fail
  *    `tsc --noEmit` and the test build with it.
+ *
+ * The path-monikers refactor (card `01KQD6064G1C1RAXDFPJVT1F46`) collapsed
+ * the legacy `SpatialKey` (UUID) and flat `Moniker` types into a single
+ * fully-qualified path. Callers declare a relative `SegmentMoniker` per
+ * primitive; the FQM is composed via context. The two newtypes are
+ * deliberately distinct — a `SegmentMoniker` cannot be passed where a
+ * `FullyQualifiedMoniker` is expected.
  */
 
 import { describe, it, expect } from "vitest";
 import {
-  asLayerKey,
+  asFq,
   asLayerName,
-  asMoniker,
   asPixels,
-  asSpatialKey,
+  asSegment,
   asWindowLabel,
-  type LayerKey,
+  composeFq,
+  fqLastSegment,
+  fqRoot,
+  type FullyQualifiedMoniker,
   type LayerName,
-  type Moniker,
   type Pixels,
   type Rect,
-  type SpatialKey,
+  type SegmentMoniker,
   type WindowLabel,
 } from "./spatial";
 
 describe("brand helpers", () => {
   it("preserve the underlying primitive value", () => {
     expect(asWindowLabel("main")).toBe("main");
-    expect(asSpatialKey("k1")).toBe("k1");
-    expect(asLayerKey("L1")).toBe("L1");
-    expect(asMoniker("task:01ABC")).toBe("task:01ABC");
+    expect(asSegment("field:T1.title")).toBe("field:T1.title");
+    expect(asFq("/window/inspector/field:T1.title")).toBe(
+      "/window/inspector/field:T1.title",
+    );
     expect(asLayerName("window")).toBe("window");
     expect(asPixels(42)).toBe(42);
   });
@@ -42,21 +51,17 @@ describe("brand helpers", () => {
   it("flow through the type system as their branded shape", () => {
     // Round-trip: a branded value can be passed straight into a function
     // that accepts that brand without re-tagging.
-    const k: SpatialKey = asSpatialKey("k");
-    const echo = (key: SpatialKey): SpatialKey => key;
-    expect(echo(k)).toBe("k");
+    const seg: SegmentMoniker = asSegment("inspector");
+    const echoSeg = (s: SegmentMoniker): SegmentMoniker => s;
+    expect(echoSeg(seg)).toBe("inspector");
 
-    const layer: LayerKey = asLayerKey("L");
-    const echoLayer = (lk: LayerKey): LayerKey => lk;
-    expect(echoLayer(layer)).toBe("L");
+    const fq: FullyQualifiedMoniker = asFq("/window");
+    const echoFq = (f: FullyQualifiedMoniker): FullyQualifiedMoniker => f;
+    expect(echoFq(fq)).toBe("/window");
 
     const w: WindowLabel = asWindowLabel("main");
     const echoWindow = (wl: WindowLabel): WindowLabel => wl;
     expect(echoWindow(w)).toBe("main");
-
-    const m: Moniker = asMoniker("task:1");
-    const echoMoniker = (mk: Moniker): Moniker => mk;
-    expect(echoMoniker(m)).toBe("task:1");
 
     const ln: LayerName = asLayerName("window");
     const echoLayerName = (n: LayerName): LayerName => n;
@@ -78,27 +83,58 @@ describe("brand helpers", () => {
   });
 });
 
+describe("FQM composition", () => {
+  it("fqRoot prefixes a separator", () => {
+    const window = fqRoot(asSegment("window"));
+    expect(window).toBe("/window");
+  });
+
+  it("composeFq appends a segment with a single separator", () => {
+    const window = fqRoot(asSegment("window"));
+    const inspector = composeFq(window, asSegment("inspector"));
+    expect(inspector).toBe("/window/inspector");
+
+    const field = composeFq(inspector, asSegment("field:T1.title"));
+    expect(field).toBe("/window/inspector/field:T1.title");
+  });
+
+  it("two zones with the same segment under different parents have distinct FQMs", () => {
+    const window = fqRoot(asSegment("window"));
+    const inspector = composeFq(window, asSegment("inspector"));
+    const board = composeFq(window, asSegment("board"));
+    const card = composeFq(board, asSegment("card:T1"));
+
+    const inspectorField = composeFq(inspector, asSegment("field:T1.title"));
+    const boardField = composeFq(card, asSegment("field:T1.title"));
+
+    expect(inspectorField).not.toBe(boardField);
+    expect(inspectorField).toBe("/window/inspector/field:T1.title");
+    expect(boardField).toBe("/window/board/card:T1/field:T1.title");
+  });
+
+  it("fqLastSegment reads the trailing path segment", () => {
+    const fq = asFq("/window/inspector/field:T1.title");
+    expect(fqLastSegment(fq)).toBe("field:T1.title");
+
+    const root = asFq("/window");
+    expect(fqLastSegment(root)).toBe("window");
+  });
+});
+
 describe("brand boundaries (compile-time)", () => {
-  it("rejects a raw string where a SpatialKey is expected", () => {
-    const expectKey = (_: SpatialKey) => {};
-    // @ts-expect-error — raw strings cannot stand in for SpatialKey
-    expectKey("not-branded");
+  it("rejects a raw string where a SegmentMoniker is expected", () => {
+    const expectSeg = (_: SegmentMoniker) => {};
+    // @ts-expect-error — raw strings cannot stand in for SegmentMoniker
+    expectSeg("not-branded");
     // Wrapping in the brand helper compiles without an error.
-    expectKey(asSpatialKey("ok"));
+    expectSeg(asSegment("ok"));
   });
 
-  it("rejects a raw string where a LayerKey is expected", () => {
-    const expectLayer = (_: LayerKey) => {};
-    // @ts-expect-error — raw strings cannot stand in for LayerKey
-    expectLayer("not-branded");
-    expectLayer(asLayerKey("ok"));
-  });
-
-  it("rejects a raw string where a Moniker is expected", () => {
-    const expectMoniker = (_: Moniker) => {};
-    // @ts-expect-error — raw strings cannot stand in for Moniker
-    expectMoniker("not-branded");
-    expectMoniker(asMoniker("task:1"));
+  it("rejects a raw string where a FullyQualifiedMoniker is expected", () => {
+    const expectFq = (_: FullyQualifiedMoniker) => {};
+    // @ts-expect-error — raw strings cannot stand in for FullyQualifiedMoniker
+    expectFq("/window/inspector");
+    expectFq(asFq("/window/inspector"));
   });
 
   it("rejects a raw string where a LayerName is expected", () => {
@@ -115,11 +151,19 @@ describe("brand boundaries (compile-time)", () => {
     expectPx(asPixels(123));
   });
 
-  it("rejects mixing brands of the same underlying type", () => {
-    const expectKey = (_: SpatialKey) => {};
-    const layer: LayerKey = asLayerKey("L");
-    // @ts-expect-error — LayerKey is not assignable to SpatialKey even though
-    // both are string-shaped
-    expectKey(layer);
+  it("rejects passing a SegmentMoniker where a FullyQualifiedMoniker is expected", () => {
+    const expectFq = (_: FullyQualifiedMoniker) => {};
+    const seg: SegmentMoniker = asSegment("field:T1.title");
+    // @ts-expect-error — SegmentMoniker is not assignable to FullyQualifiedMoniker
+    // even though both are string-shaped. This is the safety net the
+    // path-monikers refactor relies on.
+    expectFq(seg);
+  });
+
+  it("rejects passing a FullyQualifiedMoniker where a SegmentMoniker is expected", () => {
+    const expectSeg = (_: SegmentMoniker) => {};
+    const fq: FullyQualifiedMoniker = asFq("/window/inspector");
+    // @ts-expect-error — FullyQualifiedMoniker is not assignable to SegmentMoniker
+    expectSeg(fq);
   });
 });

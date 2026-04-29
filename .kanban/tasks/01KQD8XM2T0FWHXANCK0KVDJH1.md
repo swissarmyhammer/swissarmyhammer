@@ -12,35 +12,90 @@ title: 'Path monikers Layer 2: Tauri command boundary + React adapter FQM rewire
 
 Second of three sequenced sub-tasks. Depends on Layer 1 (kernel newtypes) landing first.
 
-## Status (in-progress on this card)
+## Status — Section A done, Sections B–D scaffolded, E (test sweep + new test file) NOT done
 
 ### Done — Section A: Tauri command boundary (`kanban-app/src/commands.rs` + `main.rs`)
 
-- Imports updated to use `FullyQualifiedMoniker` and `SegmentMoniker`; `SpatialKey`, `LayerKey`, `Moniker` removed from kanban-app Rust side.
-- All `spatial_*` Tauri commands rewired to FQM/segment shape:
-  - `spatial_register_scope(fq, segment, rect, layer_fq, parent_zone, overrides)`
-  - `spatial_register_zone(fq, segment, rect, layer_fq, parent_zone, overrides)`
-  - `spatial_unregister_scope(fq)`
-  - `spatial_update_rect(fq, rect)`
-  - `spatial_focus(fq)`
-  - `spatial_navigate(focused_fq, direction)`
-  - `spatial_drill_in(fq, focused_fq) -> FullyQualifiedMoniker`
-  - `spatial_drill_out(fq, focused_fq) -> FullyQualifiedMoniker`
-  - `spatial_push_layer(fq, segment, name, parent)`
-  - `spatial_pop_layer(fq)`
-- `spatial_focus_by_moniker` deleted (the FQM IS the key).
-- All `*_inner` helpers, `RegisterEntry` field references, and `spatial_command_tests` module rewritten with FQM API.
-- `state.rs` doc comment updated to reference `FullyQualifiedMoniker`.
-- `cargo check -p kanban-app` clean.
-- `cargo test -p kanban-app` — 93 passed, 0 failed.
-- `cargo build --workspace --tests` clean.
-- `cargo clippy -p kanban-app --all-targets -- -D warnings` clean.
+(Locked in earlier; cargo build, cargo test -p kanban-app, cargo clippy clean.)
 
-### Not done — Sections B, C, D, E (TypeScript / React + tests)
+### Done in this session — Section B: TS branded types (`kanban-app/ui/src/types/spatial.ts`)
 
-Scope: 931 occurrences of `SpatialKey`/`LayerKey`/`Moniker`/`crypto.randomUUID` across 82 TypeScript files, plus authoring new `path-monikers.kernel-driven.browser.test.tsx`.
+- New types defined: `SegmentMoniker`, `FullyQualifiedMoniker` (distinct brands), `WindowLabel`, `LayerName`, `Pixels`.
+- Helpers: `asSegment`, `asFq`, `asLayerName`, `asWindowLabel`, `asPixels`, `composeFq`, `fqRoot`, `fqLastSegment`.
+- Removed: `SpatialKey`, `LayerKey`, flat `Moniker`, `asMoniker`, `asSpatialKey`, `asLayerKey`.
+- `FocusChangedPayload` updated: `prev_fq`, `next_fq`, `next_segment` (matching the kernel's emit shape).
+- `FocusOverrides` is now `Partial<Record<Direction, FullyQualifiedMoniker | null>>`.
+- Companion test file `spatial.test.ts` rewritten with brand-distinctness, `composeFq`, `fqRoot`, `fqLastSegment` coverage.
 
-This is multi-day mechanical work that cannot land in a single `/implement` pass without producing either context overflow or sweeping changes that may not honor the `useFullyQualifiedMoniker()` context-composition intent. Per `/implement` skill rules ("If you cannot complete the task, do NOT move it forward"), Layer 2 has been split: Section A is locked in via the focused commit; Sections B-E should be filed as a follow-up sub-task and worked from there with a fresh `/implement` invocation per layer (e.g. types + primitives in one card; entity-focus-context in a second; test sweep in a third).
+### Done in this session — Section C: React primitives (`kanban-app/ui/src/components/`)
+
+- New `fully-qualified-moniker-context.tsx` — `FullyQualifiedMonikerContext`, `useFullyQualifiedMoniker`, `useOptionalFullyQualifiedMoniker`.
+- New `layer-fq-context.tsx` — `LayerFqContext`, `useEnclosingLayerFq`, `useOptionalEnclosingLayerFq` (broken out to avoid focus-zone ↔ focus-layer cycle).
+- `focus-layer.tsx` rewritten — takes `name: SegmentMoniker`, composes own FQM via `fqRoot`/`composeFq`, provides `FullyQualifiedMonikerContext` AND `LayerFqContext`. `crypto.randomUUID()` removed. IPC: `spatial_push_layer({ fq, segment, name, parent })`.
+- `focus-zone.tsx` rewritten — `moniker: SegmentMoniker`, composes own FQM, provides `FullyQualifiedMonikerContext` + `FocusZoneContext` (FQM-typed). `useParentZoneFq()` replaces `useParentZoneKey`. IPC: `spatial_register_zone({ fq, segment, rect, layerFq, parentZone, overrides })`. `data-moniker` attr is now the FQM; `data-segment` is the segment.
+- `focus-scope.tsx` rewritten with the same shape as FocusZone.
+- `use-track-rect-on-ancestor-scroll.ts` updated — takes `FullyQualifiedMoniker` instead of `SpatialKey`.
+
+### Done in this session — Section D: entity-focus-context + spatial-focus-context
+
+- `lib/spatial-focus-context.tsx` rewritten — actions surface takes FQM throughout: `focus(fq)`, `clearFocus()`, `registerScope(fq, segment, rect, layerFq, parentZone, overrides)`, `registerZone(fq, segment, ...)`, `unregisterScope(fq)`, `updateRect(fq, rect)`, `navigate(focusedFq, dir)`, `pushLayer(fq, segment, name, parent)`, `popLayer(fq)`, `drillIn(fq, focusedFq)`, `drillOut(fq, focusedFq)`. New `focusedFq()` replaces `focusedKey()` + `focusedMoniker()`. New `clearFocus` action. `useFocusClaim` takes FQM.
+- `lib/entity-focus-context.tsx` rewritten — `setFocus(fq: FullyQualifiedMoniker | null)` strict (segment-form is a TS error). Bridge subscribes to `focus-changed` events with the new `prev_fq`/`next_fq`/`next_segment` shape and writes `next_fq` into the store. New `useFocusedFq()`, `useFocusedSegmentMoniker()`, `useFocusedMonikerRef()` returning FQM. `useFocusedMoniker()` kept as deprecated alias.
+
+### Done in this session — Migrated production callsites
+
+- `App.tsx` — `WINDOW_LAYER_NAME = asSegment("window")`.
+- `inspectors-container.tsx` — uses `useFullyQualifiedMoniker()` to read window FQM, passes it as `parentLayerFq` to `<FocusLayer>`. `INSPECTOR_LAYER_NAME = asSegment("inspector")`.
+- `board-view.tsx` — partial: `asMoniker` import replaced with `asSegment`, `useOptionalLayerKey` replaced with `useOptionalEnclosingLayerFq`, scroll helper renamed to take `focusedFq`. Body still has migration left.
+
+### NOT done — Sections E + remaining migration sweep
+
+`npx tsc --noEmit` reports **774 errors** across ~80 files. Patterns:
+
+1. **`asMoniker(...)` callsites → `asSegment(...)`** for entity-form strings (`task:T1`, etc.). Production hits: `avatar.tsx`, `board-view.tsx`, `column-view.tsx`, `command-palette.tsx`, `data-table.tsx`, `entity-card.tsx`, `entity-inspector.tsx`, `fields/displays/attachment-display.tsx`, `fields/field.tsx`, `inspectable.tsx`, `mention-view.tsx`, `nav-bar.tsx`, `perspective-tab-bar.tsx`. Plus tests.
+2. **`asLayerName(s)` for `<FocusLayer name=>` → `asSegment(s)`** — ~20 test files.
+3. **`useOptionalLayerKey()`/`useCurrentLayerKey()` → `useOptionalEnclosingLayerFq()`/`useFullyQualifiedMoniker()`** — `app-shell.tsx`, `board-view.tsx`, `column-view.tsx`, `data-table.tsx`, `perspective-tab-bar.tsx`, etc.
+4. **`useParentZoneKey()` → `useParentZoneFq()`** — column-view + data-table.
+5. **`focusedKey()`/`focusedMoniker()` on `SpatialFocusActions` → `focusedFq()`** — app-shell.tsx, fields/field.tsx, cursor-focus-bridge.tsx.
+6. **`FocusChangedPayload` shape rename** in ~40 test files: `prev_key`→`prev_fq`, `next_key`→`next_fq`, `next_moniker`→`next_segment`.
+7. **`setFocus(target: string)` callers** — these need real attention. Today most pass entity-form like `"task:T1"`; FQM requires the full path (`/window/board/column:todo/card:T1`). Patterns:
+   - inside the focused primitive: `setFocus(useFullyQualifiedMoniker())`.
+   - composing for not-yet-mounted descendant: `setFocus(composeFq(parent, segment))`.
+   Hits: `board-view.tsx` (`useInitialBoardFocus`, `useAddTaskHandler`), `app-shell.tsx`, `column-view.tsx`, `fields/field.tsx`, `cursor-focus-bridge.tsx`, `entity-inspector.tsx` (`useFirstFieldFocus` capture/restore), `command-palette.tsx`, keymap path.
+8. **`Moniker` type imports** — many files import `type { Moniker }`. Must split into `SegmentMoniker` or `FullyQualifiedMoniker` per usage.
+9. **`SpatialKey` references in `test/spatial-shadow-registry.ts`** — `Map<SpatialKey, ShadowEntry>` should become `Map<FullyQualifiedMoniker, ShadowEntry>`. JS port of `BeamNavStrategy` is identifier-agnostic; this is mechanical.
+10. **`test-helpers/kernel-simulator.ts`** — same shape: rewrite `LayerRecord`, `RegistrationRecord`, command dispatch table for FQM keys + emit `FocusChangedPayload` with `next_fq`/`prev_fq`/`next_segment`.
+11. **The 5 mock files** + **all other test files** that use `setFocus`, `Moniker`, `SpatialKey`, `data-moniker` selectors.
+12. **New file `path-monikers.kernel-driven.browser.test.tsx`** — not yet authored. Should host the 7 named tests from parent task `01KQD6064G1C1RAXDFPJVT1F46`.
+
+### Files modified in this session (committable as a structural foundation)
+
+- `kanban-app/ui/src/types/spatial.ts` (rewritten)
+- `kanban-app/ui/src/types/spatial.test.ts` (rewritten)
+- `kanban-app/ui/src/components/fully-qualified-moniker-context.tsx` (new)
+- `kanban-app/ui/src/components/layer-fq-context.tsx` (new)
+- `kanban-app/ui/src/components/focus-layer.tsx` (rewritten)
+- `kanban-app/ui/src/components/focus-zone.tsx` (rewritten)
+- `kanban-app/ui/src/components/focus-scope.tsx` (rewritten)
+- `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts` (FQM swap)
+- `kanban-app/ui/src/components/inspectors-container.tsx` (parent FQ wiring)
+- `kanban-app/ui/src/components/board-view.tsx` (partial)
+- `kanban-app/ui/src/App.tsx` (WINDOW_LAYER_NAME swap)
+- `kanban-app/ui/src/lib/entity-focus-context.tsx` (rewritten)
+- `kanban-app/ui/src/lib/spatial-focus-context.tsx` (rewritten)
+
+### Why the card stays in `doing`
+
+Per the `/implement` skill rules: *"If you cannot complete the task, do NOT move it forward. Add a comment describing what happened and report back."*
+
+The migration sweep across ~80 TS files plus the new browser test file is multi-day mechanical work that does not fit in a single `/implement` pass without context overflow. The structural foundation (Sections B/C/D scaffolding) is in place and architecturally sound; the remaining work is the compile-error wave following through every callsite. The branded types are the safety net — `tsc --noEmit` errors are the worklist.
+
+### Suggested next pass
+
+1. Migrate `test/spatial-shadow-registry.ts` and `test-helpers/kernel-simulator.ts` first (test-helpers many tests transitively depend on).
+2. Migrate the production files with `asMoniker` / `useOptionalLayerKey` (board-view, column-view, data-table, app-shell, fields/field, entity-inspector, etc.).
+3. Migrate the 5 named mock files in the task scope (app-shell.test.tsx, inspectable.space.browser.test.tsx, grid-view.cursor-ring.test.tsx, board-view.enter-drill-in.browser.test.tsx, entity-inspector.field-enter-drill.browser.test.tsx).
+4. Migrate the wider test sweep — error groups can be addressed file-by-file in parallel.
+5. Author `path-monikers.kernel-driven.browser.test.tsx`.
 
 ## What
 
@@ -85,11 +140,13 @@ This is multi-day mechanical work that cannot land in a single `/implement` pass
 - [x] Tauri commands accept FQM/segment shape.
 - [x] `cargo test -p kanban-app` passes after the Tauri rewire.
 - [x] `cargo clippy -p kanban-app --all-targets -- -D warnings` clean.
-- [ ] `SpatialKey` and flat `Moniker` types deleted from TS.
-- [ ] `setFocus` and `spatial_focus` accept only `FullyQualifiedMoniker`. Segment passed there is a tsc compile error.
-- [ ] React consumers declare only `SegmentMoniker` props.
-- [x] `cargo test --workspace` passes.
+- [x] TS branded types `SegmentMoniker`/`FullyQualifiedMoniker` defined; `SpatialKey`/`LayerKey`/flat `Moniker` removed from `types/spatial.ts`.
+- [x] React primitives rewritten — `<FocusLayer>` / `<FocusZone>` / `<FocusScope>` take `SegmentMoniker` and compose FQM via context; `useFullyQualifiedMoniker()` hook available.
+- [x] `entity-focus-context` rewritten — `setFocus` takes `FullyQualifiedMoniker | null` strictly; bridge writes `next_fq` into store; `useFocusedSegmentMoniker` available.
+- [ ] Migration sweep — `npx tsc --noEmit` clean across ~80 callsites (~774 errors remaining).
 - [ ] `bun run test:browser` (and node tests) pass.
+- [ ] New file `path-monikers.kernel-driven.browser.test.tsx` with 7 named tests authored and passing.
+- [x] `cargo test --workspace` passes.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
 
 ## Out of scope (handled in Layer 3 card)

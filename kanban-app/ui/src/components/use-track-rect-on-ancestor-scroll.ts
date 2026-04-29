@@ -35,14 +35,19 @@
  * # Coordination with `ResizeObserver`
  *
  * Both this hook and the existing `ResizeObserver` write to the same
- * single-key entry in the Rust registry via `spatial_update_rect`. The
- * kernel's update is idempotent on `SpatialKey` (a single-key overwrite),
- * so the writes coalesce safely — the latest rect always wins. Both can
- * coexist; they cover orthogonal triggers (size vs ancestor scroll).
+ * single-FQM entry in the Rust registry via `spatial_update_rect`. The
+ * kernel's update is idempotent on `FullyQualifiedMoniker` (a single-key
+ * overwrite), so the writes coalesce safely — the latest rect always
+ * wins. Both can coexist; they cover orthogonal triggers (size vs
+ * ancestor scroll).
  */
 
 import { useEffect } from "react";
-import { asPixels, type Pixels, type SpatialKey } from "@/types/spatial";
+import {
+  asPixels,
+  type FullyQualifiedMoniker,
+  type Pixels,
+} from "@/types/spatial";
 
 /**
  * Wire-shape rect used by `spatial_update_rect`. Mirrors the kernel's
@@ -59,7 +64,7 @@ interface Rect {
  * The subset of `SpatialFocusActions["updateRect"]` this hook needs. Kept
  * narrow so callers do not have to import the full action shape.
  */
-type UpdateRect = (key: SpatialKey, rect: Rect) => Promise<void>;
+type UpdateRect = (fq: FullyQualifiedMoniker, rect: Rect) => Promise<void>;
 
 /**
  * Walk an element's parent chain and return every scrollable ancestor.
@@ -123,7 +128,7 @@ function findScrollableAncestors(node: Element): Element[] {
  */
 export function useTrackRectOnAncestorScroll(
   nodeRef: React.RefObject<HTMLElement | null>,
-  key: SpatialKey,
+  fq: FullyQualifiedMoniker,
   updateRect: UpdateRect,
 ): void {
   useEffect(() => {
@@ -151,13 +156,16 @@ export function useTrackRectOnAncestorScroll(
         const live = nodeRef.current;
         if (!live || !live.isConnected) return;
         const r = live.getBoundingClientRect();
-        updateRect(key, {
+        updateRect(fq, {
           x: asPixels(r.x),
           y: asPixels(r.y),
           width: asPixels(r.width),
           height: asPixels(r.height),
         }).catch((err) =>
-          console.error("[useTrackRectOnAncestorScroll] updateRect failed", err),
+          console.error(
+            "[useTrackRectOnAncestorScroll] updateRect failed",
+            err,
+          ),
         );
       });
     };
@@ -183,5 +191,5 @@ export function useTrackRectOnAncestorScroll(
       }
       window.removeEventListener("scroll", onScroll);
     };
-  }, [nodeRef, key, updateRect]);
+  }, [nodeRef, fq, updateRect]);
 }

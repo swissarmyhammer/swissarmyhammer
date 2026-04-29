@@ -1,14 +1,14 @@
 /**
  * Spatial focus claim registry — per-window, event-driven.
  *
- * Mirrors the Rust-side `SpatialState` in `swissarmyhammer-kanban/src/focus/state.rs`.
- * Rust owns the focused-key map (per `WindowLabel`); the React side keeps a
- * `Map<SpatialKey, (focused: boolean) => void>` and a single global
- * `focus-changed` event listener that dispatches `false` to the previously
- * focused key's callback and `true` to the newly focused key's.
+ * Mirrors the Rust-side `SpatialState` in `swissarmyhammer-focus/src/state.rs`.
+ * Rust owns the focused-FQM map (per `WindowLabel`); the React side keeps a
+ * `Map<FullyQualifiedMoniker, (focused: boolean) => void>` and a single
+ * global `focus-changed` event listener that dispatches `false` to the
+ * previously focused FQM's callback and `true` to the newly focused one's.
  *
  * Each Tauri window has its own React tree and therefore its own claim
- * registry, so a `focus-changed` event for another window's key is a
+ * registry, so a `focus-changed` event for another window's FQM is a
  * silent no-op here — the lookup misses and nothing fires. We do not
  * filter on `window_label` because Tauri's emit-to-all behavior is
  * symmetric: every window receives every event, but only the window that
@@ -16,10 +16,19 @@
  * dispatch to.
  *
  * This file does **not** replace `entity-focus-context.tsx` — that
- * context still drives the moniker-keyed scope registry, command-scope
- * chain, and the legacy `setFocus` dispatch path. The claim registry is
- * an additional, opt-in layer that lets a `<FocusScope>` subscribe to its
- * own focus state by `SpatialKey` without re-rendering the whole tree.
+ * context still drives the entity scope registry and command-scope
+ * chain. The claim registry is an additional layer that lets a
+ * `<FocusScope>` subscribe to its own focus state by FQM without
+ * re-rendering the whole tree.
+ *
+ * # Path-monikers identity model
+ *
+ * After card `01KQD6064G1C1RAXDFPJVT1F46` the kernel uses one identifier
+ * shape per primitive: `FullyQualifiedMoniker`. The FQM is the spatial
+ * key — there is no UUID-based `SpatialKey`. Every action below takes a
+ * fully-qualified path; the React side composes it from
+ * `FullyQualifiedMonikerContext` before invoking. The Tauri command
+ * boundary takes the same shape (see `kanban-app/src/commands.rs`).
  */
 
 import {
@@ -36,15 +45,14 @@ import type {
   Direction,
   FocusChangedPayload,
   FocusOverrides,
-  LayerKey,
+  FullyQualifiedMoniker,
   LayerName,
-  Moniker,
   Rect,
-  SpatialKey,
+  SegmentMoniker,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
-// Claim registry — per-key callbacks
+// Claim registry — per-FQM callbacks
 // ---------------------------------------------------------------------------
 
 /**
@@ -61,17 +69,17 @@ export type FocusClaimListener = (focused: boolean) => void;
  * Callback signature for a broad `focus-changed` subscriber.
  *
  * Unlike `FocusClaimListener` (which fires only when a specific
- * `SpatialKey` gains or loses focus), this listener observes every
- * `focus-changed` payload in full. Used by integrations that need to
- * bridge spatial-focus into another store keyed by a different
- * identity — most importantly, `EntityFocusProvider`, which mirrors
- * `next_moniker` into its legacy moniker-keyed `FocusStore` so the
- * `focusedMonikerRef` API stays in sync with spatial moves.
+ * `FullyQualifiedMoniker` gains or loses focus), this listener observes
+ * every `focus-changed` payload in full. Used by integrations that need
+ * to bridge spatial-focus into a peer store — most importantly,
+ * `EntityFocusProvider`, which mirrors `next_fq` into its FQM-keyed
+ * `FocusStore` so the legacy `focusedMonikerRef` API stays in sync with
+ * spatial moves.
  *
- * Subscribers run synchronously on the same dispatch tick as
- * per-key claim listeners, so the work they do should be cheap. Calling
- * back into Tauri (e.g. dispatching `ui.setFocus` to forward the new
- * scope chain) is acceptable — the bridge already does it.
+ * Subscribers run synchronously on the same dispatch tick as per-FQM
+ * claim listeners, so the work they do should be cheap. Calling back
+ * into Tauri (e.g. dispatching `ui.setFocus` to forward the new scope
+ * chain) is acceptable — the bridge already does it.
  */
 export type FocusChangedSubscriber = (payload: FocusChangedPayload) => void;
 
@@ -85,36 +93,46 @@ export type FocusChangedSubscriber = (payload: FocusChangedPayload) => void;
  */
 export interface SpatialFocusActions {
   /**
-   * Register a focus-claim listener for `key`. Returns the unsubscribe
+   * Register a focus-claim listener for `fq`. Returns the unsubscribe
    * function — call it on component unmount to remove the entry from the
-   * registry. Replacing an existing entry with the same key is allowed
+   * registry. Replacing an existing entry with the same FQM is allowed
    * but rare in practice (each `<FocusScope>` mounts exactly one).
    */
-  registerClaim: (key: SpatialKey, listener: FocusClaimListener) => () => void;
-  /** Read the listener for a key, primarily for tests. */
-  hasClaim: (key: SpatialKey) => boolean;
-  /** Invoke `spatial_focus` for the given key in the current window. */
-  focus: (key: SpatialKey) => Promise<void>;
+  registerClaim: (
+    fq: FullyQualifiedMoniker,
+    listener: FocusClaimListener,
+  ) => () => void;
+  /** Read whether a listener exists for the FQM, primarily for tests. */
+  hasClaim: (fq: FullyQualifiedMoniker) => boolean;
+  /** Invoke `spatial_focus` for the given FQM in the current window. */
+  focus: (fq: FullyQualifiedMoniker) => Promise<void>;
   /**
-   * Invoke `spatial_register_scope` with the full kernel-types record:
-   * stable key, entity moniker, viewport rect, owning layer, optional
-   * enclosing zone, and per-direction overrides.
+   * Invoke `spatial_focus` with `null` to clear focus in the current
+   * window. Maps to `spatial_clear_focus` on the Rust side — the
+   * window's focus slot is dropped and a `Some(prev) → None`
+   * `focus-changed` event is emitted.
+   */
+  clearFocus: () => Promise<void>;
+  /**
+   * Invoke `spatial_register_scope` with the FQM-keyed kernel record:
+   * canonical FQM, declared segment, viewport rect, owning layer FQM,
+   * optional enclosing zone FQM, and per-direction overrides.
    *
-   * Mirrors [`FocusScope`] on the Rust side — the leaf primitive. Pass
+   * Mirrors `FocusScope` on the Rust side — the leaf primitive. Pass
    * `null` for `parentZone` when the leaf is registered directly under
    * the layer root, and an empty object for `overrides` when the leaf
    * has no per-direction special cases.
    */
   registerScope: (
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layerKey: LayerKey,
-    parentZone: SpatialKey | null,
+    layerFq: FullyQualifiedMoniker,
+    parentZone: FullyQualifiedMoniker | null,
     overrides: FocusOverrides,
   ) => Promise<void>;
   /**
-   * Invoke `spatial_register_zone` with the full kernel-types record.
+   * Invoke `spatial_register_zone` with the FQM-keyed kernel record.
    *
    * Mirrors `FocusZone` on the Rust side. Same parameter shape as
    * `registerScope`; the difference is the `Zone` variant in the
@@ -123,102 +141,90 @@ export interface SpatialFocusActions {
    * navigator populates it as focus moves through the zone.
    */
   registerZone: (
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layerKey: LayerKey,
-    parentZone: SpatialKey | null,
+    layerFq: FullyQualifiedMoniker,
+    parentZone: FullyQualifiedMoniker | null,
     overrides: FocusOverrides,
   ) => Promise<void>;
-  /** Invoke `spatial_unregister_scope` for the given key. */
-  unregisterScope: (key: SpatialKey) => Promise<void>;
+  /** Invoke `spatial_unregister_scope` for the given FQM. */
+  unregisterScope: (fq: FullyQualifiedMoniker) => Promise<void>;
   /**
    * Invoke `spatial_update_rect` to refresh the bounding rect of a
    * registered scope. Call from a ResizeObserver on the underlying DOM
-   * node; no-op on the Rust side if the key is unknown.
+   * node; no-op on the Rust side if the FQM is unknown.
    */
-  updateRect: (key: SpatialKey, rect: Rect) => Promise<void>;
-  /** Invoke `spatial_navigate` from `key` in `direction`. */
-  navigate: (key: SpatialKey, direction: Direction) => Promise<void>;
+  updateRect: (fq: FullyQualifiedMoniker, rect: Rect) => Promise<void>;
+  /** Invoke `spatial_navigate` from `focusedFq` in `direction`. */
+  navigate: (
+    focusedFq: FullyQualifiedMoniker,
+    direction: Direction,
+  ) => Promise<void>;
   /**
-   * Read the [`Moniker`] currently focused in the active window, or
-   * `null` if the window has no focus yet.
+   * Read the FQM currently focused in the active window, or `null` if
+   * the window has no focus yet.
    *
    * Read on demand from the latest `focus-changed` event the provider
-   * has observed. Paired with [`focusedKey`] for callers that need to
-   * thread both into the kernel's nav / drill APIs (which take
-   * `(SpatialKey, Moniker)` under the no-silent-dropout contract).
-   * Safe to call from event handlers without re-rendering.
+   * has observed. Safe to call from event handlers without re-rendering.
    */
-  focusedMoniker: () => Moniker | null;
-  /** Invoke `spatial_push_layer` for the given key/name/parent. */
+  focusedFq: () => FullyQualifiedMoniker | null;
+  /** Invoke `spatial_push_layer` for the given (fq, segment, name, parent). */
   pushLayer: (
-    key: LayerKey,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     name: LayerName,
-    parent: LayerKey | null,
+    parent: FullyQualifiedMoniker | null,
   ) => Promise<void>;
-  /** Invoke `spatial_pop_layer` for the given key. */
-  popLayer: (key: LayerKey) => Promise<void>;
+  /** Invoke `spatial_pop_layer` for the given FQM. */
+  popLayer: (fq: FullyQualifiedMoniker) => Promise<void>;
   /**
-   * Invoke `spatial_drill_in` to compute the [`Moniker`] to focus when
-   * the user drills *into* the scope at `key`.
+   * Invoke `spatial_drill_in` to compute the FQM to focus when the
+   * user drills *into* the scope at `fq`.
    *
-   * Under the no-silent-dropout contract the kernel always returns a
-   * [`Moniker`]; the caller detects "no descent happened" by comparing
-   * the result against `focusedMoniker`. Equality means the kernel had
-   * nothing to descend into (leaf, empty zone, unknown key) and the
-   * caller should fall through to the next behavior (e.g. inline
-   * edit on a leaf with an editor). Inequality means focus should
-   * move to the returned moniker.
+   * Under the no-silent-dropout contract the kernel always returns an
+   * FQM; the caller detects "no descent happened" by comparing the
+   * result against `focusedFq`. Equality means the kernel had nothing
+   * to descend into (leaf, empty zone, unknown FQM) and the caller
+   * should fall through to the next behavior (e.g. inline edit on a
+   * leaf with an editor). Inequality means focus should move to the
+   * returned FQM.
    *
    * Mirrors `SpatialRegistry::drill_in` on the Rust side — purely a
    * registry query, no focus state mutation.
    */
-  drillIn: (key: SpatialKey, focusedMoniker: Moniker) => Promise<Moniker>;
+  drillIn: (
+    fq: FullyQualifiedMoniker,
+    focusedFq: FullyQualifiedMoniker,
+  ) => Promise<FullyQualifiedMoniker>;
   /**
-   * Invoke `spatial_drill_out` to compute the [`Moniker`] to focus when
-   * the user drills *out of* the scope at `key`.
+   * Invoke `spatial_drill_out` to compute the FQM to focus when the
+   * user drills *out of* the scope at `fq`.
    *
-   * Under the no-silent-dropout contract the kernel always returns a
-   * [`Moniker`]; the caller detects "no zone-level drill happened" by
-   * comparing the result against `focusedMoniker`. Equality means the
-   * scope sits at the layer root (or is unknown) — the React Escape
-   * chain falls through to `app.dismiss` (close the topmost modal
-   * layer). Inequality means focus should move to the returned
-   * (parent zone's) moniker.
+   * Under the no-silent-dropout contract the kernel always returns an
+   * FQM; the caller compares the result against `focusedFq` to detect
+   * "no zone-level drill happened" and falls through to `app.dismiss`
+   * (close the topmost modal layer).
    *
-   * Mirrors `SpatialRegistry::drill_out` on the Rust side — purely a
-   * registry query, no focus state mutation.
+   * Mirrors `SpatialRegistry::drill_out` on the Rust side.
    */
-  drillOut: (key: SpatialKey, focusedMoniker: Moniker) => Promise<Moniker>;
-  /**
-   * Read the [`SpatialKey`] currently focused in the active window, or
-   * `null` if the window has no focus yet.
-   *
-   * Read on demand from the latest `focus-changed` event the provider
-   * has observed; safe to call from event handlers without
-   * re-rendering. Used by the global keybinding handler to thread the
-   * focused key into `drillIn` / `drillOut` without round-tripping
-   * through the entity-focus moniker store.
-   */
-  focusedKey: () => SpatialKey | null;
+  drillOut: (
+    fq: FullyQualifiedMoniker,
+    focusedFq: FullyQualifiedMoniker,
+  ) => Promise<FullyQualifiedMoniker>;
   /**
    * Subscribe to every `focus-changed` payload the provider observes.
    *
    * Returns an unsubscribe function — call it on unmount to remove the
    * entry. Used by integrations that need to bridge spatial focus into
    * a peer store: most notably `EntityFocusProvider`, which mirrors
-   * `payload.next_moniker` into its moniker-keyed `FocusStore` so
+   * `payload.next_fq` into its FQM-keyed `FocusStore` so
    * `useFocusedMonikerRef` and `useFocusedScope` stay in sync with
-   * spatial moves — keeping `extractScopeBindings` (the keymap
-   * handler's scope-binding source) and downstream consumers honest.
+   * spatial moves.
    *
-   * Subscribers fire synchronously alongside per-key claim listeners on
-   * the same dispatch tick, so the callback should keep its work cheap.
-   * The provider runs every registered subscriber regardless of whether
-   * `next_key` matches any `SpatialKey` in the local claim registry —
-   * the broadcast is unconditional, mirroring the all-windows reach of
-   * Tauri's `emit`.
+   * Subscribers fire synchronously alongside per-FQM claim listeners
+   * on the same dispatch tick, so the callback should keep its work
+   * cheap.
    */
   subscribeFocusChanged: (subscriber: FocusChangedSubscriber) => () => void;
 }
@@ -233,7 +239,7 @@ const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
  * Provider for the spatial focus claim registry.
  *
  * Mounts a single global `focus-changed` listener; on every event, looks
- * up `payload.prev_key` and `payload.next_key` in the local registry and
+ * up `payload.prev_fq` and `payload.next_fq` in the local registry and
  * dispatches `false` / `true` to whichever callbacks are registered.
  * Unmount removes the listener so a hot-reloaded provider does not leak
  * subscriptions.
@@ -242,34 +248,22 @@ const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
  * window has its own React tree and therefore needs its own provider.
  */
 export function SpatialFocusProvider({ children }: { children: ReactNode }) {
-  // Registry of per-`SpatialKey` callbacks. Held in a ref so registrations
+  // Registry of per-FQM callbacks. Held in a ref so registrations
   // do not cause re-renders — the only thing that re-renders on a focus
   // change is the `<FocusScope>` whose listener fires.
-  const registryRef = useRef<Map<SpatialKey, FocusClaimListener>>(new Map());
+  const registryRef = useRef<Map<FullyQualifiedMoniker, FocusClaimListener>>(
+    new Map(),
+  );
 
-  // Set of broad `focus-changed` subscribers. Kept in a `Set` (not an
-  // array) so unsubscribe is O(1) and accidental double-registration of
-  // the same listener identity is a no-op. Held in a ref for the same
-  // reason as `registryRef`: subscriber churn must not re-render the
-  // provider tree.
+  // Set of broad `focus-changed` subscribers. Held in a `Set` for O(1)
+  // unsubscribe; held in a ref for the same reason as `registryRef`.
   const subscribersRef = useRef<Set<FocusChangedSubscriber>>(new Set());
 
-  // Latest focused `SpatialKey` from `focus-changed` events. Tracked in a
-  // ref because the global keybinding handler needs to read it on every
+  // Latest focused FQM from `focus-changed` events. Tracked in a ref
+  // because the global keybinding handler needs to read it on every
   // keystroke without re-registering. Mirrors what `SpatialState` holds
-  // on the Rust side, scoped to this window — `focus-changed` events for
-  // other windows arrive here too but their `next_key` is not registered
-  // in the local claim map, so the misroute is silent (and we still record
-  // the latest key, since Tauri's emit-to-all guarantees only the matching
-  // window's React tree mounts the corresponding scope).
-  const focusedKeyRef = useRef<SpatialKey | null>(null);
-
-  // Latest focused `Moniker` from `focus-changed` events. Paired with
-  // `focusedKeyRef` so callers can thread `(SpatialKey, Moniker)` into
-  // the kernel's nav / drill APIs without round-tripping through the
-  // entity-focus moniker store. The kernel emits the moniker alongside
-  // the key on every focus-changed event, so we capture both here.
-  const focusedMonikerRef = useRef<Moniker | null>(null);
+  // on the Rust side, scoped to this window.
+  const focusedFqRef = useRef<FullyQualifiedMoniker | null>(null);
 
   // Subscribe to the global `focus-changed` event exactly once for the
   // provider's lifetime. The cleanup is critical: an unmounted provider
@@ -282,22 +276,18 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
 
     listen<FocusChangedPayload>("focus-changed", ({ payload }) => {
       const registry = registryRef.current;
-      if (payload.prev_key !== null) {
-        registry.get(payload.prev_key)?.(false);
+      if (payload.prev_fq !== null) {
+        registry.get(payload.prev_fq)?.(false);
       }
-      if (payload.next_key !== null) {
-        registry.get(payload.next_key)?.(true);
+      if (payload.next_fq !== null) {
+        registry.get(payload.next_fq)?.(true);
       }
-      // Record the latest focused key so `drillIn` / `drillOut` callers
+      // Record the latest focused FQM so `drillIn` / `drillOut` callers
       // can thread it through without consulting the entity-focus
-      // moniker store. Capture the paired moniker too so the no-silent-
-      // dropout API contract has both halves of `(SpatialKey, Moniker)`
-      // available without an extra registry lookup.
-      focusedKeyRef.current = payload.next_key;
-      focusedMonikerRef.current = payload.next_moniker;
-      // Fan out the full payload to broad subscribers (e.g. the
-      // entity-focus bridge in `EntityFocusProvider`). Iteration walks a
-      // snapshot so subscriber callbacks that unsubscribe themselves
+      // moniker store.
+      focusedFqRef.current = payload.next_fq;
+      // Fan out the full payload to broad subscribers. Iteration walks
+      // a snapshot so subscriber callbacks that unsubscribe themselves
       // (or each other) mid-fire don't perturb the visit order.
       const snapshot = Array.from(subscribersRef.current);
       for (const sub of snapshot) sub(payload);
@@ -325,8 +315,7 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
     actionsRef.current = buildSpatialFocusActions(
       registryRef,
       subscribersRef,
-      focusedKeyRef,
-      focusedMonikerRef,
+      focusedFqRef,
     );
   }
 
@@ -345,120 +334,121 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
  * `buildFocusActions` split in `entity-focus-context.tsx`.
  */
 function buildSpatialFocusActions(
-  registryRef: React.MutableRefObject<Map<SpatialKey, FocusClaimListener>>,
+  registryRef: React.MutableRefObject<
+    Map<FullyQualifiedMoniker, FocusClaimListener>
+  >,
   subscribersRef: React.MutableRefObject<Set<FocusChangedSubscriber>>,
-  focusedKeyRef: React.MutableRefObject<SpatialKey | null>,
-  focusedMonikerRef: React.MutableRefObject<Moniker | null>,
+  focusedFqRef: React.MutableRefObject<FullyQualifiedMoniker | null>,
 ): SpatialFocusActions {
   const registerClaim: SpatialFocusActions["registerClaim"] = (
-    key,
+    fq,
     listener,
   ) => {
-    registryRef.current.set(key, listener);
+    registryRef.current.set(fq, listener);
     return () => {
       // Compare against the listener identity so we don't accidentally
-      // remove a successor that registered under the same key after this
-      // entry was replaced. The map only stores the latest listener per
-      // key; a stale unsubscribe should be a no-op.
-      const current = registryRef.current.get(key);
+      // remove a successor that registered under the same FQM after this
+      // entry was replaced.
+      const current = registryRef.current.get(fq);
       if (current === listener) {
-        registryRef.current.delete(key);
+        registryRef.current.delete(fq);
       }
     };
   };
 
-  const hasClaim: SpatialFocusActions["hasClaim"] = (key) =>
-    registryRef.current.has(key);
+  const hasClaim: SpatialFocusActions["hasClaim"] = (fq) =>
+    registryRef.current.has(fq);
 
-  const focus: SpatialFocusActions["focus"] = async (key) => {
-    await invoke("spatial_focus", { key });
+  const focus: SpatialFocusActions["focus"] = async (fq) => {
+    await invoke("spatial_focus", { fq });
+  };
+
+  const clearFocus: SpatialFocusActions["clearFocus"] = async () => {
+    await invoke("spatial_clear_focus");
   };
 
   const registerScope: SpatialFocusActions["registerScope"] = async (
-    key,
-    moniker,
+    fq,
+    segment,
     rect,
-    layerKey,
+    layerFq,
     parentZone,
     overrides,
   ) => {
-    // Tauri serializes argument names verbatim — they must match the
-    // Rust command signature, which uses snake_case. The TS callers use
-    // camelCase locally; the conversion happens here so each consumer
-    // stays in idiomatic JS land.
     await invoke("spatial_register_scope", {
-      key,
-      moniker,
+      fq,
+      segment,
       rect,
-      layerKey,
+      layerFq,
       parentZone,
       overrides,
     });
   };
 
   const registerZone: SpatialFocusActions["registerZone"] = async (
-    key,
-    moniker,
+    fq,
+    segment,
     rect,
-    layerKey,
+    layerFq,
     parentZone,
     overrides,
   ) => {
     await invoke("spatial_register_zone", {
-      key,
-      moniker,
+      fq,
+      segment,
       rect,
-      layerKey,
+      layerFq,
       parentZone,
       overrides,
     });
   };
 
   const unregisterScope: SpatialFocusActions["unregisterScope"] = async (
-    key,
+    fq,
   ) => {
-    await invoke("spatial_unregister_scope", { key });
+    await invoke("spatial_unregister_scope", { fq });
   };
 
-  const updateRect: SpatialFocusActions["updateRect"] = async (key, rect) => {
-    await invoke("spatial_update_rect", { key, rect });
+  const updateRect: SpatialFocusActions["updateRect"] = async (fq, rect) => {
+    await invoke("spatial_update_rect", { fq, rect });
   };
 
-  const navigate: SpatialFocusActions["navigate"] = async (key, direction) => {
-    await invoke("spatial_navigate", { key, direction });
+  const navigate: SpatialFocusActions["navigate"] = async (
+    focusedFq,
+    direction,
+  ) => {
+    await invoke("spatial_navigate", { focusedFq, direction });
   };
 
   const pushLayer: SpatialFocusActions["pushLayer"] = async (
-    key,
+    fq,
+    segment,
     name,
     parent,
   ) => {
-    await invoke("spatial_push_layer", { key, name, parent });
+    await invoke("spatial_push_layer", { fq, segment, name, parent });
   };
 
-  const popLayer: SpatialFocusActions["popLayer"] = async (key) => {
-    await invoke("spatial_pop_layer", { key });
+  const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
+    await invoke("spatial_pop_layer", { fq });
   };
 
-  const drillIn: SpatialFocusActions["drillIn"] = async (
-    key,
-    focusedMoniker,
-  ) => {
-    return await invoke<Moniker>("spatial_drill_in", { key, focusedMoniker });
+  const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
+    return await invoke<FullyQualifiedMoniker>("spatial_drill_in", {
+      fq,
+      focusedFq,
+    });
   };
 
-  const drillOut: SpatialFocusActions["drillOut"] = async (
-    key,
-    focusedMoniker,
-  ) => {
-    return await invoke<Moniker>("spatial_drill_out", { key, focusedMoniker });
+  const drillOut: SpatialFocusActions["drillOut"] = async (fq, focusedFq) => {
+    return await invoke<FullyQualifiedMoniker>("spatial_drill_out", {
+      fq,
+      focusedFq,
+    });
   };
 
-  const focusedKey: SpatialFocusActions["focusedKey"] = () =>
-    focusedKeyRef.current;
-
-  const focusedMoniker: SpatialFocusActions["focusedMoniker"] = () =>
-    focusedMonikerRef.current;
+  const focusedFq: SpatialFocusActions["focusedFq"] = () =>
+    focusedFqRef.current;
 
   const subscribeFocusChanged: SpatialFocusActions["subscribeFocusChanged"] = (
     subscriber,
@@ -473,6 +463,7 @@ function buildSpatialFocusActions(
     registerClaim,
     hasClaim,
     focus,
+    clearFocus,
     registerScope,
     registerZone,
     unregisterScope,
@@ -482,8 +473,7 @@ function buildSpatialFocusActions(
     popLayer,
     drillIn,
     drillOut,
-    focusedKey,
-    focusedMoniker,
+    focusedFq,
     subscribeFocusChanged,
   };
 }
@@ -525,19 +515,19 @@ export function useOptionalSpatialFocusActions(): SpatialFocusActions | null {
 }
 
 /**
- * Subscribe to focus changes for a single `SpatialKey`.
+ * Subscribe to focus changes for a single `FullyQualifiedMoniker`.
  *
- * Calls `listener(true)` when the key gains focus and `listener(false)`
- * when it loses focus. The listener is registered on mount and cleaned up
- * on unmount; subsequent listener identities replace the previous one (the
- * registry stores at most one callback per key).
+ * Calls `listener(true)` when the FQM gains focus and `listener(false)`
+ * when it loses focus. The listener is registered on mount and cleaned
+ * up on unmount; subsequent listener identities replace the previous
+ * one (the registry stores at most one callback per FQM).
  *
- * `listener` is intentionally read through a ref, so callers can pass an
- * inline arrow function without paying for re-registration on every
+ * `listener` is intentionally read through a ref, so callers can pass
+ * an inline arrow function without paying for re-registration on every
  * render.
  */
 export function useFocusClaim(
-  key: SpatialKey,
+  fq: FullyQualifiedMoniker,
   listener: FocusClaimListener,
 ): void {
   const { registerClaim } = useSpatialFocusActions();
@@ -545,7 +535,7 @@ export function useFocusClaim(
   listenerRef.current = listener;
 
   // Stable shim that delegates to whatever listenerRef points at. This
-  // means we register exactly once per (provider, key) pair — re-renders
+  // means we register exactly once per (provider, fq) pair — re-renders
   // that change the listener identity do not trigger re-registration.
   const stableListener = useCallback(
     (focused: boolean) => listenerRef.current(focused),
@@ -553,6 +543,6 @@ export function useFocusClaim(
   );
 
   useEffect(() => {
-    return registerClaim(key, stableListener);
-  }, [registerClaim, key, stableListener]);
+    return registerClaim(fq, stableListener);
+  }, [registerClaim, fq, stableListener]);
 }
