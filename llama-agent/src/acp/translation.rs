@@ -78,7 +78,11 @@ pub fn acp_to_llama_messages(content: Vec<ContentBlock>) -> Result<Vec<Message>,
                     "Embedded resource content not yet supported".to_string(),
                 ));
             }
-            // Handle any future ContentBlock variants
+            // ContentBlock is `#[non_exhaustive]`. All currently-known variants
+            // (Text, Image, Audio, ResourceLink, Resource) are handled explicitly
+            // above; this arm exists only to satisfy the compiler for future
+            // ACP additions and surfaces them as `UnsupportedContent` rather
+            // than silently mishandling them.
             _ => {
                 return Err(TranslationError::UnsupportedContent(
                     "Unknown content type not yet supported".to_string(),
