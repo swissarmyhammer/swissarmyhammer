@@ -1,708 +1,98 @@
-//! HookableAgent - Proxy agent that fires hooks at ACP lifecycle points
+//! HookableAgent - middleware that fires hooks at ACP lifecycle points.
 //!
-//! Matches Claude Code's hook event names and lifecycle model:
-//! - `SessionStart` — fires on new_session() and load_session()
-//! - `UserPromptSubmit` — fires before prompt()
-//! - `PreToolUse` — fires on ToolCall notification
-//! - `PostToolUse` — fires on ToolCallUpdate notification (success)
-//! - `PostToolUseFailure` — fires on ToolCallUpdate with Failed status
-//! - `Stop` — fires after prompt() returns
-//! - `Notification` — fires on any SessionNotification
+//! In ACP 0.10 `HookableAgent` was an `Arc<dyn Agent>` wrapper that
+//! implemented the `Agent` trait. ACP 0.11 replaces the trait with a
+//! Role/Builder/handler model, so the wrapper is reshaped on the same
+//! [`ConnectTo<Client>`] middleware shape used by [`TracingAgent`]:
 //!
-//! Hook handlers return `HookDecision` values derived from their output
-//! (command exit codes + JSON, prompt/agent evaluator responses).
+//! ```text
+//!     Client  <----[real channel]---->  HookableAgent  <----[duplex channel]---->  inner Agent
+//!                                       (fires hooks at lifecycle points)
+//! ```
+//!
+//! The hook event surface ([`HookEvent`], [`HookEventKind`], [`HookDecision`],
+//! [`HookHandler`], [`HookRegistration`], [`HookCommandContext`],
+//! [`SessionSource`]) is unchanged from 0.10 — it lives in
+//! [`crate::hook_config`] and is re-exported from the crate root.
+//!
+//! Hook firing logic is exposed as standalone async helper methods on
+//! [`HookableAgent`]:
+//!
+//! - [`HookableAgent::run_user_prompt_submit`] — pre-prompt hook fan-out;
+//!   returns either a possibly-modified `PromptRequest` (with prepended
+//!   context) or an [`agent_client_protocol::Error`] from a `Block` /
+//!   `Cancel` decision.
+//! - [`HookableAgent::run_stop`] — post-prompt hook fan-out; returns the
+//!   response, possibly annotated with `hook_should_continue` meta.
+//! - [`HookableAgent::track_session_start`] — records session cwd and fires
+//!   `SessionStart` hooks (called after `new_session` / `load_session`).
+//! - [`HookableAgent::intercept_notifications`] — taps a session
+//!   notification broadcast channel, fires `PreToolUse` / `PostToolUse` /
+//!   `PostToolUseFailure` / `Notification` hooks, and surfaces `Cancel` /
+//!   `AllowWithContext` decisions back through mpsc channels.
+//! - [`HookableAgent::fire_event`] — fan out an arbitrary [`HookEvent`] to
+//!   matching registrations. Used by callers (CLI, MCP proxy, …) to fire
+//!   events that don't correspond to ACP lifecycle methods, such as
+//!   `TeammateIdle`, `TaskCompleted`, `PostCompact`, `ConfigChange`.
+//!
+//! These helpers are composable: an outer driver (a real `ConnectTo<Client>`
+//! middleware, or a test) calls them at the appropriate seams in a prompt
+//! turn. The [`ConnectTo<Client>`] impl on [`HookableAgent`] is a thin
+//! TracingAgent-style passthrough; richer JSON-RPC interception layered on
+//! top of these helpers will land in follow-up tasks.
 
-use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
-    ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent, ToolCallStatus,
+use crate::hook_config::{
+    HookCommandContext, HookDecision, HookEvent, HookEventKind, HookRegistration, SessionSource,
 };
+use agent_client_protocol::schema::{
+    ContentBlock, PromptRequest, PromptResponse, SessionNotification, SessionUpdate, TextContent,
+    ToolCallStatus,
+};
+use agent_client_protocol::{Channel, Client, ConnectTo, Result as AcpResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 // ---------------------------------------------------------------------------
-// Hook command context (extra fields for AVP compatibility)
+// HookableAgent middleware
 // ---------------------------------------------------------------------------
 
-/// Extra context fields included in command hook JSON input.
+/// Middleware that fires hooks at ACP lifecycle points.
 ///
-/// These fields are required by AVP's `CommonInput` but not available
-/// from ACP lifecycle events directly. Set via builder methods on
-/// `HookableAgent` or passed through `build_registrations()`.
-#[derive(Clone, Debug, Default)]
-pub struct HookCommandContext {
-    /// Path to conversation transcript file. Default: ""
-    pub transcript_path: String,
-    /// Permission mode string. Default: "bypassPermissions"
-    pub permission_mode: String,
-}
-
-// ---------------------------------------------------------------------------
-// Session source (type-safe replacement for stringly-typed field)
-// ---------------------------------------------------------------------------
-
-/// How a session was started — distinguishes new vs resumed sessions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionSource {
-    /// New session created via `new_session()`.
-    Startup,
-    /// Existing session resumed via `load_session()`.
-    Resume,
-}
-
-impl SessionSource {
-    /// String representation matching Claude Code's JSON format.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Startup => "startup",
-            Self::Resume => "resume",
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Hook event types (matching Claude Code naming)
-// ---------------------------------------------------------------------------
-
-/// Lifecycle events that hooks can respond to.
-#[derive(Clone, Debug)]
-pub enum HookEvent {
-    /// Fires after new_session() or load_session().
-    SessionStart {
-        session_id: String,
-        source: SessionSource,
-        cwd: PathBuf,
-    },
-    /// Fires before prompt() delegates to inner agent.
-    UserPromptSubmit {
-        session_id: String,
-        prompt: Vec<ContentBlock>,
-        cwd: PathBuf,
-    },
-    /// Fires on ToolCall notification (before tool execution).
-    PreToolUse {
-        session_id: String,
-        tool_name: String,
-        tool_input: Option<serde_json::Value>,
-        tool_use_id: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires on ToolCallUpdate notification (after successful tool execution).
-    PostToolUse {
-        session_id: String,
-        tool_name: String,
-        tool_input: Option<serde_json::Value>,
-        tool_response: Option<serde_json::Value>,
-        tool_use_id: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires on ToolCallUpdate when tool status is Failed.
-    PostToolUseFailure {
-        session_id: String,
-        tool_name: String,
-        tool_input: Option<serde_json::Value>,
-        error: Option<serde_json::Value>,
-        tool_use_id: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires after prompt() returns.
-    Stop {
-        session_id: String,
-        stop_reason: StopReason,
-        stop_hook_active: bool,
-        cwd: PathBuf,
-    },
-    /// Fires on any SessionNotification.
-    Notification {
-        notification: Box<SessionNotification>,
-        cwd: PathBuf,
-    },
-    /// Fires when MCP server requests user input.
-    Elicitation {
-        session_id: String,
-        mcp_server_name: Option<String>,
-        message: Option<String>,
-        mode: String,
-        requested_schema: serde_json::Value,
-        cwd: PathBuf,
-    },
-    /// Fires when user responds to MCP elicitation.
-    ElicitationResult {
-        session_id: String,
-        mcp_server_name: String,
-        action: Option<String>,
-        content: serde_json::Value,
-        elicitation_id: String,
-        cwd: PathBuf,
-    },
-    /// Fires when CLAUDE.md or rules files are loaded.
-    InstructionsLoaded {
-        file_path: Option<String>,
-        load_reason: String,
-        cwd: PathBuf,
-    },
-    /// Fires when config files change.
-    ConfigChange {
-        session_id: String,
-        source: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires when a worktree is created.
-    WorktreeCreate {
-        worktree_path: Option<String>,
-        branch_name: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires when a worktree is removed.
-    WorktreeRemove { worktree_path: String, cwd: PathBuf },
-    /// Fires after context compaction.
-    PostCompact { session_id: String, cwd: PathBuf },
-    /// Fires when an agent teammate goes idle.
-    TeammateIdle {
-        session_id: String,
-        teammate_id: Option<String>,
-        cwd: PathBuf,
-    },
-    /// Fires when a task is marked complete.
-    TaskCompleted {
-        session_id: String,
-        task_id: Option<String>,
-        task_title: Option<String>,
-        cwd: PathBuf,
-    },
-}
-
-/// Which category of event a hook registration matches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum HookEventKind {
-    SessionStart,
-    UserPromptSubmit,
-    PreToolUse,
-    PostToolUse,
-    PostToolUseFailure,
-    Stop,
-    Notification,
-    PostCompact,
-    TeammateIdle,
-    TaskCompleted,
-    Elicitation,
-    ElicitationResult,
-    InstructionsLoaded,
-    ConfigChange,
-    WorktreeCreate,
-    WorktreeRemove,
-}
-
-impl HookEvent {
-    /// The kind of this event.
-    pub fn kind(&self) -> HookEventKind {
-        match self {
-            Self::SessionStart { .. } => HookEventKind::SessionStart,
-            Self::UserPromptSubmit { .. } => HookEventKind::UserPromptSubmit,
-            Self::PreToolUse { .. } => HookEventKind::PreToolUse,
-            Self::PostToolUse { .. } => HookEventKind::PostToolUse,
-            Self::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
-            Self::Stop { .. } => HookEventKind::Stop,
-            Self::Notification { .. } => HookEventKind::Notification,
-            Self::Elicitation { .. } => HookEventKind::Elicitation,
-            Self::ElicitationResult { .. } => HookEventKind::ElicitationResult,
-            Self::InstructionsLoaded { .. } => HookEventKind::InstructionsLoaded,
-            Self::ConfigChange { .. } => HookEventKind::ConfigChange,
-            Self::WorktreeCreate { .. } => HookEventKind::WorktreeCreate,
-            Self::WorktreeRemove { .. } => HookEventKind::WorktreeRemove,
-            Self::PostCompact { .. } => HookEventKind::PostCompact,
-            Self::TeammateIdle { .. } => HookEventKind::TeammateIdle,
-            Self::TaskCompleted { .. } => HookEventKind::TaskCompleted,
-        }
-    }
-
-    /// The string value that matchers test against.
-    ///
-    /// Returns `None` for events that don't support matchers
-    /// (UserPromptSubmit, Stop) — these always fire.
-    pub fn matcher_value(&self) -> Option<&str> {
-        match self {
-            Self::SessionStart { source, .. } => Some(source.as_str()),
-            Self::UserPromptSubmit { .. } | Self::Stop { .. } => None,
-            Self::PreToolUse { tool_name, .. }
-            | Self::PostToolUse { tool_name, .. }
-            | Self::PostToolUseFailure { tool_name, .. } => Some(tool_name.as_str()),
-            Self::Notification { notification, .. } => {
-                Some(notification_update_name(&notification.update))
-            }
-            Self::Elicitation {
-                mcp_server_name, ..
-            } => mcp_server_name.as_deref(),
-            Self::ElicitationResult {
-                mcp_server_name, ..
-            } => Some(mcp_server_name.as_str()),
-            Self::InstructionsLoaded { file_path, .. } => file_path.as_deref(),
-            Self::ConfigChange { source, .. } => source.as_deref(),
-            Self::WorktreeCreate { .. }
-            | Self::WorktreeRemove { .. }
-            | Self::PostCompact { .. }
-            | Self::TeammateIdle { .. }
-            | Self::TaskCompleted { .. } => None,
-        }
-    }
-
-    /// Serialize this event as Claude-compatible JSON for command hook stdin.
-    pub fn to_command_input(&self) -> serde_json::Value {
-        self.to_command_input_full(&HookCommandContext::default())
-    }
-
-    /// Serialize this event with extra context fields for AVP compatibility.
-    pub fn to_command_input_full(&self, ctx: &HookCommandContext) -> serde_json::Value {
-        let mut obj = self.to_base_json();
-        append_avp_context(&mut obj, ctx);
-        obj
-    }
-
-    /// Build per-variant JSON without AVP context fields.
-    fn to_base_json(&self) -> serde_json::Value {
-        match self {
-            Self::SessionStart {
-                session_id,
-                source,
-                cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "SessionStart",
-                "source": source.as_str(),
-            }),
-            Self::UserPromptSubmit {
-                session_id,
-                prompt,
-                cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": extract_prompt_text(prompt),
-            }),
-            Self::PreToolUse {
-                session_id,
-                tool_name,
-                tool_input,
-                tool_use_id,
-                cwd,
-            } => tool_event_json(
-                "PreToolUse",
-                session_id,
-                tool_name,
-                cwd,
-                tool_input,
-                tool_use_id,
-                &None,
-            ),
-            Self::PostToolUse {
-                session_id,
-                tool_name,
-                tool_input,
-                tool_response,
-                tool_use_id,
-                cwd,
-            } => tool_event_json(
-                "PostToolUse",
-                session_id,
-                tool_name,
-                cwd,
-                tool_input,
-                tool_use_id,
-                tool_response,
-            ),
-            Self::PostToolUseFailure {
-                session_id,
-                tool_name,
-                tool_input,
-                error,
-                tool_use_id,
-                cwd,
-            } => {
-                let mut o = tool_event_json(
-                    "PostToolUseFailure",
-                    session_id,
-                    tool_name,
-                    cwd,
-                    tool_input,
-                    tool_use_id,
-                    &None,
-                );
-                if let Some(err) = error {
-                    o["error"] = err.clone();
-                }
-                o
-            }
-            Self::Stop {
-                session_id,
-                stop_reason,
-                stop_hook_active,
-                cwd,
-            } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "Stop",
-                "stop_reason": format!("{:?}", stop_reason),
-                "stop_hook_active": stop_hook_active,
-            }),
-            Self::Notification {
-                notification, cwd, ..
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": notification.session_id.to_string(),
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "Notification",
-                    "notification_type": notification_update_name(&notification.update),
-                });
-                if let Ok(update_value) = serde_json::to_value(&notification.update) {
-                    obj["notification"] = update_value;
-                }
-                obj
-            }
-            Self::Elicitation {
-                session_id,
-                mcp_server_name,
-                message,
-                mode,
-                requested_schema,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "Elicitation",
-                    "mode": mode,
-                    "requested_schema": requested_schema,
-                });
-                if let Some(name) = mcp_server_name {
-                    obj["mcp_server_name"] = serde_json::Value::String(name.clone());
-                }
-                if let Some(msg) = message {
-                    obj["message"] = serde_json::Value::String(msg.clone());
-                }
-                obj
-            }
-            Self::ElicitationResult {
-                session_id,
-                mcp_server_name,
-                action,
-                content,
-                elicitation_id,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "ElicitationResult",
-                    "mcp_server_name": mcp_server_name,
-                    "content": content,
-                    "elicitation_id": elicitation_id,
-                });
-                if let Some(a) = action {
-                    obj["action"] = serde_json::Value::String(a.clone());
-                }
-                obj
-            }
-            Self::InstructionsLoaded {
-                file_path,
-                load_reason,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "InstructionsLoaded",
-                    "load_reason": load_reason,
-                });
-                if let Some(fp) = file_path {
-                    obj["file_path"] = serde_json::Value::String(fp.clone());
-                }
-                obj
-            }
-            Self::ConfigChange {
-                session_id,
-                source,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "ConfigChange",
-                });
-                if let Some(src) = source {
-                    obj["source"] = serde_json::Value::String(src.clone());
-                }
-                obj
-            }
-            Self::WorktreeCreate {
-                worktree_path,
-                branch_name,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "WorktreeCreate",
-                });
-                if let Some(wp) = worktree_path {
-                    obj["worktree_path"] = serde_json::Value::String(wp.clone());
-                }
-                if let Some(bn) = branch_name {
-                    obj["branch_name"] = serde_json::Value::String(bn.clone());
-                }
-                obj
-            }
-            Self::WorktreeRemove { worktree_path, cwd } => serde_json::json!({
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "WorktreeRemove",
-                "worktree_path": worktree_path,
-            }),
-            Self::PostCompact { session_id, cwd } => serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd.display().to_string(),
-                "hook_event_name": "PostCompact",
-            }),
-            Self::TeammateIdle {
-                session_id,
-                teammate_id,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "TeammateIdle",
-                });
-                if let Some(id) = teammate_id {
-                    obj["teammate_id"] = serde_json::Value::String(id.clone());
-                }
-                obj
-            }
-            Self::TaskCompleted {
-                session_id,
-                task_id,
-                task_title,
-                cwd,
-            } => {
-                let mut obj = serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd.display().to_string(),
-                    "hook_event_name": "TaskCompleted",
-                });
-                if let Some(id) = task_id {
-                    obj["task_id"] = serde_json::Value::String(id.clone());
-                }
-                if let Some(title) = task_title {
-                    obj["task_title"] = serde_json::Value::String(title.clone());
-                }
-                obj
-            }
-        }
-    }
-}
-
-/// Build JSON for tool-related events (PreToolUse, PostToolUse, PostToolUseFailure).
-fn tool_event_json(
-    event_name: &str,
-    session_id: &str,
-    tool_name: &str,
-    cwd: &Path,
-    tool_input: &Option<serde_json::Value>,
-    tool_use_id: &Option<String>,
-    tool_response: &Option<serde_json::Value>,
-) -> serde_json::Value {
-    let mut o = serde_json::json!({
-        "session_id": session_id,
-        "cwd": cwd.display().to_string(),
-        "hook_event_name": event_name,
-        "tool_name": tool_name,
-    });
-    o["tool_input"] = tool_input.clone().unwrap_or(serde_json::json!({}));
-    if let Some(id) = tool_use_id {
-        o["tool_use_id"] = serde_json::Value::String(id.clone());
-    }
-    if let Some(response) = tool_response {
-        o["tool_response"] = response.clone();
-    }
-    o
-}
-
-/// Extract text from prompt content blocks.
-fn extract_prompt_text(prompt: &[ContentBlock]) -> String {
-    prompt
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(t) => Some(t.text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Append AVP common fields to JSON.
-fn append_avp_context(obj: &mut serde_json::Value, ctx: &HookCommandContext) {
-    obj["transcript_path"] = serde_json::Value::String(ctx.transcript_path.clone());
-    if !ctx.permission_mode.is_empty() {
-        obj["permission_mode"] = serde_json::Value::String(ctx.permission_mode.clone());
-    }
-}
-
-/// Map SessionUpdate variant to a string name for matcher/serialization.
-fn notification_update_name(update: &SessionUpdate) -> &'static str {
-    match update {
-        SessionUpdate::AgentMessageChunk(_) => "agent_message",
-        SessionUpdate::AgentThoughtChunk(_) => "agent_thought",
-        SessionUpdate::ToolCall(_) => "tool_call",
-        SessionUpdate::ToolCallUpdate(_) => "tool_call_update",
-        SessionUpdate::Plan(_) => "plan",
-        SessionUpdate::AvailableCommandsUpdate(_) => "available_commands",
-        SessionUpdate::CurrentModeUpdate(_) => "current_mode",
-        SessionUpdate::ConfigOptionUpdate(_) => "config_option",
-        SessionUpdate::UserMessageChunk(_) => "user_message",
-        _ => "unknown",
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Hook decision
-// ---------------------------------------------------------------------------
-
-/// What a hook handler wants to happen after it runs.
+/// `HookableAgent` is generic over its inner component `A: ConnectTo<Client>`,
+/// so it composes with any agent built via `Agent.builder()` or any other
+/// component that exposes the `ConnectTo<Client>` interface.
 ///
-/// Always derived from handler output at runtime (command JSON, prompt/agent
-/// evaluator response), never configured statically.
-#[derive(Clone, Debug, Default)]
-pub enum HookDecision {
-    /// Allow the operation to proceed unchanged.
-    #[default]
-    Allow,
-    /// Block the operation (returned as ACP error).
-    Block { reason: String },
-    /// Allow but inject additional context (prepend text to prompt).
-    AllowWithContext { context: String },
-    /// Cancel the active prompt turn by calling inner.cancel().
-    Cancel { reason: String },
-    /// Signal that the agent should not have stopped.
-    /// Response meta gets `hook_should_continue: true`.
-    ShouldContinue { reason: String },
-    /// Allow but modify tool input before execution (PreToolUse only).
-    /// Note: In ACP, PreToolUse fires from notifications after tool initiation,
-    /// so updatedInput cannot actually modify the call. Logged and treated as Allow.
-    AllowWithUpdatedInput { updated_input: serde_json::Value },
-}
-
-// ---------------------------------------------------------------------------
-// Hook handler trait
-// ---------------------------------------------------------------------------
-
-/// Async handler invoked when a matching hook event fires.
-///
-/// Uses `#[async_trait]` (Send) for tokio::spawn compatibility.
-#[async_trait::async_trait]
-pub trait HookHandler: Send + Sync {
-    /// Inspect the event and return a decision.
-    async fn handle(&self, event: &HookEvent) -> HookDecision;
-}
-
-// ---------------------------------------------------------------------------
-// Hook registration
-// ---------------------------------------------------------------------------
-
-/// A registered hook: event filter + optional matcher + handler.
-pub struct HookRegistration {
-    pub events: Vec<HookEventKind>,
-    pub matcher: Option<regex::Regex>,
-    pub handler: Arc<dyn HookHandler>,
-}
-
-impl Clone for HookRegistration {
-    fn clone(&self) -> Self {
-        Self {
-            events: self.events.clone(),
-            matcher: self.matcher.clone(),
-            handler: Arc::clone(&self.handler),
-        }
-    }
-}
-
-impl std::fmt::Debug for HookRegistration {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HookRegistration")
-            .field("events", &self.events)
-            .field("matcher", &self.matcher)
-            .field("handler", &"<dyn HookHandler>")
-            .finish()
-    }
-}
-
-impl HookRegistration {
-    /// Create a new hook registration.
-    pub fn new(
-        events: Vec<HookEventKind>,
-        matcher: Option<regex::Regex>,
-        handler: Arc<dyn HookHandler>,
-    ) -> Self {
-        Self {
-            events,
-            matcher,
-            handler,
-        }
-    }
-
-    /// Which event kinds this hook fires on.
-    pub fn events(&self) -> &[HookEventKind] {
-        &self.events
-    }
-
-    /// Optional regex matcher pattern.
-    pub fn matcher(&self) -> Option<&regex::Regex> {
-        self.matcher.as_ref()
-    }
-
-    /// Does this registration match the given event?
-    fn matches(&self, event: &HookEvent) -> bool {
-        if !self.events.contains(&event.kind()) {
-            return false;
-        }
-        match (&self.matcher, event.matcher_value()) {
-            (None, _) | (_, None) => true,
-            (Some(re), Some(val)) => re.is_match(val),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// HookableAgent
-// ---------------------------------------------------------------------------
-
-/// Proxy agent that wraps any `Agent` and fires hooks at lifecycle points.
-///
-/// Follows the same `Arc<dyn Agent>` wrapping pattern as `TracingAgent`.
-/// Tracks session cwd from new_session/load_session for hook event context.
-pub struct HookableAgent {
-    inner: Arc<dyn Agent + Send + Sync>,
+/// Hook registrations are added via [`with_hook`](Self::with_hook) or
+/// [`with_registration`](Self::with_registration). The inner component is
+/// driven through a duplex channel exactly like [`crate::TracingAgent`];
+/// callers fire hooks at the right seams using the helper methods on this
+/// type.
+pub struct HookableAgent<A> {
+    inner: A,
     hooks: Vec<HookRegistration>,
-    /// Maps session_id -> cwd, populated from new_session/load_session.
-    /// Arc-wrapped so `intercept_notifications` can share it.
+    /// Maps session_id -> cwd, populated by [`Self::track_session_start`].
+    /// Arc-wrapped so [`Self::intercept_notifications`] can share it with
+    /// the spawned listener task.
     session_cwd: Arc<std::sync::Mutex<HashMap<String, PathBuf>>>,
-    agent_type: Option<&'static str>,
-    is_playback: bool,
-    /// Whether we're currently inside a Stop hook (prevents recursion).
+    /// Whether we're currently inside a Stop hook. Used to set the
+    /// `stop_hook_active` flag on `HookEvent::Stop` so handlers can detect
+    /// recursion.
     in_stop_hook: std::sync::atomic::AtomicBool,
     command_context: HookCommandContext,
 }
 
-impl HookableAgent {
-    /// Wrap an agent with no hooks. Add hooks with [`with_hook`](Self::with_hook).
-    pub fn new(inner: Arc<dyn Agent + Send + Sync>) -> Self {
+impl<A> HookableAgent<A> {
+    /// Wrap an inner ACP component with no hooks.
+    ///
+    /// Add hooks with [`with_hook`](Self::with_hook) or
+    /// [`with_registration`](Self::with_registration).
+    pub fn new(inner: A) -> Self {
         Self {
             inner,
             hooks: Vec::new(),
             session_cwd: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            agent_type: None,
-            is_playback: false,
             in_stop_hook: std::sync::atomic::AtomicBool::new(false),
             command_context: HookCommandContext {
                 transcript_path: String::new(),
@@ -711,48 +101,40 @@ impl HookableAgent {
         }
     }
 
-    /// Wrap a fixture-aware agent. Preserves `agent_type()` and `is_playback()`.
-    pub fn from_fixture_agent(inner: Arc<dyn crate::AgentWithFixture + Send + Sync>) -> Self {
-        let agent_type = inner.agent_type();
-        let is_playback = inner.is_playback();
-        Self {
-            inner,
-            hooks: Vec::new(),
-            session_cwd: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            agent_type: Some(agent_type),
-            is_playback,
-            in_stop_hook: std::sync::atomic::AtomicBool::new(false),
-            command_context: HookCommandContext {
-                transcript_path: String::new(),
-                permission_mode: "bypassPermissions".to_string(),
-            },
-        }
-    }
-
-    /// Set the transcript path for hook JSON output (AVP compatibility).
+    /// Set the transcript path included in command-hook JSON input.
+    ///
+    /// AVP's `CommonInput` requires a `transcript_path` field; ACP itself
+    /// has no transcript so this is configured by the caller.
     pub fn with_transcript_path(mut self, path: impl Into<String>) -> Self {
         self.command_context.transcript_path = path.into();
         self
     }
 
-    /// Set the permission mode for hook JSON output (AVP compatibility).
+    /// Set the permission-mode string included in command-hook JSON input.
+    ///
+    /// Empty string is treated as "no permission mode set" — the field is
+    /// omitted from the JSON.
     pub fn with_permission_mode(mut self, mode: impl Into<String>) -> Self {
         self.command_context.permission_mode = mode.into();
         self
     }
 
-    /// Get the command context (for passing to build_registrations).
+    /// Borrow the configured command context.
     pub fn command_context(&self) -> &HookCommandContext {
         &self.command_context
     }
 
     /// Register a hook handler for the given event kinds with an optional
     /// regex matcher pattern.
+    ///
+    /// # Panics
+    /// If `matcher` is `Some(pat)` and `pat` is not a valid regular
+    /// expression.
     pub fn with_hook(
         mut self,
         events: &[HookEventKind],
         matcher: Option<&str>,
-        handler: impl HookHandler + 'static,
+        handler: impl crate::hook_config::HookHandler + 'static,
     ) -> Self {
         let matcher = matcher.map(|pat| {
             regex::Regex::new(pat).unwrap_or_else(|e| panic!("invalid hook matcher regex: {e}"))
@@ -765,23 +147,135 @@ impl HookableAgent {
         self
     }
 
-    /// Register a hook from a pre-built `HookRegistration`.
+    /// Register a hook from a pre-built [`HookRegistration`].
     pub fn with_registration(mut self, registration: HookRegistration) -> Self {
         self.hooks.push(registration);
         self
     }
 
-    /// Get a reference to the inner agent.
-    pub fn inner(&self) -> &Arc<dyn Agent + Send + Sync> {
+    /// Borrow the inner component.
+    pub fn inner(&self) -> &A {
         &self.inner
     }
 
-    /// Intercept a notification broadcast channel and fire hooks on tool events.
+    /// Consume the wrapper and return the inner component.
+    pub fn into_inner(self) -> A {
+        self.inner
+    }
+
+    /// Get the cwd for a session, falling back to "." if unknown.
+    ///
+    /// Populated by [`Self::track_session_start`].
+    pub fn get_cwd(&self, session_id: &str) -> PathBuf {
+        self.session_cwd
+            .lock()
+            .expect("session_cwd mutex not poisoned")
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Record a new or resumed session's cwd and fire `SessionStart` hooks.
+    ///
+    /// Should be called after the inner component returns a `NewSessionResponse`
+    /// or `LoadSessionResponse`.
+    pub async fn track_session_start(
+        &self,
+        session_id: String,
+        source: SessionSource,
+        cwd: PathBuf,
+    ) {
+        self.session_cwd
+            .lock()
+            .expect("session_cwd mutex not poisoned")
+            .insert(session_id.clone(), cwd.clone());
+        let event = HookEvent::SessionStart {
+            session_id,
+            source,
+            cwd,
+        };
+        let _ = self.run_hooks(&event).await;
+    }
+
+    /// Fire `UserPromptSubmit` hooks before forwarding a prompt to the
+    /// inner agent.
+    ///
+    /// Returns the (possibly-modified) `PromptRequest` to forward, or an
+    /// `agent_client_protocol::Error` if any hook returned `Block` or
+    /// `Cancel`.
+    ///
+    /// `AllowWithContext` decisions cause the hook context strings to be
+    /// prepended as a `TextContent` block at the front of `request.prompt`.
+    pub async fn run_user_prompt_submit(
+        &self,
+        request: PromptRequest,
+    ) -> AcpResult<PromptRequest> {
+        let session_id = request.session_id.to_string();
+        let cwd = self.get_cwd(&session_id);
+        let event = HookEvent::UserPromptSubmit {
+            session_id,
+            prompt: request.prompt.clone(),
+            cwd,
+        };
+        let decisions = self.run_hooks(&event).await;
+        Self::check_blockable(&decisions)?;
+        Ok(Self::inject_context(&decisions, request))
+    }
+
+    /// Fire `Stop` hooks after the inner agent returns a `PromptResponse`.
+    ///
+    /// Returns the (possibly-annotated) response. If any hook returned
+    /// `ShouldContinue`, the response's `meta` is annotated with
+    /// `hook_should_continue: true` and `hook_reason: <reason>`.
+    pub async fn run_stop(
+        &self,
+        session_id: String,
+        response: PromptResponse,
+    ) -> PromptResponse {
+        let cwd = self.get_cwd(&session_id);
+        let stop_hook_active = self.in_stop_hook.load(std::sync::atomic::Ordering::SeqCst);
+        self.in_stop_hook
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let event = HookEvent::Stop {
+            session_id,
+            stop_reason: response.stop_reason,
+            stop_hook_active,
+            cwd,
+        };
+        let decisions = self.run_hooks(&event).await;
+        self.in_stop_hook
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        if let Some(reason) = Self::find_should_continue(&decisions) {
+            return Self::annotate_should_continue(response, reason);
+        }
+        response
+    }
+
+    /// Fire an arbitrary hook event and return all decisions.
+    ///
+    /// This is the public entry point for callers (CLI, MCP proxy, etc.)
+    /// to fire hook events that don't correspond to an ACP lifecycle
+    /// method — e.g. [`HookEvent::TeammateIdle`],
+    /// [`HookEvent::TaskCompleted`], [`HookEvent::PostCompact`],
+    /// [`HookEvent::ConfigChange`].
+    pub async fn fire_event(&self, event: &HookEvent) -> Vec<HookDecision> {
+        self.run_hooks(event).await
+    }
+
+    /// Intercept a `SessionNotification` broadcast channel and fire hooks
+    /// on tool-call events.
     ///
     /// Returns:
-    /// - A new receiver (forwarding all notifications)
-    /// - A cancel channel (session ID sent when a hook returns `Cancel`)
-    /// - A context channel (context strings sent when a hook returns `AllowWithContext`)
+    /// - A new `broadcast::Receiver` that downstream consumers should use
+    ///   in place of `receiver`.
+    /// - An mpsc receiver that emits the session id of any active session
+    ///   whose hooks return [`HookDecision::Cancel`] — callers should
+    ///   `select!` against this and call the inner agent's cancel method.
+    /// - An mpsc receiver of context strings from
+    ///   [`HookDecision::AllowWithContext`] decisions; intended to be
+    ///   prepended to the next `UserPromptSubmit` event for the same
+    ///   session.
     pub fn intercept_notifications(
         &self,
         receiver: broadcast::Receiver<SessionNotification>,
@@ -814,26 +308,8 @@ impl HookableAgent {
         (rx, cancel_rx, context_rx)
     }
 
-    /// Get the cwd for a session, falling back to "." if unknown.
-    fn get_cwd(&self, session_id: &str) -> PathBuf {
-        self.session_cwd
-            .lock()
-            .expect("session_cwd mutex not poisoned")
-            .get(session_id)
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-
-    /// Fire an arbitrary hook event and return all decisions.
-    ///
-    /// This is the public entry point for callers (CLI, MCP proxy, etc.) to
-    /// fire hook events that don't correspond to an ACP Agent trait method —
-    /// e.g. `TeammateIdle`, `TaskCompleted`, `PostCompact`, `ConfigChange`.
-    pub async fn fire_event(&self, event: &HookEvent) -> Vec<HookDecision> {
-        self.run_hooks(event).await
-    }
-
-    /// Run all matching hooks for an event in parallel, returning collected decisions.
+    /// Run all matching hooks for an event in parallel and collect their
+    /// decisions.
     async fn run_hooks(&self, event: &HookEvent) -> Vec<HookDecision> {
         let futures: Vec<_> = self
             .hooks
@@ -844,8 +320,9 @@ impl HookableAgent {
         futures::future::join_all(futures).await
     }
 
-    /// Check decisions for a blocking or cancelling response.
-    fn check_blockable(decisions: &[HookDecision]) -> agent_client_protocol::Result<()> {
+    /// Check decisions for a blocking or cancelling response. Returns an
+    /// `Err` for the first `Block` or `Cancel` encountered.
+    fn check_blockable(decisions: &[HookDecision]) -> AcpResult<()> {
         if let Some(reason) = Self::find_block(decisions) {
             return Err(agent_client_protocol::Error::new(
                 agent_client_protocol::ErrorCode::InvalidRequest.into(),
@@ -864,37 +341,38 @@ impl HookableAgent {
     fn find_block(decisions: &[HookDecision]) -> Option<&str> {
         decisions.iter().find_map(|d| match d {
             HookDecision::Block { reason } => Some(reason.as_str()),
-            HookDecision::Allow => None,
-            HookDecision::AllowWithContext { .. } => None,
-            HookDecision::Cancel { .. } => None,
-            HookDecision::ShouldContinue { .. } => None,
-            HookDecision::AllowWithUpdatedInput { .. } => None,
+            HookDecision::Allow
+            | HookDecision::AllowWithContext { .. }
+            | HookDecision::Cancel { .. }
+            | HookDecision::ShouldContinue { .. }
+            | HookDecision::AllowWithUpdatedInput { .. } => None,
         })
     }
 
     fn find_cancel(decisions: &[HookDecision]) -> Option<&str> {
         decisions.iter().find_map(|d| match d {
             HookDecision::Cancel { reason } => Some(reason.as_str()),
-            HookDecision::Allow => None,
-            HookDecision::Block { .. } => None,
-            HookDecision::AllowWithContext { .. } => None,
-            HookDecision::ShouldContinue { .. } => None,
-            HookDecision::AllowWithUpdatedInput { .. } => None,
+            HookDecision::Allow
+            | HookDecision::Block { .. }
+            | HookDecision::AllowWithContext { .. }
+            | HookDecision::ShouldContinue { .. }
+            | HookDecision::AllowWithUpdatedInput { .. } => None,
         })
     }
 
     fn find_should_continue(decisions: &[HookDecision]) -> Option<&str> {
         decisions.iter().find_map(|d| match d {
             HookDecision::ShouldContinue { reason } => Some(reason.as_str()),
-            HookDecision::Allow => None,
-            HookDecision::Block { .. } => None,
-            HookDecision::AllowWithContext { .. } => None,
-            HookDecision::Cancel { .. } => None,
-            HookDecision::AllowWithUpdatedInput { .. } => None,
+            HookDecision::Allow
+            | HookDecision::Block { .. }
+            | HookDecision::AllowWithContext { .. }
+            | HookDecision::Cancel { .. }
+            | HookDecision::AllowWithUpdatedInput { .. } => None,
         })
     }
 
-    /// Prepend AllowWithContext strings to a prompt request.
+    /// Prepend any `AllowWithContext` strings as a single `TextContent`
+    /// block at the front of the prompt.
     fn inject_context(decisions: &[HookDecision], request: PromptRequest) -> PromptRequest {
         let contexts: Vec<&str> = decisions
             .iter()
@@ -917,7 +395,7 @@ impl HookableAgent {
         modified
     }
 
-    /// Annotate a response with ShouldContinue meta.
+    /// Annotate a `PromptResponse` with `hook_should_continue` meta.
     fn annotate_should_continue(mut response: PromptResponse, reason: &str) -> PromptResponse {
         let meta = response.meta.get_or_insert_with(Default::default);
         meta.insert(
@@ -930,158 +408,49 @@ impl HookableAgent {
         );
         response
     }
-
-    /// Run `prompt()` while monitoring a cancel channel from `intercept_notifications`.
-    pub async fn prompt_with_cancel(
-        &self,
-        request: PromptRequest,
-        cancel_rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
-    ) -> agent_client_protocol::Result<PromptResponse> {
-        let session_id = request.session_id.to_string();
-
-        tokio::select! {
-            result = <Self as Agent>::prompt(self, request) => result,
-            Some(_) = cancel_rx.recv() => {
-                let cancel = CancelNotification::new(session_id);
-                let _ = self.inner.cancel(cancel).await;
-                Err(agent_client_protocol::Error::new(
-                    agent_client_protocol::ErrorCode::InvalidRequest.into(),
-                    "Cancelled by notification hook",
-                ))
-            }
-        }
-    }
-
-    /// Track session cwd and fire SessionStart hook.
-    async fn fire_session_start(&self, session_id: String, source: SessionSource, cwd: PathBuf) {
-        self.session_cwd
-            .lock()
-            .expect("session_cwd mutex not poisoned")
-            .insert(session_id.clone(), cwd.clone());
-        let event = HookEvent::SessionStart {
-            session_id,
-            source,
-            cwd,
-        };
-        let _ = self.run_hooks(&event).await;
-    }
 }
 
-#[async_trait::async_trait(?Send)]
-impl Agent for HookableAgent {
-    async fn initialize(
-        &self,
-        request: InitializeRequest,
-    ) -> agent_client_protocol::Result<InitializeResponse> {
-        self.inner.initialize(request).await
-    }
+impl<A> ConnectTo<Client> for HookableAgent<A>
+where
+    A: ConnectTo<Client> + Send + 'static,
+{
+    /// Wire the client transport to the inner agent through a transparent
+    /// duplex tee.
+    ///
+    /// At this layer (task A2) the wrapper forwards messages unchanged;
+    /// callers fire hooks via the helper methods on [`HookableAgent`]
+    /// (`run_user_prompt_submit`, `run_stop`, `track_session_start`,
+    /// `intercept_notifications`, `fire_event`). Richer per-message
+    /// JSON-RPC interception will be layered on top in follow-up tasks.
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
+    ) -> AcpResult<()> {
+        let (to_inner, inner_side) = Channel::duplex();
 
-    async fn authenticate(
-        &self,
-        request: AuthenticateRequest,
-    ) -> agent_client_protocol::Result<AuthenticateResponse> {
-        self.inner.authenticate(request).await
-    }
+        let inner_future = self.inner.connect_to(inner_side);
+        let (client_channel, client_future) = client.into_channel_and_future();
 
-    async fn new_session(
-        &self,
-        request: NewSessionRequest,
-    ) -> agent_client_protocol::Result<NewSessionResponse> {
-        let cwd = request.cwd.clone();
-        let response = self.inner.new_session(request).await?;
-        let session_id = response.session_id.to_string();
-        self.fire_session_start(session_id, SessionSource::Startup, cwd)
-            .await;
-        Ok(response)
-    }
-
-    async fn prompt(
-        &self,
-        request: PromptRequest,
-    ) -> agent_client_protocol::Result<PromptResponse> {
-        let session_id = request.session_id.to_string();
-        let cwd = self.get_cwd(&session_id);
-
-        // UserPromptSubmit hooks
-        let event = HookEvent::UserPromptSubmit {
-            session_id: session_id.clone(),
-            prompt: request.prompt.clone(),
-            cwd: cwd.clone(),
-        };
-        let decisions = self.run_hooks(&event).await;
-        Self::check_blockable(&decisions)?;
-        let request = Self::inject_context(&decisions, request);
-
-        // Delegate to inner agent
-        let response = self.inner.prompt(request).await?;
-
-        // Stop hooks
-        let stop_hook_active = self.in_stop_hook.load(std::sync::atomic::Ordering::SeqCst);
-        self.in_stop_hook
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let event = HookEvent::Stop {
-            session_id,
-            stop_reason: response.stop_reason,
-            stop_hook_active,
-            cwd,
-        };
-        let decisions = self.run_hooks(&event).await;
-        self.in_stop_hook
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        if let Some(reason) = Self::find_should_continue(&decisions) {
-            return Ok(Self::annotate_should_continue(response, reason));
+        let copy_client_to_inner = Channel {
+            rx: client_channel.rx,
+            tx: to_inner.tx,
         }
-        Ok(response)
-    }
+        .copy();
+        let copy_inner_to_client = Channel {
+            rx: to_inner.rx,
+            tx: client_channel.tx,
+        }
+        .copy();
 
-    async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
-        self.inner.cancel(request).await
-    }
-
-    async fn load_session(
-        &self,
-        request: LoadSessionRequest,
-    ) -> agent_client_protocol::Result<LoadSessionResponse> {
-        let session_id = request.session_id.to_string();
-        let cwd = request.cwd.clone();
-        let response = self.inner.load_session(request).await?;
-        self.fire_session_start(session_id, SessionSource::Resume, cwd)
-            .await;
-        Ok(response)
-    }
-
-    async fn set_session_mode(
-        &self,
-        request: SetSessionModeRequest,
-    ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-        self.inner.set_session_mode(request).await
-    }
-
-    async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        self.inner.ext_method(request).await
-    }
-
-    async fn ext_notification(
-        &self,
-        notification: ExtNotification,
-    ) -> agent_client_protocol::Result<()> {
-        self.inner.ext_notification(notification).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// AgentWithFixture integration
-// ---------------------------------------------------------------------------
-
-impl crate::AgentWithFixture for HookableAgent {
-    fn agent_type(&self) -> &'static str {
-        self.agent_type
-            .expect("HookableAgent: agent_type() requires from_fixture_agent() constructor")
-    }
-
-    fn is_playback(&self) -> bool {
-        self.is_playback
+        match futures::try_join!(
+            inner_future,
+            client_future,
+            copy_client_to_inner,
+            copy_inner_to_client,
+        ) {
+            Ok(((), (), (), ())) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -1089,7 +458,8 @@ impl crate::AgentWithFixture for HookableAgent {
 // Notification stream hooking (internal helpers)
 // ---------------------------------------------------------------------------
 
-/// Main loop for the notification interception task.
+/// Main loop for the notification interception task spawned by
+/// [`HookableAgent::intercept_notifications`].
 async fn run_notification_loop(
     recv: &mut broadcast::Receiver<SessionNotification>,
     hooks: &[HookRegistration],
@@ -1124,7 +494,20 @@ async fn run_notification_loop(
     }
 }
 
-/// Run matching hooks for each event and handle decisions.
+/// Run matching hooks for each event and surface side-effects through the
+/// cancel and context channels.
+///
+/// In the notification pipeline, only `Cancel` and `AllowWithContext`
+/// decisions have a meaningful effect:
+///
+/// - `Cancel` → `cancel_tx.send(session_id)` so the prompt-driving task
+///   can call the inner agent's cancel method.
+/// - `AllowWithContext` → `context_tx.send(context)` so the prompt-driving
+///   task can prepend the context to its next prompt.
+/// - `Block` / `ShouldContinue` are not meaningful here (the tool call
+///   has already been initiated by the inner agent) and are no-ops.
+/// - `AllowWithUpdatedInput` is logged at warn level and treated as
+///   `Allow`, since updated tool input cannot be applied retroactively.
 async fn dispatch_notification_hooks(
     hooks: &[HookRegistration],
     events: &[HookEvent],
@@ -1165,7 +548,14 @@ async fn dispatch_notification_hooks(
     }
 }
 
-/// Convert a SessionNotification into hook events.
+/// Convert a [`SessionNotification`] into the hook events it should fire.
+///
+/// Always produces a `Notification` event; for tool-call related updates,
+/// also produces a `PreToolUse`, `PostToolUse`, or `PostToolUseFailure`
+/// event ahead of it.
+///
+/// Tracks tool-call ids in `tool_names` so subsequent `ToolCallUpdate`s
+/// can be correlated back to the originating `ToolCall`'s name and input.
 fn notification_to_events(
     notification: &SessionNotification,
     cwd: &Path,
@@ -1223,10 +613,17 @@ fn notification_to_events(
     events
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{ContentBlock, SessionId, TextContent};
+    use crate::hook_config::HookHandler;
+    use agent_client_protocol::schema::{
+        ContentChunk, SessionId, StopReason, ToolCall, ToolCallUpdate, ToolCallUpdateFields,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
     // -- Test hook handlers --
@@ -1270,15 +667,6 @@ mod tests {
         }
     }
 
-    struct AllowHook;
-
-    #[async_trait::async_trait]
-    impl HookHandler for AllowHook {
-        async fn handle(&self, _event: &HookEvent) -> HookDecision {
-            HookDecision::Allow
-        }
-    }
-
     struct RecordingHook {
         called: Arc<AtomicBool>,
     }
@@ -1306,89 +694,10 @@ mod tests {
         }
     }
 
-    // -- Mock agent --
-
-    struct MockAgent {
-        prompt_called: Arc<AtomicBool>,
-    }
-
-    impl MockAgent {
-        fn new() -> (Self, Arc<AtomicBool>) {
-            let called = Arc::new(AtomicBool::new(false));
-            (
-                Self {
-                    prompt_called: called.clone(),
-                },
-                called,
-            )
-        }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for MockAgent {
-        async fn initialize(
-            &self,
-            _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-        }
-
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
-            _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("test-session"))
-        }
-
-        async fn prompt(
-            &self,
-            _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            self.prompt_called.store(true, Ordering::SeqCst);
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-    }
+    /// Test inner — has no behaviour; the new ACP 0.11 `ConnectTo<Client>`
+    /// passthrough is exercised by the tracing-style integration tests in
+    /// other suites. These unit tests focus on the hook-firing helpers.
+    struct DummyInner;
 
     fn make_prompt_request() -> PromptRequest {
         PromptRequest::new(
@@ -1397,30 +706,68 @@ mod tests {
         )
     }
 
-    // -- Tests --
+    /// Run a full `prompt` turn through the helper methods, mirroring what
+    /// a real `ConnectTo<Client>` middleware would do at the JSON-RPC seam.
+    ///
+    /// Returns the response from the supplied inner closure, transformed
+    /// by the pre- and post-prompt hooks. Used by tests that previously
+    /// drove the (now-removed) `Agent::prompt` impl directly.
+    async fn run_prompt_turn<A, F, Fut>(
+        agent: &HookableAgent<A>,
+        request: PromptRequest,
+        inner: F,
+    ) -> AcpResult<PromptResponse>
+    where
+        F: FnOnce(PromptRequest) -> Fut,
+        Fut: std::future::Future<Output = AcpResult<PromptResponse>>,
+    {
+        let session_id = request.session_id.to_string();
+        let request = agent.run_user_prompt_submit(request).await?;
+        let response = inner(request).await?;
+        Ok(agent.run_stop(session_id, response).await)
+    }
+
+    // -- Hook firing tests --
 
     #[tokio::test]
     async fn test_passthrough_delegates_prompt() {
-        let (mock, called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
+        let agent = HookableAgent::new(DummyInner);
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
 
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
+        let response = run_prompt_turn(&agent, make_prompt_request(), |_req| {
+            let called = called_clone.clone();
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await
+        .unwrap();
         assert!(called.load(Ordering::SeqCst));
         assert_eq!(response.stop_reason, StopReason::EndTurn);
     }
 
     #[tokio::test]
     async fn test_user_prompt_submit_block_prevents_delegation() {
-        let (mock, called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::UserPromptSubmit],
             None,
             BlockHook {
                 reason: "not allowed".into(),
             },
         );
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
 
-        let result = agent.prompt(make_prompt_request()).await;
+        let result = run_prompt_turn(&agent, make_prompt_request(), |_req| {
+            let called = called_clone.clone();
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await;
         assert!(result.is_err());
         assert!(!called.load(Ordering::SeqCst));
         assert!(result.unwrap_err().message.contains("not allowed"));
@@ -1431,72 +778,7 @@ mod tests {
         let captured = Arc::new(std::sync::Mutex::new(Vec::<ContentBlock>::new()));
         let captured_clone = captured.clone();
 
-        struct CapturingAgent {
-            captured: Arc<std::sync::Mutex<Vec<ContentBlock>>>,
-        }
-
-        #[async_trait::async_trait(?Send)]
-        impl Agent for CapturingAgent {
-            async fn initialize(
-                &self,
-                _r: InitializeRequest,
-            ) -> agent_client_protocol::Result<InitializeResponse> {
-                Ok(InitializeResponse::new(
-                    agent_client_protocol::ProtocolVersion::LATEST,
-                ))
-            }
-            async fn authenticate(
-                &self,
-                _r: AuthenticateRequest,
-            ) -> agent_client_protocol::Result<AuthenticateResponse> {
-                Ok(AuthenticateResponse::new())
-            }
-            async fn new_session(
-                &self,
-                _r: NewSessionRequest,
-            ) -> agent_client_protocol::Result<NewSessionResponse> {
-                Ok(NewSessionResponse::new("test-session"))
-            }
-            async fn prompt(
-                &self,
-                request: PromptRequest,
-            ) -> agent_client_protocol::Result<PromptResponse> {
-                *self.captured.lock().unwrap() = request.prompt.clone();
-                Ok(PromptResponse::new(StopReason::EndTurn))
-            }
-            async fn cancel(&self, _r: CancelNotification) -> agent_client_protocol::Result<()> {
-                Ok(())
-            }
-            async fn load_session(
-                &self,
-                _r: LoadSessionRequest,
-            ) -> agent_client_protocol::Result<LoadSessionResponse> {
-                Ok(LoadSessionResponse::new())
-            }
-            async fn set_session_mode(
-                &self,
-                _r: SetSessionModeRequest,
-            ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-                Ok(SetSessionModeResponse::new())
-            }
-            async fn ext_method(
-                &self,
-                _r: ExtRequest,
-            ) -> agent_client_protocol::Result<ExtResponse> {
-                Err(agent_client_protocol::Error::method_not_found())
-            }
-            async fn ext_notification(
-                &self,
-                _n: ExtNotification,
-            ) -> agent_client_protocol::Result<()> {
-                Ok(())
-            }
-        }
-
-        let agent = HookableAgent::new(Arc::new(CapturingAgent {
-            captured: captured_clone,
-        }))
-        .with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::UserPromptSubmit],
             None,
             ContextHook {
@@ -1504,9 +786,17 @@ mod tests {
             },
         );
 
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |req| {
+            let captured = captured_clone.clone();
+            async move {
+                *captured.lock().unwrap() = req.prompt.clone();
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await
+        .unwrap();
+
         let blocks = captured.lock().unwrap();
-        // Context should be prepended as the first content block
         assert!(blocks.len() >= 2);
         match &blocks[0] {
             ContentBlock::Text(t) => assert_eq!(t.text, "extra context"),
@@ -1516,8 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stop_should_continue_sets_meta() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::Stop],
             None,
             ShouldContinueHook {
@@ -1525,7 +814,11 @@ mod tests {
             },
         );
 
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
+        let response = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         let meta = response.meta.as_ref().unwrap();
         assert_eq!(
             meta.get("hook_should_continue"),
@@ -1565,8 +858,7 @@ mod tests {
     #[tokio::test]
     async fn test_matcher_skipped_for_user_prompt_submit() {
         let called = Arc::new(AtomicBool::new(false));
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::UserPromptSubmit],
             Some("nonexistent-pattern"),
             RecordingHook {
@@ -1574,15 +866,18 @@ mod tests {
             },
         );
 
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         assert!(called.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn test_matcher_skipped_for_stop() {
         let called = Arc::new(AtomicBool::new(false));
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::Stop],
             Some("nonexistent-pattern"),
             RecordingHook {
@@ -1590,15 +885,18 @@ mod tests {
             },
         );
 
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         assert!(called.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn test_session_start_fires_with_startup_source() {
         let source = Arc::new(std::sync::Mutex::new(None));
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::SessionStart],
             None,
             SourceRecordingHook {
@@ -1606,18 +904,20 @@ mod tests {
             },
         );
 
-        let _ = agent
-            .new_session(NewSessionRequest::new("/tmp"))
-            .await
-            .unwrap();
+        agent
+            .track_session_start(
+                "test-session".to_string(),
+                SessionSource::Startup,
+                PathBuf::from("/tmp"),
+            )
+            .await;
         assert_eq!(*source.lock().unwrap(), Some(SessionSource::Startup));
     }
 
     #[tokio::test]
     async fn test_session_start_fires_with_resume_source() {
         let source = Arc::new(std::sync::Mutex::new(None));
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::SessionStart],
             None,
             SourceRecordingHook {
@@ -1625,10 +925,13 @@ mod tests {
             },
         );
 
-        let _ = agent
-            .load_session(LoadSessionRequest::new("some-session", "/tmp"))
-            .await
-            .unwrap();
+        agent
+            .track_session_start(
+                "some-session".to_string(),
+                SessionSource::Resume,
+                PathBuf::from("/tmp"),
+            )
+            .await;
         assert_eq!(*source.lock().unwrap(), Some(SessionSource::Resume));
     }
 
@@ -1636,8 +939,7 @@ mod tests {
     async fn test_multiple_hooks_all_fire() {
         let called1 = Arc::new(AtomicBool::new(false));
         let called2 = Arc::new(AtomicBool::new(false));
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock))
+        let agent = HookableAgent::new(DummyInner)
             .with_hook(
                 &[HookEventKind::UserPromptSubmit],
                 None,
@@ -1653,15 +955,20 @@ mod tests {
                 },
             );
 
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         assert!(called1.load(Ordering::SeqCst));
         assert!(called2.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn test_block_takes_priority_over_context() {
-        let (mock, called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock))
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+        let agent = HookableAgent::new(DummyInner)
             .with_hook(
                 &[HookEventKind::UserPromptSubmit],
                 None,
@@ -1677,142 +984,32 @@ mod tests {
                 },
             );
 
-        let result = agent.prompt(make_prompt_request()).await;
+        let result = run_prompt_turn(&agent, make_prompt_request(), |_req| {
+            let called = called_clone.clone();
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await;
         assert!(result.is_err());
         assert!(!called.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
-    async fn test_cwd_tracked_from_new_session() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
+    async fn test_cwd_tracked_from_track_session_start() {
+        let agent = HookableAgent::new(DummyInner);
 
-        let _ = agent
-            .new_session(NewSessionRequest::new("/my/project"))
-            .await
-            .unwrap();
+        agent
+            .track_session_start(
+                "test-session".to_string(),
+                SessionSource::Startup,
+                PathBuf::from("/my/project"),
+            )
+            .await;
 
         let cwd = agent.get_cwd("test-session");
         assert_eq!(cwd, PathBuf::from("/my/project"));
-    }
-
-    // -- Cancel flow tests --
-
-    struct SlowMockAgent {
-        cancel_called: Arc<AtomicBool>,
-        cancel_notify: Arc<tokio::sync::Notify>,
-    }
-
-    impl SlowMockAgent {
-        fn new() -> (Self, Arc<AtomicBool>) {
-            let cancelled = Arc::new(AtomicBool::new(false));
-            (
-                Self {
-                    cancel_called: cancelled.clone(),
-                    cancel_notify: Arc::new(tokio::sync::Notify::new()),
-                },
-                cancelled,
-            )
-        }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for SlowMockAgent {
-        async fn initialize(
-            &self,
-            _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-        }
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-        async fn new_session(
-            &self,
-            _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("test-session"))
-        }
-        async fn prompt(
-            &self,
-            _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            self.cancel_notify.notified().await;
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            self.cancel_called.store(true, Ordering::SeqCst);
-            self.cancel_notify.notify_one();
-            Ok(())
-        }
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn test_prompt_with_cancel_aborts_on_signal() {
-        let (mock, cancelled) = SlowMockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            let _ = cancel_tx.send("test-session".to_string());
-        });
-
-        let result = agent
-            .prompt_with_cancel(make_prompt_request(), &mut cancel_rx)
-            .await;
-
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .message
-            .contains("Cancelled by notification hook"));
-        assert!(cancelled.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_prompt_with_cancel_completes_normally() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let (_cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-        let result = agent
-            .prompt_with_cancel(make_prompt_request(), &mut cancel_rx)
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().stop_reason, StopReason::EndTurn);
     }
 
     #[tokio::test]
@@ -1893,8 +1090,7 @@ mod tests {
             }
         }
 
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::Stop],
             None,
             StopActiveRecorder {
@@ -1902,7 +1098,11 @@ mod tests {
             },
         );
 
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         assert_eq!(*recorded_active.lock().unwrap(), Some(false));
     }
 
@@ -1953,206 +1153,11 @@ mod tests {
         assert_eq!(event.matcher_value(), Some("Bash"));
     }
 
-    // -- New hook event kind and matcher tests --
-
-    #[test]
-    fn test_elicitation_kind_and_matcher() {
-        let event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: Some("sah".into()),
-            message: Some("pick".into()),
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::Elicitation);
-        assert_eq!(event.matcher_value(), Some("sah"));
-    }
-
-    #[test]
-    fn test_elicitation_kind_and_matcher_none() {
-        let event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: None,
-            message: None,
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::Elicitation);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_elicitation_result_kind_and_matcher() {
-        let event = HookEvent::ElicitationResult {
-            session_id: "s1".into(),
-            mcp_server_name: "sah".into(),
-            action: Some("submit".into()),
-            content: serde_json::json!({}),
-            elicitation_id: "e1".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::ElicitationResult);
-        assert_eq!(event.matcher_value(), Some("sah"));
-    }
-
-    #[test]
-    fn test_instructions_loaded_kind_and_matcher() {
-        let event = HookEvent::InstructionsLoaded {
-            file_path: Some("/project/CLAUDE.md".into()),
-            load_reason: "startup".into(),
-            cwd: PathBuf::from("/project"),
-        };
-        assert_eq!(event.kind(), HookEventKind::InstructionsLoaded);
-        assert_eq!(event.matcher_value(), Some("/project/CLAUDE.md"));
-    }
-
-    #[test]
-    fn test_instructions_loaded_kind_and_matcher_none() {
-        let event = HookEvent::InstructionsLoaded {
-            file_path: None,
-            load_reason: "startup".into(),
-            cwd: PathBuf::from("/project"),
-        };
-        assert_eq!(event.kind(), HookEventKind::InstructionsLoaded);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_config_change_kind_and_matcher() {
-        let event = HookEvent::ConfigChange {
-            session_id: "s1".into(),
-            source: Some("user_settings".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::ConfigChange);
-        assert_eq!(event.matcher_value(), Some("user_settings"));
-    }
-
-    #[test]
-    fn test_config_change_kind_and_matcher_none() {
-        let event = HookEvent::ConfigChange {
-            session_id: "s1".into(),
-            source: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::ConfigChange);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_worktree_create_kind_and_matcher() {
-        let event = HookEvent::WorktreeCreate {
-            worktree_path: Some("/tmp/wt".into()),
-            branch_name: Some("feat".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::WorktreeCreate);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_worktree_remove_kind_and_matcher() {
-        let event = HookEvent::WorktreeRemove {
-            worktree_path: "/tmp/wt".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::WorktreeRemove);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_post_compact_kind_and_matcher() {
-        let event = HookEvent::PostCompact {
-            session_id: "s1".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::PostCompact);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_teammate_idle_kind_and_matcher() {
-        let event = HookEvent::TeammateIdle {
-            session_id: "s1".into(),
-            teammate_id: Some("agent-2".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::TeammateIdle);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_task_completed_kind_and_matcher() {
-        let event = HookEvent::TaskCompleted {
-            session_id: "s1".into(),
-            task_id: Some("t1".into()),
-            task_title: Some("Fix".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert_eq!(event.kind(), HookEventKind::TaskCompleted);
-        assert_eq!(event.matcher_value(), None);
-    }
-
-    #[test]
-    fn test_elicitation_registration_matches_with_matcher() {
-        let reg = HookRegistration::new(
-            vec![HookEventKind::Elicitation],
-            Some(regex::Regex::new("^sah$").unwrap()),
-            Arc::new(AllowHook),
-        );
-
-        let matching_event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: Some("sah".into()),
-            message: Some("pick".into()),
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert!(
-            reg.matches(&matching_event),
-            "Should match mcp_server_name=sah"
-        );
-
-        let non_matching_event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: Some("other-server".into()),
-            message: Some("pick".into()),
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert!(
-            !reg.matches(&non_matching_event),
-            "Should NOT match mcp_server_name=other-server"
-        );
-
-        // Wrong event kind should not match
-        let wrong_kind = HookEvent::Notification {
-            notification: Box::new(agent_client_protocol::SessionNotification::new(
-                agent_client_protocol::SessionId::from("s1"),
-                agent_client_protocol::SessionUpdate::AgentMessageChunk(
-                    agent_client_protocol::ContentChunk::new(
-                        agent_client_protocol::ContentBlock::Text(
-                            agent_client_protocol::TextContent::new("hi"),
-                        ),
-                    ),
-                ),
-            )),
-            cwd: PathBuf::from("/tmp"),
-        };
-        assert!(
-            !reg.matches(&wrong_kind),
-            "Elicitation registration should NOT match Notification events"
-        );
-    }
-
     // -- Decision routing intent tests --
 
-    /// A hook returning AllowWithUpdatedInput should not prevent prompt execution
-    /// (updatedInput is a PreToolUse concern, not a blocking signal).
+    /// A hook returning AllowWithUpdatedInput should not prevent prompt
+    /// execution (updatedInput is a PreToolUse concern, not a blocking
+    /// signal).
     #[tokio::test]
     async fn test_updated_input_decision_does_not_block_prompt() {
         struct UpdatedInputHook;
@@ -2166,14 +1171,22 @@ mod tests {
             }
         }
 
-        let (mock, called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::UserPromptSubmit],
             None,
             UpdatedInputHook,
         );
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
 
-        let result = agent.prompt(make_prompt_request()).await;
+        let result = run_prompt_turn(&agent, make_prompt_request(), |_req| {
+            let called = called_clone.clone();
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await;
         assert!(result.is_ok());
         assert!(called.load(Ordering::SeqCst));
     }
@@ -2194,15 +1207,17 @@ mod tests {
             }
         }
 
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::Stop],
             None,
             ContextOnStopHook,
         );
 
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
-        // AllowWithContext on Stop should NOT add hook_should_continue
+        let response = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
         assert!(
             response.meta.is_none()
                 || !response
@@ -2217,10 +1232,6 @@ mod tests {
 
     #[test]
     fn test_notification_event_exposes_agent_message_text_to_hooks() {
-        // Hook handlers receiving Notification events should be able to
-        // inspect the actual message content, not just the type string.
-        use agent_client_protocol::ContentChunk;
-
         let content = ContentChunk::new(ContentBlock::Text(TextContent::new("hello world")));
         let notification = SessionNotification::new(
             SessionId::from("sess-1"),
@@ -2232,7 +1243,6 @@ mod tests {
         };
 
         let json = event.to_command_input();
-        // The serialized update should contain the original message text
         let notification_data = &json["notification"];
         let serialized = serde_json::to_string(notification_data).unwrap();
         assert!(
@@ -2244,9 +1254,6 @@ mod tests {
 
     #[test]
     fn test_notification_matcher_filters_by_update_type() {
-        use agent_client_protocol::ContentChunk;
-
-        // Create an AgentMessageChunk notification
         let content = ContentChunk::new(ContentBlock::Text(TextContent::new("hi")));
         let notification = SessionNotification::new(
             SessionId::from("sess-1"),
@@ -2257,7 +1264,6 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
         };
 
-        // Matcher for "agent_message" should match
         let matching_reg = HookRegistration::new(
             vec![HookEventKind::Notification],
             Some(regex::Regex::new("agent_message").unwrap()),
@@ -2267,7 +1273,6 @@ mod tests {
         );
         assert!(matching_reg.matches(&event));
 
-        // Matcher for "tool_call" should NOT match
         let non_matching_reg = HookRegistration::new(
             vec![HookEventKind::Notification],
             Some(regex::Regex::new("^tool_call$").unwrap()),
@@ -2280,11 +1285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_hook_context_forwarded_via_channel() {
-        // When a notification hook returns AllowWithContext, the context
-        // should be sent through the context channel so it can be injected
-        // into the agent's next prompt.
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::PostToolUse],
             None,
             ContextHook {
@@ -2295,19 +1296,16 @@ mod tests {
         let (notify_tx, notify_rx) = broadcast::channel(16);
         let (_, _cancel_rx, mut context_rx) = agent.intercept_notifications(notify_rx);
 
-        // Send a ToolCall then ToolCallUpdate to trigger PostToolUse
-        use agent_client_protocol::{ToolCall, ToolCallUpdate, ToolCallUpdateFields};
         let tool_call = ToolCall::new("call-1", "Bash");
         let _ = notify_tx.send(SessionNotification::new(
             SessionId::from("s1"),
             SessionUpdate::ToolCall(tool_call),
         ));
-        // Small delay for the spawn to process
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         let update = ToolCallUpdate::new(
             "call-1",
-            ToolCallUpdateFields::new().status(agent_client_protocol::ToolCallStatus::Completed),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         );
         let _ = notify_tx.send(SessionNotification::new(
             SessionId::from("s1"),
@@ -2315,7 +1313,6 @@ mod tests {
         ));
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Context should arrive through the channel
         let ctx = context_rx.try_recv();
         assert!(
             ctx.is_ok(),
@@ -2338,14 +1335,19 @@ mod tests {
             }
         }
 
-        let (mock, called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
-            &[HookEventKind::UserPromptSubmit],
-            None,
-            CancelHook,
-        );
+        let agent =
+            HookableAgent::new(DummyInner).with_hook(&[HookEventKind::UserPromptSubmit], None, CancelHook);
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
 
-        let result = agent.prompt(make_prompt_request()).await;
+        let result = run_prompt_turn(&agent, make_prompt_request(), |_req| {
+            let called = called_clone.clone();
+            async move {
+                called.store(true, Ordering::SeqCst);
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+        })
+        .await;
         assert!(result.is_err());
         assert!(!called.load(Ordering::SeqCst));
         assert!(result.unwrap_err().message.contains("Cancelled"));
@@ -2365,8 +1367,7 @@ mod tests {
             }
         }
 
-        let (mock, _called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock))
+        let agent = HookableAgent::new(DummyInner)
             .with_hook(
                 &[HookEventKind::TeammateIdle],
                 None,
@@ -2378,7 +1379,6 @@ mod tests {
                 CountHook(fired.clone()),
             );
 
-        // Fire TeammateIdle — only the first hook matches
         let event = HookEvent::TeammateIdle {
             session_id: "s1".into(),
             teammate_id: None,
@@ -2388,7 +1388,6 @@ mod tests {
         assert_eq!(decisions.len(), 1);
         assert_eq!(fired.load(Ordering::SeqCst), 1);
 
-        // Fire TaskCompleted — only the second hook matches
         let event = HookEvent::TaskCompleted {
             session_id: "s1".into(),
             task_id: None,
@@ -2402,22 +1401,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_fire_event_returns_block_decision() {
-        struct BlockHook;
-
-        #[async_trait::async_trait]
-        impl HookHandler for BlockHook {
-            async fn handle(&self, _event: &HookEvent) -> HookDecision {
-                HookDecision::Block {
-                    reason: "blocked by test".into(),
-                }
-            }
-        }
-
-        let (mock, _called) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_hook(
+        let agent = HookableAgent::new(DummyInner).with_hook(
             &[HookEventKind::PostCompact],
             None,
-            BlockHook,
+            BlockHook {
+                reason: "blocked by test".into(),
+            },
         );
 
         let event = HookEvent::PostCompact {
@@ -2429,392 +1418,80 @@ mod tests {
         assert!(matches!(decisions[0], HookDecision::Block { .. }));
     }
 
-    // -- to_command_input JSON tests for all event variants --
+    // -- HookableAgent builder tests --
 
-    #[test]
-    fn test_session_start_to_command_input() {
-        let event = HookEvent::SessionStart {
-            session_id: "s1".into(),
-            source: SessionSource::Startup,
-            cwd: PathBuf::from("/project"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "SessionStart");
-        assert_eq!(json["session_id"], "s1");
-        assert_eq!(json["source"], "startup");
-        assert_eq!(json["cwd"], "/project");
-    }
-
-    #[test]
-    fn test_session_start_resume_source() {
-        let event = HookEvent::SessionStart {
-            session_id: "s1".into(),
-            source: SessionSource::Resume,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["source"], "resume");
-    }
-
-    #[test]
-    fn test_user_prompt_submit_to_command_input() {
-        let event = HookEvent::UserPromptSubmit {
-            session_id: "s1".into(),
-            prompt: vec![ContentBlock::Text(TextContent::new("test prompt"))],
-            cwd: PathBuf::from("/project"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "UserPromptSubmit");
-        assert_eq!(json["prompt"], "test prompt");
-    }
-
-    #[test]
-    fn test_stop_to_command_input() {
-        let event = HookEvent::Stop {
-            session_id: "s1".into(),
-            stop_reason: StopReason::EndTurn,
-            stop_hook_active: true,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "Stop");
-        assert_eq!(json["stop_hook_active"], true);
-    }
-
-    #[test]
-    fn test_elicitation_to_command_input_with_all_fields() {
-        let event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: Some("sah".into()),
-            message: Some("pick one".into()),
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({"type": "string"}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "Elicitation");
-        assert_eq!(json["mcp_server_name"], "sah");
-        assert_eq!(json["message"], "pick one");
-        assert_eq!(json["mode"], "blocking");
-    }
-
-    #[test]
-    fn test_elicitation_to_command_input_without_optional_fields() {
-        let event = HookEvent::Elicitation {
-            session_id: "s1".into(),
-            mcp_server_name: None,
-            message: None,
-            mode: "blocking".into(),
-            requested_schema: serde_json::json!({}),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "Elicitation");
-        assert!(json.get("mcp_server_name").is_none() || json["mcp_server_name"].is_null());
-        assert!(json.get("message").is_none() || json["message"].is_null());
-    }
-
-    #[test]
-    fn test_elicitation_result_to_command_input() {
-        let event = HookEvent::ElicitationResult {
-            session_id: "s1".into(),
-            mcp_server_name: "sah".into(),
-            action: Some("submit".into()),
-            content: serde_json::json!({"answer": "yes"}),
-            elicitation_id: "e1".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "ElicitationResult");
-        assert_eq!(json["mcp_server_name"], "sah");
-        assert_eq!(json["action"], "submit");
-        assert_eq!(json["elicitation_id"], "e1");
-    }
-
-    #[test]
-    fn test_elicitation_result_to_command_input_without_action() {
-        let event = HookEvent::ElicitationResult {
-            session_id: "s1".into(),
-            mcp_server_name: "sah".into(),
-            action: None,
-            content: serde_json::json!({}),
-            elicitation_id: "e1".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert!(json.get("action").is_none() || json["action"].is_null());
-    }
-
-    #[test]
-    fn test_instructions_loaded_to_command_input() {
-        let event = HookEvent::InstructionsLoaded {
-            file_path: Some("/project/CLAUDE.md".into()),
-            load_reason: "startup".into(),
-            cwd: PathBuf::from("/project"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "InstructionsLoaded");
-        assert_eq!(json["file_path"], "/project/CLAUDE.md");
-        assert_eq!(json["load_reason"], "startup");
-    }
-
-    #[test]
-    fn test_instructions_loaded_to_command_input_without_file() {
-        let event = HookEvent::InstructionsLoaded {
-            file_path: None,
-            load_reason: "startup".into(),
-            cwd: PathBuf::from("/project"),
-        };
-        let json = event.to_command_input();
-        assert!(json.get("file_path").is_none() || json["file_path"].is_null());
-    }
-
-    #[test]
-    fn test_config_change_to_command_input() {
-        let event = HookEvent::ConfigChange {
-            session_id: "s1".into(),
-            source: Some("user_settings".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "ConfigChange");
-        assert_eq!(json["source"], "user_settings");
-    }
-
-    #[test]
-    fn test_config_change_to_command_input_without_source() {
-        let event = HookEvent::ConfigChange {
-            session_id: "s1".into(),
-            source: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert!(json.get("source").is_none() || json["source"].is_null());
-    }
-
-    #[test]
-    fn test_worktree_create_to_command_input() {
-        let event = HookEvent::WorktreeCreate {
-            worktree_path: Some("/tmp/wt".into()),
-            branch_name: Some("feat".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "WorktreeCreate");
-        assert_eq!(json["worktree_path"], "/tmp/wt");
-        assert_eq!(json["branch_name"], "feat");
-    }
-
-    #[test]
-    fn test_worktree_create_to_command_input_without_optionals() {
-        let event = HookEvent::WorktreeCreate {
-            worktree_path: None,
-            branch_name: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "WorktreeCreate");
-        assert!(json.get("worktree_path").is_none() || json["worktree_path"].is_null());
-    }
-
-    #[test]
-    fn test_worktree_remove_to_command_input() {
-        let event = HookEvent::WorktreeRemove {
-            worktree_path: "/tmp/wt".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "WorktreeRemove");
-        assert_eq!(json["worktree_path"], "/tmp/wt");
-    }
-
-    #[test]
-    fn test_post_compact_to_command_input() {
-        let event = HookEvent::PostCompact {
-            session_id: "s1".into(),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "PostCompact");
-        assert_eq!(json["session_id"], "s1");
-    }
-
-    #[test]
-    fn test_teammate_idle_to_command_input() {
-        let event = HookEvent::TeammateIdle {
-            session_id: "s1".into(),
-            teammate_id: Some("agent-2".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "TeammateIdle");
-        assert_eq!(json["teammate_id"], "agent-2");
-    }
-
-    #[test]
-    fn test_teammate_idle_to_command_input_without_teammate_id() {
-        let event = HookEvent::TeammateIdle {
-            session_id: "s1".into(),
-            teammate_id: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert!(json.get("teammate_id").is_none() || json["teammate_id"].is_null());
-    }
-
-    #[test]
-    fn test_task_completed_to_command_input() {
-        let event = HookEvent::TaskCompleted {
-            session_id: "s1".into(),
-            task_id: Some("t1".into()),
-            task_title: Some("Fix bug".into()),
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "TaskCompleted");
-        assert_eq!(json["task_id"], "t1");
-        assert_eq!(json["task_title"], "Fix bug");
-    }
-
-    #[test]
-    fn test_task_completed_to_command_input_without_optionals() {
-        let event = HookEvent::TaskCompleted {
-            session_id: "s1".into(),
-            task_id: None,
-            task_title: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let json = event.to_command_input();
-        assert!(json.get("task_id").is_none() || json["task_id"].is_null());
-        assert!(json.get("task_title").is_none() || json["task_title"].is_null());
-    }
-
-    // -- AVP context tests --
-
-    #[test]
-    fn test_avp_context_empty_permission_mode_not_included() {
-        let event = HookEvent::SessionStart {
-            session_id: "s1".into(),
-            source: SessionSource::Startup,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let ctx = HookCommandContext {
-            transcript_path: "/tmp/t.jsonl".into(),
-            permission_mode: String::new(),
-        };
-        let json = event.to_command_input_full(&ctx);
-        assert_eq!(json["transcript_path"], "/tmp/t.jsonl");
-        // Empty permission_mode should not be included
-        assert!(json.get("permission_mode").is_none() || json["permission_mode"].is_null(),);
-    }
-
-    // -- tool_event_json tests --
-
-    #[test]
-    fn test_tool_event_json_with_no_tool_use_id() {
-        let json = tool_event_json(
-            "PreToolUse",
-            "s1",
-            "Bash",
-            &PathBuf::from("/tmp"),
-            &None,
-            &None,
-            &None,
+    #[tokio::test]
+    async fn test_hookable_agent_with_transcript_path() {
+        let agent =
+            HookableAgent::new(DummyInner).with_transcript_path("/tmp/transcript.jsonl");
+        assert_eq!(
+            agent.command_context().transcript_path,
+            "/tmp/transcript.jsonl"
         );
-        assert_eq!(json["hook_event_name"], "PreToolUse");
-        assert_eq!(json["tool_name"], "Bash");
-        assert!(json.get("tool_use_id").is_none() || json["tool_use_id"].is_null());
-        assert!(json.get("tool_response").is_none() || json["tool_response"].is_null());
     }
 
-    #[test]
-    fn test_tool_event_json_with_all_fields() {
-        let json = tool_event_json(
-            "PostToolUse",
-            "s1",
-            "Read",
-            &PathBuf::from("/project"),
-            &Some(serde_json::json!({"path": "/file"})),
-            &Some("toolu_1".to_string()),
-            &Some(serde_json::json!({"content": "file data"})),
+    #[tokio::test]
+    async fn test_hookable_agent_with_permission_mode() {
+        let agent = HookableAgent::new(DummyInner).with_permission_mode("default");
+        assert_eq!(agent.command_context().permission_mode, "default");
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_with_registration() {
+        let called = Arc::new(AtomicBool::new(false));
+        let reg = HookRegistration::new(
+            vec![HookEventKind::UserPromptSubmit],
+            None,
+            Arc::new(RecordingHook {
+                called: called.clone(),
+            }),
         );
-        assert_eq!(json["hook_event_name"], "PostToolUse");
-        assert_eq!(json["tool_use_id"], "toolu_1");
-        assert_eq!(json["tool_input"]["path"], "/file");
-        assert_eq!(json["tool_response"]["content"], "file data");
+        let agent = HookableAgent::new(DummyInner).with_registration(reg);
+
+        let _ = run_prompt_turn(&agent, make_prompt_request(), |_req| async {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        })
+        .await
+        .unwrap();
+        assert!(called.load(Ordering::SeqCst));
     }
 
-    // -- notification_update_name tests --
-
-    #[test]
-    fn test_notification_update_name_agent_message() {
-        let update = SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-            ContentBlock::Text(TextContent::new("hi")),
-        ));
-        assert_eq!(notification_update_name(&update), "agent_message");
+    #[tokio::test]
+    async fn test_hookable_agent_inner_returns_inner_agent() {
+        let agent = HookableAgent::new(DummyInner);
+        let _: &DummyInner = agent.inner();
     }
 
-    #[test]
-    fn test_notification_update_name_agent_thought() {
-        let update = SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
-            ContentBlock::Text(TextContent::new("hmm")),
-        ));
-        assert_eq!(notification_update_name(&update), "agent_thought");
+    #[tokio::test]
+    async fn test_hookable_agent_into_inner_returns_wrapped_value() {
+        struct WrappedInner(u32);
+        let agent = HookableAgent::new(WrappedInner(42));
+        let inner = agent.into_inner();
+        assert_eq!(inner.0, 42);
     }
 
-    #[test]
-    fn test_notification_update_name_tool_call() {
-        let update = SessionUpdate::ToolCall(agent_client_protocol::ToolCall::new("c1", "Bash"));
-        assert_eq!(notification_update_name(&update), "tool_call");
-    }
+    #[tokio::test]
+    async fn test_hookable_agent_get_cwd_unknown_session_fallback() {
+        let agent = HookableAgent::new(DummyInner);
 
-    #[test]
-    fn test_notification_update_name_tool_call_update() {
-        let update = SessionUpdate::ToolCallUpdate(agent_client_protocol::ToolCallUpdate::new(
-            "c1",
-            agent_client_protocol::ToolCallUpdateFields::new(),
-        ));
-        assert_eq!(notification_update_name(&update), "tool_call_update");
-    }
-
-    #[test]
-    fn test_notification_update_name_plan() {
-        let update = SessionUpdate::Plan(agent_client_protocol::Plan::new(vec![]));
-        assert_eq!(notification_update_name(&update), "plan");
-    }
-
-    #[test]
-    fn test_notification_update_name_available_commands() {
-        let update = SessionUpdate::AvailableCommandsUpdate(
-            agent_client_protocol::AvailableCommandsUpdate::new(vec![]),
-        );
-        assert_eq!(notification_update_name(&update), "available_commands");
-    }
-
-    #[test]
-    fn test_notification_update_name_current_mode() {
-        let update =
-            SessionUpdate::CurrentModeUpdate(agent_client_protocol::CurrentModeUpdate::new("plan"));
-        assert_eq!(notification_update_name(&update), "current_mode");
+        let cwd = agent.get_cwd("nonexistent-session");
+        assert_eq!(cwd, PathBuf::from("."));
     }
 
     // -- notification_to_events tests --
 
     #[test]
     fn test_notification_to_events_tool_call() {
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::ToolCall(agent_client_protocol::ToolCall::new("c1", "Bash")),
+            SessionUpdate::ToolCall(ToolCall::new("c1", "Bash")),
         );
         let mut tool_names = HashMap::new();
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
-        // Should produce PreToolUse + Notification
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], HookEvent::PreToolUse { .. }));
         assert!(matches!(events[1], HookEvent::Notification { .. }));
-
-        // tool_names should track the tool call
         assert!(tool_names.contains_key("c1"));
     }
 
@@ -2826,19 +1503,17 @@ mod tests {
             ("Bash".to_string(), Some(serde_json::json!({"cmd": "ls"}))),
         );
 
-        let update = agent_client_protocol::ToolCallUpdate::new(
+        let update = ToolCallUpdate::new(
             "c1",
-            agent_client_protocol::ToolCallUpdateFields::new()
-                .status(agent_client_protocol::ToolCallStatus::Completed),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         );
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
             SessionUpdate::ToolCallUpdate(update),
         );
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
-        // Should produce PostToolUse + Notification
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], HookEvent::PostToolUse { .. }));
     }
@@ -2848,19 +1523,17 @@ mod tests {
         let mut tool_names = HashMap::new();
         tool_names.insert("c1".to_string(), ("Bash".to_string(), None));
 
-        let update = agent_client_protocol::ToolCallUpdate::new(
+        let update = ToolCallUpdate::new(
             "c1",
-            agent_client_protocol::ToolCallUpdateFields::new()
-                .status(agent_client_protocol::ToolCallStatus::Failed),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
         );
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
             SessionUpdate::ToolCallUpdate(update),
         );
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
-        // Should produce PostToolUseFailure + Notification
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], HookEvent::PostToolUseFailure { .. }));
     }
@@ -2868,21 +1541,18 @@ mod tests {
     #[test]
     fn test_notification_to_events_unknown_tool_call_id() {
         let mut tool_names = HashMap::new();
-        // Don't pre-register tool name
 
-        let update = agent_client_protocol::ToolCallUpdate::new(
+        let update = ToolCallUpdate::new(
             "unknown-id",
-            agent_client_protocol::ToolCallUpdateFields::new()
-                .status(agent_client_protocol::ToolCallStatus::Completed),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         );
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
             SessionUpdate::ToolCallUpdate(update),
         );
 
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
-        // Should still produce events, using the tool_call_id as fallback name
         assert_eq!(events.len(), 2);
         match &events[0] {
             HookEvent::PostToolUse { tool_name, .. } => {
@@ -2894,228 +1564,23 @@ mod tests {
 
     #[test]
     fn test_notification_to_events_non_tool_notification() {
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("hi")),
-            )),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
         );
         let mut tool_names = HashMap::new();
         let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
 
-        // Should only produce Notification event
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], HookEvent::Notification { .. }));
-    }
-
-    // -- HookRegistration tests --
-
-    #[test]
-    fn test_hook_registration_debug() {
-        let reg = HookRegistration::new(
-            vec![HookEventKind::PreToolUse],
-            Some(regex::Regex::new("Bash").unwrap()),
-            Arc::new(AllowHook),
-        );
-        let debug = format!("{:?}", reg);
-        assert!(debug.contains("PreToolUse"));
-        assert!(debug.contains("Bash"));
-    }
-
-    #[test]
-    fn test_hook_registration_clone() {
-        let reg = HookRegistration::new(
-            vec![HookEventKind::PreToolUse, HookEventKind::PostToolUse],
-            Some(regex::Regex::new(".*").unwrap()),
-            Arc::new(AllowHook),
-        );
-        let cloned = reg.clone();
-        assert_eq!(cloned.events(), reg.events());
-        assert!(cloned.matcher().is_some());
-    }
-
-    #[test]
-    fn test_hook_registration_events_accessor() {
-        let reg = HookRegistration::new(
-            vec![HookEventKind::Stop, HookEventKind::UserPromptSubmit],
-            None,
-            Arc::new(AllowHook),
-        );
-        assert_eq!(reg.events().len(), 2);
-        assert!(reg.events().contains(&HookEventKind::Stop));
-        assert!(reg.events().contains(&HookEventKind::UserPromptSubmit));
-    }
-
-    #[test]
-    fn test_hook_registration_matcher_accessor() {
-        let without_matcher =
-            HookRegistration::new(vec![HookEventKind::Stop], None, Arc::new(AllowHook));
-        assert!(without_matcher.matcher().is_none());
-
-        let with_matcher = HookRegistration::new(
-            vec![HookEventKind::PreToolUse],
-            Some(regex::Regex::new("Bash").unwrap()),
-            Arc::new(AllowHook),
-        );
-        assert!(with_matcher.matcher().is_some());
-    }
-
-    // -- HookDecision Default test --
-
-    #[test]
-    fn test_hook_decision_default_is_allow() {
-        let decision: HookDecision = HookDecision::default();
-        assert!(matches!(decision, HookDecision::Allow));
-    }
-
-    // -- SessionSource tests --
-
-    #[test]
-    fn test_session_source_as_str() {
-        assert_eq!(SessionSource::Startup.as_str(), "startup");
-        assert_eq!(SessionSource::Resume.as_str(), "resume");
-    }
-
-    // -- HookCommandContext tests --
-
-    #[test]
-    fn test_hook_command_context_default() {
-        let ctx = HookCommandContext::default();
-        assert!(ctx.transcript_path.is_empty());
-        assert!(ctx.permission_mode.is_empty());
-    }
-
-    // -- HookableAgent builder tests --
-
-    #[tokio::test]
-    async fn test_hookable_agent_with_transcript_path() {
-        let (mock, _) = MockAgent::new();
-        let agent =
-            HookableAgent::new(Arc::new(mock)).with_transcript_path("/tmp/transcript.jsonl");
-        assert_eq!(
-            agent.command_context().transcript_path,
-            "/tmp/transcript.jsonl"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_with_permission_mode() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock)).with_permission_mode("default");
-        assert_eq!(agent.command_context().permission_mode, "default");
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_with_registration() {
-        let (mock, _) = MockAgent::new();
-        let called = Arc::new(AtomicBool::new(false));
-        let reg = HookRegistration::new(
-            vec![HookEventKind::UserPromptSubmit],
-            None,
-            Arc::new(RecordingHook {
-                called: called.clone(),
-            }),
-        );
-        let agent = HookableAgent::new(Arc::new(mock)).with_registration(reg);
-
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
-        assert!(called.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_inner_returns_inner_agent() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        // inner() should return an Arc to the inner agent
-        let _ = agent.inner();
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_get_cwd_unknown_session_fallback() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        // Unknown session should fall back to "."
-        let cwd = agent.get_cwd("nonexistent-session");
-        assert_eq!(cwd, PathBuf::from("."));
-    }
-
-    // -- Agent trait delegation tests --
-
-    #[tokio::test]
-    async fn test_hookable_agent_initialize_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let _response = agent
-            .initialize(InitializeRequest::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_authenticate_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let _response = agent
-            .authenticate(AuthenticateRequest::new("test-method"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_set_session_mode_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let _response = agent
-            .set_session_mode(SetSessionModeRequest::new("test-session", "plan"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_ext_method_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let raw = serde_json::value::RawValue::from_string("{}".to_string()).unwrap();
-        let request = ExtRequest::new("custom", std::sync::Arc::from(raw));
-        // MockAgent returns method_not_found
-        let result = agent.ext_method(request).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_ext_notification_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        let raw = serde_json::value::RawValue::from_string("{}".to_string()).unwrap();
-        let notification = ExtNotification::new("custom/notify", std::sync::Arc::from(raw));
-        agent.ext_notification(notification).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_hookable_agent_cancel_delegates() {
-        let (mock, _) = MockAgent::new();
-        let agent = HookableAgent::new(Arc::new(mock));
-
-        agent
-            .cancel(CancelNotification::new("test-session"))
-            .await
-            .unwrap();
     }
 
     // -- dispatch_notification_hooks tests --
 
     #[tokio::test]
     async fn test_dispatch_notification_hooks_allow_with_updated_input() {
-        // AllowWithUpdatedInput in notification pipeline should be treated as Allow
         struct UpdatedInputHook;
 
         #[async_trait::async_trait]
@@ -3133,11 +1598,11 @@ mod tests {
             Arc::new(UpdatedInputHook),
         )];
 
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("hi")),
-            )),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
         );
 
         let events = vec![HookEvent::Notification {
@@ -3148,13 +1613,11 @@ mod tests {
         let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
         let (context_tx, _context_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Should not panic — AllowWithUpdatedInput is logged and treated as Allow
         dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
     }
 
     #[tokio::test]
     async fn test_dispatch_notification_hooks_block_decision_is_noop() {
-        // Block decisions in notification pipeline are logged but don't cancel
         let hooks = vec![HookRegistration::new(
             vec![HookEventKind::Notification],
             None,
@@ -3163,11 +1626,11 @@ mod tests {
             }),
         )];
 
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("hi")),
-            )),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
         );
 
         let events = vec![HookEvent::Notification {
@@ -3180,7 +1643,6 @@ mod tests {
 
         dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
 
-        // Block in notification pipeline doesn't send to cancel channel
         assert!(cancel_rx.try_recv().is_err());
     }
 
@@ -3194,11 +1656,11 @@ mod tests {
             }),
         )];
 
-        let notification = agent_client_protocol::SessionNotification::new(
+        let notification = SessionNotification::new(
             SessionId::from("s1"),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("hi")),
-            )),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
         );
 
         let events = vec![HookEvent::Notification {
@@ -3211,48 +1673,22 @@ mod tests {
 
         dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
 
-        // ShouldContinue doesn't send to either channel
         assert!(cancel_rx.try_recv().is_err());
         assert!(context_rx.try_recv().is_err());
     }
 
-    // -- Notification event serialization tests --
+    // -- Spot-check: HookRegistration / HookDecision sanity (deeper coverage
+    //    lives in `hook_config` tests).
 
     #[test]
-    fn test_notification_event_to_command_input() {
-        let notification = agent_client_protocol::SessionNotification::new(
-            SessionId::from("sess-1"),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("test")),
-            )),
-        );
-        let event = HookEvent::Notification {
-            notification: Box::new(notification),
-            cwd: PathBuf::from("/project"),
-        };
-
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "Notification");
-        assert_eq!(json["notification_type"], "agent_message");
-        assert!(json.get("notification").is_some());
+    fn test_hook_decision_default_is_allow() {
+        let decision: HookDecision = HookDecision::default();
+        assert!(matches!(decision, HookDecision::Allow));
     }
 
-    // -- PostToolUseFailure with error in to_command_input --
-
     #[test]
-    fn test_post_tool_use_failure_without_error() {
-        let event = HookEvent::PostToolUseFailure {
-            session_id: "s1".into(),
-            tool_name: "Bash".into(),
-            tool_input: None,
-            error: None,
-            tool_use_id: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-
-        let json = event.to_command_input();
-        assert_eq!(json["hook_event_name"], "PostToolUseFailure");
-        // No error field when None
-        assert!(json.get("error").is_none() || json["error"].is_null());
+    fn test_session_source_as_str() {
+        assert_eq!(SessionSource::Startup.as_str(), "startup");
+        assert_eq!(SessionSource::Resume.as_str(), "resume");
     }
 }
