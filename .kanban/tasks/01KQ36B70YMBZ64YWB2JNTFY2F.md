@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 depends_on:
-- 01KQ7KP7HVASAD4V45AJ41P39W
+- 01KQD0D883ZW5JAA02913DXM8E
 position_column: todo
 position_ordinal: fb80
 project: acp-upgrade

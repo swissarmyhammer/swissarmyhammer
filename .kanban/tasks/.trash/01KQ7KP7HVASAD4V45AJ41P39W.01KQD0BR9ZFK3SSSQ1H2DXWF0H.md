@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQ367HE0Z8ZSXY90CTT8QYGG
-position_column: todo
-position_ordinal: fe80
+position_column: doing
+position_ordinal: '80'
 project: acp-upgrade
 title: 'ACP 0.11 SDK rewrite: bump + extras + claude-agent + llama-agent + avp-common (atomic)'
 ---
