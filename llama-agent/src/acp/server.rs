@@ -134,7 +134,8 @@ impl AcpServer {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let config = AcpConfig::default();
     ///     let agent_server = Arc::new(AgentServer::new(/* ... */).await?);
-    ///     let acp_server = Arc::new(AcpServer::new(agent_server, config));
+    ///     let (acp_server, _notification_rx) = AcpServer::new(agent_server, config);
+    ///     let acp_server = Arc::new(acp_server);
     ///
     ///     // Start server with stdio transport
     ///     Arc::clone(&acp_server).start_stdio().await?;
