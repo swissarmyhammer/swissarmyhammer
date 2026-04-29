@@ -176,12 +176,12 @@ pub struct Session {
     pub created_at: SystemTime,
     pub last_accessed: SystemTime,
     pub context: Vec<Message>,
-    pub client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
+    pub client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
     pub mcp_servers: Vec<String>,
     /// Working directory for this session (ACP requirement - must be absolute path)
     pub cwd: PathBuf,
     /// Available commands that can be invoked during this session
-    pub available_commands: Vec<agent_client_protocol::AvailableCommand>,
+    pub available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     /// Number of language model requests made in the current turn
     pub turn_request_count: u64,
     /// Total tokens consumed in the current turn (input + output)
@@ -239,7 +239,7 @@ impl Session {
     /// Update available commands for this session
     pub fn update_available_commands(
         &mut self,
-        commands: Vec<agent_client_protocol::AvailableCommand>,
+        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     ) {
         self.available_commands = commands;
         self.last_accessed = SystemTime::now();
@@ -248,7 +248,7 @@ impl Session {
     /// Check if available commands have changed from the given set
     pub fn has_available_commands_changed(
         &self,
-        new_commands: &[agent_client_protocol::AvailableCommand],
+        new_commands: &[agent_client_protocol::schema::AvailableCommand],
     ) -> bool {
         if self.available_commands.len() != new_commands.len() {
             return true;
@@ -304,12 +304,12 @@ impl Session {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub timestamp: SystemTime,
-    pub update: agent_client_protocol::SessionUpdate,
+    pub update: agent_client_protocol::schema::SessionUpdate,
 }
 
 impl Message {
     /// Create message from SessionUpdate
-    pub fn from_update(update: agent_client_protocol::SessionUpdate) -> Self {
+    pub fn from_update(update: agent_client_protocol::schema::SessionUpdate) -> Self {
         Self {
             timestamp: SystemTime::now(),
             update,
@@ -320,27 +320,27 @@ impl Message {
     ///
     /// Convenience constructor that wraps text in appropriate SessionUpdate variant
     pub fn new(role: MessageRole, content: String) -> Self {
-        use agent_client_protocol::{ContentBlock, SessionUpdate, TextContent};
+        use agent_client_protocol::schema::{ContentBlock, SessionUpdate, TextContent};
 
         let update = match role {
             MessageRole::User => {
                 let text_content = TextContent::new(content);
                 let content_block = ContentBlock::Text(text_content);
-                SessionUpdate::UserMessageChunk(agent_client_protocol::ContentChunk::new(
+                SessionUpdate::UserMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                     content_block,
                 ))
             }
             MessageRole::Assistant => {
                 let text_content = TextContent::new(content);
                 let content_block = ContentBlock::Text(text_content);
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                     content_block,
                 ))
             }
             MessageRole::System => {
                 let text_content = TextContent::new(format!("[System] {}", content));
                 let content_block = ContentBlock::Text(text_content);
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                     content_block,
                 ))
             }
@@ -488,7 +488,7 @@ impl SessionManager {
     pub fn create_session(
         &self,
         cwd: PathBuf,
-        client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
+        client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
     ) -> crate::Result<SessionId> {
         // Validate working directory before creating session
         crate::session_validation::validate_working_directory(&cwd).map_err(|e| {
@@ -700,7 +700,7 @@ impl SessionManager {
     pub fn update_available_commands(
         &self,
         session_id: &SessionId,
-        commands: Vec<agent_client_protocol::AvailableCommand>,
+        commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     ) -> crate::Result<bool> {
         // First ensure the session is loaded into memory
         self.get_session(session_id)?;
@@ -907,8 +907,10 @@ mod tests {
         let message = Message::new(MessageRole::User, "Hello".to_string());
 
         // Verify it creates appropriate SessionUpdate
-        if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) = message.update {
-            if let agent_client_protocol::ContentBlock::Text(text) = chunk.content {
+        if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
+            message.update
+        {
+            if let agent_client_protocol::schema::ContentBlock::Text(text) = chunk.content {
                 assert_eq!(text.text, "Hello");
             } else {
                 panic!("Expected Text content");
@@ -935,10 +937,10 @@ mod tests {
         assert!(session.last_accessed > initial_time);
 
         // Verify message is stored
-        if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+        if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
             &session.context[0].update
         {
-            if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+            if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
                 assert_eq!(text.text, "Hello");
             } else {
                 panic!("Expected Text content");
@@ -1004,10 +1006,10 @@ mod tests {
         assert_eq!(session.context.len(), 1);
 
         // Verify message content
-        if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+        if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
             &session.context[0].update
         {
-            if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+            if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
                 assert_eq!(text.text, "Hello");
             } else {
                 panic!("Expected Text content");
@@ -1413,11 +1415,11 @@ mod tests {
         let mut session = Session::new(session_id, cwd);
 
         let commands = vec![
-            agent_client_protocol::AvailableCommand::new(
+            agent_client_protocol::schema::AvailableCommand::new(
                 "create_plan",
                 "Create an execution plan for complex tasks",
             ),
-            agent_client_protocol::AvailableCommand::new(
+            agent_client_protocol::schema::AvailableCommand::new(
                 "research_codebase",
                 "Research and analyze the codebase structure",
             ),
@@ -1435,7 +1437,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan for complex tasks",
         )];
@@ -1445,7 +1447,7 @@ mod tests {
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Change commands - should detect difference
-        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let updated_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "research_codebase",
             "Research and analyze the codebase structure",
         )];
@@ -1459,7 +1461,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let session_id = manager.create_session(cwd, None).unwrap();
 
-        let commands = vec![agent_client_protocol::AvailableCommand::new(
+        let commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan for complex tasks",
         )];
@@ -1471,7 +1473,7 @@ mod tests {
         assert!(update_sent);
 
         // Same commands again - should not send update
-        let commands = vec![agent_client_protocol::AvailableCommand::new(
+        let commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan for complex tasks",
         )];
@@ -1489,7 +1491,7 @@ mod tests {
 
         let mut initial_meta = serde_json::Map::new();
         initial_meta.insert("version".to_string(), serde_json::json!("1.0"));
-        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )
@@ -1501,7 +1503,7 @@ mod tests {
         // Change meta field - should detect difference
         let mut updated_meta = serde_json::Map::new();
         updated_meta.insert("version".to_string(), serde_json::json!("2.0"));
-        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let updated_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )
@@ -1516,13 +1518,13 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let input_schema = agent_client_protocol::AvailableCommandInput::Unstructured(
-            agent_client_protocol::UnstructuredCommandInput::new(
+        let input_schema = agent_client_protocol::schema::AvailableCommandInput::Unstructured(
+            agent_client_protocol::schema::UnstructuredCommandInput::new(
                 "Enter task description".to_string(),
             ),
         );
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )
@@ -1532,13 +1534,14 @@ mod tests {
         assert!(!session.has_available_commands_changed(&initial_commands));
 
         // Change input field - should detect difference
-        let updated_input_schema = agent_client_protocol::AvailableCommandInput::Unstructured(
-            agent_client_protocol::UnstructuredCommandInput::new(
-                "Enter task with priority".to_string(),
-            ),
-        );
+        let updated_input_schema =
+            agent_client_protocol::schema::AvailableCommandInput::Unstructured(
+                agent_client_protocol::schema::UnstructuredCommandInput::new(
+                    "Enter task with priority".to_string(),
+                ),
+            );
 
-        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let updated_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )
@@ -1553,7 +1556,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let mut session = Session::new(session_id, cwd);
 
-        let initial_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let initial_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )];
@@ -1564,7 +1567,7 @@ mod tests {
         // Add meta field - should detect difference
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("new".to_string(), serde_json::json!("field"));
-        let updated_commands = vec![agent_client_protocol::AvailableCommand::new(
+        let updated_commands = vec![agent_client_protocol::schema::AvailableCommand::new(
             "create_plan",
             "Create an execution plan",
         )

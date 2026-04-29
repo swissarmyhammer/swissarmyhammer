@@ -4,10 +4,11 @@
 //! allowing tests to verify tool completion notifications without requiring
 //! external dependencies or the actual Claude CLI.
 
-use agent_client_protocol::{
-    Client, Error as AcpError, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
+use agent_client_protocol::schema::{
+    ReadTextFileRequest, ReadTextFileResponse, RequestPermissionRequest, RequestPermissionResponse,
+    SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
 };
+use agent_client_protocol::{Client, Error as AcpError};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -177,7 +178,7 @@ impl Client for TestClient {
         _request: RequestPermissionRequest,
     ) -> Result<RequestPermissionResponse, AcpError> {
         // Auto-approve all permissions in tests
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             PermissionOptionId, RequestPermissionOutcome, SelectedPermissionOutcome,
         };
         let selected = SelectedPermissionOutcome::new(PermissionOptionId::new("allow"));
@@ -190,7 +191,7 @@ impl Client for TestClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::SessionId;
+    use agent_client_protocol::schema::SessionId;
 
     fn test_session_id() -> SessionId {
         SessionId::new("test-session")
@@ -275,12 +276,12 @@ mod tests {
     async fn test_session_notification_succeeds() {
         let client = TestClient::new();
 
-        let text_content = agent_client_protocol::TextContent::new("test".to_string());
-        let content_block = agent_client_protocol::ContentBlock::Text(text_content);
-        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
-        let notification = agent_client_protocol::SessionNotification::new(
+        let text_content = agent_client_protocol::schema::TextContent::new("test".to_string());
+        let content_block = agent_client_protocol::schema::ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
+        let notification = agent_client_protocol::schema::SessionNotification::new(
             test_session_id(),
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk),
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk),
         );
 
         let result = client.session_notification(notification).await;
@@ -291,10 +292,10 @@ mod tests {
     async fn test_request_permission_auto_approves() {
         let client = TestClient::new();
 
-        let fields =
-            agent_client_protocol::ToolCallUpdateFields::new().title("test-tool".to_string());
-        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
-            agent_client_protocol::ToolCallId::new("tool-1"),
+        let fields = agent_client_protocol::schema::ToolCallUpdateFields::new()
+            .title("test-tool".to_string());
+        let tool_call_update = agent_client_protocol::schema::ToolCallUpdate::new(
+            agent_client_protocol::schema::ToolCallId::new("tool-1"),
             fields,
         );
 
@@ -302,7 +303,7 @@ mod tests {
 
         let response = client.request_permission(request).await.unwrap();
         match response.outcome {
-            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Selected(selected) => {
                 assert_eq!(selected.option_id.0.as_ref(), "allow");
             }
             _ => panic!("Expected Selected outcome with 'allow'"),

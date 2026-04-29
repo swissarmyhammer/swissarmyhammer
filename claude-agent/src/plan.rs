@@ -9,7 +9,7 @@
 //!
 //! Plans should be realistic, specific, and trackable.
 
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     Plan as AcpPlan, PlanEntry as AcpPlanEntry, PlanEntryPriority as AcpPriority,
     PlanEntryStatus as AcpStatus,
 };

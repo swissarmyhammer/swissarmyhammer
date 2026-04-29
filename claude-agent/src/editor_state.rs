@@ -316,7 +316,9 @@ impl Default for EditorStateManager {
 ///   }
 /// }
 /// ```
-pub fn supports_editor_state(capabilities: &agent_client_protocol::ClientCapabilities) -> bool {
+pub fn supports_editor_state(
+    capabilities: &agent_client_protocol::schema::ClientCapabilities,
+) -> bool {
     if let Some(meta) = &capabilities.fs.meta {
         if let Some(editor_state) = meta.get("editorState") {
             return editor_state.as_bool().unwrap_or(false);
@@ -428,11 +430,11 @@ mod tests {
 
     #[test]
     fn test_supports_editor_state_true() {
-        use agent_client_protocol::ClientCapabilities;
+        use agent_client_protocol::schema::ClientCapabilities;
         use serde_json::json;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(
@@ -449,11 +451,11 @@ mod tests {
 
     #[test]
     fn test_supports_editor_state_false() {
-        use agent_client_protocol::ClientCapabilities;
+        use agent_client_protocol::schema::ClientCapabilities;
         use serde_json::json;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true)
                 .meta(
@@ -470,10 +472,10 @@ mod tests {
 
     #[test]
     fn test_supports_editor_state_missing() {
-        use agent_client_protocol::ClientCapabilities;
+        use agent_client_protocol::schema::ClientCapabilities;
 
         let capabilities = ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);

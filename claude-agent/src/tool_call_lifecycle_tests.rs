@@ -11,7 +11,7 @@ mod tests {
     use crate::tool_types::ToolCallStatus;
     use crate::tools::ToolCallHandler;
     use crate::ToolPermissions;
-    use agent_client_protocol::{SessionId, SessionNotification, SessionUpdate};
+    use agent_client_protocol::schema::{SessionId, SessionNotification, SessionUpdate};
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::broadcast;
@@ -31,8 +31,8 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set full client capabilities for tests to ensure ACP compliance
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -67,10 +67,13 @@ mod tests {
                 assert_eq!(tool_call.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     tool_call.status,
-                    agent_client_protocol::ToolCallStatus::Pending
+                    agent_client_protocol::schema::ToolCallStatus::Pending
                 );
                 assert_eq!(tool_call.title, "Test tool");
-                assert_eq!(tool_call.kind, agent_client_protocol::ToolKind::Other);
+                assert_eq!(
+                    tool_call.kind,
+                    agent_client_protocol::schema::ToolKind::Other
+                );
             }
             _ => panic!("Expected ToolCall notification"),
         }
@@ -93,7 +96,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::InProgress)
+                    Some(agent_client_protocol::schema::ToolCallStatus::InProgress)
                 );
             }
             _ => panic!("Expected ToolCallUpdate notification"),
@@ -116,7 +119,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Completed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Completed)
                 );
                 assert_eq!(update.fields.raw_output, Some(output));
             }
@@ -182,7 +185,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Failed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Failed)
                 );
                 assert_eq!(update.fields.raw_output, Some(error_output));
             }
@@ -238,7 +241,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Failed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Failed)
                 );
             }
             _ => panic!("Expected ToolCallUpdate cancellation notification"),
@@ -324,8 +327,8 @@ mod tests {
             .update_tool_call_report(&session_id, &tool_call_id, |report| {
                 report.update_status(ToolCallStatus::InProgress);
                 report.add_content(crate::tool_types::ToolCallContent::Content {
-                    content: agent_client_protocol::ContentBlock::Text(
-                        agent_client_protocol::TextContent::new("Processing file..."),
+                    content: agent_client_protocol::schema::ContentBlock::Text(
+                        agent_client_protocol::schema::TextContent::new("Processing file..."),
                     ),
                 });
                 report.add_location(crate::tool_types::ToolCallLocation {
@@ -380,8 +383,8 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set client capabilities for ACP compliance
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(true);
@@ -448,7 +451,7 @@ mod tests {
                 assert_eq!(content.len(), 1, "Should have one content item");
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+                    agent_client_protocol::schema::ToolCallContent::Terminal(terminal) => {
                         let tid = &terminal.terminal_id;
                         assert_eq!(
                             tid.0.as_ref(),
@@ -544,7 +547,9 @@ mod tests {
                 let terminal_ids: Vec<String> = content
                     .iter()
                     .filter_map(|c| {
-                        if let agent_client_protocol::ToolCallContent::Terminal(terminal) = c {
+                        if let agent_client_protocol::schema::ToolCallContent::Terminal(terminal) =
+                            c
+                        {
                             Some(terminal.terminal_id.0.as_ref().to_string())
                         } else {
                             None
@@ -625,7 +630,7 @@ mod tests {
                 assert_eq!(content.len(), 1, "Should have one terminal content item");
 
                 match &content[0] {
-                    agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+                    agent_client_protocol::schema::ToolCallContent::Terminal(terminal) => {
                         let tid = &terminal.terminal_id;
                         assert_eq!(
                             tid.0.as_ref(),
@@ -689,7 +694,7 @@ mod tests {
                 assert_eq!(update.tool_call_id.0.as_ref(), tool_call_id.as_str());
                 assert_eq!(
                     update.fields.status,
-                    Some(agent_client_protocol::ToolCallStatus::Completed)
+                    Some(agent_client_protocol::schema::ToolCallStatus::Completed)
                 );
                 assert_eq!(update.fields.raw_output, Some(output));
 
@@ -698,7 +703,7 @@ mod tests {
                 assert!(
                     content.iter().any(|c| matches!(
                         c,
-                        agent_client_protocol::ToolCallContent::Terminal { .. }
+                        agent_client_protocol::schema::ToolCallContent::Terminal { .. }
                     )),
                     "Terminal content should persist through completion"
                 );
@@ -729,8 +734,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT terminal capability
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false); // Explicitly disable terminal capability
@@ -802,8 +807,8 @@ mod tests {
         let mut handler = ToolCallHandler::new(permissions, session_manager, permission_engine);
 
         // Set client capabilities WITHOUT terminal capability
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(true))
             .terminal(false);
@@ -918,8 +923,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT file read capability
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(false) // Explicitly disable read capability
                 .write_text_file(true))
             .terminal(false);
@@ -982,8 +987,8 @@ mod tests {
             ToolCallHandler::new(permissions, session_manager.clone(), permission_engine);
 
         // Set client capabilities WITHOUT file write capability
-        let capabilities = agent_client_protocol::ClientCapabilities::new()
-            .fs(agent_client_protocol::FileSystemCapabilities::new()
+        let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
+            .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                 .read_text_file(true)
                 .write_text_file(false)) // Explicitly disable write capability
             .terminal(false);

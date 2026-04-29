@@ -370,9 +370,9 @@ fn test_terminal_manager_new() {
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_caps() {
     let manager = TerminalManager::new();
-    let caps = agent_client_protocol::ClientCapabilities::new()
+    let caps = agent_client_protocol::schema::ClientCapabilities::new()
         .terminal(true)
-        .fs(agent_client_protocol::FileSystemCapabilities::new());
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
     let result = manager.create_terminal(None).await;
     assert!(result.is_ok());
@@ -385,9 +385,9 @@ async fn test_terminal_manager_create_terminal_with_caps() {
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_working_dir() {
     let manager = TerminalManager::new();
-    let caps = agent_client_protocol::ClientCapabilities::new()
+    let caps = agent_client_protocol::schema::ClientCapabilities::new()
         .terminal(true)
-        .fs(agent_client_protocol::FileSystemCapabilities::new());
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
     let result = manager.create_terminal(Some("/tmp".to_string())).await;
     assert!(result.is_ok());
@@ -410,9 +410,9 @@ async fn test_terminal_manager_create_terminal_without_capability() {
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_capability() {
     let manager = TerminalManager::new();
-    let caps = agent_client_protocol::ClientCapabilities::new()
+    let caps = agent_client_protocol::schema::ClientCapabilities::new()
         .terminal(true)
-        .fs(agent_client_protocol::FileSystemCapabilities::new());
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
     let result = manager.create_terminal(None).await;
     assert!(result.is_ok());
@@ -421,9 +421,9 @@ async fn test_terminal_manager_create_terminal_with_capability() {
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_capability_disabled() {
     let manager = TerminalManager::new();
-    let caps = agent_client_protocol::ClientCapabilities::new()
+    let caps = agent_client_protocol::schema::ClientCapabilities::new()
         .terminal(false)
-        .fs(agent_client_protocol::FileSystemCapabilities::new());
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
     let result = manager.create_terminal(None).await;
     assert!(result.is_err());
@@ -493,9 +493,9 @@ async fn test_terminal_manager_prepare_environment_override() {
 #[tokio::test]
 async fn test_terminal_manager_change_directory_not_found() {
     let manager = TerminalManager::new();
-    let caps = agent_client_protocol::ClientCapabilities::new()
+    let caps = agent_client_protocol::schema::ClientCapabilities::new()
         .terminal(true)
-        .fs(agent_client_protocol::FileSystemCapabilities::new());
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
     let terminal_id = manager.create_terminal(None).await.unwrap();
     let result = manager
@@ -1190,24 +1190,24 @@ fn test_stdio_transport_validate_working_directory_valid() {
 fn test_plan_entry_status_to_acp() {
     assert_eq!(
         PlanEntryStatus::Pending.to_acp_status(),
-        agent_client_protocol::PlanEntryStatus::Pending
+        agent_client_protocol::schema::PlanEntryStatus::Pending
     );
     assert_eq!(
         PlanEntryStatus::InProgress.to_acp_status(),
-        agent_client_protocol::PlanEntryStatus::InProgress
+        agent_client_protocol::schema::PlanEntryStatus::InProgress
     );
     assert_eq!(
         PlanEntryStatus::Completed.to_acp_status(),
-        agent_client_protocol::PlanEntryStatus::Completed
+        agent_client_protocol::schema::PlanEntryStatus::Completed
     );
     // Failed and Cancelled map to Completed
     assert_eq!(
         PlanEntryStatus::Failed.to_acp_status(),
-        agent_client_protocol::PlanEntryStatus::Completed
+        agent_client_protocol::schema::PlanEntryStatus::Completed
     );
     assert_eq!(
         PlanEntryStatus::Cancelled.to_acp_status(),
-        agent_client_protocol::PlanEntryStatus::Completed
+        agent_client_protocol::schema::PlanEntryStatus::Completed
     );
 }
 
@@ -1215,15 +1215,15 @@ fn test_plan_entry_status_to_acp() {
 fn test_priority_to_acp() {
     assert_eq!(
         Priority::High.to_acp_priority(),
-        agent_client_protocol::PlanEntryPriority::High
+        agent_client_protocol::schema::PlanEntryPriority::High
     );
     assert_eq!(
         Priority::Medium.to_acp_priority(),
-        agent_client_protocol::PlanEntryPriority::Medium
+        agent_client_protocol::schema::PlanEntryPriority::Medium
     );
     assert_eq!(
         Priority::Low.to_acp_priority(),
-        agent_client_protocol::PlanEntryPriority::Low
+        agent_client_protocol::schema::PlanEntryPriority::Low
     );
 }
 
@@ -1597,7 +1597,7 @@ fn test_session_available_commands() {
     let id = claude_agent::session::SessionId::new();
     let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"));
 
-    let cmd1 = agent_client_protocol::AvailableCommand::new("test", "A test command");
+    let cmd1 = agent_client_protocol::schema::AvailableCommand::new("test", "A test command");
 
     // Initially empty
     assert!(!session.has_available_commands_changed(&[]));
@@ -1609,7 +1609,7 @@ fn test_session_available_commands() {
 
 #[test]
 fn test_message_from_update() {
-    use agent_client_protocol::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
+    use agent_client_protocol::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
 
     let text = TextContent::new("hello".to_string());
     let block = ContentBlock::Text(text);
@@ -1720,39 +1720,39 @@ fn test_tool_kind_serialization_all_variants() {
 fn test_tool_kind_to_acp_kind_all_variants() {
     assert!(matches!(
         ToolKind::Read.to_acp_kind(),
-        agent_client_protocol::ToolKind::Read
+        agent_client_protocol::schema::ToolKind::Read
     ));
     assert!(matches!(
         ToolKind::Edit.to_acp_kind(),
-        agent_client_protocol::ToolKind::Edit
+        agent_client_protocol::schema::ToolKind::Edit
     ));
     assert!(matches!(
         ToolKind::Delete.to_acp_kind(),
-        agent_client_protocol::ToolKind::Delete
+        agent_client_protocol::schema::ToolKind::Delete
     ));
     assert!(matches!(
         ToolKind::Move.to_acp_kind(),
-        agent_client_protocol::ToolKind::Move
+        agent_client_protocol::schema::ToolKind::Move
     ));
     assert!(matches!(
         ToolKind::Search.to_acp_kind(),
-        agent_client_protocol::ToolKind::Search
+        agent_client_protocol::schema::ToolKind::Search
     ));
     assert!(matches!(
         ToolKind::Execute.to_acp_kind(),
-        agent_client_protocol::ToolKind::Execute
+        agent_client_protocol::schema::ToolKind::Execute
     ));
     assert!(matches!(
         ToolKind::Think.to_acp_kind(),
-        agent_client_protocol::ToolKind::Think
+        agent_client_protocol::schema::ToolKind::Think
     ));
     assert!(matches!(
         ToolKind::Fetch.to_acp_kind(),
-        agent_client_protocol::ToolKind::Fetch
+        agent_client_protocol::schema::ToolKind::Fetch
     ));
     assert!(matches!(
         ToolKind::Other.to_acp_kind(),
-        agent_client_protocol::ToolKind::Other
+        agent_client_protocol::schema::ToolKind::Other
     ));
 }
 
@@ -1776,24 +1776,24 @@ fn test_tool_call_status_serialization() {
 fn test_tool_call_status_to_acp_all_variants() {
     assert!(matches!(
         ToolCallStatus::Pending.to_acp_status(),
-        agent_client_protocol::ToolCallStatus::Pending
+        agent_client_protocol::schema::ToolCallStatus::Pending
     ));
     assert!(matches!(
         ToolCallStatus::InProgress.to_acp_status(),
-        agent_client_protocol::ToolCallStatus::InProgress
+        agent_client_protocol::schema::ToolCallStatus::InProgress
     ));
     assert!(matches!(
         ToolCallStatus::Completed.to_acp_status(),
-        agent_client_protocol::ToolCallStatus::Completed
+        agent_client_protocol::schema::ToolCallStatus::Completed
     ));
     assert!(matches!(
         ToolCallStatus::Failed.to_acp_status(),
-        agent_client_protocol::ToolCallStatus::Failed
+        agent_client_protocol::schema::ToolCallStatus::Failed
     ));
     // Cancelled maps to Failed
     assert!(matches!(
         ToolCallStatus::Cancelled.to_acp_status(),
-        agent_client_protocol::ToolCallStatus::Failed
+        agent_client_protocol::schema::ToolCallStatus::Failed
     ));
 }
 
@@ -1965,7 +1965,7 @@ fn test_tool_call_content_diff_to_acp() {
     let acp = content.to_acp_content();
     assert!(matches!(
         acp,
-        agent_client_protocol::ToolCallContent::Diff(_)
+        agent_client_protocol::schema::ToolCallContent::Diff(_)
     ));
 }
 
@@ -1979,7 +1979,7 @@ fn test_tool_call_content_diff_no_old_text() {
     let acp = content.to_acp_content();
     assert!(matches!(
         acp,
-        agent_client_protocol::ToolCallContent::Diff(_)
+        agent_client_protocol::schema::ToolCallContent::Diff(_)
     ));
 }
 
@@ -1991,7 +1991,7 @@ fn test_tool_call_content_terminal_to_acp() {
     let acp = content.to_acp_content();
     assert!(matches!(
         acp,
-        agent_client_protocol::ToolCallContent::Terminal(_)
+        agent_client_protocol::schema::ToolCallContent::Terminal(_)
     ));
 }
 
@@ -2323,7 +2323,7 @@ async fn test_editor_state_update_buffers_with_unavailable() {
 fn test_collected_response_debug() {
     let resp = claude_agent::CollectedResponse {
         content: "hello".to_string(),
-        stop_reason: agent_client_protocol::StopReason::EndTurn,
+        stop_reason: agent_client_protocol::schema::StopReason::EndTurn,
     };
     let debug = format!("{:?}", resp);
     assert!(debug.contains("hello"));
@@ -2348,11 +2348,11 @@ fn test_create_agent_config_builder_default() {
 #[test]
 fn test_prompt_request_creation() {
     // Verify we can construct ACP PromptRequest objects
-    let session_id = agent_client_protocol::SessionId::new("test-session-id");
-    let request = agent_client_protocol::PromptRequest::new(
+    let session_id = agent_client_protocol::schema::SessionId::new("test-session-id");
+    let request = agent_client_protocol::schema::PromptRequest::new(
         session_id,
-        vec![agent_client_protocol::ContentBlock::Text(
-            agent_client_protocol::TextContent::new("test prompt".to_string()),
+        vec![agent_client_protocol::schema::ContentBlock::Text(
+            agent_client_protocol::schema::TextContent::new("test prompt".to_string()),
         )],
     );
     assert_eq!(request.session_id.to_string(), "test-session-id");

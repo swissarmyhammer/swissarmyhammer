@@ -9,12 +9,13 @@
 
 use crate::agent::ClaudeAgent;
 use crate::agent_file_operations::{ReadTextFileParams, WriteTextFileParams};
-use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
-    ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    RawValue, SessionId, SetSessionModeRequest, SetSessionModeResponse,
+use agent_client_protocol::schema::{
+    AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+    ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, RawValue, SessionId,
+    SetSessionModeRequest, SetSessionModeResponse,
 };
+use agent_client_protocol::Agent;
 use std::sync::Arc;
 
 #[async_trait::async_trait(?Send)]
@@ -93,8 +94,9 @@ impl Agent for ClaudeAgent {
         // This is an architectural decision - do not add authentication methods.
         // If remote authentication is needed in the future, it should be a separate feature.
 
-        let agent_info = agent_client_protocol::Implementation::new("claude-agent", crate::VERSION)
-            .title(format!("Claude Agent v{}", crate::VERSION));
+        let agent_info =
+            agent_client_protocol::schema::Implementation::new("claude-agent", crate::VERSION)
+                .title(format!("Claude Agent v{}", crate::VERSION));
 
         let response =
             InitializeResponse::new(self.negotiate_protocol_version(&request.protocol_version))

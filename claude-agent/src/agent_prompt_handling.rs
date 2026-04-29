@@ -4,7 +4,7 @@
 //! logic extracted from the main agent module for maintainability.
 
 use crate::content_capability_validator::ContentCapabilityValidator;
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     ContentBlock, PromptRequest, PromptResponse, SessionId, SessionNotification, SessionUpdate,
     StopReason, TextContent,
 };
@@ -563,9 +563,10 @@ impl crate::agent::ClaudeAgent {
     ) -> Result<(), agent_client_protocol::Error> {
         accumulated_content.push_str(&chunk.content);
 
-        let update = SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-            ContentBlock::Text(TextContent::new(chunk.content.clone())),
-        ));
+        let update =
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                ContentBlock::Text(TextContent::new(chunk.content.clone())),
+            ));
 
         let chunk_message = crate::session::Message::from_update(update.clone());
 
@@ -630,7 +631,7 @@ impl crate::agent::ClaudeAgent {
         tool_call_info: &crate::claude::ToolCallInfo,
         _accumulated_content: &mut String,
     ) -> Result<(), agent_client_protocol::Error> {
-        use agent_client_protocol::{ToolCall, ToolCallId, ToolCallStatus, ToolKind};
+        use agent_client_protocol::schema::{ToolCall, ToolCallId, ToolCallStatus, ToolKind};
 
         let kind = if tool_call_info.name.to_lowercase().contains("read") {
             ToolKind::Read
@@ -786,37 +787,37 @@ impl crate::agent::ClaudeAgent {
         options: &[crate::tools::PermissionOption],
     ) {
         // Convert our internal types to ACP protocol types
-        let acp_options: Vec<agent_client_protocol::PermissionOption> = options
+        let acp_options: Vec<agent_client_protocol::schema::PermissionOption> = options
             .iter()
             .map(|opt| {
                 let kind = match opt.kind {
                     crate::tools::PermissionOptionKind::AllowOnce => {
-                        agent_client_protocol::PermissionOptionKind::AllowOnce
+                        agent_client_protocol::schema::PermissionOptionKind::AllowOnce
                     }
                     crate::tools::PermissionOptionKind::AllowAlways => {
-                        agent_client_protocol::PermissionOptionKind::AllowAlways
+                        agent_client_protocol::schema::PermissionOptionKind::AllowAlways
                     }
                     crate::tools::PermissionOptionKind::RejectOnce => {
-                        agent_client_protocol::PermissionOptionKind::RejectOnce
+                        agent_client_protocol::schema::PermissionOptionKind::RejectOnce
                     }
                     crate::tools::PermissionOptionKind::RejectAlways => {
-                        agent_client_protocol::PermissionOptionKind::RejectAlways
+                        agent_client_protocol::schema::PermissionOptionKind::RejectAlways
                     }
                 };
-                agent_client_protocol::PermissionOption::new(
-                    agent_client_protocol::PermissionOptionId::new(opt.option_id.as_str()),
+                agent_client_protocol::schema::PermissionOption::new(
+                    agent_client_protocol::schema::PermissionOptionId::new(opt.option_id.as_str()),
                     opt.name.clone(),
                     kind,
                 )
             })
             .collect();
 
-        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
-            agent_client_protocol::ToolCallId::new(tool_call_id),
-            agent_client_protocol::ToolCallUpdateFields::new(),
+        let tool_call_update = agent_client_protocol::schema::ToolCallUpdate::new(
+            agent_client_protocol::schema::ToolCallId::new(tool_call_id),
+            agent_client_protocol::schema::ToolCallUpdateFields::new(),
         );
 
-        let acp_request = agent_client_protocol::RequestPermissionRequest::new(
+        let acp_request = agent_client_protocol::schema::RequestPermissionRequest::new(
             SessionId::new(session_id_str.to_string()),
             tool_call_update,
             acp_options,
@@ -838,15 +839,15 @@ impl crate::agent::ClaudeAgent {
     async fn handle_permission_response(
         &self,
         tool_name: &str,
-        response: agent_client_protocol::RequestPermissionResponse,
+        response: agent_client_protocol::schema::RequestPermissionResponse,
         options: &[crate::tools::PermissionOption],
     ) {
         match response.outcome {
-            agent_client_protocol::RequestPermissionOutcome::Cancelled => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Cancelled => {
                 tracing::info!("Permission request cancelled for '{}'", tool_name);
                 // TODO: Send tool completion with cancelled status
             }
-            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Selected(selected) => {
                 let option_id_str = selected.option_id.0.to_string();
 
                 // Store preference if it's an "always" decision
@@ -1112,7 +1113,9 @@ impl crate::agent::ClaudeAgent {
 
             // Handle tool calls and send notifications
             let update = if let Some(tool_call_info) = &chunk.tool_call {
-                use agent_client_protocol::{ToolCall, ToolCallId, ToolCallStatus, ToolKind};
+                use agent_client_protocol::schema::{
+                    ToolCall, ToolCallId, ToolCallStatus, ToolKind,
+                };
 
                 // Infer tool kind from name
                 let kind = if tool_call_info.name.to_lowercase().contains("read") {
@@ -1140,7 +1143,7 @@ impl crate::agent::ClaudeAgent {
                 )
             } else if !chunk.content.is_empty() {
                 // Send text chunk notification
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                     ContentBlock::Text(TextContent::new(chunk.content.clone())),
                 ))
             } else {
@@ -1427,7 +1430,7 @@ mod tests {
 
     use crate::claude::{ChunkType, MessageChunk};
     use crate::config::AgentConfig;
-    use agent_client_protocol::StopReason;
+    use agent_client_protocol::schema::StopReason;
     use futures::Stream;
 
     /// Build a stream of `MessageChunk`s that emit fixed-size text deltas.

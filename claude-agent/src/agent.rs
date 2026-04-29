@@ -24,7 +24,7 @@ use crate::{
     size_validator::{SizeLimits, SizeValidator},
     tools::ToolCallHandler,
 };
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     AgentCapabilities, ContentBlock, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
     NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
     SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
@@ -55,7 +55,8 @@ pub struct ClaudeAgent {
     pub(crate) mcp_manager: Option<Arc<crate::mcp::McpServerManager>>,
     pub(crate) config: AgentConfig,
     pub(crate) capabilities: AgentCapabilities,
-    pub(crate) client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
+    pub(crate) client_capabilities:
+        Arc<RwLock<Option<agent_client_protocol::schema::ClientCapabilities>>>,
     pub(crate) notification_sender: Arc<NotificationSender>,
     pub(crate) cancellation_manager: Arc<CancellationManager>,
     pub(crate) permission_engine: Arc<PermissionPolicyEngine>,
@@ -302,13 +303,13 @@ impl ClaudeAgent {
         let mut meta_map = serde_json::Map::new();
         meta_map.insert("streaming".to_string(), serde_json::json!(true));
 
-        let prompt_capabilities = agent_client_protocol::PromptCapabilities::new()
+        let prompt_capabilities = agent_client_protocol::schema::PromptCapabilities::new()
             .audio(true)
             .embedded_context(true)
             .image(true)
             .meta(meta_map);
 
-        let mcp_capabilities = agent_client_protocol::McpCapabilities::new()
+        let mcp_capabilities = agent_client_protocol::schema::McpCapabilities::new()
             .http(true)
             .sse(false);
 
@@ -552,14 +553,16 @@ impl ClaudeAgent {
     /// Get available agents (modes) as ACP SessionMode structs
     ///
     /// Returns None if agents haven't been parsed yet from init message.
-    pub async fn get_available_modes(&self) -> Option<Vec<agent_client_protocol::SessionMode>> {
+    pub async fn get_available_modes(
+        &self,
+    ) -> Option<Vec<agent_client_protocol::schema::SessionMode>> {
         let available_agents = self.available_agents.read().await;
         available_agents.as_ref().map(|agents| {
             agents
                 .iter()
                 .map(|(id, name, description)| {
                     let mut mode =
-                        agent_client_protocol::SessionMode::new(id.clone(), name.clone());
+                        agent_client_protocol::schema::SessionMode::new(id.clone(), name.clone());
                     if let Some(desc) = description {
                         mode = mode.description(desc.clone());
                     }
@@ -700,31 +703,31 @@ impl ClaudeAgent {
 
         for content_block in &request.prompt {
             match content_block {
-                agent_client_protocol::ContentBlock::Text(text_content) => {
+                agent_client_protocol::schema::ContentBlock::Text(text_content) => {
                     prompt_text.push_str(&text_content.text);
                     if !text_content.text.trim().is_empty() {
                         has_content = true;
                     }
                 }
-                agent_client_protocol::ContentBlock::Image(image_content) => {
+                agent_client_protocol::schema::ContentBlock::Image(image_content) => {
                     // Validate image data through base64 processor
                     self.base64_processor
                         .decode_image_data(&image_content.data, &image_content.mime_type)
                         .map_err(|_| agent_client_protocol::Error::invalid_params())?;
                     has_content = true;
                 }
-                agent_client_protocol::ContentBlock::Audio(audio_content) => {
+                agent_client_protocol::schema::ContentBlock::Audio(audio_content) => {
                     // Validate audio data through base64 processor
                     self.base64_processor
                         .decode_audio_data(&audio_content.data, &audio_content.mime_type)
                         .map_err(|_| agent_client_protocol::Error::invalid_params())?;
                     has_content = true;
                 }
-                agent_client_protocol::ContentBlock::Resource(_resource_content) => {
+                agent_client_protocol::schema::ContentBlock::Resource(_resource_content) => {
                     // Resource content blocks are valid content
                     has_content = true;
                 }
-                agent_client_protocol::ContentBlock::ResourceLink(_resource_link) => {
+                agent_client_protocol::schema::ContentBlock::ResourceLink(_resource_link) => {
                     // Resource link content blocks are valid content
                     has_content = true;
                 }
@@ -851,7 +854,7 @@ impl ClaudeAgent {
 
         let text_content = TextContent::new(thought.content.clone()).meta(meta_map);
         let content_block = ContentBlock::Text(text_content);
-        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
         let update = SessionUpdate::AgentThoughtChunk(content_chunk);
 
         // Store in session context for history replay
@@ -1051,7 +1054,7 @@ impl ClaudeAgent {
         let text_content =
             TextContent::new("[Session cancelled by client request]".to_string()).meta(text_meta);
         let content_chunk =
-            agent_client_protocol::ContentChunk::new(ContentBlock::Text(text_content));
+            agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(text_content));
 
         let mut notif_meta = serde_json::Map::new();
         notif_meta.insert("final_update".to_string(), serde_json::json!(true));
@@ -1242,7 +1245,7 @@ impl ClaudeAgent {
     pub(crate) fn store_mcp_servers_in_session(
         &self,
         session_id: &crate::session::SessionId,
-        mcp_servers: &[agent_client_protocol::McpServer],
+        mcp_servers: &[agent_client_protocol::schema::McpServer],
     ) -> Result<(), agent_client_protocol::Error> {
         self.session_manager
             .update_session(session_id, |session| {
@@ -1365,8 +1368,8 @@ impl ClaudeAgent {
 
         if let Some(available_modes) = self.get_available_modes().await {
             if let Some(current_mode_id) = self.get_session_mode(session_id).await {
-                let mode_state = agent_client_protocol::SessionModeState::new(
-                    agent_client_protocol::SessionModeId::new(current_mode_id.as_str()),
+                let mode_state = agent_client_protocol::schema::SessionModeState::new(
+                    agent_client_protocol::schema::SessionModeId::new(current_mode_id.as_str()),
                     available_modes,
                 );
                 response = response.modes(mode_state);
@@ -1700,7 +1703,7 @@ impl ClaudeAgent {
         request: &SetSessionModeRequest,
     ) -> Result<(), agent_client_protocol::Error> {
         let current_mode_update =
-            agent_client_protocol::CurrentModeUpdate::new(request.mode_id.clone());
+            agent_client_protocol::schema::CurrentModeUpdate::new(request.mode_id.clone());
         let update = SessionUpdate::CurrentModeUpdate(current_mode_update);
 
         let mode_message = crate::session::Message::from_update(update.clone());
@@ -1751,7 +1754,7 @@ impl ClaudeAgent {
         tracing::debug!("  Content blocks: {}", request.prompt.len());
         for (i, block) in request.prompt.iter().enumerate() {
             match block {
-                agent_client_protocol::ContentBlock::Text(text) => {
+                agent_client_protocol::schema::ContentBlock::Text(text) => {
                     tracing::debug!("  Block {}: TEXT ({} chars)", i + 1, text.text.len());
                     tracing::debug!("  Text content: {}", text.text);
                 }
@@ -1765,7 +1768,8 @@ impl ClaudeAgent {
     /// Send user message chunks for conversation transparency.
     pub(crate) async fn send_user_message_chunks(&self, request: &PromptRequest) {
         for content_block in &request.prompt {
-            let content_chunk = agent_client_protocol::ContentChunk::new(content_block.clone());
+            let content_chunk =
+                agent_client_protocol::schema::ContentChunk::new(content_block.clone());
             let notification = SessionNotification::new(
                 request.session_id.clone(),
                 SessionUpdate::UserMessageChunk(content_chunk),
@@ -2226,25 +2230,25 @@ impl ClaudeAgent {
     /// Convert internal permission options to ACP protocol types.
     fn convert_to_acp_options(
         options: &[crate::tools::PermissionOption],
-    ) -> Vec<agent_client_protocol::PermissionOption> {
+    ) -> Vec<agent_client_protocol::schema::PermissionOption> {
         options
             .iter()
             .map(|opt| {
                 let kind = match opt.kind {
                     crate::tools::PermissionOptionKind::AllowOnce => {
-                        agent_client_protocol::PermissionOptionKind::AllowOnce
+                        agent_client_protocol::schema::PermissionOptionKind::AllowOnce
                     }
                     crate::tools::PermissionOptionKind::AllowAlways => {
-                        agent_client_protocol::PermissionOptionKind::AllowAlways
+                        agent_client_protocol::schema::PermissionOptionKind::AllowAlways
                     }
                     crate::tools::PermissionOptionKind::RejectOnce => {
-                        agent_client_protocol::PermissionOptionKind::RejectOnce
+                        agent_client_protocol::schema::PermissionOptionKind::RejectOnce
                     }
                     crate::tools::PermissionOptionKind::RejectAlways => {
-                        agent_client_protocol::PermissionOptionKind::RejectAlways
+                        agent_client_protocol::schema::PermissionOptionKind::RejectAlways
                     }
                 };
-                agent_client_protocol::PermissionOption::new(
+                agent_client_protocol::schema::PermissionOption::new(
                     opt.option_id.clone(),
                     opt.name.clone(),
                     kind,
@@ -2257,13 +2261,13 @@ impl ClaudeAgent {
     fn build_acp_permission_request(
         &self,
         request: &PermissionRequest,
-        acp_options: Vec<agent_client_protocol::PermissionOption>,
-    ) -> agent_client_protocol::RequestPermissionRequest {
-        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
-            agent_client_protocol::ToolCallId::new(request.tool_call.tool_call_id.as_str()),
-            agent_client_protocol::ToolCallUpdateFields::new(),
+        acp_options: Vec<agent_client_protocol::schema::PermissionOption>,
+    ) -> agent_client_protocol::schema::RequestPermissionRequest {
+        let tool_call_update = agent_client_protocol::schema::ToolCallUpdate::new(
+            agent_client_protocol::schema::ToolCallId::new(request.tool_call.tool_call_id.as_str()),
+            agent_client_protocol::schema::ToolCallUpdateFields::new(),
         );
-        agent_client_protocol::RequestPermissionRequest::new(
+        agent_client_protocol::schema::RequestPermissionRequest::new(
             request.session_id.clone(),
             tool_call_update,
             acp_options,
@@ -2273,15 +2277,15 @@ impl ClaudeAgent {
     /// Process the ACP permission response and store preferences if needed.
     async fn process_acp_permission_response(
         &self,
-        response: agent_client_protocol::RequestPermissionResponse,
+        response: agent_client_protocol::schema::RequestPermissionResponse,
         tool_name: &str,
         permission_options: &[crate::tools::PermissionOption],
     ) -> crate::tools::PermissionOutcome {
         match response.outcome {
-            agent_client_protocol::RequestPermissionOutcome::Cancelled => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Cancelled => {
                 crate::tools::PermissionOutcome::Cancelled
             }
-            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Selected(selected) => {
                 let option_id_str = selected.option_id.to_string();
 
                 if let Some(option) = permission_options
@@ -2310,12 +2314,12 @@ impl ClaudeAgent {
     /// Convert ACP MCP server configuration to internal configuration type for validation
     pub(crate) fn convert_acp_to_internal_mcp_config(
         &self,
-        acp_config: &agent_client_protocol::McpServer,
+        acp_config: &agent_client_protocol::schema::McpServer,
     ) -> Option<crate::config::McpServerConfig> {
         use crate::config::{
             EnvVariable, HttpHeader, HttpTransport, McpServerConfig, SseTransport, StdioTransport,
         };
-        use agent_client_protocol::McpServer;
+        use agent_client_protocol::schema::McpServer;
 
         match acp_config {
             McpServer::Stdio(stdio) => {
