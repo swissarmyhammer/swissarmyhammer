@@ -1,38 +1,245 @@
-//! TracingAgent - Wrapper that logs all Agent method calls at INFO level
+//! TracingAgent - middleware that logs every ACP message flowing through.
 //!
-//! Provides unified tracing for all ACP agent implementations.
+//! In ACP 0.10, `TracingAgent` was a wrapper that implemented the now-removed
+//! `Agent` trait and logged each method call. ACP 0.11 replaces the trait
+//! with a Role/Builder/handler model, so the wrapper is reshaped as a
+//! middleware [`ConnectTo<Client>`] component:
+//!
+//! ```text
+//!     Client  <----[real channel]---->  TracingAgent  <----[duplex channel]---->  inner Agent
+//!                                       (logs both directions)
+//! ```
+//!
+//! `TracingAgent` accepts any inner component that implements
+//! `ConnectTo<Client>` (i.e. anything that "is an agent" in the new model)
+//! and forwards every JSON-RPC message in both directions, emitting
+//! `tracing::info!` for each one.
+//!
+//! In addition, [`trace_notifications`] keeps its 0.10 shape: it is a
+//! broadcast-channel notification logger that buffers `AgentMessageChunk`
+//! updates and flushes them as a single line per session — this remains the
+//! preferred way for downstream code to log human-readable session output.
 
-use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
-    ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse,
-};
+use agent_client_protocol::schema::{ContentBlock, SessionNotification, SessionUpdate};
+use agent_client_protocol::{Channel, Client, ConnectTo, Result as AcpResult};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
-/// Extract text content from ACP ContentBlocks for logging
-fn extract_prompt_text(content: &[ContentBlock]) -> String {
-    content
-        .iter()
-        .filter_map(|block| {
-            if let ContentBlock::Text(text) = block {
-                Some(text.text.as_str())
+// ---------------------------------------------------------------------------
+// TracingAgent middleware
+// ---------------------------------------------------------------------------
+
+/// Middleware that logs every message flowing between a client and an inner agent.
+///
+/// `TracingAgent` is generic over its inner component `A: ConnectTo<Client>`,
+/// so it composes with any agent built via `Agent.builder()` or any other
+/// component that exposes the `ConnectTo<Client>` interface.
+///
+/// # Example
+///
+/// ```ignore
+/// use agent_client_protocol::Agent;
+/// use agent_client_protocol_extras::TracingAgent;
+///
+/// let inner = Agent
+///     .builder()
+///     .name("my-agent")
+///     // ... handlers ...
+///     ;
+/// let traced = TracingAgent::new(inner, "my-agent");
+/// // `traced` itself is `ConnectTo<Client>` and can be `connect_to`'d
+/// // to a client transport (stdio, ByteStreams, etc.).
+/// ```
+pub struct TracingAgent<A> {
+    inner: A,
+    agent_name: String,
+}
+
+impl<A> TracingAgent<A> {
+    /// Create a new `TracingAgent` wrapping the given inner component.
+    ///
+    /// # Arguments
+    /// * `inner` - any `ConnectTo<Client>` component (typically an `Agent` builder
+    ///   or another middleware)
+    /// * `agent_name` - human-readable name used as a tag in every log line
+    pub fn new(inner: A, agent_name: impl Into<String>) -> Self {
+        Self {
+            inner,
+            agent_name: agent_name.into(),
+        }
+    }
+
+    /// Return the agent name used as a logging tag.
+    pub fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    /// Borrow the wrapped inner component.
+    pub fn inner(&self) -> &A {
+        &self.inner
+    }
+
+    /// Consume the wrapper and return the inner component.
+    pub fn into_inner(self) -> A {
+        self.inner
+    }
+}
+
+impl<A> ConnectTo<Client> for TracingAgent<A>
+where
+    A: ConnectTo<Client> + Send + 'static,
+{
+    /// Wire the client transport to the inner agent through a logging tee.
+    ///
+    /// Creates an internal duplex channel between us and the inner component,
+    /// then runs three concurrent loops: copy-and-log client→inner, copy-and-log
+    /// inner→client, and the inner component's own future.
+    async fn connect_to(self, client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>) -> AcpResult<()> {
+        let agent_name = self.agent_name;
+
+        // Internal pipe between us and the inner agent
+        let (to_inner, inner_side) = Channel::duplex();
+
+        // Drive the inner agent on its end of the duplex channel
+        let inner_future = self.inner.connect_to(inner_side);
+
+        // Drive the real client transport — we expose ourselves as the agent
+        // it talks to. Construct a channel pair and let the client's transport
+        // drive the other side.
+        let (client_channel, client_future) = client.into_channel_and_future();
+
+        // Wire up two copy-loops with logging between client_channel and to_inner.
+        let log_client_to_inner = log_and_copy_messages(
+            client_channel.rx,
+            to_inner.tx,
+            agent_name.clone(),
+            Direction::FromClient,
+        );
+        let log_inner_to_client = log_and_copy_messages(
+            to_inner.rx,
+            client_channel.tx,
+            agent_name,
+            Direction::FromAgent,
+        );
+
+        match futures::try_join!(
+            inner_future,
+            client_future,
+            log_client_to_inner,
+            log_inner_to_client,
+        ) {
+            Ok(((), (), (), ())) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+/// Direction tag used to label log lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    /// Message coming from the client to the inner agent.
+    FromClient,
+    /// Message coming from the inner agent to the client.
+    FromAgent,
+}
+
+impl Direction {
+    fn label(self) -> &'static str {
+        match self {
+            Direction::FromClient => "client→agent",
+            Direction::FromAgent => "agent→client",
+        }
+    }
+}
+
+/// Forward every message from `rx` to `tx`, emitting one `tracing::info!` per message.
+///
+/// This is the per-direction copy loop used by [`TracingAgent::connect_to`].
+async fn log_and_copy_messages(
+    mut rx: futures::channel::mpsc::UnboundedReceiver<
+        AcpResult<agent_client_protocol::jsonrpcmsg::Message>,
+    >,
+    tx: futures::channel::mpsc::UnboundedSender<
+        AcpResult<agent_client_protocol::jsonrpcmsg::Message>,
+    >,
+    agent_name: String,
+    direction: Direction,
+) -> AcpResult<()> {
+    use futures::StreamExt;
+
+    while let Some(msg) = rx.next().await {
+        log_message(&agent_name, direction, &msg);
+        tx.unbounded_send(msg)
+            .map_err(|e| agent_client_protocol::util::internal_error(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Emit a `tracing::info!` for a single JSON-RPC message.
+///
+/// Pulls the method name out of requests and notifications. Responses are
+/// logged as `response (id=...)`.
+fn log_message(
+    agent_name: &str,
+    direction: Direction,
+    msg: &AcpResult<agent_client_protocol::jsonrpcmsg::Message>,
+) {
+    match msg {
+        Ok(agent_client_protocol::jsonrpcmsg::Message::Request(req)) => {
+            // jsonrpcmsg::Request covers both requests-with-id and notifications-without-id
+            if req.id.is_some() {
+                tracing::info!(
+                    "[{}] {}: request method={}",
+                    agent_name,
+                    direction.label(),
+                    req.method
+                );
             } else {
-                None
+                tracing::info!(
+                    "[{}] {}: notification method={}",
+                    agent_name,
+                    direction.label(),
+                    req.method
+                );
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        }
+        Ok(agent_client_protocol::jsonrpcmsg::Message::Response(resp)) => {
+            tracing::info!(
+                "[{}] {}: response id={:?}",
+                agent_name,
+                direction.label(),
+                resp.id
+            );
+        }
+        Err(err) => {
+            tracing::warn!("[{}] {}: transport error: {}", agent_name, direction.label(), err);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// trace_notifications: notification-channel logger (unchanged from 0.10)
+// ---------------------------------------------------------------------------
+
+/// Extract text content from ACP `ContentBlock`s for logging.
+fn extract_block_text(block: &ContentBlock) -> Option<&str> {
+    if let ContentBlock::Text(text) = block {
+        Some(text.text.as_str())
+    } else {
+        None
+    }
 }
 
 /// Buffers for accumulating message chunks per session.
-/// Chunks are stored with their content block index and source for proper assembly.
+///
+/// Chunks are stored with their content-block index and source so that the
+/// final flush can reconstruct the assistant message in order.
 struct ChunkBuffer {
-    /// List of (content_block_index, is_stream_event, text) tuples in arrival order
-    /// is_stream_event=true means this came from Claude's stream_event (real-time chunks)
-    /// is_stream_event=false means this came from assistant message (duplicate full text)
+    /// (content_block_index, is_stream_event, text) tuples in arrival order.
+    /// `is_stream_event=true` means the chunk came from the agent's
+    /// real-time `stream_event` source; `false` means it came from a
+    /// duplicate full-message source. Stream chunks are preferred when both
+    /// exist for the same content-block index.
     chunks: Vec<(u64, bool, String)>,
     session_id: String,
 }
@@ -45,19 +252,18 @@ impl ChunkBuffer {
         }
     }
 
-    /// Append a chunk with its content block index and source
+    /// Append a chunk with its content-block index and stream-event flag.
     fn append(&mut self, index: u64, is_stream_event: bool, text: &str) {
         self.chunks.push((index, is_stream_event, text.to_string()));
     }
 
+    /// Concatenate all buffered chunks for this session and emit a single
+    /// `tracing::info!` line, then clear the buffer.
     fn flush(&mut self, agent_name: &str) {
         if self.chunks.is_empty() {
             return;
         }
 
-        // Separate stream_event chunks from non-stream_event chunks
-        // stream_event chunks are the real-time incremental pieces
-        // non-stream_event chunks are typically duplicate full messages
         let mut stream_chunks: HashMap<u64, String> = HashMap::new();
         let mut other_chunks: HashMap<u64, String> = HashMap::new();
 
@@ -65,40 +271,30 @@ impl ChunkBuffer {
             if text.is_empty() {
                 continue;
             }
-
             if *is_stream_event {
                 stream_chunks.entry(*index).or_default().push_str(text);
             } else {
-                // For non-stream chunks, only keep if we don't have stream chunks for this index
                 other_chunks.entry(*index).or_default().push_str(text);
             }
         }
 
-        // Prefer stream_event chunks when available (they're the real-time source)
-        // Fall back to other chunks only if no stream_event chunks exist for an index
+        // Prefer stream-event chunks when both are present for an index.
         let mut final_chunks: HashMap<u64, String> = HashMap::new();
-
-        // Collect all indices
         let all_indices: std::collections::HashSet<u64> = stream_chunks
             .keys()
             .chain(other_chunks.keys())
             .copied()
             .collect();
-
         for index in all_indices {
             if let Some(stream_text) = stream_chunks.get(&index) {
-                // Prefer stream_event content
                 final_chunks.insert(index, stream_text.clone());
             } else if let Some(other_text) = other_chunks.get(&index) {
-                // Fall back to other content only if no stream content exists
                 final_chunks.insert(index, other_text.clone());
             }
         }
 
-        // Assemble final text by concatenating content blocks in index order
         let mut indices: Vec<u64> = final_chunks.keys().copied().collect();
         indices.sort();
-
         let text: String = indices
             .iter()
             .filter_map(|idx| final_chunks.get(idx))
@@ -119,8 +315,10 @@ impl ChunkBuffer {
     }
 }
 
-/// Log a single notification, with chunk buffering support
-/// Returns true if this was a chunk (buffered), false otherwise (logged immediately)
+/// Log a single notification, with chunk-buffering support.
+///
+/// Returns `true` if this notification was an `AgentMessageChunk` and was
+/// buffered for later flush, `false` if it was logged immediately.
 fn log_notification(
     agent_name: &str,
     notification: &SessionNotification,
@@ -131,14 +329,15 @@ fn log_notification(
 
     match &notification.update {
         SessionUpdate::AgentMessageChunk(chunk) => {
-            if let ContentBlock::Text(text) = &chunk.content {
-                // Extract content block index and source from notification meta
+            if let Some(text) = extract_block_text(&chunk.content) {
                 let meta = notification.meta.as_ref();
                 let content_block_index = meta
                     .and_then(|m| m.get("content_block_index"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-                let is_stream_event = meta.and_then(|m| m.get("source")).and_then(|v| v.as_str())
+                let is_stream_event = meta
+                    .and_then(|m| m.get("source"))
+                    .and_then(|v| v.as_str())
                     == Some("stream_event");
 
                 tracing::debug!(
@@ -147,13 +346,12 @@ fn log_notification(
                     session_id,
                     content_block_index,
                     is_stream_event,
-                    text.text.len()
+                    text.len()
                 );
-                // Buffer the chunk with its content block index and source
                 buffers
                     .entry(session_key)
                     .or_insert_with(|| ChunkBuffer::new(session_id.to_string()))
-                    .append(content_block_index, is_stream_event, &text.text);
+                    .append(content_block_index, is_stream_event, text);
             } else {
                 tracing::debug!(
                     "[{}] session={}, AgentMessageChunk (non-text)",
@@ -161,26 +359,24 @@ fn log_notification(
                     session_id
                 );
             }
-            true // was a chunk
+            true
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
-            // Flush any pending message chunks first
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
-            if let ContentBlock::Text(text) = &chunk.content {
+            if let Some(text) = extract_block_text(&chunk.content) {
                 tracing::info!(
                     "[{}] session={}, AgentThoughtChunk ({} chars): {}",
                     agent_name,
                     session_id,
-                    text.text.len(),
-                    text.text
+                    text.len(),
+                    text
                 );
             }
             false
         }
         SessionUpdate::ToolCall(tool_call) => {
-            // Flush any pending message chunks first
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
@@ -215,7 +411,6 @@ fn log_notification(
             false
         }
         SessionUpdate::CurrentModeUpdate(mode) => {
-            // Flush any pending message chunks first
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
@@ -228,7 +423,6 @@ fn log_notification(
             false
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            // Flush any pending message chunks first
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
@@ -241,7 +435,6 @@ fn log_notification(
             false
         }
         SessionUpdate::Plan(plan) => {
-            // Flush any pending message chunks first
             if let Some(buffer) = buffers.get_mut(&session_key) {
                 buffer.flush(agent_name);
             }
@@ -254,22 +447,34 @@ fn log_notification(
             false
         }
         _ => {
-            tracing::debug!("[{}] session={}, other update type", agent_name, session_id);
+            tracing::debug!(
+                "[{}] session={}, other update type",
+                agent_name,
+                session_id
+            );
             false
         }
     }
 }
 
-/// Spawn a task that logs all notifications from the receiver
+/// Spawn a task that logs every notification flowing through `receiver` and
+/// re-broadcasts them on a fresh channel returned to the caller.
 ///
-/// Returns a new receiver that can be used by consumers (the original is consumed by the logger).
-/// Message chunks are buffered and logged as a single INFO message when a non-chunk notification
-/// arrives or when the channel closes.
+/// `AgentMessageChunk` notifications are buffered per session and emitted as a
+/// single `tracing::info!` line when a non-chunk notification arrives or when
+/// the channel closes.
+///
+/// # Arguments
+/// * `agent_name` - tag prepended to every log line
+/// * `receiver` - source channel; this function takes ownership of it
+///
+/// # Returns
+/// A new `broadcast::Receiver` that downstream consumers should use; the
+/// original receiver is consumed by the logging task.
 pub fn trace_notifications(
     agent_name: String,
     receiver: broadcast::Receiver<SessionNotification>,
 ) -> broadcast::Receiver<SessionNotification> {
-    // Create a new channel to forward notifications after logging
     let (tx, rx) = broadcast::channel(256);
 
     let mut recv = receiver;
@@ -280,14 +485,12 @@ pub fn trace_notifications(
             match recv.recv().await {
                 Ok(notification) => {
                     log_notification(&agent_name, &notification, &mut buffers);
-                    // Forward to consumers (ignore send errors if no receivers)
                     let _ = tx.send(notification);
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!("[{}] notification receiver lagged by {}", agent_name, n);
                 }
                 Err(broadcast::error::RecvError::Closed) => {
-                    // Flush any remaining buffered chunks before closing
                     for (_, mut buffer) in buffers.drain() {
                         buffer.flush(&agent_name);
                     }
@@ -301,295 +504,17 @@ pub fn trace_notifications(
     rx
 }
 
-/// TracingAgent wraps any Agent and logs all method calls
-///
-/// Uses Arc<dyn Agent> internally to work with dynamically dispatched agents.
-pub struct TracingAgent {
-    inner: std::sync::Arc<dyn Agent + Send + Sync>,
-    agent_name: String,
-}
-
-impl TracingAgent {
-    /// Create a new TracingAgent wrapping the given agent
-    pub fn new(
-        inner: std::sync::Arc<dyn Agent + Send + Sync>,
-        agent_name: impl Into<String>,
-    ) -> Self {
-        Self {
-            inner,
-            agent_name: agent_name.into(),
-        }
-    }
-
-    /// Get the agent name for logging
-    pub fn agent_name(&self) -> &str {
-        &self.agent_name
-    }
-
-    /// Get reference to inner agent
-    pub fn inner(&self) -> &std::sync::Arc<dyn Agent + Send + Sync> {
-        &self.inner
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl Agent for TracingAgent {
-    async fn initialize(
-        &self,
-        request: InitializeRequest,
-    ) -> agent_client_protocol::Result<InitializeResponse> {
-        tracing::info!(
-            "[{}] initialize: protocol={:?}",
-            self.agent_name,
-            request.protocol_version
-        );
-
-        let response = self.inner.initialize(request).await?;
-
-        if let Some(ref info) = response.agent_info {
-            tracing::info!(
-                "[{}] response: agent={}, version={}",
-                self.agent_name,
-                info.name,
-                info.version
-            );
-        }
-
-        Ok(response)
-    }
-
-    async fn authenticate(
-        &self,
-        request: AuthenticateRequest,
-    ) -> agent_client_protocol::Result<AuthenticateResponse> {
-        tracing::info!("[{}] authenticate", self.agent_name);
-        self.inner.authenticate(request).await
-    }
-
-    async fn new_session(
-        &self,
-        request: NewSessionRequest,
-    ) -> agent_client_protocol::Result<NewSessionResponse> {
-        tracing::info!(
-            "[{}] new_session: cwd={}",
-            self.agent_name,
-            request.cwd.display()
-        );
-
-        let response = self.inner.new_session(request).await?;
-
-        tracing::info!(
-            "[{}] response: session_id={}",
-            self.agent_name,
-            response.session_id
-        );
-
-        Ok(response)
-    }
-
-    async fn prompt(
-        &self,
-        request: PromptRequest,
-    ) -> agent_client_protocol::Result<PromptResponse> {
-        let prompt_text = extract_prompt_text(&request.prompt);
-        tracing::info!(
-            "[{}] prompt ({} chars): {}",
-            self.agent_name,
-            prompt_text.len(),
-            prompt_text
-        );
-
-        let response = self.inner.prompt(request).await?;
-
-        tracing::info!(
-            "[{}] response: stop_reason={:?}",
-            self.agent_name,
-            response.stop_reason
-        );
-
-        Ok(response)
-    }
-
-    async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
-        tracing::info!(
-            "[{}] cancel: session_id={}",
-            self.agent_name,
-            request.session_id
-        );
-        self.inner.cancel(request).await
-    }
-
-    async fn load_session(
-        &self,
-        request: LoadSessionRequest,
-    ) -> agent_client_protocol::Result<LoadSessionResponse> {
-        tracing::info!(
-            "[{}] load_session: session_id={}",
-            self.agent_name,
-            request.session_id
-        );
-
-        let response = self.inner.load_session(request).await?;
-
-        tracing::info!("[{}] response: session loaded", self.agent_name);
-
-        Ok(response)
-    }
-
-    async fn set_session_mode(
-        &self,
-        request: SetSessionModeRequest,
-    ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-        tracing::info!(
-            "[{}] set_session_mode: session={}, mode={}",
-            self.agent_name,
-            request.session_id,
-            request.mode_id
-        );
-
-        let response = self.inner.set_session_mode(request).await?;
-
-        tracing::info!("[{}] response: mode set", self.agent_name);
-
-        Ok(response)
-    }
-
-    async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        tracing::info!("[{}] ext_method", self.agent_name);
-
-        let response = self.inner.ext_method(request).await?;
-
-        tracing::info!("[{}] response: ext_method complete", self.agent_name);
-
-        Ok(response)
-    }
-
-    async fn ext_notification(
-        &self,
-        notification: ExtNotification,
-    ) -> agent_client_protocol::Result<()> {
-        tracing::info!("[{}] ext_notification", self.agent_name);
-        self.inner.ext_notification(notification).await
-    }
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        AuthenticateRequest, AuthenticateResponse, AvailableCommandsUpdate, CancelNotification,
-        ContentChunk, CurrentModeUpdate, ExtNotification, ExtRequest, ExtResponse, Implementation,
-        InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-        NewSessionRequest, NewSessionResponse, Plan, PromptRequest, PromptResponse, SessionId,
-        SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall,
-        ToolCallUpdate, ToolCallUpdateFields,
+    use agent_client_protocol::schema::{
+        AvailableCommandsUpdate, ContentChunk, CurrentModeUpdate, Plan, SessionId, TextContent,
+        ToolCall, ToolCallUpdate, ToolCallUpdateFields,
     };
-    use serde_json::value::RawValue;
-    use std::sync::Arc;
-
-    // -- Mock agent for TracingAgent tests --
-
-    struct MockAgent;
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for MockAgent {
-        async fn initialize(
-            &self,
-            _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(
-                InitializeResponse::new(agent_client_protocol::ProtocolVersion::LATEST)
-                    .agent_info(Implementation::new("test-agent", "1.0.0")),
-            )
-        }
-
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
-            _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("test-session"))
-        }
-
-        async fn prompt(
-            &self,
-            _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            let raw = RawValue::from_string("null".to_string()).unwrap();
-            Ok(ExtResponse::new(Arc::from(raw)))
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn make_ext_request() -> ExtRequest {
-        let raw = RawValue::from_string("{}".to_string()).unwrap();
-        ExtRequest::new("custom/method", Arc::from(raw))
-    }
-
-    fn make_ext_notification() -> ExtNotification {
-        let raw = RawValue::from_string("{}".to_string()).unwrap();
-        ExtNotification::new("custom/notify", Arc::from(raw))
-    }
-
-    // -- extract_prompt_text tests --
-
-    #[test]
-    fn test_extract_prompt_text_from_text_blocks() {
-        let content = vec![
-            ContentBlock::Text(TextContent::new("Hello")),
-            ContentBlock::Text(TextContent::new("World")),
-        ];
-        assert_eq!(extract_prompt_text(&content), "Hello\nWorld");
-    }
-
-    #[test]
-    fn test_extract_prompt_text_empty() {
-        let content: Vec<ContentBlock> = vec![];
-        assert_eq!(extract_prompt_text(&content), "");
-    }
-
-    #[test]
-    fn test_extract_prompt_text_skips_non_text_blocks() {
-        let content = vec![ContentBlock::Text(TextContent::new("only text"))];
-        assert_eq!(extract_prompt_text(&content), "only text");
-    }
 
     // -- ChunkBuffer tests --
 
@@ -865,195 +790,33 @@ mod tests {
         assert!(buf.chunks[0].1);
     }
 
-    // -- TracingAgent tests --
+    // -- TracingAgent constructor / accessors --
 
     #[test]
     fn test_tracing_agent_new_and_accessors() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock.clone(), "my-agent");
-
+        struct DummyInner;
+        let agent = TracingAgent::new(DummyInner, "my-agent");
         assert_eq!(agent.agent_name(), "my-agent");
-        let _ = agent.inner();
+        let _: &DummyInner = agent.inner();
     }
 
-    #[tokio::test]
-    async fn test_tracing_agent_initialize_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let response = agent
-            .initialize(InitializeRequest::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-            .await
-            .unwrap();
-
-        assert!(response.agent_info.is_some());
-        assert_eq!(response.agent_info.unwrap().name, "test-agent");
+    #[test]
+    fn test_tracing_agent_into_inner_returns_wrapped_value() {
+        struct DummyInner(u32);
+        let agent = TracingAgent::new(DummyInner(42), "x");
+        let inner = agent.into_inner();
+        assert_eq!(inner.0, 42);
     }
 
-    #[tokio::test]
-    async fn test_tracing_agent_authenticate_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
+    // -- Direction labels --
 
-        let _response = agent
-            .authenticate(AuthenticateRequest::new("test-method"))
-            .await
-            .unwrap();
+    #[test]
+    fn test_direction_labels() {
+        assert_eq!(Direction::FromClient.label(), "client→agent");
+        assert_eq!(Direction::FromAgent.label(), "agent→client");
     }
 
-    #[tokio::test]
-    async fn test_tracing_agent_new_session_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let response = agent
-            .new_session(NewSessionRequest::new("/tmp"))
-            .await
-            .unwrap();
-
-        assert_eq!(response.session_id.to_string(), "test-session");
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_prompt_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let request = PromptRequest::new(
-            SessionId::from("sess-1"),
-            vec![ContentBlock::Text(TextContent::new("hello world"))],
-        );
-        let response = agent.prompt(request).await.unwrap();
-        assert_eq!(response.stop_reason, StopReason::EndTurn);
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_cancel_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        agent
-            .cancel(CancelNotification::new("sess-1"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_load_session_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let _response = agent
-            .load_session(LoadSessionRequest::new("sess-1", "/tmp"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_set_session_mode_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let _response = agent
-            .set_session_mode(SetSessionModeRequest::new("sess-1", "plan"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_ext_method_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        let _response = agent.ext_method(make_ext_request()).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_ext_notification_delegates() {
-        let mock = Arc::new(MockAgent);
-        let agent = TracingAgent::new(mock, "test");
-
-        agent
-            .ext_notification(make_ext_notification())
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_tracing_agent_initialize_without_agent_info() {
-        struct NoInfoAgent;
-
-        #[async_trait::async_trait(?Send)]
-        impl Agent for NoInfoAgent {
-            async fn initialize(
-                &self,
-                _r: InitializeRequest,
-            ) -> agent_client_protocol::Result<InitializeResponse> {
-                Ok(InitializeResponse::new(
-                    agent_client_protocol::ProtocolVersion::LATEST,
-                ))
-            }
-            async fn authenticate(
-                &self,
-                _r: AuthenticateRequest,
-            ) -> agent_client_protocol::Result<AuthenticateResponse> {
-                Ok(AuthenticateResponse::new())
-            }
-            async fn new_session(
-                &self,
-                _r: NewSessionRequest,
-            ) -> agent_client_protocol::Result<NewSessionResponse> {
-                Ok(NewSessionResponse::new("s1"))
-            }
-            async fn prompt(
-                &self,
-                _r: PromptRequest,
-            ) -> agent_client_protocol::Result<PromptResponse> {
-                Ok(PromptResponse::new(StopReason::EndTurn))
-            }
-            async fn cancel(&self, _r: CancelNotification) -> agent_client_protocol::Result<()> {
-                Ok(())
-            }
-            async fn load_session(
-                &self,
-                _r: LoadSessionRequest,
-            ) -> agent_client_protocol::Result<LoadSessionResponse> {
-                Ok(LoadSessionResponse::new())
-            }
-            async fn set_session_mode(
-                &self,
-                _r: SetSessionModeRequest,
-            ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-                Ok(SetSessionModeResponse::new())
-            }
-            async fn ext_method(
-                &self,
-                _r: ExtRequest,
-            ) -> agent_client_protocol::Result<ExtResponse> {
-                let raw = RawValue::from_string("null".to_string()).unwrap();
-                Ok(ExtResponse::new(Arc::from(raw)))
-            }
-            async fn ext_notification(
-                &self,
-                _n: ExtNotification,
-            ) -> agent_client_protocol::Result<()> {
-                Ok(())
-            }
-        }
-
-        let agent = TracingAgent::new(Arc::new(NoInfoAgent), "test");
-        let response = agent
-            .initialize(InitializeRequest::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-            .await
-            .unwrap();
-        assert!(response.agent_info.is_none());
-    }
-
-    // -- trace_notifications tests --
+    // -- trace_notifications behaviour --
 
     #[tokio::test]
     async fn test_trace_notifications_forwards_messages() {

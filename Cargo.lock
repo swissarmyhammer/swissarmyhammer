@@ -87,7 +87,6 @@ version = "0.12.11"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
- "avp-common",
  "axum",
  "futures",
  "model-context-protocol-extras",

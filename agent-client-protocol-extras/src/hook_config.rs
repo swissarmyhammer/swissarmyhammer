@@ -31,12 +31,658 @@
 //!           command: "./check.sh"
 //! ```
 
-use crate::hookable_agent::{
-    HookDecision, HookEvent, HookEventKind, HookHandler, HookRegistration,
-};
+use agent_client_protocol::schema::{ContentBlock, SessionNotification, SessionUpdate, StopReason};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Hook event data types
+// ---------------------------------------------------------------------------
+//
+// These types describe the lifecycle events that hook handlers respond to and
+// the registration metadata used to dispatch them. They are pure data — they
+// do not depend on the ACP `Agent` Role or any wrapper. The `HookableAgent`
+// wrapper in `crate::hookable_agent` (sibling task A2) consumes these types
+// to fan out events at the right moments.
+
+/// Extra context fields included in command hook JSON input.
+///
+/// These fields are required by AVP's `CommonInput` but not available
+/// from ACP lifecycle events directly. Set via builder methods on
+/// `HookableAgent` or passed through `build_registrations()`.
+#[derive(Clone, Debug, Default)]
+pub struct HookCommandContext {
+    /// Path to conversation transcript file. Default: ""
+    pub transcript_path: String,
+    /// Permission mode string. Default: "bypassPermissions"
+    pub permission_mode: String,
+}
+
+/// How a session was started — distinguishes new vs resumed sessions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionSource {
+    /// New session created via `new_session()`.
+    Startup,
+    /// Existing session resumed via `load_session()`.
+    Resume,
+}
+
+impl SessionSource {
+    /// String representation matching Claude Code's JSON format.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Resume => "resume",
+        }
+    }
+}
+
+/// Lifecycle events that hooks can respond to.
+#[derive(Clone, Debug)]
+pub enum HookEvent {
+    /// Fires after new_session() or load_session().
+    SessionStart {
+        session_id: String,
+        source: SessionSource,
+        cwd: PathBuf,
+    },
+    /// Fires before prompt() delegates to inner agent.
+    UserPromptSubmit {
+        session_id: String,
+        prompt: Vec<ContentBlock>,
+        cwd: PathBuf,
+    },
+    /// Fires on ToolCall notification (before tool execution).
+    PreToolUse {
+        session_id: String,
+        tool_name: String,
+        tool_input: Option<serde_json::Value>,
+        tool_use_id: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires on ToolCallUpdate notification (after successful tool execution).
+    PostToolUse {
+        session_id: String,
+        tool_name: String,
+        tool_input: Option<serde_json::Value>,
+        tool_response: Option<serde_json::Value>,
+        tool_use_id: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires on ToolCallUpdate when tool status is Failed.
+    PostToolUseFailure {
+        session_id: String,
+        tool_name: String,
+        tool_input: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+        tool_use_id: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires after prompt() returns.
+    Stop {
+        session_id: String,
+        stop_reason: StopReason,
+        stop_hook_active: bool,
+        cwd: PathBuf,
+    },
+    /// Fires on any SessionNotification.
+    Notification {
+        notification: Box<SessionNotification>,
+        cwd: PathBuf,
+    },
+    /// Fires when MCP server requests user input.
+    Elicitation {
+        session_id: String,
+        mcp_server_name: Option<String>,
+        message: Option<String>,
+        mode: String,
+        requested_schema: serde_json::Value,
+        cwd: PathBuf,
+    },
+    /// Fires when user responds to MCP elicitation.
+    ElicitationResult {
+        session_id: String,
+        mcp_server_name: String,
+        action: Option<String>,
+        content: serde_json::Value,
+        elicitation_id: String,
+        cwd: PathBuf,
+    },
+    /// Fires when CLAUDE.md or rules files are loaded.
+    InstructionsLoaded {
+        file_path: Option<String>,
+        load_reason: String,
+        cwd: PathBuf,
+    },
+    /// Fires when config files change.
+    ConfigChange {
+        session_id: String,
+        source: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a worktree is created.
+    WorktreeCreate {
+        worktree_path: Option<String>,
+        branch_name: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a worktree is removed.
+    WorktreeRemove { worktree_path: String, cwd: PathBuf },
+    /// Fires after context compaction.
+    PostCompact { session_id: String, cwd: PathBuf },
+    /// Fires when an agent teammate goes idle.
+    TeammateIdle {
+        session_id: String,
+        teammate_id: Option<String>,
+        cwd: PathBuf,
+    },
+    /// Fires when a task is marked complete.
+    TaskCompleted {
+        session_id: String,
+        task_id: Option<String>,
+        task_title: Option<String>,
+        cwd: PathBuf,
+    },
+}
+
+/// Which category of event a hook registration matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HookEventKind {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+    Notification,
+    PostCompact,
+    TeammateIdle,
+    TaskCompleted,
+    Elicitation,
+    ElicitationResult,
+    InstructionsLoaded,
+    ConfigChange,
+    WorktreeCreate,
+    WorktreeRemove,
+}
+
+impl HookEvent {
+    /// The kind of this event.
+    pub fn kind(&self) -> HookEventKind {
+        match self {
+            Self::SessionStart { .. } => HookEventKind::SessionStart,
+            Self::UserPromptSubmit { .. } => HookEventKind::UserPromptSubmit,
+            Self::PreToolUse { .. } => HookEventKind::PreToolUse,
+            Self::PostToolUse { .. } => HookEventKind::PostToolUse,
+            Self::PostToolUseFailure { .. } => HookEventKind::PostToolUseFailure,
+            Self::Stop { .. } => HookEventKind::Stop,
+            Self::Notification { .. } => HookEventKind::Notification,
+            Self::Elicitation { .. } => HookEventKind::Elicitation,
+            Self::ElicitationResult { .. } => HookEventKind::ElicitationResult,
+            Self::InstructionsLoaded { .. } => HookEventKind::InstructionsLoaded,
+            Self::ConfigChange { .. } => HookEventKind::ConfigChange,
+            Self::WorktreeCreate { .. } => HookEventKind::WorktreeCreate,
+            Self::WorktreeRemove { .. } => HookEventKind::WorktreeRemove,
+            Self::PostCompact { .. } => HookEventKind::PostCompact,
+            Self::TeammateIdle { .. } => HookEventKind::TeammateIdle,
+            Self::TaskCompleted { .. } => HookEventKind::TaskCompleted,
+        }
+    }
+
+    /// The string value that matchers test against.
+    ///
+    /// Returns `None` for events that don't support matchers
+    /// (UserPromptSubmit, Stop) — these always fire.
+    pub fn matcher_value(&self) -> Option<&str> {
+        match self {
+            Self::SessionStart { source, .. } => Some(source.as_str()),
+            Self::UserPromptSubmit { .. } | Self::Stop { .. } => None,
+            Self::PreToolUse { tool_name, .. }
+            | Self::PostToolUse { tool_name, .. }
+            | Self::PostToolUseFailure { tool_name, .. } => Some(tool_name.as_str()),
+            Self::Notification { notification, .. } => {
+                Some(notification_update_name(&notification.update))
+            }
+            Self::Elicitation {
+                mcp_server_name, ..
+            } => mcp_server_name.as_deref(),
+            Self::ElicitationResult {
+                mcp_server_name, ..
+            } => Some(mcp_server_name.as_str()),
+            Self::InstructionsLoaded { file_path, .. } => file_path.as_deref(),
+            Self::ConfigChange { source, .. } => source.as_deref(),
+            Self::WorktreeCreate { .. }
+            | Self::WorktreeRemove { .. }
+            | Self::PostCompact { .. }
+            | Self::TeammateIdle { .. }
+            | Self::TaskCompleted { .. } => None,
+        }
+    }
+
+    /// Serialize this event as Claude-compatible JSON for command hook stdin.
+    pub fn to_command_input(&self) -> serde_json::Value {
+        self.to_command_input_full(&HookCommandContext::default())
+    }
+
+    /// Serialize this event with extra context fields for AVP compatibility.
+    pub fn to_command_input_full(&self, ctx: &HookCommandContext) -> serde_json::Value {
+        let mut obj = self.to_base_json();
+        append_avp_context(&mut obj, ctx);
+        obj
+    }
+
+    /// Build per-variant JSON without AVP context fields.
+    fn to_base_json(&self) -> serde_json::Value {
+        match self {
+            Self::SessionStart {
+                session_id,
+                source,
+                cwd,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "SessionStart",
+                "source": source.as_str(),
+            }),
+            Self::UserPromptSubmit {
+                session_id,
+                prompt,
+                cwd,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": extract_prompt_text(prompt),
+            }),
+            Self::PreToolUse {
+                session_id,
+                tool_name,
+                tool_input,
+                tool_use_id,
+                cwd,
+            } => tool_event_json(
+                "PreToolUse",
+                session_id,
+                tool_name,
+                cwd,
+                tool_input,
+                tool_use_id,
+                &None,
+            ),
+            Self::PostToolUse {
+                session_id,
+                tool_name,
+                tool_input,
+                tool_response,
+                tool_use_id,
+                cwd,
+            } => tool_event_json(
+                "PostToolUse",
+                session_id,
+                tool_name,
+                cwd,
+                tool_input,
+                tool_use_id,
+                tool_response,
+            ),
+            Self::PostToolUseFailure {
+                session_id,
+                tool_name,
+                tool_input,
+                error,
+                tool_use_id,
+                cwd,
+            } => {
+                let mut o = tool_event_json(
+                    "PostToolUseFailure",
+                    session_id,
+                    tool_name,
+                    cwd,
+                    tool_input,
+                    tool_use_id,
+                    &None,
+                );
+                if let Some(err) = error {
+                    o["error"] = err.clone();
+                }
+                o
+            }
+            Self::Stop {
+                session_id,
+                stop_reason,
+                stop_hook_active,
+                cwd,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "Stop",
+                "stop_reason": format!("{:?}", stop_reason),
+                "stop_hook_active": stop_hook_active,
+            }),
+            Self::Notification {
+                notification, cwd, ..
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": notification.session_id.to_string(),
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "Notification",
+                    "notification_type": notification_update_name(&notification.update),
+                });
+                if let Ok(update_value) = serde_json::to_value(&notification.update) {
+                    obj["notification"] = update_value;
+                }
+                obj
+            }
+            Self::Elicitation {
+                session_id,
+                mcp_server_name,
+                message,
+                mode,
+                requested_schema,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "Elicitation",
+                    "mode": mode,
+                    "requested_schema": requested_schema,
+                });
+                if let Some(name) = mcp_server_name {
+                    obj["mcp_server_name"] = serde_json::Value::String(name.clone());
+                }
+                if let Some(msg) = message {
+                    obj["message"] = serde_json::Value::String(msg.clone());
+                }
+                obj
+            }
+            Self::ElicitationResult {
+                session_id,
+                mcp_server_name,
+                action,
+                content,
+                elicitation_id,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ElicitationResult",
+                    "mcp_server_name": mcp_server_name,
+                    "content": content,
+                    "elicitation_id": elicitation_id,
+                });
+                if let Some(a) = action {
+                    obj["action"] = serde_json::Value::String(a.clone());
+                }
+                obj
+            }
+            Self::InstructionsLoaded {
+                file_path,
+                load_reason,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "InstructionsLoaded",
+                    "load_reason": load_reason,
+                });
+                if let Some(fp) = file_path {
+                    obj["file_path"] = serde_json::Value::String(fp.clone());
+                }
+                obj
+            }
+            Self::ConfigChange {
+                session_id,
+                source,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "ConfigChange",
+                });
+                if let Some(src) = source {
+                    obj["source"] = serde_json::Value::String(src.clone());
+                }
+                obj
+            }
+            Self::WorktreeCreate {
+                worktree_path,
+                branch_name,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "WorktreeCreate",
+                });
+                if let Some(wp) = worktree_path {
+                    obj["worktree_path"] = serde_json::Value::String(wp.clone());
+                }
+                if let Some(bn) = branch_name {
+                    obj["branch_name"] = serde_json::Value::String(bn.clone());
+                }
+                obj
+            }
+            Self::WorktreeRemove { worktree_path, cwd } => serde_json::json!({
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "WorktreeRemove",
+                "worktree_path": worktree_path,
+            }),
+            Self::PostCompact { session_id, cwd } => serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd.display().to_string(),
+                "hook_event_name": "PostCompact",
+            }),
+            Self::TeammateIdle {
+                session_id,
+                teammate_id,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "TeammateIdle",
+                });
+                if let Some(id) = teammate_id {
+                    obj["teammate_id"] = serde_json::Value::String(id.clone());
+                }
+                obj
+            }
+            Self::TaskCompleted {
+                session_id,
+                task_id,
+                task_title,
+                cwd,
+            } => {
+                let mut obj = serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd.display().to_string(),
+                    "hook_event_name": "TaskCompleted",
+                });
+                if let Some(id) = task_id {
+                    obj["task_id"] = serde_json::Value::String(id.clone());
+                }
+                if let Some(title) = task_title {
+                    obj["task_title"] = serde_json::Value::String(title.clone());
+                }
+                obj
+            }
+        }
+    }
+}
+
+/// Build JSON for tool-related events (PreToolUse, PostToolUse, PostToolUseFailure).
+fn tool_event_json(
+    event_name: &str,
+    session_id: &str,
+    tool_name: &str,
+    cwd: &Path,
+    tool_input: &Option<serde_json::Value>,
+    tool_use_id: &Option<String>,
+    tool_response: &Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut o = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd.display().to_string(),
+        "hook_event_name": event_name,
+        "tool_name": tool_name,
+    });
+    o["tool_input"] = tool_input.clone().unwrap_or(serde_json::json!({}));
+    if let Some(id) = tool_use_id {
+        o["tool_use_id"] = serde_json::Value::String(id.clone());
+    }
+    if let Some(response) = tool_response {
+        o["tool_response"] = response.clone();
+    }
+    o
+}
+
+/// Extract text from prompt content blocks.
+fn extract_prompt_text(prompt: &[ContentBlock]) -> String {
+    prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Append AVP common fields to JSON.
+fn append_avp_context(obj: &mut serde_json::Value, ctx: &HookCommandContext) {
+    obj["transcript_path"] = serde_json::Value::String(ctx.transcript_path.clone());
+    if !ctx.permission_mode.is_empty() {
+        obj["permission_mode"] = serde_json::Value::String(ctx.permission_mode.clone());
+    }
+}
+
+/// Map SessionUpdate variant to a string name for matcher/serialization.
+fn notification_update_name(update: &SessionUpdate) -> &'static str {
+    match update {
+        SessionUpdate::AgentMessageChunk(_) => "agent_message",
+        SessionUpdate::AgentThoughtChunk(_) => "agent_thought",
+        SessionUpdate::ToolCall(_) => "tool_call",
+        SessionUpdate::ToolCallUpdate(_) => "tool_call_update",
+        SessionUpdate::Plan(_) => "plan",
+        SessionUpdate::AvailableCommandsUpdate(_) => "available_commands",
+        SessionUpdate::CurrentModeUpdate(_) => "current_mode",
+        SessionUpdate::ConfigOptionUpdate(_) => "config_option",
+        SessionUpdate::UserMessageChunk(_) => "user_message",
+        _ => "unknown",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hook decision
+// ---------------------------------------------------------------------------
+
+/// What a hook handler wants to happen after it runs.
+///
+/// Always derived from handler output at runtime (command JSON, prompt/agent
+/// evaluator response), never configured statically.
+#[derive(Clone, Debug, Default)]
+pub enum HookDecision {
+    /// Allow the operation to proceed unchanged.
+    #[default]
+    Allow,
+    /// Block the operation (returned as ACP error).
+    Block { reason: String },
+    /// Allow but inject additional context (prepend text to prompt).
+    AllowWithContext { context: String },
+    /// Cancel the active prompt turn by calling inner.cancel().
+    Cancel { reason: String },
+    /// Signal that the agent should not have stopped.
+    /// Response meta gets `hook_should_continue: true`.
+    ShouldContinue { reason: String },
+    /// Allow but modify tool input before execution (PreToolUse only).
+    /// Note: In ACP, PreToolUse fires from notifications after tool initiation,
+    /// so updatedInput cannot actually modify the call. Logged and treated as Allow.
+    AllowWithUpdatedInput { updated_input: serde_json::Value },
+}
+
+// ---------------------------------------------------------------------------
+// Hook handler trait
+// ---------------------------------------------------------------------------
+
+/// Async handler invoked when a matching hook event fires.
+///
+/// Uses `#[async_trait]` (Send) for tokio::spawn compatibility.
+#[async_trait::async_trait]
+pub trait HookHandler: Send + Sync {
+    /// Inspect the event and return a decision.
+    async fn handle(&self, event: &HookEvent) -> HookDecision;
+}
+
+// ---------------------------------------------------------------------------
+// Hook registration
+// ---------------------------------------------------------------------------
+
+/// A registered hook: event filter + optional matcher + handler.
+pub struct HookRegistration {
+    pub events: Vec<HookEventKind>,
+    pub matcher: Option<regex::Regex>,
+    pub handler: Arc<dyn HookHandler>,
+}
+
+impl Clone for HookRegistration {
+    fn clone(&self) -> Self {
+        Self {
+            events: self.events.clone(),
+            matcher: self.matcher.clone(),
+            handler: Arc::clone(&self.handler),
+        }
+    }
+}
+
+impl std::fmt::Debug for HookRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookRegistration")
+            .field("events", &self.events)
+            .field("matcher", &self.matcher)
+            .field("handler", &"<dyn HookHandler>")
+            .finish()
+    }
+}
+
+impl HookRegistration {
+    /// Create a new hook registration.
+    pub fn new(
+        events: Vec<HookEventKind>,
+        matcher: Option<regex::Regex>,
+        handler: Arc<dyn HookHandler>,
+    ) -> Self {
+        Self {
+            events,
+            matcher,
+            handler,
+        }
+    }
+
+    /// Which event kinds this hook fires on.
+    pub fn events(&self) -> &[HookEventKind] {
+        &self.events
+    }
+
+    /// Optional regex matcher pattern.
+    pub fn matcher(&self) -> Option<&regex::Regex> {
+        self.matcher.as_ref()
+    }
+
+    /// Does this registration match the given event?
+    pub fn matches(&self, event: &HookEvent) -> bool {
+        if !self.events.contains(&event.kind()) {
+            return false;
+        }
+        match (&self.matcher, event.matcher_value()) {
+            (None, _) | (_, None) => true,
+            (Some(re), Some(val)) => re.is_match(val),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Config types (3-level nesting matching Claude Code)
@@ -858,19 +1504,9 @@ impl HookConfig {
     }
 }
 
-/// Convenience: build a [`HookableAgent`] from config and an inner agent.
-pub fn hookable_agent_from_config(
-    inner: Arc<dyn agent_client_protocol::Agent + Send + Sync>,
-    config: &HookConfig,
-    evaluator: Option<Arc<dyn HookEvaluator>>,
-) -> Result<crate::HookableAgent, HookConfigError> {
-    let registrations = config.build_registrations(evaluator)?;
-    let mut agent = crate::HookableAgent::new(inner);
-    for reg in registrations {
-        agent = agent.with_registration(reg);
-    }
-    Ok(agent)
-}
+// `hookable_agent_from_config` lives in `crate::hookable_agent` from ACP 0.11
+// onward, because the inner-agent argument type changed shape with the new
+// SDK (no more `Arc<dyn Agent>`). It is re-exported through `lib.rs`.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -879,96 +1515,9 @@ pub fn hookable_agent_from_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
-        ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
-        LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-        PromptRequest, PromptResponse, SessionId, SetSessionModeRequest, SetSessionModeResponse,
-        StopReason, TextContent,
-    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    // -- Mock agent --
-
-    struct MockAgent {
-        prompt_called: Arc<AtomicBool>,
-    }
-
-    impl MockAgent {
-        fn new() -> (Self, Arc<AtomicBool>) {
-            let called = Arc::new(AtomicBool::new(false));
-            (
-                Self {
-                    prompt_called: called.clone(),
-                },
-                called,
-            )
-        }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for MockAgent {
-        async fn initialize(
-            &self,
-            _req: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(
-                agent_client_protocol::ProtocolVersion::LATEST,
-            ))
-        }
-        async fn authenticate(
-            &self,
-            _req: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-        async fn new_session(
-            &self,
-            _req: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("test-session"))
-        }
-        async fn prompt(
-            &self,
-            _req: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            self.prompt_called.store(true, Ordering::SeqCst);
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-        async fn cancel(&self, _req: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-        async fn load_session(
-            &self,
-            _req: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-        async fn set_session_mode(
-            &self,
-            _req: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-        async fn ext_method(&self, _req: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-        async fn ext_notification(
-            &self,
-            _notif: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn make_prompt_request() -> PromptRequest {
-        PromptRequest::new(
-            SessionId::from("test-session"),
-            vec![ContentBlock::Text(TextContent::new("hello"))],
-        )
-    }
-
-    // -- Mock evaluator --
+    // -- Mock evaluator (for prompt/agent handler config tests) --
 
     struct MockEvaluator {
         response: String,
@@ -981,24 +1530,6 @@ mod tests {
                 response: r#"{"ok": true}"#.to_string(),
                 is_agent_called: Arc::new(AtomicBool::new(false)),
             }
-        }
-
-        fn blocking(reason: &str) -> Self {
-            Self {
-                response: format!(r#"{{"ok": false, "reason": "{}"}}"#, reason),
-                is_agent_called: Arc::new(AtomicBool::new(false)),
-            }
-        }
-
-        fn with_agent_tracking() -> (Self, Arc<AtomicBool>) {
-            let flag = Arc::new(AtomicBool::new(false));
-            (
-                Self {
-                    response: r#"{"ok": true}"#.to_string(),
-                    is_agent_called: flag.clone(),
-                },
-                flag,
-            )
         }
     }
 
@@ -1024,10 +1555,7 @@ mod tests {
                     {
                         "matcher": "Bash",
                         "hooks": [
-                            {
-                                "type": "command",
-                                "command": "./check.sh"
-                            }
+                            { "type": "command", "command": "./check.sh" }
                         ]
                     }
                 ]
@@ -1052,10 +1580,7 @@ mod tests {
                 "Stop": [
                     {
                         "hooks": [
-                            {
-                                "type": "prompt",
-                                "prompt": "Check if all tasks are complete: $ARGUMENTS"
-                            }
+                            { "type": "prompt", "prompt": "Check if all tasks are complete: $ARGUMENTS" }
                         ]
                     }
                 ]
@@ -1078,11 +1603,7 @@ mod tests {
                 "Stop": [
                     {
                         "hooks": [
-                            {
-                                "type": "agent",
-                                "prompt": "Verify tests pass: $ARGUMENTS",
-                                "timeout": 120
-                            }
+                            { "type": "agent", "prompt": "Verify tests pass: $ARGUMENTS", "timeout": 120 }
                         ]
                     }
                 ]
@@ -1102,25 +1623,11 @@ mod tests {
         let json = r#"{
             "hooks": {
                 "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            { "type": "command", "command": "./bash-check.sh" }
-                        ]
-                    },
-                    {
-                        "matcher": "Edit|Write",
-                        "hooks": [
-                            { "type": "command", "command": "./lint.sh" }
-                        ]
-                    }
+                    { "matcher": "Bash", "hooks": [ { "type": "command", "command": "./bash-check.sh" } ] },
+                    { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "./lint.sh" } ] }
                 ],
                 "Stop": [
-                    {
-                        "hooks": [
-                            { "type": "prompt", "prompt": "All done? $ARGUMENTS" }
-                        ]
-                    }
+                    { "hooks": [ { "type": "prompt", "prompt": "All done? $ARGUMENTS" } ] }
                 ]
             }
         }"#;
@@ -1134,8 +1641,7 @@ mod tests {
 
     #[test]
     fn test_json_empty_config() {
-        let json = "{}";
-        let config: HookConfig = serde_json::from_str(json).unwrap();
+        let config: HookConfig = serde_json::from_str("{}").unwrap();
         assert!(config.hooks.is_empty());
     }
 
@@ -1224,8 +1730,7 @@ hooks:
 
     #[test]
     fn test_yaml_empty_config() {
-        let yaml = "{}";
-        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: HookConfig = serde_yaml_ng::from_str("{}").unwrap();
         assert!(config.hooks.is_empty());
     }
 
@@ -1238,19 +1743,10 @@ hooks:
         let json = r#"{
             "hooks": {
                 "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            { "type": "command", "command": "./check.sh" }
-                        ]
-                    }
+                    { "matcher": "Bash", "hooks": [ { "type": "command", "command": "./check.sh" } ] }
                 ],
                 "Stop": [
-                    {
-                        "hooks": [
-                            { "type": "prompt", "prompt": "Done?" }
-                        ]
-                    }
+                    { "hooks": [ { "type": "prompt", "prompt": "Done?" } ] }
                 ]
             }
         }"#;
@@ -1272,13 +1768,8 @@ hooks:
         let from_yaml: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(from_json.hooks.len(), from_yaml.hooks.len());
-        // Both should have PreToolUse and Stop
-        assert!(from_json
-            .hooks
-            .contains_key(&HookEventKindConfig::PreToolUse));
-        assert!(from_yaml
-            .hooks
-            .contains_key(&HookEventKindConfig::PreToolUse));
+        assert!(from_json.hooks.contains_key(&HookEventKindConfig::PreToolUse));
+        assert!(from_yaml.hooks.contains_key(&HookEventKindConfig::PreToolUse));
         assert!(from_json.hooks.contains_key(&HookEventKindConfig::Stop));
         assert!(from_yaml.hooks.contains_key(&HookEventKindConfig::Stop));
     }
@@ -1292,12 +1783,7 @@ hooks:
         let json = r#"{
             "hooks": {
                 "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            { "type": "command", "command": "true" }
-                        ]
-                    }
+                    { "matcher": "Bash", "hooks": [ { "type": "command", "command": "true" } ] }
                 ]
             }
         }"#;
@@ -1321,37 +1807,27 @@ hooks:
         let config: HookConfig = serde_json::from_str(json).unwrap();
         let result = config.build_registrations(None);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            HookConfigError::InvalidRegex(_)
-        ));
+        assert!(matches!(result.unwrap_err(), HookConfigError::InvalidRegex(_)));
     }
 
     #[test]
     fn test_build_registrations_missing_evaluator() {
         let json = r#"{
             "hooks": {
-                "Stop": [{
-                    "hooks": [{ "type": "prompt", "prompt": "check" }]
-                }]
+                "Stop": [{ "hooks": [{ "type": "prompt", "prompt": "check" }] }]
             }
         }"#;
         let config: HookConfig = serde_json::from_str(json).unwrap();
         let result = config.build_registrations(None);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            HookConfigError::MissingEvaluator
-        ));
+        assert!(matches!(result.unwrap_err(), HookConfigError::MissingEvaluator));
     }
 
     #[test]
     fn test_build_registrations_prompt_with_evaluator() {
         let json = r#"{
             "hooks": {
-                "Stop": [{
-                    "hooks": [{ "type": "prompt", "prompt": "check" }]
-                }]
+                "Stop": [{ "hooks": [{ "type": "prompt", "prompt": "check" }] }]
             }
         }"#;
         let config: HookConfig = serde_json::from_str(json).unwrap();
@@ -1481,10 +1957,7 @@ hooks:
 
     #[test]
     fn test_prompt_response_ok_true() {
-        let response = PromptHookResponse {
-            ok: true,
-            reason: None,
-        };
+        let response = PromptHookResponse { ok: true, reason: None };
         let decision = interpret_prompt_response(&response, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Allow));
     }
@@ -1517,8 +1990,6 @@ hooks:
 
     #[test]
     fn test_prompt_response_ok_false_post_tool_feeds_context() {
-        // For PostToolUse, ok=false should feed the reason back as context
-        // rather than block — the tool already executed.
         let response = PromptHookResponse {
             ok: false,
             reason: Some("Lint warning detected".into()),
@@ -1532,8 +2003,6 @@ hooks:
 
     #[test]
     fn test_prompt_response_ok_false_post_tool_failure_feeds_context() {
-        // For PostToolUseFailure, ok=false should also feed context —
-        // the tool already failed, can't block retroactively.
         let response = PromptHookResponse {
             ok: false,
             reason: Some("Failure noted".into()),
@@ -1546,145 +2015,12 @@ hooks:
     }
 
     // =====================================================================
-    // Integration: command hooks → HookableAgent → behavior
+    // Event-aware exit-2 tests (interpret_exit_2_stderr is in this crate)
     // =====================================================================
-
-    #[tokio::test]
-    async fn test_command_hook_exit_0_allows() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "command", "command": "true" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_ok());
-        assert!(called.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_command_hook_exit_2_blocks() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "command", "command": "echo 'forbidden' >&2; exit 2" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_err());
-        assert!(!called.load(Ordering::SeqCst));
-        assert!(result.unwrap_err().message.contains("forbidden"));
-    }
-
-    #[tokio::test]
-    async fn test_command_hook_other_exit_allows() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "command", "command": "exit 1" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_ok());
-        assert!(called.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_command_hook_sends_json_stdin() {
-        // Command that reads stdin and checks for expected fields
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "input=$(cat); echo $input | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['hook_event_name']=='UserPromptSubmit'; assert 'session_id' in d\""
-                    }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_ok());
-        assert!(called.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_command_hook_json_output_block() {
-        // Command that outputs JSON with decision: "block"
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo '{\"decision\": \"block\", \"reason\": \"JSON blocked\"}'"
-                    }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_err());
-        assert!(!called.load(Ordering::SeqCst));
-        assert!(result.unwrap_err().message.contains("JSON blocked"));
-    }
-
-    #[tokio::test]
-    async fn test_stop_exit_2_is_should_continue() {
-        let json = r#"{
-            "hooks": {
-                "Stop": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo 'Tests not passing' >&2; exit 2"
-                    }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (mock, _) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
-        let meta = response.meta.as_ref().unwrap();
-        assert_eq!(
-            meta.get("hook_should_continue"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert_eq!(
-            meta.get("hook_reason"),
-            Some(&serde_json::Value::String("Tests not passing".into()))
-        );
-    }
-
-    // -- Event-aware exit-2 tests --
 
     #[test]
     fn test_exit_2_on_silent_events_allows() {
-        // Notification and SessionStart: exit-2 stderr is shown to user
-        // only (logged), not fed back to the agent.
         let silent = vec![HookEventKind::Notification, HookEventKind::SessionStart];
-
         for kind in &silent {
             let output = std::process::Command::new("sh")
                 .arg("-c")
@@ -1693,7 +2029,6 @@ hooks:
                 .stderr(std::process::Stdio::piped())
                 .output()
                 .unwrap();
-
             let decision = interpret_exit_2_stderr(&output, "test-cmd", *kind);
             assert!(
                 matches!(decision, HookDecision::Allow),
@@ -1704,77 +2039,9 @@ hooks:
         }
     }
 
-    #[tokio::test]
-    async fn test_post_tool_use_exit_2_feeds_stderr_as_context() {
-        // PostToolUse hooks that exit with code 2 should feed stderr
-        // back to the agent as context (AllowWithContext), not block.
-        use crate::hookable_agent::HookEvent;
-        use std::path::PathBuf;
-
-        let json = r#"{
-            "hooks": {
-                "PostToolUse": [{
-                    "hooks": [{ "type": "command", "command": "echo 'tool feedback' >&2; exit 2" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let regs = config.build_registrations(None).unwrap();
-        let event = HookEvent::PostToolUse {
-            session_id: "s1".into(),
-            tool_name: "Bash".into(),
-            tool_input: None,
-            tool_response: None,
-            tool_use_id: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let decision = regs[0].handler.handle(&event).await;
-        assert!(
-            matches!(decision, HookDecision::AllowWithContext { ref context } if context == "tool feedback"),
-            "Expected AllowWithContext, got {:?}",
-            decision
-        );
-    }
-
-    #[tokio::test]
-    async fn test_post_tool_use_failure_exit_2_feeds_stderr_as_context() {
-        // PostToolUseFailure hooks that exit with code 2 should also feed
-        // stderr back as context — the tool already failed, can't block.
-        use crate::hookable_agent::HookEvent;
-        use std::path::PathBuf;
-
-        let json = r#"{
-            "hooks": {
-                "PostToolUseFailure": [{
-                    "hooks": [{ "type": "command", "command": "echo 'failure feedback' >&2; exit 2" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let regs = config.build_registrations(None).unwrap();
-        let event = HookEvent::PostToolUseFailure {
-            session_id: "s1".into(),
-            tool_name: "Bash".into(),
-            tool_input: None,
-            error: None,
-            tool_use_id: None,
-            cwd: PathBuf::from("/tmp"),
-        };
-        let decision = regs[0].handler.handle(&event).await;
-        assert!(
-            matches!(decision, HookDecision::AllowWithContext { ref context } if context == "failure feedback"),
-            "Expected AllowWithContext, got {:?}",
-            decision
-        );
-    }
-
     #[test]
     fn test_exit_2_on_blockable_event_blocks() {
-        // Only PreToolUse and UserPromptSubmit can block — the action
-        // hasn't happened yet. PostToolUseFailure cannot block because
-        // the tool already failed.
         let blockable = vec![HookEventKind::PreToolUse, HookEventKind::UserPromptSubmit];
-
         for kind in &blockable {
             let output = std::process::Command::new("sh")
                 .arg("-c")
@@ -1783,7 +2050,6 @@ hooks:
                 .stderr(std::process::Stdio::piped())
                 .output()
                 .unwrap();
-
             let decision = interpret_exit_2_stderr(&output, "test-cmd", *kind);
             assert!(
                 matches!(decision, HookDecision::Block { .. }),
@@ -1792,155 +2058,6 @@ hooks:
                 decision
             );
         }
-    }
-
-    // =====================================================================
-    // Integration: prompt/agent hooks
-    // =====================================================================
-
-    #[tokio::test]
-    async fn test_prompt_hook_ok_true_allows() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "prompt", "prompt": "Check: $ARGUMENTS" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let evaluator: Arc<dyn HookEvaluator> = Arc::new(MockEvaluator::allowing());
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, Some(evaluator)).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_ok());
-        assert!(called.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_prompt_hook_ok_false_blocks() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "prompt", "prompt": "Check: $ARGUMENTS" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let evaluator: Arc<dyn HookEvaluator> = Arc::new(MockEvaluator::blocking("Not allowed"));
-        let (mock, called) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, Some(evaluator)).unwrap();
-
-        let result = agent.prompt(make_prompt_request()).await;
-        assert!(result.is_err());
-        assert!(!called.load(Ordering::SeqCst));
-        assert!(result.unwrap_err().message.contains("Not allowed"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_hook_calls_with_is_agent_true() {
-        let json = r#"{
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{ "type": "agent", "prompt": "Verify: $ARGUMENTS" }]
-                }]
-            }
-        }"#;
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        let (eval, is_agent_flag) = MockEvaluator::with_agent_tracking();
-        let evaluator: Arc<dyn HookEvaluator> = Arc::new(eval);
-        let (mock, _) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, Some(evaluator)).unwrap();
-
-        let _ = agent.prompt(make_prompt_request()).await.unwrap();
-        assert!(is_agent_flag.load(Ordering::SeqCst));
-    }
-
-    // =====================================================================
-    // Full lifecycle test
-    // =====================================================================
-
-    #[tokio::test]
-    async fn test_full_lifecycle_from_json_config() {
-        let json = r#"{
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "Bash",
-                        "hooks": [
-                            { "type": "command", "command": "true", "timeout": 10 }
-                        ]
-                    }
-                ],
-                "UserPromptSubmit": [
-                    {
-                        "hooks": [
-                            { "type": "command", "command": "true" }
-                        ]
-                    }
-                ],
-                "Stop": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "echo '{\"decision\": \"block\", \"reason\": \"Keep going\"}'"
-                            }
-                        ]
-                    }
-                ]
-            }
-        }"#;
-
-        let config: HookConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.hooks.len(), 3);
-
-        let registrations = config.build_registrations(None).unwrap();
-        assert_eq!(registrations.len(), 3);
-
-        let (mock, _) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
-        let meta = response.meta.as_ref().unwrap();
-        assert_eq!(
-            meta.get("hook_should_continue"),
-            Some(&serde_json::Value::Bool(true))
-        );
-    }
-
-    #[tokio::test]
-    async fn test_full_lifecycle_from_yaml_config() {
-        let yaml = r#"
-hooks:
-  PreToolUse:
-    - matcher: "Bash"
-      hooks:
-        - type: command
-          command: "true"
-          timeout: 10
-  UserPromptSubmit:
-    - hooks:
-        - type: command
-          command: "true"
-  Stop:
-    - hooks:
-        - type: command
-          command: "echo '{\"decision\": \"block\", \"reason\": \"Keep going\"}'"
-"#;
-
-        let config: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
-        assert_eq!(config.hooks.len(), 3);
-
-        let (mock, _) = MockAgent::new();
-        let agent = hookable_agent_from_config(Arc::new(mock), &config, None).unwrap();
-
-        let response = agent.prompt(make_prompt_request()).await.unwrap();
-        let meta = response.meta.as_ref().unwrap();
-        assert_eq!(
-            meta.get("hook_should_continue"),
-            Some(&serde_json::Value::Bool(true))
-        );
     }
 
     // =====================================================================
@@ -1957,7 +2074,6 @@ hooks:
             HookEventKindConfig::Setup,
             HookEventKindConfig::SessionEnd,
         ];
-
         for kind in &unsupported_kinds {
             let result: Result<HookEventKind, _> = kind.clone().try_into();
             assert!(result.is_err(), "Expected {:?} to be unsupported", kind);
@@ -1967,57 +2083,23 @@ hooks:
     #[test]
     fn test_supported_event_kinds_succeed() {
         let supported_kinds = vec![
-            (
-                HookEventKindConfig::SessionStart,
-                HookEventKind::SessionStart,
-            ),
-            (
-                HookEventKindConfig::UserPromptSubmit,
-                HookEventKind::UserPromptSubmit,
-            ),
+            (HookEventKindConfig::SessionStart, HookEventKind::SessionStart),
+            (HookEventKindConfig::UserPromptSubmit, HookEventKind::UserPromptSubmit),
             (HookEventKindConfig::PreToolUse, HookEventKind::PreToolUse),
             (HookEventKindConfig::PostToolUse, HookEventKind::PostToolUse),
-            (
-                HookEventKindConfig::PostToolUseFailure,
-                HookEventKind::PostToolUseFailure,
-            ),
+            (HookEventKindConfig::PostToolUseFailure, HookEventKind::PostToolUseFailure),
             (HookEventKindConfig::Stop, HookEventKind::Stop),
-            (
-                HookEventKindConfig::Notification,
-                HookEventKind::Notification,
-            ),
+            (HookEventKindConfig::Notification, HookEventKind::Notification),
             (HookEventKindConfig::PostCompact, HookEventKind::PostCompact),
-            (
-                HookEventKindConfig::TeammateIdle,
-                HookEventKind::TeammateIdle,
-            ),
-            (
-                HookEventKindConfig::TaskCompleted,
-                HookEventKind::TaskCompleted,
-            ),
+            (HookEventKindConfig::TeammateIdle, HookEventKind::TeammateIdle),
+            (HookEventKindConfig::TaskCompleted, HookEventKind::TaskCompleted),
             (HookEventKindConfig::Elicitation, HookEventKind::Elicitation),
-            (
-                HookEventKindConfig::ElicitationResult,
-                HookEventKind::ElicitationResult,
-            ),
-            (
-                HookEventKindConfig::InstructionsLoaded,
-                HookEventKind::InstructionsLoaded,
-            ),
-            (
-                HookEventKindConfig::ConfigChange,
-                HookEventKind::ConfigChange,
-            ),
-            (
-                HookEventKindConfig::WorktreeCreate,
-                HookEventKind::WorktreeCreate,
-            ),
-            (
-                HookEventKindConfig::WorktreeRemove,
-                HookEventKind::WorktreeRemove,
-            ),
+            (HookEventKindConfig::ElicitationResult, HookEventKind::ElicitationResult),
+            (HookEventKindConfig::InstructionsLoaded, HookEventKind::InstructionsLoaded),
+            (HookEventKindConfig::ConfigChange, HookEventKind::ConfigChange),
+            (HookEventKindConfig::WorktreeCreate, HookEventKind::WorktreeCreate),
+            (HookEventKindConfig::WorktreeRemove, HookEventKind::WorktreeRemove),
         ];
-
         for (config_kind, expected_kind) in &supported_kinds {
             let result: Result<HookEventKind, _> = config_kind.clone().try_into();
             assert_eq!(
@@ -2050,12 +2132,9 @@ hooks:
                 }]
             }
         }"#;
-
         let config: HookConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.hooks.len(), 1);
-        assert!(config
-            .hooks
-            .contains_key(&HookEventKindConfig::PostToolUseFailure));
+        assert!(config.hooks.contains_key(&HookEventKindConfig::PostToolUseFailure));
     }
 
     // =====================================================================
@@ -2064,18 +2143,9 @@ hooks:
 
     #[test]
     fn test_hook_decision_value_serialization() {
-        assert_eq!(
-            serde_json::to_string(&HookDecisionValue::Allow).unwrap(),
-            "\"allow\""
-        );
-        assert_eq!(
-            serde_json::to_string(&HookDecisionValue::Block).unwrap(),
-            "\"block\""
-        );
-        assert_eq!(
-            serde_json::to_string(&HookDecisionValue::Ask).unwrap(),
-            "\"ask\""
-        );
+        assert_eq!(serde_json::to_string(&HookDecisionValue::Allow).unwrap(), "\"allow\"");
+        assert_eq!(serde_json::to_string(&HookDecisionValue::Block).unwrap(), "\"block\"");
+        assert_eq!(serde_json::to_string(&HookDecisionValue::Ask).unwrap(), "\"ask\"");
     }
 
     #[test]
@@ -2096,12 +2166,7 @@ hooks:
 
     #[test]
     fn test_hook_output_with_decision_value() {
-        let json = r#"{
-            "continue": true,
-            "decision": "block",
-            "reason": "Blocked by hook"
-        }"#;
-
+        let json = r#"{ "continue": true, "decision": "block", "reason": "Blocked by hook" }"#;
         let output: HookOutput = serde_json::from_str(json).unwrap();
         assert_eq!(output.decision, Some(HookDecisionValue::Block));
         assert_eq!(output.reason, Some("Blocked by hook".to_string()));
@@ -2114,7 +2179,6 @@ hooks:
             "permissionDecision": "deny",
             "permissionDecisionReason": "Too risky"
         }"#;
-
         let output: HookSpecificOutput = serde_json::from_str(json).unwrap();
         match output {
             HookSpecificOutput::PreToolUse {
@@ -2141,7 +2205,6 @@ hooks:
             hook_specific_output: None,
             additional_context: None,
         };
-
         let decision = interpret_output(&output, HookEventKind::UserPromptSubmit);
         assert!(matches!(decision, HookDecision::Block { .. }));
     }
@@ -2157,12 +2220,11 @@ hooks:
             }),
             ..Default::default()
         };
-
         let decision = interpret_output(&output, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Block { .. }));
     }
 
-    // -- New hook event config tests --
+    // -- New hook event config variants --
 
     #[test]
     fn test_new_config_variants_serde_round_trip() {
@@ -2211,23 +2273,18 @@ hooks:
 
     #[test]
     fn test_try_from_new_active_variants() {
-        // PostCompact, TeammateIdle, TaskCompleted should map successfully
         let result: Result<HookEventKind, _> = HookEventKindConfig::PostCompact.try_into();
-        assert!(result.is_ok(), "PostCompact should be supported");
         assert!(matches!(result.unwrap(), HookEventKind::PostCompact));
 
         let result: Result<HookEventKind, _> = HookEventKindConfig::TeammateIdle.try_into();
-        assert!(result.is_ok(), "TeammateIdle should be supported");
         assert!(matches!(result.unwrap(), HookEventKind::TeammateIdle));
 
         let result: Result<HookEventKind, _> = HookEventKindConfig::TaskCompleted.try_into();
-        assert!(result.is_ok(), "TaskCompleted should be supported");
         assert!(matches!(result.unwrap(), HookEventKind::TaskCompleted));
     }
 
     #[test]
     fn test_try_from_new_event_kinds_succeed() {
-        // These 6 are now fully supported with their own HookEventKind variants
         assert!(matches!(
             HookEventKind::try_from(HookEventKindConfig::Elicitation),
             Ok(HookEventKind::Elicitation)
