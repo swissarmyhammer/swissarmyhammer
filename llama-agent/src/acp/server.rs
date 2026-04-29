@@ -223,27 +223,22 @@ impl AcpServer {
 
     /// Start the ACP server with custom streams (stdio or other).
     ///
-    /// This method handles JSON-RPC requests and notifications concurrently.
+    /// Wires the supplied reader/writer to the ACP 0.11 builder/handler runtime.
+    /// Each ACP method (`initialize`, `authenticate`, `session/new`, `session/load`,
+    /// `session/set_mode`, `session/prompt`, `session/cancel`, plus the extension
+    /// channel) is registered as a typed handler on `Agent.builder()` and
+    /// delegates to the inherent method of the same name on `AcpServer`.
     ///
-    /// # Concurrency Model
-    /// - Request handler processes incoming JSON-RPC requests line-by-line
-    /// - Notification handler forwards session updates to the client
-    /// - Both run concurrently via `tokio::join!`
-    /// - When reader closes, request handler signals notification handler to stop
-    ///
-    /// # Shutdown Coordination
-    /// A broadcast channel coordinates graceful shutdown between handlers:
-    /// 1. Request handler processes requests until reader closes (client disconnects)
-    /// 2. Request handler sends shutdown signal via broadcast channel
-    /// 3. Notification handler receives shutdown signal in tokio::select! loop
-    /// 4. Notification handler stops gracefully, both handlers complete
-    ///
-    /// The broadcast channel (vs. oneshot) allows the notification handler to
-    /// continue processing notifications while monitoring for shutdown.
+    /// # Concurrency model
+    /// The SDK owns the dispatch loop. We spawn one auxiliary task during
+    /// `connect_with` that forwards `SessionNotification`s from the internal
+    /// broadcast channel to the connected client via `cx.send_notification`.
+    /// The connection runs until the transport closes (reader EOF or write
+    /// error), at which point both the dispatch loop and the bridge task end.
     ///
     /// # Arguments
-    /// * `reader` - Async reader for incoming JSON-RPC requests (typically stdin)
-    /// * `writer` - Async writer for responses and notifications (typically stdout)
+    /// * `reader` - Async reader for incoming JSON-RPC messages (typically stdin)
+    /// * `writer` - Async writer for outgoing JSON-RPC messages (typically stdout)
     pub async fn start_with_streams<R, W>(
         self: Arc<Self>,
         reader: R,
@@ -253,94 +248,66 @@ impl AcpServer {
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        use tokio::io::{AsyncBufReadExt, BufReader};
+        tracing::info!("Starting ACP server with stdio streams (SDK 0.11 builder)");
 
-        tracing::info!("Starting ACP server with stdio streams");
+        let transport = build_lines_transport(reader, writer);
 
-        // Create shared writer for both responses and notifications
-        let writer = Arc::new(tokio::sync::Mutex::new(writer));
+        let server = Arc::clone(&self);
 
-        // Create shutdown channel to coordinate between request and notification handlers
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-
-        // Subscribe to notification channel
-        let mut notification_rx = self.notification_tx.subscribe();
-
-        // Clone references for handlers
-        let server_for_requests = Arc::clone(&self);
-        let writer_for_notifications = Arc::clone(&writer);
-
-        // Handle incoming requests
-        let request_handler = async move {
-            let mut lines = BufReader::new(reader).lines();
-
-            while let Some(line) = lines.next_line().await.map_err(|e| {
-                tracing::error!("Failed to read line: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })? {
-                if line.trim().is_empty() {
-                    continue;
-                }
-
-                tracing::debug!("Received JSON-RPC request: {}", line);
-
-                // Parse and handle the request
-                if let Err(e) = Self::handle_request(
-                    Arc::clone(&server_for_requests),
-                    Arc::clone(&writer),
-                    line,
-                )
-                .await
+        agent_client_protocol::Agent
+            .builder()
+            .name("llama-agent")
+            // A single handler keyed on `ClientRequest` covers every ACP request
+            // (initialize, authenticate, session/*, plus extension methods). The
+            // SDK demuxes by method name into the right enum variant, and we
+            // delegate to the matching inherent method on `AcpServer`.
+            .on_receive_request(
                 {
-                    tracing::error!("Failed to handle request: {}", e);
-                }
-            }
-
-            tracing::info!("Request handler completed (reader closed)");
-            let _ = shutdown_tx.send(());
-            Ok::<(), agent_client_protocol::Error>(())
-        };
-
-        // Handle outgoing notifications
-        let notification_handler = async move {
-            tracing::info!("Notification handler started");
-            loop {
-                tokio::select! {
-                    notification_result = notification_rx.recv() => {
-                        match notification_result {
-                            Ok(notification) => {
-                                tracing::debug!("Sending session/update notification");
-                                if let Err(e) = Self::send_notification(
-                                    Arc::clone(&writer_for_notifications),
-                                    notification,
-                                )
-                                .await
-                                {
-                                    tracing::error!("Failed to send notification: {}", e);
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                #[derive(serde::Serialize, Debug)]
-                                struct ChannelError { error: String }
-                                tracing::warn!("Notification channel error: {}", Pretty(&ChannelError { error: e.to_string() }));
-                                break;
+                    let server = Arc::clone(&server);
+                    async move |req: agent_client_protocol::ClientRequest, responder, _cx| {
+                        AcpServer::dispatch_client_request(&server, req, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            // `ClientNotification` covers `session/cancel` and extension notifications.
+            .on_receive_notification(
+                {
+                    let server = Arc::clone(&server);
+                    async move |notif: agent_client_protocol::ClientNotification, _cx| {
+                        AcpServer::dispatch_client_notification(&server, notif).await;
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .connect_with(transport, async move |cx| {
+                // Bridge: forward broadcast `SessionNotification`s to the client.
+                let mut rx = self.notification_tx.subscribe();
+                loop {
+                    match rx.recv().await {
+                        Ok(notification) => {
+                            if let Err(e) = cx.send_notification(notification) {
+                                tracing::error!("Failed to forward session/update: {}", e);
+                                return Err(e);
                             }
                         }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        tracing::info!("Notification handler received shutdown signal");
-                        break;
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::info!(
+                                "Session notification channel closed; shutting down connection"
+                            );
+                            return Ok(());
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(
+                                "Notification bridge lagged; skipped {} updates",
+                                skipped
+                            );
+                        }
                     }
                 }
-            }
-            tracing::info!("Notification handler stopped");
-        };
-
-        // Run both handlers concurrently
-        let (request_result, _) = tokio::join!(request_handler, notification_handler);
-
-        request_result
+            })
+            .await
     }
 
     /// Handle a single JSON-RPC request
@@ -2213,6 +2180,111 @@ fn filesystem_error_to_protocol_error(
 }
 
 impl AcpServer {
+    /// Demultiplex an incoming `ClientRequest` enum variant onto the inherent
+    /// method that handles it, then deliver the typed response back through
+    /// the SDK-supplied `Responder`.
+    ///
+    /// The SDK gives us `Responder<serde_json::Value>` because `ClientRequest`
+    /// is registered with `Response = serde_json::Value`. We cast the responder
+    /// to the variant's typed response (`InitializeResponse`, `PromptResponse`,
+    /// etc.) so each delegate just hands its `Result<T, Error>` to
+    /// `respond_with_result` and the SDK handles serialization.
+    async fn dispatch_client_request(
+        server: &Arc<Self>,
+        request: agent_client_protocol::ClientRequest,
+        responder: agent_client_protocol::Responder<serde_json::Value>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        use agent_client_protocol::ClientRequest as Req;
+
+        match request {
+            Req::InitializeRequest(req) => {
+                let result = server.initialize(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::AuthenticateRequest(req) => {
+                let result = server.authenticate(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::NewSessionRequest(req) => {
+                let result = server.new_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::LoadSessionRequest(req) => {
+                let result = server.load_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::SetSessionModeRequest(req) => {
+                let result = server.set_session_mode(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::PromptRequest(req) => {
+                let result = server.prompt(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::ExtMethodRequest(req) => {
+                // ExtResponse wraps an opaque `Arc<RawValue>`; the SDK expects
+                // a `serde_json::Value` for `ClientRequest::Response`, so we
+                // parse the raw JSON back and forward it. Parse failures are
+                // surfaced as internal errors rather than being silently
+                // dropped.
+                let result = server
+                    .ext_method(req)
+                    .await
+                    .and_then(|ext_response| {
+                        serde_json::from_str::<serde_json::Value>(ext_response.0.get()).map_err(
+                            |e| {
+                                tracing::error!("Failed to parse ExtResponse JSON: {}", e);
+                                agent_client_protocol::Error::internal_error()
+                            },
+                        )
+                    });
+                responder.respond_with_result(result)
+            }
+            // ClientRequest is `#[non_exhaustive]` and may grow new variants
+            // (e.g. unstable list/fork/resume/close). Surface any we don't
+            // model as method-not-found rather than silently ignoring them.
+            other => {
+                tracing::warn!(
+                    "Received unsupported ClientRequest variant: {}",
+                    other.method()
+                );
+                responder
+                    .cast::<serde_json::Value>()
+                    .respond_with_error(agent_client_protocol::Error::method_not_found())
+            }
+        }
+    }
+
+    /// Demultiplex an incoming `ClientNotification` enum variant onto the
+    /// inherent notification handler. Notifications are fire-and-forget; any
+    /// per-variant error is logged inside the delegate but never returned to
+    /// the SDK (which would tear down the connection).
+    async fn dispatch_client_notification(
+        server: &Arc<Self>,
+        notification: agent_client_protocol::ClientNotification,
+    ) {
+        use agent_client_protocol::ClientNotification as Notif;
+
+        match notification {
+            Notif::CancelNotification(n) => {
+                if let Err(e) = server.cancel(n).await {
+                    tracing::error!("cancel notification handler failed: {}", e);
+                }
+            }
+            Notif::ExtNotification(n) => {
+                if let Err(e) = server.ext_notification(n).await {
+                    tracing::error!("ext notification handler failed: {}", e);
+                }
+            }
+            other => {
+                tracing::debug!(
+                    "Ignoring unsupported ClientNotification variant: {}",
+                    other.method()
+                );
+            }
+        }
+    }
+
     /// Static agent identifier used in fixtures and logs.
     ///
     /// In ACP 0.10 this implemented `agent_client_protocol_extras::AgentWithFixture`.
@@ -2222,6 +2294,57 @@ impl AcpServer {
     pub fn agent_type(&self) -> &'static str {
         "llama"
     }
+}
+
+/// Wrap a tokio `AsyncRead`/`AsyncWrite` pair into the SDK's `Lines` transport.
+///
+/// The SDK 0.11 `Builder::connect_with` accepts any `ConnectTo<Counterpart>`. The
+/// most convenient transport for newline-delimited JSON-RPC over byte streams is
+/// `agent_client_protocol::Lines`, which takes a `futures::Stream<Item =
+/// io::Result<String>>` for incoming lines and a `futures::Sink<String, Error =
+/// io::Error>` for outgoing lines.
+///
+/// Both adapters are built with `futures::stream::unfold` / `futures::sink::unfold`
+/// so we don't need the `tokio_util::compat` glue or extra crate features.
+///
+/// # Errors
+/// The returned transport surfaces underlying I/O errors through the stream/sink
+/// `io::Error` channel, which the SDK's dispatch loop maps onto the connection's
+/// shutdown path.
+fn build_lines_transport<R, W>(
+    reader: R,
+    writer: W,
+) -> agent_client_protocol::Lines<
+    impl futures::Sink<String, Error = std::io::Error> + Send + 'static,
+    impl futures::Stream<Item = std::io::Result<String>> + Send + 'static,
+>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // Incoming: yield each line as `io::Result<String>`. Empty lines are passed
+    // through; the SDK's parser ignores blank input.
+    let incoming = futures::stream::unfold(BufReader::new(reader).lines(), |mut lines| async move {
+        match lines.next_line().await {
+            Ok(Some(line)) => Some((Ok(line), lines)),
+            Ok(None) => None,
+            Err(e) => Some((Err(e), lines)),
+        }
+    });
+
+    // Outgoing: append `\n` to each line and write it to the underlying writer,
+    // flushing after every message so clients see responses immediately.
+    let outgoing = futures::sink::unfold(writer, |mut writer, line: String| async move {
+        let mut bytes = line.into_bytes();
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await?;
+        writer.flush().await?;
+        Ok::<_, std::io::Error>(writer)
+    });
+
+    agent_client_protocol::Lines::new(outgoing, incoming)
 }
 
 /// Extract the optional caller-supplied `max_tokens` cap from a
