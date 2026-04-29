@@ -26,7 +26,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use agent_client_protocol::{Agent, SessionNotification};
+use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::Agent;
 use futures::stream::{FuturesUnordered, StreamExt};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_templating::HashMapPartialLoader;
@@ -486,10 +487,10 @@ fn create_render_error(validator: &Validator, error: &str) -> ExecutedValidator 
 /// * `session_id` - The fresh session to issue the prompt on
 /// * `rule_prompt` - The rendered rule prompt body
 fn build_rule_prompt_request(
-    session_id: agent_client_protocol::SessionId,
+    session_id: agent_client_protocol::schema::SessionId,
     rule_prompt: String,
-) -> agent_client_protocol::PromptRequest {
-    use agent_client_protocol::{ContentBlock, PromptRequest, TextContent};
+) -> agent_client_protocol::schema::PromptRequest {
+    use agent_client_protocol::schema::{ContentBlock, PromptRequest, TextContent};
 
     let mut meta = serde_json::Map::new();
     meta.insert(
@@ -571,7 +572,7 @@ response. partial response: {partial}",
 fn build_rule_outcome_from_response(
     rule: &crate::validator::Rule,
     ruleset: &RuleSet,
-    response: Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+    response: Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>,
     content: String,
 ) -> RuleOutcome {
     match response {
@@ -581,7 +582,7 @@ fn build_rule_outcome_from_response(
             // than trying to parse a truncated, half-finished response.
             if matches!(
                 prompt_response.stop_reason,
-                agent_client_protocol::StopReason::MaxTokens
+                agent_client_protocol::schema::StopReason::MaxTokens
             ) {
                 tracing::error!(
                     "RuleSet '{}' rule '{}' hit max_tokens cap ({}); failing rule",
@@ -1157,7 +1158,7 @@ impl ValidatorRunner {
         // agent-level handshake (capabilities, version negotiation) and is
         // independent of session lifecycles, so it does not need to be
         // repeated per rule.
-        use agent_client_protocol::InitializeRequest;
+        use agent_client_protocol::schema::InitializeRequest;
         let init_request = InitializeRequest::new(1.into());
         if let Err(e) = self.agent.initialize(init_request).await {
             tracing::error!(
@@ -1375,8 +1376,8 @@ impl ValidatorRunner {
         &self,
         rule: &crate::validator::Rule,
         ruleset: &RuleSet,
-    ) -> Result<agent_client_protocol::SessionId, RuleOutcome> {
-        use agent_client_protocol::NewSessionRequest;
+    ) -> Result<agent_client_protocol::schema::SessionId, RuleOutcome> {
+        use agent_client_protocol::schema::NewSessionRequest;
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
         match self.agent.new_session(NewSessionRequest::new(cwd)).await {
@@ -1435,9 +1436,9 @@ impl ValidatorRunner {
         ruleset: &RuleSet,
         context: &serde_json::Value,
         changed_files: Option<&[String]>,
-        session_id: agent_client_protocol::SessionId,
+        session_id: agent_client_protocol::schema::SessionId,
     ) -> (
-        Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+        Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>,
         String,
     ) {
         // Build the self-contained rule prompt. `hook_context` carries the
@@ -2201,73 +2202,82 @@ mod tests {
     impl Agent for SessionRecordingAgent {
         async fn initialize(
             &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+            _request: agent_client_protocol::schema::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::InitializeResponse> {
+            Ok(agent_client_protocol::schema::InitializeResponse::new(
+                1.into(),
+            ))
         }
 
         async fn authenticate(
             &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
+            _request: agent_client_protocol::schema::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::AuthenticateResponse>
+        {
+            Ok(agent_client_protocol::schema::AuthenticateResponse::new())
         }
 
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let session_id = agent_client_protocol::SessionId::new(format!("test-session-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+            let session_id =
+                agent_client_protocol::schema::SessionId::new(format!("test-session-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
         async fn load_session(
             &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            _request: agent_client_protocol::schema::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::LoadSessionResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn set_session_mode(
             &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            _request: agent_client_protocol::schema::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::SetSessionModeResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn prompt(
             &self,
-            request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             self.prompt_session_ids
                 .lock()
                 .unwrap()
                 .push(request.session_id.0.to_string());
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::EndTurn,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::EndTurn,
             ))
         }
 
         async fn cancel(
             &self,
-            _notification: agent_client_protocol::CancelNotification,
+            _notification: agent_client_protocol::schema::CancelNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }
 
         async fn ext_method(
             &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            _request: agent_client_protocol::schema::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::ExtResponse> {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn ext_notification(
             &self,
-            _notification: agent_client_protocol::ExtNotification,
+            _notification: agent_client_protocol::schema::ExtNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }
@@ -2376,7 +2386,7 @@ mod tests {
     /// silently, runaway generations would no longer be capped.
     #[test]
     fn test_build_rule_prompt_request_sets_max_tokens_meta() {
-        let session_id = agent_client_protocol::SessionId::new("test-session");
+        let session_id = agent_client_protocol::schema::SessionId::new("test-session");
         let request = build_rule_prompt_request(session_id.clone(), "rule body".to_string());
 
         // session_id is propagated unchanged
@@ -2458,8 +2468,8 @@ mod tests {
             source: ValidatorSource::Project,
             base_path: PathBuf::from("/tmp/test-ruleset"),
         };
-        let response = Ok(agent_client_protocol::PromptResponse::new(
-            agent_client_protocol::StopReason::MaxTokens,
+        let response = Ok(agent_client_protocol::schema::PromptResponse::new(
+            agent_client_protocol::schema::StopReason::MaxTokens,
         ));
         let partial = "<think>I was thinking about validators</think> partial output...";
 
@@ -2528,72 +2538,80 @@ mod tests {
     impl Agent for MaxTokensAgent {
         async fn initialize(
             &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+            _request: agent_client_protocol::schema::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::InitializeResponse> {
+            Ok(agent_client_protocol::schema::InitializeResponse::new(
+                1.into(),
+            ))
         }
 
         async fn authenticate(
             &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
+            _request: agent_client_protocol::schema::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::AuthenticateResponse>
+        {
+            Ok(agent_client_protocol::schema::AuthenticateResponse::new())
         }
 
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let session_id =
-                agent_client_protocol::SessionId::new(format!("max-tokens-sess-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+                agent_client_protocol::schema::SessionId::new(format!("max-tokens-sess-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
         async fn load_session(
             &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            _request: agent_client_protocol::schema::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::LoadSessionResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn set_session_mode(
             &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            _request: agent_client_protocol::schema::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::SetSessionModeResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn prompt(
             &self,
-            _request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            _request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             // The runaway-generation case: agent stopped because it hit the
             // per-rule max_tokens cap before producing a verdict.
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::MaxTokens,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::MaxTokens,
             ))
         }
 
         async fn cancel(
             &self,
-            _notification: agent_client_protocol::CancelNotification,
+            _notification: agent_client_protocol::schema::CancelNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }
 
         async fn ext_method(
             &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            _request: agent_client_protocol::schema::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::ExtResponse> {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn ext_notification(
             &self,
-            _notification: agent_client_protocol::ExtNotification,
+            _notification: agent_client_protocol::schema::ExtNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }
@@ -2886,70 +2904,79 @@ mod tests {
     impl Agent for SlowAgent {
         async fn initialize(
             &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+            _request: agent_client_protocol::schema::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::InitializeResponse> {
+            Ok(agent_client_protocol::schema::InitializeResponse::new(
+                1.into(),
+            ))
         }
 
         async fn authenticate(
             &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
+            _request: agent_client_protocol::schema::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::AuthenticateResponse>
+        {
+            Ok(agent_client_protocol::schema::AuthenticateResponse::new())
         }
 
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let session_id = agent_client_protocol::SessionId::new(format!("slow-sess-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+            let session_id =
+                agent_client_protocol::schema::SessionId::new(format!("slow-sess-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
         async fn load_session(
             &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            _request: agent_client_protocol::schema::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::LoadSessionResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn set_session_mode(
             &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            _request: agent_client_protocol::schema::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::SetSessionModeResponse>
+        {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn prompt(
             &self,
-            _request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            _request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::EndTurn,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::EndTurn,
             ))
         }
 
         async fn cancel(
             &self,
-            _notification: agent_client_protocol::CancelNotification,
+            _notification: agent_client_protocol::schema::CancelNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }
 
         async fn ext_method(
             &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            _request: agent_client_protocol::schema::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::ExtResponse> {
             Err(agent_client_protocol::Error::method_not_found())
         }
 
         async fn ext_notification(
             &self,
-            _notification: agent_client_protocol::ExtNotification,
+            _notification: agent_client_protocol::schema::ExtNotification,
         ) -> agent_client_protocol::Result<()> {
             Ok(())
         }

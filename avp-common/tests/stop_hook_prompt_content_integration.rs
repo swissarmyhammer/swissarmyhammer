@@ -21,12 +21,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::{
-    Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
-    ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
+use agent_client_protocol::schema::{
+    AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock, ExtNotification,
+    ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
 };
+use agent_client_protocol::Agent;
 use agent_client_protocol_extras::PlaybackAgent;
 use avp_common::context::AvpContext;
 use avp_common::turn::FileDiff;

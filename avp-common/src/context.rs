@@ -42,7 +42,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use agent_client_protocol::{Agent, SessionNotification};
+use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::Agent;
 use agent_client_protocol_extras::RecordingAgent;
 use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use swissarmyhammer_tools::mcp::unified_server::{
@@ -157,63 +158,63 @@ struct ArcAgent(Arc<dyn Agent + Send + Sync>);
 impl Agent for ArcAgent {
     async fn initialize(
         &self,
-        request: agent_client_protocol::InitializeRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+        request: agent_client_protocol::schema::InitializeRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::InitializeResponse> {
         self.0.initialize(request).await
     }
 
     async fn authenticate(
         &self,
-        request: agent_client_protocol::AuthenticateRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+        request: agent_client_protocol::schema::AuthenticateRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::AuthenticateResponse> {
         self.0.authenticate(request).await
     }
 
     async fn new_session(
         &self,
-        request: agent_client_protocol::NewSessionRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+        request: agent_client_protocol::schema::NewSessionRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse> {
         self.0.new_session(request).await
     }
 
     async fn load_session(
         &self,
-        request: agent_client_protocol::LoadSessionRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+        request: agent_client_protocol::schema::LoadSessionRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::LoadSessionResponse> {
         self.0.load_session(request).await
     }
 
     async fn set_session_mode(
         &self,
-        request: agent_client_protocol::SetSessionModeRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+        request: agent_client_protocol::schema::SetSessionModeRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::SetSessionModeResponse> {
         self.0.set_session_mode(request).await
     }
 
     async fn prompt(
         &self,
-        request: agent_client_protocol::PromptRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+        request: agent_client_protocol::schema::PromptRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
         self.0.prompt(request).await
     }
 
     async fn cancel(
         &self,
-        notification: agent_client_protocol::CancelNotification,
+        notification: agent_client_protocol::schema::CancelNotification,
     ) -> agent_client_protocol::Result<()> {
         self.0.cancel(notification).await
     }
 
     async fn ext_method(
         &self,
-        request: agent_client_protocol::ExtRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+        request: agent_client_protocol::schema::ExtRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::schema::ExtResponse> {
         self.0.ext_method(request).await
     }
 
     async fn ext_notification(
         &self,
-        notification: agent_client_protocol::ExtNotification,
+        notification: agent_client_protocol::schema::ExtNotification,
     ) -> agent_client_protocol::Result<()> {
         self.0.ext_notification(notification).await
     }
