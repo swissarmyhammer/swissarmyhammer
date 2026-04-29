@@ -135,14 +135,11 @@ ane-embedding/convert/output/
 # SAH runtime state
 **/.sah/
 
-# AVP runtime state
-.avp/
 
 # Shell tool runtime state
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
-.avp/log
 
 # Per-crate skill/agent deploy artifacts produced by `<cli> init`.
 # code-context-cli and kanban-cli commit their deploy as the install baseline;
