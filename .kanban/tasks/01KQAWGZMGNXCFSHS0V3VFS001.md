@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffdd80
 project: spatial-nav
 title: 'Focus debug overlay: drop width × height from label, keep only (x, y)'
 ---
@@ -35,18 +35,18 @@ The internal `rect` state can still hold width/height (the kernel uses them — 
 
 All asserted by automated tests below.
 
-- [ ] The rendered debug-overlay label for a zone or scope shows the kind, the moniker, and the `(x, y)` pair — and no width × height suffix.
-- [ ] The rendered debug-overlay label for a layer shows `layer:<name>` and nothing else (unchanged).
-- [ ] Resizing the host element without moving it (e.g. content reflow that changes width without changing top-left) does NOT cause the overlay's React component to re-render or re-set its `rect` state. (Optimization side-effect of dropping the w/h legs of the equality check.)
+- [x] The rendered debug-overlay label for a zone or scope shows the kind, the moniker, and the `(x, y)` pair — and no width × height suffix.
+- [x] The rendered debug-overlay label for a layer shows `layer:<name>` and nothing else (unchanged).
+- [x] Resizing the host element without moving it (e.g. content reflow that changes width without changing top-left) does NOT cause the overlay's React component to re-render or re-set its `rect` state. (Optimization side-effect of dropping the w/h legs of the equality check.)
 
 ## Tests
 
 ### Frontend — update `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`
 
-- [ ] `zone_label_has_no_dimensions_suffix` — render `<FocusDebugOverlay kind="zone" label="ui:test" hostRef={refToFixedRect}>` against a host at known `(x, y, w, h) = (10, 20, 100, 50)`; assert the rendered label text is exactly `zone:ui:test (10,20)` and does NOT contain `100×50` or `100x50`.
-- [ ] `scope_label_has_no_dimensions_suffix` — same with `kind="scope"`.
-- [ ] `layer_label_unchanged` — `<FocusDebugOverlay kind="layer" label="window" ... />` renders `layer:window` exactly. Regression guard.
-- [ ] `overlay_does_not_rerender_on_pure_dimension_change` — render the overlay, capture its render count via a probe; mutate the host's width and height but keep its top-left fixed; await an animation frame; assert the overlay did not commit a new render. (Pins the side-effect that drops w/h from the equality short-circuit.)
+- [x] `zone_label_has_no_dimensions_suffix` — render `<FocusDebugOverlay kind="zone" label="ui:test" hostRef={refToFixedRect}>` against a host at known `(x, y, w, h) = (10, 20, 100, 50)`; assert the rendered label text is exactly `zone:ui:test (10,20)` and does NOT contain `100×50` or `100x50`.
+- [x] `scope_label_has_no_dimensions_suffix` — same with `kind="scope"`.
+- [x] `layer_label_unchanged` — `<FocusDebugOverlay kind="layer" label="window" ... />` renders `layer:window` exactly. Regression guard.
+- [x] `overlay_does_not_rerender_on_pure_dimension_change` — render the overlay, capture its render count via a probe; mutate the host's width and height but keep its top-left fixed; await an animation frame; assert the overlay did not commit a new render. (Pins the side-effect that drops w/h from the equality short-circuit.)
 
 Test command: `bun run test:browser focus-debug-overlay.browser.test.tsx` — all four pass alongside the existing tests in that file.
 
@@ -54,3 +54,10 @@ Test command: `bun run test:browser focus-debug-overlay.browser.test.tsx` — al
 
 - Use `/tdd` — update the existing browser test first to expect labels without dimensions, watch it fail, edit the format string, watch it pass.
 - One file touched (`focus-debug-overlay.tsx`), one test file updated. Tiny fix.
+
+## Implementation Notes
+
+- Updated `kanban-app/ui/src/components/focus-debug-overlay.tsx`: dropped width/height from the label format (was line 192) and from the equality short-circuit (was lines 162-165).
+- Updated `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`: added 4 new tests as specified, plus an `OverlayHarness` helper that direct-mounts `<FocusDebugOverlay>` against a fixed-position host. The render-count probe uses React's `<Profiler>` to assert no commits land after a pure dimension change.
+- All 13 tests in `focus-debug-overlay.browser.test.tsx` pass. Full UI suite (1842 tests) green.
+- TDD followed: 3 of 4 new tests went RED first (the layer test was always green since layers omit the rect entirely), then GREEN after the implementation edit.

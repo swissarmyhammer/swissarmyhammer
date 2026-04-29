@@ -43,12 +43,7 @@
  * inline TODO below.
  */
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -141,10 +136,14 @@ export function FocusDebugOverlay({
 
     /**
      * Read the host rect on every animation frame and push it into
-     * `rect` state when the rounded values changed. Comparing on rounded
-     * values keeps re-renders off the hot path when the host is sitting
-     * still — the overlay only commits when the visible label would
-     * change.
+     * `rect` state when the rounded x / y values changed. The visible
+     * label only shows the (x, y) coordinate pair, so width / height are
+     * intentionally NOT part of the equality short-circuit — that keeps
+     * the overlay quiet when the host's content reflows in place
+     * (dimensions move but the top-left does not). The internal `rect`
+     * state still holds full DOMRect (the kernel uses width / height for
+     * its own bookkeeping); they are simply not used for either the
+     * visible label or the re-render gate.
      *
      * TODO(01KQ9XBAG5P9W3JREQYNGAYM8Y): swap this rAF poll for a
      * subscription to the same scroll/resize observers that
@@ -160,9 +159,7 @@ export function FocusDebugOverlay({
           if (
             prev !== null &&
             Math.round(prev.x) === Math.round(next.x) &&
-            Math.round(prev.y) === Math.round(next.y) &&
-            Math.round(prev.width) === Math.round(next.width) &&
-            Math.round(prev.height) === Math.round(next.height)
+            Math.round(prev.y) === Math.round(next.y)
           ) {
             return prev;
           }
@@ -185,11 +182,13 @@ export function FocusDebugOverlay({
 
   // Build the label text. Layers don't have a meaningful rect of their
   // own (the wrapper div the layer supplies in debug mode is purely a
-  // host for the overlay), so we omit coordinates for them.
+  // host for the overlay), so we omit coordinates for them. For zones
+  // and scopes we show only the (x, y) pair — width / height were
+  // visual noise and have been deliberately dropped.
   const labelText =
     kind === "layer" || rect === null
       ? `${kind}:${label}`
-      : `${kind}:${label} (${Math.round(rect.x)},${Math.round(rect.y)}) ${Math.round(rect.width)}×${Math.round(rect.height)}`;
+      : `${kind}:${label} (${Math.round(rect.x)},${Math.round(rect.y)})`;
 
   return (
     <span

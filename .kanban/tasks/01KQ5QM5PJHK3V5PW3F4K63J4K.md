@@ -3,7 +3,7 @@ assignees:
 - claude-code
 depends_on: []
 position_column: todo
-position_ordinal: 7f80
+position_ordinal: a180
 project: single-changelog
 title: 'single-changelog: migrate views to StoreHandle&lt;ViewStore&gt;; delete ViewsChangelog and hand-rolled undo'
 ---

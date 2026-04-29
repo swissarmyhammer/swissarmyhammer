@@ -21,6 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
+import { Profiler, useRef } from "react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -62,6 +63,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { FocusZone } from "./focus-zone";
 import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
+import { FocusDebugOverlay, type FocusDebugKind } from "./focus-debug-overlay";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { asLayerName, asMoniker } from "@/types/spatial";
@@ -96,6 +98,65 @@ async function flushFrame() {
     );
     await Promise.resolve();
   });
+}
+
+/**
+ * Direct-mount harness for `<FocusDebugOverlay>`. Renders a fixed-position
+ * host `<div>` at the supplied rect and mounts the overlay against a ref to
+ * that host. Lets the overlay tests exercise the component in isolation —
+ * no `<FocusLayer>` / `<FocusZone>` machinery, no spatial-focus IPC.
+ *
+ * The host div carries `data-testid="overlay-host"` so tests can grab it to
+ * mutate dimensions later (used by the dimension-change rerender test).
+ */
+function OverlayHarness({
+  kind,
+  label,
+  hostStyle,
+  onRender,
+}: {
+  kind: FocusDebugKind;
+  label: string;
+  hostStyle: React.CSSProperties;
+  onRender?: (phase: "mount" | "update" | "nested-update") => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  // Force a re-render once after mount so the ref is populated before the
+  // overlay's effect runs against it. Without this the first
+  // `getBoundingClientRect()` may run against null on the very first frame.
+  const overlay = (
+    <FocusDebugOverlay kind={kind} label={label} hostRef={hostRef} />
+  );
+  return (
+    <div
+      ref={hostRef}
+      data-testid="overlay-host"
+      style={{ position: "fixed", ...hostStyle }}
+    >
+      {onRender ? (
+        <Profiler id="overlay-probe" onRender={(_id, phase) => onRender(phase)}>
+          {overlay}
+        </Profiler>
+      ) : (
+        overlay
+      )}
+    </div>
+  );
+}
+
+/**
+ * Resolve the rendered debug label text for a given overlay kind. The label
+ * sits in the overlay's second child `<span>` (the first is the dashed
+ * border). Returns the trimmed `textContent` or null if the overlay is not
+ * mounted.
+ */
+function readOverlayLabel(
+  container: HTMLElement,
+  kind: FocusDebugKind,
+): string | null {
+  const overlay = container.querySelector(`[data-debug="${kind}"]`);
+  if (!overlay) return null;
+  return overlay.textContent?.trim() ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +446,142 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
     // And no `[data-debug=…]` elements anywhere.
     expect(container.querySelectorAll("[data-debug]").length).toBe(0);
+
+    unmount();
+  });
+
+  it("zone_label_has_no_dimensions_suffix", async () => {
+    // Mount the overlay against a fixed-rect host at (10, 20, 100, 50). The
+    // visible label must be exactly `zone:ui:test (10,20)` — no width ×
+    // height suffix. The original ask for the overlay was a tiny x/y read-
+    // out for placement verification; the dimensions had crept in as
+    // visual noise.
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="zone"
+        label="ui:test"
+        hostStyle={{
+          left: "10px",
+          top: "20px",
+          width: "100px",
+          height: "50px",
+        }}
+      />,
+    );
+    await flushFrame();
+    // Second frame to flush the rect commit back through React.
+    await flushFrame();
+
+    const text = readOverlayLabel(container, "zone");
+    expect(text).toBe("zone:ui:test (10,20)");
+    expect(text).not.toContain("100×50");
+    expect(text).not.toContain("100x50");
+
+    unmount();
+  });
+
+  it("scope_label_has_no_dimensions_suffix", async () => {
+    // Same shape as the zone test, but with `kind="scope"` to pin that the
+    // dimension-suffix removal applies to scopes too.
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="scope"
+        label="ui:test"
+        hostStyle={{
+          left: "10px",
+          top: "20px",
+          width: "100px",
+          height: "50px",
+        }}
+      />,
+    );
+    await flushFrame();
+    await flushFrame();
+
+    const text = readOverlayLabel(container, "scope");
+    expect(text).toBe("scope:ui:test (10,20)");
+    expect(text).not.toContain("100×50");
+    expect(text).not.toContain("100x50");
+
+    unmount();
+  });
+
+  it("layer_label_unchanged", async () => {
+    // Regression guard: layers omit coordinates entirely, so the label is
+    // exactly `layer:<name>` with no rect at all. Removing the dimension
+    // suffix from zones/scopes must not perturb the layer format.
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="layer"
+        label="window"
+        hostStyle={{
+          left: "0px",
+          top: "0px",
+          width: "100px",
+          height: "100px",
+        }}
+      />,
+    );
+    await flushFrame();
+    await flushFrame();
+
+    const text = readOverlayLabel(container, "layer");
+    expect(text).toBe("layer:window");
+
+    unmount();
+  });
+
+  it("overlay_does_not_rerender_on_pure_dimension_change", async () => {
+    // After dropping the width/height legs of the rect-equality short
+    // circuit in `<FocusDebugOverlay>`, a host whose top-left stays put
+    // but whose width/height changes must NOT cause the overlay to commit
+    // a new render. Pin that here with a `<Profiler>` probe.
+    const renderPhases: string[] = [];
+
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="zone"
+        label="ui:test"
+        hostStyle={{
+          left: "10px",
+          top: "20px",
+          width: "100px",
+          height: "50px",
+        }}
+        onRender={(phase) => renderPhases.push(phase)}
+      />,
+    );
+    // Two frames so the initial mount + first rect commit have settled.
+    await flushFrame();
+    await flushFrame();
+
+    // Sanity: the harness has mounted at least once and the label reflects
+    // the starting rect.
+    expect(renderPhases.length).toBeGreaterThan(0);
+    expect(readOverlayLabel(container, "zone")).toBe("zone:ui:test (10,20)");
+
+    // Snapshot the commit count, then mutate width/height while keeping
+    // the top-left fixed at (10, 20). A subsequent rAF tick reads the new
+    // rect; with the equality short-circuit unchanged on x/y, `setRect`
+    // should bail and no further commits should land.
+    const commitsBeforeResize = renderPhases.length;
+    const hostEl = container.querySelector(
+      '[data-testid="overlay-host"]',
+    ) as HTMLElement;
+    expect(hostEl).toBeTruthy();
+    hostEl.style.width = "250px";
+    hostEl.style.height = "175px";
+
+    // A few frames to give the rAF poll opportunity to observe the new
+    // dimensions and (incorrectly) trigger a commit if the short-circuit
+    // is broken.
+    await flushFrame();
+    await flushFrame();
+    await flushFrame();
+
+    expect(renderPhases.length).toBe(commitsBeforeResize);
+    // Label still has the original (10,20) coordinates and no dim suffix.
+    expect(readOverlayLabel(container, "zone")).toBe("zone:ui:test (10,20)");
 
     unmount();
   });
