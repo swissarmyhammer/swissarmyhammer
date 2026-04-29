@@ -1177,20 +1177,16 @@ impl agent_client_protocol::Agent for AcpServer {
             if !clients.is_empty() {
                 let client_count = clients.len();
 
-                // Discover tools from all MCP clients
+                // Discover tools from all MCP clients, preserving each
+                // tool's full JSON Schema (description + parameters) so
+                // the chat-template renderer sees the real parameter
+                // contract rather than a placeholder empty object.
                 let mut all_tools = Vec::new();
                 for client in &clients {
-                    match client.list_tools().await {
-                        Ok(tool_names) => {
-                            tracing::info!("Discovered {} tools from MCP client", tool_names.len());
-                            for tool_name in tool_names {
-                                all_tools.push(crate::types::ToolDefinition {
-                                    name: tool_name.clone(),
-                                    description: format!("MCP tool: {}", tool_name),
-                                    parameters: serde_json::Value::Object(serde_json::Map::new()),
-                                    server_name: "mcp".to_string(),
-                                });
-                            }
+                    match client.list_tools_with_schemas().await {
+                        Ok(tools) => {
+                            tracing::info!("Discovered {} tools from MCP client", tools.len());
+                            all_tools.extend(tools);
                         }
                         Err(e) => {
                             tracing::warn!("Failed to list tools from MCP client: {}", e);
@@ -1377,6 +1373,16 @@ impl agent_client_protocol::Agent for AcpServer {
             agent_client_protocol::Error::invalid_params()
         })?;
 
+        // Optional per-request generation cap. The ACP `_meta` map is the
+        // documented extensibility channel — callers (e.g. the validator
+        // runner) attach a `"max_tokens"` key here to defend against runaway
+        // generation. The ACP spec lets agents ignore unknown `_meta` keys, so
+        // honoring it is a deliberate opt-in: this server clamps the per-turn
+        // cap below to `min(MAX_GENERATION_TOKENS, available_tokens, requested)`
+        // when present. Hitting the cap surfaces as `StopReason::MaxTokens` to
+        // the caller via `map_finish_reason_to_stop_reason`.
+        let requested_max_tokens = extract_request_max_tokens(request.meta.as_ref());
+
         // Translate ACP content to llama messages
         let messages = super::translation::acp_to_llama_messages(request.prompt).map_err(|e| {
             tracing::error!("Failed to translate ACP content to llama messages: {}", e);
@@ -1435,10 +1441,17 @@ impl agent_client_protocol::Agent for AcpServer {
             let available_tokens = model_context_size.saturating_sub(current_tokens);
 
             // Cap max_tokens to min(16k, available_space) to prevent hanging
-            // and ensure reasonable generation limits
+            // and ensure reasonable generation limits.
+            //
+            // If the caller provided a stricter cap via `request.meta.max_tokens`,
+            // honor it as an additional upper bound — this lets the validator
+            // runner enforce a defense-in-depth limit per rule. We never raise
+            // the cap above `MAX_GENERATION_TOKENS`; callers can only tighten,
+            // not loosen, the server-side limit.
             const MAX_GENERATION_TOKENS: usize = 16384; // 16k tokens
             const MIN_GENERATION_TOKENS: usize = 512; // Minimum reasonable generation
 
+            let server_cap = available_tokens.min(MAX_GENERATION_TOKENS);
             let max_tokens = if available_tokens < MIN_GENERATION_TOKENS {
                 tracing::warn!(
                     "Very limited context space available: {} tokens (used: {}/{})",
@@ -1448,7 +1461,10 @@ impl agent_client_protocol::Agent for AcpServer {
                 );
                 MIN_GENERATION_TOKENS.min(available_tokens)
             } else {
-                available_tokens.min(MAX_GENERATION_TOKENS)
+                match requested_max_tokens {
+                    Some(requested) => server_cap.min(requested),
+                    None => server_cap,
+                }
             };
 
             tracing::debug!(
@@ -2199,6 +2215,37 @@ impl AgentWithFixture for AcpServer {
     fn agent_type(&self) -> &'static str {
         "llama"
     }
+}
+
+/// Extract the optional caller-supplied `max_tokens` cap from a
+/// `PromptRequest`'s `_meta` map.
+///
+/// The ACP `_meta` field is the protocol's documented extensibility channel.
+/// The validator runner (in `avp-common`) attaches a `"max_tokens"` key here
+/// as a defense-in-depth cap against runaway generation. The ACP spec lets
+/// agents ignore unknown `_meta` keys, but we choose to honor this one so a
+/// misbehaving rule can't lock the entire hook.
+///
+/// Returns `Some(n)` when the meta map contains a positive integer under the
+/// `"max_tokens"` key. Returns `None` for all other cases (key missing, value
+/// not an integer, value zero, value larger than `usize::MAX`, or meta itself
+/// is `None`). Callers treat `None` as "no caller-supplied cap" and fall back
+/// to the server's own per-turn cap (`MAX_GENERATION_TOKENS`).
+///
+/// # Why a free function
+///
+/// Pulled out of the prompt loop so the parsing logic is unit-testable without
+/// standing up a real `AcpServer` (which loads a model). The behavior is pure
+/// JSON inspection — no I/O, no async — so a free function fits cleanly.
+fn extract_request_max_tokens(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<usize> {
+    let value = meta?.get("max_tokens")?;
+    let raw = value.as_u64()?;
+    if raw == 0 {
+        return None;
+    }
+    usize::try_from(raw).ok()
 }
 
 #[cfg(test)]
@@ -3798,5 +3845,86 @@ mod tests {
         assert_eq!(after.messages[0].content, "You are a reviewer.");
         assert_eq!(after.messages[1].role, crate::types::MessageRole::User);
         assert_eq!(after.messages[1].content, "Hello");
+    }
+
+    // =========================================================================
+    // extract_request_max_tokens — caller-supplied generation cap from `_meta`
+    // =========================================================================
+
+    /// `extract_request_max_tokens` returns `None` when no meta map is provided.
+    ///
+    /// The validator runner only attaches `max_tokens` for rule executions;
+    /// other callers leave `request.meta` as `None` and must keep the existing
+    /// (uncapped) behavior.
+    #[test]
+    fn test_extract_request_max_tokens_none_when_meta_missing() {
+        assert_eq!(extract_request_max_tokens(None), None);
+    }
+
+    /// Returns `None` when meta is present but doesn't contain `max_tokens`.
+    ///
+    /// This guards the "generic ACP client that uses `_meta` for something
+    /// else" case — we must not interpret unrelated `_meta` keys.
+    #[test]
+    fn test_extract_request_max_tokens_none_when_key_missing() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("other_key".to_string(), serde_json::json!(42));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+    }
+
+    /// Returns `Some(n)` for the canonical case the validator runner produces:
+    /// `max_tokens` set to a positive `u64`. This is the contract we share
+    /// with `avp-common::validator::runner::build_rule_prompt_request`.
+    #[test]
+    fn test_extract_request_max_tokens_positive_integer() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(4096_u64));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), Some(4096));
+    }
+
+    /// Returns `None` for `max_tokens: 0` — a zero cap would be useless and
+    /// almost certainly indicates a bug at the caller. Treating it as "no cap"
+    /// matches the runner's intent (defense-in-depth, not a hard requirement).
+    #[test]
+    fn test_extract_request_max_tokens_zero_treated_as_unset() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(0));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+    }
+
+    /// Returns `None` for non-integer types. Strings, floats, booleans, and
+    /// objects under the `max_tokens` key are all treated as "no cap" — we
+    /// never coerce or guess.
+    #[test]
+    fn test_extract_request_max_tokens_non_integer_treated_as_unset() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!("4096"));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(4096.5));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(true));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
+    }
+
+    /// `i64`-formatted integers (negative or signed-positive) round-trip
+    /// through `as_u64`: signed positives parse, negatives don't. We accept
+    /// the positive case since `serde_json` may serialize positive ints as
+    /// either `Number::U64` or `Number::I64` depending on source.
+    #[test]
+    fn test_extract_request_max_tokens_signed_positive_accepted() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(8192_i64));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), Some(8192));
+    }
+
+    #[test]
+    fn test_extract_request_max_tokens_negative_treated_as_unset() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("max_tokens".to_string(), serde_json::json!(-1_i64));
+        assert_eq!(extract_request_max_tokens(Some(&meta)), None);
     }
 }

@@ -893,6 +893,124 @@ mod tests {
         );
     }
 
+    // ========================================================================
+    // Block-render contract for Stop hooks (kanban 01KQ7M20F27D0Z67H9XX0XQ4QZ).
+    //
+    // When the chain produces a Stop block (validator_block set,
+    // continue_execution=false), the strategy must render it as the JSON
+    // shape claude-code parses on stdout:
+    //   {"continue": true, "decision": "block", "reason": "...", "stopReason": "..."}
+    // with strategy exit code 0 — Stop blocks are surfaced via stdout JSON,
+    // not exit-2 stderr, see `block_stop`.
+    //
+    // This test calls `transform_to_claude_output` directly with a hand-built
+    // `ChainOutput` so the assertion exercises the rendering in isolation —
+    // no `PlaybackAgent`, no fixture timing. The chain-level half (chain
+    // produces validator_block + exit code 2) lives in
+    // `avp-common/tests/validator_block_e2e_integration.rs`.
+    // ========================================================================
+
+    /// A blocked Stop chain output renders as claude-code's stop-block JSON
+    /// (`continue: true`, `decision: "block"`, `reason` and `stopReason` set
+    /// to the same string) with exit code 0.
+    #[test]
+    fn block_stop_renders_claude_parseable_json() {
+        use crate::chain::ValidatorBlockInfo;
+
+        let chain_output = ChainOutput {
+            continue_execution: false,
+            stop_reason: Some(
+                "Found magic number 8675309 on line 12 of src/replay-fixture-target.rs".to_string(),
+            ),
+            validator_block: Some(ValidatorBlockInfo {
+                validator_name: "code-quality:no-magic-numbers".to_string(),
+                message: "Found magic number 8675309 on line 12 of src/replay-fixture-target.rs"
+                    .to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        let (hook_output, exit_code) =
+            ClaudeCodeHookStrategy::transform_to_claude_output(chain_output, HookType::Stop);
+
+        // Stop blocks are surfaced via stdout JSON, not exit-2 stderr.
+        assert_eq!(
+            exit_code, 0,
+            "Stop block strategy exit code is 0 — block is surfaced via stdout JSON",
+        );
+
+        // continue=true (claude cannot stop the assistant), decision=block,
+        // reason and stopReason both carry the formatted message.
+        assert!(
+            hook_output.continue_execution,
+            "Stop block must keep continue=true (claude cannot stop the assistant)"
+        );
+        assert_eq!(
+            hook_output.decision.as_deref(),
+            Some("block"),
+            "Stop block must set decision=\"block\" so claude-code surfaces the failure"
+        );
+
+        let reason = hook_output
+            .reason
+            .as_deref()
+            .expect("Stop block reason must be set");
+        assert!(
+            reason.contains("8675309"),
+            "reason must contain the validator's finding, got: {}",
+            reason
+        );
+        assert!(
+            reason.contains("code-quality:no-magic-numbers"),
+            "reason must include the qualified rule name so the user knows \
+             which rule blocked, got: {}",
+            reason
+        );
+
+        let stop_reason = hook_output
+            .stop_reason
+            .as_deref()
+            .expect("Stop block stopReason must be set");
+        assert_eq!(
+            stop_reason, reason,
+            "block_stop() sets stopReason and reason to the same value"
+        );
+
+        // Round-trip: serialize to JSON the way the CLI does. Claude-code
+        // parses exactly that string from stdout, so the keys must use
+        // camelCase and the values must round-trip without dropping the
+        // validator info.
+        let json = serde_json::to_value(&hook_output).expect("serialize HookOutput");
+        assert_eq!(
+            json.get("continue").and_then(|v| v.as_bool()),
+            Some(true),
+            "JSON `continue` must be true"
+        );
+        assert_eq!(
+            json.get("decision").and_then(|v| v.as_str()),
+            Some("block"),
+            "JSON `decision` must be \"block\""
+        );
+        let json_reason = json
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .expect("JSON must have `reason` string");
+        assert!(
+            json_reason.contains("8675309") && json_reason.contains("no-magic-numbers"),
+            "JSON `reason` must contain both the finding and the rule name, got: {}",
+            json_reason
+        );
+        let json_stop_reason = json
+            .get("stopReason")
+            .and_then(|v| v.as_str())
+            .expect("JSON must have `stopReason` string");
+        assert_eq!(
+            json_stop_reason, json_reason,
+            "JSON `stopReason` mirrors `reason`"
+        );
+    }
+
     /// The cleanup helper should clean state when the chain output is allowed.
     #[test]
     #[serial_test::serial(cwd)]

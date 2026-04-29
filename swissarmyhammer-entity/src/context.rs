@@ -3619,11 +3619,17 @@ mod tests {
     /// When a cache is attached, `list()` should serve from the in-memory map
     /// and not hit `io::read_entity_dir` — beyond the single preload call
     /// issued by `EntityCache::load_all`.
+    ///
+    /// This is asserted behaviorally: after the cache is loaded, we plant a
+    /// new entity file directly on disk, bypassing the cache. If subsequent
+    /// `list()` calls returned that file, they must have re-scanned the
+    /// directory; if they continue to return only the originally-cached
+    /// entries, the cache successfully short-circuited disk I/O. This
+    /// avoids depending on a process-global counter, which would race
+    /// against parallel tests that also call `read_entity_dir`.
     #[tokio::test]
     async fn test_list_hits_cache_not_disk() {
         use crate::cache::EntityCache;
-        use crate::io::READ_ENTITY_DIR_CALLS;
-        use std::sync::atomic::Ordering;
 
         let dir = TempDir::new().unwrap();
         let fields = test_fields_context();
@@ -3642,28 +3648,37 @@ mod tests {
         let cache = Arc::new(EntityCache::new(Arc::clone(&ctx)));
         ctx.attach_cache(&cache);
 
-        // One preload call hits disk.
-        let before = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
         cache.load_all("tag").await.unwrap();
-        let after_load = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
-        assert_eq!(
-            after_load - before,
-            1,
-            "load_all should issue exactly one read_entity_dir"
-        );
 
-        // 100 list calls must serve from cache — zero additional disk reads.
+        // Sanity: list() sees the 5 preloaded tags.
+        assert_eq!(ctx.list("tag").await.unwrap().len(), 5);
+
+        // Plant a 6th tag directly on disk, bypassing the cache. A
+        // disk-reading `list()` would observe this file; a cache-served
+        // `list()` would not.
+        let tag_def = fields.get_entity("tag").expect("tag def must exist");
+        let tag_dir = ctx.entity_dir("tag");
+        let mut planted = Entity::new("tag", "t-planted");
+        planted.set("tag_name", json!("Planted"));
+        let path = crate::io::entity_file_path(&tag_dir, planted.id.as_str(), tag_def);
+        crate::io::write_entity(&path, &planted, tag_def)
+            .await
+            .unwrap();
+
+        // 100 list calls must serve from cache — they must not see the
+        // planted file, because the cache short-circuits disk reads.
         for _ in 0..100 {
             let tags = ctx.list("tag").await.unwrap();
-            assert_eq!(tags.len(), 5);
+            assert_eq!(
+                tags.len(),
+                5,
+                "list() after load_all must serve from cache and not re-scan disk"
+            );
+            assert!(
+                tags.iter().all(|t| t.id.as_str() != "t-planted"),
+                "list() must not observe the disk-planted entity"
+            );
         }
-
-        let after_list = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
-        assert_eq!(
-            after_list - after_load,
-            0,
-            "100 list() calls after load_all must not touch disk"
-        );
     }
 
     /// When a cache is attached, `EntityContext::write` delegates to

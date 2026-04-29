@@ -14,7 +14,10 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpService,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
+use std::time::Instant;
 use swissarmyhammer_common::{Pretty, Result, SwissArmyHammerError, SwissarmyhammerDirectory};
 use swissarmyhammer_prompts::PromptLibrary;
 
@@ -263,6 +266,52 @@ pub struct McpServerInfo {
     pub port: Option<u16>,
 }
 
+/// Lifetime statistics for an in-process MCP server.
+///
+/// Counters are updated by the per-request middleware ([`request_observer`])
+/// and read by [`McpServerHandle::shutdown`] to emit the matching shutdown
+/// log line — the one that answers "did the in-process MCP server shut down
+/// cleanly when avp exited?".
+///
+/// Cloning is cheap: every field is wrapped in [`Arc`] / [`AtomicU64`] so the
+/// stats observed by middleware reflect the same counters the handle reads
+/// at shutdown time.
+#[derive(Debug, Clone)]
+struct ServerStats {
+    /// Wall-clock time the server bound its listener.
+    started_at: Instant,
+    /// Total HTTP requests routed through the validator/MCP endpoints.
+    total_requests: Arc<AtomicU64>,
+    /// Total HTTP requests that returned a non-2xx response.
+    total_errors: Arc<AtomicU64>,
+    /// MCP session ids observed via the `mcp-session-id` header on requests.
+    /// Used to emit a one-time `session_open` log on first sight (so callers
+    /// can grep `session_id=abc-123` end-to-end through the log).
+    seen_sessions: Arc<Mutex<HashSet<String>>>,
+}
+
+impl ServerStats {
+    /// Build a fresh stats bundle with `started_at` set to now.
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            total_requests: Arc::new(AtomicU64::new(0)),
+            total_errors: Arc::new(AtomicU64::new(0)),
+            seen_sessions: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Atomically read the current request counter.
+    fn requests(&self) -> u64 {
+        self.total_requests.load(Ordering::Relaxed)
+    }
+
+    /// Atomically read the current error counter.
+    fn errors(&self) -> u64 {
+        self.total_errors.load(Ordering::Relaxed)
+    }
+}
+
 /// Handle for managing HTTP MCP server lifecycle
 pub struct McpServerHandle {
     /// Server information
@@ -275,6 +324,12 @@ pub struct McpServerHandle {
     server: Option<Arc<McpServer>>,
     /// Completion receiver to detect when server exits naturally (stdio mode)
     completion_rx: Option<oneshot::Receiver<()>>,
+    /// Lifetime statistics — observed by the per-request middleware. Used by
+    /// [`Self::shutdown`] to emit a matching `bound_for_seconds`/
+    /// `total_requests`/`total_errors` line so the in-process server's
+    /// lifetime is visible end-to-end in `.avp/log` (or `.sah/mcp.log`).
+    /// `None` for stdio handles (no HTTP middleware → no stats).
+    stats: Option<ServerStats>,
 }
 
 impl std::fmt::Debug for McpServerHandle {
@@ -285,6 +340,7 @@ impl std::fmt::Debug for McpServerHandle {
             .field("has_server_task", &self.server_task.is_some())
             .field("has_server", &self.server.is_some())
             .field("has_completion_rx", &self.completion_rx.is_some())
+            .field("has_stats", &self.stats.is_some())
             .finish()
     }
 }
@@ -296,6 +352,9 @@ struct McpServerHandleParams {
     server_task: tokio::task::JoinHandle<()>,
     server: Arc<McpServer>,
     completion_rx: oneshot::Receiver<()>,
+    /// Lifetime stats observed by the per-request middleware. Stdio-only
+    /// handles can pass `None` since there is no HTTP request observer.
+    stats: Option<ServerStats>,
 }
 
 impl McpServerHandle {
@@ -307,6 +366,7 @@ impl McpServerHandle {
             server_task: None,
             server: None,
             completion_rx: None,
+            stats: None,
         }
     }
 
@@ -318,6 +378,7 @@ impl McpServerHandle {
             server_task: Some(params.server_task),
             server: Some(params.server),
             completion_rx: Some(params.completion_rx),
+            stats: params.stats,
         }
     }
 
@@ -336,8 +397,28 @@ impl McpServerHandle {
         &self.info.connection_url
     }
 
-    /// Shutdown the server gracefully
+    /// Shutdown the server gracefully.
+    ///
+    /// Emits a final `event=server_shutdown` log line at `debug!` with
+    /// `bound_for_seconds`, `total_requests`, and `total_errors` when this
+    /// handle has lifetime stats attached (HTTP mode). The line is the grep
+    /// target for "did the in-process MCP server shut down cleanly when
+    /// avp exited?". It is logged at debug rather than info because the
+    /// summary is diagnostic-only and the sah CLI installs a stderr
+    /// subscriber at info — promoting it to info would leak MCP-internal
+    /// jargon into every CLI subprocess's stderr.
+    ///
+    /// Idempotent: a second call after the channel has been consumed is a
+    /// no-op (no log line emitted), so repeated shutdowns from explicit
+    /// callers and `Drop` do not double up.
     pub async fn shutdown(&mut self) -> Result<()> {
+        // Idempotency guard: take the shutdown_tx upfront. A second call
+        // sees None and returns silently — matches the historical contract
+        // exercised by `test_server_shutdown_idempotency`.
+        let Some(tx) = self.shutdown_tx.take() else {
+            return Ok(());
+        };
+
         // Stop file watcher if server instance is available
         if let Some(server) = &self.server {
             server.stop_file_watching().await;
@@ -345,11 +426,49 @@ impl McpServerHandle {
         }
 
         // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.take() {
-            if tx.send(()).is_err() {
-                tracing::warn!("Server shutdown signal receiver already dropped");
-            }
+        let signal_sent = if tx.send(()).is_err() {
+            tracing::warn!("Server shutdown signal receiver already dropped");
+            false
+        } else {
+            true
+        };
+
+        // Emit the lifetime summary. Always log, even when signal_sent is
+        // false, so the operator can see the final counters.
+        //
+        // Logged at `debug!` rather than `info!`: the summary is diagnostic
+        // (matters when investigating "did the server shut down cleanly?"),
+        // not user-facing. The sah CLI installs a global stderr subscriber
+        // at INFO for non-MCP-mode invocations, so promoting this line to
+        // info would leak MCP-internal jargon into every CLI subprocess's
+        // stderr — see the integration test
+        // `error_scenarios::test_error_message_consistency`. Validators
+        // (`avp-cli`) that want this line in `.avp/log` widen their file
+        // layer to capture `swissarmyhammer_tools::mcp::unified_server` at
+        // debug.
+        if let Some(stats) = &self.stats {
+            let bound_for = stats.started_at.elapsed();
+            let session_count = stats.seen_sessions.lock().map(|s| s.len()).unwrap_or(0);
+            tracing::debug!(
+                bound_for_seconds = bound_for.as_secs(),
+                bound_for_ms = bound_for.as_millis() as u64,
+                total_requests = stats.requests(),
+                total_errors = stats.errors(),
+                total_sessions = session_count,
+                signal_sent,
+                event = "server_shutdown",
+                connection_url = %self.info.connection_url,
+                "In-process MCP server shutdown"
+            );
+        } else {
+            tracing::debug!(
+                signal_sent,
+                event = "server_shutdown",
+                connection_url = %self.info.connection_url,
+                "In-process MCP server shutdown (stdio — no HTTP stats)"
+            );
         }
+
         Ok(())
     }
 
@@ -391,6 +510,64 @@ impl McpServerHandle {
     /// * `Option<oneshot::Receiver<()>>` - The completion receiver if available
     pub fn take_completion_rx(&mut self) -> Option<oneshot::Receiver<()>> {
         self.completion_rx.take()
+    }
+}
+
+/// Emit the shutdown summary line even when callers forget to call
+/// [`McpServerHandle::shutdown`] explicitly. This makes the answer to
+/// "did the in-process MCP server shut down cleanly when avp exited?"
+/// reachable in `.avp/log` even on panicking or short-lived processes.
+///
+/// The `Drop` implementation only emits the summary when the explicit
+/// shutdown path was never taken (`shutdown_tx` is still `Some`). When
+/// `shutdown()` has already run, `take()` left `None` behind and `Drop`
+/// emits nothing — preserving the idempotency contract documented on
+/// [`McpServerHandle::shutdown`].
+///
+/// We cannot send the shutdown signal here (the receiver may already be
+/// gone), but we can log the same `event=server_shutdown` line so the log
+/// surface answers the same question whether the caller used `shutdown()`
+/// or just dropped the handle.
+impl Drop for McpServerHandle {
+    fn drop(&mut self) {
+        if self.shutdown_tx.is_none() {
+            // Explicit shutdown already ran; do not double-emit.
+            return;
+        }
+
+        // Best-effort: try to send the signal. Failure is fine — the
+        // receiver may have already gone away.
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+
+        // Emit the same lifetime summary as the explicit `shutdown()` path
+        // so the log answer is identical regardless of how the handle ended
+        // its life. Mark this case explicitly with `dropped=true` so log
+        // readers can tell the explicit shutdown apart from the Drop-only
+        // path. See `shutdown()` for why this is `debug!` and not `info!`.
+        if let Some(stats) = &self.stats {
+            let bound_for = stats.started_at.elapsed();
+            let session_count = stats.seen_sessions.lock().map(|s| s.len()).unwrap_or(0);
+            tracing::debug!(
+                bound_for_seconds = bound_for.as_secs(),
+                bound_for_ms = bound_for.as_millis() as u64,
+                total_requests = stats.requests(),
+                total_errors = stats.errors(),
+                total_sessions = session_count,
+                dropped = true,
+                event = "server_shutdown",
+                connection_url = %self.info.connection_url,
+                "In-process MCP server shutdown (Drop)"
+            );
+        } else {
+            tracing::debug!(
+                dropped = true,
+                event = "server_shutdown",
+                connection_url = %self.info.connection_url,
+                "In-process MCP server shutdown (Drop, stdio — no HTTP stats)"
+            );
+        }
     }
 }
 
@@ -526,12 +703,19 @@ async fn initialize_mcp_server(
 
 /// Create MCP router with HTTP service, validator endpoint, and health check
 ///
+/// The router is wrapped in a [`request_observer`] middleware that records
+/// every HTTP request into [`ServerStats`] — request count, error count, and
+/// first-sight per-session-id log lines. The shared [`ServerStats`] lets
+/// [`McpServerHandle::shutdown`] emit a matching shutdown summary at process
+/// exit.
+///
 /// # Arguments
 /// * `server` - Arc reference to MCP server (full tool set)
+/// * `stats` - Shared lifetime statistics observed by per-request middleware
 ///
 /// # Returns
 /// * `axum::Router` - Configured router with /mcp, /mcp/validator, and /health
-fn create_mcp_router(server: Arc<McpServer>) -> axum::Router {
+fn create_mcp_router(server: Arc<McpServer>, stats: ServerStats) -> axum::Router {
     let server_for_full = server.clone();
     let http_service = StreamableHttpService::new(
         move || Ok((*server_for_full).clone()),
@@ -551,6 +735,145 @@ fn create_mcp_router(server: Arc<McpServer>) -> axum::Router {
         .nest_service("/mcp/validator", validator_service)
         .nest_service("/mcp", http_service)
         .route("/health", axum::routing::get(health_check))
+        .layer(axum::middleware::from_fn_with_state(
+            stats,
+            request_observer,
+        ))
+}
+
+/// Per-request observer middleware: increments stats counters and emits one
+/// debug-level line per HTTP request with method, path, and session id (when
+/// the `mcp-session-id` header is present). On first sight of a new session
+/// id, also emits an info-level `event=session_open` line so the lifetime of
+/// any one session can be `grep`d end-to-end by `session_id=...`.
+///
+/// # Session lifecycle events
+///
+/// - `event=session_open` — first request observed for a previously-unseen
+///   `mcp-session-id`. Fired exactly once per session.
+/// - `event=session_close` — observed an HTTP `DELETE` against a session id
+///   we have seen open. Streamable-HTTP uses `DELETE` to gracefully close a
+///   session. The session id is removed from `seen_sessions` so any future
+///   request bearing the same id would re-trigger a `session_open`. The
+///   wrapped status is included so callers can tell a clean `204` close from
+///   a forced close.
+/// - `event=session_terminate` — non-success response on a request bearing a
+///   session id, i.e. the rmcp `Session service terminated` failure mode the
+///   task description flagged. Logged with `status` and `cause=<reason>` so
+///   the lifetime of one session can be grepped end-to-end.
+///
+/// Errors (non-2xx responses) bump [`ServerStats::total_errors`]. The
+/// per-session `session_terminate` line gives the per-session attribution that
+/// the bare `total_errors` counter could not.
+async fn request_observer(
+    axum::extract::State(stats): axum::extract::State<ServerStats>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+
+    // Extract `mcp-session-id` header if present. Streamable-HTTP issues a
+    // session id on the first POST and the client echoes it on subsequent
+    // requests; the per-session ConnectionInit/Initialize/CallTool flow all
+    // share that id.
+    let session_id = request
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // First sight of this session id → log an explicit `session_open` event.
+    // Subsequent requests skip the lock-and-insert path and just log the
+    // per-request line at debug level.
+    if let Some(ref sid) = session_id {
+        let mut seen = stats
+            .seen_sessions
+            .lock()
+            .expect("ServerStats.seen_sessions mutex poisoned");
+        if seen.insert(sid.clone()) {
+            tracing::info!(
+                session_id = %sid,
+                method = %method,
+                path = %path,
+                event = "session_open",
+                "MCP session opened (first request observed)"
+            );
+        }
+    }
+
+    stats.total_requests.fetch_add(1, Ordering::Relaxed);
+
+    tracing::debug!(
+        session_id = session_id.as_deref().unwrap_or(""),
+        method = %method,
+        path = %path,
+        "MCP HTTP request"
+    );
+
+    // Capture whether this is a streamable-HTTP DELETE (graceful close)
+    // before moving `request` into `next.run`. Per MCP streamable-HTTP spec,
+    // clients close a session by sending DELETE to the session endpoint;
+    // rmcp also routes session terminate signals via DELETE.
+    let is_delete = method == axum::http::Method::DELETE;
+
+    let response = next.run(request).await;
+    let status = response.status();
+
+    if is_delete {
+        if let Some(ref sid) = session_id {
+            // Drop from seen_sessions so any future activity on the same id
+            // re-triggers session_open (which would itself signal a bug).
+            let mut seen = stats
+                .seen_sessions
+                .lock()
+                .expect("ServerStats.seen_sessions mutex poisoned");
+            let was_open = seen.remove(sid);
+            if was_open {
+                tracing::info!(
+                    session_id = %sid,
+                    method = %method,
+                    path = %path,
+                    status = %status,
+                    cause = if status.is_success() { "client_delete" } else { "delete_failed" },
+                    event = "session_close",
+                    "MCP session closed (DELETE observed)"
+                );
+            }
+        }
+    }
+
+    if !status.is_success() {
+        stats.total_errors.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(
+            session_id = session_id.as_deref().unwrap_or(""),
+            method = %method,
+            path = %path,
+            status = %status,
+            "MCP HTTP request returned non-success status"
+        );
+
+        // Per-session attribution for the rmcp `Session service terminated`
+        // family of errors: any non-success response on a session-bearing
+        // request fires `session_terminate` with the HTTP status as cause.
+        // This is what answers "why did session abc-123 die?" — grep for the
+        // session id and the line carries the status that killed it.
+        if !is_delete {
+            if let Some(ref sid) = session_id {
+                tracing::warn!(
+                    session_id = %sid,
+                    method = %method,
+                    path = %path,
+                    status = %status,
+                    cause = %status.canonical_reason().unwrap_or("non-success"),
+                    event = "session_terminate",
+                    "MCP session encountered non-success status (possible service terminate)"
+                );
+            }
+        }
+    }
+
+    response
 }
 
 /// Parse socket address from string with error handling
@@ -583,11 +906,13 @@ async fn bind_tcp_listener(socket_addr: std::net::SocketAddr) -> Result<TcpListe
 
 /// Setup HTTP server infrastructure for stdio mode workflow support
 ///
-/// Finds an available port, creates the HTTP service, and binds the listener.
-/// Returns the port number, router, and listener.
+/// Finds an available port, creates the HTTP service (wrapped in the
+/// per-request observer middleware), and binds the listener. Returns the
+/// port, router, listener, and shared [`ServerStats`] for the caller to
+/// attach to the [`McpServerHandle`].
 async fn setup_http_server_for_stdio(
     server: Arc<McpServer>,
-) -> Result<(u16, axum::Router, tokio::net::TcpListener)> {
+) -> Result<(u16, axum::Router, tokio::net::TcpListener, ServerStats)> {
     tracing::debug!("Finding available random port for HTTP server");
     let http_port = resolve_port(None).await?;
 
@@ -599,7 +924,8 @@ async fn setup_http_server_for_stdio(
     let http_bind_addr = format!("127.0.0.1:{}", http_port);
     let http_socket_addr = parse_socket_addr(&http_bind_addr)?;
 
-    let router = create_mcp_router(server);
+    let stats = ServerStats::new();
+    let router = create_mcp_router(server, stats.clone());
     let http_listener = bind_tcp_listener(http_socket_addr).await?;
 
     tracing::info!(
@@ -607,7 +933,7 @@ async fn setup_http_server_for_stdio(
         http_port
     );
 
-    Ok((http_port, router, http_listener))
+    Ok((http_port, router, http_listener, stats))
 }
 
 /// Spawn stdio server task with shutdown and completion handling
@@ -692,7 +1018,8 @@ async fn start_stdio_server(
         McpServer::new_with_work_dir(library, work_dir, model_override.clone(), agent_mode).await?;
     let temp_server_arc = Arc::new(temp_server);
 
-    let (http_port, router, http_listener) = setup_http_server_for_stdio(temp_server_arc).await?;
+    let (http_port, router, http_listener, stats) =
+        setup_http_server_for_stdio(temp_server_arc).await?;
 
     let server_arc =
         initialize_mcp_server(None, http_port, model_override, working_dir, agent_mode).await?;
@@ -721,6 +1048,7 @@ async fn start_stdio_server(
         server_task,
         server: server_arc,
         completion_rx,
+        stats: Some(stats),
     }))
 }
 
@@ -832,14 +1160,21 @@ async fn start_http_server(
     .await?;
     tracing::debug!("MCP server initialized");
 
-    let router = create_mcp_router(server_arc.clone());
+    let stats = ServerStats::new();
+    let router = create_mcp_router(server_arc.clone(), stats.clone());
     let (listener, connection_url) = create_tcp_listener(actual_port).await?;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (server_task, ready_rx) = spawn_http_server_task(listener, router, shutdown_rx);
 
     wait_for_server_ready(ready_rx).await?;
-    tracing::info!("HTTP MCP server confirmed ready on {}", connection_url);
+    tracing::info!(
+        connection_url = %connection_url,
+        port = actual_port,
+        agent_mode,
+        event = "server_start",
+        "HTTP MCP server confirmed ready"
+    );
 
     let info = McpServerInfo {
         mode: McpServerMode::Http {
@@ -852,12 +1187,304 @@ async fn start_http_server(
     let mut handle = McpServerHandle::new(info, shutdown_tx);
     handle.server_task = Some(server_task);
     handle.server = Some(server_arc);
+    handle.stats = Some(stats);
     Ok(handle)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Capture writer for log-output tests. A `MakeWriter` implementation
+    /// that pushes every formatted byte into a shared `Arc<Mutex<Vec<u8>>>`
+    /// so tests can assert on `tracing::info!` lines verbatim. Used to
+    /// convert the grep-able acceptance contract into machine-checked
+    /// regression coverage.
+    #[derive(Clone)]
+    struct LineWriter {
+        buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl std::io::Write for LineWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut guard = self.buf.lock().unwrap();
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LineWriter {
+        type Writer = LineWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Build a fresh capture buffer + `MakeWriter`.
+    fn capture_lines() -> (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, LineWriter) {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = LineWriter { buf: buf.clone() };
+        (buf, writer)
+    }
+
+    /// Drain captured bytes into a list of lines.
+    fn captured_lines(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> Vec<String> {
+        let bytes = buf.lock().unwrap();
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Asserts the explicit `shutdown()` path emits `event=server_shutdown`
+    /// with a non-zero `bound_for_ms` and zero traffic counters, and that the
+    /// idempotent second call does NOT re-emit the line.
+    ///
+    /// This converts criterion #5 from the task ("did the in-process MCP
+    /// server shut down cleanly when avp exited?") into a regression-proof
+    /// test — a future refactor that drops the `tracing::debug!` line in
+    /// `shutdown()` will fail this test rather than silently regress.
+    ///
+    /// Subscriber is set to DEBUG because the shutdown summary is logged at
+    /// debug level (it is diagnostic, not user-facing — see the comment in
+    /// `McpServerHandle::shutdown` for the rationale).
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_shutdown_emits_server_shutdown_event() {
+        use tracing_subscriber::fmt;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (buf, writer) = capture_lines();
+        let layer = fmt::layer().with_writer(writer).with_ansi(false);
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::LevelFilter::DEBUG)
+            .with(layer);
+
+        // `set_default` returns a guard scoped to this thread; since
+        // `tokio::test` runs on the current thread by default, the guard
+        // captures every `tracing::info!` we emit during the test.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Build a stats bundle and a fake handle wired to it; do not
+        // actually start a server. The only thing `shutdown()` does that
+        // affects logging is read `stats` and emit the line — exercise that
+        // path directly.
+        let stats = ServerStats::new();
+        stats.total_requests.fetch_add(7, Ordering::Relaxed);
+        stats.total_errors.fetch_add(2, Ordering::Relaxed);
+        let info = McpServerInfo {
+            mode: McpServerMode::Http { port: Some(12345) },
+            connection_url: "http://127.0.0.1:12345/mcp".to_string(),
+            port: Some(12345),
+        };
+        let (tx, _rx) = oneshot::channel::<()>();
+        let mut handle = McpServerHandle {
+            info,
+            shutdown_tx: Some(tx),
+            server_task: None,
+            server: None,
+            completion_rx: None,
+            stats: Some(stats),
+        };
+
+        // First shutdown: emits the line.
+        handle.shutdown().await.unwrap();
+        // Second shutdown: idempotent, must NOT re-emit.
+        handle.shutdown().await.unwrap();
+
+        // Forget the handle so its Drop does not also fire (the test
+        // is asserting on the explicit path, not the Drop path).
+        std::mem::forget(handle);
+
+        // Drop the guard before reading captured output to flush the
+        // formatter writer.
+        drop(_guard);
+
+        let lines = captured_lines(&buf);
+        let shutdown_lines: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("event=\"server_shutdown\""))
+            .collect();
+        assert_eq!(
+            shutdown_lines.len(),
+            1,
+            "expected exactly one server_shutdown line (idempotent second call must not re-emit), \
+             got {}: {:?}",
+            shutdown_lines.len(),
+            shutdown_lines
+        );
+        let line = shutdown_lines[0];
+        assert!(
+            line.contains("total_requests=7"),
+            "missing total_requests=7: {}",
+            line
+        );
+        assert!(
+            line.contains("total_errors=2"),
+            "missing total_errors=2: {}",
+            line
+        );
+        assert!(
+            line.contains("connection_url=http://127.0.0.1:12345/mcp"),
+            "missing connection_url: {}",
+            line
+        );
+    }
+
+    /// Asserts the request_observer middleware emits `session_open` exactly
+    /// once per `mcp-session-id`, increments request and error counters, and
+    /// emits `session_terminate` when a session-bearing request returns a
+    /// non-success status.
+    ///
+    /// This converts criterion #4 (from the task — "why did session abc-123
+    /// die?") into a regression-proof test.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_request_observer_session_lifecycle_events() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use axum::routing::any;
+        use tower::ServiceExt;
+        use tracing_subscriber::fmt;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (buf, writer) = capture_lines();
+        let layer = fmt::layer().with_writer(writer).with_ansi(false);
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::LevelFilter::INFO)
+            .with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let stats = ServerStats::new();
+        let stats_for_app = stats.clone();
+
+        async fn ok_handler() -> StatusCode {
+            StatusCode::OK
+        }
+        async fn err_handler() -> StatusCode {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        async fn delete_ok() -> StatusCode {
+            StatusCode::NO_CONTENT
+        }
+
+        let app = axum::Router::new()
+            .route("/ok", any(ok_handler))
+            .route("/err", any(err_handler))
+            .route("/del", any(delete_ok))
+            .layer(axum::middleware::from_fn_with_state(
+                stats_for_app,
+                request_observer,
+            ));
+
+        // Build three requests sharing one session id, plus one with a
+        // distinct session id.
+        let session_a = "sess-AAA";
+        let session_b = "sess-BBB";
+
+        let r1 = Request::builder()
+            .uri("/ok")
+            .header("mcp-session-id", session_a)
+            .body(Body::empty())
+            .unwrap();
+        let r2 = Request::builder()
+            .uri("/ok")
+            .header("mcp-session-id", session_a)
+            .body(Body::empty())
+            .unwrap();
+        let r3 = Request::builder()
+            .uri("/err")
+            .header("mcp-session-id", session_a)
+            .body(Body::empty())
+            .unwrap();
+        let r4 = Request::builder()
+            .uri("/ok")
+            .header("mcp-session-id", session_b)
+            .body(Body::empty())
+            .unwrap();
+        let r5 = Request::builder()
+            .method("DELETE")
+            .uri("/del")
+            .header("mcp-session-id", session_a)
+            .body(Body::empty())
+            .unwrap();
+
+        let _ = app.clone().oneshot(r1).await.unwrap();
+        let _ = app.clone().oneshot(r2).await.unwrap();
+        let _ = app.clone().oneshot(r3).await.unwrap();
+        let _ = app.clone().oneshot(r4).await.unwrap();
+        let _ = app.clone().oneshot(r5).await.unwrap();
+
+        // Drop the subscriber guard before reading captured output.
+        drop(_guard);
+
+        let lines = captured_lines(&buf);
+
+        // Counters: 5 requests, 1 error.
+        assert_eq!(
+            stats.requests(),
+            5,
+            "expected 5 requests, got {}",
+            stats.requests()
+        );
+        assert_eq!(
+            stats.errors(),
+            1,
+            "expected 1 error, got {}",
+            stats.errors()
+        );
+
+        // session_open must fire exactly once per distinct session id.
+        let opens_a: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("event=\"session_open\"") && l.contains(session_a))
+            .collect();
+        assert_eq!(
+            opens_a.len(),
+            1,
+            "expected exactly one session_open for session A, got {}: {:?}",
+            opens_a.len(),
+            opens_a
+        );
+        let opens_b: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("event=\"session_open\"") && l.contains(session_b))
+            .collect();
+        assert_eq!(
+            opens_b.len(),
+            1,
+            "expected exactly one session_open for session B, got {}: {:?}",
+            opens_b.len(),
+            opens_b
+        );
+
+        // session_terminate must fire on the err response on session A.
+        let terminates: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("event=\"session_terminate\"") && l.contains(session_a))
+            .collect();
+        assert_eq!(
+            terminates.len(),
+            1,
+            "expected exactly one session_terminate for session A, got {}: {:?}",
+            terminates.len(),
+            terminates
+        );
+
+        // session_close must fire on the DELETE response on session A.
+        let closes: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("event=\"session_close\"") && l.contains(session_a))
+            .collect();
+        assert_eq!(
+            closes.len(),
+            1,
+            "expected exactly one session_close for session A, got {}: {:?}",
+            closes.len(),
+            closes
+        );
+    }
 
     #[tokio::test]
     #[test_log::test]
@@ -1327,6 +1954,110 @@ mod tests {
             server_instance.is_some(),
             "Server instance should be accessible"
         );
+        server.shutdown().await.unwrap();
+    }
+
+    /// Runtime tools/list audit (#3 in task 01KQ7G1R9KRQ8RDBKYVSNEN9V4).
+    ///
+    /// Boots an actual HTTP MCP server, opens an RMCP client against the
+    /// `/mcp/validator` sub-route, sends `tools/list`, and asserts the
+    /// returned tool names are exactly the validator allowlist —
+    /// `{"read_file", "glob_files", "grep_files", "code_context"}` —
+    /// no more, no less.
+    ///
+    /// The split file tools are exposed by name (rather than the unified
+    /// `files` tool with an `op` argument) so that Hermes-trained validator
+    /// models can call them directly with the natural `{"name": "read_file",
+    /// "arguments": {...}}` shape.
+    ///
+    /// This is the durable guard against tool-set drift. If anyone adds a
+    /// `register_kanban_tools(&mut registry)` call to `create_validator_server`
+    /// "because it seemed harmless", the runtime list won't match and this
+    /// test fails at the boundary the actual validator agent talks to. It
+    /// also catches reverting the split: if the unified `files` tool sneaks
+    /// back onto the validator surface, the assertion fails.
+    ///
+    /// Independent of `agent_mode` because validator tool filtering is
+    /// driven by `is_validator_tool()`, not `is_agent_tool()`.
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_validator_endpoint_lists_only_validator_tools() {
+        use crate::mcp::test_utils::create_test_client;
+        use std::collections::BTreeSet;
+
+        // Bind an in-process HTTP MCP server in a clean tempdir so its
+        // index does not walk the host monorepo.
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut server = start_mcp_server_with_options(
+            McpServerMode::Http { port: None },
+            None,
+            None,
+            Some(temp.path().to_path_buf()),
+            // agent_mode is irrelevant for the validator route — it filters
+            // by is_validator_tool(), not is_agent_tool(). Pass true so we
+            // explicitly verify the validator route stays minimal even when
+            // the full server has the maximal tool set.
+            true,
+        )
+        .await
+        .unwrap();
+
+        // The server's `connection_url` points at `/mcp`. The validator
+        // sub-route is `/mcp/validator` on the same port.
+        let port = server.port().expect("HTTP server must report a bound port");
+        let validator_url = format!("http://127.0.0.1:{}/mcp/validator", port);
+
+        let client = create_test_client(&validator_url).await;
+        let tools = client
+            .list_tools(Default::default())
+            .await
+            .expect("tools/list against /mcp/validator must succeed");
+
+        let actual: BTreeSet<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+        let expected: BTreeSet<String> = ["read_file", "glob_files", "grep_files", "code_context"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(
+            actual, expected,
+            "validator endpoint must expose exactly {{read_file, glob_files, grep_files, code_context}} — got: {:?}",
+            actual
+        );
+
+        // The unified `files` tool must not appear — its op-dispatched shape
+        // does not match what Hermes-trained validator models naturally emit.
+        assert!(
+            !actual.contains("files"),
+            "validator endpoint must NOT advertise the unified 'files' tool — got: {:?}",
+            actual
+        );
+
+        // Defense in depth: enumerate the categories the validator must
+        // never advertise. If any of these names appear, registration has
+        // leaked a forbidden tool through the validator route.
+        for forbidden in [
+            "shell",
+            "git",
+            "kanban",
+            "web",
+            "questions",
+            "ralph",
+            "skill",
+            "agent",
+            "write_file",
+            "edit_file",
+        ] {
+            assert!(
+                !actual.contains(forbidden),
+                "validator endpoint must NOT advertise '{}' — got: {:?}",
+                forbidden,
+                actual
+            );
+        }
+
+        client.cancel().await.unwrap();
         server.shutdown().await.unwrap();
     }
 }

@@ -6,7 +6,22 @@ use std::path::{Path, PathBuf};
 ///
 /// For these tools, we only scan top-level string values to avoid
 /// picking up content strings like `old_string`, `new_string`, or `content`.
+///
+/// Single source of truth — exposed via [`is_known_file_tool`] so other
+/// modules (like the file_tracker chain link) can answer "is this tool one
+/// of the file-modifying tools whose Pre/Post must accumulate to turn-state?"
+/// without maintaining a parallel list.
 const KNOWN_FILE_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/// Whether the given tool is one of the known file-modifying tools.
+///
+/// Returns true for tools whose Pre/PostToolUse hooks must accumulate file
+/// changes into turn-state for Stop validators to consume. This is the
+/// authoritative answer — both the path extractor in this module and the
+/// file_tracker chain link's silent-failure diagnostics consult it.
+pub fn is_known_file_tool(tool_name: &str) -> bool {
+    KNOWN_FILE_TOOLS.contains(&tool_name)
+}
 
 /// Extract file paths from tool input using tool-aware strategy.
 ///
@@ -215,6 +230,25 @@ mod tests {
         // Path doesn't exist and parent doesn't exist
         let paths = extract_tool_paths("Edit", &value);
         assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_is_known_file_tool() {
+        // The four canonical file-modifying tools.
+        assert!(is_known_file_tool("Edit"));
+        assert!(is_known_file_tool("Write"));
+        assert!(is_known_file_tool("MultiEdit"));
+        assert!(is_known_file_tool("NotebookEdit"));
+        // Common tools that are not file-modifying.
+        assert!(!is_known_file_tool("Read"));
+        assert!(!is_known_file_tool("Bash"));
+        assert!(!is_known_file_tool("Grep"));
+        assert!(!is_known_file_tool("mcp__shell"));
+        // Case sensitivity — tool names from Claude Code are exact.
+        assert!(!is_known_file_tool("write"));
+        assert!(!is_known_file_tool("WRITE"));
+        // Empty string.
+        assert!(!is_known_file_tool(""));
     }
 
     #[test]

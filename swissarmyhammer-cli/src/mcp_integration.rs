@@ -181,7 +181,7 @@ impl CliToolContext {
     async fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
         register_code_context_tools(&mut tool_registry);
-        register_file_tools(&mut tool_registry).await;
+        register_file_tools(&mut tool_registry);
         register_git_tools(&mut tool_registry);
         register_kanban_tools(&mut tool_registry);
         register_questions_tools(&mut tool_registry);

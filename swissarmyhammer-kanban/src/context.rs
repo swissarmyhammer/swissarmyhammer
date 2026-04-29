@@ -1050,11 +1050,15 @@ type:
     /// When `entity_context()` runs for the first time it must preload the
     /// cache with every entity type registered by the fields context, and
     /// subsequent reads should serve from memory without hitting disk.
+    ///
+    /// Disk-avoidance is asserted behaviorally: after preload, we plant a
+    /// fresh entity file directly on disk, bypassing the cache. If
+    /// `cache.get_all` re-scanned the directory it would observe the
+    /// planted file; if it serves from memory it would not. This avoids
+    /// depending on a process-global counter, which would race against
+    /// any parallel test that also calls `read_entity_dir`.
     #[tokio::test]
     async fn test_entity_cache_preloads_all_types() {
-        use std::sync::atomic::Ordering;
-        use swissarmyhammer_entity::io::READ_ENTITY_DIR_CALLS;
-
         let (_temp, ctx) = setup_with_fields().await;
 
         // Seed a task, a tag, and a column directly on disk via a bare
@@ -1080,31 +1084,16 @@ type:
         drop(ectx_seed);
 
         // Open a fresh KanbanContext over the same directory so the cache
-        // is built from scratch and we can count read_entity_dir calls.
+        // is built from scratch.
         let fresh_ctx = KanbanContext::open(_temp.path().join(".kanban"))
             .await
             .unwrap();
 
-        let before = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
-        let _ = fresh_ctx.entity_context().await.unwrap();
-        let after_init = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
-
-        // Preload must hit disk at least once per registered entity type.
-        // The compute engine may read neighboring types while deriving
-        // aggregate fields (e.g. virtual tag counts), so the exact call
-        // count is a per-compute-graph detail. What matters here is that
-        // the preload succeeded and populated the cache.
-        let registered_types = fresh_ctx.fields().unwrap().all_entities().len();
-        assert!(
-            after_init - before >= registered_types,
-            "cache preload should touch disk for every registered entity type (got {} calls for {} types)",
-            after_init - before,
-            registered_types,
-        );
-
+        let ectx = fresh_ctx.entity_context().await.unwrap();
         let cache = fresh_ctx.entity_cache().expect("cache should be populated");
 
-        // The seeded entities must be present in their respective caches.
+        // The seeded entities must be present in their respective caches —
+        // proving every registered entity type was preloaded from disk.
         let tasks = cache.get_all("task").await;
         assert!(
             tasks.iter().any(|t| t.id == "01PRELOAD"),
@@ -1121,12 +1110,26 @@ type:
             "preload should have loaded the seeded column"
         );
 
-        // No additional disk reads beyond the preload — every get_all served
-        // from memory.
-        let after_reads = READ_ENTITY_DIR_CALLS.load(Ordering::Relaxed);
-        assert_eq!(
-            after_reads, after_init,
-            "cache.get_all() calls must not hit disk after preload"
+        // Plant a fresh tag directly on disk, bypassing the cache. If
+        // `cache.get_all` re-scanned the directory it would see this file.
+        let fields = fresh_ctx.fields().unwrap();
+        let tag_def = fields.get_entity("tag").expect("tag def must exist");
+        let tag_dir = ectx.entity_dir("tag");
+        let mut planted = Entity::new("tag", "planted-disk-only");
+        planted.set("tag_name", serde_json::json!("Planted"));
+        planted.set("color", serde_json::json!("#00ff00"));
+        let path =
+            swissarmyhammer_entity::io::entity_file_path(&tag_dir, planted.id.as_str(), tag_def);
+        swissarmyhammer_entity::io::write_entity(&path, &planted, tag_def)
+            .await
+            .unwrap();
+
+        // After preload, `cache.get_all` must serve from memory and must
+        // not observe the disk-planted entity.
+        let tags_after = cache.get_all("tag").await;
+        assert!(
+            tags_after.iter().all(|t| t.id != "planted-disk-only"),
+            "cache.get_all must serve from memory and not re-scan disk"
         );
     }
 

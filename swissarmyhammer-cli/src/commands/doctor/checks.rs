@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn test_lsp_servers_check_empty_dir() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -666,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn test_check_avp_hooks_empty() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();

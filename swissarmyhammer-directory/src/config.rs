@@ -123,6 +123,9 @@ turn_diffs/
 # Pre-execution file snapshots (ephemeral, per-turn)
 turn_pre/
 
+# Validator agent recordings (one JSON file per AvpContext lifetime)
+recordings/
+
 # Keep validators/ directory (should be committed)
 "#;
 

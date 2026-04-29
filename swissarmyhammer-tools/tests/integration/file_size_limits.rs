@@ -35,7 +35,7 @@ async fn create_test_context() -> ToolContext {
 /// Create a test tool registry with file tools registered
 async fn create_test_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    files::register_file_tools(&mut registry).await;
+    files::register_file_tools(&mut registry);
     registry
 }
 

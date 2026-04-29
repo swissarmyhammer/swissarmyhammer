@@ -19,9 +19,11 @@ Analyze the file content for functions with high cognitive complexity:
 
 ## Exceptions (Don't Flag)
 
-- Test functions with multiple assertions
+- Functions explicitly marked as tests (e.g. `#[test]`, `#[tokio::test]`, `it(...)`, `def test_foo`, `func TestFoo(t *testing.T)`) where the complexity is dominated by sequential assertions
 - Generated code or macro expansions
 - Simple match/switch statements with many variants but simple bodies
 - Configuration parsing with many options
+
+Note: Identify a function as a test from its attribute or framework-specific naming convention at the definition, not from the file name. A complex helper function named `build_request` in a file called `foo_test.rs` is still a complex function and should be flagged.
 
 
