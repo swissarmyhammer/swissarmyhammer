@@ -66,13 +66,24 @@ async fn main() {
         .with_writer(std::io::stderr)
         .with_filter(stderr_filter);
 
-    // File layer: info level, writes to .avp/log (if in a git repo)
+    // File layer: info level by default, writes to .avp/log (if in a git
+    // repo). The `swissarmyhammer_tools::mcp::unified_server` target is
+    // explicitly bumped to debug so the in-process validator MCP server's
+    // shutdown summary (`event=server_shutdown`) lands in `.avp/log` —
+    // that is the load-bearing log target for "did the in-process MCP
+    // server shut down cleanly when avp exited?". The shutdown line is
+    // intentionally `debug!` rather than `info!` so it does not leak
+    // into the sah CLI's own stderr (which has an info-level subscriber);
+    // widening the filter here keeps the line reachable for validator
+    // debugging without that side effect.
     let file_layer = open_avp_log().map(|log_file| {
         tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_ansi(false)
             .with_writer(move || FileWriterGuard::new(log_file.clone()))
-            .with_filter(EnvFilter::new("info"))
+            .with_filter(EnvFilter::new(
+                "info,swissarmyhammer_tools::mcp::unified_server=debug",
+            ))
     });
 
     tracing_subscriber::registry()

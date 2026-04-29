@@ -69,6 +69,7 @@ pub mod tool_descriptions;
 pub mod tool_handlers;
 pub mod tool_registry;
 pub mod tools;
+pub mod tracing_util;
 pub mod types;
 pub mod unified_server;
 pub mod utils;

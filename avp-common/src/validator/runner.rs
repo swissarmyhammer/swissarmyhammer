@@ -36,7 +36,8 @@ use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::types::{compile_glob_patterns, matches_any_pattern};
 use crate::validator::{
-    create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
+    create_executed_ruleset, create_executed_validator, emit_validator_result_log,
+    emit_validator_result_log_with_reason, is_rate_limit_error, log_ruleset_result,
     log_validator_result, parse_validator_response,
     render_validator_prompt_with_partials_and_changed_files, ExecutedRuleSet, ExecutedValidator,
     RulePromptContext, RuleResult, RuleSet, Validator, ValidatorLoader, ValidatorResult,
@@ -126,6 +127,44 @@ const RECOVERY_THRESHOLD: usize = 10;
 /// in-tree agents now opt in for symmetry with the runner's defense-in-depth
 /// expectation.
 pub(crate) const RULE_GENERATION_MAX_TOKENS: u64 = 16 * 1024;
+
+/// Default per-rule wall-clock timeout in seconds.
+///
+/// Each rule inside a ruleset is wrapped in [`tokio::time::timeout`] with this
+/// budget. If the agent's `prompt()` call (including its internal agentic loop
+/// and any tool calls) does not return within this window, the rule is treated
+/// as a passing-with-warning result whose `validator result` log line carries
+/// `reason="timeout"`. The hook then proceeds to the next rule.
+///
+/// This is a wall-clock cap, not a token cap. The token cap
+/// ([`RULE_GENERATION_MAX_TOKENS`]) prevents runaway *generation*; the wall
+/// timeout prevents runaway *latency* (e.g. an agent silently waiting on a
+/// dead MCP session, a stuck channel, or just an unusably slow model).
+///
+/// The rule-level frontmatter `timeout` field overrides this default per rule
+/// (see [`crate::validator::Rule::effective_timeout`]). The default exists so
+/// rules and rulesets that don't set their own timeout still have a sane cap.
+pub(crate) const RULE_DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Default cap on how many rules of a ruleset run concurrently inside the
+/// in-ruleset [`tokio::task::JoinSet`].
+///
+/// This is the "max in-flight" knob from kanban task `01KQAFFZDX40GSKXQVS0MTNDWV`:
+/// the per-rule sessions each spin up an isolated agent (e.g. a fresh llama
+/// session), so unbounded parallelism would saturate memory and turn a
+/// performance fix into an OOM. A flat default of 4 in-flight rules gives
+/// meaningful parallelism without scaling with CPU count — per-rule agents
+/// are memory-bound (each holds a llama session), not CPU-bound, so a hard
+/// cap is more appropriate than a CPU-derived heuristic.
+///
+/// The runtime can override this via the `AVP_RULE_MAX_IN_FLIGHT` environment
+/// variable (positive integer). Values that fail to parse fall back to the
+/// default.
+pub(crate) const RULE_DEFAULT_PARALLELISM: usize = 4;
+
+/// Environment variable name for overriding [`RULE_DEFAULT_PARALLELISM`] at
+/// runtime.
+pub(crate) const RULE_PARALLELISM_ENV_VAR: &str = "AVP_RULE_MAX_IN_FLIGHT";
 
 /// Maximum size in bytes of the partial agent response included in a
 /// `MaxTokens` failure message.
@@ -732,6 +771,14 @@ pub struct ValidatorRunner {
     notifier: Arc<claude_agent::NotificationSender>,
     /// Concurrency limiter for parallel execution
     concurrency: Arc<ConcurrencyLimiter>,
+    /// Cap on the number of rules that may run concurrently *inside* a single
+    /// ruleset's [`tokio::task::JoinSet`].
+    ///
+    /// This is shared across all rulesets via `clone_for_task` so two parallel
+    /// rulesets compete for the same pool of in-flight slots — preventing the
+    /// `(num_rulesets × in_flight)` combinatorial explosion that would otherwise
+    /// spawn one isolated agent session per rule per ruleset all at once.
+    rule_concurrency: Arc<Semaphore>,
 }
 
 /// Internal outcome of evaluating a single rule in a fresh session.
@@ -742,13 +789,23 @@ pub struct ValidatorRunner {
 enum RuleOutcome {
     /// Rule evaluated successfully (passed or failed verdict from the agent).
     Result(RuleResult),
-    /// Rule failed with a rate-limit / capacity / timeout error. The caller
-    /// should record this result and stop iterating remaining rules.
+    /// Rule failed with a rate-limit / capacity / transport-level timeout
+    /// error reported by the agent. Adaptive throttling kicks in and the
+    /// caller continues evaluating remaining rules (the parallel fan-out
+    /// makes "stop the loop" no longer meaningful — the other rules are
+    /// already in-flight).
     RateLimited(RuleResult),
     /// Rule failed with a non-rate-limit error (e.g. session creation failure
     /// or agent execution error). The caller should record the result and
     /// continue with the next rule.
     Failure(RuleResult),
+    /// Rule did not complete within its wall-clock budget (see
+    /// [`RULE_DEFAULT_TIMEOUT_SECS`] / per-rule `timeout` frontmatter).
+    /// The wrapped [`RuleResult`] is a passing-with-warning verdict so the
+    /// hook is not blocked on a stuck rule. The caller emits the
+    /// `validator result ... reason="timeout"` log line via
+    /// [`emit_rule_timeout_verdict`].
+    Timeout(RuleResult),
 }
 
 impl ValidatorRunner {
@@ -765,12 +822,21 @@ impl ValidatorRunner {
         let partials = Self::load_validator_partials();
         let concurrency = Arc::new(ConcurrencyLimiter::new());
 
+        let rule_in_flight = resolve_rule_in_flight_cap();
+        tracing::debug!(
+            "ValidatorRunner rule-in-flight cap = {} (env override key: {})",
+            rule_in_flight,
+            RULE_PARALLELISM_ENV_VAR,
+        );
+        let rule_concurrency = Arc::new(Semaphore::new(rule_in_flight));
+
         Ok(Self {
             prompt_library: Arc::new(prompt_library),
             partials,
             agent,
             notifier,
             concurrency,
+            rule_concurrency,
         })
     }
 
@@ -1062,21 +1128,21 @@ impl ValidatorRunner {
         context: &serde_json::Value,
         changed_files: Option<&[String]>,
     ) -> (ExecutedRuleSet, bool) {
-        // `hook_type` is accepted for caller-side API symmetry with
-        // `execute_rulesets` / `execute_validator`. The hook event semantics
-        // are already encoded in `context` (which carries `hook_event_name`
-        // plus any embedded diff blocks via `prepare_validator_context`), so
-        // there is nothing additional the runner needs to do with `hook_type`
-        // here — it's recorded by callers upstream and inspected by chain
-        // links.
+        // `hook_type` is consumed in two places:
+        //   1. Threaded into the per-rule `validator result` log line emitted
+        //      below as soon as each rule's verdict is known. This is what
+        //      production scrapes via `grep validator result .avp/log` to
+        //      tell which hook ran which rule (e.g. Stop vs PostToolUse).
+        //   2. Otherwise the hook event semantics are encoded in `context`
+        //      (which carries `hook_event_name` plus any embedded diff
+        //      blocks via `prepare_validator_context`).
         //
-        // `changed_files`, by contrast, IS consumed: it is threaded down to
-        // the per-rule prompt builder so the rendered rule prompt includes a
-        // `## Files Changed This Turn` section. The diff blocks alone do not
-        // explicitly enumerate the file list (and a per-ruleset diff filter
-        // can drop files entirely), so the explicit list is what gives the
-        // validator orientation about which paths to focus on.
-        let _ = &hook_type;
+        // `changed_files` is threaded down to the per-rule prompt builder so
+        // the rendered rule prompt includes a `## Files Changed This Turn`
+        // section. The diff blocks alone do not explicitly enumerate the
+        // file list (and a per-ruleset diff filter can drop files entirely),
+        // so the explicit list is what gives the validator orientation about
+        // which paths to focus on.
 
         // Acquire concurrency permit for this RuleSet
         let _permit = self.concurrency.acquire().await;
@@ -1112,30 +1178,62 @@ impl ValidatorRunner {
             );
         }
 
-        let mut rule_results = Vec::new();
-        let mut is_rate_limited = false;
+        let hook_type_str = hook_type.to_string();
 
-        // Execute each rule in its own fresh session so rule N never sees
-        // rule N-1's prompt or response. This eliminates the prompt-bleed
-        // observed when rules shared a single session_id.
-        for rule in &ruleset.rules {
-            let outcome = self
-                .execute_rule_in_fresh_session(rule, ruleset, context, changed_files)
-                .await;
+        // Execute rules concurrently inside the ruleset, capped by the shared
+        // `rule_concurrency` semaphore. Each rule still runs in its own fresh
+        // session — the JoinSet-style fan-out only affects scheduling, not
+        // session isolation. Rules that exceed their wall-clock timeout are
+        // recorded as passing-with-warning so a single stuck rule cannot block
+        // the entire hook.
+        let mut futures = FuturesUnordered::new();
+        for (idx, rule) in ruleset.rules.iter().enumerate() {
+            let timeout_secs = rule.effective_timeout(ruleset) as u64;
+            let timeout_secs = if timeout_secs == 0 {
+                RULE_DEFAULT_TIMEOUT_SECS
+            } else {
+                timeout_secs
+            };
+            futures.push(async move {
+                let outcome = self
+                    .execute_rule_with_timeout(rule, ruleset, context, changed_files, timeout_secs)
+                    .await;
+                (idx, outcome)
+            });
+        }
+
+        // Collect outcomes in original rule order so downstream consumers (and
+        // tests that assert on `rule_results[0]`) see a deterministic ordering
+        // regardless of which rule finishes first.
+        let mut indexed_outcomes: Vec<Option<RuleOutcome>> =
+            (0..ruleset.rules.len()).map(|_| None).collect();
+        let mut is_rate_limited = false;
+        while let Some((idx, outcome)) = futures.next().await {
+            indexed_outcomes[idx] = Some(outcome);
+        }
+
+        let mut rule_results = Vec::with_capacity(ruleset.rules.len());
+        for outcome in indexed_outcomes.into_iter().flatten() {
             match outcome {
                 RuleOutcome::Result(rule_result) => {
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
                     rule_results.push(rule_result);
                     self.concurrency.report_success();
                 }
                 RuleOutcome::RateLimited(rule_result) => {
                     is_rate_limited = true;
                     self.concurrency.report_rate_limit();
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
                     rule_results.push(rule_result);
-                    // Stop executing remaining rules if rate limited
-                    break;
                 }
                 RuleOutcome::Failure(rule_result) => {
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
                     rule_results.push(rule_result);
+                }
+                RuleOutcome::Timeout(rule_result) => {
+                    emit_rule_timeout_verdict(ruleset.name(), &rule_result, &hook_type_str);
+                    rule_results.push(rule_result);
+                    self.concurrency.report_success();
                 }
             }
         }
@@ -1144,6 +1242,76 @@ impl ValidatorRunner {
         log_ruleset_result(ruleset.name(), &executed);
 
         (executed, is_rate_limited)
+    }
+
+    /// Execute a single rule with both an in-flight cap and a wall-clock timeout.
+    ///
+    /// This is the inner per-rule worker driven by `execute_ruleset`'s
+    /// `JoinSet`-style fan-out. It performs three things in order:
+    ///
+    /// 1. Acquires a permit from `rule_concurrency` to enforce the shared
+    ///    "max in-flight rules across all rulesets" cap. The permit is
+    ///    automatically released when this function returns.
+    /// 2. Wraps the underlying `execute_rule_in_fresh_session` call in
+    ///    [`tokio::time::timeout`] so a stuck agent / dead MCP session /
+    ///    runaway tool loop cannot drag the whole hook past the parent
+    ///    process's tolerance window.
+    /// 3. On timeout, returns [`RuleOutcome::Timeout`] carrying a
+    ///    passing-with-warning [`RuleResult`] so the rest of the ruleset
+    ///    continues. The caller logs this as `validator result ... reason="timeout"`.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule to evaluate
+    /// * `ruleset` - The parent RuleSet (for severity inheritance and partials)
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of paths changed during the turn
+    /// * `timeout_secs` - Per-rule wall-clock budget in seconds
+    async fn execute_rule_with_timeout(
+        &self,
+        rule: &crate::validator::Rule,
+        ruleset: &RuleSet,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+        timeout_secs: u64,
+    ) -> RuleOutcome {
+        // Acquire the in-flight permit *outside* the timeout so blocking on
+        // the semaphore is not counted against the rule's own wall budget.
+        // This matches the user-visible contract: a rule's `timeout` is "how
+        // long the agent has to think", not "how long it has to wait its
+        // turn behind other rules".
+        let _permit = self
+            .rule_concurrency
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("rule_concurrency semaphore closed unexpectedly");
+
+        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        match tokio::time::timeout(
+            timeout_duration,
+            self.execute_rule_in_fresh_session(rule, ruleset, context, changed_files),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "RuleSet '{}' rule '{}' exceeded wall-clock timeout of {}s; treating as pass-with-warning",
+                    ruleset.name(),
+                    rule.name,
+                    timeout_secs,
+                );
+                RuleOutcome::Timeout(RuleResult {
+                    rule_name: rule.name.clone(),
+                    severity: rule.effective_severity(ruleset),
+                    result: ValidatorResult::pass(format!(
+                        "Rule '{}' did not complete within {}s; skipped (timeout)",
+                        rule.name, timeout_secs,
+                    )),
+                })
+            }
+        }
     }
 
     /// Execute a single rule inside a freshly-created agent session.
@@ -1389,8 +1557,84 @@ impl ValidatorRunner {
             agent: Arc::clone(&self.agent),
             notifier: Arc::clone(&self.notifier),
             concurrency: Arc::clone(&self.concurrency),
+            rule_concurrency: Arc::clone(&self.rule_concurrency),
         }
     }
+}
+
+/// Emit the per-rule `validator result` log line as soon as a rule's verdict
+/// is known.
+///
+/// This is the eager counterpart to the deferred batch emit that previously
+/// fired only after every RuleSet finished. Emitting per-rule guarantees that:
+///
+/// - A hook that times out mid-ruleset still has logs for the rules that
+///   completed (the failure mode captured by kanban task
+///   `01KQAFE5WGYJK3HZ8WE3B8N86K`).
+/// - The Stop and PostToolUse paths produce identical `validator result`
+///   lines — same field order, same level=INFO — because both flow through
+///   the same `execute_ruleset` call site.
+///
+/// The validator name is qualified as `<ruleset>:<rule>` so production log
+/// scrapes (`grep code-quality .avp/log`) match the same shape regardless
+/// of which hook fired the rule.
+fn emit_rule_verdict(ruleset_name: &str, rule_result: &RuleResult, hook_type_str: &str) {
+    let qualified_name = format!("{}:{}", ruleset_name, rule_result.rule_name);
+    emit_validator_result_log(
+        &qualified_name,
+        rule_result.passed(),
+        hook_type_str,
+        rule_result.message(),
+    );
+}
+
+/// Emit the per-rule `validator result` log line for a rule that hit its
+/// wall-clock timeout.
+///
+/// This is the timeout-specific counterpart to [`emit_rule_verdict`]. It tags
+/// the log line with `reason="timeout"` so production scrapes can distinguish
+/// "rule passed because the agent said so" from "rule passed because the
+/// hook gave up waiting for the agent". The verdict itself remains a pass —
+/// the timeout handler intentionally produces a passing [`RuleResult`] so a
+/// stuck rule does not block the hook.
+///
+/// The validator name is qualified as `<ruleset>:<rule>` to match the shape
+/// produced by [`emit_rule_verdict`].
+fn emit_rule_timeout_verdict(ruleset_name: &str, rule_result: &RuleResult, hook_type_str: &str) {
+    let qualified_name = format!("{}:{}", ruleset_name, rule_result.rule_name);
+    emit_validator_result_log_with_reason(
+        &qualified_name,
+        rule_result.passed(),
+        hook_type_str,
+        rule_result.message(),
+        "timeout",
+    );
+}
+
+/// Resolve the cap on rules that may run concurrently inside a single
+/// ruleset's [`tokio::task::JoinSet`].
+///
+/// Reads the `AVP_RULE_MAX_IN_FLIGHT` environment variable for an explicit
+/// runtime override (positive integer). When unset or unparseable, the cap
+/// defaults to [`RULE_DEFAULT_PARALLELISM`].
+///
+/// Per-rule agents are memory-bound (each holds an isolated llama session),
+/// so a flat default cap is more appropriate than a CPU-derived heuristic.
+fn resolve_rule_in_flight_cap() -> usize {
+    if let Ok(raw) = std::env::var(RULE_PARALLELISM_ENV_VAR) {
+        if let Ok(parsed) = raw.parse::<usize>() {
+            if parsed >= 1 {
+                return parsed;
+            }
+        }
+        tracing::warn!(
+            "Invalid {} value '{}'; falling back to default of {}",
+            RULE_PARALLELISM_ENV_VAR,
+            raw,
+            RULE_DEFAULT_PARALLELISM,
+        );
+    }
+    RULE_DEFAULT_PARALLELISM
 }
 
 /// Filter changed files for a specific RuleSet based on its match.files patterns.
@@ -2615,5 +2859,297 @@ mod tests {
             .map(|d| d.path.display().to_string())
             .collect();
         assert_eq!(paths, vec!["main.rs", "Cargo.toml"]);
+    }
+
+    // =========================================================================
+    // Per-rule timeout + in-ruleset parallelism tests
+    // =========================================================================
+
+    /// Test agent that sleeps inside `prompt()` for a configurable duration
+    /// before returning a passing response. Used to drive the per-rule
+    /// wall-clock timeout path.
+    struct SlowAgent {
+        next_session: std::sync::atomic::AtomicUsize,
+        sleep_ms: u64,
+    }
+
+    impl SlowAgent {
+        fn new(sleep_ms: u64) -> Self {
+            Self {
+                next_session: std::sync::atomic::AtomicUsize::new(0),
+                sleep_ms,
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for SlowAgent {
+        async fn initialize(
+            &self,
+            _request: agent_client_protocol::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: agent_client_protocol::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+            Ok(agent_client_protocol::AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            let n = self
+                .next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session_id = agent_client_protocol::SessionId::new(format!("slow-sess-{}", n));
+            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+        }
+
+        async fn load_session(
+            &self,
+            _request: agent_client_protocol::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: agent_client_protocol::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn prompt(
+            &self,
+            _request: agent_client_protocol::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            Ok(agent_client_protocol::PromptResponse::new(
+                agent_client_protocol::StopReason::EndTurn,
+            ))
+        }
+
+        async fn cancel(
+            &self,
+            _notification: agent_client_protocol::CancelNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: agent_client_protocol::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: agent_client_protocol::ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Helper: build a RuleSet whose default timeout is `timeout_secs` and
+    /// which contains `n` rules. Used by the timeout / parallelism tests.
+    fn create_ruleset_with_timeout(rule_names: &[&str], timeout_secs: u32) -> RuleSet {
+        use crate::validator::{Rule, RuleSetManifest, RuleSetMetadata, Severity, ValidatorSource};
+
+        let rules = rule_names
+            .iter()
+            .map(|name| Rule {
+                name: (*name).to_string(),
+                description: format!("Test rule {}", name),
+                body: format!("Validate {}", name),
+                severity: None,
+                timeout: None,
+            })
+            .collect();
+
+        RuleSet {
+            manifest: RuleSetManifest {
+                name: "timeout-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: timeout_secs,
+                once: false,
+            },
+            rules,
+            source: ValidatorSource::Project,
+            base_path: PathBuf::from("/tmp/timeout-ruleset"),
+        }
+    }
+
+    /// Each rule is wrapped in its own wall-clock timeout, and a rule that
+    /// does not return within the budget must surface as a passing-with-warning
+    /// [`RuleResult`] (not a hard failure that would block the hook). The
+    /// caller logs that result with `reason="timeout"`.
+    #[tokio::test]
+    async fn test_execute_ruleset_rule_timeout_passes_with_warning() {
+        // Agent sleeps for 5s; rule timeout is 1s. The timeout path must fire.
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(5_000));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let runner = ValidatorRunner::new(agent, notifier).unwrap();
+        let ruleset = create_ruleset_with_timeout(&["slow-rule"], 1);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        // The timeout must actually have fired — the call must return well
+        // before the agent's 5s sleep would have finished.
+        assert!(
+            elapsed.as_secs() < 4,
+            "execute_ruleset must return when the rule times out, not block on the agent (elapsed: {:?})",
+            elapsed,
+        );
+
+        assert!(!is_rate_limited, "wall-clock timeout is not a rate limit");
+        assert_eq!(executed.rule_results.len(), 1);
+
+        let result = &executed.rule_results[0];
+        assert_eq!(result.rule_name, "slow-rule");
+        assert!(
+            result.passed(),
+            "timed-out rule must produce a passing-with-warning result so the hook is not blocked"
+        );
+        let message = result.message();
+        assert!(
+            message.contains("timeout") || message.contains("did not complete"),
+            "timeout message should mention the timeout, got: {}",
+            message,
+        );
+    }
+
+    /// Multiple rules whose individual prompt sleeps would, in series, take
+    /// longer than the wall budget must still be evaluated in parallel. With
+    /// 3 rules sleeping 200ms each and an in-flight cap of at least 2, the
+    /// total wall time should be well under the 600ms serial sum.
+    #[tokio::test]
+    async fn test_execute_ruleset_runs_rules_in_parallel() {
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        // Force a non-trivial in-flight cap so the test does not depend on the
+        // host's CPU count: 3 in-flight slots is enough to run all 3 rules
+        // concurrently.
+        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
+        runner.rule_concurrency = Arc::new(Semaphore::new(3));
+
+        let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, _is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(executed.rule_results.len(), 3);
+        // 3 sequential rules at 200ms each would take ~600ms. With parallel
+        // execution we expect well under 600ms — give plenty of headroom for
+        // CI noise but still fail loudly if the loop went serial.
+        assert!(
+            elapsed.as_millis() < 500,
+            "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
+            elapsed,
+        );
+    }
+
+    /// The in-flight cap must serialize work when there are more rules than
+    /// slots. 4 rules sleeping 200ms each with a cap of 1 should take roughly
+    /// 4×200ms = 800ms — proving the semaphore actually throttles, rather
+    /// than letting all four run at once.
+    #[tokio::test]
+    async fn test_execute_ruleset_in_flight_cap_throttles() {
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
+        runner.rule_concurrency = Arc::new(Semaphore::new(1));
+
+        let ruleset = create_ruleset_with_timeout(&["a", "b", "c", "d"], 30);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, _) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(executed.rule_results.len(), 4);
+        // With cap=1 we expect serial execution: ~4×200ms = 800ms minimum.
+        assert!(
+            elapsed.as_millis() >= 700,
+            "in-flight cap=1 must serialize work; expected >=700ms but got {:?}",
+            elapsed,
+        );
+    }
+
+    /// `resolve_rule_in_flight_cap` must default to [`RULE_DEFAULT_PARALLELISM`]
+    /// when the env var is unset.
+    #[test]
+    #[serial_test::serial(rule_parallelism_env)]
+    fn test_resolve_rule_in_flight_cap_default() {
+        // Save and clear the env var
+        let saved = std::env::var(RULE_PARALLELISM_ENV_VAR).ok();
+        std::env::remove_var(RULE_PARALLELISM_ENV_VAR);
+
+        let cap = resolve_rule_in_flight_cap();
+        assert_eq!(
+            cap, RULE_DEFAULT_PARALLELISM,
+            "default cap must be RULE_DEFAULT_PARALLELISM"
+        );
+
+        // Restore
+        if let Some(v) = saved {
+            std::env::set_var(RULE_PARALLELISM_ENV_VAR, v);
+        }
+    }
+
+    /// `resolve_rule_in_flight_cap` must honor the env var override when set
+    /// to a positive integer, and fall back to the default for invalid or
+    /// non-positive values.
+    #[test]
+    #[serial_test::serial(rule_parallelism_env)]
+    fn test_resolve_rule_in_flight_cap_env_override() {
+        let saved = std::env::var(RULE_PARALLELISM_ENV_VAR).ok();
+
+        // Valid positive integer
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "7");
+        assert_eq!(resolve_rule_in_flight_cap(), 7);
+
+        // Invalid value falls back to default
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "not-a-number");
+        assert_eq!(resolve_rule_in_flight_cap(), RULE_DEFAULT_PARALLELISM);
+
+        // Zero is rejected (must be >=1) and falls back
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "0");
+        assert_eq!(resolve_rule_in_flight_cap(), RULE_DEFAULT_PARALLELISM);
+
+        // Cleanup
+        std::env::remove_var(RULE_PARALLELISM_ENV_VAR);
+        if let Some(v) = saved {
+            std::env::set_var(RULE_PARALLELISM_ENV_VAR, v);
+        }
     }
 }

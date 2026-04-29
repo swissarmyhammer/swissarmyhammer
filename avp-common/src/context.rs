@@ -919,12 +919,11 @@ impl AvpContext {
 
     /// Log a validator execution event via tracing.
     pub fn log_validator(&self, event: &ValidatorEvent) {
-        tracing::info!(
-            validator = event.name,
-            passed = event.passed,
-            hook_type = event.hook_type,
-            message = event.message,
-            "validator result"
+        crate::validator::emit_validator_result_log(
+            event.name,
+            event.passed,
+            event.hook_type,
+            event.message,
         );
     }
 
@@ -1087,12 +1086,15 @@ impl AvpContext {
             return self.placeholder_ruleset_results(rulesets, hook_type);
         }
 
-        let results = self
-            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
-            .await;
-
-        self.log_ruleset_results(&results, hook_type);
-        results
+        // Note: per-rule `validator result` log lines are emitted eagerly
+        // by `ValidatorRunner::execute_ruleset` as each rule's verdict is
+        // known, so we do NOT batch-emit them here. Batching would either
+        // duplicate the eager emit (two lines per rule) or — worse — be the
+        // only place a Stop hook ever logged (and thus drop everything when
+        // the run timed out before this awaited future completed). See
+        // kanban task `01KQAFE5WGYJK3HZ8WE3B8N86K` for the regression.
+        self.run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
+            .await
     }
 
     /// Run RuleSets with cached runner, falling back to placeholders on error.
@@ -1118,21 +1120,6 @@ impl AvpContext {
             Err(e) => {
                 tracing::warn!("Failed to execute RuleSets: {} - using placeholders", e);
                 self.placeholder_ruleset_results(rulesets, hook_type)
-            }
-        }
-    }
-
-    /// Log results for each executed RuleSet.
-    fn log_ruleset_results(&self, results: &[ExecutedRuleSet], hook_type: HookType) {
-        let hook_type_str = hook_type.to_string();
-        for ruleset_result in results {
-            for rule_result in &ruleset_result.rule_results {
-                self.log_validator(&ValidatorEvent {
-                    name: &format!("{}:{}", ruleset_result.ruleset_name, rule_result.rule_name),
-                    passed: rule_result.passed(),
-                    message: rule_result.message(),
-                    hook_type: &hook_type_str,
-                });
             }
         }
     }

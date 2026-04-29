@@ -27,6 +27,9 @@ use super::tool_registry::{
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
+use super::tracing_util::{
+    serialize_json_bounded, truncate_utf8_for_log, MAX_ARGS_BYTES_INFO, MAX_PREVIEW_BYTES_INFO,
+};
 use swissarmyhammer_agents::AgentLibrary;
 use swissarmyhammer_skills::SkillLibrary;
 
@@ -1489,16 +1492,92 @@ async fn wait_for_lsp_supervisor(
     None
 }
 
+/// Extract the MCP session id from a [`RequestContext`].
+///
+/// For HTTP transports (the in-process validator MCP server), `rmcp` injects
+/// [`http::request::Parts`] into the request context's extensions. The
+/// `mcp-session-id` header on every per-session request carries the session
+/// id assigned by the streamable-HTTP server. Returns `None` for stdio
+/// transports (which have no session id concept) or when the header is
+/// absent.
+fn session_id_from_context(context: &RequestContext<RoleServer>) -> Option<String> {
+    let parts = context.extensions.get::<http::request::Parts>()?;
+    let value = parts.headers.get("mcp-session-id")?;
+    value.to_str().ok().map(|s| s.to_string())
+}
+
+/// Render a [`CallToolResult`] for diagnostic preview.
+///
+/// Joins all text content blocks; non-text blocks (images, audio, etc.) are
+/// summarized as `<binary:N bytes>` placeholders so the log line stays
+/// compact even for tools that return mixed content.
+///
+/// Returns `(total_text_bytes, joined_text)`. The caller is responsible for
+/// truncating the returned string before emitting it at info level — full
+/// text payloads are only safe at trace level.
+fn format_call_result_for_preview(result: &rmcp::model::CallToolResult) -> (usize, String) {
+    use rmcp::model::RawContent;
+
+    let mut joined = String::new();
+    for block in &result.content {
+        match &block.raw {
+            RawContent::Text(t) => {
+                if !joined.is_empty() {
+                    joined.push('\n');
+                }
+                joined.push_str(&t.text);
+            }
+            RawContent::Image(_) => {
+                if !joined.is_empty() {
+                    joined.push('\n');
+                }
+                joined.push_str("<image>");
+            }
+            RawContent::Audio(_) => {
+                if !joined.is_empty() {
+                    joined.push('\n');
+                }
+                joined.push_str("<audio>");
+            }
+            RawContent::Resource(_) => {
+                if !joined.is_empty() {
+                    joined.push('\n');
+                }
+                joined.push_str("<resource>");
+            }
+            RawContent::ResourceLink(_) => {
+                if !joined.is_empty() {
+                    joined.push('\n');
+                }
+                joined.push_str("<resource_link>");
+            }
+        }
+    }
+    let bytes = joined.len();
+    (bytes, joined)
+}
+
 impl ServerHandler for McpServer {
     async fn initialize(
         &self,
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<InitializeResult, McpError> {
+        let session_id = session_id_from_context(&context);
+
+        // Distinct from the `event=session_open` line emitted by
+        // [`unified_server::request_observer`] on first sight of a new
+        // `mcp-session-id` header. That earlier line marks the *transport*
+        // assigning a session id; this one fires when the MCP `initialize`
+        // request actually arrives, carrying client name + version. Keeping
+        // the two events distinct prevents `grep 'event=session_open' | wc -l`
+        // from double-counting per session.
         tracing::info!(
-            "🚀 MCP client connecting: {} v{}",
-            request.client_info.name,
-            request.client_info.version
+            session_id = session_id.as_deref().unwrap_or("<stdio>"),
+            client = %request.client_info.name,
+            client_version = %request.client_info.version,
+            event = "session_initialized",
+            "🚀 MCP client connecting (initialize received)"
         );
 
         self.spawn_background_file_watcher(context.peer);
@@ -1615,7 +1694,7 @@ impl ServerHandler for McpServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
         // Hot reload: check if tools.yaml changed since last call.
         // Acquire the write lock once and read from it directly — avoids a
@@ -1625,8 +1704,26 @@ impl ServerHandler for McpServer {
             let mut watcher = self.tool_config_watcher.lock().await;
             watcher.check_and_reload(&mut registry);
         }
+        let tools = registry.list_tools();
+
+        // Per-session log of which tools were advertised — answers the
+        // grep-able question "which tools were exposed to the validator
+        // agent?". Joins names rather than dumping schemas because schemas
+        // are large and rarely the failure mode; trace-level callers can opt
+        // in to per-tool schema bytes via the `tool_count` and tool-name
+        // list below.
+        let session_id = session_id_from_context(&context);
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        tracing::info!(
+            session_id = session_id.as_deref().unwrap_or("<stdio>"),
+            tool_count = tools.len(),
+            tools = %tool_names.join(","),
+            event = "tools_listed",
+            "Advertised tool list to MCP client"
+        );
+
         Ok(ListToolsResult {
-            tools: registry.list_tools(),
+            tools,
             next_cursor: None,
             meta: None,
         })
@@ -1641,28 +1738,79 @@ impl ServerHandler for McpServer {
 
         let tool_name = request.name.to_string();
         let arg_count = request.arguments.as_ref().map_or(0, |a| a.len());
+        let session_id = session_id_from_context(&context);
+        let session_field = session_id.clone().unwrap_or_else(|| "<stdio>".to_string());
 
         let span = tracing::info_span!(
             "tool_call",
             tool = %tool_name,
             args = arg_count,
+            session_id = %session_field,
             caller = "mcp",
             status = tracing::field::Empty,
         );
 
-        async {
+        async move {
+            // The wall-clock total still anchors the `tool_call complete`
+            // line, but we also break it into the four phases the original
+            // task description called out so a slow call's bottleneck is
+            // visible without re-running with more verbose tracing:
+            //   parse_ms     — pre-call args logging + lookup of the tool.
+            //   dispatch_ms  — building the tool context for this peer.
+            //   handler_ms   — `tool.execute()` itself.
+            //   response_ms  — formatting the response preview.
+            let total_start = std::time::Instant::now();
+            let parse_start = total_start;
+
+            // Pre-call args logging — answers "what did rule X actually
+            // call?". JSON serialization is gated behind `tracing::enabled!`
+            // so info-disabled runs do not allocate.
+            //
+            // Trace-level callers see the full payload; info-level callers
+            // see a UTF-8-safe truncation with a `...[+N more bytes]`
+            // marker. The info path uses a bounded writer that stops
+            // serializing at the byte budget instead of allocating the full
+            // JSON and discarding the tail.
+            if let Some(args) = request.arguments.as_ref() {
+                if tracing::enabled!(tracing::Level::TRACE) {
+                    let full = serde_json::to_string(args)
+                        .unwrap_or_else(|_| "<unserializable>".to_string());
+                    tracing::trace!(
+                        tool = %tool_name,
+                        args_full = %full,
+                        "tool_call args (full payload)"
+                    );
+                } else if tracing::enabled!(tracing::Level::INFO) {
+                    let (preview, total_bytes) = serialize_json_bounded(args, MAX_ARGS_BYTES_INFO);
+                    let suffix = if total_bytes > preview.len() {
+                        format!("...[+{} more bytes]", total_bytes - preview.len())
+                    } else {
+                        String::new()
+                    };
+                    tracing::info!(
+                        tool = %tool_name,
+                        args_preview = %format!("{}{}", preview, suffix),
+                        args_bytes = total_bytes,
+                        "tool_call args"
+                    );
+                }
+            }
+
             let registry = self.tool_registry.read().await;
             let tool = registry.get_tool(&request.name).ok_or_else(|| {
                 tracing::error!(tool = %request.name, "unknown tool requested");
                 McpError::invalid_request(format!("Unknown tool: {}", request.name), None)
             })?;
+            let parse_ms = parse_start.elapsed().as_millis() as u64;
 
+            let dispatch_start = std::time::Instant::now();
             let tool_context_with_peer = self.prepare_tool_context(context.peer.clone());
             let arguments = request.arguments.unwrap_or_default();
+            let dispatch_ms = dispatch_start.elapsed().as_millis() as u64;
 
-            let start = std::time::Instant::now();
+            let handler_start = std::time::Instant::now();
             let result = tool.execute(arguments, &tool_context_with_peer).await;
-            let elapsed = start.elapsed();
+            let handler_ms = handler_start.elapsed().as_millis() as u64;
 
             let is_error = match &result {
                 Ok(r) => r.is_error.unwrap_or(false),
@@ -1670,9 +1818,51 @@ impl ServerHandler for McpServer {
             };
             tracing::Span::current().record("status", if is_error { "error" } else { "ok" });
 
+            // Post-call response preview — answers "what did the tool
+            // return?". Computed when info OR trace is enabled so the trace
+            // branch never reads from an empty preview when info is
+            // suppressed by a custom subscriber.
+            //
+            // Note: This is a *preview*, not the full payload. Full
+            // responses (including `read_file` content and tool errors) are
+            // emitted only at trace level — keeps secret hygiene at info
+            // level while still surfacing diagnostic detail.
+            let response_start = std::time::Instant::now();
+            let (result_bytes, preview): (usize, String) =
+                if tracing::enabled!(tracing::Level::INFO)
+                    || tracing::enabled!(tracing::Level::TRACE)
+                {
+                    match &result {
+                        Ok(call_result) => format_call_result_for_preview(call_result),
+                        Err(e) => {
+                            let s = e.to_string();
+                            (s.len(), s)
+                        }
+                    }
+                } else {
+                    (0, String::new())
+                };
+            let response_ms = response_start.elapsed().as_millis() as u64;
+
+            if tracing::enabled!(tracing::Level::TRACE) {
+                tracing::trace!(
+                    tool = %tool_name,
+                    result_full = %preview,
+                    result_bytes,
+                    "tool_call result (full payload)"
+                );
+            }
+
+            let total_ms = total_start.elapsed().as_millis() as u64;
             tracing::info!(
-                duration_ms = elapsed.as_millis(),
+                duration_ms = total_ms,
+                parse_ms,
+                dispatch_ms,
+                handler_ms,
+                response_ms,
                 error = is_error,
+                result_bytes,
+                preview = %truncate_utf8_for_log(&preview, MAX_PREVIEW_BYTES_INFO),
                 "tool_call complete"
             );
 

@@ -57,21 +57,64 @@ impl<I> ValidatorExecutorLink<I> {
 }
 
 impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
-    /// Load changed files for Stop hooks from turn state.
+    /// Load changed files for Stop hooks.
+    ///
+    /// Returns the list of files that changed during the turn so the validator
+    /// loader can match Stop-triggered RuleSets that have a `match.files`
+    /// pattern (e.g. `code-quality` matches `*.rs`).
+    ///
+    /// Sources, in order of preference:
+    /// 1. `turn_state.changed` — populated by `PostToolUseFileTracker` when a
+    ///    pre-hash differs from the post-hash for a tool's tracked paths.
+    /// 2. Sidecar diff filenames under `.avp/turn_diffs/<session_id>/` —
+    ///    populated by the same tracker as `.diff` files keyed by encoded
+    ///    file path.
+    ///
+    /// The sidecar fallback is what makes Stop hooks robust against the
+    /// failure mode where `turn_state.changed` is empty even though diffs
+    /// were written (e.g. process boundary issues, or any path where the
+    /// state file is cleared but the diff sidecars are not). Without this
+    /// fallback, the Stop chain silently rejects every ruleset with a
+    /// `match.files` pattern — which was the regression captured by kanban
+    /// task `01KQ8CXYMBGN1VTV4S89FGQYCA`.
+    ///
+    /// Returns `None` for non-Stop hooks, and `None` when neither source has
+    /// any changed paths.
     fn load_changed_files_for_stop(&self, input: &I) -> Option<Vec<String>> {
         if input.hook_type() != HookType::Stop {
             return None;
         }
-        match self.turn_state.load(input.session_id()) {
-            Ok(state) if !state.changed.is_empty() => Some(
-                state
-                    .changed
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect(),
-            ),
-            _ => None,
+        let session_id = input.session_id();
+
+        // Primary source: turn state's accumulated `changed` list.
+        if let Ok(state) = self.turn_state.load(session_id) {
+            if !state.changed.is_empty() {
+                return Some(
+                    state
+                        .changed
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
+                );
+            }
         }
+
+        // Fallback: derive changed files from sidecar diff filenames. The
+        // sidecars are the most authoritative on-disk record of what the
+        // turn modified — if any are present, we treat their paths as the
+        // changed-files list for Stop matching.
+        let sidecar = self.turn_state.load_all_diffs(session_id);
+        if sidecar.is_empty() {
+            return None;
+        }
+        let mut files: Vec<String> = sidecar.into_keys().collect();
+        files.sort();
+        tracing::debug!(
+            "ValidatorExecutorLink: Stop hook session={} changed_files derived from {} sidecar diff(s) (turn_state.changed was empty)",
+            session_id,
+            files.len()
+        );
+        Some(files)
     }
 
     /// Load accumulated diffs from sidecar files for Stop hooks.
@@ -336,14 +379,39 @@ where
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
         let changed_files = self.load_changed_files_for_stop(input);
+
+        // For Stop hooks specifically, surface the resolved changed-files
+        // count at info level. A Stop hook firing with zero changed files
+        // means every RuleSet that has `match.files` patterns will be
+        // rejected — which is the symptom reported in kanban task
+        // `01KQ8CXYMBGN1VTV4S89FGQYCA`. Logging it here gives operators a
+        // single line to grep when the Stop validator path goes silent.
+        if hook_type == HookType::Stop {
+            tracing::info!(
+                changed_files_count = changed_files.as_ref().map_or(0, |f| f.len()),
+                session_id = input.session_id(),
+                "ValidatorExecutorLink: Stop hook resolved changed files",
+            );
+        }
+
         let match_ctx = build_match_context(input, changed_files.clone());
         let rulesets = self.loader.matching_rulesets(&match_ctx);
 
         if rulesets.is_empty() {
             tracing::trace!("ValidatorExecutorLink: No RuleSets for {:?}", hook_type);
+            // For Stop hooks, also log at info level so the empty-match
+            // case is visible without enabling trace output. PostToolUse
+            // and friends fire often enough that info-level "no matches"
+            // would be noise.
+            if hook_type == HookType::Stop {
+                tracing::info!("ValidatorExecutorLink: Stop hook matched 0 RuleSets",);
+            }
             return ChainResult::continue_empty();
         }
-        tracing::debug!(
+        let matched_names: Vec<&str> = rulesets.iter().map(|rs| rs.name()).collect();
+        tracing::info!(
+            ruleset_count = rulesets.len(),
+            rulesets = ?matched_names,
             "ValidatorExecutorLink: Executing {} RuleSets for {:?}",
             rulesets.len(),
             hook_type

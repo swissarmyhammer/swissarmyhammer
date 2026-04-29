@@ -4,14 +4,57 @@
 //! - `PreToolUseFileTracker`: Extracts paths from tool input and hashes files before execution
 //! - `PostToolUseFileTracker`: Hashes files after execution and records changes
 //! - `SessionStartCleanup`: Clears turn state at session start
+//!
+//! ## Diagnostic logging — kanban task `01KQ8CXYMBGN1VTV4S89FGQYCA`
+//!
+//! When a Stop hook fires with `changed_files_count=0`, the proximate cause
+//! is always one of:
+//!
+//! - **Path A** — the writer dropped the change. Three sub-modes: no extracted
+//!   paths, no `tool_use_id`, or PostToolUse finds no pending hashes for the
+//!   tool_use_id (Pre/Post mismatch). Each sub-mode emits an info-level log
+//!   line below so the silent failure is greppable in `.avp/log` without
+//!   enabling debug logs.
+//! - **Path C** — the writer ran cleanly but the file's pre-hash equalled its
+//!   post-hash (a no-op write — same bytes overwriting same bytes). That is
+//!   the *correct* outcome: a Write that doesn't actually change file bytes
+//!   should not appear in `state.changed`. The "pending hashes present but no
+//!   file content actually changed" log line distinguishes Path C from
+//!   Path A's no-pending-hashes mode in production logs.
+//!
+//! The 22:38 production session that motivated this task was Path C: the
+//! qwen test re-wrote `sample_avp_test.rs` with the exact same bytes (the
+//! transcript's `tool_result.content` and `tool_result.originalFile` are
+//! byte-identical), so `state.changed` correctly stayed empty. See the
+//! kanban description and the `noop_write_does_not_accumulate_into_changed`
+//! test in `avp-common/tests/stop_hook_code_quality_regression.rs` for the
+//! locked-in contract.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::chain::{ChainContext, ChainLink, ChainResult, CTX_FILE_DIFFS};
-use crate::turn::{compute_diff, extract_tool_paths, hash_bytes, FileDiff, TurnStateManager};
+use crate::turn::{
+    compute_diff, extract_tool_paths, hash_bytes, is_known_file_tool, FileDiff, TurnStateManager,
+};
 use crate::types::{PostToolUseInput, PreToolUseInput, SessionStartInput};
+
+/// Return the top-level keys of a JSON tool_input value (object only).
+///
+/// Used by the `tool_input produced 0 paths` diagnostic so we can surface
+/// the *shape* of the tool input without leaking its values. For `Write`,
+/// `tool_input.content` can carry the full file body, which may include
+/// secrets (env files, credentials YAML). Keys are safe to log; values are
+/// not.
+///
+/// Returns an empty vec for non-object JSON values.
+fn tool_input_top_level_keys(tool_input: &serde_json::Value) -> Vec<&str> {
+    match tool_input {
+        serde_json::Value::Object(map) => map.keys().map(|s| s.as_str()).collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// Chain link that extracts file paths from tool input and hashes them before execution.
 pub struct PreToolUseFileTracker {
@@ -32,19 +75,49 @@ impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
         let paths = extract_tool_paths(&input.tool_name, &input.tool_input);
 
         if paths.is_empty() {
-            tracing::trace!(
-                "PreToolUseFileTracker: No paths found in {} tool input",
-                input.tool_name
-            );
+            // Known file-modifying tools that produce no extracted paths are a
+            // silent failure mode — the Stop hook will see no changed files
+            // even though the tool actually wrote one. Surface at info so the
+            // condition is greppable without enabling debug logs.
+            //
+            // We deliberately log only the top-level keys of `tool_input` (not
+            // the values), because for `Write` the `content` value can carry
+            // secrets — env files, credentials YAML, configs with API keys.
+            // Logging the keys is enough to diagnose "the tool fired with
+            // unexpected input shape"; logging the values would leak.
+            // See kanban task 01KQ8CXYMBGN1VTV4S89FGQYCA.
+            if is_known_file_tool(&input.tool_name) {
+                let tool_input_keys = tool_input_top_level_keys(&input.tool_input);
+                tracing::info!(
+                    tool_name = %input.tool_name,
+                    tool_input_keys = ?tool_input_keys,
+                    "PreToolUseFileTracker: known file tool produced 0 paths — file change will not be tracked",
+                );
+            } else {
+                tracing::trace!(
+                    "PreToolUseFileTracker: No paths found in {} tool input",
+                    input.tool_name
+                );
+            }
             return ChainResult::continue_empty();
         }
 
         // Need a tool_use_id to track this
         let Some(tool_use_id) = &input.tool_use_id else {
-            tracing::trace!(
-                "PreToolUseFileTracker: No tool_use_id for {} tool, skipping",
-                input.tool_name
-            );
+            // Same silent-failure surface as the empty-paths branch above:
+            // a known file tool firing with no tool_use_id means the change
+            // cannot be paired up at PostToolUse time. Surface at info.
+            if is_known_file_tool(&input.tool_name) {
+                tracing::info!(
+                    tool_name = %input.tool_name,
+                    "PreToolUseFileTracker: known file tool fired without tool_use_id — file change will not be tracked",
+                );
+            } else {
+                tracing::trace!(
+                    "PreToolUseFileTracker: No tool_use_id for {} tool, skipping",
+                    input.tool_name
+                );
+            }
             return ChainResult::continue_empty();
         };
 
@@ -114,6 +187,16 @@ impl PostToolUseFileTracker {
 impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
     async fn process(&self, input: &PostToolUseInput, ctx: &mut ChainContext) -> ChainResult {
         let Some(tool_use_id) = &input.tool_use_id else {
+            // Known file tool firing without tool_use_id is a silent failure
+            // mode — the post-side cannot pair with a Pre snapshot, so the
+            // file change never reaches Stop. See kanban task
+            // 01KQ8CXYMBGN1VTV4S89FGQYCA.
+            if is_known_file_tool(&input.tool_name) {
+                tracing::info!(
+                    tool_name = %input.tool_name,
+                    "PostToolUseFileTracker: known file tool fired without tool_use_id — change not tracked",
+                );
+            }
             return ChainResult::continue_empty();
         };
 
@@ -131,10 +214,42 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
 
         // Get pending hashes for this tool
         let Some(pre_hashes) = state.pending.remove(tool_use_id) else {
-            tracing::trace!(
-                "PostToolUseFileTracker: No pending hashes for tool {}",
-                tool_use_id
-            );
+            // Most common silent-failure mode: PostToolUse fires for a known
+            // file-modifying tool but no Pre snapshot was recorded under the
+            // matching `(session_id, tool_use_id)` pair. This is the kanban
+            // task 01KQ8CXYMBGN1VTV4S89FGQYCA regression — the Stop hook
+            // later sees `state.changed.is_empty()` and rejects every
+            // ruleset with a `match.files` pattern. Surface at info so the
+            // absence is greppable in `.avp/log` without enabling debug
+            // logs.
+            //
+            // Two underlying causes both produce this same symptom:
+            //   - Pre never ran for this tool (the chain was short-circuited
+            //     for the Pre hook but not for the Post — e.g. a subagent
+            //     boundary or an env-var change between invocations).
+            //   - Pre wrote its snapshot under a different `session_id`
+            //     than Post is reading from (the path-B failure mode the
+            //     kanban description called out). The `pending_keys` field
+            //     covers the second case: if the keys are non-empty, the
+            //     mismatch is on `tool_use_id`; if `pending_keys` is empty,
+            //     either Pre never ran for this session or its writes were
+            //     cleared between Pre and Post.
+            if is_known_file_tool(&input.tool_name) {
+                tracing::info!(
+                    tool_name = %input.tool_name,
+                    tool_use_id = %tool_use_id,
+                    session_id = %session_id,
+                    pending_keys = ?state.pending.keys().collect::<Vec<_>>(),
+                    "PostToolUseFileTracker: no Pre snapshot found for this (session_id, tool_use_id) pair — \
+                     either Pre was skipped, the session_id changed between Pre and Post, \
+                     or the Pre snapshot was cleared before Post ran. Change not tracked.",
+                );
+            } else {
+                tracing::trace!(
+                    "PostToolUseFileTracker: No pending hashes for tool {}",
+                    tool_use_id
+                );
+            }
             return ChainResult::continue_empty();
         };
 
@@ -172,10 +287,33 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
         }
 
         if changed_count > 0 {
-            tracing::debug!(
-                "PostToolUseFileTracker: {} file(s) changed by {} tool",
+            // Surface the per-tool changed-file count at info level so the
+            // production .avp/log shows the writer-side evidence that pairs
+            // with the Stop hook's `Stop hook resolved changed files
+            // changed_files_count=N` info-level line. See kanban task
+            // 01KQ8CXYMBGN1VTV4S89FGQYCA — without this log line, an empty
+            // Stop changed-files list cannot be diagnosed without enabling
+            // debug logs.
+            tracing::info!(
                 changed_count,
-                input.tool_name
+                tool_name = %input.tool_name,
+                tool_use_id = %tool_use_id,
+                session_id = %session_id,
+                "PostToolUseFileTracker: tracked changed files",
+            );
+        } else if is_known_file_tool(&input.tool_name) {
+            // Known file tool fired with pending hashes but the post-tool
+            // hash matched the pre-tool hash for every tracked path —
+            // i.e. the tool ran but didn't actually change anything. This
+            // is uncommon for Write/Edit but surface it so the silent
+            // "no change" case is distinguishable in production logs from
+            // the silent "no pending hashes" case above.
+            tracing::info!(
+                tool_name = %input.tool_name,
+                tool_use_id = %tool_use_id,
+                session_id = %session_id,
+                pre_hashes_count = pre_hashes.len(),
+                "PostToolUseFileTracker: pending hashes present but no file content actually changed",
             );
         }
 
@@ -265,6 +403,42 @@ mod tests {
     use crate::types::CommonInput;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// `tool_input_top_level_keys` returns just the keys for an object,
+    /// dropping the values. This is the redaction that prevents Write's
+    /// `content` field (which can carry secrets) from leaking into
+    /// info-level logs. See the Warning 2 fix in kanban task
+    /// 01KQ8CXYMBGN1VTV4S89FGQYCA.
+    #[test]
+    fn test_tool_input_top_level_keys_returns_keys_not_values() {
+        let input = serde_json::json!({
+            "file_path": "/tmp/secrets.env",
+            "content": "API_KEY=sk-real-secret-1234567890abcdef",
+        });
+        let mut keys = tool_input_top_level_keys(&input);
+        keys.sort();
+        assert_eq!(keys, vec!["content", "file_path"]);
+        // The secret value is NOT in the returned keys.
+        assert!(!keys.iter().any(|k| k.contains("sk-real-secret")));
+    }
+
+    /// Non-object JSON values (string, number, array, null) yield an empty
+    /// keys list rather than a partial leak. The caller logs the empty list
+    /// alongside the tool name, which is enough to diagnose "tool input was
+    /// not an object" without exposing the contents.
+    #[test]
+    fn test_tool_input_top_level_keys_non_object_returns_empty() {
+        assert!(tool_input_top_level_keys(&serde_json::json!("a string")).is_empty());
+        assert!(tool_input_top_level_keys(&serde_json::json!(42)).is_empty());
+        assert!(tool_input_top_level_keys(&serde_json::json!(["a", "b"])).is_empty());
+        assert!(tool_input_top_level_keys(&serde_json::json!(null)).is_empty());
+    }
+
+    /// Empty object yields empty keys list (boundary case).
+    #[test]
+    fn test_tool_input_top_level_keys_empty_object() {
+        assert!(tool_input_top_level_keys(&serde_json::json!({})).is_empty());
+    }
 
     fn create_test_turn_state() -> (Arc<TurnStateManager>, TempDir) {
         let temp_dir = TempDir::new().unwrap();

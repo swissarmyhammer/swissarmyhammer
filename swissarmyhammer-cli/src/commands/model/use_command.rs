@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     async fn test_execute_use_command_with_temp_config() {
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().unwrap();

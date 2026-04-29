@@ -771,6 +771,72 @@ pub fn log_validator_result(name: &str, result: &ValidatorResult) {
     );
 }
 
+/// Emit the structured `validator result` log line at INFO level.
+///
+/// This is the single source of truth for the per-rule log line that
+/// production scrapes (`grep validator result .avp/log`). The structured
+/// fields and order — `validator`, `passed`, `hook_type`, `message`,
+/// optional `reason` — must match byte-for-byte across every emit site
+/// so log scrapers see one consistent shape.
+///
+/// # Arguments
+///
+/// * `validator_name` — Fully-qualified rule name, conventionally
+///   `<ruleset>:<rule>` for rule-set runs.
+/// * `passed` — Whether the rule's verdict was a pass.
+/// * `hook_type` — String form of the hook type that triggered the rule
+///   (e.g. `"Stop"`, `"PostToolUse"`).
+/// * `message` — Human-readable verdict message from the agent.
+pub fn emit_validator_result_log(
+    validator_name: &str,
+    passed: bool,
+    hook_type: &str,
+    message: &str,
+) {
+    tracing::info!(
+        validator = validator_name,
+        passed = passed,
+        hook_type = hook_type,
+        message = message,
+        "validator result"
+    );
+}
+
+/// Emit a `validator result` log line annotated with an explanatory `reason`.
+///
+/// This variant is used when the verdict was produced by something other than
+/// a normal agent response — e.g. a per-rule wall-clock timeout. The `reason`
+/// field is the machine-readable tag (`"timeout"`, ...) that production scrapes
+/// look for, distinct from the human-readable `message`.
+///
+/// # Arguments
+///
+/// * `validator_name` — Fully-qualified rule name, conventionally
+///   `<ruleset>:<rule>` for rule-set runs.
+/// * `passed` — Whether the rule's verdict was a pass. For timeouts this is
+///   `true` (passing-with-warning), per the existing convention that a
+///   missing/timed-out verdict must not block the hook.
+/// * `hook_type` — String form of the hook type that triggered the rule.
+/// * `message` — Human-readable verdict message.
+/// * `reason` — Short machine-readable tag explaining why the result was
+///   produced this way (e.g. `"timeout"`).
+pub fn emit_validator_result_log_with_reason(
+    validator_name: &str,
+    passed: bool,
+    hook_type: &str,
+    message: &str,
+    reason: &str,
+) {
+    tracing::info!(
+        validator = validator_name,
+        passed = passed,
+        hook_type = hook_type,
+        message = message,
+        reason = reason,
+        "validator result"
+    );
+}
+
 /// Check if an error indicates a rate limit, timeout, or capacity issue.
 ///
 /// This function performs case-insensitive pattern matching against the error

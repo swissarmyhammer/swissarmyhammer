@@ -33,8 +33,9 @@ Examine the file content for patterns where data is converted to strings just fo
 ## Exceptions (Don't Flag)
 
 - Comparing actual string values
-- Test assertions that intentionally check string representation
+- Assertions whose explicit purpose is to check the string/serialized representation of a value (e.g. an assertion that compares `serde_json::to_string(&x)` against a snapshot, or `format!("{:?}", x)` against an expected debug string)
 - Logging or debugging code
-- Serialization tests
+
+Note: Do not exempt code based on the filename containing `test`, `_test`, `test_`, `.spec.`, or `.test.`. Stringify-then-compare is a smell wherever it appears: a fixture or test helper that compares two domain objects via `format!("{:?}", a) == format!("{:?}", b)` is still doing the wrong thing. The exception is for assertions that are *deliberately* about the string form (snapshot tests, serialization round-trips), identified by the construct, not by the file.
 
 

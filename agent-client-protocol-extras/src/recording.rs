@@ -79,7 +79,7 @@ impl<A> RecordingAgent<A> {
                 match receiver.try_recv() {
                     Ok(notification) => {
                         count += 1;
-                        tracing::info!("RecordingAgent: Captured ACP notification #{}", count);
+                        tracing::trace!("RecordingAgent: Captured ACP notification #{}", count);
                         if let Ok(json) = serde_json::to_value(&notification) {
                             buffer.lock().unwrap().push(json);
                         }
@@ -179,10 +179,20 @@ impl<A> RecordingAgent<A> {
         Arc::clone(&self.notification_buffer)
     }
 
-    /// Record a method call with captured notifications
-    fn record_with_notifications(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
-        // Don't take notifications here - they arrive asynchronously after method completes
-        // Drop will associate all buffered notifications with the appropriate method
+    /// Record a method call.
+    ///
+    /// Note: despite earlier naming, this method does NOT attach the captured
+    /// notifications inline. Notifications arrive asynchronously after the
+    /// method response future resolves; attaching them here would race and
+    /// mis-bucket them onto the next call. Instead, `notifications` is left
+    /// empty and the per-prompt `flush_now`/`Drop` path routes buffered
+    /// notifications to the correct call by `sessionId`.
+    fn record_call(&self, method: &str, req: &impl Serialize, resp: &impl Serialize) {
+        // Don't take notifications here - they arrive asynchronously after method completes.
+        // Drop time routes buffered notifications to the appropriate call by `sessionId`,
+        // which avoids the race where the response future resolves before the notification
+        // stream has finished draining (notifications belonging to call N would otherwise
+        // be mis-attributed to call N+1's bucket).
         let call = RecordedCall {
             method: method.to_string(),
             request: serde_json::to_value(req).unwrap_or_default(),
@@ -198,12 +208,10 @@ impl<A> RecordingAgent<A> {
             calls: calls.clone(),
         };
 
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
+        // Parent-directory creation is handled by `atomic_write`, no need to
+        // duplicate it here.
         let json = serde_json::to_string_pretty(&session)?;
-        std::fs::write(&self.path, json)?;
+        atomic_write(&self.path, json.as_bytes())?;
 
         let absolute_path = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
 
@@ -215,12 +223,101 @@ impl<A> RecordingAgent<A> {
         );
         Ok(())
     }
+
+    /// Drain currently-buffered notifications, route them to their owning prompt
+    /// calls by `sessionId`, and atomically persist the recording to disk.
+    ///
+    /// This is the durability primitive used both by [`Drop`] and by per-call
+    /// flushes invoked from inside [`Agent::prompt`]. Calling it mid-stream is
+    /// safe: any notifications still in flight (not yet observed by the capture
+    /// thread) simply remain in the buffer and are picked up by the next flush
+    /// or by the final `Drop`. Errors are logged but never propagated — a
+    /// failed flush must not break the wrapped `Agent` call.
+    fn flush_now(&self) {
+        // Snapshot whatever notifications have arrived since the last flush.
+        // Notifications still racing in the capture thread will be picked up
+        // by a later flush; we deliberately do NOT sleep here because this
+        // runs in the hot path between prompt calls.
+        let notifications = std::mem::take(&mut *self.notification_buffer.lock().unwrap());
+        if !notifications.is_empty() {
+            let mut calls = self.calls.lock().unwrap();
+            distribute_notifications_by_session(&mut calls, notifications);
+        }
+
+        if let Err(e) = self.save() {
+            tracing::error!("RecordingAgent: mid-stream flush failed: {}", e);
+        }
+    }
+}
+
+/// Atomically write `bytes` to `path` by writing to a sibling temp file and
+/// renaming. This guarantees that a process kill mid-write cannot leave the
+/// recording file half-written or corrupt; readers see either the previous
+/// good contents or the new ones.
+///
+/// The temp file lives next to the destination so that `rename` stays on the
+/// same filesystem (rename across filesystems would copy + unlink and lose the
+/// atomicity guarantee).
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "recording path has no parent directory",
+        )
+    })?;
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "recording path has no file name",
+        )
+    })?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(".tmp");
+    let tmp_path = parent.join(&tmp_name);
+
+    // Write to the temp file. On any failure, remove the temp file so we don't
+    // leave a `.recording.json.tmp` orphan on disk if the process exits before
+    // the next successful flush would have overwritten it.
+    let write_result = (|| -> std::io::Result<()> {
+        let mut tmp = std::fs::File::create(&tmp_path)?;
+        tmp.write_all(bytes)?;
+        tmp.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // NOTE: We deliberately do not fsync the parent directory after the rename.
+    // POSIX-strict durability would open `parent` and `sync_all()` it so the new
+    // directory entry survives a kernel crash. The actual failure mode for this
+    // recorder is SIGKILL of the user-space process (Stop-hook timeout), not a
+    // kernel panic — and the rename itself is atomic at the kernel level, so
+    // SIGKILL between rename and a missing dir-fsync still leaves a readable
+    // recording. The diagnostic use case does not justify the extra fsync.
+    std::fs::rename(&tmp_path, path)
 }
 
 impl<A> Drop for RecordingAgent<A> {
     fn drop(&mut self) {
-        // Give capture thread time to receive all async notifications
-        // This ensures notifications sent during Agent method calls are fully captured
+        // Give capture thread time to receive all async notifications still in
+        // flight. Per-prompt flushes (see `flush_now` invoked from `prompt()`)
+        // already persisted every prior prompt's request/response and any
+        // notifications that had arrived by then; this final settle window
+        // exists only to catch the tail of the *last* prompt's notification
+        // stream, which has no subsequent flush to fall back on.
+        //
+        // Do not remove without also rethinking the per-prompt flush contract:
+        // for any prompt N < last, durability is provided by `flush_now` at the
+        // end of `Agent::prompt`; only prompt `last` relies on this sleep.
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let notification_count = self.notification_buffer.lock().unwrap().len();
@@ -229,31 +326,90 @@ impl<A> Drop for RecordingAgent<A> {
             notification_count
         );
 
-        // Associate all captured notifications with the prompt method call
-        // (notifications are generated during prompt execution)
-        if notification_count > 0 {
-            let notifications = std::mem::take(&mut *self.notification_buffer.lock().unwrap());
-            let mut calls = self.calls.lock().unwrap();
+        self.flush_now();
+    }
+}
 
-            // Find the last prompt call and add notifications to it
-            if let Some(call) = calls.iter_mut().rev().find(|c| c.method == "prompt") {
-                tracing::info!(
-                    "Adding {} notifications to prompt call",
-                    notifications.len()
-                );
-                call.notifications = notifications;
-            } else {
-                tracing::warn!(
-                    "No prompt call found to attach {} notifications",
-                    notifications.len()
-                );
-            }
+/// Extract the `sessionId` field from a JSON value, if present at the top level.
+///
+/// Returns `None` for notifications/calls that don't carry a session id (e.g. the
+/// initialize call). The field is named `sessionId` because both ACP
+/// `SessionNotification` and ACP requests serialize with that camelCase key.
+fn extract_session_id(value: &serde_json::Value) -> Option<&str> {
+    value.get("sessionId").and_then(|v| v.as_str())
+}
+
+/// Distribute buffered notifications to their matching prompt calls by `sessionId`.
+///
+/// Streaming notifications arrive on a separate channel from prompt responses. The
+/// response future for prompt N can resolve while N's notifications are still
+/// in flight, which means a naïve "append all buffered notifs to the last prompt"
+/// strategy mis-buckets call N's tail onto call N+1 (and so on). Routing by
+/// `sessionId` is reliable because each notification carries the id of the session
+/// it belongs to.
+///
+/// Routing rules:
+/// - For each notification with a `sessionId`, append it to the *last* prompt call
+///   whose request has the same `sessionId`. The "last" choice ensures that if a
+///   single session has multiple prompt calls (rare), trailing notifications go
+///   to the most recent call rather than retroactively into an earlier bucket.
+/// - Notifications without a `sessionId`, or whose session has no matching prompt
+///   call, are appended to the last prompt call as a fallback so they are not
+///   silently dropped.
+/// - If there are no prompt calls at all, the notifications are logged and
+///   discarded (there is nowhere to attach them in the recording schema).
+fn distribute_notifications_by_session(
+    calls: &mut [RecordedCall],
+    notifications: Vec<serde_json::Value>,
+) {
+    if notifications.is_empty() {
+        return;
+    }
+
+    // Build an index: sessionId -> index of the *last* prompt call with that session.
+    let mut last_prompt_for_session: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut last_prompt_idx: Option<usize> = None;
+    for (idx, call) in calls.iter().enumerate() {
+        if call.method != "prompt" {
+            continue;
         }
-
-        if let Err(e) = self.save() {
-            tracing::error!("Failed to save recording: {}", e);
+        last_prompt_idx = Some(idx);
+        if let Some(sid) = extract_session_id(&call.request) {
+            last_prompt_for_session.insert(sid.to_string(), idx);
         }
     }
+
+    let Some(fallback_idx) = last_prompt_idx else {
+        tracing::warn!(
+            "No prompt call found to attach {} notifications",
+            notifications.len()
+        );
+        return;
+    };
+
+    // Tally for logging.
+    let mut routed_by_session = 0usize;
+    let mut routed_to_fallback = 0usize;
+
+    for notification in notifications {
+        let target_idx = extract_session_id(&notification)
+            .and_then(|sid| last_prompt_for_session.get(sid).copied())
+            .inspect(|_| {
+                routed_by_session += 1;
+            })
+            .unwrap_or_else(|| {
+                routed_to_fallback += 1;
+                fallback_idx
+            });
+        calls[target_idx].notifications.push(notification);
+    }
+
+    tracing::info!(
+        "Distributed notifications: {} routed by sessionId, {} routed to fallback (last prompt)",
+        routed_by_session,
+        routed_to_fallback
+    );
 }
 
 #[async_trait::async_trait(?Send)]
@@ -263,7 +419,7 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         request: InitializeRequest,
     ) -> agent_client_protocol::Result<InitializeResponse> {
         let response = self.inner.initialize(request.clone()).await?;
-        self.record_with_notifications("initialize", &request, &response);
+        self.record_call("initialize", &request, &response);
         Ok(response)
     }
 
@@ -279,7 +435,7 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         request: NewSessionRequest,
     ) -> agent_client_protocol::Result<NewSessionResponse> {
         let response = self.inner.new_session(request.clone()).await?;
-        self.record_with_notifications("new_session", &request, &response);
+        self.record_call("new_session", &request, &response);
         Ok(response)
     }
 
@@ -288,13 +444,19 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         request: PromptRequest,
     ) -> agent_client_protocol::Result<PromptResponse> {
         let response = self.inner.prompt(request.clone()).await?;
-        self.record_with_notifications("prompt", &request, &response);
+        self.record_call("prompt", &request, &response);
+        // Persist after every prompt so the recording is durable across
+        // mid-flight termination. If the *next* prompt deadlocks and the
+        // process is killed, the on-disk file already contains every prior
+        // prompt's request, response, and any notifications that landed in
+        // the buffer before this flush. See task 01KQAFT5H1CYQ8YDNAM4J0HD1Q.
+        self.flush_now();
         Ok(response)
     }
 
     async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
         self.inner.cancel(request.clone()).await?;
-        self.record_with_notifications("cancel", &request, &());
+        self.record_call("cancel", &request, &());
         Ok(())
     }
 
@@ -303,7 +465,7 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         request: LoadSessionRequest,
     ) -> agent_client_protocol::Result<LoadSessionResponse> {
         let response = self.inner.load_session(request.clone()).await?;
-        self.record_with_notifications("load_session", &request, &response);
+        self.record_call("load_session", &request, &response);
         Ok(response)
     }
 
@@ -312,7 +474,7 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         request: SetSessionModeRequest,
     ) -> agent_client_protocol::Result<SetSessionModeResponse> {
         let response = self.inner.set_session_mode(request.clone()).await?;
-        self.record_with_notifications("set_session_mode", &request, &response);
+        self.record_call("set_session_mode", &request, &response);
         Ok(response)
     }
 
@@ -320,11 +482,11 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         let result = self.inner.ext_method(request.clone()).await;
         match &result {
             Ok(response) => {
-                self.record_with_notifications("ext_method", &request, response);
+                self.record_call("ext_method", &request, response);
             }
             Err(e) => {
                 // Record error responses too (for capability check tests that expect errors)
-                self.record_with_notifications(
+                self.record_call(
                     "ext_method",
                     &request,
                     &serde_json::json!({
@@ -345,7 +507,7 @@ impl<A: Agent> Agent for RecordingAgent<A> {
         notification: ExtNotification,
     ) -> agent_client_protocol::Result<()> {
         self.inner.ext_notification(notification.clone()).await?;
-        self.record_with_notifications("ext_notification", &notification, &());
+        self.record_call("ext_notification", &notification, &());
         Ok(())
     }
 }
@@ -553,11 +715,11 @@ mod tests {
     }
 
     #[test]
-    fn test_record_with_notifications_stores_call() {
+    fn test_record_call_stores_call() {
         let (mock, _) = MockAgent::new();
         let agent = RecordingAgent::new(mock, PathBuf::from("/tmp/test_rec_record.json"));
 
-        agent.record_with_notifications(
+        agent.record_call(
             "initialize",
             &serde_json::json!({"protocol_version": "2024-11-05"}),
             &serde_json::json!({"agent_info": null}),
@@ -580,7 +742,7 @@ mod tests {
 
         let (mock, _) = MockAgent::new();
         let agent = RecordingAgent::new(mock, path.clone());
-        agent.record_with_notifications("initialize", &"req", &"resp");
+        agent.record_call("initialize", &"req", &"resp");
 
         agent.save().unwrap();
 
@@ -1006,5 +1168,503 @@ mod tests {
         }
 
         std::mem::forget(agent);
+    }
+
+    // -- Tests for sessionId-based notification routing --
+
+    /// Build a `prompt` RecordedCall with a given session id, used by routing tests.
+    fn prompt_call_for(session_id: &str) -> RecordedCall {
+        RecordedCall {
+            method: "prompt".to_string(),
+            request: serde_json::json!({ "sessionId": session_id }),
+            response: serde_json::json!({ "stopReason": "end_turn" }),
+            notifications: Vec::new(),
+        }
+    }
+
+    /// Build a notification JSON object tagged with the given session id and a marker
+    /// payload so each notification can be uniquely identified in assertions.
+    fn notification_for(session_id: &str, marker: &str) -> serde_json::Value {
+        serde_json::json!({
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": marker }
+            }
+        })
+    }
+
+    fn marker_of(notification: &serde_json::Value) -> &str {
+        notification
+            .pointer("/update/content/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    }
+
+    #[test]
+    fn distribute_routes_notifications_by_session_id() {
+        // Two prompt calls, each on its own session — exactly the bug shape:
+        //   CALL2: sessionId=A (rule 1)
+        //   CALL4: sessionId=B (rule 2)
+        // Notifications for A arrive AFTER A's response future already resolved
+        // (they're in the buffer when the recorder finally drains). The fix must
+        // route them to A by sessionId, not append them to the last call (B).
+        let mut calls = vec![
+            RecordedCall {
+                method: "initialize".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!({}),
+                notifications: Vec::new(),
+            },
+            prompt_call_for("session-A"),
+            RecordedCall {
+                method: "new_session".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!({ "sessionId": "session-B" }),
+                notifications: Vec::new(),
+            },
+            prompt_call_for("session-B"),
+        ];
+
+        // Interleaved arrival order — A's notifications arrive late, even after B's.
+        let buffered = vec![
+            notification_for("session-B", "B-1"),
+            notification_for("session-A", "A-1"),
+            notification_for("session-B", "B-2"),
+            notification_for("session-A", "A-2"),
+            notification_for("session-A", "A-3"),
+        ];
+
+        distribute_notifications_by_session(&mut calls, buffered);
+
+        // Call index 1 is the prompt for session-A, index 3 is the prompt for session-B.
+        let a_markers: Vec<&str> = calls[1].notifications.iter().map(marker_of).collect();
+        let b_markers: Vec<&str> = calls[3].notifications.iter().map(marker_of).collect();
+
+        assert_eq!(
+            a_markers,
+            vec!["A-1", "A-2", "A-3"],
+            "session-A notifications must land in session-A's prompt call only, in arrival order"
+        );
+        assert_eq!(
+            b_markers,
+            vec!["B-1", "B-2"],
+            "session-B notifications must land in session-B's prompt call only, in arrival order"
+        );
+
+        // Non-prompt calls must remain untouched.
+        assert!(calls[0].notifications.is_empty());
+        assert!(calls[2].notifications.is_empty());
+    }
+
+    #[test]
+    fn distribute_falls_back_to_last_prompt_when_session_unknown() {
+        // A notification whose sessionId matches no prompt call falls back to the
+        // most recent prompt call, so it isn't silently dropped.
+        let mut calls = vec![prompt_call_for("session-A"), prompt_call_for("session-B")];
+
+        let buffered = vec![
+            notification_for("session-A", "A-1"),
+            notification_for("session-unknown", "stray"),
+            notification_for("session-B", "B-1"),
+        ];
+
+        distribute_notifications_by_session(&mut calls, buffered);
+
+        assert_eq!(
+            calls[0].notifications.len(),
+            1,
+            "A's bucket has only its own"
+        );
+        assert_eq!(marker_of(&calls[0].notifications[0]), "A-1");
+
+        assert_eq!(
+            calls[1].notifications.len(),
+            2,
+            "B's bucket gets its own + the stray fallback"
+        );
+        let b_markers: Vec<&str> = calls[1].notifications.iter().map(marker_of).collect();
+        assert_eq!(b_markers, vec!["stray", "B-1"]);
+    }
+
+    #[test]
+    fn distribute_routes_repeated_session_to_last_prompt_for_that_session() {
+        // If one session has multiple prompts, all routed-by-session notifications
+        // land in the *last* prompt for that session. This is the least-bad choice
+        // when temporal info isn't available, and matches the documented behaviour.
+        let mut calls = vec![
+            prompt_call_for("session-A"),
+            prompt_call_for("session-B"),
+            prompt_call_for("session-A"), // second prompt on session-A
+        ];
+
+        let buffered = vec![
+            notification_for("session-A", "A-1"),
+            notification_for("session-A", "A-2"),
+            notification_for("session-B", "B-1"),
+        ];
+
+        distribute_notifications_by_session(&mut calls, buffered);
+
+        assert!(
+            calls[0].notifications.is_empty(),
+            "first prompt for session-A receives nothing — last-wins routing"
+        );
+        let last_a: Vec<&str> = calls[2].notifications.iter().map(marker_of).collect();
+        assert_eq!(last_a, vec!["A-1", "A-2"]);
+
+        let b: Vec<&str> = calls[1].notifications.iter().map(marker_of).collect();
+        assert_eq!(b, vec!["B-1"]);
+    }
+
+    #[test]
+    fn distribute_handles_empty_inputs() {
+        let mut calls = vec![prompt_call_for("session-A")];
+        distribute_notifications_by_session(&mut calls, Vec::new());
+        assert!(calls[0].notifications.is_empty());
+
+        // No prompt calls at all — must not panic; notifications are dropped.
+        let mut empty: Vec<RecordedCall> = vec![RecordedCall {
+            method: "initialize".to_string(),
+            request: serde_json::json!({}),
+            response: serde_json::json!({}),
+            notifications: Vec::new(),
+        }];
+        distribute_notifications_by_session(
+            &mut empty,
+            vec![notification_for("session-A", "orphan")],
+        );
+        assert!(empty[0].notifications.is_empty());
+    }
+
+    #[test]
+    fn distribute_is_resilient_to_notifications_without_session_id() {
+        // Some captured items may not have a top-level sessionId (e.g. MCP notifs
+        // converted to JSON). They must fall back to the last prompt call.
+        let mut calls = vec![prompt_call_for("session-A"), prompt_call_for("session-B")];
+
+        let no_sid = serde_json::json!({ "kind": "mcp_progress", "value": 42 });
+        let buffered = vec![no_sid.clone(), notification_for("session-A", "A-1")];
+
+        distribute_notifications_by_session(&mut calls, buffered);
+
+        assert_eq!(calls[0].notifications.len(), 1);
+        assert_eq!(marker_of(&calls[0].notifications[0]), "A-1");
+        assert_eq!(calls[1].notifications.len(), 1);
+        assert_eq!(calls[1].notifications[0], no_sid);
+    }
+
+    /// End-to-end regression: simulate the bug scenario through a real `RecordingAgent`
+    /// with overlapping prompt calls. Notifications for prompt 1 are pushed into the
+    /// buffer AFTER prompt 2 has already returned — exactly the off-by-one race the
+    /// task describes. After Drop, each call's bucket must contain only its own
+    /// session's notifications.
+    #[tokio::test]
+    async fn overlapping_prompt_streams_bucket_correctly_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overlap.json");
+
+        struct DualSessionAgent;
+
+        #[async_trait::async_trait(?Send)]
+        impl Agent for DualSessionAgent {
+            async fn initialize(
+                &self,
+                _r: InitializeRequest,
+            ) -> agent_client_protocol::Result<InitializeResponse> {
+                Ok(InitializeResponse::new(
+                    agent_client_protocol::ProtocolVersion::LATEST,
+                ))
+            }
+            async fn authenticate(
+                &self,
+                _r: AuthenticateRequest,
+            ) -> agent_client_protocol::Result<AuthenticateResponse> {
+                Ok(AuthenticateResponse::new())
+            }
+            async fn new_session(
+                &self,
+                _r: NewSessionRequest,
+            ) -> agent_client_protocol::Result<NewSessionResponse> {
+                Ok(NewSessionResponse::new("ignored"))
+            }
+            async fn prompt(
+                &self,
+                _r: PromptRequest,
+            ) -> agent_client_protocol::Result<PromptResponse> {
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+            async fn cancel(&self, _r: CancelNotification) -> agent_client_protocol::Result<()> {
+                Ok(())
+            }
+            async fn load_session(
+                &self,
+                _r: LoadSessionRequest,
+            ) -> agent_client_protocol::Result<LoadSessionResponse> {
+                Ok(LoadSessionResponse::new())
+            }
+            async fn set_session_mode(
+                &self,
+                _r: SetSessionModeRequest,
+            ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+                Ok(SetSessionModeResponse::new())
+            }
+            async fn ext_method(
+                &self,
+                _r: ExtRequest,
+            ) -> agent_client_protocol::Result<ExtResponse> {
+                Err(agent_client_protocol::Error::method_not_found())
+            }
+            async fn ext_notification(
+                &self,
+                _n: ExtNotification,
+            ) -> agent_client_protocol::Result<()> {
+                Ok(())
+            }
+        }
+
+        let agent = RecordingAgent::new(DualSessionAgent, path.clone());
+
+        // Two prompt calls on different sessions, just like the bug recording.
+        let prompt_a = PromptRequest::new(
+            SessionId::from("session-A"),
+            vec![ContentBlock::Text(TextContent::new("rule 1 input"))],
+        );
+        let prompt_b = PromptRequest::new(
+            SessionId::from("session-B"),
+            vec![ContentBlock::Text(TextContent::new("rule 2 input"))],
+        );
+
+        let _ = agent.prompt(prompt_a).await.unwrap();
+        let _ = agent.prompt(prompt_b).await.unwrap();
+
+        // Now simulate the race: notifications for BOTH sessions arrive AFTER both
+        // prompt response futures already resolved. They are interleaved in
+        // arrival order, mirroring how token-by-token chunks would stream in.
+        {
+            let mut buf = agent.notification_buffer.lock().unwrap();
+            buf.push(notification_for("session-A", "rule-1-tok-1"));
+            buf.push(notification_for("session-B", "rule-2-tok-1"));
+            buf.push(notification_for("session-A", "rule-1-tok-2"));
+            buf.push(notification_for("session-B", "rule-2-tok-2"));
+            buf.push(notification_for("session-A", "rule-1-tok-3"));
+        }
+
+        // Dropping triggers distribution + save. We'd rather not pay the 2-second
+        // settle sleep, but the assertions read from the saved file so we have to.
+        drop(agent);
+
+        let json = std::fs::read_to_string(&path).unwrap();
+        let session: RecordedSession = serde_json::from_str(&json).unwrap();
+
+        let prompt_calls: Vec<&RecordedCall> = session
+            .calls
+            .iter()
+            .filter(|c| c.method == "prompt")
+            .collect();
+        assert_eq!(prompt_calls.len(), 2);
+
+        let call_a = prompt_calls[0];
+        let call_b = prompt_calls[1];
+        assert_eq!(extract_session_id(&call_a.request), Some("session-A"));
+        assert_eq!(extract_session_id(&call_b.request), Some("session-B"));
+
+        let a_markers: Vec<&str> = call_a.notifications.iter().map(marker_of).collect();
+        let b_markers: Vec<&str> = call_b.notifications.iter().map(marker_of).collect();
+
+        assert_eq!(
+            a_markers,
+            vec!["rule-1-tok-1", "rule-1-tok-2", "rule-1-tok-3"],
+            "session-A's prompt call must contain only session-A's notifications, in arrival order"
+        );
+        assert_eq!(
+            b_markers,
+            vec!["rule-2-tok-1", "rule-2-tok-2"],
+            "session-B's prompt call must contain only session-B's notifications, in arrival order"
+        );
+    }
+
+    /// Minimal Agent that returns trivial responses; used by durability tests
+    /// where we only care about the *recording* behaviour, not the response
+    /// contents.
+    struct TrivialAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for TrivialAgent {
+        async fn initialize(
+            &self,
+            _r: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(
+                agent_client_protocol::ProtocolVersion::LATEST,
+            ))
+        }
+        async fn authenticate(
+            &self,
+            _r: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+        async fn new_session(
+            &self,
+            _r: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("ignored"))
+        }
+        async fn prompt(&self, _r: PromptRequest) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+        async fn cancel(&self, _r: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+        async fn load_session(
+            &self,
+            _r: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+        async fn set_session_mode(
+            &self,
+            _r: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+        async fn ext_method(&self, _r: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+        async fn ext_notification(&self, _n: ExtNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Mid-flight termination simulation: drive several prompt calls, then
+    /// `mem::forget` the agent so [`Drop`] never runs. The file on disk must
+    /// still be a valid recording containing every prompt completed before the
+    /// "kill". This is the regression test for task 01KQAFT5H1CYQ8YDNAM4J0HD1Q.
+    #[tokio::test]
+    async fn mid_flight_termination_preserves_completed_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("midflight.json");
+
+        let agent = RecordingAgent::new(TrivialAgent, path.clone());
+
+        // Simulate 3 of 11 rules completing before the parent process is killed.
+        for i in 0..3 {
+            let req = PromptRequest::new(
+                SessionId::from(format!("rule-{}", i)),
+                vec![ContentBlock::Text(TextContent::new(format!(
+                    "rule {} input",
+                    i
+                )))],
+            );
+            let _ = agent.prompt(req).await.unwrap();
+        }
+
+        // Abnormal termination: Drop never runs, so durability must come from
+        // the per-prompt flush invoked inside `prompt()`.
+        std::mem::forget(agent);
+
+        let json = std::fs::read_to_string(&path).expect("recording file must exist on disk");
+        let session: RecordedSession =
+            serde_json::from_str(&json).expect("recording must be valid JSON in the legacy schema");
+
+        let prompt_calls: Vec<&RecordedCall> = session
+            .calls
+            .iter()
+            .filter(|c| c.method == "prompt")
+            .collect();
+        assert_eq!(
+            prompt_calls.len(),
+            3,
+            "all 3 completed prompts must be durable on disk after mem::forget"
+        );
+
+        for (i, call) in prompt_calls.iter().enumerate() {
+            assert_eq!(
+                extract_session_id(&call.request),
+                Some(format!("rule-{}", i).as_str())
+            );
+        }
+    }
+
+    /// The on-disk schema must remain `{"calls": [...]}` so existing fixtures
+    /// keep loading. This regression test reads back what the per-prompt flush
+    /// wrote and asserts the top-level shape, not just successful deserialization.
+    #[tokio::test]
+    async fn on_disk_schema_is_legacy_calls_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("schema.json");
+
+        let agent = RecordingAgent::new(TrivialAgent, path.clone());
+        let req = PromptRequest::new(
+            SessionId::from("only-session"),
+            vec![ContentBlock::Text(TextContent::new("hi"))],
+        );
+        let _ = agent.prompt(req).await.unwrap();
+        std::mem::forget(agent);
+
+        let json = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value.get("calls").is_some(),
+            "on-disk recording must have a top-level `calls` array"
+        );
+        assert!(value.get("calls").unwrap().is_array());
+    }
+
+    /// Each prompt-call flush should overwrite the file in place, not append.
+    /// We assert a strictly monotonic call count over successive flushes.
+    #[tokio::test]
+    async fn per_prompt_flush_replaces_file_contents_each_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("monotonic.json");
+
+        let agent = RecordingAgent::new(TrivialAgent, path.clone());
+
+        for i in 0..4 {
+            let req = PromptRequest::new(
+                SessionId::from(format!("rule-{}", i)),
+                vec![ContentBlock::Text(TextContent::new(format!("input-{}", i)))],
+            );
+            let _ = agent.prompt(req).await.unwrap();
+
+            // Read after every flush — must always parse and contain exactly i+1
+            // prompt calls.
+            let json = std::fs::read_to_string(&path).unwrap();
+            let session: RecordedSession = serde_json::from_str(&json).unwrap();
+            let prompt_count = session
+                .calls
+                .iter()
+                .filter(|c| c.method == "prompt")
+                .count();
+            assert_eq!(
+                prompt_count,
+                i + 1,
+                "after {} prompts, on-disk file must contain {} prompt calls",
+                i + 1,
+                i + 1
+            );
+        }
+
+        std::mem::forget(agent);
+    }
+
+    /// `atomic_write` must produce the destination file with the exact bytes
+    /// requested, and must not leave a stray temp file behind on success.
+    #[test]
+    fn atomic_write_lands_full_contents_and_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recording.json");
+
+        atomic_write(&path, br#"{"calls":[]}"#).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"calls":[]}"#);
+
+        // Temp file must have been renamed away, not left behind.
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries.len(), 1, "only the destination file should remain");
     }
 }
