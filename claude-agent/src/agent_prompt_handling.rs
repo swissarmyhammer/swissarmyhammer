@@ -777,13 +777,37 @@ impl crate::agent::ClaudeAgent {
     }
 
     /// Request user permission for a tool call
+    ///
+    /// Sends an ACP `session/request_permission` request back to the client over
+    /// the provided connection, awaits the response on the spawned-task event
+    /// loop, and dispatches the outcome to [`Self::handle_permission_response`].
+    ///
+    /// The `client` parameter is a `ConnectionTo<Agent>`: the agent-side handle
+    /// to the JSON-RPC connection whose counterpart is the client. In ACP 0.11
+    /// the `Client` role is a unit struct (not a trait), so requests flow
+    /// through `ConnectionTo::send_request` rather than a trait method on a
+    /// `dyn Client` object.
+    ///
+    /// # Arguments
+    ///
+    /// * `_session_id` - Internal session identifier (currently unused; retained
+    ///   for symmetry with other permission helpers and future tool-completion
+    ///   wiring).
+    /// * `session_id_str` - Wire-format ACP session id to attach to the
+    ///   permission request.
+    /// * `tool_call_id` - The ACP tool call id this permission gates.
+    /// * `tool_name` - Human-readable tool name used for logging and stored
+    ///   preference lookups.
+    /// * `client` - Agent-side connection used to dispatch the permission
+    ///   request to the client.
+    /// * `options` - Caller-supplied permission options to render to the user.
     async fn request_user_permission(
         &self,
         _session_id: &crate::session::SessionId,
         session_id_str: &str,
         tool_call_id: &str,
         tool_name: &str,
-        client: &std::sync::Arc<dyn agent_client_protocol::Client + Send + Sync>,
+        client: &agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
         options: &[crate::tools::PermissionOption],
     ) {
         // Convert our internal types to ACP protocol types
@@ -823,7 +847,10 @@ impl crate::agent::ClaudeAgent {
             acp_options,
         );
 
-        match client.request_permission(acp_request).await {
+        // ACP 0.11: dispatch to the counterpart Client role over the
+        // ConnectionTo handle. `block_task` is safe here because this method
+        // runs inside the spawned prompt task, not on the event loop itself.
+        match client.send_request(acp_request).block_task().await {
             Ok(response) => {
                 self.handle_permission_response(tool_name, response, options)
                     .await;
