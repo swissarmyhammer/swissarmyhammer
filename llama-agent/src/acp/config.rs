@@ -54,6 +54,12 @@ pub struct AcpConfig {
     ///
     /// These servers will be automatically added to every new session,
     /// in addition to any servers specified in the NewSessionRequest.
+    ///
+    /// Under ACP 0.11, [`agent_client_protocol::schema::McpServer`] is a
+    /// `#[non_exhaustive]` enum (`Http`/`Sse`/`Stdio` variants) rather than
+    /// a struct. Construction sites live outside this module; this field
+    /// only stores and forwards values, so the variant change is transparent
+    /// here.
     #[serde(skip, default)]
     pub default_mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
 
