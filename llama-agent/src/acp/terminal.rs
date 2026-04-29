@@ -2,7 +2,7 @@
 //!
 //! This module handles terminal process management exposed via ACP protocol.
 
-use agent_client_protocol::ClientCapabilities;
+use agent_client_protocol::schema::ClientCapabilities;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

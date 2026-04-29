@@ -4,7 +4,7 @@
 //! It implements comprehensive security validation to prevent path traversal
 //! and unauthorized file access.
 
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use std::path::{Path, PathBuf};
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_structures_serialization_camelcase() {
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
         use std::path::PathBuf;
 
         // Test ReadTextFileRequest

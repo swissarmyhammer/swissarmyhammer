@@ -101,12 +101,12 @@ mod acp_tests {
         let server = create_test_server().await.expect("Failed to create server");
 
         // Test initialize
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new()
+                .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true),
@@ -118,7 +118,7 @@ mod acp_tests {
 
         // Test new_session
         let session_request =
-            agent_client_protocol::NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
+            agent_client_protocol::schema::NewSessionRequest::new(std::path::PathBuf::from("/tmp"));
         let _session_response = server
             .new_session(session_request)
             .await
@@ -155,8 +155,9 @@ mod acp_tests {
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
 
         // Create notification channel
-        let (notification_tx, mut notification_rx) =
-            tokio::sync::mpsc::unbounded_channel::<agent_client_protocol::SessionNotification>();
+        let (notification_tx, mut notification_rx) = tokio::sync::mpsc::unbounded_channel::<
+            agent_client_protocol::schema::SessionNotification,
+        >();
 
         // Simulate request handler - reads until EOF then signals shutdown
         let request_handler = async move {
@@ -231,8 +232,8 @@ mod acp_tests {
         let server = create_test_server().await.expect("Failed to create server");
 
         // Try to load a nonexistent session
-        let load_request = agent_client_protocol::LoadSessionRequest::new(
-            agent_client_protocol::SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ"),
+        let load_request = agent_client_protocol::schema::LoadSessionRequest::new(
+            agent_client_protocol::schema::SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ"),
             PathBuf::from("/tmp"),
         );
 
@@ -257,8 +258,8 @@ mod acp_tests {
         let server = create_test_server().await.expect("Failed to create server");
 
         // Try to load with an invalid session ID format
-        let load_request = agent_client_protocol::LoadSessionRequest::new(
-            agent_client_protocol::SessionId::new("not-a-valid-ulid"),
+        let load_request = agent_client_protocol::schema::LoadSessionRequest::new(
+            agent_client_protocol::schema::SessionId::new("not-a-valid-ulid"),
             PathBuf::from("/tmp"),
         );
 
@@ -499,7 +500,7 @@ mod acp_tests {
     /// fs.read_text_file capability before allowing file read operations.
     #[tokio::test]
     async fn test_file_read_requires_capability() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
@@ -556,7 +557,7 @@ mod acp_tests {
     /// the client has the required capability.
     #[tokio::test]
     async fn test_file_read_with_capability() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
@@ -609,7 +610,7 @@ mod acp_tests {
     /// fs.write_text_file capability before allowing file write operations.
     #[tokio::test]
     async fn test_file_write_requires_capability() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ClientCapabilities, FileSystemCapabilities, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
@@ -670,7 +671,7 @@ mod acp_tests {
     /// the client has the required capability.
     #[tokio::test]
     async fn test_file_write_with_capability() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ClientCapabilities, FileSystemCapabilities, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;
@@ -726,7 +727,7 @@ mod acp_tests {
     /// terminal capability before allowing terminal creation.
     #[tokio::test]
     async fn test_terminal_create_requires_capability() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
+        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
         use llama_agent::acp::session::AcpSessionState;
         use llama_agent::acp::terminal::{CreateTerminalRequest, TerminalManager};
         use llama_agent::types::ids::SessionId;
@@ -773,7 +774,7 @@ mod acp_tests {
     /// the client has the required capability.
     #[tokio::test]
     async fn test_terminal_create_with_capability() {
-        use agent_client_protocol::{ClientCapabilities, FileSystemCapabilities};
+        use agent_client_protocol::schema::{ClientCapabilities, FileSystemCapabilities};
         use llama_agent::acp::session::AcpSessionState;
         use llama_agent::acp::terminal::{CreateTerminalRequest, TerminalManager};
         use llama_agent::types::ids::SessionId;
@@ -818,7 +819,7 @@ mod acp_tests {
     /// capabilities, all related operations fail with appropriate errors.
     #[tokio::test]
     async fn test_no_capabilities_fails_all_operations() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ClientCapabilities, FileSystemCapabilities, ReadTextFileRequest, WriteTextFileRequest,
         };
         use llama_agent::acp::config::FilesystemSettings;

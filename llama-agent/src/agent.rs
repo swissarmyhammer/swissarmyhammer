@@ -118,7 +118,7 @@ pub struct AgentServer {
     /// Client capabilities from ACP initialize request (if running as ACP server)
     /// This enables capability enforcement for filesystem, terminal, and other operations
     pub(crate) client_capabilities:
-        tokio::sync::RwLock<Option<agent_client_protocol::ClientCapabilities>>,
+        tokio::sync::RwLock<Option<agent_client_protocol::schema::ClientCapabilities>>,
 }
 
 impl std::fmt::Debug for AgentServer {
@@ -176,7 +176,7 @@ impl AgentServer {
     /// ```
     pub async fn set_client_capabilities(
         &self,
-        capabilities: agent_client_protocol::ClientCapabilities,
+        capabilities: agent_client_protocol::schema::ClientCapabilities,
     ) {
         let mut caps = self.client_capabilities.write().await;
         *caps = Some(capabilities);
@@ -188,7 +188,7 @@ impl AgentServer {
     /// request, or None if running in non-ACP mode or before initialization.
     pub async fn get_client_capabilities(
         &self,
-    ) -> Option<agent_client_protocol::ClientCapabilities> {
+    ) -> Option<agent_client_protocol::schema::ClientCapabilities> {
         self.client_capabilities.read().await.clone()
     }
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::agent::AgentServer;
 use crate::types::ids::SessionId as LlamaSessionId;
 use crate::types::AgentAPI;
-use agent_client_protocol::{ExtResponse, SessionId as AcpSessionId, SessionNotification};
+use agent_client_protocol::schema::{ExtResponse, SessionId as AcpSessionId, SessionNotification};
 use futures::StreamExt;
 use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
@@ -32,7 +32,7 @@ pub struct AcpServer {
     notification_tx: broadcast::Sender<SessionNotification>,
 
     /// Client capabilities from initialize request for capability gating
-    client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
+    client_capabilities: Arc<RwLock<Option<agent_client_protocol::schema::ClientCapabilities>>>,
 
     /// ACP server configuration
     config: AcpConfig,
@@ -56,7 +56,7 @@ impl AcpServer {
         config: AcpConfig,
     ) -> (
         Self,
-        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
     ) {
         let (notification_tx, notification_rx) = broadcast::channel(1000);
 
@@ -154,20 +154,20 @@ impl AcpServer {
     /// the capabilities advertised in the initialize response.
     fn validate_mcp_transports(
         &self,
-        mcp_servers: &[agent_client_protocol::McpServer],
+        mcp_servers: &[agent_client_protocol::schema::McpServer],
     ) -> Result<(), agent_client_protocol::Error> {
         for server in mcp_servers {
             match server {
-                agent_client_protocol::McpServer::Stdio(_) => {
+                agent_client_protocol::schema::McpServer::Stdio(_) => {
                     // stdio is always supported (baseline requirement)
                     continue;
                 }
-                agent_client_protocol::McpServer::Http(_) => {
+                agent_client_protocol::schema::McpServer::Http(_) => {
                     // For now, http is advertised as true in initialize, so allow
                     // TODO: Make this configurable when we add mcp_capabilities to AcpCapabilities
                     tracing::debug!("HTTP MCP server accepted");
                 }
-                agent_client_protocol::McpServer::Sse(_) => {
+                agent_client_protocol::schema::McpServer::Sse(_) => {
                     // SSE is advertised as false, so reject
                     tracing::error!("SSE MCP server requested but sse capability not advertised");
                     return Err(agent_client_protocol::Error::invalid_params());
@@ -211,12 +211,12 @@ impl AcpServer {
     /// tool calls have been made and executed.
     fn map_finish_reason_to_stop_reason(
         finish_reason: &crate::types::FinishReason,
-    ) -> agent_client_protocol::StopReason {
+    ) -> agent_client_protocol::schema::StopReason {
         match finish_reason {
             crate::types::FinishReason::Stopped(reason) => match reason.as_str() {
-                "Maximum tokens reached" => agent_client_protocol::StopReason::MaxTokens,
-                "Error: Request cancelled" => agent_client_protocol::StopReason::Cancelled,
-                _ => agent_client_protocol::StopReason::EndTurn,
+                "Maximum tokens reached" => agent_client_protocol::schema::StopReason::MaxTokens,
+                "Error: Request cancelled" => agent_client_protocol::schema::StopReason::Cancelled,
+                _ => agent_client_protocol::schema::StopReason::EndTurn,
             },
         }
     }
@@ -459,13 +459,14 @@ impl AcpServer {
             },
             // Handle extension methods through ext_method
             _ => {
-                let params_raw = agent_client_protocol::RawValue::from_string(params.to_string())
-                    .map_err(|_| {
-                    tracing::error!("Failed to convert params to RawValue");
-                    agent_client_protocol::Error::invalid_params()
-                })?;
+                let params_raw =
+                    agent_client_protocol::schema::RawValue::from_string(params.to_string())
+                        .map_err(|_| {
+                            tracing::error!("Failed to convert params to RawValue");
+                            agent_client_protocol::Error::invalid_params()
+                        })?;
 
-                let ext_request = agent_client_protocol::ExtRequest::new(
+                let ext_request = agent_client_protocol::schema::ExtRequest::new(
                     method.to_string(),
                     Arc::from(params_raw),
                 );
@@ -703,7 +704,7 @@ impl AcpServer {
     /// - The plan data is malformed
     fn send_plan_notification_from_result(
         &self,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
         tool_result: &crate::types::ToolResult,
     ) -> Result<(), agent_client_protocol::Error> {
         // Extract _plan from tool result
@@ -735,9 +736,9 @@ impl AcpServer {
         let plan = super::plan::plan_data_to_acp_plan(&plan_data);
 
         // Create and broadcast Plan notification
-        let plan_notification = agent_client_protocol::SessionNotification::new(
+        let plan_notification = agent_client_protocol::schema::SessionNotification::new(
             acp_session_id.clone(),
-            agent_client_protocol::SessionUpdate::Plan(plan),
+            agent_client_protocol::schema::SessionUpdate::Plan(plan),
         );
 
         self.broadcast_notification(plan_notification);
@@ -769,13 +770,13 @@ impl AcpServer {
     /// * `mode_id` - The new mode ID that is now active
     async fn send_current_mode_update(
         &self,
-        session_id: &agent_client_protocol::SessionId,
-        mode_id: agent_client_protocol::SessionModeId,
+        session_id: &agent_client_protocol::schema::SessionId,
+        mode_id: agent_client_protocol::schema::SessionModeId,
     ) {
-        let update = agent_client_protocol::CurrentModeUpdate::new(mode_id.clone());
-        let notification = agent_client_protocol::SessionNotification::new(
+        let update = agent_client_protocol::schema::CurrentModeUpdate::new(mode_id.clone());
+        let notification = agent_client_protocol::schema::SessionNotification::new(
             session_id.clone(),
-            agent_client_protocol::SessionUpdate::CurrentModeUpdate(update),
+            agent_client_protocol::schema::SessionUpdate::CurrentModeUpdate(update),
         );
 
         self.broadcast_notification(notification);
@@ -802,8 +803,9 @@ impl AcpServer {
     /// session exists and returns success.
     pub async fn load_session(
         &self,
-        req: agent_client_protocol::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::LoadSessionResponse, agent_client_protocol::Error> {
+        req: agent_client_protocol::schema::LoadSessionRequest,
+    ) -> Result<agent_client_protocol::schema::LoadSessionResponse, agent_client_protocol::Error>
+    {
         tracing::info!("Loading session {}", req.session_id.0);
 
         // Try to get ACP session from memory, or reconstruct it from llama session
@@ -872,21 +874,22 @@ impl AcpServer {
 
         // Stream ALL historical messages via session/update notifications
         for message in &llama_session.messages {
-            let text_content = agent_client_protocol::TextContent::new(message.content.clone());
-            let content_block = agent_client_protocol::ContentBlock::Text(text_content);
-            let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+            let text_content =
+                agent_client_protocol::schema::TextContent::new(message.content.clone());
+            let content_block = agent_client_protocol::schema::ContentBlock::Text(text_content);
+            let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
 
             let update = match message.role {
                 crate::types::MessageRole::User => {
-                    agent_client_protocol::SessionUpdate::UserMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::UserMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::Assistant => {
-                    agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::Tool => {
                     // For tool messages, we need to send them as agent message chunks
                     // since SessionUpdate doesn't have a direct ToolResult variant for historical messages
-                    agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::System => {
                     // Skip system messages in session history
@@ -904,7 +907,7 @@ impl AcpServer {
             llama_session.messages.len()
         );
 
-        Ok(agent_client_protocol::LoadSessionResponse::new())
+        Ok(agent_client_protocol::schema::LoadSessionResponse::new())
     }
 
     /// Get a session by ACP session ID
@@ -932,10 +935,11 @@ impl AcpServer {
     }
 
     /// Supported ACP protocol versions (V0 and V1)
-    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::ProtocolVersion] = &[
-        agent_client_protocol::ProtocolVersion::V0,
-        agent_client_protocol::ProtocolVersion::V1,
-    ];
+    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::schema::ProtocolVersion] =
+        &[
+            agent_client_protocol::schema::ProtocolVersion::V0,
+            agent_client_protocol::schema::ProtocolVersion::V1,
+        ];
 
     /// Negotiate protocol version according to ACP specification
     ///
@@ -948,8 +952,8 @@ impl AcpServer {
     /// # Returns
     /// The negotiated protocol version to use for the session
     fn negotiate_protocol_version(
-        client_requested_version: &agent_client_protocol::ProtocolVersion,
-    ) -> agent_client_protocol::ProtocolVersion {
+        client_requested_version: &agent_client_protocol::schema::ProtocolVersion,
+    ) -> agent_client_protocol::schema::ProtocolVersion {
         // If client's requested version is supported, use it
         if Self::SUPPORTED_PROTOCOL_VERSIONS.contains(client_requested_version) {
             client_requested_version.clone()
@@ -958,7 +962,7 @@ impl AcpServer {
             Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&agent_client_protocol::ProtocolVersion::V1)
+                .unwrap_or(&agent_client_protocol::schema::ProtocolVersion::V1)
                 .clone()
         }
     }
@@ -976,8 +980,8 @@ impl AcpServer {
     fn build_session_mode_state_with_current(
         &self,
         current_mode: &str,
-    ) -> Option<agent_client_protocol::SessionModeState> {
-        use agent_client_protocol::{SessionModeId, SessionModeState};
+    ) -> Option<agent_client_protocol::schema::SessionModeState> {
+        use agent_client_protocol::schema::{SessionModeId, SessionModeState};
 
         if self.config.available_modes.is_empty() {
             return None;
@@ -995,8 +999,9 @@ impl AcpServer {
 impl agent_client_protocol::Agent for AcpServer {
     async fn initialize(
         &self,
-        request: agent_client_protocol::InitializeRequest,
-    ) -> Result<agent_client_protocol::InitializeResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::InitializeRequest,
+    ) -> Result<agent_client_protocol::schema::InitializeResponse, agent_client_protocol::Error>
+    {
         tracing::trace!(
             "Processing initialize request with protocol version {}",
             Pretty(&request.protocol_version)
@@ -1030,7 +1035,7 @@ impl agent_client_protocol::Agent for AcpServer {
         // Build agent capabilities from config
         // Only advertise capabilities we actually support
         // Currently llama-agent only supports text content (see translation.rs)
-        let prompt_caps = agent_client_protocol::PromptCapabilities::new()
+        let prompt_caps = agent_client_protocol::schema::PromptCapabilities::new()
             .audio(false)
             .embedded_context(false)
             .image(false)
@@ -1040,11 +1045,11 @@ impl agent_client_protocol::Agent for AcpServer {
                 map
             });
 
-        let mcp_caps = agent_client_protocol::McpCapabilities::new()
+        let mcp_caps = agent_client_protocol::schema::McpCapabilities::new()
             .http(true)
             .sse(false);
 
-        let agent_capabilities = agent_client_protocol::AgentCapabilities::new()
+        let agent_capabilities = agent_client_protocol::schema::AgentCapabilities::new()
             .load_session(self.config.capabilities.supports_session_loading)
             .prompt_capabilities(prompt_caps)
             .mcp_capabilities(mcp_caps)
@@ -1067,13 +1072,15 @@ impl agent_client_protocol::Agent for AcpServer {
             });
 
         // Build Implementation using builder pattern
-        let agent_info =
-            agent_client_protocol::Implementation::new("llama-agent", env!("CARGO_PKG_VERSION"))
-                .title(format!("LLaMA Agent v{}", env!("CARGO_PKG_VERSION")));
+        let agent_info = agent_client_protocol::schema::Implementation::new(
+            "llama-agent",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .title(format!("LLaMA Agent v{}", env!("CARGO_PKG_VERSION")));
 
         // Return InitializeResponse with agent capabilities using builder pattern
         Ok(
-            agent_client_protocol::InitializeResponse::new(negotiated_version)
+            agent_client_protocol::schema::InitializeResponse::new(negotiated_version)
                 .agent_capabilities(agent_capabilities)
                 .auth_methods(vec![])
                 .agent_info(agent_info),
@@ -1082,8 +1089,9 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn authenticate(
         &self,
-        request: agent_client_protocol::AuthenticateRequest,
-    ) -> Result<agent_client_protocol::AuthenticateResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::AuthenticateRequest,
+    ) -> Result<agent_client_protocol::schema::AuthenticateResponse, agent_client_protocol::Error>
+    {
         // AUTHENTICATION ARCHITECTURE DECISION:
         // llama-agent declares NO authentication methods in initialize().
         // According to ACP spec, clients should not call authenticate when no methods are declared.
@@ -1098,8 +1106,9 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn new_session(
         &self,
-        request: agent_client_protocol::NewSessionRequest,
-    ) -> Result<agent_client_protocol::NewSessionResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::NewSessionRequest,
+    ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
+    {
         tracing::info!(
             "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
             request.cwd,
@@ -1253,7 +1262,7 @@ impl agent_client_protocol::Agent for AcpServer {
             None
         };
 
-        let mut response = agent_client_protocol::NewSessionResponse::new(session_id);
+        let mut response = agent_client_protocol::schema::NewSessionResponse::new(session_id);
         if let Some(mode_state) = modes {
             response = response.modes(mode_state);
         }
@@ -1263,16 +1272,18 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn load_session(
         &self,
-        request: agent_client_protocol::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::LoadSessionResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::LoadSessionRequest,
+    ) -> Result<agent_client_protocol::schema::LoadSessionResponse, agent_client_protocol::Error>
+    {
         // Delegate to the existing load_session method
         self.load_session(request).await
     }
 
     async fn set_session_mode(
         &self,
-        request: agent_client_protocol::SetSessionModeRequest,
-    ) -> Result<agent_client_protocol::SetSessionModeResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::SetSessionModeRequest,
+    ) -> Result<agent_client_protocol::schema::SetSessionModeResponse, agent_client_protocol::Error>
+    {
         // Parse mode ID from request
         let mode_id = &request.mode_id;
         let session_id = &request.session_id;
@@ -1347,7 +1358,7 @@ impl agent_client_protocol::Agent for AcpServer {
         self.send_current_mode_update(session_id, mode_id.clone())
             .await;
 
-        let mut response = agent_client_protocol::SetSessionModeResponse::new();
+        let mut response = agent_client_protocol::schema::SetSessionModeResponse::new();
 
         // Add metadata to indicate mode was successfully set
         let mut meta = serde_json::Map::new();
@@ -1363,8 +1374,8 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn prompt(
         &self,
-        request: agent_client_protocol::PromptRequest,
-    ) -> Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::PromptRequest,
+    ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
         tracing::info!("Processing prompt for session {}", request.session_id.0);
 
         // Get ACP session
@@ -1420,7 +1431,7 @@ impl agent_client_protocol::Agent for AcpServer {
         // Agentic loop: Continue generating until no more tool calls are produced
         let mut total_tokens = 0usize;
         let mut total_tool_calls = 0usize;
-        let mut final_stop_reason = agent_client_protocol::StopReason::EndTurn;
+        let mut final_stop_reason = agent_client_protocol::schema::StopReason::EndTurn;
         let mut all_generated_text = String::new();
 
         loop {
@@ -1568,17 +1579,18 @@ impl agent_client_protocol::Agent for AcpServer {
                 tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call_id);
 
                 // Send initial ToolCall notification with pending status (per ACP spec)
-                let initial_tool_call = agent_client_protocol::ToolCall::new(
-                    agent_client_protocol::ToolCallId::new(tool_call_id.to_string()),
+                let initial_tool_call = agent_client_protocol::schema::ToolCall::new(
+                    agent_client_protocol::schema::ToolCallId::new(tool_call_id.to_string()),
                     &tool_name,
                 )
-                .status(agent_client_protocol::ToolCallStatus::Pending)
+                .status(agent_client_protocol::schema::ToolCallStatus::Pending)
                 .raw_input(tool_call.arguments.clone());
 
-                let tool_call_notification = agent_client_protocol::SessionNotification::new(
-                    request.session_id.clone(),
-                    agent_client_protocol::SessionUpdate::ToolCall(initial_tool_call),
-                );
+                let tool_call_notification =
+                    agent_client_protocol::schema::SessionNotification::new(
+                        request.session_id.clone(),
+                        agent_client_protocol::schema::SessionUpdate::ToolCall(initial_tool_call),
+                    );
                 self.broadcast_notification(tool_call_notification);
 
                 // Handle tool call with permission checking and execution
@@ -1598,9 +1610,9 @@ impl agent_client_protocol::Agent for AcpServer {
 
                         // Convert tool result to ACP ToolCallUpdate and broadcast
                         let update = super::translation::tool_result_to_acp_update(result.clone());
-                        let notification = agent_client_protocol::SessionNotification::new(
+                        let notification = agent_client_protocol::schema::SessionNotification::new(
                             request.session_id.clone(),
-                            agent_client_protocol::SessionUpdate::ToolCallUpdate(update),
+                            agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update),
                         );
                         self.broadcast_notification(notification);
 
@@ -1642,17 +1654,18 @@ impl agent_client_protocol::Agent for AcpServer {
                     Err(e) => {
                         tracing::error!("Tool call execution failed: {}", e);
                         // Convert tool call error to ACP notification
-                        let error_notification = agent_client_protocol::SessionNotification::new(
-                            request.session_id.clone(),
-                            agent_client_protocol::SessionUpdate::AgentMessageChunk(
-                                agent_client_protocol::ContentChunk::new(
-                                    agent_client_protocol::ContentBlock::from(format!(
-                                        "Tool call failed: {}",
-                                        e
-                                    )),
+                        let error_notification =
+                            agent_client_protocol::schema::SessionNotification::new(
+                                request.session_id.clone(),
+                                agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(
+                                    agent_client_protocol::schema::ContentChunk::new(
+                                        agent_client_protocol::schema::ContentBlock::from(format!(
+                                            "Tool call failed: {}",
+                                            e
+                                        )),
+                                    ),
                                 ),
-                            ),
-                        );
+                            );
                         self.broadcast_notification(error_notification);
                         // Continue with other tool calls even if one fails
                     }
@@ -1663,9 +1676,9 @@ impl agent_client_protocol::Agent for AcpServer {
             // Note: EOS/EndTurn with no tool calls is already handled above (tool_calls.is_empty() check)
             // If we reach here, tool calls existed, so we need to continue unless hitting a hard limit
             match final_stop_reason {
-                agent_client_protocol::StopReason::MaxTokens
-                | agent_client_protocol::StopReason::Cancelled
-                | agent_client_protocol::StopReason::Refusal => {
+                agent_client_protocol::schema::StopReason::MaxTokens
+                | agent_client_protocol::schema::StopReason::Cancelled
+                | agent_client_protocol::schema::StopReason::Refusal => {
                     tracing::info!(
                         "Stopping agentic loop after executing {} tool calls (hard limit: {})",
                         tool_calls_count,
@@ -1712,12 +1725,12 @@ impl agent_client_protocol::Agent for AcpServer {
         self.clear_mcp_session_context(&acp_session.llama_session_id)
             .await;
 
-        Ok(agent_client_protocol::PromptResponse::new(final_stop_reason).meta(meta))
+        Ok(agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta))
     }
 
     async fn cancel(
         &self,
-        request: agent_client_protocol::CancelNotification,
+        request: agent_client_protocol::schema::CancelNotification,
     ) -> Result<(), agent_client_protocol::Error> {
         let session_id = &request.session_id;
         tracing::info!("Processing cancellation for session: {}", session_id.0);
@@ -1752,7 +1765,7 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn ext_method(
         &self,
-        request: agent_client_protocol::ExtRequest,
+        request: agent_client_protocol::schema::ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
         tracing::info!("Extension method called: {}", request.method);
 
@@ -1788,7 +1801,7 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
 
                 // Parse request
-                let fs_req: agent_client_protocol::ReadTextFileRequest =
+                let fs_req: agent_client_protocol::schema::ReadTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/read_text_file params: {}", e);
                         agent_client_protocol::Error::invalid_params()
@@ -1839,7 +1852,7 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
 
                 // Parse request
-                let fs_req: agent_client_protocol::WriteTextFileRequest =
+                let fs_req: agent_client_protocol::schema::WriteTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/write_text_file params: {}", e);
                         agent_client_protocol::Error::invalid_params()
@@ -2144,8 +2157,8 @@ impl agent_client_protocol::Agent for AcpServer {
             agent_client_protocol::Error::internal_error()
         })?;
 
-        let raw_value =
-            agent_client_protocol::RawValue::from_string(response_json_str).map_err(|e| {
+        let raw_value = agent_client_protocol::schema::RawValue::from_string(response_json_str)
+            .map_err(|e| {
                 tracing::error!("Failed to create RawValue from response: {}", e);
                 agent_client_protocol::Error::internal_error()
             })?;
@@ -2155,7 +2168,7 @@ impl agent_client_protocol::Agent for AcpServer {
 
     async fn ext_notification(
         &self,
-        notification: agent_client_protocol::ExtNotification,
+        notification: agent_client_protocol::schema::ExtNotification,
     ) -> Result<(), agent_client_protocol::Error> {
         tracing::debug!("Extension notification {} received", notification.method);
         // Extension notifications are ignored for now
@@ -2319,12 +2332,12 @@ mod tests {
     async fn test_initialize() {
         let server = Arc::new(create_test_server().await);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new()
+                .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true),
@@ -2337,7 +2350,7 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(
             response.protocol_version,
-            agent_client_protocol::ProtocolVersion::V1,
+            agent_client_protocol::schema::ProtocolVersion::V1,
             "Agent should respond with V1 protocol version"
         );
     }
@@ -2349,7 +2362,7 @@ mod tests {
 
         // Create a new session request
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
 
         use agent_client_protocol::Agent;
         let result = server.new_session(new_session_request).await;
@@ -2394,10 +2407,10 @@ mod tests {
     async fn test_capability_advertisement() {
         let server = Arc::new(create_test_server().await);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
         use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
@@ -2597,10 +2610,10 @@ mod tests {
         let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
         let server = Arc::new(acp_server);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
         use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
@@ -2650,16 +2663,16 @@ mod tests {
         let server = Arc::new(create_test_server().await);
 
         // Create initialize request with specific capabilities
-        let fs_caps = agent_client_protocol::FileSystemCapabilities::new()
+        let fs_caps = agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(false);
 
-        let client_caps = agent_client_protocol::ClientCapabilities::new()
+        let client_caps = agent_client_protocol::schema::ClientCapabilities::new()
             .fs(fs_caps)
             .terminal(true);
 
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(client_caps.clone());
 
@@ -2683,7 +2696,7 @@ mod tests {
 
         // Create a new session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_result = server.new_session(new_session_request).await;
         assert!(session_result.is_ok(), "New session should succeed");
         let session_response = session_result.unwrap();
@@ -2897,7 +2910,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_nonexistent_session() {
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let server = create_test_server().await;
 
@@ -2917,8 +2930,8 @@ mod tests {
         let writer_buf: Vec<u8> = Vec::new();
 
         // Create a valid InitializeRequest and serialize it to see the correct JSON format
-        let init_req = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_req = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         );
         let params_json = serde_json::to_value(&init_req).unwrap();
 
@@ -3037,13 +3050,19 @@ mod tests {
         // Create config with modes
         let config = AcpConfig {
             available_modes: vec![
-                agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
-                    .description("General-purpose agent"),
-                agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
-                    .description("Configure status line"),
-                agent_client_protocol::SessionMode::new("Explore", "Explore")
+                agent_client_protocol::schema::SessionMode::new(
+                    "general-purpose",
+                    "General Purpose",
+                )
+                .description("General-purpose agent"),
+                agent_client_protocol::schema::SessionMode::new(
+                    "statusline-setup",
+                    "Statusline Setup",
+                )
+                .description("Configure status line"),
+                agent_client_protocol::schema::SessionMode::new("Explore", "Explore")
                     .description("Explore codebases"),
-                agent_client_protocol::SessionMode::new("Plan", "Plan")
+                agent_client_protocol::schema::SessionMode::new("Plan", "Plan")
                     .description("Plan implementations"),
             ],
             default_mode_id: "general-purpose".to_string(),
@@ -3060,17 +3079,17 @@ mod tests {
         let server = Arc::new(create_test_server_with_modes().await);
 
         // Initialize with client capabilities
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
         use agent_client_protocol::Agent;
         let _init_result = server.initialize(init_request).await;
 
         // Create a new session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_result = server.new_session(new_session_request).await;
         assert!(session_result.is_ok(), "New session should succeed");
         let session_response = session_result.unwrap();
@@ -3147,14 +3166,14 @@ mod tests {
 
         // Create a session first
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_response = server.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
         // Change mode to "Explore"
-        let mode_id = agent_client_protocol::SessionModeId::new("Explore");
+        let mode_id = agent_client_protocol::schema::SessionModeId::new("Explore");
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(session_id.clone(), mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(session_id.clone(), mode_id);
 
         let result = server.set_session_mode(set_mode_request).await;
         assert!(result.is_ok(), "Setting session mode should succeed");
@@ -3184,10 +3203,10 @@ mod tests {
         use agent_client_protocol::Agent;
 
         // Try to set mode on non-existent session
-        let fake_session_id = agent_client_protocol::SessionId::new("nonexistent");
-        let mode_id = agent_client_protocol::SessionModeId::new("Plan");
+        let fake_session_id = agent_client_protocol::schema::SessionId::new("nonexistent");
+        let mode_id = agent_client_protocol::schema::SessionModeId::new("Plan");
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(fake_session_id, mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(fake_session_id, mode_id);
 
         let result = server.set_session_mode(set_mode_request).await;
         assert!(result.is_err(), "Should fail with invalid session");
@@ -3200,7 +3219,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_build_session_mode_state() {
-        use agent_client_protocol::{SessionMode, SessionModeId, SessionModeState};
+        use agent_client_protocol::schema::{SessionMode, SessionModeId, SessionModeState};
 
         // Build test mode state
         let available_modes = vec![
@@ -3440,15 +3459,15 @@ mod tests {
 
         // Create a new session first
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_response = server.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
         // Create a set_session_mode request with a test mode
         let mode_id_str = "test-mode";
-        let mode_id = agent_client_protocol::SessionModeId::new(mode_id_str);
+        let mode_id = agent_client_protocol::schema::SessionModeId::new(mode_id_str);
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(session_id.clone(), mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(session_id.clone(), mode_id);
 
         // Call set_session_mode
         let result = server.set_session_mode(set_mode_request).await;

@@ -3,7 +3,7 @@
 use crate::mcp::{MCPClient, UnifiedMCPClient};
 use crate::mcp_client_handler::NotifyingClientHandler;
 use crate::types::MCPError;
-use agent_client_protocol::McpServer;
+use agent_client_protocol::schema::McpServer;
 use std::sync::Arc;
 
 /// Default timeout for MCP tool calls (10 minutes).

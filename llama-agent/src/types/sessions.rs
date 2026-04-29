@@ -268,7 +268,7 @@ pub struct Session {
     /// When ACP feature is enabled, changes to available_commands trigger
     /// AvailableCommandsUpdate notifications to inform clients of the current
     /// command set.
-    pub available_commands: Vec<agent_client_protocol::AvailableCommand>,
+    pub available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
     /// Current session mode identifier for ACP current mode updates
     ///
     /// Tracks the active mode for this session. When the mode changes,
@@ -303,7 +303,7 @@ pub struct Session {
     /// When capabilities are not available (None), file operations should not be performed
     /// in ACP contexts. For non-ACP contexts (MCP mode), this field is None and operations
     /// proceed without capability checks.
-    pub client_capabilities: Option<agent_client_protocol::ClientCapabilities>,
+    pub client_capabilities: Option<agent_client_protocol::schema::ClientCapabilities>,
 
     /// Number of messages that have been processed and saved in the session KV cache
     ///
