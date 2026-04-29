@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD0EA8Q367A70AWY8MMZ79D
-position_column: doing
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9480
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: mcp_client_handler + mcp'
 ---

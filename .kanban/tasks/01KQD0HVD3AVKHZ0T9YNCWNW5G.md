@@ -5,7 +5,7 @@ depends_on:
 - 01KQD0DF12DJ1WPZ4MMWF69DAQ
 - 01KQD0DW1GAW3KF2A33FQ0JZT3
 position_column: todo
-position_ordinal: ff8e80
+position_ordinal: ffa080
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: agent_prompt_handling'
 ---

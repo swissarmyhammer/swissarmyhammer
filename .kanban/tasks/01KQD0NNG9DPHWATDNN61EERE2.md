@@ -9,8 +9,8 @@ depends_on:
 - 01KQD0JYABBB0VPPBFKQYH4TY8
 - 01KQD0K1GARV6ZA0ZSJPSZWJBE
 - 01KQD0K4Q2DYTE9Q9RY8MG9VM7
-position_column: todo
-position_ordinal: ff9c80
+position_column: doing
+position_ordinal: '8480'
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: acp/server.rs (AcpServer reshape)'
 ---

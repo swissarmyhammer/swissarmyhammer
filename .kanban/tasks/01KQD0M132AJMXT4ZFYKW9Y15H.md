@@ -4,6 +4,8 @@ assignees:
 depends_on:
 - 01KQD0EDB540RNXPTBEX4MNT83
 - 01KQD0G0N3KDEZAHRJEQT5SS9W
+- 01KQD0MMR7W64307S03XBV69BH
+- 01KQD0NS3EFZ6Q7WCN5FME36VY
 position_column: todo
 position_ordinal: ff9880
 project: acp-upgrade
