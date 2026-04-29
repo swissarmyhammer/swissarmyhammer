@@ -352,8 +352,6 @@ impl AcpServer {
     where
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        use agent_client_protocol::Agent as _;
-
         // Parse JSON-RPC request
         let request: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
             tracing::error!("Failed to parse JSON-RPC request: {}", e);
@@ -994,10 +992,11 @@ impl AcpServer {
     }
 }
 
-// Implement the Agent trait for AcpServer to handle ACP protocol methods
-#[async_trait::async_trait(?Send)]
-impl agent_client_protocol::Agent for AcpServer {
-    async fn initialize(
+// ACP protocol entry-points used by the SDK 0.11 builder/handler layer.
+// Each method matches a JSON-RPC request handler registered on
+// `Agent.builder().on_receive_request(...)` in `start_with_streams`.
+impl AcpServer {
+    pub async fn initialize(
         &self,
         request: agent_client_protocol::schema::InitializeRequest,
     ) -> Result<agent_client_protocol::schema::InitializeResponse, agent_client_protocol::Error>
@@ -1087,7 +1086,7 @@ impl agent_client_protocol::Agent for AcpServer {
         )
     }
 
-    async fn authenticate(
+    pub async fn authenticate(
         &self,
         request: agent_client_protocol::schema::AuthenticateRequest,
     ) -> Result<agent_client_protocol::schema::AuthenticateResponse, agent_client_protocol::Error>
@@ -1104,7 +1103,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
-    async fn new_session(
+    pub async fn new_session(
         &self,
         request: agent_client_protocol::schema::NewSessionRequest,
     ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
@@ -1270,16 +1269,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(response)
     }
 
-    async fn load_session(
-        &self,
-        request: agent_client_protocol::schema::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::schema::LoadSessionResponse, agent_client_protocol::Error>
-    {
-        // Delegate to the existing load_session method
-        self.load_session(request).await
-    }
-
-    async fn set_session_mode(
+    pub async fn set_session_mode(
         &self,
         request: agent_client_protocol::schema::SetSessionModeRequest,
     ) -> Result<agent_client_protocol::schema::SetSessionModeResponse, agent_client_protocol::Error>
@@ -1372,7 +1362,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(response)
     }
 
-    async fn prompt(
+    pub async fn prompt(
         &self,
         request: agent_client_protocol::schema::PromptRequest,
     ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
@@ -1728,7 +1718,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta))
     }
 
-    async fn cancel(
+    pub async fn cancel(
         &self,
         request: agent_client_protocol::schema::CancelNotification,
     ) -> Result<(), agent_client_protocol::Error> {
@@ -1763,7 +1753,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(())
     }
 
-    async fn ext_method(
+    pub async fn ext_method(
         &self,
         request: agent_client_protocol::schema::ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
@@ -2166,7 +2156,7 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(ExtResponse::new(Arc::from(raw_value)))
     }
 
-    async fn ext_notification(
+    pub async fn ext_notification(
         &self,
         notification: agent_client_protocol::schema::ExtNotification,
     ) -> Result<(), agent_client_protocol::Error> {
@@ -2222,10 +2212,14 @@ fn filesystem_error_to_protocol_error(
     }
 }
 
-use agent_client_protocol_extras::AgentWithFixture;
-
-impl AgentWithFixture for AcpServer {
-    fn agent_type(&self) -> &'static str {
+impl AcpServer {
+    /// Static agent identifier used in fixtures and logs.
+    ///
+    /// In ACP 0.10 this implemented `agent_client_protocol_extras::AgentWithFixture`.
+    /// That trait was removed when extras was reshaped for ACP 0.11; the inherent
+    /// method preserves the value so existing fixture / playback paths can still
+    /// query the agent type.
+    pub fn agent_type(&self) -> &'static str {
         "llama"
     }
 }
