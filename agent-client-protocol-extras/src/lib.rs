@@ -21,15 +21,17 @@
 //! - [`recording`] — the [`RecordingAgent`] middleware that captures every
 //!   request/response/notification flowing through to a stable on-disk
 //!   JSON file for later replay.
+//! - [`playback`] — the [`PlaybackAgent`] leaf agent that replays a recorded
+//!   JSON session over an ACP 0.11 connection (inverse of [`recording`]).
 //!
-//! The `playback` and `test_mcp_server` modules are migrated by sibling
-//! tasks (A4 / D-series) and are not yet wired in here. The
-//! fixture-recording entry points (`with_fixture`, `AgentWithFixture`,
-//! `start_test_mcp_server_with_capture`) are likewise rebuilt by those
-//! tasks.
+//! The `test_mcp_server` module is migrated by a sibling task (D-series)
+//! and is not yet wired in here. The fixture-recording entry points
+//! (`with_fixture`, `AgentWithFixture`, `start_test_mcp_server_with_capture`)
+//! are likewise rebuilt by those tasks.
 
 pub mod hook_config;
 pub mod hookable_agent;
+pub mod playback;
 pub mod recording;
 pub mod tracing_agent;
 
@@ -40,6 +42,7 @@ pub use hook_config::{
     SessionSource, UnsupportedEventKind,
 };
 pub use hookable_agent::HookableAgent;
+pub use playback::PlaybackAgent;
 pub use recording::{RecordedCall, RecordedSession, RecordingAgent};
 pub use tracing_agent::{trace_notifications, TracingAgent};
 

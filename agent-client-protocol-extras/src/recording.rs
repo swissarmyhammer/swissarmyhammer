@@ -260,6 +260,15 @@ struct RecordingInner {
     pending: HashMap<IdKey, PendingRequest>,
     /// Notifications buffered for routing at the next flush.
     notifications: Vec<serde_json::Value>,
+    /// True when the on-disk file is current as of the latest mutation.
+    /// Set by [`RecordingState::flush_now`] and cleared whenever new state
+    /// lands. The [`Drop`] impl skips its final write when this is set so
+    /// the explicit flush issued at the end of `connect_to` isn't followed
+    /// by a redundant Drop-time flush. Initial value is `false` so a
+    /// `RecordingState` constructed and dropped without ever observing a
+    /// message still writes an empty `{"calls":[]}` file, matching
+    /// pre-flag behaviour.
+    clean: bool,
 }
 
 /// A request waiting for its response.
@@ -462,7 +471,7 @@ impl Drop for RecordingState {
 /// Map a JSON-RPC wire method onto the legacy 0.10 Agent-trait method name
 /// recorded by older fixtures. Methods with no legacy mapping are recorded
 /// under their wire name verbatim.
-fn legacy_method_for(wire_method: &str) -> String {
+pub(crate) fn legacy_method_for(wire_method: &str) -> String {
     match wire_method {
         "initialize" => "initialize".to_string(),
         "session/new" => "new_session".to_string(),
