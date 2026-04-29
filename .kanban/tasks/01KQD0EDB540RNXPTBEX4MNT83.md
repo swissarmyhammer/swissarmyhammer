@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQ367HE0Z8ZSXY90CTT8QYGG
-position_column: todo
-position_ordinal: ff8380
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9b80
 project: acp-upgrade
 title: 'ACP 0.11: avp-common: housekeeping + bulk schema imports + executor.rs StopReason'
 ---

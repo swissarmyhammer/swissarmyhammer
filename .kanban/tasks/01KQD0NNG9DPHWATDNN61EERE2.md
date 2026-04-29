@@ -9,8 +9,8 @@ depends_on:
 - 01KQD0JYABBB0VPPBFKQYH4TY8
 - 01KQD0K1GARV6ZA0ZSJPSZWJBE
 - 01KQD0K4Q2DYTE9Q9RY8MG9VM7
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9680
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: acp/server.rs (AcpServer reshape)'
 ---
@@ -69,3 +69,25 @@ Addressed warnings + the doc-comment nit:
 The `ARCHITECTURE.md` nit remains out-of-scope per the original review and is left for a follow-up task once the broader 0.11 migration lands.
 
 `cargo check -p llama-agent --lib` and `cargo clippy -p llama-agent --lib` both pass clean. `cargo fmt -p llama-agent` applied.
+
+## Review Findings 3 (2026-04-29 21:00)
+
+Re-reviewed commit `eaf9e2bd4` against the prior findings. All actionable items are resolved.
+
+**Verified:**
+
+1. **Notification bridge cancellation logic (`llama-agent/src/acp/server.rs:262-352`)** — `start_with_streams` owns a `tokio_util::sync::CancellationToken` (`connection_closed`) cloned into `build_lines_transport`. The incoming `unfold` stream calls `connection_closed.cancel()` on `Ok(None)` (clean EOF) and on `Err(e)` (I/O error). The bridge uses `tokio::select! { biased; ... }` with the cancel branch first, so the cancel takes priority over a simultaneously-ready `rx.recv()`. The select arm for `recv_result` retains the `Closed` and `Lagged` cases. Three clean exit paths cover all teardown scenarios: token cancel, broadcast `Closed`, `cx.send_notification` error. No race, no leak.
+
+2. **`build_lines_transport` (`llama-agent/src/acp/server.rs:2091-2128`)** — Signature now takes the `connection_closed` token by value; the `unfold` carries it forward in its accumulator and cancels on the two terminal branches. The original `Err` branch still yields `Some((Err(e), state))` so the SDK sees the I/O error before the stream ends, while the cancel fires alongside. Doc-comment correctly describes the new behavior.
+
+3. **Dead `use agent_client_protocol::Agent;` imports** — `grep -c "use agent_client_protocol::Agent;"` against the file returns 0. All eight occurrences removed.
+
+4. **Doc-comments** — Both `start_with_streams` (lines 224-249) and `build_lines_transport` (lines 2079-2090) now describe the actual concurrency model and connection-liveness coordination.
+
+**Build status:**
+- `cargo check -p llama-agent --lib` → clean (0.21s, no warnings).
+- `cargo clippy -p llama-agent --lib -- -D warnings` → clean (no warnings, no errors).
+
+**Outstanding nit:** the `ARCHITECTURE.md:493` item from "Review Findings (2026-04-29 15:39)" is still unchecked. The original review explicitly marked it out-of-scope ("Out of scope for this single-file task, but worth a follow-up task..."). Spun off as a dedicated task `01KQDGB6NQF50F407NY3P9DMM9` ("ACP 0.11: Update ARCHITECTURE.md to reflect builder/handler API") so the doc update is tracked independently of this single-file llama-agent change.
+
+All actionable findings against `llama-agent/src/acp/server.rs` are resolved. Task is clean.

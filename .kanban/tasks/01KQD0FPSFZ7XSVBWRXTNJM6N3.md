@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD0D883ZW5JAA02913DXM8E
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9c80
 project: acp-upgrade
 title: 'ACP 0.11: extras: HookableAgent'
 ---

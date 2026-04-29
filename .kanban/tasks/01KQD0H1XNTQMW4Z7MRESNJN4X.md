@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQD0DF12DJ1WPZ4MMWF69DAQ
 - 01KQD0DW1GAW3KF2A33FQ0JZT3
-position_column: todo
-position_ordinal: ff8880
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9f80
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: error.rs + protocol_translator.rs + content_block_processor.rs'
 ---
