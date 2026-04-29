@@ -246,6 +246,74 @@ fn unregister_removes_scope() {
     assert!(!reg.is_registered(&SpatialKey::from_string("k")));
 }
 
+/// `find_by_moniker` resolves a [`Moniker`] to its registered
+/// [`SpatialKey`]. The kernel's `SpatialState::focus_by_moniker` (and
+/// the `spatial_focus_by_moniker` Tauri command) use this to honor
+/// React-side `setFocus(moniker)` calls without making the React side
+/// keep its own moniker → key map.
+#[test]
+fn find_by_moniker_resolves_to_registered_key() {
+    let mut reg = SpatialRegistry::new();
+    reg.register_scope(make_focus_scope("k1", "task:01ABC", "L1", None));
+    reg.register_zone(make_zone("z1", "column:doing", "L1", None));
+
+    assert_eq!(
+        reg.find_by_moniker(&Moniker::from_string("task:01ABC")),
+        Some(&SpatialKey::from_string("k1")),
+        "leaf moniker resolves to its scope key"
+    );
+    assert_eq!(
+        reg.find_by_moniker(&Moniker::from_string("column:doing")),
+        Some(&SpatialKey::from_string("z1")),
+        "zone moniker resolves to its zone key"
+    );
+}
+
+/// `find_by_moniker` returns `None` for an unregistered moniker. The
+/// kernel translates this to `tracing::error!` + `None` in
+/// [`SpatialState::focus_by_moniker`]; the Tauri adapter surfaces the
+/// `None` to the React caller as `Err(_)`.
+#[test]
+fn find_by_moniker_unknown_returns_none() {
+    let mut reg = SpatialRegistry::new();
+    reg.register_scope(make_focus_scope("k1", "task:01", "L1", None));
+
+    assert!(reg
+        .find_by_moniker(&Moniker::from_string("task:does-not-exist"))
+        .is_none());
+}
+
+/// `find_by_moniker` returns a deterministic key when two distinct
+/// scopes are registered with the same moniker (an invariant violation
+/// in production, typically caused by a React-side bug that mints two
+/// `<FocusScope>` mounts with the same moniker). The kernel does not
+/// enforce uniqueness — it observes — so the returned key is whichever
+/// the underlying HashMap iteration yields first. The dangerous part
+/// is the silent non-determinism, so the implementation also emits a
+/// `tracing::warn!` when it detects the duplicate; this test pins the
+/// "still findable" half of that contract by registering both
+/// orderings against an isolated registry and asserting the lookup
+/// returns one of the two registered keys (not an unrelated key, not
+/// `None`).
+#[test]
+fn find_by_moniker_duplicate_returns_one_of_the_registered_keys() {
+    let mut reg = SpatialRegistry::new();
+    let shared = "task:duplicate";
+    reg.register_scope(make_focus_scope("k1", shared, "L1", None));
+    reg.register_scope(make_focus_scope("k2", shared, "L1", None));
+
+    let resolved = reg
+        .find_by_moniker(&Moniker::from_string(shared))
+        .expect("duplicate-moniker registration must still resolve to one of the keys");
+
+    let k1 = SpatialKey::from_string("k1");
+    let k2 = SpatialKey::from_string("k2");
+    assert!(
+        resolved == &k1 || resolved == &k2,
+        "find_by_moniker must return one of the two registered keys, got {resolved:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Zone tree ops
 // ---------------------------------------------------------------------------

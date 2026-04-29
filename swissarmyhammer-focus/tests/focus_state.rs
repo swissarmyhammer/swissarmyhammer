@@ -269,3 +269,126 @@ fn focus_transfer_within_window_carries_prev_key() {
     assert_eq!(event.prev_key, Some(first));
     assert_eq!(event.next_key, Some(second));
 }
+
+/// `focus_by_moniker` resolves the moniker to a registered SpatialKey and
+/// behaves identically to `focus` from there. This is the kernel-side
+/// API the React `setFocus(moniker)` dispatches through after card
+/// `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
+/// projection of kernel events.
+#[test]
+fn focus_by_moniker_resolves_and_advances_focus() {
+    let registry = registry_with_scope("main", "L", "k1", "task:01ABC");
+    let mut state = SpatialState::new();
+    let moniker = Moniker::from_string("task:01ABC");
+
+    let event = state
+        .focus_by_moniker(&registry, &moniker)
+        .expect("focus_by_moniker emits when the moniker resolves");
+    assert_eq!(event.window_label, WindowLabel::from_string("main"));
+    assert_eq!(event.prev_key, None);
+    assert_eq!(event.next_key, Some(SpatialKey::from_string("k1")));
+    assert_eq!(event.next_moniker, Some(moniker.clone()));
+
+    assert_eq!(
+        state.focused_in(&WindowLabel::from_string("main")),
+        Some(&SpatialKey::from_string("k1")),
+        "focus_by_moniker must advance the per-window focus slot the same way focus does"
+    );
+}
+
+/// `focus_by_moniker` returns `None` when the moniker is not registered.
+/// Adapters surface this as `Err(_)` to the React caller so its
+/// `setFocus` dispatch can `console.error` for dev visibility — the
+/// kernel-side log is a `tracing::error!`.
+#[test]
+fn focus_by_moniker_unknown_moniker_returns_none_and_does_not_change_focus() {
+    let registry = registry_with_scope("main", "L", "k1", "task:known");
+    let mut state = SpatialState::new();
+
+    // Seed an initial focus so we can prove "no change on unknown".
+    state
+        .focus_by_moniker(&registry, &Moniker::from_string("task:known"))
+        .expect("seed focus succeeds");
+
+    let unknown = Moniker::from_string("task:does-not-exist");
+    let event = state.focus_by_moniker(&registry, &unknown);
+    assert!(
+        event.is_none(),
+        "unknown moniker must produce no FocusChangedEvent"
+    );
+
+    assert_eq!(
+        state.focused_in(&WindowLabel::from_string("main")),
+        Some(&SpatialKey::from_string("k1")),
+        "unknown-moniker call must not perturb the per-window focus slot"
+    );
+}
+
+/// `focus_by_moniker` is a no-op on the already-focused moniker (mirrors
+/// the same short-circuit `focus(SpatialKey)` applies). The frontend's
+/// re-focus on a moniker it already owns must not re-emit a
+/// `focus-changed` event.
+#[test]
+fn focus_by_moniker_already_focused_emits_no_event() {
+    let registry = registry_with_scope("main", "L", "k1", "task:01");
+    let mut state = SpatialState::new();
+    let moniker = Moniker::from_string("task:01");
+
+    assert!(state.focus_by_moniker(&registry, &moniker).is_some());
+    assert!(
+        state.focus_by_moniker(&registry, &moniker).is_none(),
+        "re-focusing the same moniker must short-circuit without emitting"
+    );
+}
+
+/// `clear_focus` produces a `Some(prev) → None` event so the React-side
+/// `focus-changed` projection can flip the entity-focus store back to
+/// `null`. This is the kernel-side API the React `setFocus(null)`
+/// dispatches through (card `01KQD0WK54G0FRD7SZVZASA9ST`); without it,
+/// `setFocus(null)` would have to mutate the React store synchronously
+/// to clear focus, which is exactly the kernel/React drift the card
+/// was filed to eliminate.
+#[test]
+fn clear_focus_emits_some_to_none_event() {
+    let registry = registry_with_scope("main", "L", "k1", "task:01");
+    let mut state = SpatialState::new();
+    let window = WindowLabel::from_string("main");
+
+    // Seed focus so there is something to clear.
+    state
+        .focus_by_moniker(&registry, &Moniker::from_string("task:01"))
+        .expect("seed focus succeeds");
+    assert_eq!(
+        state.focused_in(&window),
+        Some(&SpatialKey::from_string("k1"))
+    );
+
+    let event = state
+        .clear_focus(&window)
+        .expect("clear_focus emits when there was prior focus");
+    assert_eq!(event.window_label, window);
+    assert_eq!(event.prev_key, Some(SpatialKey::from_string("k1")));
+    assert_eq!(event.next_key, None);
+    assert_eq!(event.next_moniker, None);
+
+    assert!(
+        state.focused_in(&window).is_none(),
+        "clear_focus must drop the per-window focus slot"
+    );
+}
+
+/// `clear_focus` on a window with no prior focus is a no-op: returns
+/// `None` so adapters do not emit a redundant `focus-changed` event.
+/// Mirrors the idempotency `focus` and `focus_by_moniker` already
+/// provide on the "already focused" / "unknown moniker" branches.
+#[test]
+fn clear_focus_no_prior_focus_returns_none() {
+    let mut state = SpatialState::new();
+    let window = WindowLabel::from_string("main");
+
+    let event = state.clear_focus(&window);
+    assert!(
+        event.is_none(),
+        "clear_focus on a window with no prior focus must produce no event"
+    );
+}

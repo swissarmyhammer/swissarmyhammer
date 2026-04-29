@@ -50,7 +50,11 @@
  *     toolbar component today; see `it.skip` note for the linked card to
  *     file when one ships.
  *   - **Inspector field row** (`field:task:<id>.<name>`).
- *   - **Inspector panel background** (`panel:task:<id>`).
+ *   - ~~Inspector panel background~~ — removed in card
+ *     `01KQCTJY1QZ710A05SE975GHNR`. The `<FocusZone moniker="panel:*">`
+ *     wrap was deleted; the inspector body renders directly inside
+ *     `<SlidePanel>` and field zones at the layer root carry their own
+ *     click contracts.
  *
  * # Why a single regression suite, not per-component cards
  *
@@ -195,9 +199,7 @@ vi.mock("@/lib/context-menu", () => ({
 // `beforeEach` so the inspect leaf (which only mounts when `useBoardData()`
 // returns a board) is present. The default values keep the perspective-bar
 // / column-view tests deterministic regardless of nav-bar fixture state.
-const mockBoardData = vi.hoisted(() =>
-  vi.fn<() => unknown>(() => null),
-);
+const mockBoardData = vi.hoisted(() => vi.fn<() => unknown>(() => null));
 const mockOpenBoards = vi.hoisted(() => vi.fn<() => unknown[]>(() => []));
 const mockActiveBoardPath = vi.hoisted(() =>
   vi.fn<() => string | undefined>(() => undefined),
@@ -456,9 +458,7 @@ function spatialFocusCalls(): Array<{ key: SpatialKey }> {
  * helpful list of every moniker the test saw, so a misspelled fixture
  * fails with actionable context instead of a cryptic `undefined`.
  */
-function findRegistration(
-  moniker: string,
-): Record<string, unknown> {
+function findRegistration(moniker: string): Record<string, unknown> {
   const all = [...registerZoneArgs(), ...registerScopeArgs()];
   const reg = all.find((r) => r.moniker === moniker);
   if (!reg) {
@@ -705,28 +705,6 @@ function renderInspectorFieldRow(entity: Entity, fieldName: string) {
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>,
-    ),
-  );
-}
-
-/**
- * Render an inspector-style `<FocusZone moniker="panel:task:<id>">` host.
- *
- * Mirrors how `<InspectorsContainer>`'s `InspectorPanel` mounts a per-panel
- * zone inside the inspector layer. We mount the same `panel:` zone shape
- * here so the click contract is exercised end-to-end without the surrounding
- * panel-stack machinery (UIState wiring, slide-panel layout) which is
- * orthogonal to the click → indicator chain. The zone is mounted under the
- * window-root layer; in production it lives under a nested `inspector`
- * layer, but `<FocusZone>` resolves its enclosing layer at registration
- * and the layer key is opaque to the click handler anyway.
- */
-function renderInspectorPanelZone(moniker: string) {
-  return render(
-    withSpatialStack(
-      <FocusZone moniker={asMoniker(moniker)}>
-        <div data-testid="panel-body">panel content</div>
-      </FocusZone>,
     ),
   );
 }
@@ -1138,9 +1116,7 @@ describe("focus-on-click regression suite (every component class)", () => {
         expect(node!.getAttribute("data-focused")).toBe("true");
       });
 
-      const indicator = node!.querySelector(
-        "[data-testid='focus-indicator']",
-      );
+      const indicator = node!.querySelector("[data-testid='focus-indicator']");
       expect(indicator).not.toBeNull();
 
       unmount();
@@ -1219,21 +1195,11 @@ describe("focus-on-click regression suite (every component class)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Inspector panel background — `panel:task:<id>`.
+  // Inspector panel background was deleted in card
+  // `01KQCTJY1QZ710A05SE975GHNR` — the `<FocusZone moniker="panel:*">`
+  // wrap is gone and the inspector body renders directly inside
+  // `<SlidePanel>`. Field zones at the inspector layer root carry their
+  // own click contracts (covered by the `<Field>` test above and by
+  // `inspector-focus-bridge.layer-barrier.browser.test.tsx`).
   // -------------------------------------------------------------------------
-  describe("inspector panel background", () => {
-    it("clicking the panel body focuses the panel zone and renders the indicator", async () => {
-      const moniker = `panel:task:${TASK_ID_A}`;
-      const { container, unmount } = renderInspectorPanelZone(moniker);
-      await flushSetup();
-
-      await assertClickProducesIndicator({
-        container,
-        moniker,
-        parentMonikers: [],
-      });
-
-      unmount();
-    });
-  });
 });

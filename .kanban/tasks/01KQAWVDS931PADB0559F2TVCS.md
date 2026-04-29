@@ -1,8 +1,10 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: 9e8180
+project: spatial-nav
 title: Column header registers two spatial primitives for the same surface — collapse the synthetic `column:&lt;id&gt;.name` FocusScope into the inner `<Field>` zone
 ---
 ## What
@@ -119,5 +121,15 @@ Test commands:
 - Use `/tdd` — start by adding the "no synthetic scope" assertion in `column-view.spatial-nav.test.tsx` (fails today). Then add the double-click safety test (`column-name-double-click.test.tsx`). Then make both green by removing the outer `<FocusScope>` wrap. Update the dependent tests as the moniker rename lands.
 - Spike the `<Inspectable>` double-click behavior on a `field:column:<id>.name` moniker FIRST — if it dispatches the wrong inspector, switch to Option B (Field gains a `disableSpatial` prop) and update the task to reflect that pivot.
 - Keep the change scoped to the column-name surface. Do not generalise to other entity-namespaced synthetic monikers in this card; if any other call site has the same redundancy, file a follow-up.
+
+## FQM Refactor Notice (added 2026-04-29)
+
+Coordinate with `01KQD6064G1C1RAXDFPJVT1F46` (path-monikers as spatial keys) before driving this task. Specific updates needed under the new contract:
+
+- `columnNameMoniker = column.moniker + ".name"` (string concat) is exactly the construction pattern the FQM refactor obsoletes. Under FQM, the segment passed to `<FocusZone>` / `<FocusScope>` IS just the relative segment (`"column:<id>.name"`), and the kernel-side identity is the FQM (`/window/board/column:<id>/column:<id>.name`) — derived from React context, not string-concatenated by consumers.
+- `setFocus(columnNameMoniker)` (which this task already deletes) was a flat-moniker setter. Under FQM, `setFocus` accepts only `FullyQualifiedMoniker`. The deletion in this task aligns with the new contract.
+- Test assertions like `data-moniker="field:column:<id>.name"` may need to change to `data-fq-moniker="/window/.../field:column:<id>.name"` if the React layer surfaces the FQM as a data attribute. Verify with the FQM refactor's React adapter implementation.
+
+If this task is implemented BEFORE the FQM refactor lands, the work uses today's flat `Moniker`. After the refactor, segment vs FQM gets a mechanical rename. Either order is fine.
 
 #frontend #spatial-nav #kanban-app

@@ -45,11 +45,17 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
     // Tab / Shift+Tab cycle to the next / previous spatial sibling.
-    // The board view binds `nav.right`/`nav.left` to `spatial_navigate`
-    // calls in the Rust kernel, so Tab on a focused board cycles the
-    // focused column. Inspector scopes shadow these globals via
-    // `inspector.nextField` / `inspector.prevField`, which keeps the
-    // form-style "Tab moves between fields" behaviour intact.
+    // `nav.right` / `nav.left` are global commands defined in
+    // `app-shell.tsx`'s `NAV_COMMAND_SPEC`; their execute closures
+    // dispatch `spatial_navigate(focusedKey, "right" | "left")`. The
+    // Rust kernel's cascade (iter 0: same-kind siblings, iter 1:
+    // escalate to parent zone) picks the next focusable. Inside an
+    // inspector the vertical layout means iter 0 finds no horizontal
+    // sibling and iter 1 escalates to the panel zone — so Tab still
+    // moves between fields without any inspector-scoped shadow command.
+    // (Card `01KQCKVN140DGBCK8NF8RZM4R5` deleted the
+    // `inspector.nextField` / `inspector.prevField` shadows that used
+    // to claim Tab / Shift+Tab inside the inspector.)
     Tab: "nav.right",
     "Shift+Tab": "nav.left",
   },

@@ -323,6 +323,55 @@ impl SpatialState {
         })
     }
 
+    /// Move focus to the scope identified by `moniker`, resolving the
+    /// `(SpatialKey, Moniker)` pair against `registry`.
+    ///
+    /// This is the moniker-keyed counterpart of [`Self::focus`]. The
+    /// React side owns moniker identity (`"task:01ABC"`,
+    /// `"field:task:01ABC.title"`); the kernel owns spatial-key
+    /// identity (ULIDs minted per mount). When the React side wants to
+    /// move focus by moniker — e.g. `setFocus("field:task:01ABC.title")`
+    /// after the inspector mounts — the kernel resolves the moniker
+    /// once, advances `focus_by_window`, and emits the resulting
+    /// [`FocusChangedEvent`].
+    ///
+    /// Mirrors the no-silent-dropout contract elsewhere in the kernel:
+    /// when the moniker is unknown, this method emits
+    /// `tracing::error!` and returns `None`. The adapter forwards the
+    /// `None` to the React caller as an `Err(_)` so the React side's
+    /// `setFocus` dispatch can `console.error` for dev visibility.
+    /// "Already focused" returns `None` for the same reason
+    /// [`Self::focus`] does — adapters need not emit redundant
+    /// `focus-changed` events.
+    ///
+    /// Returns `None` when:
+    /// - no registered scope has the given moniker (kernel logs
+    ///   `tracing::error!` for the unknown-moniker case), or
+    /// - the resolved scope's layer is missing (torn registry —
+    ///   should not happen via the adapter, but we degrade silently
+    ///   rather than panic), or
+    /// - the resolved key is already focused in its window (no-op so
+    ///   adapters do not emit redundant `focus-changed` events).
+    pub fn focus_by_moniker(
+        &mut self,
+        registry: &SpatialRegistry,
+        moniker: &Moniker,
+    ) -> Option<FocusChangedEvent> {
+        let Some(key) = registry.find_by_moniker(moniker).cloned() else {
+            // Unknown moniker — under the no-silent-dropout contract
+            // the kernel surfaces a tracing error so the regression is
+            // observable in logs. The React adapter forwards the
+            // adapter-level `Err(_)` to a console.error for dev mode.
+            tracing::error!(
+                op = "focus_by_moniker",
+                moniker = %moniker,
+                "unknown moniker passed to SpatialState::focus_by_moniker"
+            );
+            return None;
+        };
+        self.focus(registry, key)
+    }
+
     /// React to a scope being unregistered from the registry, computing
     /// a zone-aware focus fallback.
     ///
@@ -675,6 +724,41 @@ impl SpatialState {
         // contract (the strategy returned `focused_moniker`). No
         // additional check is required here.
         self.focus(registry, target_key)
+    }
+
+    /// Clear focus for `window`.
+    ///
+    /// Removes the per-window focus slot and returns a
+    /// [`FocusChangedEvent`] describing the `Some(prev) → None`
+    /// transition so the React side's `focus-changed` projection can
+    /// flip the entity-focus store back to `null`. When `window` had no
+    /// prior focus, returns `None` (no-op — adapters do not need to
+    /// emit a redundant event).
+    ///
+    /// This is the explicit-clear counterpart of [`Self::focus`] /
+    /// [`Self::focus_by_moniker`]. It exists so the React-side
+    /// `setFocus(null)` path can dispatch through the kernel and let
+    /// the bridge handle the store write — keeping the
+    /// "store is a pure projection" invariant from card
+    /// `01KQD0WK54G0FRD7SZVZASA9ST`. Without this method, `setFocus(null)`
+    /// would have to mutate the React store synchronously to clear
+    /// focus, producing exactly the kernel/React drift the card was
+    /// filed to eliminate.
+    ///
+    /// Related: [`Self::handle_unregister`] also produces a
+    /// `Some(prev) → None` event when its fallback resolution is
+    /// [`FallbackResolution::NoFocus`]. The shape is the same; the
+    /// difference is the trigger — `handle_unregister` runs on
+    /// scope-deregistration, `clear_focus` runs on an explicit
+    /// React-side request.
+    pub fn clear_focus(&mut self, window: &WindowLabel) -> Option<FocusChangedEvent> {
+        let prev_key = self.focus_by_window.remove(window)?;
+        Some(FocusChangedEvent {
+            window_label: window.clone(),
+            prev_key: Some(prev_key),
+            next_key: None,
+            next_moniker: None,
+        })
     }
 
     /// Read the focused [`SpatialKey`] for `window`, if any.

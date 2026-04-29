@@ -40,6 +40,17 @@ type ListenCallback = (event: { payload: unknown }) => void;
  */
 const drillInResponses = new Map<string, string | null>();
 
+/**
+ * Tracks the moniker → SpatialKey mapping so `spatial_focus_by_moniker`
+ * can synthesize the kernel's `focus-changed` emit. Card
+ * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
+ * projection of kernel events; tests that mock `invoke` without a
+ * kernel simulator need this minimal stub so `setFocus(moniker)`
+ * still flows through the spatial-focus bridge into the React store.
+ */
+const monikerToKey = new Map<string, string>();
+const currentFocusKey: { key: string | null } = { key: null };
+
 const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
   const listeners = new Map<string, ListenCallback[]>();
   const mockInvoke = vi.fn(
@@ -236,6 +247,68 @@ async function defaultInvokeImpl(
     return focusedMoniker;
   }
   if (cmd === "spatial_navigate") return null;
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+    const a = (args ?? {}) as { key?: string; moniker?: string };
+    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    return undefined;
+  }
+  if (cmd === "spatial_unregister_scope") {
+    const a = (args ?? {}) as { key?: string };
+    if (a.key) {
+      for (const [m, k] of monikerToKey.entries()) {
+        if (k === a.key) {
+          monikerToKey.delete(m);
+          break;
+        }
+      }
+    }
+    return undefined;
+  }
+  if (cmd === "spatial_focus_by_moniker") {
+    // Queued via `queueMicrotask` to match the kernel simulator and
+    // real Tauri events — emitting synchronously would hide
+    // regressions where `setFocus` writes the store synchronously.
+    const a = (args ?? {}) as { moniker?: string };
+    const moniker = a.moniker ?? null;
+    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
+    if (moniker) {
+      const prev = currentFocusKey.key;
+      currentFocusKey.key = key;
+      queueMicrotask(() => {
+        const handlers = listeners.get("focus-changed") ?? [];
+        for (const handler of handlers) {
+          handler({
+            payload: {
+              window_label: "main",
+              prev_key: prev,
+              next_key: key,
+              next_moniker: moniker,
+            },
+          });
+        }
+      });
+    }
+    return undefined;
+  }
+  if (cmd === "spatial_clear_focus") {
+    const prev = currentFocusKey.key;
+    if (prev === null) return undefined;
+    currentFocusKey.key = null;
+    queueMicrotask(() => {
+      const handlers = listeners.get("focus-changed") ?? [];
+      for (const handler of handlers) {
+        handler({
+          payload: {
+            window_label: "main",
+            prev_key: prev,
+            next_key: null,
+            next_moniker: null,
+          },
+        });
+      }
+    });
+    return undefined;
+  }
   return undefined;
 }
 
@@ -380,6 +453,8 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     mockInvoke.mockClear();
     mockListen.mockClear();
     listeners.clear();
+    monikerToKey.clear();
+    currentFocusKey.key = null;
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });
 

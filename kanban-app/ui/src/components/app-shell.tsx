@@ -326,7 +326,7 @@ interface DrillRefs {
  *   is idempotent on the entity-focus store, so a leaf without an
  *   inline-edit affordance is a visible no-op. Leaves with an editor
  *   handle Enter via their own scope-level command (e.g.
- *   `inspector.edit`, card-name rename) which shadows this binding.
+ *   `field.edit`, card-name rename) which shadows this binding.
  * - `nav.drillOut` falls through to `app.dismiss` when the result
  *   equals the focused moniker, so the existing Escape chain (close
  *   the topmost modal layer) still fires at a layer root.

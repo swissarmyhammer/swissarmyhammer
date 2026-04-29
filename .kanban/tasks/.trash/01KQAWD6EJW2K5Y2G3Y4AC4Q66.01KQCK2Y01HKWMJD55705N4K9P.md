@@ -2,7 +2,8 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: a080
+position_ordinal: a980
+project: spatial-nav
 title: 'BLOCKER: navbar is keyboard-inaccessible in production — no focus indicator, arrow keys do not traverse the bar, debug overlay also missing'
 ---
 ## What

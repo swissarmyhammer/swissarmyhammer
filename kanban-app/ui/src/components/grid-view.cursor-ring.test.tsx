@@ -212,10 +212,27 @@ function GridHarness({
   );
 }
 
+/**
+ * Tracks the moniker → SpatialKey mapping so `spatial_focus_by_moniker`
+ * can synthesize the kernel's `focus-changed` emit. Card
+ * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
+ * projection of kernel events; tests that mock `invoke` without a
+ * kernel simulator need this minimal stub so `setFocus(moniker)`
+ * still flows through the spatial-focus bridge into the React store.
+ *
+ * `currentFocusKey` tracks the kernel's current focused key so emitted
+ * `focus-changed` payloads carry a correct `prev_key`. Without this,
+ * the previous cell's `useFocusClaim` callback never flips to false
+ * and the focus indicator stacks across cells — the bug that produced
+ * "expected 1 to be 2" in the single-focus-visual test.
+ */
+const monikerToKey = new Map<string, string>();
+const currentFocusKey: { key: string | null } = { key: null };
+
 /** Default invoke responses for the mount-time IPCs the providers fire. */
 async function defaultInvokeImpl(
   cmd: string,
-  _args?: unknown,
+  args?: unknown,
 ): Promise<unknown> {
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
@@ -232,6 +249,70 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "list_commands_for_scope") return [];
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+    const a = (args ?? {}) as { key?: string; moniker?: string };
+    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    return undefined;
+  }
+  if (cmd === "spatial_unregister_scope") {
+    const a = (args ?? {}) as { key?: string };
+    if (a.key) {
+      for (const [m, k] of monikerToKey.entries()) {
+        if (k === a.key) {
+          monikerToKey.delete(m);
+          break;
+        }
+      }
+    }
+    return undefined;
+  }
+  if (cmd === "spatial_focus_by_moniker") {
+    // Queued via `queueMicrotask` so the timing matches the kernel
+    // simulator and real Tauri events. Synchronous emit would hide
+    // regressions where `setFocus` writes the store synchronously.
+    const a = (args ?? {}) as { moniker?: string };
+    const moniker = a.moniker ?? null;
+    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
+    if (moniker) {
+      const prev = currentFocusKey.key;
+      currentFocusKey.key = key;
+      queueMicrotask(() => {
+        const handler = listenHandlers["focus-changed"];
+        if (handler) {
+          handler({
+            payload: {
+              window_label: "main",
+              prev_key: prev,
+              next_key: key,
+              next_moniker: moniker,
+            },
+          });
+        }
+      });
+    }
+    return undefined;
+  }
+  if (cmd === "spatial_clear_focus") {
+    // Explicit-clear counterpart — emits the `Some(prev) → None`
+    // `focus-changed` event the React-side bridge consumes.
+    const prev = currentFocusKey.key;
+    if (prev === null) return undefined;
+    currentFocusKey.key = null;
+    queueMicrotask(() => {
+      const handler = listenHandlers["focus-changed"];
+      if (handler) {
+        handler({
+          payload: {
+            window_label: "main",
+            prev_key: prev,
+            next_key: null,
+            next_moniker: null,
+          },
+        });
+      }
+    });
+    return undefined;
+  }
   return undefined;
 }
 
@@ -242,6 +323,8 @@ async function defaultInvokeImpl(
 describe("GridView -- cursor-ring suppression outside ui:grid", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
+    monikerToKey.clear();
+    currentFocusKey.key = null;
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });
 
@@ -361,6 +444,8 @@ describe("GridView -- cursor-ring suppression outside ui:grid", () => {
 describe("GridView -- click-to-cursor regression (spatial path)", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
+    monikerToKey.clear();
+    currentFocusKey.key = null;
     mockInvoke.mockImplementation(defaultInvokeImpl);
   });
 

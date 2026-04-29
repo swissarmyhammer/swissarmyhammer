@@ -229,13 +229,6 @@ function registeredZones() {
     );
 }
 
-/** Pull every `spatial_unregister_scope` unregister call. */
-function unregisteredScopes() {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: string });
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -390,15 +383,16 @@ describe("InspectorsContainer", () => {
   });
 
   // ---------------------------------------------------------------------
-  // Spatial-nav: inspector layer + per-panel zones
+  // Spatial-nav: inspector layer push/pop semantics.
   //
   // The container mounts a single `<FocusLayer name="inspector">` when the
-  // panel stack is non-empty. Each panel registers a
-  // `<FocusZone moniker="panel:<entityType>:<entityId>">` *inside* its
-  // `<SlidePanel>` so the zone has a real layout box (the SlidePanel is
-  // `position: fixed`, which would collapse an outer wrapper to zero size
-  // and leave the focus indicator without a visible host). These tests
-  // pin that wiring at the registration / unregistration layer.
+  // panel stack is non-empty. Per card `01KQCTJY1QZ710A05SE975GHNR`, the
+  // per-panel `<FocusZone moniker="panel:*">` was deleted — the inspector
+  // body now renders directly inside `<SlidePanel>` and field zones
+  // register at the layer root. These tests pin the layer-level wiring
+  // (push when stack non-empty, pop when stack empties); the field-zone
+  // registration shape is pinned in
+  // `inspector-focus-bridge.layer-barrier.browser.test.tsx`.
   // ---------------------------------------------------------------------
 
   it("does not push an inspector layer when no panels are open", async () => {
@@ -429,9 +423,8 @@ describe("InspectorsContainer", () => {
     expect(inspectorLayers[0].parent).toBe(windowLayer.key);
   });
 
-  it("opening a second panel pushes a zone, NOT another layer", async () => {
-    // First mount opens the first panel — pushes window + inspector layers
-    // and registers one panel zone.
+  it("opening a second panel does not push another inspector layer", async () => {
+    // First mount opens the first panel — pushes window + inspector layers.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
     const { rerender } = renderInspectors();
     await flushSetup();
@@ -452,38 +445,30 @@ describe("InspectorsContainer", () => {
     );
     await flushSetup();
 
-    // Still exactly one inspector layer — no extra layer push.
+    // Still exactly one inspector layer — no extra layer push. The
+    // simplified container does not register a per-panel zone, so the
+    // only registrations belong to descendant field zones (covered by
+    // the field-zone snapshot test).
     const inspectorLayersAfterTwo = pushedLayers().filter(
       (l) => l.name === "inspector",
     );
     expect(inspectorLayersAfterTwo).toHaveLength(1);
 
-    // Both panel monikers are registered as zones inside the inspector layer.
-    const inspectorLayerKey = inspectorLayersAfterTwo[0].key;
-    const panelZones = registeredZones().filter(
-      (z) => z.moniker.startsWith("panel:") && z.layerKey === inspectorLayerKey,
+    // No `panel:*` zone is registered — the panel zone was deleted in
+    // card `01KQCTJY1QZ710A05SE975GHNR`.
+    const panelZones = registeredZones().filter((z) =>
+      z.moniker.startsWith("panel:"),
     );
-    const monikers = panelZones.map((z) => z.moniker);
-    expect(monikers).toContain("panel:task:t1");
-    expect(monikers).toContain("panel:task:t2");
+    expect(panelZones).toEqual([]);
   });
 
-  it("closing one of two panels unregisters that panel's zone but keeps the inspector layer", async () => {
+  it("closing one of two panels keeps the inspector layer alive", async () => {
     // Open two panels.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1", "task:t2"]));
     const { rerender } = renderInspectors();
     await flushSetup();
 
     const inspectorLayer = pushedLayers().find((l) => l.name === "inspector")!;
-
-    // Snapshot the spatial keys for each panel's zone — we'll verify the
-    // closed panel's key shows up in the unregister call list.
-    const panelZonesBefore = registeredZones().filter(
-      (z) =>
-        z.moniker.startsWith("panel:") && z.layerKey === inspectorLayer.key,
-    );
-    const t2Zone = panelZonesBefore.find((z) => z.moniker === "panel:task:t2");
-    expect(t2Zone).toBeDefined();
 
     // Reset call log so we only see what happens during the close.
     mockInvoke.mockClear();
@@ -504,10 +489,6 @@ describe("InspectorsContainer", () => {
       (p) => p.key === inspectorLayer.key,
     );
     expect(popsForInspector).toHaveLength(0);
-
-    // The closed panel's zone key should have been unregistered.
-    const unregistered = unregisteredScopes().map((u) => u.key);
-    expect(unregistered).toContain(t2Zone!.key);
   });
 
   it("closing the only panel unmounts the inspector layer (pop_layer fires once)", async () => {

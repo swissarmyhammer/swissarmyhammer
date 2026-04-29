@@ -9,9 +9,13 @@ import {
   type ReactNode,
   type MutableRefObject,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { CommandScope, DispatchOptions } from "./command-scope";
 import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
-import { useOptionalSpatialFocusActions } from "./spatial-focus-context";
+import {
+  useOptionalSpatialFocusActions,
+  type SpatialFocusActions,
+} from "./spatial-focus-context";
 
 /** Pre-bound dispatch callable for a specific command — the shape returned by `useDispatchCommand(presetCmd)`. */
 type PreboundDispatch = (opts?: DispatchOptions) => Promise<unknown>;
@@ -91,6 +95,21 @@ export class FocusStore {
    * previous moniker's slot (lost focus), the next moniker's slot (gained
    * focus), and every broad listener. Broad-listener notification happens
    * last so its order-of-effect matches the pre-refactor `useState` flow.
+   *
+   * **Architectural note**: in production this method is called only
+   * from the spatial-focus → entity-focus bridge inside
+   * [`EntityFocusProvider`] — the kernel's `focus-changed` event is the
+   * sole upstream of focus state. `FocusActions.setFocus(moniker)` does
+   * NOT call this method directly; it dispatches a kernel command and
+   * waits for the kernel's `focus-changed` event to flow back through
+   * the bridge. See the provider's bridge-effect comment for the full
+   * architecture rationale (card `01KQD0WK54G0FRD7SZVZASA9ST`).
+   *
+   * The `set` name is preserved (rather than renamed to
+   * `_setFromKernelEvent`) because direct unit tests of `FocusStore`
+   * still drive this method to exercise the subscriber-notification
+   * mechanics independently of the kernel pipeline. Production code
+   * outside the bridge must not call it.
    */
   set(next: string | null): void {
     const prev = this.current;
@@ -124,11 +143,11 @@ export interface FocusActions {
   /**
    * Broadcast a navigation command. Retained as a stable callback in
    * the actions bag so existing call sites (board-view, grid-view,
-   * inspector-focus-bridge, app-shell) compile without churn while the
-   * spatial-nav migration completes — but the function no longer walks
-   * a predicate registry. All real navigation now lives in the Rust
-   * spatial-nav kernel, with React-side directives expressed as
-   * `navOverride` props on `<FocusScope>` / `<FocusZone>`.
+   * app-shell) compile without churn while the spatial-nav migration
+   * completes — but the function no longer walks a predicate registry.
+   * All real navigation now lives in the Rust spatial-nav kernel, with
+   * React-side directives expressed as `navOverride` props on
+   * `<FocusScope>` / `<FocusZone>`.
    * This callback is therefore a no-op that always
    * returns `false`; callers that need to drive navigation should
    * invoke `spatial_navigate` via `useSpatialFocusActions().navigate`.
@@ -199,6 +218,15 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
 
+  // Hold the latest spatial-focus actions in a ref so `setFocus` reads
+  // through the kernel pathway in production (where `<SpatialFocusProvider>`
+  // is always mounted) and falls back to direct store mutation in test
+  // harnesses that skip it. Updating the ref every render keeps the
+  // actions bag identity-stable while still picking up provider remounts.
+  const spatialFocus = useOptionalSpatialFocusActions();
+  const spatialActionsRef = useRef<SpatialFocusActions | null>(spatialFocus);
+  spatialActionsRef.current = spatialFocus;
+
   // Actions bag — created once via a lazy-init ref, identity-stable forever.
   // Every callback reads from refs so they don't need to be recreated.
   const actionsRef = useRef<FocusActions | null>(null);
@@ -207,6 +235,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       store,
       registryRef,
       dispatchRef,
+      spatialActionsRef,
     });
   }
   const actions = actionsRef.current;
@@ -230,46 +259,66 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [store]);
 
-  // Bridge spatial-focus → entity-focus.
+  // Bridge spatial-focus → entity-focus: the kernel is the single
+  // source of truth for focus state.
   //
-  // The spatial-nav kernel (`SpatialFocusProvider`) is the source of truth
-  // for which scope owns focus in the active window: every leaf click and
-  // every arrow-key navigation flows through `spatial_focus` /
-  // `spatial_navigate`, which in turn emits a `focus-changed` event with
-  // the new `SpatialKey` and the resolved `Moniker`. The legacy entity-
-  // focus store (this file) used to be driven directly by click handlers
-  // calling `setFocus`, but post-spatial-nav not every leaf does that —
-  // some only call `spatial_focus` and leave entity-focus stale, which
-  // historically caused `focusedMonikerRef.current` to fall to `null`
-  // after clicks and made the now-removed `board.inspect` look like a
-  // no-op on Space. Inspect is now scope-resolved through the
-  // per-entity `<Inspectable>` wrapper, but the bridge below still
-  // matters: it keeps `useFocusedScope()` aligned with the spatial
-  // kernel so `extractScopeBindings` and friends see the right scope
-  // chain on every keydown.
+  // The Rust spatial-nav kernel (`SpatialFocusProvider` / `SpatialState`
+  // on the Rust side) owns the focused-key map. Every change — leaf
+  // click, arrow-key cascade, drill-out, fallback resolution after
+  // unregister, AND now `setFocus(moniker)` itself — flows through
+  // `spatial_focus*` / `spatial_navigate` and emits a `focus-changed`
+  // event with the new `(SpatialKey, Moniker)` pair. The bridge below
+  // translates each event into a `store.set(payload.next_moniker)`
+  // write so the React-side moniker-keyed store stays in lockstep with
+  // the kernel.
   //
-  // The bridge fixes that by mirroring `payload.next_moniker` straight
-  // into the entity-focus store via `setFocus`. Calling the full
-  // `setFocus` action (rather than `store.set` directly) is intentional:
-  // we also want the backend's `scope_chain` to reflect the new focus,
-  // and `setFocus` already encapsulates the chain-build + dispatch step.
-  // No feedback loop: `ui.setFocus` is a one-way request and does not
-  // re-emit `focus-changed`.
+  // **Architectural invariant** (card `01KQD0WK54G0FRD7SZVZASA9ST`):
+  // this bridge is the ONLY upstream of `store.set` in production.
+  // `FocusActions.setFocus(moniker)` no longer mutates the store
+  // directly — it dispatches `spatial_focus_by_moniker` and waits for
+  // the kernel's emit to flow back through this bridge. That keeps a
+  // single source of truth: the Rust kernel.
+  //
+  // Calling `store.set` directly here (instead of routing back through
+  // the `setFocus` action) is critical: under the new contract,
+  // `setFocus` dispatches a kernel command, which would emit another
+  // `focus-changed`, which would re-enter this bridge — a feedback
+  // loop. The store is the projection target; the kernel emit is its
+  // authoritative input.
+  //
+  // The `ui.setFocus` dispatch (scope-chain bookkeeping for the
+  // backend's static-scope map) used to live inside `setFocus`; it
+  // moves here so every kernel-driven focus move (not just
+  // `setFocus(moniker)` calls) keeps the backend's scope chain
+  // synchronized. The kernel does not consume `ui.setFocus`, so there
+  // is still no feedback loop.
   //
   // Degrades silently when no `<SpatialFocusProvider>` ancestor is
   // mounted (`useOptionalSpatialFocusActions` returns `null`) — older
   // tests that wrap only in `<EntityFocusProvider>` keep their pre-
-  // bridge behavior, where `setFocus` is the only way state changes.
-  const spatialFocus = useOptionalSpatialFocusActions();
+  // bridge behavior, where `setFocus`'s test-harness fallback writes
+  // the store directly.
   useEffect(() => {
     if (!spatialFocus) return;
     return spatialFocus.subscribeFocusChanged((payload) => {
       // `next_moniker` is null when focus clears (window lost focus,
-      // focused scope unregistered without a fallback). `setFocus(null)`
-      // matches the React-side contract for a cleared focus state.
-      actions.setFocus(payload.next_moniker);
+      // focused scope unregistered without a fallback, or
+      // `setFocus(null)` dispatched `spatial_clear_focus`). Writing
+      // the store directly — not calling the `setFocus` action —
+      // preserves the no-feedback-loop invariant: the kernel emit is
+      // the input to the projection, never an action that re-enters
+      // the kernel.
+      store.set(payload.next_moniker);
+      const chain = payload.next_moniker
+        ? buildScopeChain(payload.next_moniker, registryRef.current)
+        : [];
+      dispatchRef
+        .current({ args: { scope_chain: chain } })
+        .catch((error) =>
+          console.error("ui.setFocus (kernel bridge) failed:", error),
+        );
     });
-  }, [spatialFocus, actions]);
+  }, [spatialFocus, store]);
 
   // Stable ref tracking the focused CommandScope. Published via
   // `FocusedScopeRefContext` so `useDispatchCommand` can read it at dispatch
@@ -310,6 +359,7 @@ interface FocusActionsDeps {
   store: FocusStore;
   registryRef: MutableRefObject<Map<string, CommandScope>>;
   dispatchRef: MutableRefObject<PreboundDispatch>;
+  spatialActionsRef: MutableRefObject<SpatialFocusActions | null>;
 }
 
 /**
@@ -321,9 +371,86 @@ interface FocusActionsDeps {
  * data and logic in `entity-store-context.tsx`.
  */
 function buildFocusActions(deps: FocusActionsDeps): FocusActions {
-  const { store, registryRef, dispatchRef } = deps;
+  const { store, registryRef, dispatchRef, spatialActionsRef } = deps;
 
+  /**
+   * Dispatch a "set focus" request to the Rust kernel — the single
+   * source of truth for focus state.
+   *
+   * For a non-null moniker, invokes `spatial_focus_by_moniker`: the
+   * kernel resolves the moniker to its registered SpatialKey (via
+   * `SpatialRegistry::find_by_moniker`), updates `focus_by_window`,
+   * and emits a `focus-changed` event.
+   *
+   * For `null`, invokes `spatial_clear_focus`: the kernel removes the
+   * window's `focus_by_window` slot and emits a
+   * `focus-changed { next_key: null, next_moniker: null }` event.
+   *
+   * In both cases the provider's bridge effect subscribes to those
+   * events and writes them into the local `FocusStore` via
+   * `store.set` — that is the ONLY upstream of the store. This setter
+   * does NOT mutate the store directly, so a synchronous read of
+   * `useFocusedMoniker()` immediately after `setFocus(moniker)`
+   * returns the OLD value; callers that need the post-write value
+   * must await the kernel's emit (which production tests already do
+   * via `waitFor`).
+   *
+   * When the kernel rejects the moniker (unknown to the registry) the
+   * Tauri command resolves to `Err(_)`; we surface that as a
+   * `console.error` so dev mode catches drift between the React
+   * mount tree and the kernel registry. The store stays at its
+   * previous value because no `focus-changed` event fires.
+   *
+   * Falls back to a direct `store.set` ONLY when no
+   * `<SpatialFocusProvider>` ancestor is mounted (test harnesses that
+   * skip the spatial-nav stack). Production trees always mount both
+   * providers, so the kernel pathway is the production one. The
+   * fallback also dispatches `ui.setFocus` for scope-chain bookkeeping;
+   * the production pathway lets the bridge handle that after the
+   * kernel emit.
+   *
+   * Cards: `01KQD0WK54G0FRD7SZVZASA9ST` (this refactor),
+   * `01KQAW97R9XTCNR1PJAWYSKBC7` (no-silent-dropout contract).
+   */
   const setFocus = (moniker: string | null): void => {
+    const spatial = spatialActionsRef.current;
+    if (spatial) {
+      // Production pathway: kernel-keyed write. The kernel emits
+      // `focus-changed` on success; the bridge effect writes the
+      // store and dispatches `ui.setFocus` for scope-chain bookkeeping
+      // through the same path the spatial-nav cascade already uses.
+      if (moniker === null) {
+        // Explicit clear: dispatch `spatial_clear_focus` to the
+        // kernel and let the bridge handle the store write when the
+        // kernel emits `focus-changed { next_key: null }`. This is
+        // the same path every other focus mutation uses — keeping
+        // the "store is a pure projection" invariant from card
+        // `01KQD0WK54G0FRD7SZVZASA9ST`. Synchronously calling
+        // `store.set(null)` here would re-introduce the kernel/React
+        // drift the card was filed to eliminate.
+        void invoke<void>("spatial_clear_focus").catch((error) => {
+          // Adapter-level failure (e.g. lock contention, channel
+          // teardown). Log so dev mode catches it; the store stays at
+          // its previous value because no `focus-changed` event fires.
+          console.error("spatial_clear_focus failed:", error);
+        });
+        return;
+      }
+      void invoke<void>("spatial_focus_by_moniker", { moniker }).catch(
+        (error) => {
+          // The kernel rejected the moniker — log so dev mode catches
+          // drift between the React mount tree and the kernel
+          // registry. The store stays at its previous value.
+          console.error("spatial_focus_by_moniker failed:", error);
+        },
+      );
+      return;
+    }
+
+    // Test-harness fallback: no kernel available, so write the store
+    // directly and dispatch `ui.setFocus` like the pre-refactor flow.
+    // Production trees always mount `<SpatialFocusProvider>`, so this
+    // branch never fires in real apps.
     store.set(moniker);
     const chain = moniker ? buildScopeChain(moniker, registryRef.current) : [];
     dispatchRef

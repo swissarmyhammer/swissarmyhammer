@@ -505,41 +505,66 @@ export function Field({
     // No `onEdit` AND no provider stack to drill into → nothing the
     // command could do, leave Enter to global `nav.drillIn`.
     if (!onEdit && (!spatialActions || !focusActions)) return EMPTY_COMMANDS;
+    // Drill-in-or-edit closure. `vim:i`, `vim:Enter`, and `cua:Enter`
+    // all funnel through the same body — the only difference is the
+    // mapped key. We expose three command IDs (mirroring grid-view's
+    // `grid.edit` / `grid.editEnter` split) so the keybinding extractor
+    // produces the right per-keymap binding without needing a single
+    // command to advertise multiple keys per keymap (which the
+    // CommandDef shape does not support).
+    const editClosure = async () => {
+      // Drill into spatial children first — pills (`<FocusScope>`
+      // leaves) win over edit mode. Read the focused key + moniker
+      // off the spatial provider: the command only fires when this
+      // field zone is the focused entity, so `focusedKey()` /
+      // `focusedMoniker()` return this field's `(SpatialKey,
+      // Moniker)` pair.
+      //
+      // Under the no-silent-dropout contract the kernel always
+      // returns a moniker; we detect "no descent happened" by
+      // comparing the result to the focused moniker. Equality
+      // means the field has no spatial children — fall through to
+      // the editor.
+      if (spatialActions && focusActions) {
+        const key = spatialActions.focusedKey();
+        const focusedMoniker = spatialActions.focusedMoniker();
+        if (key !== null && focusedMoniker !== null) {
+          const result = await spatialActions.drillIn(key, focusedMoniker);
+          if (result !== focusedMoniker) {
+            focusActions.setFocus(result);
+            return;
+          }
+        }
+      }
+      // Kernel echoed the focused moniker (no spatial children) —
+      // fall through to the editor. `onEdit` is optional: a
+      // read-only field with no children produces a no-op, which
+      // matches the "Enter on a leaf with nothing to do" contract.
+      onEdit?.();
+    };
     return [
       {
         id: "field.edit",
+        // vim's normal-mode `i` enters insert mode; cua `Enter` shadows
+        // the global `nav.drillIn: Enter` only while the field zone is
+        // the focused scope chain, which is the desired behaviour:
+        // Enter on a field zone opens the editor (or drills into pills,
+        // via the closure above). For non-editable fields with no
+        // spatial children, `onEdit` is undefined and the keystroke is
+        // a no-op — matching the "Enter on a leaf with nothing to do"
+        // contract.
         name: "Edit Field",
-        keys: { vim: "Enter", cua: "Enter" },
-        execute: async () => {
-          // Drill into spatial children first — pills (`<FocusScope>`
-          // leaves) win over edit mode. Read the focused key + moniker
-          // off the spatial provider: the command only fires when this
-          // field zone is the focused entity, so `focusedKey()` /
-          // `focusedMoniker()` return this field's `(SpatialKey,
-          // Moniker)` pair.
-          //
-          // Under the no-silent-dropout contract the kernel always
-          // returns a moniker; we detect "no descent happened" by
-          // comparing the result to the focused moniker. Equality
-          // means the field has no spatial children — fall through to
-          // the editor.
-          if (spatialActions && focusActions) {
-            const key = spatialActions.focusedKey();
-            const focusedMoniker = spatialActions.focusedMoniker();
-            if (key !== null && focusedMoniker !== null) {
-              const result = await spatialActions.drillIn(key, focusedMoniker);
-              if (result !== focusedMoniker) {
-                focusActions.setFocus(result);
-                return;
-              }
-            }
-          }
-          // Kernel echoed the focused moniker (no spatial children) —
-          // fall through to the editor. `onEdit` is optional: a
-          // read-only field with no children produces a no-op, which
-          // matches the "Enter on a leaf with nothing to do" contract.
-          onEdit?.();
-        },
+        keys: { vim: "i", cua: "Enter" },
+        execute: editClosure,
+      },
+      {
+        id: "field.editEnter",
+        // vim parity for the cua `Enter` binding above. Vim's normal-
+        // mode `i` enters insert mode; this additional `Enter` mapping
+        // lets users press the same key regardless of keymap.
+        name: "Edit Field (Enter)",
+        keys: { vim: "Enter" },
+        execute: editClosure,
       },
     ];
   }, [editing, onEdit, spatialActions, focusActions]);

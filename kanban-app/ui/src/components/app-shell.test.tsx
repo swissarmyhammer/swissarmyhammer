@@ -6,13 +6,34 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
  *
  * Returns a populated UIState payload for `get_ui_state` so AppShell's
  * `useAppShellUIState` hook can read `uiState.windows?.[label]` without
- * a null-deref. Tests that need to stub a *specific* command should
- * call `mockInvoke.mockImplementation` with a dispatcher that defers
+ * a null-deref.
+ *
+ * Also tracks the moniker → SpatialKey mapping that the kernel would
+ * normally maintain, so `spatial_focus_by_moniker` can synthesize the
+ * `focus-changed` event the React-side bridge expects. Card
+ * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
+ * projection of kernel events; tests that mocked `invoke` without a
+ * kernel simulator need this minimal stub so click-driven `setFocus`
+ * still updates the React store.
+ *
+ * Tests that need to stub a *specific* command should call
+ * `mockInvoke.mockImplementation` with a dispatcher that defers
  * to this default for everything else — overriding the entire mock
  * implementation without preserving the UIState branch will crash the
  * AppShell render.
  */
-function defaultInvoke(cmd: string): Promise<unknown> {
+const monikerToKey = new Map<string, string>();
+const currentFocusKey: { key: string | null } = { key: null };
+
+/**
+ * Captured event listeners keyed by event name.
+ *
+ * The `listen` mock stores each callback here so tests can fire synthetic
+ * events by calling `listenCallbacks["event-name"](payload)`.
+ */
+const listenCallbacks: Record<string, (event: unknown) => void> = {};
+
+function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
   if (cmd === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -23,20 +44,100 @@ function defaultInvoke(cmd: string): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+    const a = (args ?? {}) as { key?: string; moniker?: string };
+    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    return Promise.resolve(null);
+  }
+  if (cmd === "spatial_unregister_scope") {
+    const a = (args ?? {}) as { key?: string };
+    if (a.key) {
+      for (const [m, k] of monikerToKey.entries()) {
+        if (k === a.key) {
+          monikerToKey.delete(m);
+          break;
+        }
+      }
+    }
+    return Promise.resolve(null);
+  }
+  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
+    // Under the no-silent-dropout contract the kernel always returns a
+    // moniker — typically the focused moniker (echoed) when no descent
+    // / drill-out is possible. Tests override this when they want a
+    // specific drill result.
+    const a = (args ?? {}) as { focusedMoniker?: string };
+    return Promise.resolve(a.focusedMoniker ?? null);
+  }
+  if (cmd === "spatial_focus_by_moniker") {
+    // Synthesize the kernel's focus-changed emit so the
+    // entity-focus bridge writes the React store. Mirrors the real
+    // kernel behavior under card `01KQD0WK54G0FRD7SZVZASA9ST`: the
+    // kernel resolves the moniker, advances `focus_by_window`, and
+    // emits `focus-changed` with both `next_key` and `next_moniker`.
+    //
+    // The emit is queued via `queueMicrotask` to match the kernel
+    // simulator's timing contract (see `test-helpers/kernel-simulator.ts`):
+    // production `focus-changed` events arrive asynchronously through
+    // Tauri's event channel, so emitting synchronously here would hide
+    // any timing-related defect (e.g. a regression that re-introduces
+    // a synchronous `store.set(moniker)` in `setFocus`). Tests that
+    // need to observe the post-emit state should drain the microtask
+    // queue inside an `act(...)` block.
+    const a = (args ?? {}) as { moniker?: string };
+    const moniker = a.moniker ?? null;
+    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
+    if (moniker) {
+      const prev = currentFocusKey.key;
+      currentFocusKey.key = key;
+      queueMicrotask(() => {
+        const cb = listenCallbacks["focus-changed"];
+        if (cb) {
+          cb({
+            payload: {
+              window_label: "main",
+              prev_key: prev,
+              next_key: key,
+              next_moniker: moniker,
+            },
+          });
+        }
+      });
+    }
+    return Promise.resolve(null);
+  }
+  if (cmd === "spatial_clear_focus") {
+    // Explicit-clear counterpart of `spatial_focus_by_moniker`. The
+    // kernel removes the per-window focus slot and emits
+    // `focus-changed { next_key: null, next_moniker: null }`. Mirror
+    // that here so the bridge flips the React store back to `null`.
+    const prev = currentFocusKey.key;
+    if (prev === null) {
+      return Promise.resolve(null);
+    }
+    currentFocusKey.key = null;
+    queueMicrotask(() => {
+      const cb = listenCallbacks["focus-changed"];
+      if (cb) {
+        cb({
+          payload: {
+            window_label: "main",
+            prev_key: prev,
+            next_key: null,
+            next_moniker: null,
+          },
+        });
+      }
+    });
+    return Promise.resolve(null);
+  }
   return Promise.resolve(null);
 }
 
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string) => defaultInvoke(cmd)),
+  invoke: vi.fn((cmd: string, args?: unknown) => defaultInvoke(cmd, args)),
 }));
-/**
- * Captured event listeners keyed by event name.
- *
- * The `listen` mock stores each callback here so tests can fire synthetic
- * events by calling `listenCallbacks["event-name"](payload)`.
- */
-const listenCallbacks: Record<string, (event: unknown) => void> = {};
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((eventName: string, cb: (event: unknown) => void) => {
     listenCallbacks[eventName] = cb;
@@ -118,6 +219,11 @@ const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    monikerToKey.clear();
+    currentFocusKey.key = null;
+    for (const key of Object.keys(listenCallbacks)) {
+      delete listenCallbacks[key];
+    }
   });
 
   it("renders children", () => {
@@ -513,10 +619,10 @@ describe("AppShell", () => {
     // module-scope mock returns a populated UIState payload there);
     // overriding the entire mockImplementation would null it out and
     // break `useAppShellUIState`'s `uiState.windows?.[label]` read.
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_in")
         return Promise.resolve(asMoniker("task:child"));
-      return defaultInvoke(cmd);
+      return defaultInvoke(cmd, args);
     });
 
     await act(async () => {
@@ -541,10 +647,10 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_in")
         return Promise.resolve(asMoniker("task:child"));
-      return defaultInvoke(cmd);
+      return defaultInvoke(cmd, args);
     });
 
     await act(async () => {
@@ -579,11 +685,11 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       // Kernel echoes the focused moniker — semantic "stay put".
       if (cmd === "spatial_drill_in")
         return Promise.resolve(asMoniker("ui:leaf"));
-      return defaultInvoke(cmd);
+      return defaultInvoke(cmd, args);
     });
 
     await act(async () => {
@@ -611,10 +717,10 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_out")
         return Promise.resolve(asMoniker("ui:zone"));
-      return defaultInvoke(cmd);
+      return defaultInvoke(cmd, args);
     });
 
     await act(async () => {
@@ -653,11 +759,11 @@ describe("AppShell", () => {
     });
 
     mockInvoke.mockClear();
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       // Kernel echoes the focused moniker — layer-root edge.
       if (cmd === "spatial_drill_out")
         return Promise.resolve(asMoniker("ui:rootLeaf"));
-      return defaultInvoke(cmd);
+      return defaultInvoke(cmd, args);
     });
 
     await act(async () => {

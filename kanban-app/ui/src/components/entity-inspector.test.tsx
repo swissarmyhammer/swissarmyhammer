@@ -219,7 +219,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
-import { InspectorFocusBridge } from "./inspector-focus-bridge";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -253,32 +252,6 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
                 <CommandScopeProvider commands={[]}>
                   <EntityInspector entity={entity} />
                 </CommandScopeProvider>
-              </UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
-  );
-  // Wait for async schema load
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 50));
-  });
-  return result;
-}
-
-async function renderViaInspectorBridge(
-  entity: Entity,
-  tagEntities: Entity[] = [],
-) {
-  const result = render(
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>
-                <InspectorFocusBridge entity={entity} />
               </UIStateProvider>
             </FieldUpdateProvider>
           </EntityFocusProvider>
@@ -537,9 +510,7 @@ describe("EntityInspector", () => {
     // Filter to field-zone monikers so we don't count nested pill scopes.
     const focused = Array.from(
       container.querySelectorAll("[data-focused]"),
-    ).filter((el) =>
-      el.getAttribute("data-moniker")?.startsWith("field:"),
-    );
+    ).filter((el) => el.getAttribute("data-moniker")?.startsWith("field:"));
     expect(focused.length).toBe(1);
   });
 
@@ -667,36 +638,12 @@ describe("EntityInspector", () => {
     });
   });
 
-  it("tag pill in inspector has entity moniker as ancestor scope when using InspectorFocusBridge", async () => {
-    const tags = [
-      {
-        entity_type: "tag",
-        id: "tag-ui",
-        moniker: "tag:tag-ui",
-        fields: { tag_name: "ui", color: "1d76db", description: "UI" },
-      },
-    ];
-    const { container } = await renderViaInspectorBridge(
-      makeEntity({ body: "Fix #ui bug" }),
-      tags,
-    );
-
-    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-    expect(bodyRow).toBeTruthy();
-    // The entity FocusScope wraps the inspector — verify data-moniker="task:test-id" is present
-    const entityScope = container.querySelector(
-      '[data-moniker="task:test-id"]',
-    );
-    expect(
-      entityScope,
-      "Entity FocusScope with task:test-id moniker should exist",
-    ).toBeTruthy();
-    // The body row (containing the tag pill) should be inside the entity scope
-    expect(
-      entityScope!.contains(bodyRow),
-      "body row (with tag pill) should be inside the entity scope",
-    ).toBe(true);
-  });
+  // Test "tag pill in inspector has entity moniker as ancestor scope when
+  // using InspectorFocusBridge" deleted in card 01KQCTJY1QZ710A05SE975GHNR.
+  // The entity FocusScope wrap that this test asserted on is gone — the
+  // inspector no longer wraps `<EntityInspector>` in a `<FocusScope
+  // moniker={entityMoniker}>`. Field zones (and the pill leaves inside
+  // them) register at the inspector layer root with `parentZone === null`.
 
   describe("iconOverride", () => {
     // Task schema with a status_date field that has a display with iconOverride.
@@ -1256,8 +1203,7 @@ describe("EntityInspector", () => {
       // from `makeEntity()` (task, test-id). The element bearing the
       // moniker is a descendant of the row (the Field's FocusZone div).
       expect(
-        titleRow!
-          .querySelector("[data-moniker='field:task:test-id.title']"),
+        titleRow!.querySelector("[data-moniker='field:task:test-id.title']"),
       ).toBeTruthy();
       expect(
         tagsRow!.querySelector("[data-moniker='field:task:test-id.tags']"),

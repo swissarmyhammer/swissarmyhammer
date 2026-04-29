@@ -313,10 +313,13 @@ describe("BINDING_TABLES", () => {
     // through to `app.dismiss` on a null kernel result.
     expect(cua["Escape"]).toBe("nav.drillOut");
     expect(cua["Enter"]).toBe("nav.drillIn");
-    // Tab / Shift+Tab cycle siblings via `nav.right`/`nav.left`.
-    // Inspector scopes can shadow these via `inspector.nextField` /
-    // `inspector.prevField` to keep the form-style "Tab moves between
-    // fields" behaviour where it matters; everywhere else Tab cycles.
+    // Tab / Shift+Tab cycle siblings via global `nav.right` / `nav.left`.
+    // Card `01KQCKVN140DGBCK8NF8RZM4R5` deleted the
+    // `inspector.nextField` / `inspector.prevField` shadows that used
+    // to claim Tab / Shift+Tab inside the inspector — under the
+    // unified-nav contract, the kernel cascade (iter 0 → iter 1)
+    // routes Tab to the next field zone naturally without a per-context
+    // shadow command.
     expect(cua["Tab"]).toBe("nav.right");
     expect(cua["Shift+Tab"]).toBe("nav.left");
   });
@@ -581,25 +584,35 @@ describe("createKeyHandler", () => {
   /* ---------- scope bindings ---------- */
 
   it("dispatches scope bindings when getScopeBindings is provided", () => {
-    const scopeBindings = () => ({ ArrowDown: "inspector.moveDown" });
+    // `field.edit` (cua: Enter) is a real example of a scope-level
+    // binding the focused inspector field zone surfaces. Card
+    // `01KQCKVN140DGBCK8NF8RZM4R5` deleted the inspector nav shadows;
+    // card `01KQCTJY1QZ710A05SE975GHNR` then deleted the inspector edit
+    // commands and the `<InspectorFocusBridge>` itself, leaving
+    // `field.edit` as the only scope-level edit-mode command in the
+    // inspector.
+    const scopeBindings = () => ({ Enter: "field.edit" });
     const handler = createKeyHandler("cua", executeCommand, scopeBindings);
-    handler(fakeKeyEvent("ArrowDown"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
+    handler(fakeKeyEvent("Enter"));
+    expect(executeCommand).toHaveBeenCalledWith("field.edit");
   });
 
   it("scope bindings shadow global bindings for the same key", () => {
     // Escape is globally `nav.drillOut` (which itself falls through
     // to `app.dismiss` on a null kernel result) — scope can still
-    // claim it back when the focused subtree wants its own Escape
-    // semantics (e.g. the inspector's own close handler).
-    const scopeBindings = () => ({ Escape: "inspector.escape" });
+    // claim it back when a focused subtree wants its own Escape
+    // semantics. `dialog.cancel` is a representative example.
+    const scopeBindings = () => ({ Escape: "dialog.cancel" });
     const handler = createKeyHandler("cua", executeCommand, scopeBindings);
     handler(fakeKeyEvent("Escape"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.escape");
+    expect(executeCommand).toHaveBeenCalledWith("dialog.cancel");
   });
 
   it("falls through to global bindings when scope has no match", () => {
-    const scopeBindings = () => ({ ArrowDown: "inspector.moveDown" });
+    // Scope claims Enter via `field.edit`; pressing Escape falls
+    // through to the global `nav.drillOut` binding because the scope
+    // has no Escape entry.
+    const scopeBindings = () => ({ Enter: "field.edit" });
     const handler = createKeyHandler("cua", executeCommand, scopeBindings);
     handler(fakeKeyEvent("Escape"));
     // Escape now binds globally to `nav.drillOut`; behaviorally the
@@ -612,32 +625,40 @@ describe("createKeyHandler", () => {
     let bindings: Record<string, string> = {};
     const handler = createKeyHandler("cua", executeCommand, () => bindings);
 
-    // No scope binding yet — ArrowDown does nothing
-    handler(fakeKeyEvent("ArrowDown"));
-    expect(executeCommand).not.toHaveBeenCalled();
+    // No scope binding yet — Enter resolves through the global keymap
+    // to `nav.drillIn`. We're testing the dynamic-update path, so just
+    // assert no scope-specific binding fires before bindings are seeded.
+    handler(fakeKeyEvent("Enter"));
+    // Global `nav.drillIn: Enter` fires. (See the next assertion for
+    // the post-seed shadowing.)
+    expect(executeCommand).toHaveBeenCalledWith("nav.drillIn");
+    (executeCommand as ReturnType<typeof vi.fn>).mockClear();
 
-    // Simulate inspector focus — now ArrowDown resolves
-    bindings = { ArrowDown: "inspector.moveDown" };
-    handler(fakeKeyEvent("ArrowDown"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
+    // Simulate inspector field focus — `field.edit` now claims Enter
+    // and shadows the global `nav.drillIn`.
+    bindings = { Enter: "field.edit" };
+    handler(fakeKeyEvent("Enter"));
+    expect(executeCommand).toHaveBeenCalledWith("field.edit");
   });
 
-  it("vim scope bindings (j/k) dispatch inspector commands", () => {
+  it("vim scope bindings dispatch field edit commands", () => {
+    // The surviving inspector-field edit-mode commands declare vim keys:
+    //   - `field.edit`      — vim `i` (also cua `Enter`)
+    //   - `field.editEnter` — vim `Enter`
+    // Nav commands (`nav.up`, `nav.down`, …) are global, not scope-
+    // bound — vim `j`/`k` resolve through `BINDING_TABLES.vim` and
+    // `app-shell.tsx`'s `NAV_COMMAND_SPEC`, never through scope.
     const scopeBindings = () => ({
-      j: "inspector.moveDown",
-      k: "inspector.moveUp",
-      i: "inspector.edit",
+      i: "field.edit",
+      Enter: "field.editEnter",
     });
     const handler = createKeyHandler("vim", executeCommand, scopeBindings);
 
-    handler(fakeKeyEvent("j"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
-
-    handler(fakeKeyEvent("k"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.moveUp");
-
     handler(fakeKeyEvent("i"));
-    expect(executeCommand).toHaveBeenCalledWith("inspector.edit");
+    expect(executeCommand).toHaveBeenCalledWith("field.edit");
+
+    handler(fakeKeyEvent("Enter"));
+    expect(executeCommand).toHaveBeenCalledWith("field.editEnter");
   });
 });
 
@@ -659,64 +680,78 @@ function makeScope(
 }
 
 describe("extractScopeBindings", () => {
+  // The card `01KQCKVN140DGBCK8NF8RZM4R5` deleted the six
+  // `inspector.move{Up,Down,ToFirst,ToLast}` and `inspector.{nextField,
+  // prevField}` commands; card `01KQCTJY1QZ710A05SE975GHNR` then
+  // deleted the inspector edit commands and the
+  // `<InspectorFocusBridge>` itself. Under the unified-nav contract
+  // every Up/Down/Left/Right/Home/End/Tab/Shift+Tab resolves through
+  // the global keymap in `BINDING_TABLES.cua` plus `app-shell.tsx`'s
+  // `NAV_COMMAND_SPEC` — there are no inspector-scoped nav variants.
+  // Edit-mode entry on the focused inspector field zone is owned by
+  // the field-zone-scoped commands `field.edit` / `field.editEnter`.
+
   it("extracts keys for the given mode", () => {
     const scope = makeScope([
-      { id: "inspector.moveUp", keys: { vim: "k", cua: "ArrowUp" } },
-      { id: "inspector.moveDown", keys: { vim: "j", cua: "ArrowDown" } },
+      { id: "field.edit", keys: { vim: "i", cua: "Enter" } },
+      { id: "ui.entity.startRename", keys: { vim: "F2", cua: "F2" } },
     ]);
     const bindings = extractScopeBindings(scope, "cua");
     expect(bindings).toEqual({
-      ArrowUp: "inspector.moveUp",
-      ArrowDown: "inspector.moveDown",
+      Enter: "field.edit",
+      F2: "ui.entity.startRename",
     });
   });
 
   it("extracts vim keys", () => {
     const scope = makeScope([
-      { id: "inspector.moveUp", keys: { vim: "k", cua: "ArrowUp" } },
+      { id: "field.edit", keys: { vim: "i", cua: "Enter" } },
     ]);
     const bindings = extractScopeBindings(scope, "vim");
-    expect(bindings).toEqual({ k: "inspector.moveUp" });
+    expect(bindings).toEqual({ i: "field.edit" });
   });
 
   it("skips commands without keys", () => {
     const scope = makeScope([
-      { id: "inspector.moveUp", keys: { vim: "k" } },
-      { id: "inspector.deleteRow" }, // no keys
+      { id: "field.edit", keys: { vim: "i" } },
+      { id: "field.dummy" }, // no keys — should be skipped
     ]);
     const bindings = extractScopeBindings(scope, "vim");
-    expect(bindings).toEqual({ k: "inspector.moveUp" });
+    expect(bindings).toEqual({ i: "field.edit" });
   });
 
   it("skips commands without keys for the requested mode", () => {
     const scope = makeScope([
-      { id: "inspector.nextField", keys: { cua: "Tab" } }, // no vim key
+      { id: "field.editEnter", keys: { vim: "Enter" } }, // no cua key
     ]);
-    const bindings = extractScopeBindings(scope, "vim");
+    const bindings = extractScopeBindings(scope, "cua");
     expect(bindings).toEqual({});
   });
 
   it("inner scope shadows outer scope for same key", () => {
-    const outer = makeScope([
-      { id: "grid.moveDown", keys: { cua: "ArrowDown" } },
-    ]);
+    // Inner field-zone scope claims Enter for `field.edit`; an outer
+    // hypothetical scope also claims Enter for some other command. The
+    // innermost wins — pressing Enter on a focused field zone fires
+    // `field.edit` (which drills into pills first, then opens the
+    // editor on a leaf field).
+    const outer = makeScope([{ id: "outer.handler", keys: { cua: "Enter" } }]);
     const inner = makeScope(
-      [{ id: "inspector.moveDown", keys: { cua: "ArrowDown" } }],
+      [{ id: "field.edit", keys: { cua: "Enter" } }],
       outer,
     );
     const bindings = extractScopeBindings(inner, "cua");
-    expect(bindings["ArrowDown"]).toBe("inspector.moveDown");
+    expect(bindings["Enter"]).toBe("field.edit");
   });
 
   it("includes parent scope commands not shadowed by inner", () => {
     const outer = makeScope([{ id: "app.dismiss", keys: { cua: "Escape" } }]);
     const inner = makeScope(
-      [{ id: "inspector.moveDown", keys: { cua: "ArrowDown" } }],
+      [{ id: "field.edit", keys: { cua: "Enter" } }],
       outer,
     );
     const bindings = extractScopeBindings(inner, "cua");
     expect(bindings).toEqual({
-      ArrowDown: "inspector.moveDown",
+      Enter: "field.edit",
       Escape: "app.dismiss",
     });
   });

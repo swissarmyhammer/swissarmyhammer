@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: a380
+project: spatial-nav
 title: 'BUG: Enter on a focused perspective tab logs "drill in target None" instead of starting inline name rename'
 ---
 ## What
@@ -157,5 +158,13 @@ Test command: `cd kanban-app/ui && bun test perspective-tab-bar perspective-bar 
 - Use `/tdd` — write the failing inactive-tab-Enter assertion against the production tree first. Confirm via DevTools whether the failure is H1 (binding only on active tab) or H2 (production-tree composition issue).
 - If H2 is at play, this card depends on `01KQAWD6EJW2K5Y2G3Y4AC4Q66` (the navbar release-blocker) — same class of breakage. Land that card first, then re-run the failing tests here.
 - Default to Option A in Approach. Pick Option B only if Option A produces a visual jump that user testing flags as disruptive.
+
+## FQM Refactor Notice (added 2026-04-29)
+
+Coordinate with `01KQD6064G1C1RAXDFPJVT1F46` (path-monikers as spatial keys) before driving this task. Specific updates needed under the new contract:
+
+- The test plan's `spatial_focus(activeTabKey)` / `spatial_focus(inactiveTabKey)` calls take a `FullyQualifiedMoniker` (e.g., `/window/perspective-bar/tab:<id>`), not a UUID `SpatialKey`. The UUID-based `SpatialKey` type is being deleted.
+- `mockInvoke` payloads for `spatial_focus` need to send the FQM, not a UUID.
+- If this task is implemented BEFORE the FQM refactor lands, expect a follow-up adjustment when monikers become path-shaped.
 
 #bug #frontend #spatial-nav #kanban-app

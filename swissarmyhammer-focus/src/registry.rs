@@ -182,6 +182,60 @@ impl SpatialRegistry {
         self.scopes.values()
     }
 
+    /// Resolve a [`Moniker`] to the [`SpatialKey`] of the registered
+    /// scope (leaf or zone) that owns it.
+    ///
+    /// Returns `None` when no registered scope has the given moniker.
+    /// When more than one scope is registered with the same moniker
+    /// (an invariant violation that would also confuse the navigator),
+    /// the first match in iteration order wins; the registry does not
+    /// enforce moniker uniqueness because re-registers under the same
+    /// `(SpatialKey, Moniker)` pair are deliberately idempotent and
+    /// pre-collision validation would add cost on every register call.
+    /// As a defensive observe-only measure, the lookup scans for a
+    /// second match after the first hit and emits `tracing::warn!`
+    /// when one is found — the dev-mode log surfaces the duplicate
+    /// registration without making `spatial_focus_by_moniker` flaky
+    /// across calls (the React side is the bug source; the kernel is
+    /// the bug detector). The cost is at most one extra linear scan
+    /// per duplicate-bearing call, which is still cheap relative to
+    /// an IPC round-trip.
+    ///
+    /// Cost is O(N) in the registered-scope count — same as the
+    /// navigator's existing moniker → key resolution in
+    /// [`SpatialState::navigate_with`](crate::state::SpatialState::navigate_with).
+    /// The scope set is small (one per mounted `<FocusScope>` /
+    /// `<FocusZone>` per window), so a linear scan is cheap relative
+    /// to a Tauri IPC round-trip.
+    ///
+    /// Used by [`SpatialState::focus_by_moniker`](crate::state::SpatialState::focus_by_moniker)
+    /// to back the `spatial_focus_by_moniker` Tauri command — the
+    /// React side dispatches focus by moniker (the identity it owns)
+    /// and the kernel resolves it to a [`SpatialKey`] (the identity it
+    /// stores).
+    pub fn find_by_moniker(&self, moniker: &Moniker) -> Option<&SpatialKey> {
+        let mut iter = self.scopes.values().filter(|s| s.moniker() == moniker);
+        let first = iter.next()?;
+        // Defensive duplicate scan: when two distinct keys claim the
+        // same moniker the navigator's `find` and this method both
+        // return whichever HashMap iteration surfaces first, so any
+        // call that resolves through the moniker is non-deterministic
+        // across calls. We observe rather than enforce — the React
+        // mount tree is the bug source; the kernel surfaces the
+        // collision so dev mode can find and fix it.
+        if let Some(second) = iter.next() {
+            tracing::warn!(
+                op = "find_by_moniker",
+                moniker = %moniker,
+                first_key = %first.key(),
+                second_key = %second.key(),
+                "duplicate moniker registered against two distinct keys — \
+                 spatial_focus_by_moniker will resolve non-deterministically"
+            );
+        }
+        Some(first.key())
+    }
+
     /// Iterate every registered [`FocusScope`] leaf in the registry,
     /// regardless of layer.
     pub fn leaves_iter(&self) -> impl Iterator<Item = &FocusScope> + '_ {

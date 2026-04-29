@@ -2507,6 +2507,89 @@ pub async fn spatial_focus(
     Ok(())
 }
 
+/// Move focus to the scope identified by `moniker`.
+///
+/// Moniker-keyed counterpart of [`spatial_focus`]. The React side owns
+/// moniker identity (`"task:01ABC"`, `"field:task:01ABC.title"`); the
+/// kernel owns spatial-key identity (ULIDs minted per mount). Wiring
+/// `setFocus(moniker)` through this command keeps the kernel as the
+/// single source of truth for focus state — the React store is
+/// downstream of `focus-changed` events the kernel emits.
+///
+/// Delegates to [`SpatialState::focus_by_moniker`], which resolves the
+/// moniker once via [`SpatialRegistry::find_by_moniker`], advances the
+/// per-window focus map, and returns the resulting
+/// [`FocusChangedEvent`]. Returns:
+///
+/// - `Ok(())` and emits `focus-changed` when the moniker resolved to a
+///   different scope than the currently-focused one.
+/// - `Ok(())` with no emit when the resolved key is already focused
+///   (idempotent on repeat calls).
+/// - `Err(_)` when the moniker is not registered. The kernel logs a
+///   `tracing::error!` per the no-silent-dropout contract; the adapter
+///   surfaces the error to the React caller so its `setFocus`
+///   dispatch can `console.error` for dev-mode visibility.
+#[tauri::command]
+pub async fn spatial_focus_by_moniker(
+    window: Window,
+    state: State<'_, AppState>,
+    moniker: Moniker,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        let resolved = registry.find_by_moniker(&moniker).is_some();
+        let event = spatial_state.focus_by_moniker(registry, &moniker);
+        (resolved, event)
+    })
+    .await;
+
+    let (resolved, event) = event;
+    if !resolved {
+        // Surface the unknown-moniker case to the React caller so the
+        // dispatch site can `console.error`. The kernel already logged
+        // `tracing::error!` inside `focus_by_moniker`.
+        return Err(format!("unknown moniker: {moniker}"));
+    }
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Clear focus for the calling window.
+///
+/// Explicit-clear counterpart of [`spatial_focus`] /
+/// [`spatial_focus_by_moniker`]. The React side calls this when the user
+/// (or a component-level handler) wants to drop focus altogether — for
+/// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
+/// the clear through the kernel preserves the architectural invariant
+/// from card `01KQD0WK54G0FRD7SZVZASA9ST`: the React entity-focus
+/// store is a pure projection of `focus-changed` events. Without this
+/// command, `setFocus(null)` would have to mutate the React store
+/// synchronously to clear focus, which is exactly the kernel/React
+/// drift the card was filed to eliminate.
+///
+/// Delegates to [`SpatialState::clear_focus`], which removes the
+/// per-window focus slot and returns a `Some(prev) → None`
+/// [`FocusChangedEvent`] when focus was actually cleared. We forward
+/// the event so the React-side bridge writes the entity-focus store
+/// to `null` and dispatches `ui.setFocus` with an empty scope chain.
+/// When the window had no prior focus, the kernel returns `None` and
+/// no event is emitted (idempotent).
+#[tauri::command]
+pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> Result<(), String> {
+    let label = window_label_from(&window);
+    let event = with_spatial(&state, |_registry, spatial_state| {
+        spatial_state.clear_focus(&label)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
 /// Move focus relative to `key` in `direction`.
 ///
 /// Uses the default [`BeamNavStrategy`] for the navigator. `key` is the

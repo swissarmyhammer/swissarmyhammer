@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '7e80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffde80
 project: spatial-nav
 title: Inspector field Up/Down returns None — pin which silent-None path fires and fix
 ---

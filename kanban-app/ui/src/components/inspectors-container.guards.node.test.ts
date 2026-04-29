@@ -63,22 +63,32 @@ describe("InspectorsContainer source-level guards", () => {
     expect(src).toMatch(/useCurrentLayerKey\s*\(\s*\)/);
   });
 
-  it("wraps each panel in a FocusZone with a panel:<type>:<id> moniker", () => {
-    // Three-peer architecture: zones (containers) use `<FocusZone>` directly;
-    // the legacy `<FocusScope kind="zone">` composite is gone. Each panel
-    // body is the parent of the field rows inside it, so it registers as
-    // a zone via `spatial_register_zone` rather than as a leaf scope.
-    const src = readSource();
-    expect(src).toMatch(/<FocusZone\b[\s\S]*?/);
-    expect(src).toMatch(/panel:\$\{entry\.entityType\}:\$\{entry\.entityId\}/);
+  it("does not register a panel zone (deleted in card 01KQCTJY1QZ710A05SE975GHNR)", () => {
+    // Per the card: the per-panel `<FocusZone moniker="panel:...">` wrap
+    // was deleted. Field zones inside the inspector now register at the
+    // layer root (`parentZone === null`); cross-panel nav uses the
+    // kernel's beam-search cascade across all field zones in the
+    // inspector layer, not a panel-as-parent fallback.
+    const code = readCodeOnly();
+    // No `panel:` moniker template literal in code (comments may still
+    // mention it in migration context).
+    expect(code).not.toMatch(/panel:\$\{/);
+    // No `<FocusZone>` element in code — `InspectorsContainer` mounts
+    // only `<FocusLayer>`. Field zones live inside `<EntityInspector>`
+    // descendants and are not its concern.
+    expect(code).not.toMatch(/<FocusZone\b/);
   });
 
-  it("uses the asLayerName / asMoniker brand helpers (no raw string casts)", () => {
+  it("does not import the deleted InspectorFocusBridge", () => {
+    const code = readCodeOnly();
+    // The bridge was deleted in card 01KQCTJY1QZ710A05SE975GHNR.
+    expect(code).not.toMatch(/InspectorFocusBridge/);
+    expect(code).not.toMatch(/inspector-focus-bridge/);
+  });
+
+  it("uses the asLayerName brand helper (no raw string casts)", () => {
     const src = readSource();
     // The branded layer name must come from `asLayerName(...)`.
     expect(src).toMatch(/asLayerName\(\s*"inspector"\s*\)/);
-    // The branded panel moniker must come from `asMoniker(...)`.
-    // Match across optional whitespace/newline so prettier line-breaks don't break the guard.
-    expect(src).toMatch(/asMoniker\(\s*`panel:/);
   });
 });

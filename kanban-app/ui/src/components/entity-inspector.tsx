@@ -25,8 +25,6 @@ import { fieldMoniker } from "@/lib/moniker";
 
 interface EntityInspectorProps {
   entity: Entity;
-  /** Ref callback to expose the nav state to parent (InspectorFocusBridge). */
-  navRef?: React.RefObject<UseInspectorNavReturn | null>;
 }
 
 /**
@@ -57,7 +55,7 @@ interface EntityInspectorProps {
  * - Field definitions and ordering from SchemaContext
  * - Save function from FieldUpdateContext (used internally by FieldRow)
  */
-export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
+export function EntityInspector({ entity }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
   const fields = schema?.fields ?? [];
@@ -71,8 +69,6 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   }, [sections, entity.entity_type, entity.id]);
 
   const nav = useInspectorNav();
-  // Expose nav to parent (InspectorFocusBridge) via ref
-  if (navRef) navRef.current = nav;
 
   useFirstFieldFocus(firstFieldMoniker);
 
