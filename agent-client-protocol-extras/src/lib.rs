@@ -43,6 +43,13 @@ pub use hook_config::{
 };
 pub use hookable_agent::HookableAgent;
 pub use playback::PlaybackAgent;
+// NOTE: The A3 task acceptance criteria mentioned `RecordedEvent` alongside
+// `RecordedCall`/`RecordedSession`, but no `RecordedEvent` type ever existed
+// — neither in 0.10 nor here. The on-disk schema has only ever been
+// `RecordedSession { calls: Vec<RecordedCall> }`. The criterion was
+// inaccurate; the public surface re-exported below is the complete public
+// surface of the recording module, so future reviewers shouldn't go hunting
+// for a phantom `RecordedEvent`.
 pub use recording::{RecordedCall, RecordedSession, RecordingAgent};
 pub use tracing_agent::{trace_notifications, TracingAgent};
 

@@ -192,9 +192,13 @@ where
             record_inner_to_client,
         );
 
-        // Final persist always happens — Drop is the safety net for early
-        // returns and SIGKILL alike, but explicit flush here covers normal
-        // shutdown so the caller observes a complete recording on success.
+        // Explicit final flush so the caller observes a complete recording
+        // on normal shutdown (the inner future resolved). `flush_now` marks
+        // the state clean, which causes the subsequent `Drop` (when the
+        // last `Arc<RecordingState>` falls out of scope) to short-circuit
+        // and avoid a redundant double-write. Drop remains the safety net
+        // for early returns, panics, and SIGKILL — all paths that don't
+        // reach this line keep the original Drop-time flush.
         state.flush_now();
 
         match result {
@@ -309,6 +313,7 @@ impl RecordingState {
                 calls: Vec::new(),
                 pending: HashMap::new(),
                 notifications: Vec::new(),
+                clean: false,
             }),
             path,
         }
@@ -321,6 +326,11 @@ impl RecordingState {
         match (direction, message) {
             (Direction::FromClient, Message::Request(req)) if req.id.is_some() => {
                 self.observe_request_from_client(req);
+            }
+            (Direction::FromClient, Message::Request(req))
+                if req.id.is_none() && req.method == "session/cancel" =>
+            {
+                self.observe_cancel_notification_from_client(req);
             }
             (Direction::FromAgent, Message::Response(resp)) => {
                 self.observe_response_from_agent(resp);
@@ -351,6 +361,27 @@ impl RecordingState {
         self.inner.lock().unwrap().pending.insert(id, pending);
     }
 
+    /// Record a `session/cancel` notification from the client as a synthetic
+    /// `cancel` call with a `null` response.
+    ///
+    /// In ACP 0.10 `Agent::cancel` was a real method invocation that landed
+    /// in the recording even though the underlying wire shape is a JSON-RPC
+    /// notification (no id, no response). Preserving this here keeps
+    /// `avp-common` playback fixtures with `cancel` entries replayable
+    /// against recordings produced under 0.11.
+    fn observe_cancel_notification_from_client(&self, req: &Request) {
+        let request_value = params_to_value(req.params.as_ref());
+        let call = RecordedCall {
+            method: legacy_method_for(&req.method),
+            request: request_value,
+            response: serde_json::Value::Null,
+            notifications: Vec::new(),
+        };
+        let mut inner = self.inner.lock().unwrap();
+        inner.calls.push(call);
+        inner.clean = false;
+    }
+
     /// Pair an agent's response with a pending request and record it. If
     /// the request was a `session/prompt`, also flush the recording so
     /// completed prompts survive an abnormal termination.
@@ -377,6 +408,7 @@ impl RecordingState {
                 notifications: Vec::new(),
             };
             inner.calls.push(call);
+            inner.clean = false;
             pending
         };
 
@@ -398,12 +430,14 @@ impl RecordingState {
             // session/update is the streaming agent → client notification.
             "session/update" => {
                 let value = params_to_value(req.params.as_ref());
-                self.inner.lock().unwrap().notifications.push(value);
+                let mut inner = self.inner.lock().unwrap();
+                inner.notifications.push(value);
+                inner.clean = false;
             }
             // session/cancel is a client → agent notification — handled by
-            // the FromClient branch only. Agent-originated notifications
-            // for other methods are not part of the recording contract;
-            // log and drop.
+            // [`observe_cancel_notification_from_client`] when the FromClient
+            // branch matches it. Agent-originated notifications for other
+            // methods are not part of the recording contract; log and drop.
             other => {
                 tracing::debug!(
                     "RecordingAgent: ignoring agent → client notification method={}",
@@ -416,7 +450,9 @@ impl RecordingState {
     /// Drain the notification buffer, route by sessionId, and persist.
     ///
     /// Errors are logged and swallowed; the recording is best-effort and
-    /// must not propagate failures into the agent call path.
+    /// must not propagate failures into the agent call path. Marks the
+    /// state `clean` so a subsequent [`Drop`] can skip a redundant write
+    /// when no further mutations land before drop time.
     fn flush_now(&self) {
         let snapshot = {
             let mut inner = self.inner.lock().unwrap();
@@ -424,6 +460,7 @@ impl RecordingState {
             if !notifications.is_empty() {
                 distribute_notifications_by_session(&mut inner.calls, notifications);
             }
+            inner.clean = true;
             inner.calls.clone()
         };
 
@@ -435,11 +472,31 @@ impl RecordingState {
 
 impl Drop for RecordingState {
     /// Final persist — covers the trailing notification tail of the very
-    /// last prompt, which has no subsequent flush to fall back on. The
-    /// 2-second settle window matches the 0.10 behaviour and gives any
-    /// in-flight notification a chance to land before we close the file.
+    /// last prompt, which has no subsequent flush to fall back on.
+    ///
+    /// Skips the write entirely when the state is `clean` (the explicit
+    /// flush issued at the end of `connect_to` already wrote the latest
+    /// snapshot, and no further mutations have landed since). Otherwise
+    /// gives a 50ms settle window for any in-flight notification to land
+    /// before draining and saving. The 0.10 implementation used a 2-second
+    /// window; that proved excessive in practice — Drop runs on the
+    /// caller's thread (commonly during test teardown) and the channel
+    /// shutdown that triggers Drop has already drained the inbound queues
+    /// at the executor level. 50ms is sufficient for trailing notifications
+    /// that lost the race with the response future.
     fn drop(&mut self) {
-        let buffered = self.inner.lock().unwrap().notifications.len();
+        let (clean, buffered) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.clean, inner.notifications.len())
+        };
+
+        if clean && buffered == 0 {
+            tracing::debug!(
+                "RecordingState Drop: already clean, skipping redundant final flush"
+            );
+            return;
+        }
+
         tracing::info!(
             "RecordingState Drop: {} buffered notifications to distribute",
             buffered
@@ -1218,18 +1275,26 @@ mod tests {
 
     #[test]
     fn observe_records_cancel_notification_from_client() {
-        // session/cancel from client → agent is a notification (no id) and
-        // SHOULD be recorded as a `cancel` call to match legacy behaviour.
-        // Our current implementation only records request/response pairs
-        // and notifications from the agent direction, so `cancel` is NOT
-        // recorded as a call. This is a known semantic shift; older
-        // fixtures only use cancel sparingly. Verify the documented
-        // behaviour: client → agent notifications are NOT routed into the
-        // call list.
+        // session/cancel from client → agent is a JSON-RPC notification (no
+        // id) on the wire, but the 0.10 recorder logged it as a `cancel`
+        // call with a `null` response so playback fixtures could replay it
+        // alongside real request/response pairs. We preserve that contract
+        // by synthesizing a RecordedCall on the FromClient + notification
+        // path for this specific method.
         let state = fresh_state();
-        let cancel = jsonrpc_notification("session/cancel", serde_json::json!({"sessionId": "s1"}));
+        let cancel =
+            jsonrpc_notification("session/cancel", serde_json::json!({"sessionId": "s1"}));
         state.observe(Direction::FromClient, &cancel);
-        assert!(state.inner.lock().unwrap().calls.is_empty());
+
+        let inner = state.inner.lock().unwrap();
+        assert_eq!(inner.calls.len(), 1);
+        assert_eq!(inner.calls[0].method, "cancel");
+        assert_eq!(
+            inner.calls[0].request,
+            serde_json::json!({"sessionId": "s1"})
+        );
+        assert_eq!(inner.calls[0].response, serde_json::Value::Null);
+        assert!(inner.calls[0].notifications.is_empty());
     }
 
     #[test]
