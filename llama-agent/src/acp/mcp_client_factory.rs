@@ -84,7 +84,12 @@ pub async fn create_mcp_client_from_acp(
             Ok(Arc::new(client))
         }
         _ => {
-            // Unknown MCP server type (future-proofing)
+            // `agent_client_protocol::schema::McpServer` is `#[non_exhaustive]`
+            // under ACP 0.11, so this catch-all arm is required even though all
+            // currently-known variants (`Stdio`, `Http`, `Sse`) are handled
+            // explicitly above. Future protocol revisions may add new transport
+            // variants; until this factory learns about them, we surface a
+            // protocol error rather than panicking.
             tracing::warn!("Unknown MCP server type, cannot create client");
             Err(MCPError::Protocol("Unknown MCP server type".to_string()))
         }
