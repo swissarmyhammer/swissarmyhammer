@@ -3,6 +3,13 @@
 //! This module handles file system operations exposed via ACP protocol.
 //! It implements comprehensive security validation to prevent path traversal
 //! and unauthorized file access.
+//!
+//! Under ACP 0.11, [`ReadTextFileRequest`], [`ReadTextFileResponse`],
+//! [`WriteTextFileRequest`], and [`WriteTextFileResponse`] live in the
+//! `agent_client_protocol::schema` module and are `#[non_exhaustive]`
+//! structs. Construction goes through their builder-style `new(...)`
+//! constructors (used in the inline tests below), which forward-compatibly
+//! initialize any future fields.
 
 use agent_client_protocol::schema::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
