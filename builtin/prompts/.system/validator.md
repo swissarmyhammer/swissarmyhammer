@@ -56,12 +56,7 @@ When evaluating code quality validators, focus your analysis on these changed fi
 
 Analyze this hook event against the validator instructions above.
 
-## Analysis Process
-
-**Use tools as needed during your analysis.** You may have access to the following MCP tools:
-
-- **files** (read-only): Read file contents (`op: "read file"`), search by pattern (`op: "glob files"`), or search file contents (`op: "grep files"`). Use this to inspect source code mentioned in the hook context.
-- **code_context**: Look up symbols (`op: "get symbol"`), search symbols (`op: "search symbol"`), trace call graphs (`op: "get callgraph"`), analyze blast radius (`op: "get blastradius"`), and grep indexed code (`op: "grep code"`). Use this for deeper code analysis.
+{% include "_partials/validator-tools" %}
 
 When a validator's instructions reference specific files or code patterns, use these tools to verify the actual code before making your decision. Do NOT guess about file contents — read them.
 

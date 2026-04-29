@@ -57,21 +57,64 @@ impl<I> ValidatorExecutorLink<I> {
 }
 
 impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
-    /// Load changed files for Stop hooks from turn state.
+    /// Load changed files for Stop hooks.
+    ///
+    /// Returns the list of files that changed during the turn so the validator
+    /// loader can match Stop-triggered RuleSets that have a `match.files`
+    /// pattern (e.g. `code-quality` matches `*.rs`).
+    ///
+    /// Sources, in order of preference:
+    /// 1. `turn_state.changed` — populated by `PostToolUseFileTracker` when a
+    ///    pre-hash differs from the post-hash for a tool's tracked paths.
+    /// 2. Sidecar diff filenames under `.avp/turn_diffs/<session_id>/` —
+    ///    populated by the same tracker as `.diff` files keyed by encoded
+    ///    file path.
+    ///
+    /// The sidecar fallback is what makes Stop hooks robust against the
+    /// failure mode where `turn_state.changed` is empty even though diffs
+    /// were written (e.g. process boundary issues, or any path where the
+    /// state file is cleared but the diff sidecars are not). Without this
+    /// fallback, the Stop chain silently rejects every ruleset with a
+    /// `match.files` pattern — which was the regression captured by kanban
+    /// task `01KQ8CXYMBGN1VTV4S89FGQYCA`.
+    ///
+    /// Returns `None` for non-Stop hooks, and `None` when neither source has
+    /// any changed paths.
     fn load_changed_files_for_stop(&self, input: &I) -> Option<Vec<String>> {
         if input.hook_type() != HookType::Stop {
             return None;
         }
-        match self.turn_state.load(input.session_id()) {
-            Ok(state) if !state.changed.is_empty() => Some(
-                state
-                    .changed
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect(),
-            ),
-            _ => None,
+        let session_id = input.session_id();
+
+        // Primary source: turn state's accumulated `changed` list.
+        if let Ok(state) = self.turn_state.load(session_id) {
+            if !state.changed.is_empty() {
+                return Some(
+                    state
+                        .changed
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
+                );
+            }
         }
+
+        // Fallback: derive changed files from sidecar diff filenames. The
+        // sidecars are the most authoritative on-disk record of what the
+        // turn modified — if any are present, we treat their paths as the
+        // changed-files list for Stop matching.
+        let sidecar = self.turn_state.load_all_diffs(session_id);
+        if sidecar.is_empty() {
+            return None;
+        }
+        let mut files: Vec<String> = sidecar.into_keys().collect();
+        files.sort();
+        tracing::debug!(
+            "ValidatorExecutorLink: Stop hook session={} changed_files derived from {} sidecar diff(s) (turn_state.changed was empty)",
+            session_id,
+            files.len()
+        );
+        Some(files)
     }
 
     /// Load accumulated diffs from sidecar files for Stop hooks.
@@ -134,58 +177,75 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
             (prepared, None)
         }
     }
+}
 
-    /// Handle RuleSet results, returning appropriate ChainResult.
-    ///
-    /// This produces agent-agnostic output with validator block info.
-    /// Agent strategies transform this into their platform-specific format.
-    fn handle_ruleset_results(
-        &self,
-        results: &[crate::validator::ExecutedRuleSet],
-        hook_type: HookType,
-        ctx: &mut ChainContext,
-    ) -> ChainResult {
-        // Find the first blocking failure across all RuleSets
-        for ruleset_result in results {
-            if let Some(blocking) = ruleset_result.blocking_failures().first() {
-                let full_name = format!("{}:{}", ruleset_result.ruleset_name, blocking.rule_name);
-                tracing::info!(
-                    "ValidatorExecutorLink: Rule '{}' blocked chain for {:?}",
-                    full_name,
-                    hook_type
-                );
+/// Decide whether a hook type uses the stderr-only failure surface.
+///
+/// Stderr-only hooks have no structured stdout output channel for blocking,
+/// so AVP signals a block by setting exit code [`VALIDATOR_BLOCK_EXIT_CODE`]
+/// and writing the failure message to stderr. Stdout-style hooks (PreToolUse,
+/// PostToolUse, Stop, etc.) signal a block by emitting JSON on stdout with
+/// `decision: "block"` (or equivalent), so the exit code stays 0 for those.
+fn hook_uses_stderr_only_failure_surface(hook_type: HookType) -> bool {
+    matches!(
+        hook_type,
+        HookType::SessionStart
+            | HookType::SessionEnd
+            | HookType::Notification
+            | HookType::SubagentStart
+            | HookType::PreCompact
+            | HookType::Setup
+            | HookType::Elicitation
+            | HookType::ElicitationResult
+            | HookType::ConfigChange
+            | HookType::WorktreeCreate
+            | HookType::TeammateIdle
+            | HookType::TaskCompleted
+    )
+}
 
-                // Set exit code for hooks that use stderr-only format
-                let uses_stderr_only = matches!(
-                    hook_type,
-                    HookType::SessionStart
-                        | HookType::SessionEnd
-                        | HookType::Notification
-                        | HookType::SubagentStart
-                        | HookType::PreCompact
-                        | HookType::Setup
-                        | HookType::Elicitation
-                        | HookType::ElicitationResult
-                        | HookType::ConfigChange
-                        | HookType::WorktreeCreate
-                        | HookType::TeammateIdle
-                        | HookType::TaskCompleted
-                );
-                if uses_stderr_only {
-                    ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
-                }
+/// Handle RuleSet results, returning appropriate ChainResult.
+///
+/// Walks all `ExecutedRuleSet`s and finds the first blocking failure (any
+/// rule with `severity == Error` whose result is failed). When found:
+/// - Returns [`ChainResult::Stop`] carrying a [`LinkOutput::from_validator_block`]
+///   with the qualified rule name (`<ruleset>:<rule>`) and the blocking
+///   rule's message.
+/// - Sets [`VALIDATOR_BLOCK_EXIT_CODE`] on `ctx` for stderr-only hook types
+///   (see [`hook_uses_stderr_only_failure_surface`]).
+///
+/// When no rule blocks, returns [`ChainResult::continue_empty`] and leaves
+/// the context untouched. The output is agent-agnostic; agent strategies
+/// transform it into their platform-specific format.
+pub(super) fn handle_ruleset_results(
+    results: &[crate::validator::ExecutedRuleSet],
+    hook_type: HookType,
+    ctx: &mut ChainContext,
+) -> ChainResult {
+    // Find the first blocking failure across all RuleSets
+    for ruleset_result in results {
+        if let Some(blocking) = ruleset_result.blocking_failures().first() {
+            let full_name = format!("{}:{}", ruleset_result.ruleset_name, blocking.rule_name);
+            tracing::info!(
+                "ValidatorExecutorLink: Rule '{}' blocked chain for {:?}",
+                full_name,
+                hook_type
+            );
 
-                // Return agent-agnostic validator block info
-                return ChainResult::stop(LinkOutput::from_validator_block(
-                    &full_name,
-                    blocking.message(),
-                    hook_type,
-                ));
+            if hook_uses_stderr_only_failure_surface(hook_type) {
+                ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
             }
-        }
 
-        ChainResult::continue_empty()
+            // Return agent-agnostic validator block info
+            return ChainResult::stop(LinkOutput::from_validator_block(
+                &full_name,
+                blocking.message(),
+                hook_type,
+            ));
+        }
     }
+
+    ChainResult::continue_empty()
 }
 
 /// Build a MatchContext from input implementing ValidatorMatchInfo.
@@ -319,14 +379,39 @@ where
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
         let changed_files = self.load_changed_files_for_stop(input);
+
+        // For Stop hooks specifically, surface the resolved changed-files
+        // count at info level. A Stop hook firing with zero changed files
+        // means every RuleSet that has `match.files` patterns will be
+        // rejected — which is the symptom reported in kanban task
+        // `01KQ8CXYMBGN1VTV4S89FGQYCA`. Logging it here gives operators a
+        // single line to grep when the Stop validator path goes silent.
+        if hook_type == HookType::Stop {
+            tracing::info!(
+                changed_files_count = changed_files.as_ref().map_or(0, |f| f.len()),
+                session_id = input.session_id(),
+                "ValidatorExecutorLink: Stop hook resolved changed files",
+            );
+        }
+
         let match_ctx = build_match_context(input, changed_files.clone());
         let rulesets = self.loader.matching_rulesets(&match_ctx);
 
         if rulesets.is_empty() {
             tracing::trace!("ValidatorExecutorLink: No RuleSets for {:?}", hook_type);
+            // For Stop hooks, also log at info level so the empty-match
+            // case is visible without enabling trace output. PostToolUse
+            // and friends fire often enough that info-level "no matches"
+            // would be noise.
+            if hook_type == HookType::Stop {
+                tracing::info!("ValidatorExecutorLink: Stop hook matched 0 RuleSets",);
+            }
             return ChainResult::continue_empty();
         }
-        tracing::debug!(
+        let matched_names: Vec<&str> = rulesets.iter().map(|rs| rs.name()).collect();
+        tracing::info!(
+            ruleset_count = rulesets.len(),
+            rulesets = ?matched_names,
             "ValidatorExecutorLink: Executing {} RuleSets for {:?}",
             rulesets.len(),
             hook_type
@@ -353,7 +438,7 @@ where
             )
             .await;
 
-        self.handle_ruleset_results(&results, hook_type, ctx)
+        handle_ruleset_results(&results, hook_type, ctx)
     }
 
     fn name(&self) -> &'static str {
@@ -807,5 +892,340 @@ mod tests {
         let ctx = build_match_context(&input, Some(files.clone()));
         assert_eq!(ctx.hook_type, HookType::Stop);
         assert_eq!(ctx.changed_files, Some(files));
+    }
+
+    // ========================================================================
+    // handle_ruleset_results: error-severity failure path
+    //
+    // These tests cover the chain-link decision logic in isolation. They are
+    // the unit half of the end-to-end coverage promised by kanban task
+    // 01KQ7M20F27D0Z67H9XX0XQ4QZ — when a validator returns failed with
+    // severity Error, the link must produce ChainResult::Stop carrying a
+    // LinkOutput::from_validator_block whose validator name and message
+    // reflect the offending rule. The integration half lives in
+    // tests/recording_replay_integration.rs.
+    // ========================================================================
+
+    use crate::chain::ChainContext;
+    use crate::chain::VALIDATOR_BLOCK_EXIT_CODE;
+    use crate::validator::{ExecutedRuleSet, RuleResult, Severity, ValidatorResult};
+
+    /// Build an [`ExecutedRuleSet`] with the given rule results. Test helper.
+    fn make_ruleset(name: &str, rules: Vec<RuleResult>) -> ExecutedRuleSet {
+        ExecutedRuleSet {
+            ruleset_name: name.to_string(),
+            rule_results: rules,
+        }
+    }
+
+    /// Build a single error-severity failed [`RuleResult`]. Test helper.
+    fn failed_error_rule(name: &str, message: &str) -> RuleResult {
+        RuleResult {
+            rule_name: name.to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::fail(message),
+        }
+    }
+
+    /// Build a single error-severity passed [`RuleResult`]. Test helper.
+    fn passing_error_rule(name: &str) -> RuleResult {
+        RuleResult {
+            rule_name: name.to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::pass("ok"),
+        }
+    }
+
+    /// Single failed error-severity rule on a Stop hook produces a
+    /// ChainResult::Stop with the qualified rule name and failure message.
+    ///
+    /// Stop is a stdout-style hook (it surfaces blocks via JSON
+    /// `decision: "block"` on stdout, not exit code 2), so the context exit
+    /// code is left at its default 0. The chain executor itself promotes the
+    /// final exit code to `VALIDATOR_BLOCK_EXIT_CODE` when the chain output
+    /// has `continue_execution: false` — that promotion is exercised in the
+    /// integration test.
+    #[test]
+    fn handle_ruleset_results_single_error_failure_stop_hook_returns_stop() {
+        let results = vec![make_ruleset(
+            "code-quality",
+            vec![failed_error_rule(
+                "no-magic-numbers",
+                "Found magic number 8675309 on line 12",
+            )],
+        )];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Stop(output) => {
+                assert_eq!(output.continue_execution, Some(false));
+                let block = output
+                    .validator_block
+                    .expect("Stop output should carry validator_block info");
+                assert_eq!(block.validator_name, "code-quality:no-magic-numbers");
+                assert_eq!(block.message, "Found magic number 8675309 on line 12");
+                assert_eq!(block.hook_type, HookType::Stop);
+                // stop_reason mirrors the validator message so agent strategies
+                // can surface it without re-reaching into validator_block.
+                assert_eq!(
+                    output.stop_reason.as_deref(),
+                    Some("Found magic number 8675309 on line 12")
+                );
+            }
+            other => panic!("expected ChainResult::Stop, got {:?}", other),
+        }
+
+        // Stop is NOT a stderr-only hook; ctx.exit_code() must remain 0.
+        // The chain executor sets the final exit code based on the chain
+        // output's continue_execution flag, not on ctx.exit_code() for Stop.
+        assert_eq!(ctx.exit_code(), 0);
+    }
+
+    /// Multiple failed rules across rulesets — first ruleset's first blocking
+    /// failure wins, and the chain stops without inspecting later rulesets.
+    /// This locks in the documented contract that
+    /// `ExecutedRuleSet::blocking_failures()` returns failures in input order
+    /// and the link only surfaces the first one.
+    #[test]
+    fn handle_ruleset_results_multiple_failures_returns_first_blocking() {
+        let results = vec![
+            make_ruleset(
+                "security-rules",
+                vec![failed_error_rule(
+                    "no-secrets",
+                    "Hard-coded API key in src/config.rs",
+                )],
+            ),
+            make_ruleset(
+                "code-quality",
+                vec![failed_error_rule(
+                    "no-magic-numbers",
+                    "Magic numbers everywhere",
+                )],
+            ),
+        ];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Stop(output) => {
+                let block = output
+                    .validator_block
+                    .expect("validator_block should be set");
+                // First ruleset's first blocking failure wins.
+                assert_eq!(block.validator_name, "security-rules:no-secrets");
+                assert_eq!(block.message, "Hard-coded API key in src/config.rs");
+            }
+            other => panic!("expected ChainResult::Stop, got {:?}", other),
+        }
+    }
+
+    /// A failed rule alongside passing rules in the same RuleSet — the
+    /// blocking failure is still surfaced. Order within a RuleSet doesn't
+    /// hide a blocking rule behind passing ones.
+    #[test]
+    fn handle_ruleset_results_failed_rule_alongside_passing_rules() {
+        let results = vec![make_ruleset(
+            "code-quality",
+            vec![
+                passing_error_rule("function-length"),
+                failed_error_rule("no-magic-numbers", "Found magic number 8675309 on line 12"),
+                passing_error_rule("missing-docs"),
+            ],
+        )];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Stop(output) => {
+                let block = output
+                    .validator_block
+                    .expect("blocking failure must produce validator_block");
+                assert_eq!(block.validator_name, "code-quality:no-magic-numbers");
+                assert_eq!(block.message, "Found magic number 8675309 on line 12");
+            }
+            other => panic!("expected ChainResult::Stop, got {:?}", other),
+        }
+    }
+
+    /// All rules passed → chain continues with no output. No exit code is
+    /// set, no validator block info is produced.
+    #[test]
+    fn handle_ruleset_results_all_pass_returns_continue_empty() {
+        let results = vec![make_ruleset(
+            "code-quality",
+            vec![
+                passing_error_rule("function-length"),
+                passing_error_rule("no-magic-numbers"),
+            ],
+        )];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Continue(None) => {}
+            other => panic!("expected ChainResult::Continue(None), got {:?}", other),
+        }
+        assert_eq!(ctx.exit_code(), 0);
+    }
+
+    /// Empty results (no rulesets executed) → chain continues. This is the
+    /// "no validators matched" branch.
+    #[test]
+    fn handle_ruleset_results_empty_returns_continue() {
+        let results: Vec<ExecutedRuleSet> = vec![];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Continue(None) => {}
+            other => panic!("expected ChainResult::Continue(None), got {:?}", other),
+        }
+        assert_eq!(ctx.exit_code(), 0);
+    }
+
+    /// Warn-severity failures are NOT blocking. The link continues even
+    /// though the rule's result is "failed" — only `severity == Error`
+    /// failures stop the chain.
+    #[test]
+    fn handle_ruleset_results_warn_severity_failure_does_not_block() {
+        let results = vec![make_ruleset(
+            "code-quality",
+            vec![RuleResult {
+                rule_name: "function-length".to_string(),
+                severity: Severity::Warn,
+                result: ValidatorResult::fail("function is 51 lines"),
+            }],
+        )];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::Stop, &mut ctx);
+
+        match chain_result {
+            ChainResult::Continue(None) => {}
+            other => panic!(
+                "warn-severity failure must not stop the chain, got {:?}",
+                other
+            ),
+        }
+        assert_eq!(ctx.exit_code(), 0);
+    }
+
+    /// For stderr-only hooks (SessionStart, ConfigChange, etc.), the link
+    /// MUST set the context exit code to `VALIDATOR_BLOCK_EXIT_CODE`. Those
+    /// hooks have no stdout JSON channel for blocking, so the only signal
+    /// to claude-code is exit code 2 + stderr message.
+    #[test]
+    fn handle_ruleset_results_session_start_sets_exit_code_to_validator_block() {
+        let results = vec![make_ruleset(
+            "code-quality",
+            vec![failed_error_rule(
+                "no-magic-numbers",
+                "Found magic number 42",
+            )],
+        )];
+        let mut ctx = ChainContext::new();
+
+        let chain_result = handle_ruleset_results(&results, HookType::SessionStart, &mut ctx);
+
+        match chain_result {
+            ChainResult::Stop(output) => {
+                let block = output
+                    .validator_block
+                    .expect("stderr-only hook block still carries validator_block");
+                assert_eq!(block.hook_type, HookType::SessionStart);
+            }
+            other => panic!("expected ChainResult::Stop, got {:?}", other),
+        }
+        assert_eq!(
+            ctx.exit_code(),
+            VALIDATOR_BLOCK_EXIT_CODE,
+            "stderr-only hook must set exit code to VALIDATOR_BLOCK_EXIT_CODE"
+        );
+    }
+
+    /// Round-trip: every hook type in `hook_uses_stderr_only_failure_surface`
+    /// actually flips the exit code. Belt-and-braces against drift between
+    /// the helper and the call site.
+    #[test]
+    fn handle_ruleset_results_all_stderr_only_hooks_set_exit_code() {
+        let stderr_only_hooks = [
+            HookType::SessionStart,
+            HookType::SessionEnd,
+            HookType::Notification,
+            HookType::SubagentStart,
+            HookType::PreCompact,
+            HookType::Setup,
+            HookType::Elicitation,
+            HookType::ElicitationResult,
+            HookType::ConfigChange,
+            HookType::WorktreeCreate,
+            HookType::TeammateIdle,
+            HookType::TaskCompleted,
+        ];
+
+        for hook in stderr_only_hooks {
+            assert!(
+                hook_uses_stderr_only_failure_surface(hook),
+                "{:?} should be classified stderr-only",
+                hook
+            );
+
+            let results = vec![make_ruleset(
+                "code-quality",
+                vec![failed_error_rule("no-magic-numbers", "boom")],
+            )];
+            let mut ctx = ChainContext::new();
+            let _ = handle_ruleset_results(&results, hook, &mut ctx);
+            assert_eq!(
+                ctx.exit_code(),
+                VALIDATOR_BLOCK_EXIT_CODE,
+                "stderr-only hook {:?} did not set exit code",
+                hook
+            );
+        }
+    }
+
+    /// Round-trip: stdout-style hooks must NOT set the exit code. Together
+    /// with `..._all_stderr_only_hooks_set_exit_code` this pins down both
+    /// halves of the matches! arm.
+    #[test]
+    fn handle_ruleset_results_stdout_style_hooks_leave_exit_code_default() {
+        let stdout_style_hooks = [
+            HookType::PreToolUse,
+            HookType::PostToolUse,
+            HookType::PostToolUseFailure,
+            HookType::PermissionRequest,
+            HookType::Stop,
+            HookType::SubagentStop,
+            HookType::UserPromptSubmit,
+        ];
+
+        for hook in stdout_style_hooks {
+            assert!(
+                !hook_uses_stderr_only_failure_surface(hook),
+                "{:?} should NOT be classified stderr-only",
+                hook
+            );
+
+            let results = vec![make_ruleset(
+                "code-quality",
+                vec![failed_error_rule("no-magic-numbers", "boom")],
+            )];
+            let mut ctx = ChainContext::new();
+            let _ = handle_ruleset_results(&results, hook, &mut ctx);
+            assert_eq!(
+                ctx.exit_code(),
+                0,
+                "stdout-style hook {:?} should leave exit code at default 0",
+                hook
+            );
+        }
     }
 }

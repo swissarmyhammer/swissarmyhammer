@@ -14,15 +14,43 @@
 //! The context also provides access to an ACP Agent for validator execution.
 //! In production, this is a ClaudeAgent created lazily. In tests, a PlaybackAgent
 //! can be injected via `with_agent()`.
+//!
+//! ## Recording validator agent sessions
+//!
+//! Validator agent sessions are always recorded under `.avp/recordings/`;
+//! transcripts double as audit trails and as `PlaybackAgent` fixtures for the
+//! integration tests. The validator agent is transparently wrapped with
+//! [`agent_client_protocol_extras::RecordingAgent`] before being handed to the
+//! runner. Every call (`initialize`, `new_session`, `prompt`) and the
+//! notifications streamed during those calls are written as a `RecordedSession`
+//! JSON file under `<AVP_DIR>/recordings/`. There is no opt-in flag — recording
+//! is unconditional.
+//!
+//! ### Session id resolution
+//!
+//! The recording filename embeds an AVP-level session id. Production hook
+//! entry points should call [`AvpContext::set_session_id`] right after
+//! constructing the context (whether via [`AvpContext::init`] or
+//! [`AvpContext::with_agent`]) and before the first call to
+//! [`AvpContext::agent`]. The recording wrap is applied lazily on first agent
+//! use for *both* construction paths, so the session id installed between
+//! construction and first use propagates into the recording filename in
+//! either case. The `AVP_SESSION_ID` env var is honored as a fallback for
+//! tests and scripts that can't easily call the explicit API; when neither
+//! is set, the literal string `"no-session"` is used.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use agent_client_protocol::{Agent, SessionNotification};
+use agent_client_protocol_extras::RecordingAgent;
 use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
+use swissarmyhammer_tools::mcp::unified_server::{
+    start_mcp_server_with_options, McpServerHandle, McpServerMode,
+};
 use tokio::sync::{broadcast, Mutex};
 
-use swissarmyhammer_config::model::{ModelConfig, ModelManager, ModelPaths};
+use swissarmyhammer_config::model::{ModelConfig, ModelExecutorType, ModelManager, ModelPaths};
 
 use crate::error::AvpError;
 use crate::turn::TurnStateManager;
@@ -89,9 +117,106 @@ pub struct ValidatorEvent<'a> {
 }
 
 /// Holds the agent and notification sender.
+///
+/// `recording_wrap_applied` is the latch that records whether
+/// [`AvpContext::wrap_with_recording`] has run against this handle's
+/// `agent`. The lazy [`AvpContext::init`] path and the eager
+/// [`AvpContext::with_agent`]/[`AvpContext::with_agent_and_model`] paths both
+/// install the handle with `recording_wrap_applied: false`; the wrap is then
+/// applied (in-place) on the first call to [`AvpContext::agent`]. This is
+/// what makes [`AvpContext::set_session_id`] take effect for both
+/// construction paths — the recording filename is snapshotted at first
+/// agent use, not at construction time, so a session id installed between
+/// the constructor returning and the first `agent()` call propagates into
+/// the recording.
+///
+/// Once `recording_wrap_applied` flips to `true`, `agent` is the final
+/// [`RecordingAgent`] wrapper returned to callers; subsequent `agent()`
+/// calls return this cached value without re-wrapping.
 struct AgentHandle {
     agent: Arc<dyn Agent + Send + Sync>,
     notifier: Arc<claude_agent::NotificationSender>,
+    recording_wrap_applied: bool,
+}
+
+/// Newtype wrapper that adapts `Arc<dyn Agent + Send + Sync>` into a sized
+/// type implementing [`Agent`].
+///
+/// This shim exists because [`RecordingAgent<A>`] is parameterized by a sized
+/// inner agent type (`A: Agent`), and trait objects like `dyn Agent` are not
+/// `Sized`. The blanket impl `impl<T: Agent> Agent for Arc<T>` requires
+/// `T: Sized`, so wrapping `Arc<dyn Agent>` directly in `RecordingAgent` does
+/// not compile. `ArcAgent` forwards every `Agent` method to the underlying
+/// trait object, giving us a sized wrapper that `RecordingAgent` can hold.
+///
+/// The runtime cost is one virtual dispatch per call — the same cost the
+/// runner already paid before recording was introduced.
+struct ArcAgent(Arc<dyn Agent + Send + Sync>);
+
+#[async_trait::async_trait(?Send)]
+impl Agent for ArcAgent {
+    async fn initialize(
+        &self,
+        request: agent_client_protocol::InitializeRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+        self.0.initialize(request).await
+    }
+
+    async fn authenticate(
+        &self,
+        request: agent_client_protocol::AuthenticateRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+        self.0.authenticate(request).await
+    }
+
+    async fn new_session(
+        &self,
+        request: agent_client_protocol::NewSessionRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+        self.0.new_session(request).await
+    }
+
+    async fn load_session(
+        &self,
+        request: agent_client_protocol::LoadSessionRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+        self.0.load_session(request).await
+    }
+
+    async fn set_session_mode(
+        &self,
+        request: agent_client_protocol::SetSessionModeRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+        self.0.set_session_mode(request).await
+    }
+
+    async fn prompt(
+        &self,
+        request: agent_client_protocol::PromptRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+        self.0.prompt(request).await
+    }
+
+    async fn cancel(
+        &self,
+        notification: agent_client_protocol::CancelNotification,
+    ) -> agent_client_protocol::Result<()> {
+        self.0.cancel(notification).await
+    }
+
+    async fn ext_method(
+        &self,
+        request: agent_client_protocol::ExtRequest,
+    ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+        self.0.ext_method(request).await
+    }
+
+    async fn ext_notification(
+        &self,
+        notification: agent_client_protocol::ExtNotification,
+    ) -> agent_client_protocol::Result<()> {
+        self.0.ext_notification(notification).await
+    }
 }
 
 /// AVP Context - manages the AVP directory, logging, agent access, turn state, and validator execution.
@@ -125,6 +250,42 @@ pub struct AvpContext {
 
     /// Cached validator runner (lazily initialized from agent)
     runner_cache: Mutex<Option<ValidatorRunner>>,
+
+    /// Optional AVP-level session id used to name validator recording files.
+    ///
+    /// This is the explicit path for threading a session id through to
+    /// [`Self::wrap_with_recording`]. When set via [`Self::set_session_id`]
+    /// it takes precedence over the [`Self::SESSION_ID_ENV`] env var; when
+    /// neither is set, the recording filename falls back to `"no-session"`.
+    ///
+    /// We use [`OnceLock`] to make the "set once before [`Self::agent`]"
+    /// invariant explicit in the type. The reader and writer use the same
+    /// non-blocking primitive — there is no asymmetric `try_lock` dance and no
+    /// possibility of a reader silently fooling itself into thinking the value
+    /// was never set. Calling [`Self::set_session_id`] more than once is a
+    /// silent no-op (the first value wins), which matches the "name the
+    /// recording after the first session id we see" semantics.
+    session_id: OnceLock<String>,
+
+    /// Handle for the in-process sah MCP server that backs the validator agent.
+    ///
+    /// Every `AvpContext` owns exactly one validator MCP server. The server is
+    /// started lazily on the first call to [`Self::agent`] (which awaits
+    /// [`Self::resolve_validator_mcp_config`]), bound to `127.0.0.1:0`, and
+    /// held here for the lifetime of the context. There is no env-var
+    /// short-circuit and no "fallback" path — the validator agent always talks
+    /// to this in-process server.
+    ///
+    /// The `Option` is `None` only between context construction and the first
+    /// `agent()` call; once populated it stays populated until the context is
+    /// dropped.
+    ///
+    /// Lifecycle: dropping `AvpContext` drops the inner [`McpServerHandle`],
+    /// which drops its `shutdown_tx: oneshot::Sender<()>`. The server task's
+    /// `with_graceful_shutdown` future then resolves (the receiver errors), the
+    /// axum serve loop exits, and the listener is closed — freeing the port.
+    /// No async teardown is required from `AvpContext`'s side.
+    mcp_server_handle: Mutex<Option<McpServerHandle>>,
 }
 
 impl std::fmt::Debug for AvpContext {
@@ -136,6 +297,8 @@ impl std::fmt::Debug for AvpContext {
             .field("has_agent", &"<async>")
             .field("turn_state", &"<manager>")
             .field("runner_cache", &"<cached>")
+            .field("session_id", &self.session_id.get())
+            .field("mcp_server_handle", &"<async>")
             .finish()
     }
 }
@@ -149,27 +312,17 @@ impl AvpContext {
     /// 3. Open log file for appending
     /// 4. Optionally connect to user AVP directory
     ///
-    /// The agent is created lazily on first access.
+    /// The agent and the in-process sah MCP server that backs its tool surface
+    /// are both created lazily on the first call to [`Self::agent`]. Every
+    /// `AvpContext` owns exactly one validator MCP server for its lifetime —
+    /// there is no env-var short-circuit and no opt-out. The handle is held
+    /// on `self.mcp_server_handle` and released when the context is dropped.
     ///
     /// Returns Err if not in a git repository.
     pub fn init() -> Result<Self, AvpError> {
         let (project_dir, home_dir) = Self::init_directories()?;
-
-        // Resolve model configuration (defaults to claude-code if not configured)
         let model_config = Self::resolve_model_config();
-
-        // Create turn state manager - uses parent of avp_dir (project root)
-        let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
-        let turn_state = Arc::new(TurnStateManager::new(project_root));
-
-        Ok(Self {
-            project_dir,
-            home_dir,
-            model_config,
-            agent_handle: Arc::new(Mutex::new(None)),
-            turn_state,
-            runner_cache: Mutex::new(None),
-        })
+        Ok(Self::new_without_agent(project_dir, home_dir, model_config))
     }
 
     /// Create an AVP context with an injected agent.
@@ -193,43 +346,8 @@ impl AvpContext {
         agent: Arc<dyn Agent + Send + Sync>,
         notifications: broadcast::Receiver<SessionNotification>,
     ) -> Result<Self, AvpError> {
-        let (project_dir, home_dir) = Self::init_directories()?;
-
-        // Create a NotificationSender and forward from the injected receiver
-        // This is for test/playback agents that provide a Receiver
-        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
-        let notifier = Arc::new(notifier);
-        let notifier_clone = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = notifications;
-            loop {
-                match rx.recv().await {
-                    Ok(notification) => {
-                        let _ = notifier_clone.send_update(notification).await;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "with_agent notification forwarder lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-
-        // Resolve model configuration
         let model_config = Self::resolve_model_config();
-
-        // Create turn state manager
-        let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
-        let turn_state = Arc::new(TurnStateManager::new(project_root));
-
-        Ok(Self {
-            project_dir,
-            home_dir,
-            model_config,
-            agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
-            turn_state,
-            runner_cache: Mutex::new(None),
-        })
+        Self::init_with_agent_and_model(agent, notifications, model_config)
     }
 
     /// Create an AVP context with an injected agent and explicit model configuration.
@@ -242,37 +360,70 @@ impl AvpContext {
         notifications: broadcast::Receiver<SessionNotification>,
         model_config: ModelConfig,
     ) -> Result<Self, AvpError> {
-        let (project_dir, home_dir) = Self::init_directories()?;
+        Self::init_with_agent_and_model(agent, notifications, model_config)
+    }
 
-        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
-        let notifier = Arc::new(notifier);
-        let notifier_clone = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = notifications;
-            loop {
-                match rx.recv().await {
-                    Ok(notification) => {
-                        let _ = notifier_clone.send_update(notification).await;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "notification forwarder lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-
+    /// Build a context that has no agent yet (the lazy-init [`Self::init`] path).
+    ///
+    /// Factored out so [`Self::init`] and [`Self::init_with_agent_and_model`]
+    /// share a single source of truth for field initialization. Callers must
+    /// supply the directories and model config; everything else is derived.
+    fn new_without_agent(
+        project_dir: ManagedDirectory<AvpConfig>,
+        home_dir: Option<ManagedDirectory<AvpConfig>>,
+        model_config: ModelConfig,
+    ) -> Self {
+        // Create turn state manager - uses parent of avp_dir (project root)
         let project_root = project_dir.root().parent().unwrap_or(project_dir.root());
         let turn_state = Arc::new(TurnStateManager::new(project_root));
 
-        Ok(Self {
+        Self {
             project_dir,
             home_dir,
             model_config,
-            agent_handle: Arc::new(Mutex::new(Some(AgentHandle { agent, notifier }))),
+            agent_handle: Arc::new(Mutex::new(None)),
             turn_state,
             runner_cache: Mutex::new(None),
-        })
+            session_id: OnceLock::new(),
+            mcp_server_handle: Mutex::new(None),
+        }
+    }
+
+    /// Shared constructor for the eager-agent paths ([`Self::with_agent`] and
+    /// [`Self::with_agent_and_model`]).
+    ///
+    /// Builds the context, bridges notifications, and installs the inner agent
+    /// in the handle **without** the recording wrap applied. The wrap is
+    /// applied lazily on the first [`Self::agent`] call. This means
+    /// [`Self::set_session_id`] can be called between this constructor and the
+    /// first agent use and still propagate into the recording filename — the
+    /// same invariant the lazy [`Self::init`] path provides.
+    ///
+    /// The two public eager-path entry points only differ in how
+    /// `model_config` is resolved.
+    fn init_with_agent_and_model(
+        agent: Arc<dyn Agent + Send + Sync>,
+        notifications: broadcast::Receiver<SessionNotification>,
+        model_config: ModelConfig,
+    ) -> Result<Self, AvpError> {
+        let (project_dir, home_dir) = Self::init_directories()?;
+        let notifier = Self::bridge_notifications(notifications);
+
+        let ctx = Self::new_without_agent(project_dir, home_dir, model_config);
+
+        // Install the inner agent unwrapped. `recording_wrap_applied: false`
+        // tells `agent()` to apply `wrap_with_recording` on first use,
+        // which is what makes `set_session_id` work after this constructor.
+        // No lock contention here: the mutex is fresh and uncontended.
+        *ctx.agent_handle
+            .try_lock()
+            .expect("fresh agent_handle is uncontended") = Some(AgentHandle {
+            agent,
+            notifier,
+            recording_wrap_applied: false,
+        });
+
+        Ok(ctx)
     }
 
     /// Initialize directories (shared by init and with_agent).
@@ -311,40 +462,274 @@ impl AvpContext {
         &self.model_config
     }
 
+    /// Environment variable that carries the AVP-level session id into the
+    /// recording filename, used as a fallback when [`Self::set_session_id`]
+    /// has not been called.
+    ///
+    /// Prefer [`Self::set_session_id`] in new code — env-based control flow
+    /// invites silent drift if the caller forgets to set it. The env var is
+    /// kept for backwards compatibility and as an escape hatch for
+    /// scripts/tests that can't easily call the explicit API.
+    const SESSION_ID_ENV: &'static str = "AVP_SESSION_ID";
+
+    /// Set the AVP-level session id used to name validator recording files.
+    ///
+    /// This is the explicit, preferred path for threading a session id into
+    /// [`RecordingAgent`]'s output filename. Production hook entry points
+    /// should call this immediately after [`Self::init`] (and *before* the
+    /// first call to [`Self::agent`], since the recording wrap is applied on
+    /// first agent use and snapshots the session id at that moment) so
+    /// recordings are named after the same session id the hook input carries.
+    ///
+    /// The session id is stored in a [`OnceLock`], which makes the "set once"
+    /// invariant explicit in the type. Calling this method more than once is
+    /// a silent no-op — the first value wins. This matches the underlying
+    /// recording semantics: a single [`AvpContext`] produces a single
+    /// `RecordedSession` file with a single filename, so a second session id
+    /// has no place to land anyway.
+    ///
+    /// When set, this value takes precedence over [`Self::SESSION_ID_ENV`].
+    /// When neither is set, the recording filename uses the literal string
+    /// `"no-session"`.
+    pub fn set_session_id(&self, session_id: impl Into<String>) {
+        // OnceLock::set returns Err on second call. We intentionally ignore
+        // it — the first id wins, and a duplicate setter call from the same
+        // hook entry point is a benign retry, not a programming error.
+        let _ = self.session_id.set(session_id.into());
+    }
+
+    /// Resolve the AVP-level session id used in recording filenames.
+    ///
+    /// Order of precedence:
+    /// 1. Value set via [`Self::set_session_id`] (the explicit, preferred path).
+    /// 2. The [`Self::SESSION_ID_ENV`] env var (legacy fallback).
+    /// 3. `None` (recording filename falls back to `"no-session"`).
+    ///
+    /// Reader and writer share the same [`OnceLock`] primitive, so there is
+    /// no asymmetry between "set" and "get" — if `set_session_id` was called,
+    /// `get` sees it; if not, the env var is consulted; if not, `None`.
+    fn resolved_session_id(&self) -> Option<String> {
+        if let Some(id) = self.session_id.get() {
+            return Some(id.clone());
+        }
+        std::env::var(Self::SESSION_ID_ENV).ok()
+    }
+
+    /// Resolve the directory where validator recordings are written.
+    ///
+    /// Always `<AVP_DIR>/recordings/`. There is no env-var override — if the
+    /// user wants recordings to live elsewhere they can move the directory
+    /// after the fact.
+    fn recording_dir(&self) -> PathBuf {
+        self.project_dir.subdir("recordings")
+    }
+
+    /// Build a recording file path for a validator agent invocation.
+    ///
+    /// **Layout: `<AVP_DIR>/recordings/<session_id>-<unix_micros>.json`.**
+    ///
+    /// The original task spec called for a nested layout
+    /// (`<session_id>/<hook_type>/<ruleset>/<rule>.json`, one file per rule),
+    /// but the implementation flattens it into one JSON file per
+    /// [`AvpContext`] lifetime. The reasoning:
+    ///
+    /// - [`RecordingAgent`] aggregates an entire trait-call sequence
+    ///   (`initialize` → `new_session` → `prompt` → ...) into a single
+    ///   [`agent_client_protocol_extras::recording::RecordedSession`] and
+    ///   flushes it on drop. There is exactly one [`RecordingAgent`] per
+    ///   [`AvpContext`] (the wrapper is installed in the lazy `agent()` path
+    ///   and reused for every rule), so a single output file matches the
+    ///   abstraction's natural granularity.
+    ///
+    /// - To get one file per rule we'd have to instantiate a new
+    ///   [`RecordingAgent`] per rule and tear it down between rules, which
+    ///   would force the runner (not the context) to own the wrapper's
+    ///   lifecycle — and lose the `initialize` recording for every rule
+    ///   except the first.
+    ///
+    /// - The microsecond suffix prevents collisions when the same AVP session
+    ///   triggers multiple hooks (e.g. several PostToolUse calls during one
+    ///   Stop session) and keeps each file scoped to a single agent lifetime.
+    ///
+    /// Replay tests load these aggregated `RecordedSession` files via
+    /// [`agent_client_protocol_extras::PlaybackAgent`], which iterates the
+    /// recorded calls in order — exactly what the test corpus needs.
+    ///
+    /// `session_id` is `None` for hook events that don't carry a session
+    /// (the rare InstructionsLoaded / WorktreeCreate paths). In that case we
+    /// fall back to the literal string `"no-session"`.
+    fn recording_path(&self, session_id: Option<&str>) -> PathBuf {
+        let session = session_id.unwrap_or("no-session");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        self.recording_dir()
+            .join(format!("{}-{}.json", session, stamp))
+    }
+
+    /// Wrap an inner validator agent with [`RecordingAgent`].
+    ///
+    /// Recording is unconditional — every Agent method call routed through the
+    /// returned `Arc<dyn Agent>` is recorded to a JSON file along with the
+    /// notifications streamed during that call. The recording is flushed when
+    /// the wrapper is dropped (i.e. when [`AvpContext`] itself is dropped).
+    ///
+    /// The session id used in the filename is resolved by
+    /// [`Self::resolved_session_id`] — explicit setter first, env var second.
+    fn wrap_with_recording(
+        &self,
+        inner: Arc<dyn Agent + Send + Sync>,
+        notifier: &claude_agent::NotificationSender,
+    ) -> Arc<dyn Agent + Send + Sync> {
+        let session_id = self.resolved_session_id();
+        let path = self.recording_path(session_id.as_deref());
+
+        // Subscribe to the global notification channel so the RecordingAgent
+        // capture thread can attach notifications to the recorded calls.
+        let notification_rx = notifier.sender().subscribe();
+
+        tracing::info!(
+            "Wrapping validator agent with RecordingAgent (path={})",
+            path.display()
+        );
+
+        // ArcAgent gives RecordingAgent a sized inner type to hold; the
+        // resulting wrapper is then re-erased back to Arc<dyn Agent>.
+        let recording = RecordingAgent::with_notifications(ArcAgent(inner), path, notification_rx);
+        Arc::new(recording)
+    }
+
+    /// Decide whether the in-process validator MCP server should register agent tools.
+    ///
+    /// `agent_mode` controls which tool surface the in-process sah server
+    /// exposes. ClaudeCode brings its own Read/Glob/Grep, so registering the
+    /// agent tool set on top would just create duplicates and confuse the
+    /// model — Claude only needs sah's domain tools (kanban, etc.), which the
+    /// `agent_mode: false` registration provides. LlamaAgent (qwen, etc.) has
+    /// no built-in tools, so it relies on the agent tool set.
+    fn agent_mode_for_validator(&self) -> bool {
+        matches!(
+            self.model_config.executor_type(),
+            ModelExecutorType::LlamaAgent
+        )
+    }
+
+    /// Start an in-process sah MCP server for validator tools.
+    ///
+    /// Binds an HTTP listener on `127.0.0.1:0` (random ephemeral port) using
+    /// [`start_mcp_server_with_options`]. Returns the [`McpServerConfig`]
+    /// pointing at `/mcp/validator` (the validator-only sub-route exposed by
+    /// the unified server) and the [`McpServerHandle`] whose `Drop` triggers
+    /// graceful shutdown of the spawned server task.
+    ///
+    /// `agent_mode` is determined by [`Self::agent_mode_for_validator`]:
+    /// `LlamaAgent` → `true` (qwen needs Read/Glob/Grep/code_context),
+    /// `ClaudeCode` → `false` (claude already has its own).
+    ///
+    /// Working directory is set to the repo root (parent of `<AVP_DIR>/`) so
+    /// the in-process tools see the project, not the AVP bookkeeping dir.
+    async fn start_in_process_mcp_server(
+        &self,
+    ) -> Result<(swissarmyhammer_agent::McpServerConfig, McpServerHandle), AvpError> {
+        // project_dir is `<root>/.avp`, so its parent is the repository root.
+        // Fall back to project_dir itself if for some reason there's no parent
+        // (shouldn't happen in practice — git root always has a parent), to
+        // avoid panicking out of the validator hot path.
+        let project_root = self
+            .project_dir
+            .root()
+            .parent()
+            .unwrap_or_else(|| self.project_dir.root())
+            .to_path_buf();
+
+        let agent_mode = self.agent_mode_for_validator();
+
+        tracing::debug!(
+            agent_mode,
+            working_dir = %project_root.display(),
+            "Starting in-process sah MCP server for validator tools"
+        );
+
+        let handle = start_mcp_server_with_options(
+            McpServerMode::Http { port: None }, // bind 127.0.0.1:0
+            None,                               // default PromptLibrary
+            None,                               // no model override
+            Some(project_root),
+            agent_mode,
+        )
+        .await
+        .map_err(|e| {
+            AvpError::Context(format!(
+                "Failed to start in-process MCP server for validator tools: {}",
+                e
+            ))
+        })?;
+
+        // The server's `connection_url` is `http://127.0.0.1:{port}/mcp` —
+        // the validator agent talks to the `/mcp/validator` sub-route which
+        // exposes a filtered tool set. We construct that URL from the port
+        // rather than parsing/rewriting the connection URL string.
+        let port = handle.port().ok_or_else(|| {
+            AvpError::Context(
+                "In-process MCP server returned no port — cannot route validator agent".to_string(),
+            )
+        })?;
+        let validator_url = format!("http://127.0.0.1:{}/mcp/validator", port);
+
+        tracing::info!(
+            url = %validator_url,
+            agent_mode,
+            "Validator agent in-process MCP server bound; agent will use this endpoint for tool calls"
+        );
+
+        Ok((
+            swissarmyhammer_agent::McpServerConfig::new(validator_url),
+            handle,
+        ))
+    }
+
     /// Resolve MCP config for the validator agent.
     ///
-    /// If `SAH_HTTP_PORT` or `SWISSARMYHAMMER_HTTP_PORT` is set, returns an MCP
-    /// config pointing at `/mcp/validator` and `tools_override = Some("")` to
-    /// disable all built-in Claude tools. Otherwise returns `(None, None)`,
-    /// and the validator runs without tools (prompt-only, backward compatible).
-    fn resolve_validator_mcp_config() -> (
-        Option<swissarmyhammer_agent::McpServerConfig>,
-        Option<String>,
-    ) {
-        let port = std::env::var("SAH_HTTP_PORT")
-            .or_else(|_| std::env::var("SWISSARMYHAMMER_HTTP_PORT"))
-            .ok()
-            .and_then(|p| p.parse::<u16>().ok());
-
-        match port {
-            Some(port) => {
-                let url = format!("http://localhost:{}/mcp/validator", port);
-                tracing::info!(
-                    "Validator agent will use MCP endpoint: {} (tools disabled)",
-                    url
-                );
-                (
-                    Some(swissarmyhammer_agent::McpServerConfig::new(url)),
-                    Some(String::new()), // --tools "" disables all built-in tools
+    /// Always starts an in-process sah MCP server bound to `127.0.0.1:0`
+    /// (random ephemeral port) on first call, holds the resulting
+    /// [`McpServerHandle`] on `self`, and returns an MCP config pointing at
+    /// the `/mcp/validator` sub-route. Subsequent calls return a config
+    /// pointing at the same already-bound URL (defensive against re-entry,
+    /// even though `agent()` only calls this once per `AvpContext`).
+    ///
+    /// `tools_override` is always `String::new()` to ensure the validator
+    /// agent only sees MCP-provided tools — claude-code's built-in
+    /// Read/Grep/etc. would otherwise mask the qwen-as-validator path's tool
+    /// requirements.
+    ///
+    /// If the in-process server fails to start, the error is propagated. The
+    /// validator agent is never constructed without tools.
+    async fn resolve_validator_mcp_config(
+        &self,
+    ) -> Result<(swissarmyhammer_agent::McpServerConfig, String), AvpError> {
+        let mut guard = self.mcp_server_handle.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            // Already started — re-resolve against the existing handle's
+            // URL rather than spawn a duplicate. In practice `agent()` only
+            // calls this once per `AvpContext`; this branch exists purely as
+            // a defensive guard against re-entry.
+            let port = existing.port().ok_or_else(|| {
+                AvpError::Context(
+                    "Existing in-process MCP handle has no port — cannot reuse".to_string(),
                 )
-            }
-            None => {
-                tracing::debug!(
-                    "No SAH_HTTP_PORT set — validator agent will run without MCP tools"
-                );
-                (None, None)
-            }
+            })?;
+            let url = format!("http://127.0.0.1:{}/mcp/validator", port);
+            return Ok((
+                swissarmyhammer_agent::McpServerConfig::new(url),
+                String::new(),
+            ));
         }
+
+        let (mcp_config, handle) = self.start_in_process_mcp_server().await?;
+        *guard = Some(handle);
+
+        Ok((mcp_config, String::new()))
     }
 
     /// Get the agent for validator execution.
@@ -353,6 +738,14 @@ impl AvpContext {
     /// For ClaudeCode models, creates an ephemeral ClaudeAgent.
     /// For LlamaAgent models, creates a local LlamaAgent.
     /// Returns a reference to the agent and the notification sender (for per-session subscribing).
+    ///
+    /// Recording is applied lazily on the first call — both for the lazy
+    /// [`Self::init`] path (where the inner agent is created here) and for the
+    /// eager [`Self::with_agent`]/[`Self::with_agent_and_model`] paths (where
+    /// the inner agent was installed at construction time but left unwrapped).
+    /// This deferred wrap is what makes [`Self::set_session_id`] take effect
+    /// in *both* construction paths: the recording filename is computed at
+    /// first agent use, never at construction time.
     pub async fn agent(
         &self,
     ) -> Result<
@@ -371,17 +764,23 @@ impl AvpContext {
             );
             let start = std::time::Instant::now();
 
-            // If an MCP server is available, point the validator agent at /mcp/validator
-            // and disable built-in tools so it only has code_context + read-only files.
-            let (mcp_config, tools_override) = Self::resolve_validator_mcp_config();
+            // Point the validator agent at `/mcp/validator` and disable
+            // built-in tools so it only has code_context + read-only files.
+            // This starts the in-process sah MCP server (held on
+            // `self.mcp_server_handle` for the lifetime of the context) so the
+            // validator agent — particularly llama-agent (qwen) which has no
+            // built-in tools — always has tools to call. There is no env-var
+            // short-circuit and no fallback path: the in-process server is
+            // the validator agent's only tool surface.
+            let (mcp_config, tools_override) = self.resolve_validator_mcp_config().await?;
 
             let options = swissarmyhammer_agent::CreateAgentOptions {
                 ephemeral: true,
-                tools_override,
+                tools_override: Some(tools_override),
             };
             let handle = swissarmyhammer_agent::create_agent_with_options(
                 &self.model_config,
-                mcp_config,
+                Some(mcp_config),
                 options,
             )
             .await
@@ -390,13 +789,30 @@ impl AvpContext {
             tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
 
             let notifier = Self::bridge_notifications(handle.notification_rx);
+            // Install the raw inner agent with `recording_wrap_applied: false`.
+            // The wrap is applied immediately below by the shared codepath
+            // that also handles the eager-agent paths. Wrapping must happen
+            // *after* the notification bridge is built so the recorder and
+            // the bridge subscribe to the same broadcast — otherwise the
+            // recorder would steal the receiver from the bridge.
             *guard = Some(AgentHandle {
                 agent: handle.agent,
                 notifier,
+                recording_wrap_applied: false,
             });
         }
 
-        let handle = guard.as_ref().unwrap();
+        // Apply the recording wrap lazily on first observation. This is the
+        // single point where `wrap_with_recording` is called for both
+        // construction paths, which means `set_session_id` consistently
+        // propagates into the recording filename regardless of whether the
+        // caller used `init` or `with_agent`.
+        let handle = guard.as_mut().unwrap();
+        if !handle.recording_wrap_applied {
+            handle.agent = self.wrap_with_recording(Arc::clone(&handle.agent), &handle.notifier);
+            handle.recording_wrap_applied = true;
+        }
+
         Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
     }
 
@@ -503,12 +919,11 @@ impl AvpContext {
 
     /// Log a validator execution event via tracing.
     pub fn log_validator(&self, event: &ValidatorEvent) {
-        tracing::info!(
-            validator = event.name,
-            passed = event.passed,
-            hook_type = event.hook_type,
-            message = event.message,
-            "validator result"
+        crate::validator::emit_validator_result_log(
+            event.name,
+            event.passed,
+            event.hook_type,
+            event.message,
         );
     }
 
@@ -671,12 +1086,15 @@ impl AvpContext {
             return self.placeholder_ruleset_results(rulesets, hook_type);
         }
 
-        let results = self
-            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
-            .await;
-
-        self.log_ruleset_results(&results, hook_type);
-        results
+        // Note: per-rule `validator result` log lines are emitted eagerly
+        // by `ValidatorRunner::execute_ruleset` as each rule's verdict is
+        // known, so we do NOT batch-emit them here. Batching would either
+        // duplicate the eager emit (two lines per rule) or — worse — be the
+        // only place a Stop hook ever logged (and thus drop everything when
+        // the run timed out before this awaited future completed). See
+        // kanban task `01KQAFE5WGYJK3HZ8WE3B8N86K` for the regression.
+        self.run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
+            .await
     }
 
     /// Run RuleSets with cached runner, falling back to placeholders on error.
@@ -702,21 +1120,6 @@ impl AvpContext {
             Err(e) => {
                 tracing::warn!("Failed to execute RuleSets: {} - using placeholders", e);
                 self.placeholder_ruleset_results(rulesets, hook_type)
-            }
-        }
-    }
-
-    /// Log results for each executed RuleSet.
-    fn log_ruleset_results(&self, results: &[ExecutedRuleSet], hook_type: HookType) {
-        let hook_type_str = hook_type.to_string();
-        for ruleset_result in results {
-            for rule_result in &ruleset_result.rule_results {
-                self.log_validator(&ValidatorEvent {
-                    name: &format!("{}:{}", ruleset_result.ruleset_name, rule_result.rule_name),
-                    passed: rule_result.passed(),
-                    message: rule_result.message(),
-                    hook_type: &hook_type_str,
-                });
             }
         }
     }
@@ -1048,5 +1451,508 @@ mod tests {
             config.executor(),
             ModelExecutorConfig::ClaudeCode(_)
         ));
+    }
+
+    // ========================================================================
+    // Recording configuration tests
+    // ========================================================================
+
+    /// The recordings directory is always `<AVP_DIR>/recordings/`. There is
+    /// no env-var override.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_recording_dir_is_avp_subdir() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+        let dir = ctx.recording_dir();
+
+        assert!(
+            dir.ends_with("recordings"),
+            "recording dir should be <AVP_DIR>/recordings, got {}",
+            dir.display()
+        );
+        assert!(
+            dir.starts_with(ctx.avp_dir()),
+            "recording dir should live under the AVP project dir"
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_recording_path_includes_session_id_and_extension() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+        let path = ctx.recording_path(Some("abc123"));
+
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("abc123-"),
+            "recording filename should start with session id, got {}",
+            name
+        );
+        assert!(
+            name.ends_with(".json"),
+            "recording filename should end with .json, got {}",
+            name
+        );
+        assert_eq!(path.parent().unwrap(), ctx.recording_dir());
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_recording_path_falls_back_to_no_session() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+        let path = ctx.recording_path(None);
+
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("no-session-"),
+            "recording filename without session should use no-session prefix, got {}",
+            name
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// `resolved_session_id` should pick up the value installed via
+    /// `set_session_id`, in preference to any env var fallback.
+    #[test]
+    #[serial_test::serial(cwd, env)]
+    fn test_resolved_session_id_prefers_explicit_setter_over_env() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        std::env::set_var(AvpContext::SESSION_ID_ENV, "from-env");
+
+        let ctx = AvpContext::init().unwrap();
+        ctx.set_session_id("from-setter");
+
+        assert_eq!(
+            ctx.resolved_session_id(),
+            Some("from-setter".to_string()),
+            "explicit setter should win over env"
+        );
+
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// When `set_session_id` has not been called, the env var is the fallback.
+    #[test]
+    #[serial_test::serial(cwd, env)]
+    fn test_resolved_session_id_falls_back_to_env() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        std::env::set_var(AvpContext::SESSION_ID_ENV, "env-only");
+
+        let ctx = AvpContext::init().unwrap();
+        assert_eq!(
+            ctx.resolved_session_id(),
+            Some("env-only".to_string()),
+            "env var should be used when setter has not been called"
+        );
+
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// Without the setter or the env var, `resolved_session_id` returns None
+    /// (which `recording_path` then renders as "no-session").
+    #[test]
+    #[serial_test::serial(cwd, env)]
+    fn test_resolved_session_id_returns_none_when_unset() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+
+        let ctx = AvpContext::init().unwrap();
+        assert_eq!(ctx.resolved_session_id(), None);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// `set_session_id` is set-once: the first call wins, subsequent calls
+    /// are silent no-ops. This locks in the [`OnceLock`] semantics — a second
+    /// caller (e.g. a buggy retry path) can't quietly mutate the recording
+    /// filename out from under the first observer.
+    #[test]
+    #[serial_test::serial(cwd, env)]
+    fn test_set_session_id_is_set_once() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+
+        let ctx = AvpContext::init().unwrap();
+        ctx.set_session_id("first");
+        ctx.set_session_id("second-should-be-ignored");
+
+        assert_eq!(
+            ctx.resolved_session_id(),
+            Some("first".to_string()),
+            "first set wins; second is a silent no-op"
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// `set_session_id` works on the eager-agent path
+    /// ([`AvpContext::with_agent`]): the recording wrap is applied lazily on
+    /// the first [`AvpContext::agent`] call, so a session id installed
+    /// between `with_agent(...)` and `agent().await` propagates into the
+    /// recording filename. This is the regression test for the second nit
+    /// from the 2026-04-26 21:10 review round.
+    ///
+    /// Strategy: pass a playback agent through `with_agent`, install a known
+    /// session id via `set_session_id`, drive `agent()` once to materialise
+    /// the wrap, then drop the context to flush the recording. The on-disk
+    /// filename must start with the session id we installed — *not* with
+    /// `no-session-`, which would indicate the wrap was applied at
+    /// construction time (before the setter ran).
+    #[tokio::test]
+    #[serial_test::serial(cwd, env)]
+    async fn test_set_session_id_propagates_through_eager_with_agent() {
+        use agent_client_protocol_extras::PlaybackAgent;
+
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        // Make sure neither the env-var fallback nor any prior setter call
+        // is shadowing what we're testing.
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+
+        // Build an empty fixture for PlaybackAgent — we never actually drive
+        // the recorded wrapper through any real calls, we only need to push
+        // it past the deferred-wrap point.
+        let fixture_dir = temp.path().join("fixtures");
+        fs::create_dir_all(&fixture_dir).unwrap();
+        let fixture = fixture_dir.join("empty.json");
+        fs::write(&fixture, r#"{"messages": []}"#).unwrap();
+
+        let record_dir = {
+            let agent = PlaybackAgent::new(fixture, "test");
+            let notifications = agent.subscribe_notifications();
+            let agent_arc: Arc<dyn Agent + Send + Sync> = Arc::new(agent);
+
+            let ctx = AvpContext::with_agent(agent_arc, notifications).unwrap();
+
+            // Installed *after* the eager constructor returned, *before* the
+            // first agent() call. Under the deferred-wrap design this must
+            // make it into the recording filename.
+            ctx.set_session_id("eager-session-id");
+
+            let _ = ctx.agent().await.unwrap();
+            let dir = ctx.recording_dir();
+            // ctx is dropped here, flushing the recording to disk.
+            dir
+        };
+
+        let entries: Vec<_> = std::fs::read_dir(&record_dir)
+            .expect("read recording dir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            entries
+                .iter()
+                .any(|name| name.starts_with("eager-session-id-") && name.ends_with(".json")),
+            "recording filename should embed the session id installed via \
+             set_session_id() on the eager path; entries={:?}",
+            entries
+        );
+        assert!(
+            !entries.iter().any(|name| name.starts_with("no-session-")),
+            "no recording should fall back to 'no-session' when set_session_id \
+             was called before agent(); entries={:?}",
+            entries
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// Constructing and dropping an `AvpContext` (with no env vars set, no
+    /// custom output dir) produces at least one recording file under the
+    /// project's `<AVP_DIR>/recordings/` directory. This is the
+    /// always-on-recording acceptance test for the env-var-gate removal.
+    #[tokio::test]
+    #[serial_test::serial(cwd, env)]
+    async fn test_recording_is_always_on_with_no_env_vars() {
+        use agent_client_protocol_extras::PlaybackAgent;
+
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        // No env-var manipulation: assert recording happens by default.
+        std::env::remove_var(AvpContext::SESSION_ID_ENV);
+
+        let fixture_dir = temp.path().join("fixtures");
+        fs::create_dir_all(&fixture_dir).unwrap();
+        let fixture = fixture_dir.join("empty.json");
+        fs::write(&fixture, r#"{"messages": []}"#).unwrap();
+
+        let record_dir = {
+            let agent = PlaybackAgent::new(fixture, "test");
+            let notifications = agent.subscribe_notifications();
+            let agent_arc: Arc<dyn Agent + Send + Sync> = Arc::new(agent);
+
+            let ctx = AvpContext::with_agent(agent_arc, notifications).unwrap();
+            let _ = ctx.agent().await.unwrap();
+            let dir = ctx.recording_dir();
+            // ctx is dropped here, flushing the recording to disk.
+            dir
+        };
+
+        assert!(
+            record_dir.exists(),
+            "recordings dir must exist after a context lifetime, looked at {}",
+            record_dir.display()
+        );
+
+        // Canonicalize both sides because on macOS `/var` is a symlink to
+        // `/private/var`, so a raw `starts_with` against the unmodified
+        // `temp.path()` would not match a `recording_dir()` resolved through
+        // `git_root()`.
+        let temp_avp_canonical = temp
+            .path()
+            .join(".avp")
+            .canonicalize()
+            .expect("canonicalize avp dir");
+        let record_dir_canonical = record_dir.canonicalize().expect("canonicalize record dir");
+        assert!(
+            record_dir_canonical.starts_with(&temp_avp_canonical),
+            "recordings dir must live under <AVP_DIR>, got {} (expected under {})",
+            record_dir_canonical.display(),
+            temp_avp_canonical.display(),
+        );
+
+        let entries: Vec<_> = std::fs::read_dir(&record_dir)
+            .expect("read recording dir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            !entries.is_empty(),
+            "at least one recording file must be written by default, dir={}",
+            record_dir.display()
+        );
+        assert!(
+            entries.iter().all(|name| name.ends_with(".json")),
+            "every recording file must be JSON, entries={:?}",
+            entries
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    // ========================================================================
+    // Validator MCP config / in-process MCP server lifecycle
+    // ========================================================================
+
+    /// Helper: probe whether `127.0.0.1:port` is currently listening.
+    ///
+    /// Uses a short connect timeout so a closed port returns quickly rather
+    /// than hanging the test. Returns `true` when a TCP connection
+    /// succeeds, `false` otherwise (refused, timeout, or any I/O error).
+    async fn is_port_listening(port: u16) -> bool {
+        let addr = format!("127.0.0.1:{}", port);
+        matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                tokio::net::TcpStream::connect(&addr),
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    }
+
+    /// Helper: parse the `:<port>/...` segment out of a URL like
+    /// `http://127.0.0.1:54321/mcp/validator`. Returns `None` when no port
+    /// is present or it doesn't parse as `u16`.
+    fn extract_port_from_url(url: &str) -> Option<u16> {
+        let after_colon = url.rsplit("://").next()?.split('/').next()?;
+        after_colon.rsplit(':').next()?.parse::<u16>().ok()
+    }
+
+    /// `resolve_validator_mcp_config` must always start an in-process sah MCP
+    /// server, return a config pointing at its `/mcp/validator` URL, and hold
+    /// the handle on the context. Dropping the context must release the
+    /// bound port.
+    ///
+    /// Acceptance criterion: "verify with a unit test that constructs an
+    /// AvpContext, reads the URL, drops the context, then asserts the port
+    /// is no longer listening".
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_in_process_mcp_server_lifecycle_on_drop() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let port = {
+            let ctx = AvpContext::init().unwrap();
+
+            // Resolve the validator MCP config — this should start the
+            // in-process server and store the handle on `ctx`.
+            let (mcp_config, tools_override) = ctx
+                .resolve_validator_mcp_config()
+                .await
+                .expect("resolve_validator_mcp_config should succeed");
+
+            // Tools must be disabled so claude-code's built-in tools don't
+            // mask qwen-as-validator's MCP-only tool surface.
+            assert_eq!(
+                tools_override, "",
+                "tools_override must be the empty string on the validator path"
+            );
+
+            let url = mcp_config.url.clone();
+
+            // The URL must point at the validator sub-route on a local port.
+            assert!(
+                url.starts_with("http://127.0.0.1:"),
+                "in-process URL should bind to 127.0.0.1, got: {}",
+                url
+            );
+            assert!(
+                url.ends_with("/mcp/validator"),
+                "in-process URL should target the /mcp/validator sub-route, got: {}",
+                url
+            );
+
+            let port = extract_port_from_url(&url)
+                .unwrap_or_else(|| panic!("could not parse port from URL: {}", url));
+
+            // While the context is alive, the port must be listening.
+            assert!(
+                is_port_listening(port).await,
+                "port {} should be listening while AvpContext is alive",
+                port
+            );
+
+            // The mcp_server_handle must hold the handle while ctx is alive.
+            {
+                let guard = ctx.mcp_server_handle.lock().await;
+                assert!(
+                    guard.is_some(),
+                    "mcp_server_handle must hold the handle once resolve_validator_mcp_config succeeds"
+                );
+            }
+
+            port
+            // ctx is dropped at the end of this block, which drops the
+            // McpServerHandle, which drops the shutdown_tx oneshot::Sender,
+            // which causes the server task's graceful_shutdown future to
+            // resolve and the listener to be released.
+        };
+
+        // Allow the spawned shutdown task a moment to actually release the
+        // listener. Drop is synchronous from our side, but axum's
+        // `with_graceful_shutdown` finishes asynchronously on its task —
+        // poll for up to a few seconds rather than sleeping a fixed amount.
+        let mut released = false;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if !is_port_listening(port).await {
+                released = true;
+                break;
+            }
+        }
+
+        assert!(
+            released,
+            "port {} should no longer be listening after AvpContext is dropped",
+            port
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// `agent_mode_for_validator` must be `false` for the default ClaudeCode
+    /// model (claude has its own Read/Glob/Grep — registering the agent tool
+    /// set would just confuse the model).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_agent_mode_for_validator_defaults_to_false_for_claude() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let ctx = AvpContext::init().unwrap();
+
+        // Default config is ClaudeCode → no agent tools needed.
+        assert!(
+            !ctx.agent_mode_for_validator(),
+            "agent_mode must be false for ClaudeCode validator"
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
+    }
+
+    /// `agent_mode_for_validator` must be `true` for a LlamaAgent model
+    /// (qwen has no built-in tools — the in-process sah server must register
+    /// the agent tool set so Read/Glob/Grep/code_context are available).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_agent_mode_for_validator_is_true_for_llama_agent() {
+        use swissarmyhammer_config::model::LlamaAgentConfig;
+
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let mut ctx = AvpContext::init().unwrap();
+        // Swap in a LlamaAgent config so executor_type() returns LlamaAgent.
+        // Direct field mutation is permitted within the same module's test
+        // submodule and avoids adding a public test-only constructor.
+        ctx.model_config = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
+
+        assert!(
+            ctx.agent_mode_for_validator(),
+            "agent_mode must be true for LlamaAgent validator"
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
     }
 }

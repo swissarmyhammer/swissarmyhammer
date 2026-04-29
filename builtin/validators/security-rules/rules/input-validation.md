@@ -46,7 +46,8 @@ Examine the file content for these vulnerability patterns:
 - **Escaped output**: Using framework-provided escaping functions
 - **Static strings**: Hardcoded strings without user input concatenation
 - **Safe APIs**: Using `subprocess.run(..., shell=False)` with list arguments
-- **Test files**: Mock data in test files (files ending in `_test`, `test_`, `.spec.`, `.test.`)
+
+Note: Do not exempt code based on the filename containing `test`, `_test`, `test_`, `.spec.`, or `.test.`. The dispatcher decides whether a file is a test via `@file_groups/test_files`; this rule's job is to flag injection patterns wherever they appear. Test fixtures and helpers can contain real injection vulnerabilities (e.g. unsanitised `format!` SQL builders shared from a `tests/` helper into production), so flag them too.
 
 Include:
 - Vulnerability type (SQL injection, XSS, command injection, path traversal, XXE, deserialization)

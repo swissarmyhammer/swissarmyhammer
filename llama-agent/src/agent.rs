@@ -70,6 +70,33 @@ type SummaryGeneratorFn = Box<
         + Sync,
 >;
 
+/// Derive a string identifier suitable for `ToolParsingStrategy::detect_from_model_name`
+/// from a `ModelConfig`.
+///
+/// HuggingFace sources expose a `repo` (e.g. `unsloth/Qwen3-0.6B-GGUF`) — we
+/// pass that through verbatim because it carries enough name signal for the
+/// detector. Local sources only have a path, so we pass the filename if
+/// present (which usually contains the model name) and otherwise the folder
+/// path. Empty/garbage input falls through to the `Default` strategy.
+pub(crate) fn model_identifier_for_strategy(model: &crate::types::ModelConfig) -> String {
+    use model_loader::ModelSource;
+    match &model.source {
+        ModelSource::HuggingFace { repo, filename, .. } => {
+            // Combine repo and filename so detection picks up signals from
+            // either side (e.g. the repo `Qwen/Qwen3-8B` plus the filename
+            // `Qwen3-8B-Q4_K_M.gguf`).
+            match filename {
+                Some(name) => format!("{}/{}", repo, name),
+                None => repo.clone(),
+            }
+        }
+        ModelSource::Local { folder, filename } => match filename {
+            Some(name) => format!("{}/{}", folder.display(), name),
+            None => folder.to_string_lossy().to_string(),
+        },
+    }
+}
+
 pub struct AgentServer {
     model_manager: Arc<ModelManager>,
     request_queue: Arc<RequestQueue>,
@@ -828,9 +855,22 @@ impl AgentAPI for AgentServer {
         };
         info!("MCP client initialized");
 
-        // Initialize chat template engine
-        let chat_template = Arc::new(ChatTemplateEngine::new());
-        info!("Chat template engine initialized");
+        // Initialize chat template engine with model-derived strategy.
+        //
+        // We derive an identifier from the configured model source so that
+        // `ToolParsingStrategy::detect_from_model_name` can pick the right
+        // input-rendering and output-parsing pair (e.g. `Qwen3` for
+        // `unsloth/Qwen3-0.6B-GGUF`, `Qwen3Coder` for the Coder variant).
+        // Without this, the engine stayed strategy-less and silently fell
+        // back to the legacy HashMap parsers — which masked Qwen3-specific
+        // bugs end-to-end.
+        let model_identifier = model_identifier_for_strategy(&config.model);
+        let chat_template = Arc::new(ChatTemplateEngine::with_model_strategy(&model_identifier));
+        info!(
+            "Chat template engine initialized with strategy: {:?} (derived from model: {})",
+            chat_template.get_parsing_strategy(),
+            model_identifier
+        );
 
         // Initialize dependency analyzer with configured settings
         let dependency_analyzer = Arc::new(DependencyAnalyzer::new(
@@ -1198,16 +1238,10 @@ impl AgentAPI for AgentServer {
     async fn discover_tools(&self, session: &mut Session) -> Result<(), AgentError> {
         debug!("Discovering tools for session: {}", session.id);
 
-        let tool_names = self.mcp_client.list_tools().await?;
-        session.available_tools = tool_names
-            .into_iter()
-            .map(|name| crate::types::ToolDefinition {
-                name: name.clone(),
-                description: format!("Tool: {}", name),
-                parameters: serde_json::Value::Object(serde_json::Map::new()),
-                server_name: "discovered".to_string(),
-            })
-            .collect();
+        // Use the schema-aware variant so the model receives real
+        // parameter schemas in the rendered system prompt, not placeholder
+        // empty objects. See `MCPClient::list_tools_with_schemas` for why.
+        session.available_tools = self.mcp_client.list_tools_with_schemas().await?;
         session.updated_at = SystemTime::now();
 
         info!(

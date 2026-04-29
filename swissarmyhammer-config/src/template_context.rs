@@ -1961,9 +1961,12 @@ config_only = "config_only_value"
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_set_working_directory_variables_populates_cwd_and_working_directory() {
         // When neither variable is set, set_working_directory_variables should
-        // populate both from the process current directory.
+        // populate both from the process current directory. Marked serial(cwd)
+        // because it reads `env::current_dir()` and other tests in this file
+        // mutate process cwd via `CurrentDirGuard`.
         let mut context = TemplateContext::new();
         context.set_working_directory_variables();
 

@@ -1,0 +1,11 @@
+---
+description: "Qwen3.6"
+---
+quiet: false
+executor:
+  type: llama-agent
+  config:
+    model:
+      source: !HuggingFace
+        repo: "unsloth/Qwen3.6-27B-GGUF"
+        filename: "Qwen3.6-27B-IQ4_NL.gguf"

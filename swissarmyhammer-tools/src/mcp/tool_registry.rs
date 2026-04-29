@@ -846,8 +846,10 @@ pub trait McpTool:
     /// Whether this tool should be available to validator agents.
     ///
     /// Validator tools are served on the `/mcp/validator` endpoint, which
-    /// provides a locked-down subset for AVP validators. Only `code_context`
-    /// and `files` (read-only) return true.
+    /// provides a locked-down subset for AVP validators. The validator
+    /// surface exposes `code_context` plus three split read-only file tools
+    /// — `read_file`, `glob_files`, `grep_files` — under their natural
+    /// names so Hermes-trained models can call them by name.
     ///
     /// # Default
     ///
@@ -882,9 +884,10 @@ pub trait AgentTool: McpTool {}
 
 /// Marker trait for tools available to validator agents.
 ///
-/// Validator tools are the minimal, locked-down subset of tools that
-/// AVP validators can access. Only `code_context` and `files` (read-only)
-/// should implement this trait.
+/// Validator tools are the minimal, locked-down subset of tools that AVP
+/// validators can access. The current validator surface is `code_context`
+/// and the three split read-only file tools (`read_file`, `glob_files`,
+/// `grep_files`).
 ///
 /// The `/mcp/validator` endpoint serves only tools tagged with this trait.
 ///
@@ -1880,9 +1883,9 @@ pub async fn send_mcp_log(
 }
 
 /// Register all file-related tools with the registry
-pub async fn register_file_tools(registry: &mut ToolRegistry) {
+pub fn register_file_tools(registry: &mut ToolRegistry) {
     use super::tools::files;
-    files::register_file_tools(registry).await;
+    files::register_file_tools(registry);
 }
 
 register_tool_category!(
@@ -1934,7 +1937,7 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
-    register_file_tools(&mut registry).await;
+    register_file_tools(&mut registry);
     register_git_tools(&mut registry);
     register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);

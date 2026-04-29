@@ -14,7 +14,7 @@ tags:
   - security
   - blocking
 severity: error
-timeout: 30
+timeout: 300
 ---
 
 # Security Rules RuleSet

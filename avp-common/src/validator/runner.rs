@@ -36,11 +36,12 @@ use crate::error::AvpError;
 use crate::types::HookType;
 use crate::validator::types::{compile_glob_patterns, matches_any_pattern};
 use crate::validator::{
-    create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
+    create_executed_ruleset, create_executed_validator, emit_validator_result_log,
+    emit_validator_result_log_with_reason, is_rate_limit_error, log_ruleset_result,
     log_validator_result, parse_validator_response,
     render_validator_prompt_with_partials_and_changed_files, ExecutedRuleSet, ExecutedValidator,
-    RulePromptContext, RuleResult, RuleSet, RuleSetSessionContext, Validator, ValidatorLoader,
-    ValidatorResult, VALIDATOR_PROMPT_NAME,
+    RulePromptContext, RuleResult, RuleSet, Validator, ValidatorLoader, ValidatorResult,
+    VALIDATOR_PROMPT_NAME,
 };
 
 /// Minimum concurrency level for parallel validator execution.
@@ -71,6 +72,107 @@ const CONCURRENCY_REDUCTION_FACTOR: usize = 2;
 /// A value of 10 provides stability by ensuring the reduced concurrency is working
 /// well before attempting to increase it.
 const RECOVERY_THRESHOLD: usize = 10;
+
+/// Per-rule cap on generation tokens for a single `agent.prompt()` call.
+///
+/// This is a defense-in-depth limit against runaway generation: a misbehaving
+/// model, a confused prompt, or a parser bug shouldn't be able to generate
+/// millions of tokens and lock the entire hook indefinitely.
+///
+/// ## Why 16384 (16k)
+///
+/// The original task recommendation was 4096 — comfortable headroom for a
+/// non-reasoning model's typical output (a handful of tool calls + final JSON
+/// verdict). We chose 16k instead for two reasons:
+///
+/// 1. **Reasoning models need room for `<think>` blocks.** Qwen3, the model
+///    that motivated this cap, often produces several thousand tokens of
+///    interior `<think>` reasoning before tool calls or a verdict. 4k caps
+///    legitimate reasoning runs; 16k preserves them.
+/// 2. **Alignment with `llama-agent`'s existing per-call cap.** llama-agent's
+///    ACP server already hardcodes `MAX_GENERATION_TOKENS = 16384` at the
+///    generation layer (see `llama-agent/src/acp/server.rs`). Picking the same
+///    value means a runaway generation hits the same wall whether the cap is
+///    enforced runner-side or agent-side, and we never have a confusing
+///    asymmetry where one layer caps tighter than the other.
+///
+/// If a rule legitimately needs more than 16k generation tokens, the right
+/// fix is to simplify the rule body or pick a more capable model — not to
+/// raise this cap.
+///
+/// ## How it's communicated
+///
+/// The cap is sent to the agent via the `PromptRequest.meta` map under the key
+/// `"max_tokens"`. When the agent honors the cap and stops because it was hit,
+/// it returns `stop_reason: MaxTokens`, and [`build_rule_outcome_from_response`]
+/// converts that into a loud rule failure (severity follows the rule's
+/// effective severity).
+///
+/// ## Agent-side support status
+///
+/// - **`llama-agent`**: honors the cap. Reads `request.meta.max_tokens` and
+///   uses it as an upper bound on the per-turn `max_tokens` it passes to the
+///   generation request. A runaway generation hits this cap and surfaces as
+///   `StopReason::MaxTokens` to the runner.
+/// - **`claude-agent`**: honors the cap as of kanban task
+///   `01KQ7VB868YZ7AWHNT16YB4XZR`. The Claude CLI does not accept a per-turn
+///   `--max-tokens` flag, so claude-agent counts streamed output tokens at
+///   the agent layer and aborts the subprocess + returns
+///   `StopReason::MaxTokens` once the count exceeds the requested cap. The
+///   cap is treated as tighter-only — it narrows but never widens
+///   claude-agent's existing `max_tokens_per_turn` config.
+///
+/// The ACP spec explicitly says "Implementations MUST NOT make assumptions
+/// about values at these keys" — agents are free to ignore `_meta`. Both
+/// in-tree agents now opt in for symmetry with the runner's defense-in-depth
+/// expectation.
+pub(crate) const RULE_GENERATION_MAX_TOKENS: u64 = 16 * 1024;
+
+/// Default per-rule wall-clock timeout in seconds.
+///
+/// Each rule inside a ruleset is wrapped in [`tokio::time::timeout`] with this
+/// budget. If the agent's `prompt()` call (including its internal agentic loop
+/// and any tool calls) does not return within this window, the rule is treated
+/// as a passing-with-warning result whose `validator result` log line carries
+/// `reason="timeout"`. The hook then proceeds to the next rule.
+///
+/// This is a wall-clock cap, not a token cap. The token cap
+/// ([`RULE_GENERATION_MAX_TOKENS`]) prevents runaway *generation*; the wall
+/// timeout prevents runaway *latency* (e.g. an agent silently waiting on a
+/// dead MCP session, a stuck channel, or just an unusably slow model).
+///
+/// The rule-level frontmatter `timeout` field overrides this default per rule
+/// (see [`crate::validator::Rule::effective_timeout`]). The default exists so
+/// rules and rulesets that don't set their own timeout still have a sane cap.
+pub(crate) const RULE_DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Default cap on how many rules of a ruleset run concurrently inside the
+/// in-ruleset [`tokio::task::JoinSet`].
+///
+/// This is the "max in-flight" knob from kanban task `01KQAFFZDX40GSKXQVS0MTNDWV`:
+/// the per-rule sessions each spin up an isolated agent (e.g. a fresh llama
+/// session), so unbounded parallelism would saturate memory and turn a
+/// performance fix into an OOM. A flat default of 4 in-flight rules gives
+/// meaningful parallelism without scaling with CPU count — per-rule agents
+/// are memory-bound (each holds a llama session), not CPU-bound, so a hard
+/// cap is more appropriate than a CPU-derived heuristic.
+///
+/// The runtime can override this via the `AVP_RULE_MAX_IN_FLIGHT` environment
+/// variable (positive integer). Values that fail to parse fall back to the
+/// default.
+pub(crate) const RULE_DEFAULT_PARALLELISM: usize = 4;
+
+/// Environment variable name for overriding [`RULE_DEFAULT_PARALLELISM`] at
+/// runtime.
+pub(crate) const RULE_PARALLELISM_ENV_VAR: &str = "AVP_RULE_MAX_IN_FLIGHT";
+
+/// Maximum size in bytes of the partial agent response included in a
+/// `MaxTokens` failure message.
+///
+/// Larger partial responses are truncated and marked with a `[truncated]`
+/// suffix to keep the failure message bounded (~2KB) while still preserving
+/// enough context to diagnose what the model was generating when the cap fired.
+const MAX_TOKENS_PARTIAL_RESPONSE_BYTES: usize = 4 * 1024;
 
 /// Manages adaptive concurrency for parallel validator execution.
 ///
@@ -312,7 +414,11 @@ fn handle_execution_response(
                     "Validator returned empty response"
                 );
             }
-            let result = parse_validator_response(&collected.content, &collected.stop_reason);
+            let result = parse_validator_response(
+                &collected.content,
+                &collected.stop_reason,
+                validator.name(),
+            );
             log_validator_result(validator.name(), &result);
             (create_executed_validator(validator, result), false)
         }
@@ -360,6 +466,188 @@ fn create_render_error(validator: &Validator, error: &str) -> ExecutedValidator 
         validator,
         crate::validator::ValidatorResult::fail(format!("Failed to render prompt: {}", error)),
     )
+}
+
+/// Build the `PromptRequest` used for a single rule evaluation.
+///
+/// Wires the rule's rendered prompt into a `PromptRequest` for the given
+/// session and attaches the per-rule `max_tokens` cap via the request's
+/// `meta` map (key: `"max_tokens"`, value:
+/// [`RULE_GENERATION_MAX_TOKENS`]).
+///
+/// The cap is communicated through `meta` because the ACP `PromptRequest`
+/// schema does not have a first-class `max_tokens` field. Agents that honor
+/// the cap will return `stop_reason: MaxTokens` when it fires; the runner
+/// then converts that into a loud rule failure via
+/// [`build_rule_outcome_from_response`].
+///
+/// # Arguments
+///
+/// * `session_id` - The fresh session to issue the prompt on
+/// * `rule_prompt` - The rendered rule prompt body
+fn build_rule_prompt_request(
+    session_id: agent_client_protocol::SessionId,
+    rule_prompt: String,
+) -> agent_client_protocol::PromptRequest {
+    use agent_client_protocol::{ContentBlock, PromptRequest, TextContent};
+
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "max_tokens".to_string(),
+        serde_json::json!(RULE_GENERATION_MAX_TOKENS),
+    );
+
+    PromptRequest::new(
+        session_id,
+        vec![ContentBlock::Text(TextContent::new(rule_prompt))],
+    )
+    .meta(meta)
+}
+
+/// Truncate a partial response string to at most
+/// [`MAX_TOKENS_PARTIAL_RESPONSE_BYTES`] bytes.
+///
+/// If the response is longer than the limit, returns the truncated prefix with
+/// a `" [truncated]"` marker appended. Truncation respects UTF-8 character
+/// boundaries to avoid producing invalid UTF-8 in the output.
+///
+/// # Arguments
+///
+/// * `response` - The partial response text captured before the cap fired
+fn truncate_partial_response_for_max_tokens(response: &str) -> String {
+    if response.len() <= MAX_TOKENS_PARTIAL_RESPONSE_BYTES {
+        return response.to_string();
+    }
+
+    let mut end = MAX_TOKENS_PARTIAL_RESPONSE_BYTES;
+    while end > 0 && !response.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!("{} [truncated]", &response[..end])
+}
+
+/// Build a fail-loud failure message for a rule that hit the per-rule
+/// `max_tokens` generation cap before producing a verdict.
+///
+/// The message references the cap value (so users see what was hit) and embeds
+/// a truncated partial response (so users have a debug trail of what the model
+/// was generating when it ran away).
+fn build_max_tokens_failure_message(rule_name: &str, partial_response: &str) -> String {
+    format!(
+        "Validator rule '{rule}' exceeded max generation tokens ({cap}) without producing a verdict. \
+This usually indicates a prompt/model mismatch — file an issue with the rule body and the partial \
+response. partial response: {partial}",
+        rule = rule_name,
+        cap = RULE_GENERATION_MAX_TOKENS,
+        partial = truncate_partial_response_for_max_tokens(partial_response),
+    )
+}
+
+/// Map an `agent.prompt()` outcome onto a [`RuleOutcome`].
+///
+/// This is the post-processing half of [`ValidatorRunner::execute_rule_in_fresh_session`]:
+/// given the prompt response (or error) and the streamed content collected
+/// during the call, produce the appropriate [`RuleOutcome`] variant.
+///
+/// - `Ok(prompt_response)` with `stop_reason == MaxTokens` → [`RuleOutcome::Failure`]
+///   referencing the cap and including a truncated partial response. This is a
+///   defense-in-depth path: a runaway generation should fail loudly, not
+///   silently pass.
+/// - `Ok(prompt_response)` (any other stop reason) → parse the streamed content
+///   into a verdict and wrap as [`RuleOutcome::Result`]. An empty content body
+///   is logged as a warning but still parsed (the parser produces a fail-loud
+///   outcome for empty/unparseable responses).
+/// - `Err(...)` containing a rate-limit signature → [`RuleOutcome::RateLimited`]
+///   so the caller can stop iterating remaining rules.
+/// - Any other `Err(...)` → [`RuleOutcome::Failure`].
+///
+/// # Arguments
+///
+/// * `rule` - The rule that was evaluated (for naming/severity on the result)
+/// * `ruleset` - The parent RuleSet (for severity inheritance)
+/// * `response` - The raw `agent.prompt()` result
+/// * `content` - The streamed assistant content collected during the prompt call
+fn build_rule_outcome_from_response(
+    rule: &crate::validator::Rule,
+    ruleset: &RuleSet,
+    response: Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+    content: String,
+) -> RuleOutcome {
+    match response {
+        Ok(prompt_response) => {
+            // Defense-in-depth: if the agent stopped because it hit the
+            // per-rule max_tokens cap, treat it as a loud rule failure rather
+            // than trying to parse a truncated, half-finished response.
+            if matches!(
+                prompt_response.stop_reason,
+                agent_client_protocol::StopReason::MaxTokens
+            ) {
+                tracing::error!(
+                    "RuleSet '{}' rule '{}' hit max_tokens cap ({}); failing rule",
+                    ruleset.name(),
+                    rule.name,
+                    RULE_GENERATION_MAX_TOKENS,
+                );
+                return RuleOutcome::Failure(RuleResult {
+                    rule_name: rule.name.clone(),
+                    severity: rule.effective_severity(ruleset),
+                    result: ValidatorResult::fail(build_max_tokens_failure_message(
+                        &rule.name, &content,
+                    )),
+                });
+            }
+
+            if content.is_empty() {
+                tracing::warn!(
+                    "RuleSet '{}' rule '{}' returned empty content (stop_reason: {:?})",
+                    ruleset.name(),
+                    rule.name,
+                    prompt_response.stop_reason
+                );
+            }
+
+            let result =
+                parse_validator_response(&content, &prompt_response.stop_reason, &rule.name);
+            RuleOutcome::Result(RuleResult {
+                rule_name: rule.name.clone(),
+                severity: rule.effective_severity(ruleset),
+                result,
+            })
+        }
+        Err(e) => {
+            let error_str = e.to_string();
+            let rate_limited = is_rate_limit_error(&error_str);
+
+            if rate_limited {
+                tracing::warn!(
+                    "Rate limit/timeout for RuleSet '{}' rule '{}': {}",
+                    ruleset.name(),
+                    rule.name,
+                    e
+                );
+            } else {
+                tracing::error!(
+                    "Agent execution failed for RuleSet '{}' rule '{}': {}",
+                    ruleset.name(),
+                    rule.name,
+                    e
+                );
+            }
+
+            let rule_result = RuleResult {
+                rule_name: rule.name.clone(),
+                severity: rule.effective_severity(ruleset),
+                result: ValidatorResult::fail(format!("Agent execution failed: {}", e)),
+            };
+
+            if rate_limited {
+                RuleOutcome::RateLimited(rule_result)
+            } else {
+                RuleOutcome::Failure(rule_result)
+            }
+        }
+    }
 }
 
 /// Task context for executing a single validator in parallel.
@@ -483,6 +771,41 @@ pub struct ValidatorRunner {
     notifier: Arc<claude_agent::NotificationSender>,
     /// Concurrency limiter for parallel execution
     concurrency: Arc<ConcurrencyLimiter>,
+    /// Cap on the number of rules that may run concurrently *inside* a single
+    /// ruleset's [`tokio::task::JoinSet`].
+    ///
+    /// This is shared across all rulesets via `clone_for_task` so two parallel
+    /// rulesets compete for the same pool of in-flight slots — preventing the
+    /// `(num_rulesets × in_flight)` combinatorial explosion that would otherwise
+    /// spawn one isolated agent session per rule per ruleset all at once.
+    rule_concurrency: Arc<Semaphore>,
+}
+
+/// Internal outcome of evaluating a single rule in a fresh session.
+///
+/// Used by [`ValidatorRunner::execute_rule_in_fresh_session`] to communicate
+/// back to the per-rule loop whether the result should be appended, whether
+/// rate-limit handling kicks in, or whether it was a non-rate-limit failure.
+enum RuleOutcome {
+    /// Rule evaluated successfully (passed or failed verdict from the agent).
+    Result(RuleResult),
+    /// Rule failed with a rate-limit / capacity / transport-level timeout
+    /// error reported by the agent. Adaptive throttling kicks in and the
+    /// caller continues evaluating remaining rules (the parallel fan-out
+    /// makes "stop the loop" no longer meaningful — the other rules are
+    /// already in-flight).
+    RateLimited(RuleResult),
+    /// Rule failed with a non-rate-limit error (e.g. session creation failure
+    /// or agent execution error). The caller should record the result and
+    /// continue with the next rule.
+    Failure(RuleResult),
+    /// Rule did not complete within its wall-clock budget (see
+    /// [`RULE_DEFAULT_TIMEOUT_SECS`] / per-rule `timeout` frontmatter).
+    /// The wrapped [`RuleResult`] is a passing-with-warning verdict so the
+    /// hook is not blocked on a stuck rule. The caller emits the
+    /// `validator result ... reason="timeout"` log line via
+    /// [`emit_rule_timeout_verdict`].
+    Timeout(RuleResult),
 }
 
 impl ValidatorRunner {
@@ -499,12 +822,21 @@ impl ValidatorRunner {
         let partials = Self::load_validator_partials();
         let concurrency = Arc::new(ConcurrencyLimiter::new());
 
+        let rule_in_flight = resolve_rule_in_flight_cap();
+        tracing::debug!(
+            "ValidatorRunner rule-in-flight cap = {} (env override key: {})",
+            rule_in_flight,
+            RULE_PARALLELISM_ENV_VAR,
+        );
+        let rule_concurrency = Arc::new(Semaphore::new(rule_in_flight));
+
         Ok(Self {
             prompt_library: Arc::new(prompt_library),
             partials,
             agent,
             notifier,
             concurrency,
+            rule_concurrency,
         })
     }
 
@@ -796,50 +1128,36 @@ impl ValidatorRunner {
         context: &serde_json::Value,
         changed_files: Option<&[String]>,
     ) -> (ExecutedRuleSet, bool) {
+        // `hook_type` is consumed in two places:
+        //   1. Threaded into the per-rule `validator result` log line emitted
+        //      below as soon as each rule's verdict is known. This is what
+        //      production scrapes via `grep validator result .avp/log` to
+        //      tell which hook ran which rule (e.g. Stop vs PostToolUse).
+        //   2. Otherwise the hook event semantics are encoded in `context`
+        //      (which carries `hook_event_name` plus any embedded diff
+        //      blocks via `prepare_validator_context`).
+        //
+        // `changed_files` is threaded down to the per-rule prompt builder so
+        // the rendered rule prompt includes a `## Files Changed This Turn`
+        // section. The diff blocks alone do not explicitly enumerate the
+        // file list (and a per-ruleset diff filter can drop files entirely),
+        // so the explicit list is what gives the validator orientation about
+        // which paths to focus on.
+
         // Acquire concurrency permit for this RuleSet
         let _permit = self.concurrency.acquire().await;
 
         tracing::debug!(
-            "Executing RuleSet '{}' with {} rules in a single session",
+            "Executing RuleSet '{}' with {} rules (fresh session per rule)",
             ruleset.name(),
             ruleset.rules.len()
         );
 
-        // Initialize the session
-        let session_ctx =
-            RuleSetSessionContext::new(&self.prompt_library, ruleset, hook_type, context)
-                .with_changed_files(changed_files);
-
-        let init_prompt = match session_ctx.render_session_init() {
-            Ok(prompt) => prompt,
-            Err(e) => {
-                tracing::error!(
-                    "Failed to render RuleSet '{}' session init: {}",
-                    ruleset.name(),
-                    e
-                );
-                return (
-                    create_executed_ruleset(
-                        ruleset,
-                        vec![RuleResult {
-                            rule_name: "session-init".to_string(),
-                            severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!(
-                                "Failed to render session init: {}",
-                                e
-                            )),
-                        }],
-                    ),
-                    false,
-                );
-            }
-        };
-
-        // Initialize agent and create session for multi-turn conversation
-        use agent_client_protocol::{
-            ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, TextContent,
-        };
-
+        // Initialize the agent once for the RuleSet. ACP `initialize` is an
+        // agent-level handshake (capabilities, version negotiation) and is
+        // independent of session lifecycles, so it does not need to be
+        // repeated per rule.
+        use agent_client_protocol::InitializeRequest;
         let init_request = InitializeRequest::new(1.into());
         if let Err(e) = self.agent.initialize(init_request).await {
             tracing::error!(
@@ -860,157 +1178,62 @@ impl ValidatorRunner {
             );
         }
 
-        // Create session
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
-        let session_request = NewSessionRequest::new(cwd);
-        let session_response = match self.agent.new_session(session_request).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::error!(
-                    "Failed to create session for RuleSet '{}': {}",
-                    ruleset.name(),
-                    e
-                );
-                return (
-                    create_executed_ruleset(
-                        ruleset,
-                        vec![RuleResult {
-                            rule_name: "session-create".to_string(),
-                            severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!(
-                                "Failed to create session: {}",
-                                e
-                            )),
-                        }],
-                    ),
-                    false,
-                );
-            }
-        };
+        let hook_type_str = hook_type.to_string();
 
-        let session_id = session_response.session_id;
-        tracing::debug!("RuleSet '{}' got session_id={}", ruleset.name(), session_id);
-
-        let mut rule_results = Vec::new();
-        let mut is_rate_limited = false;
-
-        // Send initialization prompt as first message
-        let init_request = PromptRequest::new(
-            session_id.clone(),
-            vec![ContentBlock::Text(TextContent::new(init_prompt))],
-        );
-
-        // Subscribe to this session's dedicated notification channel
-        let init_notifications = self.notifier.subscribe_session(&session_id.0);
-        let (init_collector, _init_text, _, _) =
-            claude_agent::spawn_notification_collector(init_notifications, session_id.clone());
-
-        match self.agent.prompt(init_request).await {
-            Ok(_init_response) => {
-                // prompt() returned - collector already has everything, discard it
-                init_collector.abort();
-            }
-            Err(e) => {
-                init_collector.abort();
-                tracing::error!(
-                    "Failed to send init prompt for RuleSet '{}': {}",
-                    ruleset.name(),
-                    e
-                );
-                return (
-                    create_executed_ruleset(
-                        ruleset,
-                        vec![RuleResult {
-                            rule_name: "session-init".to_string(),
-                            severity: ruleset.manifest.severity,
-                            result: ValidatorResult::fail(format!(
-                                "Failed to send init prompt: {}",
-                                e
-                            )),
-                        }],
-                    ),
-                    false,
-                );
-            }
+        // Execute rules concurrently inside the ruleset, capped by the shared
+        // `rule_concurrency` semaphore. Each rule still runs in its own fresh
+        // session — the JoinSet-style fan-out only affects scheduling, not
+        // session isolation. Rules that exceed their wall-clock timeout are
+        // recorded as passing-with-warning so a single stuck rule cannot block
+        // the entire hook.
+        let mut futures = FuturesUnordered::new();
+        for (idx, rule) in ruleset.rules.iter().enumerate() {
+            let timeout_secs = rule.effective_timeout(ruleset) as u64;
+            let timeout_secs = if timeout_secs == 0 {
+                RULE_DEFAULT_TIMEOUT_SECS
+            } else {
+                timeout_secs
+            };
+            futures.push(async move {
+                let outcome = self
+                    .execute_rule_with_timeout(rule, ruleset, context, changed_files, timeout_secs)
+                    .await;
+                (idx, outcome)
+            });
         }
 
-        // Execute each rule sequentially in the same session
-        for rule in &ruleset.rules {
-            let mut rule_ctx =
-                RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
-            rule_ctx.hook_context = Some(context);
-            let rule_prompt = rule_ctx.render();
+        // Collect outcomes in original rule order so downstream consumers (and
+        // tests that assert on `rule_results[0]`) see a deterministic ordering
+        // regardless of which rule finishes first.
+        let mut indexed_outcomes: Vec<Option<RuleOutcome>> =
+            (0..ruleset.rules.len()).map(|_| None).collect();
+        let mut is_rate_limited = false;
+        while let Some((idx, outcome)) = futures.next().await {
+            indexed_outcomes[idx] = Some(outcome);
+        }
 
-            let rule_request = PromptRequest::new(
-                session_id.clone(),
-                vec![ContentBlock::Text(TextContent::new(rule_prompt))],
-            );
-
-            // Spawn collector BEFORE prompt - it runs concurrently, collecting
-            // notifications as they stream in during prompt execution
-            let rule_notifications = self.notifier.subscribe_session(&session_id.0);
-            let (rule_collector, rule_text, _, _) =
-                claude_agent::spawn_notification_collector(rule_notifications, session_id.clone());
-
-            let response = self.agent.prompt(rule_request).await;
-
-            // prompt() returned - collector has already received all content
-            rule_collector.abort();
-
-            match response {
-                Ok(prompt_response) => {
-                    let content = rule_text.lock().await.clone();
-
-                    if content.is_empty() {
-                        tracing::warn!(
-                            "RuleSet '{}' rule '{}' returned empty content (stop_reason: {:?})",
-                            ruleset.name(),
-                            rule.name,
-                            prompt_response.stop_reason
-                        );
-                    }
-
-                    let result = parse_validator_response(&content, &prompt_response.stop_reason);
-                    let rule_result = RuleResult {
-                        rule_name: rule.name.clone(),
-                        severity: rule.effective_severity(ruleset),
-                        result,
-                    };
+        let mut rule_results = Vec::with_capacity(ruleset.rules.len());
+        for outcome in indexed_outcomes.into_iter().flatten() {
+            match outcome {
+                RuleOutcome::Result(rule_result) => {
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
                     rule_results.push(rule_result);
                     self.concurrency.report_success();
                 }
-                Err(e) => {
-                    let error_str = e.to_string();
-                    is_rate_limited = is_rate_limit_error(&error_str);
-
-                    if is_rate_limited {
-                        self.concurrency.report_rate_limit();
-                        tracing::warn!(
-                            "Rate limit/timeout for RuleSet '{}' rule '{}': {}",
-                            ruleset.name(),
-                            rule.name,
-                            e
-                        );
-                    } else {
-                        tracing::error!(
-                            "Agent execution failed for RuleSet '{}' rule '{}': {}",
-                            ruleset.name(),
-                            rule.name,
-                            e
-                        );
-                    }
-
-                    let rule_result = RuleResult {
-                        rule_name: rule.name.clone(),
-                        severity: rule.effective_severity(ruleset),
-                        result: ValidatorResult::fail(format!("Agent execution failed: {}", e)),
-                    };
+                RuleOutcome::RateLimited(rule_result) => {
+                    is_rate_limited = true;
+                    self.concurrency.report_rate_limit();
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
                     rule_results.push(rule_result);
-
-                    // Stop executing remaining rules if rate limited
-                    if is_rate_limited {
-                        break;
-                    }
+                }
+                RuleOutcome::Failure(rule_result) => {
+                    emit_rule_verdict(ruleset.name(), &rule_result, &hook_type_str);
+                    rule_results.push(rule_result);
+                }
+                RuleOutcome::Timeout(rule_result) => {
+                    emit_rule_timeout_verdict(ruleset.name(), &rule_result, &hook_type_str);
+                    rule_results.push(rule_result);
+                    self.concurrency.report_success();
                 }
             }
         }
@@ -1019,6 +1242,227 @@ impl ValidatorRunner {
         log_ruleset_result(ruleset.name(), &executed);
 
         (executed, is_rate_limited)
+    }
+
+    /// Execute a single rule with both an in-flight cap and a wall-clock timeout.
+    ///
+    /// This is the inner per-rule worker driven by `execute_ruleset`'s
+    /// `JoinSet`-style fan-out. It performs three things in order:
+    ///
+    /// 1. Acquires a permit from `rule_concurrency` to enforce the shared
+    ///    "max in-flight rules across all rulesets" cap. The permit is
+    ///    automatically released when this function returns.
+    /// 2. Wraps the underlying `execute_rule_in_fresh_session` call in
+    ///    [`tokio::time::timeout`] so a stuck agent / dead MCP session /
+    ///    runaway tool loop cannot drag the whole hook past the parent
+    ///    process's tolerance window.
+    /// 3. On timeout, returns [`RuleOutcome::Timeout`] carrying a
+    ///    passing-with-warning [`RuleResult`] so the rest of the ruleset
+    ///    continues. The caller logs this as `validator result ... reason="timeout"`.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule to evaluate
+    /// * `ruleset` - The parent RuleSet (for severity inheritance and partials)
+    /// * `context` - Hook event context as JSON
+    /// * `changed_files` - Optional list of paths changed during the turn
+    /// * `timeout_secs` - Per-rule wall-clock budget in seconds
+    async fn execute_rule_with_timeout(
+        &self,
+        rule: &crate::validator::Rule,
+        ruleset: &RuleSet,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+        timeout_secs: u64,
+    ) -> RuleOutcome {
+        // Acquire the in-flight permit *outside* the timeout so blocking on
+        // the semaphore is not counted against the rule's own wall budget.
+        // This matches the user-visible contract: a rule's `timeout` is "how
+        // long the agent has to think", not "how long it has to wait its
+        // turn behind other rules".
+        let _permit = self
+            .rule_concurrency
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("rule_concurrency semaphore closed unexpectedly");
+
+        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        match tokio::time::timeout(
+            timeout_duration,
+            self.execute_rule_in_fresh_session(rule, ruleset, context, changed_files),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "RuleSet '{}' rule '{}' exceeded wall-clock timeout of {}s; treating as pass-with-warning",
+                    ruleset.name(),
+                    rule.name,
+                    timeout_secs,
+                );
+                RuleOutcome::Timeout(RuleResult {
+                    rule_name: rule.name.clone(),
+                    severity: rule.effective_severity(ruleset),
+                    result: ValidatorResult::pass(format!(
+                        "Rule '{}' did not complete within {}s; skipped (timeout)",
+                        rule.name, timeout_secs,
+                    )),
+                })
+            }
+        }
+    }
+
+    /// Execute a single rule inside a freshly-created agent session.
+    ///
+    /// Each call creates a new ACP session via `new_session` so the rule's
+    /// prompt is evaluated with no conversation history from prior rules.
+    /// The rule prompt itself is self-contained (hook context + rule body +
+    /// response-format instructions), rendered via [`RulePromptContext`].
+    ///
+    /// The agent's internal agentic loop within `prompt()` is preserved —
+    /// tool calls and multi-turn behavior happen inside the single
+    /// `agent.prompt()` invocation, exactly as before.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule to evaluate
+    /// * `ruleset` - The parent RuleSet (for severity inheritance and partials)
+    /// * `context` - Hook event context as JSON, rendered into the rule prompt
+    /// * `changed_files` - Optional list of file paths changed during the
+    ///   turn. Threaded into the rule prompt so the validator sees a
+    ///   `## Files Changed This Turn` section.
+    ///
+    /// # Returns
+    ///
+    /// A [`RuleOutcome`] describing the result of the rule evaluation. The
+    /// caller maps this onto `rule_results` / rate-limit state.
+    async fn execute_rule_in_fresh_session(
+        &self,
+        rule: &crate::validator::Rule,
+        ruleset: &RuleSet,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+    ) -> RuleOutcome {
+        // Step 1: create a fresh session, or fail-fast with an outcome.
+        let session_id = match self.create_rule_session(rule, ruleset).await {
+            Ok(id) => id,
+            Err(outcome) => return outcome,
+        };
+
+        // Step 2: send the rule prompt while collecting streaming content.
+        let (response, content) = self
+            .send_rule_prompt_and_collect(rule, ruleset, context, changed_files, session_id)
+            .await;
+
+        // Step 3: map the response into a RuleOutcome.
+        build_rule_outcome_from_response(rule, ruleset, response, content)
+    }
+
+    /// Create a fresh ACP session for a single rule.
+    ///
+    /// On success returns the agent-assigned `SessionId`. On failure returns
+    /// the appropriate [`RuleOutcome::Failure`] in the `Err` branch so the
+    /// caller can short-circuit without nested matches.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule the session is being created for (used for logging
+    ///   and for constructing the failure result)
+    /// * `ruleset` - The parent RuleSet (for severity inheritance on failure)
+    async fn create_rule_session(
+        &self,
+        rule: &crate::validator::Rule,
+        ruleset: &RuleSet,
+    ) -> Result<agent_client_protocol::SessionId, RuleOutcome> {
+        use agent_client_protocol::NewSessionRequest;
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
+        match self.agent.new_session(NewSessionRequest::new(cwd)).await {
+            Ok(resp) => {
+                let session_id = resp.session_id;
+                tracing::debug!(
+                    "RuleSet '{}' rule '{}' got session_id={}",
+                    ruleset.name(),
+                    rule.name,
+                    session_id
+                );
+                Ok(session_id)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to create session for RuleSet '{}' rule '{}': {}",
+                    ruleset.name(),
+                    rule.name,
+                    e
+                );
+                Err(RuleOutcome::Failure(RuleResult {
+                    rule_name: rule.name.clone(),
+                    severity: rule.effective_severity(ruleset),
+                    result: ValidatorResult::fail(format!("Failed to create session: {}", e)),
+                }))
+            }
+        }
+    }
+
+    /// Build the rule prompt, send it on `session_id`, and collect the
+    /// streamed assistant content.
+    ///
+    /// Spawns a per-session notification collector before issuing
+    /// `agent.prompt()` so streaming text is captured as it arrives, then
+    /// aborts the collector once `prompt()` returns. The agent's internal
+    /// agentic loop (tool use, multi-turn) is preserved inside the single
+    /// `prompt()` call.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The rule to evaluate
+    /// * `ruleset` - The parent RuleSet (for partial resolution)
+    /// * `context` - Hook event context as JSON, rendered into the rule prompt
+    /// * `changed_files` - Optional list of changed files for the turn,
+    ///   rendered into the prompt as `## Files Changed This Turn`
+    /// * `session_id` - The fresh session to issue the prompt on
+    ///
+    /// # Returns
+    ///
+    /// A pair of:
+    /// - the raw `prompt()` result (the agent's `PromptResponse` or its error)
+    /// - the collected streaming content (empty string if nothing streamed)
+    async fn send_rule_prompt_and_collect(
+        &self,
+        rule: &crate::validator::Rule,
+        ruleset: &RuleSet,
+        context: &serde_json::Value,
+        changed_files: Option<&[String]>,
+        session_id: agent_client_protocol::SessionId,
+    ) -> (
+        Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+        String,
+    ) {
+        // Build the self-contained rule prompt. `hook_context` carries the
+        // pre-rendered YAML + diff blocks for the rule to inspect, and
+        // `changed_files` enumerates the paths the validator should focus on.
+        let mut rule_ctx = RulePromptContext::with_partials(rule, ruleset, Some(&self.partials));
+        rule_ctx.hook_context = Some(context);
+        rule_ctx.changed_files = changed_files;
+        let rule_prompt = rule_ctx.render();
+
+        let rule_request = build_rule_prompt_request(session_id.clone(), rule_prompt);
+
+        // Spawn the per-session collector before sending the prompt so it
+        // captures streaming notifications as they arrive.
+        let rule_notifications = self.notifier.subscribe_session(&session_id.0);
+        let (rule_collector, rule_text, _, _) =
+            claude_agent::spawn_notification_collector(rule_notifications, session_id);
+
+        let response = self.agent.prompt(rule_request).await;
+
+        // prompt() returned - collector has already received all content
+        rule_collector.abort();
+
+        let content = rule_text.lock().await.clone();
+        (response, content)
     }
 
     /// Execute multiple RuleSets against a hook event context.
@@ -1113,8 +1557,84 @@ impl ValidatorRunner {
             agent: Arc::clone(&self.agent),
             notifier: Arc::clone(&self.notifier),
             concurrency: Arc::clone(&self.concurrency),
+            rule_concurrency: Arc::clone(&self.rule_concurrency),
         }
     }
+}
+
+/// Emit the per-rule `validator result` log line as soon as a rule's verdict
+/// is known.
+///
+/// This is the eager counterpart to the deferred batch emit that previously
+/// fired only after every RuleSet finished. Emitting per-rule guarantees that:
+///
+/// - A hook that times out mid-ruleset still has logs for the rules that
+///   completed (the failure mode captured by kanban task
+///   `01KQAFE5WGYJK3HZ8WE3B8N86K`).
+/// - The Stop and PostToolUse paths produce identical `validator result`
+///   lines — same field order, same level=INFO — because both flow through
+///   the same `execute_ruleset` call site.
+///
+/// The validator name is qualified as `<ruleset>:<rule>` so production log
+/// scrapes (`grep code-quality .avp/log`) match the same shape regardless
+/// of which hook fired the rule.
+fn emit_rule_verdict(ruleset_name: &str, rule_result: &RuleResult, hook_type_str: &str) {
+    let qualified_name = format!("{}:{}", ruleset_name, rule_result.rule_name);
+    emit_validator_result_log(
+        &qualified_name,
+        rule_result.passed(),
+        hook_type_str,
+        rule_result.message(),
+    );
+}
+
+/// Emit the per-rule `validator result` log line for a rule that hit its
+/// wall-clock timeout.
+///
+/// This is the timeout-specific counterpart to [`emit_rule_verdict`]. It tags
+/// the log line with `reason="timeout"` so production scrapes can distinguish
+/// "rule passed because the agent said so" from "rule passed because the
+/// hook gave up waiting for the agent". The verdict itself remains a pass —
+/// the timeout handler intentionally produces a passing [`RuleResult`] so a
+/// stuck rule does not block the hook.
+///
+/// The validator name is qualified as `<ruleset>:<rule>` to match the shape
+/// produced by [`emit_rule_verdict`].
+fn emit_rule_timeout_verdict(ruleset_name: &str, rule_result: &RuleResult, hook_type_str: &str) {
+    let qualified_name = format!("{}:{}", ruleset_name, rule_result.rule_name);
+    emit_validator_result_log_with_reason(
+        &qualified_name,
+        rule_result.passed(),
+        hook_type_str,
+        rule_result.message(),
+        "timeout",
+    );
+}
+
+/// Resolve the cap on rules that may run concurrently inside a single
+/// ruleset's [`tokio::task::JoinSet`].
+///
+/// Reads the `AVP_RULE_MAX_IN_FLIGHT` environment variable for an explicit
+/// runtime override (positive integer). When unset or unparseable, the cap
+/// defaults to [`RULE_DEFAULT_PARALLELISM`].
+///
+/// Per-rule agents are memory-bound (each holds an isolated llama session),
+/// so a flat default cap is more appropriate than a CPU-derived heuristic.
+fn resolve_rule_in_flight_cap() -> usize {
+    if let Ok(raw) = std::env::var(RULE_PARALLELISM_ENV_VAR) {
+        if let Ok(parsed) = raw.parse::<usize>() {
+            if parsed >= 1 {
+                return parsed;
+            }
+        }
+        tracing::warn!(
+            "Invalid {} value '{}'; falling back to default of {}",
+            RULE_PARALLELISM_ENV_VAR,
+            raw,
+            RULE_DEFAULT_PARALLELISM,
+        );
+    }
+    RULE_DEFAULT_PARALLELISM
 }
 
 /// Filter changed files for a specific RuleSet based on its match.files patterns.
@@ -1647,6 +2167,491 @@ mod tests {
     }
 
     // =========================================================================
+    // execute_ruleset per-rule fresh session tests
+    // =========================================================================
+
+    /// Test agent that records the `session_id` of every `prompt()` call.
+    ///
+    /// `new_session` returns a freshly minted `SessionId` derived from a
+    /// monotonic counter so the runner can hand out distinct ids to each
+    /// rule. `prompt` returns a hard-coded valid `passed` response.
+    ///
+    /// Used by [`test_execute_ruleset_uses_fresh_session_per_rule`] to verify
+    /// that each rule in a RuleSet gets its own session and therefore cannot
+    /// see prior rules' conversation history.
+    struct SessionRecordingAgent {
+        next_session: std::sync::atomic::AtomicUsize,
+        prompt_session_ids: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl SessionRecordingAgent {
+        fn new() -> Self {
+            Self {
+                next_session: std::sync::atomic::AtomicUsize::new(0),
+                prompt_session_ids: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded_session_ids(&self) -> Vec<String> {
+            self.prompt_session_ids.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for SessionRecordingAgent {
+        async fn initialize(
+            &self,
+            _request: agent_client_protocol::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: agent_client_protocol::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+            Ok(agent_client_protocol::AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            let n = self
+                .next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session_id = agent_client_protocol::SessionId::new(format!("test-session-{}", n));
+            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+        }
+
+        async fn load_session(
+            &self,
+            _request: agent_client_protocol::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: agent_client_protocol::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn prompt(
+            &self,
+            request: agent_client_protocol::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            self.prompt_session_ids
+                .lock()
+                .unwrap()
+                .push(request.session_id.0.to_string());
+            Ok(agent_client_protocol::PromptResponse::new(
+                agent_client_protocol::StopReason::EndTurn,
+            ))
+        }
+
+        async fn cancel(
+            &self,
+            _notification: agent_client_protocol::CancelNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: agent_client_protocol::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: agent_client_protocol::ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Build a RuleSet with N test rules for the per-rule session tests.
+    fn create_ruleset_with_n_rules(rule_names: &[&str]) -> RuleSet {
+        use crate::validator::{Rule, RuleSetManifest, RuleSetMetadata, Severity, ValidatorSource};
+
+        let rules = rule_names
+            .iter()
+            .map(|name| Rule {
+                name: (*name).to_string(),
+                description: format!("Test rule {}", name),
+                body: format!("Validate {}", name),
+                severity: None,
+                timeout: None,
+            })
+            .collect();
+
+        RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules,
+            source: ValidatorSource::Project,
+            base_path: PathBuf::from("/tmp/test-ruleset"),
+        }
+    }
+
+    /// Regression test: each rule in a RuleSet must run in its own session.
+    ///
+    /// Prior behaviour: a single `new_session` was called before the rule
+    /// loop and reused for every rule, causing rule N to see rule N-1's
+    /// prompt and response in its conversation history (prompt bleed).
+    ///
+    /// Corrected behaviour (this task): `new_session` is called inside the
+    /// loop, so each rule gets a distinct `session_id`. This test asserts
+    /// that the agent observes a different `session_id` on every `prompt()`
+    /// call.
+    #[tokio::test]
+    async fn test_execute_ruleset_uses_fresh_session_per_rule() {
+        let recording_agent = Arc::new(SessionRecordingAgent::new());
+        let agent: Arc<dyn Agent + Send + Sync> = recording_agent.clone();
+
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let runner = ValidatorRunner::new(agent, notifier).unwrap();
+        let ruleset = create_ruleset_with_n_rules(&["rule-a", "rule-b", "rule-c"]);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let (executed, is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+
+        assert!(!is_rate_limited, "Should not be rate limited");
+        assert_eq!(
+            executed.rule_results.len(),
+            3,
+            "Each rule should produce a result"
+        );
+
+        let session_ids = recording_agent.recorded_session_ids();
+        assert_eq!(
+            session_ids.len(),
+            3,
+            "agent.prompt() should be called once per rule (no init prompt)"
+        );
+
+        // The critical regression assertion: every rule must see a distinct
+        // session_id. If any two rules share a session_id, prompt-bleed is
+        // possible because the second rule would see the first rule's
+        // conversation history.
+        let unique: std::collections::HashSet<&String> = session_ids.iter().collect();
+        assert_eq!(
+            unique.len(),
+            session_ids.len(),
+            "Each rule must run in its own session_id, but observed: {:?}",
+            session_ids
+        );
+    }
+
+    // =========================================================================
+    // RULE_GENERATION_MAX_TOKENS cap tests
+    // =========================================================================
+
+    /// `build_rule_prompt_request` must attach the per-rule generation cap to
+    /// the request's `_meta` map under the key `"max_tokens"`.
+    ///
+    /// This is the contract the runner relies on: agents that honor the cap
+    /// read it from `_meta` (the ACP `PromptRequest` schema does not have a
+    /// first-class `max_tokens` field) and return `stop_reason: MaxTokens`
+    /// when the generation hits it. If the field disappears or is renamed
+    /// silently, runaway generations would no longer be capped.
+    #[test]
+    fn test_build_rule_prompt_request_sets_max_tokens_meta() {
+        let session_id = agent_client_protocol::SessionId::new("test-session");
+        let request = build_rule_prompt_request(session_id.clone(), "rule body".to_string());
+
+        // session_id is propagated unchanged
+        assert_eq!(request.session_id.0.as_ref(), "test-session");
+
+        // meta is populated and contains the cap under the documented key
+        let meta = request
+            .meta
+            .expect("meta must be populated with max_tokens");
+        let max_tokens = meta
+            .get("max_tokens")
+            .expect("meta must contain a 'max_tokens' entry");
+        assert_eq!(
+            max_tokens
+                .as_u64()
+                .expect("'max_tokens' must serialize as a u64"),
+            RULE_GENERATION_MAX_TOKENS,
+            "meta.max_tokens must equal the RULE_GENERATION_MAX_TOKENS constant"
+        );
+    }
+
+    /// `truncate_partial_response_for_max_tokens` returns short responses
+    /// untouched and truncates long ones at the configured byte budget with a
+    /// `[truncated]` marker, respecting UTF-8 character boundaries.
+    #[test]
+    fn test_truncate_partial_response_short_unchanged() {
+        let short = "this is short";
+        assert_eq!(
+            truncate_partial_response_for_max_tokens(short),
+            short,
+            "responses under the byte budget must be returned unchanged"
+        );
+    }
+
+    #[test]
+    fn test_truncate_partial_response_long_marked_truncated() {
+        let long = "x".repeat(MAX_TOKENS_PARTIAL_RESPONSE_BYTES + 100);
+        let truncated = truncate_partial_response_for_max_tokens(&long);
+        assert!(
+            truncated.ends_with(" [truncated]"),
+            "long responses must be marked as [truncated], got: {:?}",
+            &truncated[truncated.len().saturating_sub(20)..]
+        );
+        // The original payload prefix must be preserved (no character drift)
+        assert!(truncated.starts_with(&"x".repeat(100)));
+    }
+
+    /// `build_rule_outcome_from_response` must convert a `MaxTokens`
+    /// `PromptResponse` into a loud rule failure rather than parsing a
+    /// truncated, half-finished response. The failure message must reference
+    /// the cap and embed the partial response so users have a debug trail.
+    #[test]
+    fn test_build_rule_outcome_max_tokens_is_failure() {
+        use crate::validator::{Rule, RuleSetManifest, RuleSetMetadata, Severity, ValidatorSource};
+
+        let rule = Rule {
+            name: "naming-consistency".to_string(),
+            description: "Test rule".to_string(),
+            body: "Validate naming.".to_string(),
+            severity: None,
+            timeout: None,
+        };
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Project,
+            base_path: PathBuf::from("/tmp/test-ruleset"),
+        };
+        let response = Ok(agent_client_protocol::PromptResponse::new(
+            agent_client_protocol::StopReason::MaxTokens,
+        ));
+        let partial = "<think>I was thinking about validators</think> partial output...";
+
+        let outcome =
+            build_rule_outcome_from_response(&rule, &ruleset, response, partial.to_string());
+
+        let result = match outcome {
+            RuleOutcome::Failure(r) => r,
+            other => panic!(
+                "MaxTokens stop_reason must produce RuleOutcome::Failure, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        };
+
+        assert_eq!(result.rule_name, "naming-consistency");
+        assert_eq!(
+            result.severity,
+            Severity::Error,
+            "severity must follow the rule's effective severity (the ruleset's Error in this case)"
+        );
+        assert!(
+            !result.passed(),
+            "MaxTokens outcome must be a failed result, not passed"
+        );
+
+        let message = result.message();
+        assert!(
+            message.contains(&RULE_GENERATION_MAX_TOKENS.to_string()),
+            "failure message must reference the cap value, got: {}",
+            message
+        );
+        assert!(
+            message.contains("naming-consistency"),
+            "failure message must reference the rule name, got: {}",
+            message
+        );
+        assert!(
+            message.contains("partial output"),
+            "failure message must include the partial response for debugging, got: {}",
+            message
+        );
+    }
+
+    /// Test agent that returns `stop_reason: MaxTokens` from `prompt()` so we
+    /// can exercise the runner's `MaxTokens → loud failure` path through the
+    /// real `execute_ruleset` entry point — not just the helper functions.
+    ///
+    /// This is the integration-style cousin of
+    /// [`test_build_rule_outcome_max_tokens_is_failure`]: that test pokes the
+    /// helper directly; this one drives the same path through the public API
+    /// to catch wiring regressions (e.g. someone adding a new code path that
+    /// bypasses `build_rule_outcome_from_response`).
+    struct MaxTokensAgent {
+        next_session: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MaxTokensAgent {
+        fn new() -> Self {
+            Self {
+                next_session: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for MaxTokensAgent {
+        async fn initialize(
+            &self,
+            _request: agent_client_protocol::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: agent_client_protocol::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+            Ok(agent_client_protocol::AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            let n = self
+                .next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session_id =
+                agent_client_protocol::SessionId::new(format!("max-tokens-sess-{}", n));
+            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+        }
+
+        async fn load_session(
+            &self,
+            _request: agent_client_protocol::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: agent_client_protocol::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn prompt(
+            &self,
+            _request: agent_client_protocol::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            // The runaway-generation case: agent stopped because it hit the
+            // per-rule max_tokens cap before producing a verdict.
+            Ok(agent_client_protocol::PromptResponse::new(
+                agent_client_protocol::StopReason::MaxTokens,
+            ))
+        }
+
+        async fn cancel(
+            &self,
+            _notification: agent_client_protocol::CancelNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: agent_client_protocol::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: agent_client_protocol::ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// End-to-end test: when the agent returns `stop_reason: MaxTokens` for a
+    /// rule, `execute_ruleset` must surface it as a non-rate-limited failure
+    /// whose message references the cap and the rule name.
+    ///
+    /// This guards against a regression where a future refactor of
+    /// `execute_rule_in_fresh_session` or `send_rule_prompt_and_collect`
+    /// silently bypasses the `MaxTokens → failure` mapping.
+    #[tokio::test]
+    async fn test_execute_ruleset_max_tokens_fails_loudly() {
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(MaxTokensAgent::new());
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let runner = ValidatorRunner::new(agent, notifier).unwrap();
+        let ruleset = create_ruleset_with_n_rules(&["naming-consistency"]);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let (executed, is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+
+        // MaxTokens is a rule-level failure, not a transport-level rate limit
+        assert!(
+            !is_rate_limited,
+            "MaxTokens must not be reported as a rate limit (it's a runaway generation, not throttling)"
+        );
+        assert_eq!(
+            executed.rule_results.len(),
+            1,
+            "rule must produce exactly one result"
+        );
+
+        let result = &executed.rule_results[0];
+        assert_eq!(result.rule_name, "naming-consistency");
+        assert!(
+            !result.passed(),
+            "MaxTokens must produce a failed verdict, not a silent pass"
+        );
+        let message = result.message();
+        assert!(
+            message.contains(&RULE_GENERATION_MAX_TOKENS.to_string()),
+            "failure message must reference the cap value ({}), got: {}",
+            RULE_GENERATION_MAX_TOKENS,
+            message
+        );
+        assert!(
+            message.contains("naming-consistency"),
+            "failure message must reference the rule name, got: {}",
+            message
+        );
+    }
+
+    // =========================================================================
     // filter_changed_files_for_ruleset tests
     // =========================================================================
 
@@ -1854,5 +2859,297 @@ mod tests {
             .map(|d| d.path.display().to_string())
             .collect();
         assert_eq!(paths, vec!["main.rs", "Cargo.toml"]);
+    }
+
+    // =========================================================================
+    // Per-rule timeout + in-ruleset parallelism tests
+    // =========================================================================
+
+    /// Test agent that sleeps inside `prompt()` for a configurable duration
+    /// before returning a passing response. Used to drive the per-rule
+    /// wall-clock timeout path.
+    struct SlowAgent {
+        next_session: std::sync::atomic::AtomicUsize,
+        sleep_ms: u64,
+    }
+
+    impl SlowAgent {
+        fn new(sleep_ms: u64) -> Self {
+            Self {
+                next_session: std::sync::atomic::AtomicUsize::new(0),
+                sleep_ms,
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for SlowAgent {
+        async fn initialize(
+            &self,
+            _request: agent_client_protocol::InitializeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
+            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: agent_client_protocol::AuthenticateRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
+            Ok(agent_client_protocol::AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            let n = self
+                .next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let session_id = agent_client_protocol::SessionId::new(format!("slow-sess-{}", n));
+            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+        }
+
+        async fn load_session(
+            &self,
+            _request: agent_client_protocol::LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: agent_client_protocol::SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn prompt(
+            &self,
+            _request: agent_client_protocol::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            Ok(agent_client_protocol::PromptResponse::new(
+                agent_client_protocol::StopReason::EndTurn,
+            ))
+        }
+
+        async fn cancel(
+            &self,
+            _notification: agent_client_protocol::CancelNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: agent_client_protocol::ExtRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: agent_client_protocol::ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Helper: build a RuleSet whose default timeout is `timeout_secs` and
+    /// which contains `n` rules. Used by the timeout / parallelism tests.
+    fn create_ruleset_with_timeout(rule_names: &[&str], timeout_secs: u32) -> RuleSet {
+        use crate::validator::{Rule, RuleSetManifest, RuleSetMetadata, Severity, ValidatorSource};
+
+        let rules = rule_names
+            .iter()
+            .map(|name| Rule {
+                name: (*name).to_string(),
+                description: format!("Test rule {}", name),
+                body: format!("Validate {}", name),
+                severity: None,
+                timeout: None,
+            })
+            .collect();
+
+        RuleSet {
+            manifest: RuleSetManifest {
+                name: "timeout-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: timeout_secs,
+                once: false,
+            },
+            rules,
+            source: ValidatorSource::Project,
+            base_path: PathBuf::from("/tmp/timeout-ruleset"),
+        }
+    }
+
+    /// Each rule is wrapped in its own wall-clock timeout, and a rule that
+    /// does not return within the budget must surface as a passing-with-warning
+    /// [`RuleResult`] (not a hard failure that would block the hook). The
+    /// caller logs that result with `reason="timeout"`.
+    #[tokio::test]
+    async fn test_execute_ruleset_rule_timeout_passes_with_warning() {
+        // Agent sleeps for 5s; rule timeout is 1s. The timeout path must fire.
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(5_000));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let runner = ValidatorRunner::new(agent, notifier).unwrap();
+        let ruleset = create_ruleset_with_timeout(&["slow-rule"], 1);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        // The timeout must actually have fired — the call must return well
+        // before the agent's 5s sleep would have finished.
+        assert!(
+            elapsed.as_secs() < 4,
+            "execute_ruleset must return when the rule times out, not block on the agent (elapsed: {:?})",
+            elapsed,
+        );
+
+        assert!(!is_rate_limited, "wall-clock timeout is not a rate limit");
+        assert_eq!(executed.rule_results.len(), 1);
+
+        let result = &executed.rule_results[0];
+        assert_eq!(result.rule_name, "slow-rule");
+        assert!(
+            result.passed(),
+            "timed-out rule must produce a passing-with-warning result so the hook is not blocked"
+        );
+        let message = result.message();
+        assert!(
+            message.contains("timeout") || message.contains("did not complete"),
+            "timeout message should mention the timeout, got: {}",
+            message,
+        );
+    }
+
+    /// Multiple rules whose individual prompt sleeps would, in series, take
+    /// longer than the wall budget must still be evaluated in parallel. With
+    /// 3 rules sleeping 200ms each and an in-flight cap of at least 2, the
+    /// total wall time should be well under the 600ms serial sum.
+    #[tokio::test]
+    async fn test_execute_ruleset_runs_rules_in_parallel() {
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        // Force a non-trivial in-flight cap so the test does not depend on the
+        // host's CPU count: 3 in-flight slots is enough to run all 3 rules
+        // concurrently.
+        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
+        runner.rule_concurrency = Arc::new(Semaphore::new(3));
+
+        let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, _is_rate_limited) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(executed.rule_results.len(), 3);
+        // 3 sequential rules at 200ms each would take ~600ms. With parallel
+        // execution we expect well under 600ms — give plenty of headroom for
+        // CI noise but still fail loudly if the loop went serial.
+        assert!(
+            elapsed.as_millis() < 500,
+            "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
+            elapsed,
+        );
+    }
+
+    /// The in-flight cap must serialize work when there are more rules than
+    /// slots. 4 rules sleeping 200ms each with a cap of 1 should take roughly
+    /// 4×200ms = 800ms — proving the semaphore actually throttles, rather
+    /// than letting all four run at once.
+    #[tokio::test]
+    async fn test_execute_ruleset_in_flight_cap_throttles() {
+        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let (notifier, _) = claude_agent::NotificationSender::new(64);
+        let notifier = Arc::new(notifier);
+
+        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
+        runner.rule_concurrency = Arc::new(Semaphore::new(1));
+
+        let ruleset = create_ruleset_with_timeout(&["a", "b", "c", "d"], 30);
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let start = std::time::Instant::now();
+        let (executed, _) = runner
+            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+            .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(executed.rule_results.len(), 4);
+        // With cap=1 we expect serial execution: ~4×200ms = 800ms minimum.
+        assert!(
+            elapsed.as_millis() >= 700,
+            "in-flight cap=1 must serialize work; expected >=700ms but got {:?}",
+            elapsed,
+        );
+    }
+
+    /// `resolve_rule_in_flight_cap` must default to [`RULE_DEFAULT_PARALLELISM`]
+    /// when the env var is unset.
+    #[test]
+    #[serial_test::serial(rule_parallelism_env)]
+    fn test_resolve_rule_in_flight_cap_default() {
+        // Save and clear the env var
+        let saved = std::env::var(RULE_PARALLELISM_ENV_VAR).ok();
+        std::env::remove_var(RULE_PARALLELISM_ENV_VAR);
+
+        let cap = resolve_rule_in_flight_cap();
+        assert_eq!(
+            cap, RULE_DEFAULT_PARALLELISM,
+            "default cap must be RULE_DEFAULT_PARALLELISM"
+        );
+
+        // Restore
+        if let Some(v) = saved {
+            std::env::set_var(RULE_PARALLELISM_ENV_VAR, v);
+        }
+    }
+
+    /// `resolve_rule_in_flight_cap` must honor the env var override when set
+    /// to a positive integer, and fall back to the default for invalid or
+    /// non-positive values.
+    #[test]
+    #[serial_test::serial(rule_parallelism_env)]
+    fn test_resolve_rule_in_flight_cap_env_override() {
+        let saved = std::env::var(RULE_PARALLELISM_ENV_VAR).ok();
+
+        // Valid positive integer
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "7");
+        assert_eq!(resolve_rule_in_flight_cap(), 7);
+
+        // Invalid value falls back to default
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "not-a-number");
+        assert_eq!(resolve_rule_in_flight_cap(), RULE_DEFAULT_PARALLELISM);
+
+        // Zero is rejected (must be >=1) and falls back
+        std::env::set_var(RULE_PARALLELISM_ENV_VAR, "0");
+        assert_eq!(resolve_rule_in_flight_cap(), RULE_DEFAULT_PARALLELISM);
+
+        // Cleanup
+        std::env::remove_var(RULE_PARALLELISM_ENV_VAR);
+        if let Some(v) = saved {
+            std::env::set_var(RULE_PARALLELISM_ENV_VAR, v);
+        }
     }
 }
