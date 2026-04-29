@@ -230,11 +230,22 @@ impl AcpServer {
     /// delegates to the inherent method of the same name on `AcpServer`.
     ///
     /// # Concurrency model
-    /// The SDK owns the dispatch loop. We spawn one auxiliary task during
-    /// `connect_with` that forwards `SessionNotification`s from the internal
+    /// The SDK owns the dispatch loop. The closure passed to `connect_with`
+    /// (the "bridge") forwards `SessionNotification`s from the internal
     /// broadcast channel to the connected client via `cx.send_notification`.
-    /// The connection runs until the transport closes (reader EOF or write
-    /// error), at which point both the dispatch loop and the bridge task end.
+    ///
+    /// Connection liveness is tracked through a [`tokio_util::sync::CancellationToken`]
+    /// owned by this call. The reader stream wired into the SDK is wrapped so
+    /// that when it returns EOF (clean client disconnect), the token is
+    /// cancelled. The bridge races `rx.recv()` against `token.cancelled()` and
+    /// returns `Ok(())` on cancel, which lets `connect_with` shut the
+    /// connection down cleanly.
+    ///
+    /// Without this coordination the bridge would block forever on
+    /// `rx.recv()` after a clean transport close, because the broadcast
+    /// channel's senders are owned by `AcpServer` (which outlives the
+    /// connection) and `cx.send_notification` only errors after the SDK has
+    /// already torn down its outgoing actor.
     ///
     /// # Arguments
     /// * `reader` - Async reader for incoming JSON-RPC messages (typically stdin)
@@ -250,7 +261,13 @@ impl AcpServer {
     {
         tracing::info!("Starting ACP server with stdio streams (SDK 0.11 builder)");
 
-        let transport = build_lines_transport(reader, writer);
+        // Cancellation token used to wake the notification bridge when the
+        // transport's reader hits EOF. The transport's incoming stream is
+        // wrapped so EOF triggers `connection_closed.cancel()`, and the bridge
+        // exits its `rx.recv()` loop the moment the token fires.
+        let connection_closed = tokio_util::sync::CancellationToken::new();
+
+        let transport = build_lines_transport(reader, writer, connection_closed.clone());
 
         let server = Arc::clone(&self);
 
@@ -283,26 +300,52 @@ impl AcpServer {
             )
             .connect_with(transport, async move |cx| {
                 // Bridge: forward broadcast `SessionNotification`s to the client.
+                //
+                // The bridge exits cleanly when any of the following happens:
+                // - `connection_closed` is cancelled (reader EOF — see
+                //   `build_lines_transport`).
+                // - The broadcast channel reports `Closed` (all senders dropped).
+                // - `cx.send_notification` errors (write side of the transport
+                //   has shut down).
+                //
+                // Any of these returning `Ok(())` from the bridge causes
+                // `run_until` inside `connect_with` to drop the background
+                // dispatch loop and return — i.e. `start_with_streams`
+                // completes.
                 let mut rx = self.notification_tx.subscribe();
                 loop {
-                    match rx.recv().await {
-                        Ok(notification) => {
-                            if let Err(e) = cx.send_notification(notification) {
-                                tracing::error!("Failed to forward session/update: {}", e);
-                                return Err(e);
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tokio::select! {
+                        biased;
+                        () = connection_closed.cancelled() => {
                             tracing::info!(
-                                "Session notification channel closed; shutting down connection"
+                                "Transport closed (reader EOF); shutting down notification bridge"
                             );
                             return Ok(());
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!(
-                                "Notification bridge lagged; skipped {} updates",
-                                skipped
-                            );
+                        recv_result = rx.recv() => {
+                            match recv_result {
+                                Ok(notification) => {
+                                    if let Err(e) = cx.send_notification(notification) {
+                                        tracing::error!(
+                                            "Failed to forward session/update: {}",
+                                            e
+                                        );
+                                        return Err(e);
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    tracing::info!(
+                                        "Session notification channel closed; shutting down connection"
+                                    );
+                                    return Ok(());
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                    tracing::warn!(
+                                        "Notification bridge lagged; skipped {} updates",
+                                        skipped
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1960,17 +2003,12 @@ impl AcpServer {
                 // parse the raw JSON back and forward it. Parse failures are
                 // surfaced as internal errors rather than being silently
                 // dropped.
-                let result = server
-                    .ext_method(req)
-                    .await
-                    .and_then(|ext_response| {
-                        serde_json::from_str::<serde_json::Value>(ext_response.0.get()).map_err(
-                            |e| {
-                                tracing::error!("Failed to parse ExtResponse JSON: {}", e);
-                                agent_client_protocol::Error::internal_error()
-                            },
-                        )
-                    });
+                let result = server.ext_method(req).await.and_then(|ext_response| {
+                    serde_json::from_str::<serde_json::Value>(ext_response.0.get()).map_err(|e| {
+                        tracing::error!("Failed to parse ExtResponse JSON: {}", e);
+                        agent_client_protocol::Error::internal_error()
+                    })
+                });
                 responder.respond_with_result(result)
             }
             // ClientRequest is `#[non_exhaustive]` and may grow new variants
@@ -2040,6 +2078,12 @@ impl AcpServer {
 /// Both adapters are built with `futures::stream::unfold` / `futures::sink::unfold`
 /// so we don't need the `tokio_util::compat` glue or extra crate features.
 ///
+/// # Connection liveness
+/// The incoming stream cancels `connection_closed` when the reader returns
+/// EOF or an I/O error. The notification bridge in `start_with_streams`
+/// races on this token so it can stop forwarding broadcasts as soon as the
+/// transport is gone, instead of blocking forever on `broadcast::Receiver::recv`.
+///
 /// # Errors
 /// The returned transport surfaces underlying I/O errors through the stream/sink
 /// `io::Error` channel, which the SDK's dispatch loop maps onto the connection's
@@ -2047,6 +2091,7 @@ impl AcpServer {
 fn build_lines_transport<R, W>(
     reader: R,
     writer: W,
+    connection_closed: tokio_util::sync::CancellationToken,
 ) -> agent_client_protocol::Lines<
     impl futures::Sink<String, Error = std::io::Error> + Send + 'static,
     impl futures::Stream<Item = std::io::Result<String>> + Send + 'static,
@@ -2059,13 +2104,28 @@ where
 
     // Incoming: yield each line as `io::Result<String>`. Empty lines are passed
     // through; the SDK's parser ignores blank input.
-    let incoming = futures::stream::unfold(BufReader::new(reader).lines(), |mut lines| async move {
-        match lines.next_line().await {
-            Ok(Some(line)) => Some((Ok(line), lines)),
-            Ok(None) => None,
-            Err(e) => Some((Err(e), lines)),
-        }
-    });
+    //
+    // When the reader returns `Ok(None)` (EOF) or an `Err`, signal
+    // `connection_closed` so the notification bridge in `start_with_streams`
+    // wakes up and exits. The SDK's incoming protocol actor terminates cleanly
+    // either way; the cancellation token is what releases the bridge from its
+    // broadcast `recv()` await.
+    let incoming = futures::stream::unfold(
+        (BufReader::new(reader).lines(), connection_closed),
+        |(mut lines, connection_closed)| async move {
+            match lines.next_line().await {
+                Ok(Some(line)) => Some((Ok(line), (lines, connection_closed))),
+                Ok(None) => {
+                    connection_closed.cancel();
+                    None
+                }
+                Err(e) => {
+                    connection_closed.cancel();
+                    Some((Err(e), (lines, connection_closed)))
+                }
+            }
+        },
+    );
 
     // Outgoing: append `\n` to each line and write it to the underlying writer,
     // flushing after every message so clients see responses immediately.
@@ -2193,7 +2253,6 @@ mod tests {
                 .terminal(true),
         );
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(result.is_ok(), "Initialize should succeed");
 
@@ -2214,7 +2273,6 @@ mod tests {
         let new_session_request =
             agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
 
-        use agent_client_protocol::Agent;
         let result = server.new_session(new_session_request).await;
         assert!(result.is_ok(), "New session should succeed");
 
@@ -2262,7 +2320,6 @@ mod tests {
         )
         .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(result.is_ok(), "Initialize should succeed");
 
@@ -2465,7 +2522,6 @@ mod tests {
         )
         .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(
             result.is_ok(),
@@ -2525,8 +2581,6 @@ mod tests {
             agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(client_caps.clone());
-
-        use agent_client_protocol::Agent;
 
         // Initialize server
         let init_result = server.initialize(init_request).await;
@@ -2872,7 +2926,6 @@ mod tests {
         )
         .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let _init_result = server.initialize(init_request).await;
 
         // Create a new session
@@ -2950,8 +3003,6 @@ mod tests {
     async fn test_set_session_mode_changes_mode() {
         let server = Arc::new(create_test_server().await);
 
-        use agent_client_protocol::Agent;
-
         // Create a session first
         let new_session_request =
             agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
@@ -2987,8 +3038,6 @@ mod tests {
     #[serial]
     async fn test_set_session_mode_with_invalid_session() {
         let server = Arc::new(create_test_server().await);
-
-        use agent_client_protocol::Agent;
 
         // Try to set mode on non-existent session
         let fake_session_id = agent_client_protocol::schema::SessionId::new("nonexistent");
