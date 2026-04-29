@@ -15,66 +15,81 @@
 //! variant-aware iterator helpers instead of pattern-matching on a public
 //! enum.
 //!
+//! ## Identity model — the FQM is the key
+//!
+//! Every primitive carries two identity fields:
+//!
+//! - `fq: FullyQualifiedMoniker` — the canonical path and registry
+//!   key. Composed by the consumer side (React `FullyQualifiedMonikerContext`)
+//!   from the parent FQM and the consumer's declared segment. Two
+//!   registrations under the same FQM are a programmer mistake; the
+//!   kernel surfaces the duplicate via `tracing::error!` and lets the
+//!   second registration replace the first (idempotent on remount).
+//! - `segment: SegmentMoniker` — the relative segment the consumer
+//!   declared (e.g. `field:T1.title`, `card:T1`, `inspector`). Carried
+//!   for human-readable logging only — the kernel never keys lookups on
+//!   the segment, since the same segment can legitimately appear at two
+//!   distinct FQMs (a board card field and an inspector panel field, for
+//!   example).
+//!
 //! ## Why two structs instead of one
 //!
 //! Leaves and zones have a meaningful structural difference: zones own a
-//! `last_focused: Option<SpatialKey>` slot used by drill-out / fallback
-//! resolution, leaves don't. Modeling that with a single struct + a `kind`
-//! field would force every leaf-only access path to either `unwrap()` or
-//! ignore a meaningless field. The two distinct structs make the
-//! zone-only fields type-checked and keep each peer's wire shape minimal.
+//! `last_focused: Option<FullyQualifiedMoniker>` slot used by drill-out /
+//! fallback resolution, leaves don't. Modeling that with a single struct
+//! plus a `kind` field would force every leaf-only access path to either
+//! `unwrap()` or ignore a meaningless field. The two distinct structs
+//! make the zone-only fields type-checked and keep each peer's wire
+//! shape minimal.
 //!
 //! [`SpatialRegistry`]: super::registry::SpatialRegistry
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::types::{Direction, LayerKey, Moniker, Rect, SpatialKey};
+use super::types::{Direction, FullyQualifiedMoniker, Rect, SegmentMoniker};
 
 /// A leaf focus scope — atomic, no children, no zone-level features.
 ///
 /// Examples: task title text, status pill, tag pill, button, menu item,
-/// breadcrumb item. Each `FocusScope` has a stable `key` (ULID minted per
-/// mount on the React side), an entity `moniker` (e.g. `"task:01ABC"`,
-/// `"ui:toolbar.new"`), a screen-coordinate `rect`, and a `layer_key`
-/// pointing at the [`super::layer::FocusLayer`] it lives in.
+/// breadcrumb item. Each `FocusScope` has a canonical [`FullyQualifiedMoniker`]
+/// `fq` (the registry key, e.g. `/window/board/column:todo/card:T1/field:T1.title`),
+/// a relative `segment` (e.g. `field:T1.title`, used for human-readable
+/// logs only), a screen-coordinate `rect`, and a `layer_fq` pointing at
+/// the [`super::layer::FocusLayer`] it lives in.
 ///
-/// `parent_zone` is the immediate enclosing [`FocusZone`], or `None` if
-/// this leaf is registered directly under its layer root. `overrides`
-/// per-direction lets the React side hard-wire a navigation target (or a
-/// `None` "wall") without round-tripping through beam search.
+/// `parent_zone` is the FQM of the immediate enclosing [`FocusZone`], or
+/// `None` if this leaf is registered directly under its layer root.
+/// `overrides` per-direction lets the React side hard-wire a navigation
+/// target (or a `None` "wall") without round-tripping through beam
+/// search.
 ///
 /// This struct is the Rust peer of the React `<FocusScope>` component —
 /// the leaf primitive that renders a focus indicator, takes click events,
-/// and routes navigation. It used to be named `Focusable`; the rename
-/// happened when the React `<Focusable>` and `<FocusScope>` were
-/// collapsed into one component (see kanban card
-/// `01KQ5PP55SAAVJ0V3HDJ1DGNBY`).
+/// and routes navigation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FocusScope {
-    /// Stable identity for this mount. Minted as a ULID on the React side
-    /// so re-renders that don't unmount the component reuse the same key.
-    pub key: SpatialKey,
-    /// Entity-identity moniker (`"task:01ABC"`, `"ui:toolbar.new"`).
-    /// Surfaced on `focus-changed` events as `next_moniker` so the
-    /// frontend can drive moniker-keyed effects without an extra IPC
-    /// round-trip.
-    pub moniker: Moniker,
+    /// Canonical FQM — the registry key. Composed by the consumer from
+    /// the parent FQM and the consumer's declared segment.
+    pub fq: FullyQualifiedMoniker,
+    /// Relative segment the consumer declared. Carried for
+    /// human-readable logging only; the kernel keys on `fq`.
+    pub segment: SegmentMoniker,
     /// Bounding rect in viewport coordinates. Drives beam-search distance
     /// and overlap math; updated via [`super::registry::SpatialRegistry::update_rect`]
     /// when ResizeObserver fires on the React side.
     pub rect: Rect,
-    /// Layer this leaf belongs to. Beam search and ancestor-zone walks
-    /// never cross a layer boundary.
-    pub layer_key: LayerKey,
-    /// Immediate enclosing zone, if any. `None` means the leaf is
+    /// FQM of the layer this leaf belongs to. Beam search and
+    /// ancestor-zone walks never cross a layer boundary.
+    pub layer_fq: FullyQualifiedMoniker,
+    /// Immediate enclosing zone's FQM, if any. `None` means the leaf is
     /// registered directly under the layer root.
-    pub parent_zone: Option<SpatialKey>,
-    /// Per-direction navigation overrides. `Some(target)` redirects nav
-    /// to the named moniker; `None` is an explicit "wall" that blocks
+    pub parent_zone: Option<FullyQualifiedMoniker>,
+    /// Per-direction navigation overrides. `Some(target_fq)` redirects
+    /// nav to the named FQM; `None` is an explicit "wall" that blocks
     /// navigation in that direction. Missing key means "fall through to
     /// beam search".
-    pub overrides: HashMap<Direction, Option<Moniker>>,
+    pub overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 }
 
 /// A navigable container within a layer.
@@ -91,30 +106,31 @@ pub struct FocusScope {
 /// field row, nav bar, toolbar group.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FocusZone {
-    /// Stable identity for this mount. Minted as a ULID on the React side.
-    pub key: SpatialKey,
-    /// Entity-identity moniker. Zones are typically anchored to a
-    /// container entity (e.g. `"column:doing"`, `"task:01ABC"`).
-    pub moniker: Moniker,
+    /// Canonical FQM — the registry key.
+    pub fq: FullyQualifiedMoniker,
+    /// Relative segment the consumer declared. Carried for
+    /// human-readable logging only.
+    pub segment: SegmentMoniker,
     /// Bounding rect in viewport coordinates.
     pub rect: Rect,
-    /// Layer this zone belongs to.
-    pub layer_key: LayerKey,
-    /// Immediate enclosing zone, if any. `None` means the zone is
+    /// FQM of the layer this zone belongs to.
+    pub layer_fq: FullyQualifiedMoniker,
+    /// Immediate enclosing zone's FQM, if any. `None` means the zone is
     /// registered directly under the layer root.
-    pub parent_zone: Option<SpatialKey>,
-    /// Drill-out / fallback memory: the most recently focused descendant
-    /// (leaf or child zone) inside this zone. Initialized to `None` and
-    /// populated by the navigator when focus changes inside the zone.
-    pub last_focused: Option<SpatialKey>,
+    pub parent_zone: Option<FullyQualifiedMoniker>,
+    /// Drill-out / fallback memory: the FQM of the most recently focused
+    /// descendant (leaf or child zone) inside this zone. Initialized to
+    /// `None` and populated by the navigator when focus changes inside
+    /// the zone.
+    pub last_focused: Option<FullyQualifiedMoniker>,
     /// Per-direction navigation overrides. Same semantics as
-    /// [`FocusScope::overrides`] — `Some(target)` redirects, `None` is a
-    /// wall, missing falls through to beam search.
-    pub overrides: HashMap<Direction, Option<Moniker>>,
+    /// [`FocusScope::overrides`] — `Some(target_fq)` redirects, `None`
+    /// is a wall, missing falls through to beam search.
+    pub overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 }
 
 /// Internal sum type the registry uses to store either a [`FocusScope`]
-/// leaf or a [`FocusZone`] container under one [`SpatialKey`]-keyed map.
+/// leaf or a [`FocusZone`] container under one FQM-keyed map.
 ///
 /// Not exported. The public surface is the two struct types only — the
 /// kernel's three peer types are layer / zone / scope, with no public
@@ -131,19 +147,20 @@ pub(crate) enum RegisteredScope {
 }
 
 impl RegisteredScope {
-    /// Stable identity of the scope, regardless of variant.
-    pub(crate) fn key(&self) -> &SpatialKey {
+    /// Canonical FQM of the scope, regardless of variant.
+    pub(crate) fn fq(&self) -> &FullyQualifiedMoniker {
         match self {
-            Self::Scope(f) => &f.key,
-            Self::Zone(z) => &z.key,
+            Self::Scope(f) => &f.fq,
+            Self::Zone(z) => &z.fq,
         }
     }
 
-    /// Entity-identity moniker of the scope, regardless of variant.
-    pub(crate) fn moniker(&self) -> &Moniker {
+    /// Relative segment of the scope, regardless of variant. For
+    /// human-readable logs.
+    pub(crate) fn segment(&self) -> &SegmentMoniker {
         match self {
-            Self::Scope(f) => &f.moniker,
-            Self::Zone(z) => &z.moniker,
+            Self::Scope(f) => &f.segment,
+            Self::Zone(z) => &z.segment,
         }
     }
 
@@ -155,16 +172,16 @@ impl RegisteredScope {
         }
     }
 
-    /// Owning layer of the scope, regardless of variant.
-    pub(crate) fn layer_key(&self) -> &LayerKey {
+    /// Owning layer's FQM, regardless of variant.
+    pub(crate) fn layer_fq(&self) -> &FullyQualifiedMoniker {
         match self {
-            Self::Scope(f) => &f.layer_key,
-            Self::Zone(z) => &z.layer_key,
+            Self::Scope(f) => &f.layer_fq,
+            Self::Zone(z) => &z.layer_fq,
         }
     }
 
-    /// Immediate enclosing zone, if any.
-    pub(crate) fn parent_zone(&self) -> Option<&SpatialKey> {
+    /// Immediate enclosing zone's FQM, if any.
+    pub(crate) fn parent_zone(&self) -> Option<&FullyQualifiedMoniker> {
         match self {
             Self::Scope(f) => f.parent_zone.as_ref(),
             Self::Zone(z) => z.parent_zone.as_ref(),
@@ -172,7 +189,7 @@ impl RegisteredScope {
     }
 
     /// Per-direction overrides, regardless of variant.
-    pub(crate) fn overrides(&self) -> &HashMap<Direction, Option<Moniker>> {
+    pub(crate) fn overrides(&self) -> &HashMap<Direction, Option<FullyQualifiedMoniker>> {
         match self {
             Self::Scope(f) => &f.overrides,
             Self::Zone(z) => &z.overrides,
@@ -224,7 +241,7 @@ mod tests {
     //! is caught at the inner-crate compile step.
 
     use super::*;
-    use crate::types::{LayerKey, Pixels};
+    use crate::types::Pixels;
 
     fn rect_zero() -> Rect {
         Rect {
@@ -238,10 +255,10 @@ mod tests {
     #[test]
     fn scope_accessors() {
         let scope = RegisteredScope::Scope(FocusScope {
-            key: SpatialKey::from_string("k"),
-            moniker: Moniker::from_string("ui:k"),
+            fq: FullyQualifiedMoniker::from_string("/L/k"),
+            segment: SegmentMoniker::from_string("k"),
             rect: rect_zero(),
-            layer_key: LayerKey::from_string("L"),
+            layer_fq: FullyQualifiedMoniker::from_string("/L"),
             parent_zone: None,
             overrides: HashMap::new(),
         });
@@ -249,16 +266,16 @@ mod tests {
         assert!(scope.is_scope());
         assert!(!scope.is_zone());
         assert_eq!(scope.as_zone(), None);
-        assert_eq!(scope.key(), &SpatialKey::from_string("k"));
+        assert_eq!(scope.fq(), &FullyQualifiedMoniker::from_string("/L/k"));
     }
 
     #[test]
     fn zone_accessors() {
         let scope = RegisteredScope::Zone(FocusZone {
-            key: SpatialKey::from_string("k"),
-            moniker: Moniker::from_string("ui:k"),
+            fq: FullyQualifiedMoniker::from_string("/L/k"),
+            segment: SegmentMoniker::from_string("k"),
             rect: rect_zero(),
-            layer_key: LayerKey::from_string("L"),
+            layer_fq: FullyQualifiedMoniker::from_string("/L"),
             parent_zone: None,
             last_focused: None,
             overrides: HashMap::new(),

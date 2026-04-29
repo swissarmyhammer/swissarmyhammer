@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
     BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, FocusLayer, FocusScope,
-    FocusZone, LayerKey, LayerName, Moniker, NavStrategy, NoopSink, Pixels, RecordingSink, Rect,
-    SpatialKey, SpatialRegistry, SpatialState, WindowLabel,
+    FocusZone, FullyQualifiedMoniker, LayerName, NavStrategy, NoopSink, Pixels, RecordingSink,
+    Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Touch every public type so the import block above is not dead code.
@@ -31,32 +31,33 @@ fn every_public_type_is_constructible_or_referenced() {
         width: Pixels::new(0.0),
         height: Pixels::new(0.0),
     };
-    let _key = SpatialKey::from_string("k");
-    let _layer = LayerKey::from_string("L");
-    let _moniker = Moniker::from_string("ui:k");
+    let _segment = SegmentMoniker::from_string("k");
+    let _fq = FullyQualifiedMoniker::from_string("/L/k");
+    let _layer_fq = FullyQualifiedMoniker::from_string("/L");
     let _name = LayerName::from_string("window");
     let _window = WindowLabel::from_string("main");
 
     // The leaf scope primitive — the Rust peer of React's `<FocusScope>`.
     let _scope = FocusScope {
-        key: SpatialKey::from_string("k"),
-        moniker: Moniker::from_string("ui:k"),
+        fq: FullyQualifiedMoniker::from_string("/L/k"),
+        segment: SegmentMoniker::from_string("k"),
         rect: _rect,
-        layer_key: LayerKey::from_string("L"),
+        layer_fq: FullyQualifiedMoniker::from_string("/L"),
         parent_zone: None,
         overrides: HashMap::new(),
     };
     let _zone = FocusZone {
-        key: SpatialKey::from_string("z"),
-        moniker: Moniker::from_string("ui:z"),
+        fq: FullyQualifiedMoniker::from_string("/L/z"),
+        segment: SegmentMoniker::from_string("z"),
         rect: _rect,
-        layer_key: LayerKey::from_string("L"),
+        layer_fq: FullyQualifiedMoniker::from_string("/L"),
         parent_zone: None,
         last_focused: None,
         overrides: HashMap::new(),
     };
     let _flayer = FocusLayer {
-        key: LayerKey::from_string("L"),
+        fq: FullyQualifiedMoniker::from_string("/L"),
+        segment: SegmentMoniker::from_string("L"),
         name: LayerName::from_string("window"),
         parent: None,
         window_label: WindowLabel::from_string("main"),
@@ -64,9 +65,9 @@ fn every_public_type_is_constructible_or_referenced() {
     };
     let _event = FocusChangedEvent {
         window_label: WindowLabel::from_string("main"),
-        prev_key: None,
-        next_key: None,
-        next_moniker: None,
+        prev_fq: None,
+        next_fq: None,
+        next_segment: None,
     };
 
     let _registry = SpatialRegistry::new();

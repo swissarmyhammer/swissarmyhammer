@@ -6,29 +6,30 @@
 //!
 //! The crate is **generic and domain-free**: nothing in here knows about
 //! kanban tasks, columns, projects, or any other application concept.
-//! Identities are opaque [`Moniker`] strings produced by the consumer; the
-//! kernel only sees rectangles, layers, and zones.
+//! Identities are [`FullyQualifiedMoniker`] paths produced by the
+//! consumer (the path through the focus hierarchy); the kernel only
+//! sees rectangles, layers, and zones.
 //!
 //! # No-silent-dropout contract
 //!
-//! Nav and drill APIs always return a [`Moniker`]. "No motion possible"
-//! is communicated by returning the focused entry's own moniker — the
-//! React side detects "stay put" by comparing the returned moniker to
-//! the previous focused moniker. Torn state (unknown key, orphan
-//! parent reference) emits `tracing::error!` and echoes the input
-//! moniker so the call site has a valid result. There is no [`Option`]
-//! or [`Result`] on these APIs; silence is impossible. See the
-//! [`navigate`] module docs for the full contract and the
+//! Nav and drill APIs always return a [`FullyQualifiedMoniker`]. "No
+//! motion possible" is communicated by returning the focused entry's
+//! own FQM — the React side detects "stay put" by comparing the
+//! returned FQM to the previous focused FQM. Torn state (unknown FQM,
+//! orphan parent reference) emits `tracing::error!` and echoes the
+//! input FQM so the call site has a valid result. There is no
+//! [`Option`] or [`Result`] on these APIs; silence is impossible. See
+//! the [`navigate`] module docs for the full contract and the
 //! `tests/no_silent_none.rs` integration suite for the regression
 //! guard that pins each path.
 //!
 //! # Modules
 //!
-//! - [`types`] — newtype wrappers ([`WindowLabel`], [`SpatialKey`],
-//!   [`LayerKey`], [`Moniker`], [`LayerName`], [`Pixels`]), the [`Rect`]
-//!   value type, and the [`Direction`] enum used by the spatial-nav
-//!   surface. Every public signature uses these newtypes — never bare
-//!   `String` or `f64`.
+//! - [`types`] — newtype wrappers ([`WindowLabel`], [`SegmentMoniker`],
+//!   [`FullyQualifiedMoniker`], [`LayerName`], [`Pixels`]), the
+//!   [`Rect`] value type, and the [`Direction`] enum used by the
+//!   spatial-nav surface. Every public signature uses these newtypes —
+//!   never bare `String` or `f64`.
 //!
 //! - [`scope`] — the two registered struct types that describe a point in
 //!   the spatial-nav tree: [`FocusScope`] leaves and [`FocusZone`]
@@ -76,7 +77,11 @@ pub mod types;
 pub use layer::FocusLayer;
 pub use navigate::{BeamNavStrategy, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
-pub use registry::{BatchRegisterError, ChildScope, RegisterEntry, ScopeKind, SpatialRegistry};
+pub use registry::{
+    BatchRegisterError, ChildScope, FocusEntry, RegisterEntry, ScopeKind, SpatialRegistry,
+};
 pub use scope::{FocusScope, FocusZone};
 pub use state::{FallbackResolution, FocusChangedEvent, SpatialState};
-pub use types::{Direction, LayerKey, LayerName, Moniker, Pixels, Rect, SpatialKey, WindowLabel};
+pub use types::{
+    Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
+};

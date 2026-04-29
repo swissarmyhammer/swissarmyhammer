@@ -3,11 +3,12 @@
 //! Overrides are a per-direction directive map that runs as **rule 0**
 //! before the beam-search cascade in [`BeamNavStrategy`]. They live on
 //! [`FocusScope::overrides`] and [`FocusZone::overrides`] as
-//! `HashMap<Direction, Option<Moniker>>` and have three states:
+//! `HashMap<Direction, Option<FullyQualifiedMoniker>>` and have three
+//! states:
 //!
 //! - **No entry for the direction** — the override does not apply; the
 //!   beam-search cascade runs as usual.
-//! - **`Some(target_moniker)`** — redirect to `target_moniker`, but only
+//! - **`Some(target_fq)`** — redirect to `target_fq`, but only
 //!   when the target is registered in the focused entry's layer. A
 //!   target in a different layer is **ignored** and the beam-search
 //!   cascade runs (cross-layer teleportation is never allowed).
@@ -17,8 +18,9 @@
 //! These tests exercise the four cases the override resolver must
 //! distinguish:
 //!
-//! 1. Same-layer target → returns the override moniker.
-//! 2. `None` (wall) → returns `None`, beam search is **not** consulted.
+//! 1. Same-layer target → returns the override FQM.
+//! 2. `None` (wall) → echoes focused FQM, beam search is **not**
+//!    consulted.
 //! 3. Cross-layer target → falls through to beam search (a sibling that
 //!    beam search would otherwise pick is returned).
 //! 4. No override entry for the direction → beam search runs as usual.
@@ -26,8 +28,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker,
-    NavStrategy, Pixels, Rect, SpatialKey, SpatialRegistry, WindowLabel,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,33 +46,43 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-/// Build a `FocusScope` leaf with empty overrides.
-fn leaf(key: &str, moniker: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
+/// FQM for a primitive registered directly under a layer's root.
+fn fq_in_layer(layer_path: &str, segment: &str) -> FullyQualifiedMoniker {
+    FullyQualifiedMoniker::from_string(format!("{layer_path}/{segment}"))
+}
+
+/// Build a `FocusScope` leaf with empty overrides. `segment` is the
+/// last component of the FQM by convention here.
+fn leaf(
+    segment: &str,
+    layer: &str,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    r: Rect,
+) -> FocusScope {
     FocusScope {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq: fq_in_layer(layer, segment),
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone,
         overrides: HashMap::new(),
     }
 }
 
 /// Build a `FocusScope` leaf carrying the supplied overrides map.
 fn leaf_with_overrides(
-    key: &str,
-    moniker: &str,
+    segment: &str,
     layer: &str,
-    parent_zone: Option<&str>,
+    parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) -> FocusScope {
     FocusScope {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq: fq_in_layer(layer, segment),
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone,
         overrides,
     }
 }
@@ -78,52 +90,54 @@ fn leaf_with_overrides(
 /// Build a `FocusZone` carrying the supplied overrides map. `last_focused`
 /// starts empty.
 fn zone_with_overrides(
-    key: &str,
-    moniker: &str,
+    segment: &str,
     layer: &str,
-    parent_zone: Option<&str>,
+    parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) -> FocusZone {
     FocusZone {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq: fq_in_layer(layer, segment),
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone,
         last_focused: None,
         overrides,
     }
 }
 
 /// Build a `FocusLayer` rooted at `window` with optional parent.
-fn layer(key: &str, window: &str, parent: Option<&str>) -> FocusLayer {
+fn layer(layer_fq: &str, segment: &str, window: &str, parent: Option<&str>) -> FocusLayer {
     FocusLayer {
-        key: LayerKey::from_string(key),
+        fq: FullyQualifiedMoniker::from_string(layer_fq),
+        segment: SegmentMoniker::from_string(segment),
         name: LayerName::from_string("window"),
-        parent: parent.map(LayerKey::from_string),
+        parent: parent.map(FullyQualifiedMoniker::from_string),
         window_label: WindowLabel::from_string(window),
         last_focused: None,
     }
 }
 
-/// Run the default `BeamNavStrategy` and return the navigated-to moniker.
+/// Run the default `BeamNavStrategy` and return the navigated-to FQM.
 ///
-/// Resolves the focused entry's moniker from the registry — under the
-/// no-silent-dropout contract every nav call needs the focused moniker
-/// alongside the focused key. For unknown `from`, falls back to a
-/// synthetic `ui:<from>` moniker so the test can still exercise the
-/// torn-state path.
-fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Moniker {
-    let key = SpatialKey::from_string(from);
-    let focused_moniker = reg
-        .leaves_iter()
-        .map(|f| (&f.key, &f.moniker))
-        .chain(reg.zones_iter().map(|z| (&z.key, &z.moniker)))
-        .find(|(k, _)| **k == key)
-        .map(|(_, m)| m.clone())
-        .unwrap_or_else(|| Moniker::from_string(format!("ui:{from}")));
-    BeamNavStrategy::new().next(reg, &key, &focused_moniker, dir)
+/// Resolves the focused entry's segment from the registry — under the
+/// no-silent-dropout contract every nav call needs the focused segment
+/// alongside the focused FQM. For unknown FQMs, falls back to a
+/// synthetic segment derived from the leaf component.
+fn nav(
+    reg: &SpatialRegistry,
+    from: &FullyQualifiedMoniker,
+    dir: Direction,
+) -> FullyQualifiedMoniker {
+    let focused_segment = reg
+        .find_by_fq(from)
+        .map(|e| e.segment().clone())
+        .unwrap_or_else(|| {
+            let s = from.as_str().rsplit('/').next().unwrap_or("");
+            SegmentMoniker::from_string(s)
+        });
+    BeamNavStrategy::new().next(reg, from, &focused_segment, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,44 +150,40 @@ fn nav(reg: &SpatialRegistry, from: &str, dir: Direction) -> Moniker {
 #[test]
 fn override_redirects_to_same_layer_target() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
     // Beam-search candidate: a leaf directly to the right of `src`.
     reg.register_scope(leaf(
-        "beam_target",
         "ui:beam_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
     // Override candidate: a leaf far below — nothing beam search would
     // pick for `Direction::Right`.
+    let override_target_fq = fq_in_layer("/L", "ui:override_target");
     reg.register_scope(leaf(
-        "override_target",
         "ui:override_target",
-        "L",
+        "/L",
         None,
         rect(0.0, 500.0, 50.0, 50.0),
     ));
 
     // Source carries an override that redirects right → override_target.
     let mut overrides = HashMap::new();
-    overrides.insert(
-        Direction::Right,
-        Some(Moniker::from_string("ui:override_target")),
-    );
+    overrides.insert(Direction::Right, Some(override_target_fq.clone()));
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
     assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:override_target"),
+        nav(&reg, &src_fq, Direction::Right),
+        override_target_fq,
         "override target in same layer must win over beam-search candidate"
     );
 }
@@ -182,45 +192,38 @@ fn override_redirects_to_same_layer_target() {
 #[test]
 fn override_redirects_to_same_layer_target_for_zone() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
     // Beam-search candidate: a sibling zone to the right of `src`.
     reg.register_zone(zone_with_overrides(
-        "beam_zone",
         "ui:beam_zone",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
         HashMap::new(),
     ));
     // Override target: a sibling zone elsewhere.
+    let override_zone_fq = fq_in_layer("/L", "ui:override_zone");
     reg.register_zone(zone_with_overrides(
-        "override_zone",
         "ui:override_zone",
-        "L",
+        "/L",
         None,
         rect(0.0, 500.0, 50.0, 50.0),
         HashMap::new(),
     ));
 
     let mut overrides = HashMap::new();
-    overrides.insert(
-        Direction::Right,
-        Some(Moniker::from_string("ui:override_zone")),
-    );
+    overrides.insert(Direction::Right, Some(override_zone_fq.clone()));
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_zone(zone_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
-    assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:override_zone")
-    );
+    assert_eq!(nav(&reg, &src_fq, Direction::Right), override_zone_fq);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,38 +231,37 @@ fn override_redirects_to_same_layer_target_for_zone() {
 // ---------------------------------------------------------------------------
 
 /// `nav.right` from a leaf carrying a `None` override for that direction
-/// returns `None` — even when a beam-search candidate exists.
+/// echoes the focused FQM — even when a beam-search candidate exists.
 #[test]
 fn override_none_blocks_navigation() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
     // A beam-search candidate exists to the right — but the override
     // wall must override it.
     reg.register_scope(leaf(
-        "beam_target",
         "ui:beam_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
 
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, None);
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
     assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:src"),
+        nav(&reg, &src_fq, Direction::Right),
+        src_fq,
         "explicit None override must block navigation — under the no-silent-dropout \
-         contract this echoes the focused moniker (the React side detects equality \
+         contract this echoes the focused FQM (the React side detects equality \
          and stays put)"
     );
 }
@@ -269,20 +271,19 @@ fn override_none_blocks_navigation() {
 #[test]
 fn override_none_only_blocks_named_direction() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
     // Candidates to both right and down.
     reg.register_scope(leaf(
-        "right_target",
         "ui:right_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
+    let down_target_fq = fq_in_layer("/L", "ui:down_target");
     reg.register_scope(leaf(
-        "down_target",
         "ui:down_target",
-        "L",
+        "/L",
         None,
         rect(0.0, 100.0, 50.0, 50.0),
     ));
@@ -290,22 +291,19 @@ fn override_none_only_blocks_named_direction() {
     // Wall right; leave down untouched.
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, None);
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
+    assert_eq!(nav(&reg, &src_fq, Direction::Right), src_fq);
     assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:src"),
-    );
-    assert_eq!(
-        nav(&reg, "src", Direction::Down),
-        Moniker::from_string("ui:down_target"),
+        nav(&reg, &src_fq, Direction::Down),
+        down_target_fq,
         "down has no override, beam search must run"
     );
 }
@@ -314,7 +312,7 @@ fn override_none_only_blocks_named_direction() {
 // Case 3: cross-layer fall-through
 // ---------------------------------------------------------------------------
 
-/// An override pointing at a moniker registered in a *different* layer
+/// An override pointing at an FQM registered in a *different* layer
 /// is ignored — beam search runs as usual.
 ///
 /// The cross-layer target exists in the registry, but it's not in the
@@ -323,78 +321,83 @@ fn override_none_only_blocks_named_direction() {
 #[test]
 fn override_cross_layer_target_falls_through_to_beam_search() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L_window", "main", None));
-    reg.push_layer(layer("L_inspector", "main", Some("L_window")));
+    reg.push_layer(layer("/L_window", "L_window", "main", None));
+    reg.push_layer(layer(
+        "/L_window/L_inspector",
+        "L_inspector",
+        "main",
+        Some("/L_window"),
+    ));
 
     // Cross-layer target — exists, but in a different layer.
+    let cross_layer_fq = fq_in_layer("/L_window/L_inspector", "ui:cross_layer");
     reg.register_scope(leaf(
-        "cross_layer",
         "ui:cross_layer",
-        "L_inspector",
+        "/L_window/L_inspector",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
     ));
     // Beam-search candidate in the same layer as `src`.
+    let beam_target_fq = fq_in_layer("/L_window", "ui:beam_target");
     reg.register_scope(leaf(
-        "beam_target",
         "ui:beam_target",
-        "L_window",
+        "/L_window",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
 
-    // Override redirects right → a moniker that lives in L_inspector.
+    // Override redirects right → an FQM that lives in the inspector layer.
     let mut overrides = HashMap::new();
-    overrides.insert(
-        Direction::Right,
-        Some(Moniker::from_string("ui:cross_layer")),
-    );
+    overrides.insert(Direction::Right, Some(cross_layer_fq));
+    let src_fq = fq_in_layer("/L_window", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L_window",
+        "/L_window",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
     assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:beam_target"),
+        nav(&reg, &src_fq, Direction::Right),
+        beam_target_fq,
         "cross-layer override target must be ignored; beam search must run"
     );
 }
 
-/// Override target moniker that does not exist anywhere in the
+/// Override target FQM that does not exist anywhere in the
 /// registry also falls through to beam search — same "didn't apply"
 /// outcome as the cross-layer case.
 #[test]
 fn override_unknown_target_falls_through_to_beam_search() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
+    let beam_target_fq = fq_in_layer("/L", "ui:beam_target");
     reg.register_scope(leaf(
-        "beam_target",
         "ui:beam_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
 
     let mut overrides = HashMap::new();
-    overrides.insert(Direction::Right, Some(Moniker::from_string("ui:ghost")));
+    overrides.insert(
+        Direction::Right,
+        Some(FullyQualifiedMoniker::from_string("/L/ui:ghost")),
+    );
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
     assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:beam_target"),
+        nav(&reg, &src_fq, Direction::Right),
+        beam_target_fq,
         "unknown override target must be ignored; beam search must run"
     );
 }
@@ -409,21 +412,19 @@ fn override_unknown_target_falls_through_to_beam_search() {
 #[test]
 fn no_override_delegates_to_beam_search() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
+    let right_target_fq = fq_in_layer("/L", "ui:right_target");
     reg.register_scope(leaf(
-        "right_target",
         "ui:right_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
-    reg.register_scope(leaf("src", "ui:src", "L", None, rect(0.0, 0.0, 50.0, 50.0)));
+    let src_fq = fq_in_layer("/L", "ui:src");
+    reg.register_scope(leaf("ui:src", "/L", None, rect(0.0, 0.0, 50.0, 50.0)));
 
-    assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:right_target")
-    );
+    assert_eq!(nav(&reg, &src_fq, Direction::Right), right_target_fq);
 }
 
 /// A leaf with an override for `Right` but not `Left` runs beam search
@@ -431,54 +432,44 @@ fn no_override_delegates_to_beam_search() {
 #[test]
 fn override_for_one_direction_does_not_affect_others() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("L", "main", None));
+    reg.push_layer(layer("/L", "L", "main", None));
 
     // Two candidates, one to the left and one to the right.
+    let left_target_fq = fq_in_layer("/L", "ui:left_target");
     reg.register_scope(leaf(
-        "left_target",
         "ui:left_target",
-        "L",
+        "/L",
         None,
         rect(-100.0, 0.0, 50.0, 50.0),
     ));
     reg.register_scope(leaf(
-        "right_target",
         "ui:right_target",
-        "L",
+        "/L",
         None,
         rect(100.0, 0.0, 50.0, 50.0),
     ));
     // Override target for Right only.
+    let right_override_fq = fq_in_layer("/L", "ui:right_override");
     reg.register_scope(leaf(
-        "right_override",
         "ui:right_override",
-        "L",
+        "/L",
         None,
         rect(0.0, 200.0, 50.0, 50.0),
     ));
 
     let mut overrides = HashMap::new();
-    overrides.insert(
-        Direction::Right,
-        Some(Moniker::from_string("ui:right_override")),
-    );
+    overrides.insert(Direction::Right, Some(right_override_fq.clone()));
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf_with_overrides(
-        "src",
         "ui:src",
-        "L",
+        "/L",
         None,
         rect(0.0, 0.0, 50.0, 50.0),
         overrides,
     ));
 
     // Right honors the override.
-    assert_eq!(
-        nav(&reg, "src", Direction::Right),
-        Moniker::from_string("ui:right_override")
-    );
+    assert_eq!(nav(&reg, &src_fq, Direction::Right), right_override_fq);
     // Left is unconsidered by the override; beam search runs.
-    assert_eq!(
-        nav(&reg, "src", Direction::Left),
-        Moniker::from_string("ui:left_target")
-    );
+    assert_eq!(nav(&reg, &src_fq, Direction::Left), left_target_fq);
 }

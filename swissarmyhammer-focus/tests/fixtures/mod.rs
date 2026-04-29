@@ -7,66 +7,36 @@
 //! user hits when keyboard-navigating the running app, but without the
 //! Tauri runtime, jsdom, or a Playwright browser. The kernel + registry
 //! shape is the system under test; consumers swap in a [`BeamNavStrategy`]
-//! and assert on returned [`Moniker`] values.
+//! and assert on returned [`FullyQualifiedMoniker`] values.
 //!
-//! # Why this lives here
+//! # Path-monikers identifier model
 //!
-//! The directional-nav card [`01KQ7STZN3G5N2WB3FF4PM4DKX`] explicitly
-//! relocated the source-of-truth tests for card-level nav from the React
-//! browser-mode harness into Rust integration tests. The earlier per-
-//! direction browser tests (`board-view.cross-column-nav.spatial.test.tsx`)
-//! built a JS shadow registry that mimicked the kernel — which let
-//! algorithmic bugs through whenever the JS port disagreed with the Rust
-//! implementation. Building the realistic state in Rust and calling the
-//! actual kernel removes the mimicry layer.
+//! The kernel uses **one** identifier shape per primitive: the
+//! [`FullyQualifiedMoniker`]. The path through the focus hierarchy IS
+//! the spatial key. The fixture builds FQMs by composing the parent
+//! FQM and the consumer's [`SegmentMoniker`] at each level, exactly as
+//! the React adapter does at runtime via `FullyQualifiedMonikerContext`.
 //!
-//! The unified-policy card [`01KQ7S6WHK9RCCG2R4FN474EFD`] also depends on
-//! this shape, so the fixture is shared rather than duplicated per test
-//! file. Each integration test pulls it in via the standard Rust
-//! `tests/<module>/mod.rs` shared-module pattern (`mod fixtures;` at the
-//! top of the integration `.rs`).
+//! Each entity is exposed by:
+//! - its `*_segment` (the [`SegmentMoniker`] that React declared, e.g.
+//!   `task:T1A`, `column:TODO`, `field:task:T1A.title`).
+//! - its `*_fq` (the canonical path FQM the kernel keys on).
 //!
-//! # Layout philosophy
+//! Tests that previously called `find_by_moniker(&Moniker::from_string("..."))`
+//! migrate by replacing the lookup with `find_by_fq(&app.<entity>_fq())`.
 //!
-//! Geometrically realistic rectangles drive Android-beam scoring; if the
-//! fixture's rects are wrong the tests pass against synthetic state that
-//! diverges from production. Three columns sit side-by-side under the
-//! board; each column holds a name-leaf header followed by cards stacked
-//! vertically. The dimensions match the kanban-app's typical desktop
-//! layout (~440 px-wide columns, ~80 px-tall cards) so beam-search runs
-//! against the same scale the user sees.
-//!
-//! # Stable monikers
-//!
-//! Every entity in the fixture has a deterministic moniker that the
-//! tests can read back by name:
-//!
-//! - Window layer chrome: `ui:navbar`, `ui:navbar.<button>`,
-//!   `field:board:b1.percent_complete` (a `<FocusZone>` sibling of the
-//!   navbar leaves), `ui:perspective-bar`, `ui:perspective-bar.<button>`,
-//!   `ui:board`.
-//! - Columns: `column:TODO`, `column:DOING`, `column:DONE` for the zone;
-//!   `column:TODO.name`, `column:DOING.name`, `column:DONE.name` for the
-//!   header leaf.
-//! - Cards: `task:T1A`, `task:T2A`, …, `task:T3C`. The first digit is the
-//!   row position (1 = top, 3 = bottom); the letter is the column
-//!   (A = TODO, B = DOING, C = DONE).
-//! - Inspector layer: `panel:task:T1A` for the panel zone, `field:task:T1A.title`,
-//!   `field:task:T1A.status` for the field-row zones inside.
-//!
-//! [`01KQ7STZN3G5N2WB3FF4PM4DKX`]: # "directional-nav supersession card"
-//! [`01KQ7S6WHK9RCCG2R4FN474EFD`]: # "unified-policy card"
+//! [`FullyQualifiedMoniker`]: swissarmyhammer_focus::FullyQualifiedMoniker
+//! [`SegmentMoniker`]: swissarmyhammer_focus::SegmentMoniker
 //! [`SpatialRegistry`]: swissarmyhammer_focus::SpatialRegistry
 //! [`BeamNavStrategy`]: swissarmyhammer_focus::BeamNavStrategy
-//! [`Moniker`]: swissarmyhammer_focus::Moniker
 
 #![allow(dead_code)] // Some helpers are consumed by tests added in later cards.
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker, Pixels, Rect, SpatialKey,
-    SpatialRegistry, WindowLabel,
+    FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+    SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -99,15 +69,26 @@ pub const CARD_HEIGHT: f64 = 80.0;
 pub const FIRST_CARD_TOP: f64 = BOARD_TOP + COLUMN_HEADER_HEIGHT;
 
 // ---------------------------------------------------------------------------
-// Layer + window constants — names that appear in monikers.
+// Layer + window constants.
 // ---------------------------------------------------------------------------
 
 /// Window label for the realistic-app fixture's main window.
 pub const MAIN_WINDOW: &str = "main";
-/// Spatial key used for the window-root layer.
-pub const WINDOW_LAYER_KEY: &str = "L_window";
-/// Spatial key used for the inspector layer (child of the window layer).
-pub const INSPECTOR_LAYER_KEY: &str = "L_inspector";
+
+/// FQM for the window-root layer. Consumers compose all window-layer
+/// scopes by appending segments to this FQM via
+/// [`FullyQualifiedMoniker::compose`].
+pub fn window_layer_fq() -> FullyQualifiedMoniker {
+    FullyQualifiedMoniker::root(&SegmentMoniker::from_string("window"))
+}
+
+/// FQM for the inspector layer (a child of the window-root layer).
+pub fn inspector_layer_fq() -> FullyQualifiedMoniker {
+    FullyQualifiedMoniker::compose(
+        &window_layer_fq(),
+        &SegmentMoniker::from_string("inspector"),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Small constructors — keep the assembly in `RealisticApp` readable.
@@ -125,33 +106,37 @@ fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
     }
 }
 
-/// Build a [`FocusLayer`] with the given role and parent.
-fn make_layer(key: &str, role: &str, parent: Option<&str>) -> FocusLayer {
+/// Build a [`FocusLayer`] with the given role, FQM, and parent FQM.
+fn make_layer(
+    fq: FullyQualifiedMoniker,
+    segment: &str,
+    role: &str,
+    parent: Option<FullyQualifiedMoniker>,
+) -> FocusLayer {
     FocusLayer {
-        key: LayerKey::from_string(key),
+        fq,
+        segment: SegmentMoniker::from_string(segment),
         name: LayerName::from_string(role),
-        parent: parent.map(LayerKey::from_string),
+        parent,
         window_label: WindowLabel::from_string(MAIN_WINDOW),
         last_focused: None,
     }
 }
 
-/// Build a [`FocusZone`] with empty overrides and no `last_focused`. The
-/// directional-nav tests do not exercise the override or memory paths;
-/// that coverage lives in [`tests/overrides.rs`] and [`tests/fallback.rs`].
+/// Build a [`FocusZone`] with empty overrides and no `last_focused`.
 fn make_zone(
-    key: &str,
-    moniker: &str,
-    layer_key: &str,
-    parent_zone: Option<&str>,
+    fq: FullyQualifiedMoniker,
+    segment: &str,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
 ) -> FocusZone {
     FocusZone {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq,
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer_key),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq,
+        parent_zone,
         last_focused: None,
         overrides: HashMap::new(),
     }
@@ -159,33 +144,28 @@ fn make_zone(
 
 /// Build a [`FocusScope`] leaf with empty overrides.
 fn make_leaf(
-    key: &str,
-    moniker: &str,
-    layer_key: &str,
-    parent_zone: Option<&str>,
+    fq: FullyQualifiedMoniker,
+    segment: &str,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
 ) -> FocusScope {
     FocusScope {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq,
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer_key),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq,
+        parent_zone,
         overrides: HashMap::new(),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Column / card identity helpers — keep production-shape monikers
+// Column / card identity helpers — keep production-shape segments
 // generated from one place.
 // ---------------------------------------------------------------------------
 
 /// Column letters in left-to-right layout order.
-///
-/// Index `i` corresponds to `COLUMN_NAMES[i]`. Tests reference cards by
-/// `task:T<row><letter>` and columns by `column:<NAME>` — both halves
-/// derive from this single ordered list, so changing the order here is
-/// the only edit needed to swap, drop, or add a column.
 pub const COLUMN_LETTERS: &[char] = &['A', 'B', 'C'];
 
 /// Column display names in left-to-right layout order. Aligns with
@@ -193,62 +173,42 @@ pub const COLUMN_LETTERS: &[char] = &['A', 'B', 'C'];
 /// `C` is `DONE`.
 pub const COLUMN_NAMES: &[&str] = &["TODO", "DOING", "DONE"];
 
-/// Number of cards stacked inside each column. Three is the minimum that
-/// exercises both adjacent-card moves (rows 1↔2, 2↔3) and a non-adjacent
-/// boundary (row 3 has nothing below).
+/// Number of cards stacked inside each column.
 pub const CARDS_PER_COLUMN: usize = 3;
 
-/// Build the moniker for a card at row `row_one_based` in column index
-/// `column_index`. Uses the production `task:T<row><letter>` shape.
-pub fn card_moniker(row_one_based: usize, column_index: usize) -> String {
+/// Build the [`SegmentMoniker`] for a card at row `row_one_based` (1-based)
+/// in column index `column_index`. Uses the production
+/// `task:T<row><letter>` shape.
+pub fn card_segment(row_one_based: usize, column_index: usize) -> String {
     let letter = COLUMN_LETTERS[column_index];
     format!("task:T{row_one_based}{letter}")
 }
 
-/// Build the spatial key for a card at row `row_one_based` in column
-/// index `column_index`. The key matches the moniker so test setup and
-/// tear-down can use either as a stable handle.
-pub fn card_key(row_one_based: usize, column_index: usize) -> String {
-    let letter = COLUMN_LETTERS[column_index];
-    format!("k_task_T{row_one_based}{letter}")
-}
-
-/// Build the moniker for a column zone at index `column_index`. Uses the
-/// production `column:<NAME>` shape.
-pub fn column_moniker(column_index: usize) -> String {
+/// Build the [`SegmentMoniker`] for a column zone at index `column_index`.
+/// Uses the production `column:<NAME>` shape.
+pub fn column_segment(column_index: usize) -> String {
     format!("column:{}", COLUMN_NAMES[column_index])
 }
 
-/// Build the spatial key for a column zone.
-pub fn column_key(column_index: usize) -> String {
-    format!("k_column_{}", COLUMN_NAMES[column_index])
-}
-
-/// Build the moniker for a column-header name leaf. Uses the production
-/// `column:<NAME>.name` shape.
-pub fn column_name_moniker(column_index: usize) -> String {
+/// Build the [`SegmentMoniker`] for a column-header name leaf at the
+/// given index.
+pub fn column_name_segment(column_index: usize) -> String {
     format!("column:{}.name", COLUMN_NAMES[column_index])
-}
-
-/// Build the spatial key for a column-header name leaf.
-pub fn column_name_key(column_index: usize) -> String {
-    format!("k_column_{}_name", COLUMN_NAMES[column_index])
 }
 
 // ---------------------------------------------------------------------------
 // RealisticApp — the assembly.
 // ---------------------------------------------------------------------------
 
-/// A populated [`SpatialRegistry`] paired with the moniker constants the
-/// tests assert against.
+/// A populated [`SpatialRegistry`] paired with the FQM helpers tests
+/// assert against.
 ///
 /// Construct one with [`RealisticApp::new`]; read its
 /// [`registry`](Self::registry) for the kernel under test, or call the
-/// `*_key` helpers below for the [`SpatialKey`] of any pre-registered
-/// scope so test code stays moniker-driven.
+/// `*_fq` helpers below for the [`FullyQualifiedMoniker`] of any
+/// pre-registered scope so test code stays path-driven.
 pub struct RealisticApp {
-    /// The populated [`SpatialRegistry`]. Move into a navigator strategy
-    /// or borrow for test assertions.
+    /// The populated [`SpatialRegistry`].
     pub registry: SpatialRegistry,
 }
 
@@ -264,7 +224,7 @@ impl RealisticApp {
     /// panel + field-row zones.
     ///
     /// The build is deterministic — every call produces the same
-    /// keys/monikers/rects, so two test functions that build the
+    /// FQMs/segments/rects, so two test functions that build the
     /// fixture independently land on identical state.
     pub fn new() -> Self {
         let mut registry = SpatialRegistry::new();
@@ -280,70 +240,144 @@ impl RealisticApp {
         &self.registry
     }
 
-    /// [`SpatialKey`] for the card at row `row_one_based` (1-based) in
-    /// column index `column_index` (0 = TODO, 1 = DOING, 2 = DONE).
-    pub fn card_key(&self, row_one_based: usize, column_index: usize) -> SpatialKey {
-        SpatialKey::from_string(card_key(row_one_based, column_index))
+    /// FQM for the navbar zone — `/window/ui:navbar`.
+    pub fn navbar_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &window_layer_fq(),
+            &SegmentMoniker::from_string("ui:navbar"),
+        )
     }
 
-    /// [`SpatialKey`] for the column-header name leaf at the given index.
-    pub fn column_name_key(&self, column_index: usize) -> SpatialKey {
-        SpatialKey::from_string(column_name_key(column_index))
+    /// FQM for the perspective-bar zone — `/window/ui:perspective-bar`.
+    pub fn perspective_bar_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &window_layer_fq(),
+            &SegmentMoniker::from_string("ui:perspective-bar"),
+        )
     }
 
-    /// [`SpatialKey`] for the column zone at the given index.
-    pub fn column_key(&self, column_index: usize) -> SpatialKey {
-        SpatialKey::from_string(column_key(column_index))
+    /// FQM for the board zone — `/window/ui:board`.
+    pub fn board_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(&window_layer_fq(), &SegmentMoniker::from_string("ui:board"))
     }
 
-    /// [`SpatialKey`] for the `ui:navbar.board-selector` leaf, the
-    /// leftmost entry inside the navbar zone.
-    pub fn navbar_board_selector_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_ui_navbar_board_selector")
+    /// FQM for the column zone at `column_index` —
+    /// `/window/ui:board/column:<NAME>`.
+    pub fn column_fq(&self, column_index: usize) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.board_fq(),
+            &SegmentMoniker::from_string(column_segment(column_index)),
+        )
     }
 
-    /// [`SpatialKey`] for the `ui:navbar.inspect` leaf, the second
-    /// entry inside the navbar zone (between board-selector and the
-    /// percent-complete field zone).
-    pub fn navbar_inspect_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_ui_navbar_inspect")
+    /// FQM for the column-name leaf at `column_index` —
+    /// `/window/ui:board/column:<NAME>/column:<NAME>.name`.
+    pub fn column_name_fq(&self, column_index: usize) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.column_fq(column_index),
+            &SegmentMoniker::from_string(column_name_segment(column_index)),
+        )
     }
 
-    /// [`SpatialKey`] for the `field:board:b1.percent_complete` zone,
-    /// a sibling of the navbar leaves whose `parent_zone` is the
-    /// navbar. Production renders this as `<Field>` which itself is a
-    /// `<FocusZone>` — see `kanban-app/ui/src/components/fields/field.tsx`.
-    pub fn navbar_percent_field_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_field_board_b1_percent_complete")
+    /// FQM for the card at row `row_one_based` (1-based) in column
+    /// `column_index` —
+    /// `/window/ui:board/column:<NAME>/task:T<row><letter>`.
+    pub fn card_fq(&self, row_one_based: usize, column_index: usize) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.column_fq(column_index),
+            &SegmentMoniker::from_string(card_segment(row_one_based, column_index)),
+        )
     }
 
-    /// [`SpatialKey`] for the `ui:navbar.search` leaf, the rightmost
-    /// entry inside the navbar zone.
-    pub fn navbar_search_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_ui_navbar_search")
+    /// FQM for `ui:navbar.board-selector`, the leftmost entry inside the
+    /// navbar zone.
+    pub fn navbar_board_selector_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.navbar_fq(),
+            &SegmentMoniker::from_string("ui:navbar.board-selector"),
+        )
     }
 
-    /// [`SpatialKey`] for the `perspective_tab:p1` leaf, the leftmost
-    /// perspective tab inside the `ui:perspective-bar` zone.
-    pub fn perspective_tab_p1_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_perspective_tab_p1")
+    /// FQM for `ui:navbar.inspect`.
+    pub fn navbar_inspect_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.navbar_fq(),
+            &SegmentMoniker::from_string("ui:navbar.inspect"),
+        )
     }
 
-    /// [`SpatialKey`] for the `perspective_tab:p2` leaf — the middle
-    /// perspective tab. Production widens this leaf when the tab is
-    /// active because it renders extra inline chrome
-    /// ([`FilterFocusButton`] + [`GroupPopoverButton`]) inside the same
-    /// `<FocusScope>` wrapper. The fixture mirrors that by giving p2 a
-    /// wider rect than p1 / p3 so beam-search runs against the same
-    /// rect-growth pattern the user produces by clicking p2.
-    pub fn perspective_tab_p2_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_perspective_tab_p2")
+    /// FQM for the `field:board:b1.percent_complete` zone — a sibling of
+    /// the navbar leaves.
+    pub fn navbar_percent_field_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.navbar_fq(),
+            &SegmentMoniker::from_string("field:board:b1.percent_complete"),
+        )
     }
 
-    /// [`SpatialKey`] for the `perspective_tab:p3` leaf, the rightmost
-    /// perspective tab inside the `ui:perspective-bar` zone.
-    pub fn perspective_tab_p3_key(&self) -> SpatialKey {
-        SpatialKey::from_string("k_perspective_tab_p3")
+    /// FQM for `ui:navbar.search`.
+    pub fn navbar_search_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.navbar_fq(),
+            &SegmentMoniker::from_string("ui:navbar.search"),
+        )
+    }
+
+    /// FQM for `perspective_tab:p1`, the leftmost perspective tab.
+    pub fn perspective_tab_p1_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.perspective_bar_fq(),
+            &SegmentMoniker::from_string("perspective_tab:p1"),
+        )
+    }
+
+    /// FQM for `perspective_tab:p2`, the middle (and visually wider when
+    /// active) perspective tab.
+    pub fn perspective_tab_p2_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.perspective_bar_fq(),
+            &SegmentMoniker::from_string("perspective_tab:p2"),
+        )
+    }
+
+    /// FQM for `perspective_tab:p3`, the rightmost perspective tab.
+    pub fn perspective_tab_p3_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.perspective_bar_fq(),
+            &SegmentMoniker::from_string("perspective_tab:p3"),
+        )
+    }
+
+    /// FQM for the inspector panel zone — `/window/inspector/panel:task:T1A`.
+    pub fn inspector_panel_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &inspector_layer_fq(),
+            &SegmentMoniker::from_string("panel:task:T1A"),
+        )
+    }
+
+    /// FQM for the inspector's title field zone.
+    pub fn inspector_field_title_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.inspector_panel_fq(),
+            &SegmentMoniker::from_string("field:task:T1A.title"),
+        )
+    }
+
+    /// FQM for the inspector's status field zone.
+    pub fn inspector_field_status_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.inspector_panel_fq(),
+            &SegmentMoniker::from_string("field:task:T1A.status"),
+        )
+    }
+
+    /// FQM for the inspector's assignees field zone.
+    pub fn inspector_field_assignees_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.inspector_panel_fq(),
+            &SegmentMoniker::from_string("field:task:T1A.assignees"),
+        )
     }
 }
 
@@ -352,165 +386,157 @@ impl RealisticApp {
 // ---------------------------------------------------------------------------
 
 /// Register the two layers: a window root and an inspector child layer.
-///
-/// The inspector layer is included even though the directional-nav card
-/// asserts only on window-layer trajectories — having a second layer in
-/// the fixture surfaces any kernel rule that accidentally crosses the
-/// layer boundary (the absolute boundary contract from
-/// `tests/navigate.rs::nav_never_crosses_layer_boundary_within_one_window`).
 fn register_layers(reg: &mut SpatialRegistry) {
-    reg.push_layer(make_layer(WINDOW_LAYER_KEY, "window", None));
+    reg.push_layer(make_layer(window_layer_fq(), "window", "window", None));
     reg.push_layer(make_layer(
-        INSPECTOR_LAYER_KEY,
+        inspector_layer_fq(),
         "inspector",
-        Some(WINDOW_LAYER_KEY),
+        "inspector",
+        Some(window_layer_fq()),
     ));
 }
 
 /// Register the navbar and perspective-bar zones on the window layer.
-///
-/// Each chrome zone gets a small handful of leaf children so tests that
-/// navigate from a non-card focused entry (the unified-policy card) have
-/// realistic neighbours to land on. The directional-nav card never
-/// focuses these directly, but their presence pressures the kernel's
-/// rule-2 cross-zone fallback to consider them as candidates.
-///
-/// Inside `ui:navbar` the production layout from `nav-bar.tsx` is, left
-/// to right: board-selector leaf → inspect leaf → percent-complete
-/// **field zone** → search leaf. The percent-complete field is itself a
-/// `<FocusZone>` (its `parent_zone` is `ui:navbar`), making it a sibling
-/// of the navbar leaves at the kernel level even though visually it sits
-/// in the same horizontal strip. Tests for navbar arrow-nav use this
-/// mixed-kind sibling layout to verify the in-zone beam search treats
-/// each entry as a peer regardless of leaf-vs-zone kind.
 fn register_window_chrome(reg: &mut SpatialRegistry) {
+    let win = window_layer_fq();
+    let navbar_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:navbar"));
+
     // ui:navbar — full-width strip across the top.
     reg.register_zone(make_zone(
-        "k_ui_navbar",
+        navbar_fq.clone(),
         "ui:navbar",
-        WINDOW_LAYER_KEY,
+        win.clone(),
         None,
         rect(0.0, 0.0, VIEWPORT_WIDTH, NAVBAR_HEIGHT),
     ));
     // Navbar entries laid out left-to-right inside the navbar zone.
-    // Three leaves and one field zone, mirroring the production layout
-    // from `kanban-app/ui/src/components/nav-bar.tsx`.
     reg.register_scope(make_leaf(
-        "k_ui_navbar_board_selector",
+        FullyQualifiedMoniker::compose(
+            &navbar_fq,
+            &SegmentMoniker::from_string("ui:navbar.board-selector"),
+        ),
         "ui:navbar.board-selector",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_navbar"),
+        win.clone(),
+        Some(navbar_fq.clone()),
         rect(8.0, 8.0, 200.0, 24.0),
     ));
     reg.register_scope(make_leaf(
-        "k_ui_navbar_inspect",
+        FullyQualifiedMoniker::compose(
+            &navbar_fq,
+            &SegmentMoniker::from_string("ui:navbar.inspect"),
+        ),
         "ui:navbar.inspect",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_navbar"),
+        win.clone(),
+        Some(navbar_fq.clone()),
         rect(216.0, 8.0, 80.0, 24.0),
     ));
     // Percent-complete field zone — a `<FocusZone>` peer of the navbar
-    // leaves. Its `parent_zone` is `ui:navbar` so beam search inside the
-    // navbar treats it as a sibling.
+    // leaves.
     reg.register_zone(make_zone(
-        "k_field_board_b1_percent_complete",
+        FullyQualifiedMoniker::compose(
+            &navbar_fq,
+            &SegmentMoniker::from_string("field:board:b1.percent_complete"),
+        ),
         "field:board:b1.percent_complete",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_navbar"),
+        win.clone(),
+        Some(navbar_fq.clone()),
         rect(304.0, 8.0, 200.0, 24.0),
     ));
     reg.register_scope(make_leaf(
-        "k_ui_navbar_search",
+        FullyQualifiedMoniker::compose(
+            &navbar_fq,
+            &SegmentMoniker::from_string("ui:navbar.search"),
+        ),
         "ui:navbar.search",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_navbar"),
+        win.clone(),
+        Some(navbar_fq),
         rect(VIEWPORT_WIDTH - 200.0, 8.0, 192.0, 24.0),
     ));
 
     // ui:perspective-bar — full-width strip directly below the navbar.
+    let pbar_fq =
+        FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:perspective-bar"));
     reg.register_zone(make_zone(
-        "k_ui_perspective_bar",
+        pbar_fq.clone(),
         "ui:perspective-bar",
-        WINDOW_LAYER_KEY,
+        win.clone(),
         None,
         rect(0.0, NAVBAR_HEIGHT, VIEWPORT_WIDTH, PERSPECTIVE_BAR_HEIGHT),
     ));
-    // Three perspective tab leaves laid out left-to-right inside the
-    // perspective bar. Monikers match the production shape
-    // (`perspective_tab:{id}` from `kanban-app/ui/src/components/perspective-tab-bar.tsx`).
-    //
-    // The middle tab (p2) is wider than the flanking tabs so the
-    // fixture mirrors the production active-tab rect growth: the active
-    // perspective renders inline `<FilterFocusButton>` and
-    // `<GroupPopoverButton>` siblings inside the same `<FocusScope>`
-    // wrapper, growing the leaf's bounding rect. Beam search must still
-    // pick the next tab to the right by left-edge ordering regardless
-    // of the focused tab's width — that contract is pinned by the
-    // `perspective_right_from_middle_active_tab_lands_on_rightmost_tab`
-    // case in `tests/perspective_bar_arrow_nav.rs`.
-    //
+    // Three perspective tab leaves laid out left-to-right.
     // Layout: 8 px left padding, then p1 (96 px) + 8 px gap +
     // p2 (160 px, wider for active chrome) + 8 px gap + p3 (96 px).
     reg.register_scope(make_leaf(
-        "k_perspective_tab_p1",
+        FullyQualifiedMoniker::compose(
+            &pbar_fq,
+            &SegmentMoniker::from_string("perspective_tab:p1"),
+        ),
         "perspective_tab:p1",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_perspective_bar"),
+        win.clone(),
+        Some(pbar_fq.clone()),
         rect(8.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
     ));
     reg.register_scope(make_leaf(
-        "k_perspective_tab_p2",
+        FullyQualifiedMoniker::compose(
+            &pbar_fq,
+            &SegmentMoniker::from_string("perspective_tab:p2"),
+        ),
         "perspective_tab:p2",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_perspective_bar"),
+        win.clone(),
+        Some(pbar_fq.clone()),
         rect(112.0, NAVBAR_HEIGHT + 8.0, 160.0, 24.0),
     ));
     reg.register_scope(make_leaf(
-        "k_perspective_tab_p3",
+        FullyQualifiedMoniker::compose(
+            &pbar_fq,
+            &SegmentMoniker::from_string("perspective_tab:p3"),
+        ),
         "perspective_tab:p3",
-        WINDOW_LAYER_KEY,
-        Some("k_ui_perspective_bar"),
+        win,
+        Some(pbar_fq),
         rect(280.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
     ));
 }
 
 /// Register the board zone and the three columns inside it.
-///
-/// The board zone is the rectangle below the chrome bars; each column is
-/// a child zone laid out horizontally; each column owns a column-name
-/// leaf at its top and three card leaves stacked vertically beneath it.
-/// This is the shape `column-view.tsx` and `board-view.tsx` produce at
-/// runtime — see the `BoardSpatialZone` doc comment in `board-view.tsx`
-/// for the production wiring.
 fn register_board_and_columns(reg: &mut SpatialRegistry) {
+    let win = window_layer_fq();
+    let board_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:board"));
     reg.register_zone(make_zone(
-        "k_ui_board",
+        board_fq.clone(),
         "ui:board",
-        WINDOW_LAYER_KEY,
+        win.clone(),
         None,
         rect(0.0, BOARD_TOP, VIEWPORT_WIDTH, VIEWPORT_HEIGHT - BOARD_TOP),
     ));
 
     for (i, _name) in COLUMN_NAMES.iter().enumerate() {
         let col_x = (i as f64) * COLUMN_WIDTH;
-        let col_key = column_key(i);
-        let col_moniker = column_moniker(i);
+        let col_seg = column_segment(i);
+        let col_fq = FullyQualifiedMoniker::compose(
+            &board_fq,
+            &SegmentMoniker::from_string(col_seg.clone()),
+        );
 
         // Column zone — child of the board.
         reg.register_zone(make_zone(
-            &col_key,
-            &col_moniker,
-            WINDOW_LAYER_KEY,
-            Some("k_ui_board"),
+            col_fq.clone(),
+            &col_seg,
+            win.clone(),
+            Some(board_fq.clone()),
             rect(col_x, BOARD_TOP, COLUMN_WIDTH, VIEWPORT_HEIGHT - BOARD_TOP),
         ));
 
         // Column-name leaf — top of the column.
+        let col_name_seg = column_name_segment(i);
         reg.register_scope(make_leaf(
-            &column_name_key(i),
-            &column_name_moniker(i),
-            WINDOW_LAYER_KEY,
-            Some(&col_key),
+            FullyQualifiedMoniker::compose(
+                &col_fq,
+                &SegmentMoniker::from_string(col_name_seg.clone()),
+            ),
+            &col_name_seg,
+            win.clone(),
+            Some(col_fq.clone()),
             rect(col_x + 8.0, BOARD_TOP + 4.0, COLUMN_WIDTH - 16.0, 32.0),
         ));
 
@@ -518,11 +544,15 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
         for row in 1..=CARDS_PER_COLUMN {
             let row_index = row - 1;
             let card_top = FIRST_CARD_TOP + (row_index as f64) * CARD_HEIGHT;
+            let card_seg = card_segment(row, i);
             reg.register_scope(make_leaf(
-                &card_key(row, i),
-                &card_moniker(row, i),
-                WINDOW_LAYER_KEY,
-                Some(&col_key),
+                FullyQualifiedMoniker::compose(
+                    &col_fq,
+                    &SegmentMoniker::from_string(card_seg.clone()),
+                ),
+                &card_seg,
+                win.clone(),
+                Some(col_fq.clone()),
                 rect(
                     col_x + 8.0,
                     card_top,
@@ -536,44 +566,32 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
 
 /// Register a panel zone on the inspector layer with three field-row
 /// zones stacked inside it.
-///
-/// The directional-nav card does not focus the inspector — but the
-/// fixture is shared with the unified-policy card which does, and even
-/// the directional-nav card benefits from a cross-layer second layer
-/// because it ensures none of its assertions accidentally pass by
-/// reaching across the layer boundary. The panel is parented to the
-/// inspector layer (not the window layer); the field rows are parented
-/// to the panel.
-///
-/// Three rows (title, status, assignees) so the unified-policy card's
-/// trajectory D (`field:title → field:status → field:assignees → None`)
-/// has the full chain to walk.
 fn register_inspector(reg: &mut SpatialRegistry) {
-    // Inspector docks on the right side of the viewport — width 400 px.
+    let inspector = inspector_layer_fq();
     let inspector_x = VIEWPORT_WIDTH - 400.0;
+    let panel_fq =
+        FullyQualifiedMoniker::compose(&inspector, &SegmentMoniker::from_string("panel:task:T1A"));
     reg.register_zone(make_zone(
-        "k_panel_t1a",
+        panel_fq.clone(),
         "panel:task:T1A",
-        INSPECTOR_LAYER_KEY,
+        inspector.clone(),
         None,
         rect(inspector_x, BOARD_TOP, 400.0, VIEWPORT_HEIGHT - BOARD_TOP),
     ));
 
-    // Field rows stack vertically inside the panel. Each row is 48 px
-    // tall with no margin between rows so beam-search distance math
-    // mirrors the production inspector pane layout.
-    let field_specs: &[(&str, &str)] = &[
-        ("k_field_t1a_title", "field:task:T1A.title"),
-        ("k_field_t1a_status", "field:task:T1A.status"),
-        ("k_field_t1a_assignees", "field:task:T1A.assignees"),
+    // Field rows stack vertically inside the panel.
+    let field_specs: &[&str] = &[
+        "field:task:T1A.title",
+        "field:task:T1A.status",
+        "field:task:T1A.assignees",
     ];
-    for (i, (key, moniker)) in field_specs.iter().enumerate() {
+    for (i, segment) in field_specs.iter().enumerate() {
         let row_top = BOARD_TOP + 8.0 + (i as f64) * 56.0;
         reg.register_zone(make_zone(
-            key,
-            moniker,
-            INSPECTOR_LAYER_KEY,
-            Some("k_panel_t1a"),
+            FullyQualifiedMoniker::compose(&panel_fq, &SegmentMoniker::from_string(*segment)),
+            segment,
+            inspector.clone(),
+            Some(panel_fq.clone()),
             rect(inspector_x + 8.0, row_top, 384.0, 48.0),
         ));
     }

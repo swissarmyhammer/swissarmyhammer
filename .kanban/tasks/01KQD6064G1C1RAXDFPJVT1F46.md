@@ -1,8 +1,12 @@
 ---
 assignees:
 - claude-code
+depends_on:
+- 01KQD8X3PYXQAJN593HR11T7R4
+- 01KQD8XM2T0FWHXANCK0KVDJH1
+- 01KQD8Y496CCACWN656SNFTRT8
 position_column: todo
-position_ordinal: a980
+position_ordinal: ac80
 project: spatial-nav
 title: 'Path monikers as spatial keys: SegmentMoniker (input) + FullyQualifiedMoniker (key); collapse SpatialKey/Moniker into one identifier'
 ---

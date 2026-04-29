@@ -1,11 +1,11 @@
 //! Integration tests for the spatial focus registry kernel.
 //!
-//! Headless pattern matching `tests/resolve_focused_column.rs` and
-//! `tests/focus_state.rs` — pure Rust, no Tauri runtime, no jsdom. Every
-//! registry operation runs through the public surface and is asserted by
-//! inspecting return values plus subsequent reads.
+//! Headless pattern matching `tests/focus_state.rs` — pure Rust, no Tauri
+//! runtime, no jsdom. Every registry operation runs through the public
+//! surface and is asserted by inspecting return values plus subsequent
+//! reads.
 //!
-//! These tests cover the kernel-types card (`01KNQXW7HH...`):
+//! These tests cover the path-monikers refactor:
 //!
 //! - `Pixels` arithmetic is type-preserving (no `.0` access required for
 //!   `+`, `-`, `*`, `/`).
@@ -13,20 +13,20 @@
 //!   independently. There is no public sum-type enum that conflates them
 //!   — the registry stores the discriminator internally.
 //! - `SpatialRegistry` stores both [`FocusScope`] leaves and [`FocusZone`]
-//!   containers behind a single [`SpatialKey`] map; typed accessors
+//!   containers behind a single FQM-keyed map; typed accessors
 //!   (`scope`, `zone`) return only the matching variant.
 //! - Zone tree ops (`children_of_zone`, `ancestor_zones`) walk the
 //!   `parent_zone` chain inside a layer.
 //! - Layer forest ops (`children_of_layer`, `root_for_window`,
 //!   `ancestors_of_layer`) walk the `layer.parent` chain across windows.
 //! - `leaves_in_layer` / `zones_in_layer` return typed structs filtered
-//!   by `layer_key`.
+//!   by `layer_fq`.
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    ChildScope, Direction, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker, Pixels,
-    Rect, SpatialKey, SpatialRegistry, WindowLabel,
+    ChildScope, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName,
+    Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -97,29 +97,29 @@ fn rect_edges_compute_from_origin_and_size() {
 #[test]
 fn focus_scope_and_zone_round_trip_independently() {
     let leaf = FocusScope {
-        key: SpatialKey::from_string("k-leaf"),
-        moniker: Moniker::from_string("ui:leaf"),
+        fq: FullyQualifiedMoniker::from_string("/L1/leaf"),
+        segment: SegmentMoniker::from_string("leaf"),
         rect: Rect {
             x: Pixels::new(0.0),
             y: Pixels::new(0.0),
             width: Pixels::new(10.0),
             height: Pixels::new(10.0),
         },
-        layer_key: LayerKey::from_string("layer-1"),
+        layer_fq: FullyQualifiedMoniker::from_string("/L1"),
         parent_zone: None,
         overrides: HashMap::new(),
     };
 
     let zone = FocusZone {
-        key: SpatialKey::from_string("k-zone"),
-        moniker: Moniker::from_string("ui:zone"),
+        fq: FullyQualifiedMoniker::from_string("/L1/zone"),
+        segment: SegmentMoniker::from_string("zone"),
         rect: Rect {
             x: Pixels::new(0.0),
             y: Pixels::new(0.0),
             width: Pixels::new(10.0),
             height: Pixels::new(10.0),
         },
-        layer_key: LayerKey::from_string("layer-1"),
+        layer_fq: FullyQualifiedMoniker::from_string("/L1"),
         parent_zone: None,
         last_focused: None,
         overrides: HashMap::new(),
@@ -131,8 +131,8 @@ fn focus_scope_and_zone_round_trip_independently() {
     let leaf_back: FocusScope = serde_json::from_value(leaf_json).unwrap();
     let zone_back: FocusZone = serde_json::from_value(zone_json).unwrap();
 
-    assert_eq!(leaf_back.moniker, leaf.moniker);
-    assert_eq!(zone_back.moniker, zone.moniker);
+    assert_eq!(leaf_back.segment, leaf.segment);
+    assert_eq!(zone_back.segment, zone.segment);
     assert_eq!(zone_back.last_focused, None);
 }
 
@@ -140,77 +140,76 @@ fn focus_scope_and_zone_round_trip_independently() {
 // Registry — round-trip register/lookup
 // ---------------------------------------------------------------------------
 
-fn make_focus_scope(
-    key: &str,
-    moniker: &str,
-    layer: &str,
-    parent_zone: Option<&str>,
-) -> FocusScope {
+fn make_focus_scope(fq: &str, segment: &str, layer: &str, parent_zone: Option<&str>) -> FocusScope {
     FocusScope {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq: FullyQualifiedMoniker::from_string(fq),
+        segment: SegmentMoniker::from_string(segment),
         rect: Rect {
             x: Pixels::new(0.0),
             y: Pixels::new(0.0),
             width: Pixels::new(10.0),
             height: Pixels::new(10.0),
         },
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
         overrides: HashMap::new(),
     }
 }
 
-fn make_zone(key: &str, moniker: &str, layer: &str, parent_zone: Option<&str>) -> FocusZone {
+fn make_zone(fq: &str, segment: &str, layer: &str, parent_zone: Option<&str>) -> FocusZone {
     FocusZone {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq: FullyQualifiedMoniker::from_string(fq),
+        segment: SegmentMoniker::from_string(segment),
         rect: Rect {
             x: Pixels::new(0.0),
             y: Pixels::new(0.0),
             width: Pixels::new(100.0),
             height: Pixels::new(100.0),
         },
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
         last_focused: None,
         overrides: HashMap::new(),
     }
 }
 
-fn make_layer(key: &str, name: &str, window: &str, parent: Option<&str>) -> FocusLayer {
+fn make_layer(fq: &str, name: &str, window: &str, parent: Option<&str>) -> FocusLayer {
     FocusLayer {
-        key: LayerKey::from_string(key),
+        fq: FullyQualifiedMoniker::from_string(fq),
+        segment: SegmentMoniker::from_string(name),
         name: LayerName::from_string(name),
-        parent: parent.map(LayerKey::from_string),
+        parent: parent.map(FullyQualifiedMoniker::from_string),
         window_label: WindowLabel::from_string(window),
         last_focused: None,
     }
 }
 
-/// Registering a [`FocusScope`] and a [`FocusZone`] under different keys
-/// stores them in the same `SpatialKey`-indexed map but exposes them
-/// through the variant-typed accessors. The leaf accessor (`scope`)
-/// returns `Some` only for leaves; the zone accessor (`zone`) returns
-/// `Some` only for zones.
+/// Registering a [`FocusScope`] and a [`FocusZone`] under different FQMs
+/// stores them in the same FQM-indexed map but exposes them through the
+/// variant-typed accessors. The leaf accessor (`scope`) returns `Some`
+/// only for leaves; the zone accessor (`zone`) returns `Some` only for
+/// zones.
 #[test]
 fn registry_returns_typed_accessor_for_each_variant() {
     let mut reg = SpatialRegistry::new();
-    let leaf = make_focus_scope("k-leaf", "ui:leaf", "L1", None);
-    let zone = make_zone("k-zone", "ui:zone", "L1", None);
+    let leaf = make_focus_scope("/L1/leaf", "leaf", "/L1", None);
+    let zone = make_zone("/L1/zone", "zone", "/L1", None);
     reg.register_scope(leaf);
     reg.register_zone(zone);
 
-    assert!(reg.scope(&SpatialKey::from_string("k-leaf")).is_some());
-    assert!(reg.zone(&SpatialKey::from_string("k-leaf")).is_none());
+    let leaf_fq = FullyQualifiedMoniker::from_string("/L1/leaf");
+    let zone_fq = FullyQualifiedMoniker::from_string("/L1/zone");
 
-    assert!(reg.zone(&SpatialKey::from_string("k-zone")).is_some());
-    assert!(reg.scope(&SpatialKey::from_string("k-zone")).is_none());
+    assert!(reg.scope(&leaf_fq).is_some());
+    assert!(reg.zone(&leaf_fq).is_none());
 
-    // Both keys are registered (variant-blind check).
-    assert!(reg.is_registered(&SpatialKey::from_string("k-leaf")));
-    assert!(reg.is_registered(&SpatialKey::from_string("k-zone")));
-    assert!(!reg.is_registered(&SpatialKey::from_string("ghost")));
+    assert!(reg.zone(&zone_fq).is_some());
+    assert!(reg.scope(&zone_fq).is_none());
+
+    // Both FQMs are registered (variant-blind check).
+    assert!(reg.is_registered(&leaf_fq));
+    assert!(reg.is_registered(&zone_fq));
+    assert!(!reg.is_registered(&FullyQualifiedMoniker::from_string("/ghost")));
 }
 
 /// `update_rect` mutates the stored rect of a registered scope without
@@ -218,7 +217,7 @@ fn registry_returns_typed_accessor_for_each_variant() {
 #[test]
 fn update_rect_preserves_variant_and_other_fields() {
     let mut reg = SpatialRegistry::new();
-    let leaf = make_focus_scope("k", "ui:leaf", "L1", Some("parent"));
+    let leaf = make_focus_scope("/L1/k", "k", "/L1", Some("/L1/parent"));
     reg.register_scope(leaf);
 
     let new_rect = Rect {
@@ -227,91 +226,109 @@ fn update_rect_preserves_variant_and_other_fields() {
         width: Pixels::new(7.0),
         height: Pixels::new(8.0),
     };
-    reg.update_rect(&SpatialKey::from_string("k"), new_rect);
+    let fq = FullyQualifiedMoniker::from_string("/L1/k");
+    reg.update_rect(&fq, new_rect);
 
-    let scope = reg.scope(&SpatialKey::from_string("k")).unwrap();
+    let scope = reg.scope(&fq).unwrap();
     assert_eq!(scope.rect, new_rect);
-    assert_eq!(scope.parent_zone, Some(SpatialKey::from_string("parent")));
+    assert_eq!(
+        scope.parent_zone,
+        Some(FullyQualifiedMoniker::from_string("/L1/parent"))
+    );
 }
 
 /// `unregister_scope` removes the scope from the map.
 #[test]
 fn unregister_removes_scope() {
     let mut reg = SpatialRegistry::new();
-    let leaf = make_focus_scope("k", "ui:leaf", "L1", None);
+    let leaf = make_focus_scope("/L1/k", "k", "/L1", None);
     reg.register_scope(leaf);
-    assert!(reg.is_registered(&SpatialKey::from_string("k")));
+    let fq = FullyQualifiedMoniker::from_string("/L1/k");
+    assert!(reg.is_registered(&fq));
 
-    reg.unregister_scope(&SpatialKey::from_string("k"));
-    assert!(!reg.is_registered(&SpatialKey::from_string("k")));
+    reg.unregister_scope(&fq);
+    assert!(!reg.is_registered(&fq));
 }
 
-/// `find_by_moniker` resolves a [`Moniker`] to its registered
-/// [`SpatialKey`]. The kernel's `SpatialState::focus_by_moniker` (and
-/// the `spatial_focus_by_moniker` Tauri command) use this to honor
-/// React-side `setFocus(moniker)` calls without making the React side
-/// keep its own moniker → key map.
+/// `find_by_fq` resolves a [`FullyQualifiedMoniker`] to its registered
+/// entry. The kernel's path-as-key contract means the FQM IS the
+/// registry key; lookups are exact-match.
 #[test]
-fn find_by_moniker_resolves_to_registered_key() {
+fn find_by_fq_resolves_to_registered_entry() {
     let mut reg = SpatialRegistry::new();
-    reg.register_scope(make_focus_scope("k1", "task:01ABC", "L1", None));
-    reg.register_zone(make_zone("z1", "column:doing", "L1", None));
+    reg.register_scope(make_focus_scope(
+        "/L1/task:01ABC",
+        "task:01ABC",
+        "/L1",
+        None,
+    ));
+    reg.register_zone(make_zone("/L1/column:doing", "column:doing", "/L1", None));
 
+    let leaf_entry = reg
+        .find_by_fq(&FullyQualifiedMoniker::from_string("/L1/task:01ABC"))
+        .expect("leaf FQM resolves to its registered entry");
     assert_eq!(
-        reg.find_by_moniker(&Moniker::from_string("task:01ABC")),
-        Some(&SpatialKey::from_string("k1")),
-        "leaf moniker resolves to its scope key"
+        leaf_entry.segment(),
+        &SegmentMoniker::from_string("task:01ABC")
     );
+
+    let zone_entry = reg
+        .find_by_fq(&FullyQualifiedMoniker::from_string("/L1/column:doing"))
+        .expect("zone FQM resolves to its registered entry");
     assert_eq!(
-        reg.find_by_moniker(&Moniker::from_string("column:doing")),
-        Some(&SpatialKey::from_string("z1")),
-        "zone moniker resolves to its zone key"
+        zone_entry.segment(),
+        &SegmentMoniker::from_string("column:doing")
     );
 }
 
-/// `find_by_moniker` returns `None` for an unregistered moniker. The
-/// kernel translates this to `tracing::error!` + `None` in
-/// [`SpatialState::focus_by_moniker`]; the Tauri adapter surfaces the
-/// `None` to the React caller as `Err(_)`.
+/// `find_by_fq` returns `None` for an unregistered FQM. Higher-level
+/// callers translate this to `tracing::error!` per the
+/// no-silent-dropout contract.
 #[test]
-fn find_by_moniker_unknown_returns_none() {
+fn find_by_fq_unknown_returns_none() {
     let mut reg = SpatialRegistry::new();
-    reg.register_scope(make_focus_scope("k1", "task:01", "L1", None));
+    reg.register_scope(make_focus_scope("/L1/task:01", "task:01", "/L1", None));
 
     assert!(reg
-        .find_by_moniker(&Moniker::from_string("task:does-not-exist"))
+        .find_by_fq(&FullyQualifiedMoniker::from_string(
+            "/L1/task:does-not-exist"
+        ))
         .is_none());
 }
 
-/// `find_by_moniker` returns a deterministic key when two distinct
-/// scopes are registered with the same moniker (an invariant violation
-/// in production, typically caused by a React-side bug that mints two
-/// `<FocusScope>` mounts with the same moniker). The kernel does not
-/// enforce uniqueness — it observes — so the returned key is whichever
-/// the underlying HashMap iteration yields first. The dangerous part
-/// is the silent non-determinism, so the implementation also emits a
-/// `tracing::warn!` when it detects the duplicate; this test pins the
-/// "still findable" half of that contract by registering both
-/// orderings against an isolated registry and asserting the lookup
-/// returns one of the two registered keys (not an unrelated key, not
-/// `None`).
+/// Registering the same FQM twice replaces the prior entry — same
+/// semantics as today's "register_zone replaces any prior scope under
+/// the same key". A real duplicate FQM is a programmer mistake (two
+/// `<FocusScope>` mounts whose composed paths collide); the kernel
+/// surfaces it via `tracing::error!` and lets the second registration
+/// win so re-mounts under the same path stay idempotent.
 #[test]
-fn find_by_moniker_duplicate_returns_one_of_the_registered_keys() {
+fn duplicate_fq_registration_replaces_prior_entry() {
     let mut reg = SpatialRegistry::new();
-    let shared = "task:duplicate";
-    reg.register_scope(make_focus_scope("k1", shared, "L1", None));
-    reg.register_scope(make_focus_scope("k2", shared, "L1", None));
+    let path = "/L1/task:duplicate";
+
+    let mut first = make_focus_scope(path, "task:duplicate", "/L1", None);
+    first.rect = Rect {
+        x: Pixels::new(1.0),
+        y: Pixels::new(1.0),
+        width: Pixels::new(10.0),
+        height: Pixels::new(10.0),
+    };
+    reg.register_scope(first);
+
+    let mut second = make_focus_scope(path, "task:duplicate", "/L1", None);
+    second.rect = Rect {
+        x: Pixels::new(99.0),
+        y: Pixels::new(99.0),
+        width: Pixels::new(10.0),
+        height: Pixels::new(10.0),
+    };
+    reg.register_scope(second);
 
     let resolved = reg
-        .find_by_moniker(&Moniker::from_string(shared))
-        .expect("duplicate-moniker registration must still resolve to one of the keys");
-
-    let k1 = SpatialKey::from_string("k1");
-    let k2 = SpatialKey::from_string("k2");
-    assert!(
-        resolved == &k1 || resolved == &k2,
-        "find_by_moniker must return one of the two registered keys, got {resolved:?}"
-    );
+        .scope(&FullyQualifiedMoniker::from_string(path))
+        .expect("duplicate FQM still resolves to one registered entry");
+    assert_eq!(resolved.rect.x, Pixels::new(99.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -326,26 +343,31 @@ fn find_by_moniker_duplicate_returns_one_of_the_registered_keys() {
 fn children_of_zone_returns_direct_children_only() {
     let mut reg = SpatialRegistry::new();
     // outer zone → inner zone → leaf
-    reg.register_zone(make_zone("outer", "ui:outer", "L1", None));
-    reg.register_zone(make_zone("inner", "ui:inner", "L1", Some("outer")));
-    reg.register_scope(make_focus_scope(
-        "leaf-outer",
-        "ui:leaf-outer",
-        "L1",
-        Some("outer"),
+    reg.register_zone(make_zone("/L1/outer", "outer", "/L1", None));
+    reg.register_zone(make_zone(
+        "/L1/outer/inner",
+        "inner",
+        "/L1",
+        Some("/L1/outer"),
     ));
     reg.register_scope(make_focus_scope(
+        "/L1/outer/leaf-outer",
+        "leaf-outer",
+        "/L1",
+        Some("/L1/outer"),
+    ));
+    reg.register_scope(make_focus_scope(
+        "/L1/outer/inner/leaf-inner",
         "leaf-inner",
-        "ui:leaf-inner",
-        "L1",
-        Some("inner"),
+        "/L1",
+        Some("/L1/outer/inner"),
     ));
 
-    let outer_kids: Vec<&SpatialKey> = reg
-        .children_of_zone(&SpatialKey::from_string("outer"))
+    let outer_kids: Vec<&FullyQualifiedMoniker> = reg
+        .children_of_zone(&FullyQualifiedMoniker::from_string("/L1/outer"))
         .map(|c| match c {
-            ChildScope::Leaf(f) => &f.key,
-            ChildScope::Zone(z) => &z.key,
+            ChildScope::Leaf(f) => &f.fq,
+            ChildScope::Zone(z) => &z.fq,
         })
         .collect();
     assert_eq!(
@@ -353,10 +375,12 @@ fn children_of_zone_returns_direct_children_only() {
         2,
         "outer has 2 direct children: inner zone + leaf-outer"
     );
-    assert!(outer_kids.contains(&&SpatialKey::from_string("inner")));
-    assert!(outer_kids.contains(&&SpatialKey::from_string("leaf-outer")));
+    assert!(outer_kids.contains(&&FullyQualifiedMoniker::from_string("/L1/outer/inner")));
+    assert!(outer_kids.contains(&&FullyQualifiedMoniker::from_string("/L1/outer/leaf-outer")));
     assert!(
-        !outer_kids.contains(&&SpatialKey::from_string("leaf-inner")),
+        !outer_kids.contains(&&FullyQualifiedMoniker::from_string(
+            "/L1/outer/inner/leaf-inner"
+        )),
         "leaf-inner is a grandchild — must not show up"
     );
 }
@@ -366,23 +390,40 @@ fn children_of_zone_returns_direct_children_only() {
 #[test]
 fn ancestor_zones_walks_parent_chain_innermost_first() {
     let mut reg = SpatialRegistry::new();
-    reg.register_zone(make_zone("outer", "ui:outer", "L1", None));
-    reg.register_zone(make_zone("middle", "ui:middle", "L1", Some("outer")));
-    reg.register_zone(make_zone("inner", "ui:inner", "L1", Some("middle")));
-    reg.register_scope(make_focus_scope("leaf", "ui:leaf", "L1", Some("inner")));
+    reg.register_zone(make_zone("/L1/outer", "outer", "/L1", None));
+    reg.register_zone(make_zone(
+        "/L1/outer/middle",
+        "middle",
+        "/L1",
+        Some("/L1/outer"),
+    ));
+    reg.register_zone(make_zone(
+        "/L1/outer/middle/inner",
+        "inner",
+        "/L1",
+        Some("/L1/outer/middle"),
+    ));
+    reg.register_scope(make_focus_scope(
+        "/L1/outer/middle/inner/leaf",
+        "leaf",
+        "/L1",
+        Some("/L1/outer/middle/inner"),
+    ));
 
-    let chain: Vec<&SpatialKey> = reg
-        .ancestor_zones(&SpatialKey::from_string("leaf"))
+    let chain: Vec<&FullyQualifiedMoniker> = reg
+        .ancestor_zones(&FullyQualifiedMoniker::from_string(
+            "/L1/outer/middle/inner/leaf",
+        ))
         .into_iter()
-        .map(|z| &z.key)
+        .map(|z| &z.fq)
         .collect();
 
     assert_eq!(
         chain,
         vec![
-            &SpatialKey::from_string("inner"),
-            &SpatialKey::from_string("middle"),
-            &SpatialKey::from_string("outer"),
+            &FullyQualifiedMoniker::from_string("/L1/outer/middle/inner"),
+            &FullyQualifiedMoniker::from_string("/L1/outer/middle"),
+            &FullyQualifiedMoniker::from_string("/L1/outer"),
         ]
     );
 }
@@ -392,10 +433,10 @@ fn ancestor_zones_walks_parent_chain_innermost_first() {
 #[test]
 fn ancestor_zones_at_layer_root_is_empty() {
     let mut reg = SpatialRegistry::new();
-    reg.register_scope(make_focus_scope("leaf", "ui:leaf", "L1", None));
+    reg.register_scope(make_focus_scope("/L1/leaf", "leaf", "/L1", None));
 
     assert!(reg
-        .ancestor_zones(&SpatialKey::from_string("leaf"))
+        .ancestor_zones(&FullyQualifiedMoniker::from_string("/L1/leaf"))
         .is_empty());
 }
 
@@ -404,29 +445,47 @@ fn ancestor_zones_at_layer_root_is_empty() {
 // ---------------------------------------------------------------------------
 
 /// `children_of_layer` returns layers whose `parent` matches the queried
-/// key. Layers belonging to other windows or other parents are filtered
+/// FQM. Layers belonging to other windows or other parents are filtered
 /// out.
 #[test]
 fn children_of_layer_filters_by_parent_not_cross_window() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("root-a", "window", "win-a", None));
-    reg.push_layer(make_layer("root-b", "window", "win-b", None));
-    reg.push_layer(make_layer("ins-a", "inspector", "win-a", Some("root-a")));
-    reg.push_layer(make_layer("ins-b", "inspector", "win-b", Some("root-b")));
-    reg.push_layer(make_layer("dlg-a", "dialog", "win-a", Some("ins-a")));
+    reg.push_layer(make_layer("/win-a", "window", "win-a", None));
+    reg.push_layer(make_layer("/win-b", "window", "win-b", None));
+    reg.push_layer(make_layer(
+        "/win-a/inspector",
+        "inspector",
+        "win-a",
+        Some("/win-a"),
+    ));
+    reg.push_layer(make_layer(
+        "/win-b/inspector",
+        "inspector",
+        "win-b",
+        Some("/win-b"),
+    ));
+    reg.push_layer(make_layer(
+        "/win-a/inspector/dialog",
+        "dialog",
+        "win-a",
+        Some("/win-a/inspector"),
+    ));
 
-    let kids_a: Vec<&LayerKey> = reg
-        .children_of_layer(&LayerKey::from_string("root-a"))
+    let kids_a: Vec<&FullyQualifiedMoniker> = reg
+        .children_of_layer(&FullyQualifiedMoniker::from_string("/win-a"))
         .into_iter()
-        .map(|l| &l.key)
+        .map(|l| &l.fq)
         .collect();
 
     assert_eq!(
         kids_a.len(),
         1,
-        "root-a has exactly one child layer (ins-a)"
+        "/win-a has exactly one child layer (the inspector)"
     );
-    assert_eq!(kids_a[0], &LayerKey::from_string("ins-a"));
+    assert_eq!(
+        kids_a[0],
+        &FullyQualifiedMoniker::from_string("/win-a/inspector")
+    );
 }
 
 /// `root_for_window` returns the layer with the matching `window_label`
@@ -434,19 +493,24 @@ fn children_of_layer_filters_by_parent_not_cross_window() {
 #[test]
 fn root_for_window_returns_window_root_only() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("root-a", "window", "win-a", None));
-    reg.push_layer(make_layer("ins-a", "inspector", "win-a", Some("root-a")));
-    reg.push_layer(make_layer("root-b", "window", "win-b", None));
+    reg.push_layer(make_layer("/win-a", "window", "win-a", None));
+    reg.push_layer(make_layer(
+        "/win-a/inspector",
+        "inspector",
+        "win-a",
+        Some("/win-a"),
+    ));
+    reg.push_layer(make_layer("/win-b", "window", "win-b", None));
 
     let root_a = reg
         .root_for_window(&WindowLabel::from_string("win-a"))
         .unwrap();
-    assert_eq!(root_a.key, LayerKey::from_string("root-a"));
+    assert_eq!(root_a.fq, FullyQualifiedMoniker::from_string("/win-a"));
 
     let root_b = reg
         .root_for_window(&WindowLabel::from_string("win-b"))
         .unwrap();
-    assert_eq!(root_b.key, LayerKey::from_string("root-b"));
+    assert_eq!(root_b.fq, FullyQualifiedMoniker::from_string("/win-b"));
 
     assert!(reg
         .root_for_window(&WindowLabel::from_string("ghost"))
@@ -458,64 +522,77 @@ fn root_for_window_returns_window_root_only() {
 #[test]
 fn ancestors_of_layer_walks_parent_chain() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("root", "window", "win-a", None));
-    reg.push_layer(make_layer("ins", "inspector", "win-a", Some("root")));
-    reg.push_layer(make_layer("dlg", "dialog", "win-a", Some("ins")));
+    reg.push_layer(make_layer("/win-a", "window", "win-a", None));
+    reg.push_layer(make_layer(
+        "/win-a/ins",
+        "inspector",
+        "win-a",
+        Some("/win-a"),
+    ));
+    reg.push_layer(make_layer(
+        "/win-a/ins/dlg",
+        "dialog",
+        "win-a",
+        Some("/win-a/ins"),
+    ));
 
-    let chain: Vec<&LayerKey> = reg
-        .ancestors_of_layer(&LayerKey::from_string("dlg"))
+    let chain: Vec<&FullyQualifiedMoniker> = reg
+        .ancestors_of_layer(&FullyQualifiedMoniker::from_string("/win-a/ins/dlg"))
         .into_iter()
-        .map(|l| &l.key)
+        .map(|l| &l.fq)
         .collect();
 
     assert_eq!(
         chain,
         vec![
-            &LayerKey::from_string("ins"),
-            &LayerKey::from_string("root"),
+            &FullyQualifiedMoniker::from_string("/win-a/ins"),
+            &FullyQualifiedMoniker::from_string("/win-a"),
         ]
     );
 }
 
-/// `remove_layer` deletes the layer; subsequent `layer(key)` returns
+/// `remove_layer` deletes the layer; subsequent `layer(fq)` returns
 /// `None`.
 #[test]
 fn remove_layer_drops_the_entry() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("L", "window", "win-a", None));
-    assert!(reg.layer(&LayerKey::from_string("L")).is_some());
+    reg.push_layer(make_layer("/L", "window", "win-a", None));
+    let fq = FullyQualifiedMoniker::from_string("/L");
+    assert!(reg.layer(&fq).is_some());
 
-    reg.remove_layer(&LayerKey::from_string("L"));
-    assert!(reg.layer(&LayerKey::from_string("L")).is_none());
+    reg.remove_layer(&fq);
+    assert!(reg.layer(&fq).is_none());
 }
 
 /// `leaves_in_layer` and `zones_in_layer` return typed structs filtered
-/// by `layer_key`. Scopes in other layers are excluded.
+/// by `layer_fq`. Scopes in other layers are excluded.
 #[test]
-fn leaves_and_zones_in_layer_filter_by_layer_key() {
+fn leaves_and_zones_in_layer_filter_by_layer_fq() {
     let mut reg = SpatialRegistry::new();
-    reg.register_scope(make_focus_scope("leaf-1", "ui:leaf-1", "L1", None));
-    reg.register_zone(make_zone("zone-1", "ui:zone-1", "L1", None));
-    reg.register_scope(make_focus_scope("leaf-2", "ui:leaf-2", "L2", None));
+    reg.register_scope(make_focus_scope("/L1/leaf-1", "leaf-1", "/L1", None));
+    reg.register_zone(make_zone("/L1/zone-1", "zone-1", "/L1", None));
+    reg.register_scope(make_focus_scope("/L2/leaf-2", "leaf-2", "/L2", None));
 
-    let leaf_keys: Vec<&SpatialKey> = reg
-        .leaves_in_layer(&LayerKey::from_string("L1"))
-        .map(|f| &f.key)
-        .collect();
-    let zone_keys: Vec<&SpatialKey> = reg
-        .zones_in_layer(&LayerKey::from_string("L1"))
-        .map(|z| &z.key)
-        .collect();
+    let l1 = FullyQualifiedMoniker::from_string("/L1");
+    let l2 = FullyQualifiedMoniker::from_string("/L2");
 
-    assert_eq!(leaf_keys, vec![&SpatialKey::from_string("leaf-1")]);
-    assert_eq!(zone_keys, vec![&SpatialKey::from_string("zone-1")]);
+    let leaf_fqs: Vec<&FullyQualifiedMoniker> = reg.leaves_in_layer(&l1).map(|f| &f.fq).collect();
+    let zone_fqs: Vec<&FullyQualifiedMoniker> = reg.zones_in_layer(&l1).map(|z| &z.fq).collect();
 
-    // L2 has only the second leaf.
-    let l2_leaves: Vec<&SpatialKey> = reg
-        .leaves_in_layer(&LayerKey::from_string("L2"))
-        .map(|f| &f.key)
-        .collect();
-    assert_eq!(l2_leaves, vec![&SpatialKey::from_string("leaf-2")]);
+    assert_eq!(
+        leaf_fqs,
+        vec![&FullyQualifiedMoniker::from_string("/L1/leaf-1")]
+    );
+    assert_eq!(
+        zone_fqs,
+        vec![&FullyQualifiedMoniker::from_string("/L1/zone-1")]
+    );
+
+    let l2_leaves: Vec<&FullyQualifiedMoniker> = reg.leaves_in_layer(&l2).map(|f| &f.fq).collect();
+    assert_eq!(
+        l2_leaves,
+        vec![&FullyQualifiedMoniker::from_string("/L2/leaf-2")]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -524,56 +601,67 @@ fn leaves_and_zones_in_layer_filter_by_layer_key() {
 
 /// Build a realistic forest: two windows (each with a root layer and an
 /// inspector layer), plus a dialog layer stacked on one of the inspectors.
-/// Verify that:
-/// - `root_for_window` finds each window's root.
-/// - `ancestors_of_layer` for the dialog walks `dialog → inspector → root`.
-/// - `children_of_layer(window-A)` returns only the window-A inspector.
 #[test]
 fn forest_with_two_windows_and_stacked_overlays() {
     let mut reg = SpatialRegistry::new();
 
     // Two windows, each with a root layer.
-    reg.push_layer(make_layer("root-a", "window", "win-a", None));
-    reg.push_layer(make_layer("root-b", "window", "win-b", None));
+    reg.push_layer(make_layer("/win-a", "window", "win-a", None));
+    reg.push_layer(make_layer("/win-b", "window", "win-b", None));
 
     // Each window has an inspector overlay.
-    reg.push_layer(make_layer("ins-a", "inspector", "win-a", Some("root-a")));
-    reg.push_layer(make_layer("ins-b", "inspector", "win-b", Some("root-b")));
+    reg.push_layer(make_layer(
+        "/win-a/ins",
+        "inspector",
+        "win-a",
+        Some("/win-a"),
+    ));
+    reg.push_layer(make_layer(
+        "/win-b/ins",
+        "inspector",
+        "win-b",
+        Some("/win-b"),
+    ));
 
     // Window A has a dialog stacked on top of its inspector.
-    reg.push_layer(make_layer("dlg-a", "dialog", "win-a", Some("ins-a")));
+    reg.push_layer(make_layer(
+        "/win-a/ins/dlg",
+        "dialog",
+        "win-a",
+        Some("/win-a/ins"),
+    ));
 
-    // 5 layers, 2 roots.
     let root_a = reg
         .root_for_window(&WindowLabel::from_string("win-a"))
         .unwrap();
     let root_b = reg
         .root_for_window(&WindowLabel::from_string("win-b"))
         .unwrap();
-    assert_eq!(root_a.key, LayerKey::from_string("root-a"));
-    assert_eq!(root_b.key, LayerKey::from_string("root-b"));
+    assert_eq!(root_a.fq, FullyQualifiedMoniker::from_string("/win-a"));
+    assert_eq!(root_b.fq, FullyQualifiedMoniker::from_string("/win-b"));
 
-    // Dialog ancestors: ins-a, root-a (innermost first, no cross to win-b).
-    let dlg_ancestors: Vec<&LayerKey> = reg
-        .ancestors_of_layer(&LayerKey::from_string("dlg-a"))
+    let dlg_ancestors: Vec<&FullyQualifiedMoniker> = reg
+        .ancestors_of_layer(&FullyQualifiedMoniker::from_string("/win-a/ins/dlg"))
         .into_iter()
-        .map(|l| &l.key)
+        .map(|l| &l.fq)
         .collect();
     assert_eq!(
         dlg_ancestors,
         vec![
-            &LayerKey::from_string("ins-a"),
-            &LayerKey::from_string("root-a"),
+            &FullyQualifiedMoniker::from_string("/win-a/ins"),
+            &FullyQualifiedMoniker::from_string("/win-a"),
         ]
     );
 
-    // Children of root-a: ins-a only (ins-b belongs to root-b).
-    let root_a_kids: Vec<&LayerKey> = reg
-        .children_of_layer(&LayerKey::from_string("root-a"))
+    let root_a_kids: Vec<&FullyQualifiedMoniker> = reg
+        .children_of_layer(&FullyQualifiedMoniker::from_string("/win-a"))
         .into_iter()
-        .map(|l| &l.key)
+        .map(|l| &l.fq)
         .collect();
-    assert_eq!(root_a_kids, vec![&LayerKey::from_string("ins-a")]);
+    assert_eq!(
+        root_a_kids,
+        vec![&FullyQualifiedMoniker::from_string("/win-a/ins")]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -582,23 +670,27 @@ fn forest_with_two_windows_and_stacked_overlays() {
 
 /// `FocusScope.overrides` map round-trips through serde with `Direction` as
 /// the JSON key. `None` value preserves an explicit "wall" override (block
-/// nav in this direction); `Some(Moniker)` is an explicit redirect.
+/// nav in this direction); `Some(FullyQualifiedMoniker)` is an explicit
+/// redirect.
 #[test]
 fn focus_scope_overrides_round_trip_with_direction_keys() {
-    let mut overrides: HashMap<Direction, Option<Moniker>> = HashMap::new();
-    overrides.insert(Direction::Up, Some(Moniker::from_string("ui:above")));
+    let mut overrides: HashMap<Direction, Option<FullyQualifiedMoniker>> = HashMap::new();
+    overrides.insert(
+        Direction::Up,
+        Some(FullyQualifiedMoniker::from_string("/L/above")),
+    );
     overrides.insert(Direction::Left, None);
 
     let f = FocusScope {
-        key: SpatialKey::from_string("k"),
-        moniker: Moniker::from_string("ui:k"),
+        fq: FullyQualifiedMoniker::from_string("/L/k"),
+        segment: SegmentMoniker::from_string("k"),
         rect: Rect {
             x: Pixels::new(0.0),
             y: Pixels::new(0.0),
             width: Pixels::new(1.0),
             height: Pixels::new(1.0),
         },
-        layer_key: LayerKey::from_string("L"),
+        layer_fq: FullyQualifiedMoniker::from_string("/L"),
         parent_zone: None,
         overrides,
     };
@@ -609,7 +701,7 @@ fn focus_scope_overrides_round_trip_with_direction_keys() {
     assert_eq!(back.overrides.len(), 2);
     assert_eq!(
         back.overrides.get(&Direction::Up),
-        Some(&Some(Moniker::from_string("ui:above")))
+        Some(&Some(FullyQualifiedMoniker::from_string("/L/above")))
     );
     assert_eq!(back.overrides.get(&Direction::Left), Some(&None));
 }

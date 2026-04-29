@@ -3,8 +3,8 @@
 //! Every signature in the spatial-nav surface uses one of the newtypes
 //! defined here — never a bare `String` or `f64`. This is enforced by the
 //! task spec: the frontend mirrors these as TypeScript branded types so
-//! mixing up a `WindowLabel` and a `Moniker` is a compile error on both
-//! sides of the Tauri boundary.
+//! mixing up a [`WindowLabel`] and a [`FullyQualifiedMoniker`] is a
+//! compile error on both sides of the Tauri boundary.
 //!
 //! All string-valued newtypes are produced by the canonical
 //! [`swissarmyhammer_common::define_id!`] macro, matching the pattern used
@@ -12,6 +12,23 @@
 //! us `#[serde(transparent)]`, `Display`, `AsRef<str>`, `From<&str>`,
 //! `From<String>`, `Deref<str>`, `FromStr`, and `PartialEq<str>` for free,
 //! plus `new()` (fresh ULID) and `from_string()` constructors.
+//!
+//! # Path-monikers identifier model
+//!
+//! The kernel uses **one** identifier shape per primitive — the
+//! [`FullyQualifiedMoniker`]. The path through the focus hierarchy
+//! IS the spatial key. Consumers declare a relative [`SegmentMoniker`]
+//! when constructing a `<FocusLayer>` / `<FocusZone>` / `<FocusScope>`
+//! and the FQM is composed by parent/child nesting on the consumer side
+//! before being passed to the kernel.
+//!
+//! There is no UUID-based `SpatialKey` and no flat `Moniker`. Path is
+//! the key, the key is exact-match. See the parent path-monikers card
+//! (`01KQD6064G1C1RAXDFPJVT1F46`) for the structural-bug rationale: with
+//! flat `Moniker`s the inspector's `field:T1.title` zone collided with
+//! the board's `field:T1.title` zone in the registry's lookup table,
+//! and `find_by_moniker` resolved non-deterministically. FQMs eliminate
+//! the collision by construction.
 //!
 //! [`Pixels`] is the only numeric newtype on the spatial-nav surface, so
 //! it is hand-rolled with arithmetic ops (`+`, `-`, `*`, `/`) that keep
@@ -33,18 +50,64 @@ define_id!(
     "Tauri window label — which window a scope/layer lives in"
 );
 define_id!(
-    SpatialKey,
-    "ULID per FocusLayer/FocusZone/FocusScope instance"
+    SegmentMoniker,
+    "Relative path segment declared by a consumer, e.g. \"field:T1.title\", \"card:T1\", \"inspector\". Composed with a parent FQM via `FullyQualifiedMoniker::compose` to form a canonical key."
 );
-define_id!(LayerKey, "ULID per FocusLayer instance");
 define_id!(
-    Moniker,
-    "Entity focus identity: \"task:01ABC\", \"ui:toolbar.new\""
+    FullyQualifiedMoniker,
+    "Canonical path through the focus hierarchy, e.g. \"/window/inspector/field:T1.title\". The FQM IS the spatial key — used as the registry key, the focus identity, and the wire-format identifier on every spatial-nav IPC."
 );
 define_id!(
     LayerName,
     "Layer role: \"window\", \"inspector\", \"dialog\", \"palette\""
 );
+
+/// Path separator used by [`FullyQualifiedMoniker::compose`] and
+/// [`FullyQualifiedMoniker::root`]. Mirrors the `/window/...` shape the
+/// React side composes via `FullyQualifiedMonikerContext`. Separator
+/// choice is a wire-format detail; both sides agree on `'/'`.
+const FQ_SEPARATOR: char = '/';
+
+impl FullyQualifiedMoniker {
+    /// Construct the FQM for a **layer root** — the topmost segment in
+    /// a window's spatial hierarchy. The result is `"/<segment>"`,
+    /// e.g. `FullyQualifiedMoniker::root(&seg("window"))` produces
+    /// `/window`.
+    ///
+    /// Layer roots are the only primitives constructed without a
+    /// parent FQM — every other zone or scope composes against a
+    /// parent via [`Self::compose`].
+    pub fn root(segment: &SegmentMoniker) -> Self {
+        Self(format!("{FQ_SEPARATOR}{}", segment.as_str()))
+    }
+
+    /// Compose a child FQM by appending `segment` to `parent` with the
+    /// path separator. The result is `"<parent>/<segment>"`.
+    ///
+    /// This is the only way to construct a non-root FQM in well-formed
+    /// kernel code. The React adapter performs the same composition via
+    /// `FullyQualifiedMonikerContext` so the kernel and React agree on
+    /// the canonical path string for every primitive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use swissarmyhammer_focus::{FullyQualifiedMoniker, SegmentMoniker};
+    /// let window = FullyQualifiedMoniker::root(&SegmentMoniker::from_string("window"));
+    /// let inspector = FullyQualifiedMoniker::compose(
+    ///     &window,
+    ///     &SegmentMoniker::from_string("inspector"),
+    /// );
+    /// assert_eq!(inspector.as_str(), "/window/inspector");
+    /// ```
+    pub fn compose(parent: &FullyQualifiedMoniker, segment: &SegmentMoniker) -> Self {
+        Self(format!(
+            "{}{FQ_SEPARATOR}{}",
+            parent.as_str(),
+            segment.as_str()
+        ))
+    }
+}
 
 /// Navigation direction passed to `spatial_navigate`.
 ///
@@ -263,16 +326,62 @@ mod tests {
     #[test]
     fn newtypes_serialize_as_bare_strings() {
         let label = WindowLabel::from_string("main");
-        let key = SpatialKey::from_string("01ABC");
-        let layer = LayerKey::from_string("01XYZ");
-        let moniker = Moniker::from_string("task:01ABC");
+        let segment = SegmentMoniker::from_string("field:T1.title");
+        let fq = FullyQualifiedMoniker::from_string("/window/inspector/field:T1.title");
         let name = LayerName::from_string("inspector");
 
         assert_eq!(serde_json::to_string(&label).unwrap(), "\"main\"");
-        assert_eq!(serde_json::to_string(&key).unwrap(), "\"01ABC\"");
-        assert_eq!(serde_json::to_string(&layer).unwrap(), "\"01XYZ\"");
-        assert_eq!(serde_json::to_string(&moniker).unwrap(), "\"task:01ABC\"");
+        assert_eq!(
+            serde_json::to_string(&segment).unwrap(),
+            "\"field:T1.title\""
+        );
+        assert_eq!(
+            serde_json::to_string(&fq).unwrap(),
+            "\"/window/inspector/field:T1.title\""
+        );
         assert_eq!(serde_json::to_string(&name).unwrap(), "\"inspector\"");
+    }
+
+    /// `FullyQualifiedMoniker::root` produces a leading-slash path with
+    /// the supplied segment. Every layer root in the kernel is built
+    /// this way so the path shape is uniform across the registry.
+    #[test]
+    fn fq_root_prefixes_separator() {
+        let window = FullyQualifiedMoniker::root(&SegmentMoniker::from_string("window"));
+        assert_eq!(window.as_str(), "/window");
+    }
+
+    /// `FullyQualifiedMoniker::compose` appends a segment to a parent
+    /// with a single separator between them. Composition is the only
+    /// path through which non-root FQMs are minted in well-formed
+    /// kernel code.
+    #[test]
+    fn fq_compose_appends_segment() {
+        let window = FullyQualifiedMoniker::root(&SegmentMoniker::from_string("window"));
+        let inspector =
+            FullyQualifiedMoniker::compose(&window, &SegmentMoniker::from_string("inspector"));
+        assert_eq!(inspector.as_str(), "/window/inspector");
+
+        let field = FullyQualifiedMoniker::compose(
+            &inspector,
+            &SegmentMoniker::from_string("field:T1.title"),
+        );
+        assert_eq!(field.as_str(), "/window/inspector/field:T1.title");
+    }
+
+    /// `SegmentMoniker` and `FullyQualifiedMoniker` are distinct types
+    /// — the type system rejects passing one where the other is
+    /// expected. This is the safety net the path-monikers refactor
+    /// relies on; an accidental `String` alias would silently let
+    /// segment values reach `find_by_fq` callsites.
+    #[test]
+    fn segment_and_fq_are_distinct_types() {
+        use std::any::TypeId;
+
+        assert_ne!(
+            TypeId::of::<SegmentMoniker>(),
+            TypeId::of::<FullyQualifiedMoniker>(),
+        );
     }
 
     /// Direction serializes to lower-case so React can mirror it as a
@@ -293,9 +402,13 @@ mod tests {
     /// the workspace's IDs.
     #[test]
     fn newtypes_use_define_id_surface() {
-        let key = SpatialKey::from_string("hello");
-        assert_eq!(key.as_str(), "hello");
-        assert_eq!(format!("{}", key), "hello");
+        let fq = FullyQualifiedMoniker::from_string("/window/inspector");
+        assert_eq!(fq.as_str(), "/window/inspector");
+        assert_eq!(format!("{}", fq), "/window/inspector");
+
+        let segment = SegmentMoniker::from_string("inspector");
+        assert_eq!(segment.as_str(), "inspector");
+        assert_eq!(format!("{}", segment), "inspector");
     }
 
     /// `Pixels` arithmetic returns `Pixels`, never `f64`. The unit tests

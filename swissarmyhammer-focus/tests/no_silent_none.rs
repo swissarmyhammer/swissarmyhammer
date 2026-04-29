@@ -3,36 +3,31 @@
 //!
 //! Pins the contract documented on
 //! [`swissarmyhammer_focus::navigate`]: every nav / drill API returns a
-//! [`Moniker`] (never `Option<Moniker>`); when motion is not possible
-//! the kernel echoes the focused moniker, and torn-state paths
-//! (unknown key, orphan parent reference) additionally emit
+//! [`FullyQualifiedMoniker`] (never `Option<FullyQualifiedMoniker>`); when motion is not possible
+//! the kernel echoes the focused FQM, and torn-state paths
+//! (unknown FQM, orphan parent reference) additionally emit
 //! `tracing::error!` so the issue is observable in logs.
 //!
 //! Each test below sets up a registry, captures `tracing::error!`
 //! events while invoking the kernel, and asserts:
 //!
-//! 1. The returned [`Moniker`] matches the contract for the path
-//!    being exercised (peer match, drill-out, focused-moniker echo).
+//! 1. The returned [`FullyQualifiedMoniker`] matches the contract for
+//!    the path being exercised (peer match, drill-out, focused-FQM
+//!    echo).
 //! 2. The event capture's count matches the contract: zero error
 //!    events on the well-formed semantic-edge paths (override wall,
 //!    layer root, leaf with no children, empty zone), exactly one
-//!    error event on the torn-state paths (unknown key, orphan
+//!    error event on the torn-state paths (unknown FQM, orphan
 //!    parent ref).
 //!
-//! The tracing capture is a custom [`tracing_subscriber`] layer that
-//! counts events and stores their fields — we read fields back to
-//! verify the kernel emitted the expected `op = "nav" | "drill_in" |
-//! "drill_out"` discriminator and included the focused key / moniker
-//! in the structured payload.
-//!
-//! [`Moniker`]: swissarmyhammer_focus::Moniker
+//! [`FullyQualifiedMoniker`]: swissarmyhammer_focus::FullyQualifiedMoniker
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, LayerKey, LayerName, Moniker,
-    NavStrategy, Pixels, Rect, SpatialKey, SpatialRegistry, WindowLabel,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 use tracing::{
     field::{Field, Visit},
@@ -48,17 +43,10 @@ use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer
 
 /// One captured `ERROR` event with the structured fields the kernel
 /// emits on torn-state paths.
-///
-/// The kernel emits events with at minimum an `op` field
-/// (`"nav"` / `"drill_in"` / `"drill_out"`) and a message describing
-/// the torn-state class. Optional `focused_key`, `focused_moniker`,
-/// and `parent_zone_key` fields carry the keys / monikers involved.
 #[derive(Debug, Default)]
 struct CapturedEvent {
     /// Field values rendered to string. Keys are field names; values
-    /// are the rendered fmt::Debug or fmt::Display output. The kernel
-    /// uses the structured field shape `op = "nav"` / `focused_key =
-    /// %key`, which renders here as a `String`.
+    /// are the rendered fmt::Debug or fmt::Display output.
     fields: HashMap<String, String>,
 }
 
@@ -72,10 +60,7 @@ impl CapturedEvent {
 }
 
 /// Visitor that copies each field into a `HashMap<String, String>` on
-/// the captured event. Implements both the `&dyn Debug` and `&dyn
-/// Display` arms so structured fields like `focused_key = %key` (which
-/// uses Display) and `op = "nav"` (which uses Debug for the literal)
-/// both round-trip readably.
+/// the captured event.
 struct FieldVisitor<'a>(&'a mut HashMap<String, String>);
 
 impl<'a> Visit for FieldVisitor<'a> {
@@ -89,8 +74,7 @@ impl<'a> Visit for FieldVisitor<'a> {
 }
 
 /// Tracing [`Layer`] that records ERROR-level events into a shared
-/// `Vec<CapturedEvent>`. Wrapping the `Vec` in `Arc<Mutex<…>>` lets
-/// the test thread inspect captures after the closure runs.
+/// `Vec<CapturedEvent>`.
 struct CapturingLayer {
     events: Arc<Mutex<Vec<CapturedEvent>>>,
 }
@@ -104,25 +88,16 @@ where
             return;
         }
         let mut captured = CapturedEvent::default();
-        // Record the message field too so tests can assert on the
-        // human-readable description if needed. tracing wraps the
-        // free-form message under a synthetic `message` field.
         let mut visitor = FieldVisitor(&mut captured.fields);
         event.record(&mut visitor);
         self.events.lock().unwrap().push(captured);
     }
 
-    // No-op span hooks — we capture events only, not span lifecycles.
     fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
 }
 
 /// Run `f` with a tracing subscriber that captures `ERROR` events,
 /// returning the captured events in arrival order.
-///
-/// Uses [`tracing::subscriber::with_default`] so the subscriber is
-/// scoped to the closure — concurrent tests do not see each other's
-/// captures, and the global default (which test runners may have
-/// installed for log output) is restored afterward.
 fn capture_errors<F, R>(f: F) -> (R, Vec<CapturedEvent>)
 where
     F: FnOnce() -> R,
@@ -137,8 +112,6 @@ where
     (result, captured)
 }
 
-// `Clone` impl for `CapturedEvent` so we can drain the mutex into a
-// returnable Vec.
 impl Clone for CapturedEvent {
     fn clone(&self) -> Self {
         Self {
@@ -164,48 +137,53 @@ fn rect_zero() -> Rect {
     rect(0.0, 0.0, 10.0, 10.0)
 }
 
+fn fq_in_layer(layer_path: &str, segment: &str) -> FullyQualifiedMoniker {
+    FullyQualifiedMoniker::from_string(format!("{layer_path}/{segment}"))
+}
+
 fn leaf(
-    key: &str,
-    moniker: &str,
+    fq: FullyQualifiedMoniker,
+    segment: &str,
     layer: &str,
-    parent_zone: Option<&str>,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
     r: Rect,
 ) -> FocusScope {
     FocusScope {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq,
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone,
         overrides,
     }
 }
 
 fn zone(
-    key: &str,
-    moniker: &str,
+    fq: FullyQualifiedMoniker,
+    segment: &str,
     layer: &str,
-    parent_zone: Option<&str>,
-    last_focused: Option<&str>,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    last_focused: Option<FullyQualifiedMoniker>,
     r: Rect,
 ) -> FocusZone {
     FocusZone {
-        key: SpatialKey::from_string(key),
-        moniker: Moniker::from_string(moniker),
+        fq,
+        segment: SegmentMoniker::from_string(segment),
         rect: r,
-        layer_key: LayerKey::from_string(layer),
-        parent_zone: parent_zone.map(SpatialKey::from_string),
-        last_focused: last_focused.map(SpatialKey::from_string),
+        layer_fq: FullyQualifiedMoniker::from_string(layer),
+        parent_zone,
+        last_focused,
         overrides: HashMap::new(),
     }
 }
 
-fn layer_node(key: &str, window: &str, parent: Option<&str>) -> FocusLayer {
+fn layer_node(layer_fq: &str, segment: &str, window: &str, parent: Option<&str>) -> FocusLayer {
     FocusLayer {
-        key: LayerKey::from_string(key),
+        fq: FullyQualifiedMoniker::from_string(layer_fq),
+        segment: SegmentMoniker::from_string(segment),
         name: LayerName::from_string("window"),
-        parent: parent.map(LayerKey::from_string),
+        parent: parent.map(FullyQualifiedMoniker::from_string),
         window_label: WindowLabel::from_string(window),
         last_focused: None,
     }
@@ -216,29 +194,27 @@ fn layer_node(key: &str, window: &str, parent: Option<&str>) -> FocusLayer {
 // ---------------------------------------------------------------------------
 
 /// A leaf at the layer root with no peers receives no parent zone to
-/// drill out to. The cascade echoes the focused moniker, and tracing
-/// emits zero `ERROR` events — this is a well-formed semantic edge.
+/// drill out to. The cascade echoes the focused FQM, and tracing
+/// emits zero `ERROR` events.
 #[test]
-fn nav_at_layer_root_returns_focused_moniker_no_trace() {
+fn nav_at_layer_root_returns_focused_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer_node("L", "main", None));
-    reg.register_scope(leaf("k", "ui:k", "L", None, HashMap::new(), rect_zero()));
+    reg.push_layer(layer_node("/L", "L", "main", None));
+    let k_fq = fq_in_layer("/L", "ui:k");
+    reg.register_scope(leaf(
+        k_fq.clone(),
+        "ui:k",
+        "/L",
+        None,
+        HashMap::new(),
+        rect_zero(),
+    ));
 
     let strategy = BeamNavStrategy::new();
-    let focused_moniker = Moniker::from_string("ui:k");
-    let (result, captured) = capture_errors(|| {
-        strategy.next(
-            &reg,
-            &SpatialKey::from_string("k"),
-            &focused_moniker,
-            Direction::Up,
-        )
-    });
+    let segment = SegmentMoniker::from_string("ui:k");
+    let (result, captured) = capture_errors(|| strategy.next(&reg, &k_fq, &segment, Direction::Up));
 
-    assert_eq!(
-        result, focused_moniker,
-        "layer-root nav echoes the focused moniker"
-    );
+    assert_eq!(result, k_fq, "layer-root nav echoes the focused FQM");
     assert_eq!(
         captured.len(),
         0,
@@ -247,48 +223,39 @@ fn nav_at_layer_root_returns_focused_moniker_no_trace() {
 }
 
 /// A leaf carrying an explicit `Right => None` override (the override
-/// wall) returns the focused moniker. Wall is a semantic "stay put",
+/// wall) returns the focused FQM. Wall is a semantic "stay put",
 /// not a kernel error — zero `ERROR` events.
 #[test]
-fn nav_with_wall_override_returns_focused_moniker_no_trace() {
+fn nav_with_wall_override_returns_focused_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer_node("L", "main", None));
+    reg.push_layer(layer_node("/L", "L", "main", None));
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, None);
+    let src_fq = fq_in_layer("/L", "ui:src");
     reg.register_scope(leaf(
-        "src",
+        src_fq.clone(),
         "ui:src",
-        "L",
+        "/L",
         None,
         overrides,
         rect(0.0, 0.0, 50.0, 50.0),
     ));
-    // A would-be beam-search target to the right — must NOT be picked
-    // because the override wall fires first.
+    // A would-be beam-search target to the right — must NOT be picked.
     reg.register_scope(leaf(
-        "dst",
+        fq_in_layer("/L", "ui:dst"),
         "ui:dst",
-        "L",
+        "/L",
         None,
         HashMap::new(),
         rect(100.0, 0.0, 50.0, 50.0),
     ));
 
     let strategy = BeamNavStrategy::new();
-    let focused_moniker = Moniker::from_string("ui:src");
-    let (result, captured) = capture_errors(|| {
-        strategy.next(
-            &reg,
-            &SpatialKey::from_string("src"),
-            &focused_moniker,
-            Direction::Right,
-        )
-    });
+    let segment = SegmentMoniker::from_string("ui:src");
+    let (result, captured) =
+        capture_errors(|| strategy.next(&reg, &src_fq, &segment, Direction::Right));
 
-    assert_eq!(
-        result, focused_moniker,
-        "wall override echoes the focused moniker"
-    );
+    assert_eq!(result, src_fq, "wall override echoes the focused FQM");
     assert_eq!(
         captured.len(),
         0,
@@ -296,39 +263,32 @@ fn nav_with_wall_override_returns_focused_moniker_no_trace() {
     );
 }
 
-/// A scope whose `parent_zone` references an unregistered key is in
-/// torn state. The cascade echoes the focused moniker AND emits
+/// A scope whose `parent_zone` references an unregistered FQM is in
+/// torn state. The cascade echoes the focused FQM AND emits
 /// exactly one `ERROR` event with `op = "nav"`.
 #[test]
-fn nav_with_torn_parent_returns_focused_moniker_and_traces_error() {
+fn nav_with_torn_parent_returns_focused_fq_and_traces_error() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer_node("L", "main", None));
+    reg.push_layer(layer_node("/L", "L", "main", None));
     // `src` claims `parent_zone = orphan-zone`, but no zone is
-    // registered under that key.
+    // registered under that FQM.
+    let src_fq = fq_in_layer("/L", "ui:src");
+    let orphan_fq = fq_in_layer("/L", "orphan-zone");
     reg.register_scope(leaf(
-        "src",
+        src_fq.clone(),
         "ui:src",
-        "L",
-        Some("orphan-zone"),
+        "/L",
+        Some(orphan_fq),
         HashMap::new(),
         rect_zero(),
     ));
 
     let strategy = BeamNavStrategy::new();
-    let focused_moniker = Moniker::from_string("ui:src");
-    let (result, captured) = capture_errors(|| {
-        strategy.next(
-            &reg,
-            &SpatialKey::from_string("src"),
-            &focused_moniker,
-            Direction::Right,
-        )
-    });
+    let segment = SegmentMoniker::from_string("ui:src");
+    let (result, captured) =
+        capture_errors(|| strategy.next(&reg, &src_fq, &segment, Direction::Right));
 
-    assert_eq!(
-        result, focused_moniker,
-        "torn parent ref echoes the focused moniker"
-    );
+    assert_eq!(result, src_fq, "torn parent ref echoes the focused FQM");
     assert_eq!(
         captured.len(),
         1,
@@ -337,32 +297,24 @@ fn nav_with_torn_parent_returns_focused_moniker_and_traces_error() {
     assert_eq!(captured[0].op(), Some("nav"));
 }
 
-/// An unknown focused key is torn state — the cascade can't even read
+/// An unknown focused FQM is torn state — the cascade can't even read
 /// the entry. The kernel emits one `ERROR` event with `op = "nav"`
-/// and echoes the input moniker.
+/// and echoes the input FQM.
 #[test]
-fn nav_with_unknown_key_returns_focused_moniker_and_traces_error() {
+fn nav_with_unknown_fq_returns_focused_fq_and_traces_error() {
     let reg = SpatialRegistry::new();
     let strategy = BeamNavStrategy::new();
-    let focused_moniker = Moniker::from_string("ui:ghost");
+    let ghost_fq = fq_in_layer("/L", "ui:ghost");
+    let segment = SegmentMoniker::from_string("ui:ghost");
 
-    let (result, captured) = capture_errors(|| {
-        strategy.next(
-            &reg,
-            &SpatialKey::from_string("ghost"),
-            &focused_moniker,
-            Direction::Down,
-        )
-    });
+    let (result, captured) =
+        capture_errors(|| strategy.next(&reg, &ghost_fq, &segment, Direction::Down));
 
-    assert_eq!(
-        result, focused_moniker,
-        "unknown key echoes the focused moniker"
-    );
+    assert_eq!(result, ghost_fq, "unknown FQM echoes the focused FQM");
     assert_eq!(
         captured.len(),
         1,
-        "unknown key must emit exactly one ERROR event, got {captured:?}"
+        "unknown FQM must emit exactly one ERROR event, got {captured:?}"
     );
     assert_eq!(captured[0].op(), Some("nav"));
 }
@@ -371,22 +323,24 @@ fn nav_with_unknown_key_returns_focused_moniker_and_traces_error() {
 // Drill-in — semantic edges (no trace) and torn state (one trace).
 // ---------------------------------------------------------------------------
 
-/// A registered zone with no children returns the focused moniker
-/// without tracing — the React side detects equality and falls
-/// through to inline edit / no-op.
+/// A registered zone with no children returns the focused FQM
+/// without tracing.
 #[test]
-fn drill_in_zone_with_no_children_returns_zone_moniker_no_trace() {
+fn drill_in_zone_with_no_children_returns_zone_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
-    reg.register_zone(zone("z", "ui:zone", "L", None, None, rect_zero()));
+    let zone_fq = fq_in_layer("/L", "ui:zone");
+    reg.register_zone(zone(
+        zone_fq.clone(),
+        "ui:zone",
+        "/L",
+        None,
+        None,
+        rect_zero(),
+    ));
 
-    let zone_moniker = Moniker::from_string("ui:zone");
-    let (result, captured) =
-        capture_errors(|| reg.drill_in(SpatialKey::from_string("z"), &zone_moniker));
+    let (result, captured) = capture_errors(|| reg.drill_in(zone_fq.clone(), &zone_fq));
 
-    assert_eq!(
-        result, zone_moniker,
-        "empty zone echoes the focused moniker"
-    );
+    assert_eq!(result, zone_fq, "empty zone echoes the focused FQM");
     assert_eq!(
         captured.len(),
         0,
@@ -397,22 +351,21 @@ fn drill_in_zone_with_no_children_returns_zone_moniker_no_trace() {
 /// A leaf has no children to drill into — semantic "stay put", no
 /// tracing.
 #[test]
-fn drill_in_leaf_returns_leaf_moniker_no_trace() {
+fn drill_in_leaf_returns_leaf_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
+    let leaf_fq = fq_in_layer("/L", "ui:leaf");
     reg.register_scope(leaf(
-        "leaf",
+        leaf_fq.clone(),
         "ui:leaf",
-        "L",
+        "/L",
         None,
         HashMap::new(),
         rect_zero(),
     ));
 
-    let leaf_moniker = Moniker::from_string("ui:leaf");
-    let (result, captured) =
-        capture_errors(|| reg.drill_in(SpatialKey::from_string("leaf"), &leaf_moniker));
+    let (result, captured) = capture_errors(|| reg.drill_in(leaf_fq.clone(), &leaf_fq));
 
-    assert_eq!(result, leaf_moniker, "leaf echoes the focused moniker");
+    assert_eq!(result, leaf_fq, "leaf echoes the focused FQM");
     assert_eq!(
         captured.len(),
         0,
@@ -420,18 +373,18 @@ fn drill_in_leaf_returns_leaf_moniker_no_trace() {
     );
 }
 
-/// An unknown key on `drill_in` is torn state — exactly one `ERROR`
+/// An unknown FQM on `drill_in` is torn state — exactly one `ERROR`
 /// event with `op = "drill_in"`.
 #[test]
-fn drill_in_unknown_key_returns_focused_moniker_and_traces_error() {
+fn drill_in_unknown_fq_returns_focused_fq_and_traces_error() {
     let reg = SpatialRegistry::new();
-    let focused_moniker = Moniker::from_string("ui:focused");
-    let (result, captured) =
-        capture_errors(|| reg.drill_in(SpatialKey::from_string("ghost"), &focused_moniker));
+    let focused_fq = fq_in_layer("/L", "ui:focused");
+    let ghost_fq = fq_in_layer("/L", "ghost");
+    let (result, captured) = capture_errors(|| reg.drill_in(ghost_fq, &focused_fq));
 
     assert_eq!(
-        result, focused_moniker,
-        "unknown drill-in echoes the focused moniker"
+        result, focused_fq,
+        "unknown drill-in echoes the focused FQM"
     );
     assert_eq!(
         captured.len(),
@@ -445,28 +398,26 @@ fn drill_in_unknown_key_returns_focused_moniker_and_traces_error() {
 // Drill-out — semantic edges (no trace) and torn state (one trace).
 // ---------------------------------------------------------------------------
 
-/// A scope at the layer root (no parent_zone) drills out to itself —
-/// the React adapter detects equality and falls through to
-/// `app.dismiss`. Well-formed edge, no tracing.
+/// A scope at the layer root (no parent_zone) drills out to itself.
+/// Well-formed edge, no tracing.
 #[test]
-fn drill_out_layer_root_returns_focused_moniker_no_trace() {
+fn drill_out_layer_root_returns_focused_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
+    let leaf_fq = fq_in_layer("/L", "ui:leaf");
     reg.register_scope(leaf(
-        "leaf",
+        leaf_fq.clone(),
         "ui:leaf",
-        "L",
+        "/L",
         None,
         HashMap::new(),
         rect_zero(),
     ));
 
-    let leaf_moniker = Moniker::from_string("ui:leaf");
-    let (result, captured) =
-        capture_errors(|| reg.drill_out(SpatialKey::from_string("leaf"), &leaf_moniker));
+    let (result, captured) = capture_errors(|| reg.drill_out(leaf_fq.clone(), &leaf_fq));
 
     assert_eq!(
-        result, leaf_moniker,
-        "layer-root drill-out echoes the focused moniker"
+        result, leaf_fq,
+        "layer-root drill-out echoes the focused FQM"
     );
     assert_eq!(
         captured.len(),
@@ -475,28 +426,28 @@ fn drill_out_layer_root_returns_focused_moniker_no_trace() {
     );
 }
 
-/// A scope whose `parent_zone` references an unregistered key is in
+/// A scope whose `parent_zone` references an unregistered FQM is in
 /// torn state. Drill-out emits one `ERROR` event with
-/// `op = "drill_out"` and echoes the focused moniker.
+/// `op = "drill_out"` and echoes the focused FQM.
 #[test]
-fn drill_out_torn_parent_returns_focused_moniker_and_traces_error() {
+fn drill_out_torn_parent_returns_focused_fq_and_traces_error() {
     let mut reg = SpatialRegistry::new();
+    let leaf_fq = fq_in_layer("/L", "ui:leaf");
+    let orphan_fq = fq_in_layer("/L", "orphan-zone");
     reg.register_scope(leaf(
-        "leaf",
+        leaf_fq.clone(),
         "ui:leaf",
-        "L",
-        Some("orphan-zone"),
+        "/L",
+        Some(orphan_fq),
         HashMap::new(),
         rect_zero(),
     ));
 
-    let leaf_moniker = Moniker::from_string("ui:leaf");
-    let (result, captured) =
-        capture_errors(|| reg.drill_out(SpatialKey::from_string("leaf"), &leaf_moniker));
+    let (result, captured) = capture_errors(|| reg.drill_out(leaf_fq.clone(), &leaf_fq));
 
     assert_eq!(
-        result, leaf_moniker,
-        "torn-parent drill-out echoes the focused moniker"
+        result, leaf_fq,
+        "torn-parent drill-out echoes the focused FQM"
     );
     assert_eq!(
         captured.len(),
@@ -506,18 +457,18 @@ fn drill_out_torn_parent_returns_focused_moniker_and_traces_error() {
     assert_eq!(captured[0].op(), Some("drill_out"));
 }
 
-/// Drill-out for an unknown key is torn state — exactly one `ERROR`
+/// Drill-out for an unknown FQM is torn state — exactly one `ERROR`
 /// event with `op = "drill_out"`.
 #[test]
-fn drill_out_unknown_key_returns_focused_moniker_and_traces_error() {
+fn drill_out_unknown_fq_returns_focused_fq_and_traces_error() {
     let reg = SpatialRegistry::new();
-    let focused_moniker = Moniker::from_string("ui:focused");
-    let (result, captured) =
-        capture_errors(|| reg.drill_out(SpatialKey::from_string("ghost"), &focused_moniker));
+    let focused_fq = fq_in_layer("/L", "ui:focused");
+    let ghost_fq = fq_in_layer("/L", "ghost");
+    let (result, captured) = capture_errors(|| reg.drill_out(ghost_fq, &focused_fq));
 
     assert_eq!(
-        result, focused_moniker,
-        "unknown drill-out echoes the focused moniker"
+        result, focused_fq,
+        "unknown drill-out echoes the focused FQM"
     );
     assert_eq!(
         captured.len(),

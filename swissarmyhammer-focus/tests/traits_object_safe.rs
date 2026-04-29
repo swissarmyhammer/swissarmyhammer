@@ -10,29 +10,25 @@
 use std::sync::Mutex;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, Moniker, NavStrategy, NoopSink,
-    RecordingSink, SpatialKey, SpatialRegistry, WindowLabel,
+    BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, FullyQualifiedMoniker,
+    NavStrategy, NoopSink, RecordingSink, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 /// `NavStrategy` is object-safe: `Box<dyn NavStrategy>` compiles and
 /// dispatches its only method.
 ///
-/// On an unknown focused key the kernel emits `tracing::error!` (torn
-/// state) and echoes the input moniker. Object-safety only cares about
-/// successful dispatch — the smoke test asserts the echoed moniker
-/// matches the input as a sanity check.
+/// On an unknown focused FQM the kernel emits `tracing::error!` (torn
+/// state) and echoes the input FQM. Object-safety only cares about
+/// successful dispatch — the smoke test asserts the echoed FQM matches
+/// the input as a sanity check.
 #[test]
 fn nav_strategy_is_object_safe() {
     let strategy: Box<dyn NavStrategy> = Box::new(BeamNavStrategy::new());
     let registry = SpatialRegistry::new();
-    let focused_moniker = Moniker::from_string("ui:ghost");
-    let result = strategy.next(
-        &registry,
-        &SpatialKey::from_string("ghost"),
-        &focused_moniker,
-        Direction::Right,
-    );
-    assert_eq!(result, focused_moniker);
+    let focused_fq = FullyQualifiedMoniker::from_string("/ghost");
+    let focused_segment = SegmentMoniker::from_string("ghost");
+    let result = strategy.next(&registry, &focused_fq, &focused_segment, Direction::Right);
+    assert_eq!(result, focused_fq);
 }
 
 /// `FocusEventSink` is object-safe in both ready-made impls.
@@ -45,9 +41,9 @@ fn focus_event_sink_is_object_safe() {
 
     let event = FocusChangedEvent {
         window_label: WindowLabel::from_string("main"),
-        prev_key: None,
-        next_key: Some(SpatialKey::from_string("k")),
-        next_moniker: Some(Moniker::from_string("ui:k")),
+        prev_fq: None,
+        next_fq: Some(FullyQualifiedMoniker::from_string("/L/k")),
+        next_segment: Some(SegmentMoniker::from_string("k")),
     };
     noop.emit(&event);
     recorder.emit(&event);
@@ -62,15 +58,15 @@ fn recording_sink_collects_two_events_in_order() {
 
     let first = FocusChangedEvent {
         window_label: WindowLabel::from_string("main"),
-        prev_key: None,
-        next_key: Some(SpatialKey::from_string("first")),
-        next_moniker: Some(Moniker::from_string("ui:first")),
+        prev_fq: None,
+        next_fq: Some(FullyQualifiedMoniker::from_string("/L/first")),
+        next_segment: Some(SegmentMoniker::from_string("first")),
     };
     let second = FocusChangedEvent {
         window_label: WindowLabel::from_string("main"),
-        prev_key: Some(SpatialKey::from_string("first")),
-        next_key: Some(SpatialKey::from_string("second")),
-        next_moniker: Some(Moniker::from_string("ui:second")),
+        prev_fq: Some(FullyQualifiedMoniker::from_string("/L/first")),
+        next_fq: Some(FullyQualifiedMoniker::from_string("/L/second")),
+        next_segment: Some(SegmentMoniker::from_string("second")),
     };
 
     sink.emit(&first);
@@ -95,9 +91,9 @@ fn recording_sink_is_send_sync_via_arc() {
     let handle = std::thread::spawn(move || {
         sink_for_thread.emit(&FocusChangedEvent {
             window_label: WindowLabel::from_string("main"),
-            prev_key: None,
-            next_key: Some(SpatialKey::from_string("k")),
-            next_moniker: Some(Moniker::from_string("ui:k")),
+            prev_fq: None,
+            next_fq: Some(FullyQualifiedMoniker::from_string("/L/k")),
+            next_segment: Some(SegmentMoniker::from_string("k")),
         });
     });
     handle.join().unwrap();

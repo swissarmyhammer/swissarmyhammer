@@ -3,17 +3,16 @@
 //! `SpatialState` is the **headless** focus tracker that backs the spatial-
 //! nav Tauri commands. It owns exactly one piece of mutable state:
 //!
-//! - A per-window focus map: `HashMap<WindowLabel, SpatialKey>`. Every
-//!   Tauri window has its own focused element; focus moves in window A do
-//!   not perturb window B's slot.
+//! - A per-window focus map: `HashMap<WindowLabel, FullyQualifiedMoniker>`.
+//!   Every Tauri window has its own focused element; focus moves in
+//!   window A do not perturb window B's slot.
 //!
-//! Everything else — the moniker bound to a key, the window the key
+//! Everything else — the segment bound to an FQM, the window the FQM
 //! lives in, the rect, the layer / zone hierarchy — lives in
-//! [`SpatialRegistry`] and is read on demand. There is no per-key
+//! [`SpatialRegistry`] and is read on demand. There is no per-FQM
 //! "entry" map on `SpatialState`: a single source of truth (the
 //! registry) eliminates the drift surface that an earlier dual-store
-//! design exposed (see review note "Duplicate (SpatialKey, Moniker)
-//! pair").
+//! design exposed.
 //!
 //! Mutating methods return [`Option<FocusChangedEvent>`] **instead of**
 //! emitting on a Tauri channel directly. This keeps the focus crate
@@ -39,21 +38,21 @@ use serde::{Deserialize, Serialize};
 use super::registry::SpatialRegistry;
 use super::scope::RegisteredScope;
 use super::types::{
-    pixels_cmp, Direction, LayerKey, Moniker, Pixels, Rect, SpatialKey, WindowLabel,
+    pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
 
-/// Payload emitted to React whenever the focused [`SpatialKey`] for a
-/// window changes.
+/// Payload emitted to React whenever the focused FQM for a window
+/// changes.
 ///
-/// The frontend's claim registry (`Map<SpatialKey, (focused) => void>`)
-/// dispatches `false` to `prev_key` and `true` to `next_key`, so the wire
+/// The frontend's claim registry (`Map<FullyQualifiedMoniker, (focused) => void>`)
+/// dispatches `false` to `prev_fq` and `true` to `next_fq`, so the wire
 /// shape is exactly what one cell on either side of a focus move needs to
-/// re-render. `next_moniker` is included so consumers that key off the
-/// entity identity (rather than the spatial key) can update without an
-/// extra IPC round-trip.
+/// re-render. `next_segment` is included so consumers that key off the
+/// relative segment (rather than the FQM) can update without an extra
+/// IPC round-trip.
 ///
-/// `prev_key` is `None` when the window had no prior focus (cold-start, or
-/// the previously focused scope was just unregistered). `next_key` is
+/// `prev_fq` is `None` when the window had no prior focus (cold-start, or
+/// the previously focused scope was just unregistered). `next_fq` is
 /// `None` when focus is being cleared (e.g. the focused scope unmounted
 /// and there is no obvious replacement). Both fields independent — focus
 /// transfer (`Some(prev) → Some(next)`), focus acquisition
@@ -61,74 +60,59 @@ use super::types::{
 /// through the same payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FocusChangedEvent {
-    /// Window in which the focus changed. Mirrors the `WindowLabel` the
-    /// originating Tauri command derived from its `tauri::Window`
-    /// parameter, so the frontend's per-window claim registry can ignore
-    /// events for other windows.
+    /// Window in which the focus changed. Mirrors the [`WindowLabel`]
+    /// the originating Tauri command derived from its `tauri::Window`
+    /// parameter, so the frontend's per-window claim registry can
+    /// ignore events for other windows.
     pub window_label: WindowLabel,
-    /// Previously focused [`SpatialKey`] in this window, if any.
-    pub prev_key: Option<SpatialKey>,
-    /// Newly focused [`SpatialKey`] in this window, if any.
-    pub next_key: Option<SpatialKey>,
-    /// Moniker of the newly focused entity, if `next_key.is_some()`. Read
-    /// from the registry at event-construction time so React consumers do
-    /// not need to look it up.
-    pub next_moniker: Option<Moniker>,
+    /// Previously focused FQM in this window, if any.
+    pub prev_fq: Option<FullyQualifiedMoniker>,
+    /// Newly focused FQM in this window, if any.
+    pub next_fq: Option<FullyQualifiedMoniker>,
+    /// Relative segment of the newly focused entity, if `next_fq.is_some()`.
+    /// Read from the registry at event-construction time so React
+    /// consumers do not need to look it up.
+    pub next_segment: Option<SegmentMoniker>,
 }
 
 /// Result of a zone-aware focus fallback computation.
 ///
 /// Produced by [`SpatialState::resolve_fallback`] when the focused entry
 /// is about to be unregistered. Each "found" variant carries the resolved
-/// target's [`SpatialKey`] and [`Moniker`] — the focus tracker uses them
-/// to update `focus_by_window`, and the adapter uses them to emit the
-/// outgoing [`FocusChangedEvent`]. Variant carries newtypes throughout;
-/// no raw strings on the kernel surface.
+/// target's [`FullyQualifiedMoniker`] and [`SegmentMoniker`] — the focus
+/// tracker uses them to update `focus_by_window`, and the adapter uses
+/// them to emit the outgoing [`FocusChangedEvent`]. Variants carry
+/// newtypes throughout; no raw strings on the kernel surface.
 ///
 /// The variant communicates **how** the resolver arrived at the target
 /// so consumers (mostly tests, and tracing in the adapter) can reason
-/// about the precise rule that applied. The five "found" variants
-/// correspond 1:1 to the cascade documented on
-/// [`SpatialState::resolve_fallback`]:
-///
-/// - [`FallbackResolution::FallbackSiblingInZone`] — rule 1.
-/// - [`FallbackResolution::FallbackParentZoneLastFocused`] — rule 2
-///   preferred path.
-/// - [`FallbackResolution::FallbackParentZoneNearest`] — rule 2
-///   fallback when `last_focused` is stale or absent.
-/// - [`FallbackResolution::FallbackParentLayerLastFocused`] — rule 4
-///   preferred path: the ancestor layer's `last_focused` is still
-///   registered.
-/// - [`FallbackResolution::FallbackParentLayerNearest`] — rule 4
-///   fallback: the layer's `last_focused` is stale or absent and the
-///   resolver picked the nearest live scope in that layer.
-/// - [`FallbackResolution::NoFocus`] — rule 5.
+/// about the precise rule that applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FallbackResolution {
     /// Target is a sibling of the lost entry in the same zone (rule 1).
-    FallbackSiblingInZone(SpatialKey, Moniker),
+    FallbackSiblingInZone(FullyQualifiedMoniker, SegmentMoniker),
     /// Target is the parent zone's `last_focused` slot, still
     /// registered (rule 2 preferred).
-    FallbackParentZoneLastFocused(SpatialKey, Moniker),
+    FallbackParentZoneLastFocused(FullyQualifiedMoniker, SegmentMoniker),
     /// Target is the nearest entry in an ancestor zone, used when the
     /// preferred `last_focused` is stale or absent (rule 2 fallback).
-    FallbackParentZoneNearest(SpatialKey, Moniker),
+    FallbackParentZoneNearest(FullyQualifiedMoniker, SegmentMoniker),
     /// Target is the ancestor layer's `last_focused` slot, still
     /// registered (rule 4 preferred path).
-    FallbackParentLayerLastFocused(SpatialKey, Moniker),
+    FallbackParentLayerLastFocused(FullyQualifiedMoniker, SegmentMoniker),
     /// Target is the nearest live scope in an ancestor layer, used when
     /// the layer's `last_focused` is stale or absent (rule 4 fallback).
     /// The candidate set covers every scope in the ancestor layer
     /// regardless of `parent_zone`, since rule 4 is layer-scoped, not
     /// zone-scoped.
-    FallbackParentLayerNearest(SpatialKey, Moniker),
+    FallbackParentLayerNearest(FullyQualifiedMoniker, SegmentMoniker),
     /// No live fallback target exists in the lost entry's window
     /// (rule 5). The caller clears the window's focus slot.
     NoFocus,
 }
 
-/// Pick the nearest entry in `layer_key` whose `parent_zone == zone_key`,
-/// excluding `lost_key` from the candidate set.
+/// Pick the nearest entry in `layer_fq` whose `parent_zone == zone_fq`,
+/// excluding `lost_fq` from the candidate set.
 ///
 /// "Nearest" is measured by Euclidean-square distance between rect
 /// origins; ties break by `top` then `left` so the choice is
@@ -144,16 +128,16 @@ pub enum FallbackResolution {
 /// candidates are ranked together.
 fn nearest_in_zone(
     registry: &SpatialRegistry,
-    layer_key: &LayerKey,
-    zone_key: &Option<SpatialKey>,
-    lost_key: &SpatialKey,
+    layer_fq: &FullyQualifiedMoniker,
+    zone_fq: &Option<FullyQualifiedMoniker>,
+    lost_fq: &FullyQualifiedMoniker,
     origin_rect: Rect,
     prefer_variant: Option<ScopeVariant>,
-) -> Option<(SpatialKey, Moniker)> {
+) -> Option<(FullyQualifiedMoniker, SegmentMoniker)> {
     let candidates: Vec<&RegisteredScope> = registry
-        .entries_in_layer(layer_key)
-        .filter(|s| s.key() != lost_key)
-        .filter(|s| match zone_key {
+        .entries_in_layer(layer_fq)
+        .filter(|s| s.fq() != lost_fq)
+        .filter(|s| match zone_fq {
             Some(zk) => s.parent_zone() == Some(zk),
             None => s.parent_zone().is_none(),
         })
@@ -176,7 +160,7 @@ fn nearest_in_zone(
                     .then(pixels_cmp(a.rect().left(), b.rect().left()))
             })
         {
-            return Some((best.key().clone(), best.moniker().clone()));
+            return Some((best.fq().clone(), best.segment().clone()));
         }
     }
 
@@ -189,11 +173,11 @@ fn nearest_in_zone(
                 .then(pixels_cmp(a.rect().top(), b.rect().top()))
                 .then(pixels_cmp(a.rect().left(), b.rect().left()))
         })
-        .map(|s| (s.key().clone(), s.moniker().clone()))
+        .map(|s| (s.fq().clone(), s.segment().clone()))
 }
 
-/// Pick the nearest entry in `layer_key`, regardless of `parent_zone`,
-/// excluding `lost_key` from the candidate set.
+/// Pick the nearest entry in `layer_fq`, regardless of `parent_zone`,
+/// excluding `lost_fq` from the candidate set.
 ///
 /// Used by [`SpatialState::resolve_fallback`]'s rule 4 fallback: when a
 /// layer's `last_focused` is stale or absent, we still want to land on
@@ -205,13 +189,13 @@ fn nearest_in_zone(
 /// [`SpatialState::resolve_fallback`]).
 fn nearest_in_layer(
     registry: &SpatialRegistry,
-    layer_key: &LayerKey,
-    lost_key: &SpatialKey,
+    layer_fq: &FullyQualifiedMoniker,
+    lost_fq: &FullyQualifiedMoniker,
     origin_rect: Rect,
-) -> Option<(SpatialKey, Moniker)> {
+) -> Option<(FullyQualifiedMoniker, SegmentMoniker)> {
     registry
-        .entries_in_layer(layer_key)
-        .filter(|s| s.key() != lost_key)
+        .entries_in_layer(layer_fq)
+        .filter(|s| s.fq() != lost_fq)
         .min_by(|a, b| {
             let da = squared_distance(origin_rect, *a.rect());
             let db = squared_distance(origin_rect, *b.rect());
@@ -219,7 +203,7 @@ fn nearest_in_layer(
                 .then(pixels_cmp(a.rect().top(), b.rect().top()))
                 .then(pixels_cmp(a.rect().left(), b.rect().left()))
         })
-        .map(|s| (s.key().clone(), s.moniker().clone()))
+        .map(|s| (s.fq().clone(), s.segment().clone()))
 }
 
 /// Variant tag for [`nearest_in_zone`]'s "prefer matching variant" knob.
@@ -256,7 +240,7 @@ fn same_window(
     expected_window: &WindowLabel,
 ) -> bool {
     registry
-        .layer(scope.layer_key())
+        .layer(scope.layer_fq())
         .map(|l| &l.window_label == expected_window)
         .unwrap_or(false)
 }
@@ -270,11 +254,12 @@ fn same_window(
 /// inner type is intentionally just the data).
 #[derive(Debug, Default, Clone)]
 pub struct SpatialState {
-    /// The currently focused [`SpatialKey`] **per window**. Looking up a
-    /// `WindowLabel` that does not appear here yields no focus for that
-    /// window — distinct from "focus is the same key in two windows",
-    /// which is impossible because each window owns its own slot.
-    focus_by_window: HashMap<WindowLabel, SpatialKey>,
+    /// The currently focused [`FullyQualifiedMoniker`] **per window**.
+    /// Looking up a `WindowLabel` that does not appear here yields no
+    /// focus for that window — distinct from "focus is the same FQM in
+    /// two windows", which is impossible because each window owns its
+    /// own slot.
+    focus_by_window: HashMap<WindowLabel, FullyQualifiedMoniker>,
 }
 
 impl SpatialState {
@@ -283,100 +268,51 @@ impl SpatialState {
         Self::default()
     }
 
-    /// Move focus to `key`, scoped to the window the registered scope
+    /// Move focus to `fq`, scoped to the window the registered scope
     /// belongs to.
     ///
-    /// The window and moniker are derived from `registry`: a scope's
-    /// owning window is `registry.layer(scope.layer_key()).window_label`,
-    /// and its moniker is `scope.moniker()`. The registry is the single
+    /// The window and segment are derived from `registry`: a scope's
+    /// owning window is `registry.layer(scope.layer_fq()).window_label`,
+    /// and its segment is `scope.segment()`. The registry is the single
     /// source of truth — no entry mirror lives on `SpatialState`.
     ///
     /// Returns `None` when:
-    /// - `key` is not registered in `registry` (the caller's
+    /// - `fq` is not registered in `registry` (the caller's
     ///   `<FocusScope>` is racing its own register call), or
-    /// - the scope's `layer_key` does not resolve to a layer (the
+    /// - the scope's `layer_fq` does not resolve to a layer (the
     ///   registry is in a torn state — should not happen via the
     ///   adapter, but we degrade silently rather than panic), or
-    /// - the resolved key is already focused in its window (no-op so
+    /// - the resolved FQM is already focused in its window (no-op so
     ///   adapters do not emit redundant `focus-changed` events).
     pub fn focus(
         &mut self,
         registry: &SpatialRegistry,
-        key: SpatialKey,
+        fq: FullyQualifiedMoniker,
     ) -> Option<FocusChangedEvent> {
-        let entry = registry.entry(&key)?;
-        let layer = registry.layer(entry.layer_key())?;
+        let entry = registry.entry(&fq)?;
+        let layer = registry.layer(entry.layer_fq())?;
         let window = layer.window_label.clone();
-        let moniker = entry.moniker().clone();
+        let segment = entry.segment().clone();
 
-        let prev_key = self.focus_by_window.get(&window).cloned();
-        if prev_key.as_ref() == Some(&key) {
+        let prev_fq = self.focus_by_window.get(&window).cloned();
+        if prev_fq.as_ref() == Some(&fq) {
             return None;
         }
 
-        self.focus_by_window.insert(window.clone(), key.clone());
+        self.focus_by_window.insert(window.clone(), fq.clone());
         Some(FocusChangedEvent {
             window_label: window,
-            prev_key,
-            next_key: Some(key),
-            next_moniker: Some(moniker),
+            prev_fq,
+            next_fq: Some(fq),
+            next_segment: Some(segment),
         })
-    }
-
-    /// Move focus to the scope identified by `moniker`, resolving the
-    /// `(SpatialKey, Moniker)` pair against `registry`.
-    ///
-    /// This is the moniker-keyed counterpart of [`Self::focus`]. The
-    /// React side owns moniker identity (`"task:01ABC"`,
-    /// `"field:task:01ABC.title"`); the kernel owns spatial-key
-    /// identity (ULIDs minted per mount). When the React side wants to
-    /// move focus by moniker — e.g. `setFocus("field:task:01ABC.title")`
-    /// after the inspector mounts — the kernel resolves the moniker
-    /// once, advances `focus_by_window`, and emits the resulting
-    /// [`FocusChangedEvent`].
-    ///
-    /// Mirrors the no-silent-dropout contract elsewhere in the kernel:
-    /// when the moniker is unknown, this method emits
-    /// `tracing::error!` and returns `None`. The adapter forwards the
-    /// `None` to the React caller as an `Err(_)` so the React side's
-    /// `setFocus` dispatch can `console.error` for dev visibility.
-    /// "Already focused" returns `None` for the same reason
-    /// [`Self::focus`] does — adapters need not emit redundant
-    /// `focus-changed` events.
-    ///
-    /// Returns `None` when:
-    /// - no registered scope has the given moniker (kernel logs
-    ///   `tracing::error!` for the unknown-moniker case), or
-    /// - the resolved scope's layer is missing (torn registry —
-    ///   should not happen via the adapter, but we degrade silently
-    ///   rather than panic), or
-    /// - the resolved key is already focused in its window (no-op so
-    ///   adapters do not emit redundant `focus-changed` events).
-    pub fn focus_by_moniker(
-        &mut self,
-        registry: &SpatialRegistry,
-        moniker: &Moniker,
-    ) -> Option<FocusChangedEvent> {
-        let Some(key) = registry.find_by_moniker(moniker).cloned() else {
-            // Unknown moniker — under the no-silent-dropout contract
-            // the kernel surfaces a tracing error so the regression is
-            // observable in logs. The React adapter forwards the
-            // adapter-level `Err(_)` to a console.error for dev mode.
-            tracing::error!(
-                op = "focus_by_moniker",
-                moniker = %moniker,
-                "unknown moniker passed to SpatialState::focus_by_moniker"
-            );
-            return None;
-        };
-        self.focus(registry, key)
     }
 
     /// React to a scope being unregistered from the registry, computing
     /// a zone-aware focus fallback.
     ///
     /// Adapters call this **before** `SpatialRegistry::unregister_scope`
-    /// so the lost entry's metadata (`layer_key`, `parent_zone`, owning
+    /// so the lost entry's metadata (`layer_fq`, `parent_zone`, owning
     /// window) is still readable. The resolver walks outward through
     /// the zone tree, then up the layer tree, looking for a live
     /// candidate; the search is bounded by the lost entry's
@@ -384,101 +320,72 @@ impl SpatialState {
     /// [`Self::resolve_fallback`] for the precise rule cascade and the
     /// returned [`FallbackResolution`] variants.
     ///
-    /// If `key` is the focused slot for some window:
+    /// If `fq` is the focused slot for some window:
     /// - When the resolution is anything other than
     ///   [`FallbackResolution::NoFocus`], the window's focus slot is
-    ///   updated to the resolved key and a [`FocusChangedEvent`]
+    ///   updated to the resolved FQM and a [`FocusChangedEvent`]
     ///   describing the transition is returned.
     /// - When the resolution is [`FallbackResolution::NoFocus`], the
     ///   window's focus slot is cleared and a `Some → None` event is
     ///   returned so the React claim registry can release the focus
     ///   visual.
     ///
-    /// If `key` is **not** focused in any window, this is a no-op
+    /// If `fq` is **not** focused in any window, this is a no-op
     /// returning `None` — `unregister_scope` for an unfocused entry has
     /// nothing to do at the focus-state layer.
     pub fn handle_unregister(
         &mut self,
         registry: &SpatialRegistry,
-        key: &SpatialKey,
+        fq: &FullyQualifiedMoniker,
     ) -> Option<FocusChangedEvent> {
         // Owning window is found by walking `focus_by_window` for a value
-        // equal to `key`. O(num_windows), and num_windows is in single
+        // equal to `fq`. O(num_windows), and num_windows is in single
         // digits, so cheaper than maintaining a reverse index. Critically,
-        // returning `None` when the key is not focused anywhere means the
+        // returning `None` when the FQM is not focused anywhere means the
         // unfocused-unregister path is free of registry / fallback work.
         let window = self
             .focus_by_window
             .iter()
-            .find(|(_, focused)| *focused == key)
+            .find(|(_, focused)| *focused == fq)
             .map(|(w, _)| w.clone())?;
 
-        let resolution = self.resolve_fallback(registry, key);
+        let resolution = self.resolve_fallback(registry, fq);
         match resolution {
             FallbackResolution::NoFocus => {
                 self.focus_by_window.remove(&window);
                 Some(FocusChangedEvent {
                     window_label: window,
-                    prev_key: Some(key.clone()),
-                    next_key: None,
-                    next_moniker: None,
+                    prev_fq: Some(fq.clone()),
+                    next_fq: None,
+                    next_segment: None,
                 })
             }
-            FallbackResolution::FallbackSiblingInZone(next_key, next_moniker)
-            | FallbackResolution::FallbackParentZoneLastFocused(next_key, next_moniker)
-            | FallbackResolution::FallbackParentZoneNearest(next_key, next_moniker)
-            | FallbackResolution::FallbackParentLayerLastFocused(next_key, next_moniker)
-            | FallbackResolution::FallbackParentLayerNearest(next_key, next_moniker) => {
-                self.focus_by_window
-                    .insert(window.clone(), next_key.clone());
+            FallbackResolution::FallbackSiblingInZone(next_fq, next_segment)
+            | FallbackResolution::FallbackParentZoneLastFocused(next_fq, next_segment)
+            | FallbackResolution::FallbackParentZoneNearest(next_fq, next_segment)
+            | FallbackResolution::FallbackParentLayerLastFocused(next_fq, next_segment)
+            | FallbackResolution::FallbackParentLayerNearest(next_fq, next_segment) => {
+                self.focus_by_window.insert(window.clone(), next_fq.clone());
                 Some(FocusChangedEvent {
                     window_label: window,
-                    prev_key: Some(key.clone()),
-                    next_key: Some(next_key),
-                    next_moniker: Some(next_moniker),
+                    prev_fq: Some(fq.clone()),
+                    next_fq: Some(next_fq),
+                    next_segment: Some(next_segment),
                 })
             }
         }
     }
 
-    /// Compute the zone-aware focus fallback for `lost_key`.
+    /// Compute the zone-aware focus fallback for `lost_fq`.
     ///
     /// Pure registry query — does not mutate any focus state. The lost
     /// entry **must still be registered** so the resolver can read its
-    /// `parent_zone`, `layer_key`, and owning window. Adapters call this
+    /// `parent_zone`, `layer_fq`, and owning window. Adapters call this
     /// before calling [`SpatialRegistry::unregister_scope`].
     ///
     /// The resolution walks outward through the zone tree, then up the
-    /// layer tree, in priority order:
-    ///
-    /// 1. **Sibling in same zone** — the nearest live entry whose
-    ///    `parent_zone` matches the lost entry's `parent_zone` in the
-    ///    same layer. "Lost" candidates (the entry itself) are
-    ///    excluded. The variant of the lost entry (`Focusable` /
-    ///    `Zone`) is preferred — losing a leaf prefers a sibling leaf,
-    ///    losing a zone prefers a sibling zone — but only at this rule.
-    ///    Returns [`FallbackResolution::FallbackSiblingInZone`].
-    /// 2. **Walk up parent zones** — at each ancestor zone, prefer the
-    ///    zone's `last_focused` if it still resolves to a live scope;
-    ///    otherwise pick the nearest entry inside that zone (excluding
-    ///    the lost key). Variant preference does **not** apply at this
-    ///    rule — the nearest live candidate wins regardless of variant.
-    ///    Returns
-    ///    [`FallbackResolution::FallbackParentZoneLastFocused`] or
-    ///    [`FallbackResolution::FallbackParentZoneNearest`].
-    /// 3. **Walk up to layer root** — the walk continues until a zone
-    ///    has any live candidate or the layer root is reached.
-    /// 4. **Walk up the layer tree** — when the layer root has no
-    ///    remaining entries, walk `layer.parent`. At each ancestor
-    ///    layer, prefer the layer's `last_focused` if it is still
-    ///    registered (returns
-    ///    [`FallbackResolution::FallbackParentLayerLastFocused`]);
-    ///    otherwise pick the nearest entry **anywhere** in that layer
-    ///    (any `parent_zone`, including zone-nested leaves) and return
-    ///    [`FallbackResolution::FallbackParentLayerNearest`].
-    /// 5. **No-focus** — when the walk exhausts the layer chain without
-    ///    finding a live candidate, returns
-    ///    [`FallbackResolution::NoFocus`].
+    /// layer tree, in priority order (see `FallbackResolution` for the
+    /// rule cascade).
     ///
     /// Fallback is **bounded by `WindowLabel`**: the layer-tree walk
     /// stops if it would cross into a different window. Layers in a
@@ -486,29 +393,29 @@ impl SpatialState {
     /// resolver re-reads each visited layer's window to enforce the
     /// barrier defensively.
     ///
-    /// Returns [`FallbackResolution::NoFocus`] when `lost_key` is not
+    /// Returns [`FallbackResolution::NoFocus`] when `lost_fq` is not
     /// registered (the caller already unregistered it, or it never
     /// existed) — there is no metadata to start the walk from, so
     /// fallback cannot meaningfully resolve.
     pub fn resolve_fallback(
         &self,
         registry: &SpatialRegistry,
-        lost_key: &SpatialKey,
+        lost_fq: &FullyQualifiedMoniker,
     ) -> FallbackResolution {
         // Snapshot the lost entry's metadata into owned values so the
         // immutable borrow can be released before we walk the registry
         // (the walk does its own short-lived borrows and would otherwise
         // collide with this one in some borrow-checker paths).
         //
-        // If the lost key is already gone, we have no metadata to drive
+        // If the lost FQM is already gone, we have no metadata to drive
         // the walk; degrade to NoFocus. Adapters that want a meaningful
         // fallback must call this before `unregister_scope`.
         let (lost_layer, lost_parent_zone, lost_rect, lost_variant) = {
-            let Some(lost) = registry.entry(lost_key) else {
+            let Some(lost) = registry.entry(lost_fq) else {
                 return FallbackResolution::NoFocus;
             };
             (
-                lost.layer_key().clone(),
+                lost.layer_fq().clone(),
                 lost.parent_zone().cloned(),
                 *lost.rect(),
                 if lost.is_zone() {
@@ -530,7 +437,7 @@ impl SpatialState {
         // ── Phase 1: zone-tree walk inside the lost layer.
         //
         // At each level, candidates are scopes in the current layer
-        // whose `parent_zone == current_zone`. The lost key itself is
+        // whose `parent_zone == current_zone`. The lost FQM itself is
         // excluded so a stale registration doesn't ghost-block the
         // walk. The first non-empty level wins; siblings are picked
         // by nearest-rect to the lost rect.
@@ -550,15 +457,15 @@ impl SpatialState {
             // root (`current_zone is None`) there is no enclosing zone
             // to consult, so this step is also skipped.
             if !on_lost_zone {
-                if let Some(zone_key) = &current_zone {
-                    if let Some(zone) = registry.zone(zone_key) {
+                if let Some(zone_fq) = &current_zone {
+                    if let Some(zone) = registry.zone(zone_fq) {
                         if let Some(remembered) = &zone.last_focused {
-                            if remembered != lost_key {
+                            if remembered != lost_fq {
                                 if let Some(scope) = registry.entry(remembered) {
                                     if same_window(registry, scope, &lost_window) {
                                         return FallbackResolution::FallbackParentZoneLastFocused(
-                                            scope.key().clone(),
-                                            scope.moniker().clone(),
+                                            scope.fq().clone(),
+                                            scope.segment().clone(),
                                         );
                                     }
                                 }
@@ -580,11 +487,11 @@ impl SpatialState {
             } else {
                 None
             };
-            if let Some((key, moniker)) = nearest_in_zone(
+            if let Some((next_fq, next_segment)) = nearest_in_zone(
                 registry,
                 &lost_layer,
                 &current_zone,
-                lost_key,
+                lost_fq,
                 lost_rect,
                 prefer,
             ) {
@@ -592,19 +499,19 @@ impl SpatialState {
                 // Subsequent iterations: zone above the (now empty) one
                 // the lost entry was in → rule 2 nearest.
                 let resolution = if on_lost_zone {
-                    FallbackResolution::FallbackSiblingInZone(key, moniker)
+                    FallbackResolution::FallbackSiblingInZone(next_fq, next_segment)
                 } else {
-                    FallbackResolution::FallbackParentZoneNearest(key, moniker)
+                    FallbackResolution::FallbackParentZoneNearest(next_fq, next_segment)
                 };
                 return resolution;
             }
 
             // Move up one zone. If we were already at the layer root
             // (`current_zone == None`), exit the zone-tree phase.
-            let Some(zone_key) = current_zone else {
+            let Some(zone_fq) = current_zone else {
                 break;
             };
-            let parent = registry.zone(&zone_key).and_then(|z| z.parent_zone.clone());
+            let parent = registry.zone(&zone_fq).and_then(|z| z.parent_zone.clone());
             current_zone = parent;
             is_first_iteration = false;
         }
@@ -617,8 +524,8 @@ impl SpatialState {
         // entry's window is an invariant violation, but we treat it as
         // a barrier and stop rather than crossing.
         let mut current_layer_parent = registry.layer(&lost_layer).and_then(|l| l.parent.clone());
-        while let Some(parent_layer_key) = current_layer_parent {
-            let Some(parent_layer) = registry.layer(&parent_layer_key) else {
+        while let Some(parent_layer_fq) = current_layer_parent {
+            let Some(parent_layer) = registry.layer(&parent_layer_fq) else {
                 break;
             };
             if parent_layer.window_label != lost_window {
@@ -629,12 +536,12 @@ impl SpatialState {
 
             // Prefer the layer's `last_focused` if still registered.
             if let Some(remembered) = &parent_layer.last_focused {
-                if remembered != lost_key {
+                if remembered != lost_fq {
                     if let Some(scope) = registry.entry(remembered) {
                         if same_window(registry, scope, &lost_window) {
                             return FallbackResolution::FallbackParentLayerLastFocused(
-                                scope.key().clone(),
-                                scope.moniker().clone(),
+                                scope.fq().clone(),
+                                scope.segment().clone(),
                             );
                         }
                     }
@@ -647,10 +554,10 @@ impl SpatialState {
             // fallback target as a leaf hanging directly under the
             // layer root, so the candidate set ignores `parent_zone`
             // entirely. Variant preference does not apply at this rule.
-            if let Some((key, moniker)) =
-                nearest_in_layer(registry, &parent_layer.key, lost_key, lost_rect)
+            if let Some((next_fq, next_segment)) =
+                nearest_in_layer(registry, &parent_layer.fq, lost_fq, lost_rect)
             {
-                return FallbackResolution::FallbackParentLayerNearest(key, moniker);
+                return FallbackResolution::FallbackParentLayerNearest(next_fq, next_segment);
             }
 
             current_layer_parent = parent_layer.parent.clone();
@@ -669,23 +576,23 @@ impl SpatialState {
     ///
     /// The strategy is consulted with the supplied [`SpatialRegistry`]
     /// (geometry / hierarchy backing store), the focused
-    /// [`SpatialKey`], and the focused entry's [`Moniker`] (read from
-    /// the registry by `from`). The strategy always returns a
-    /// [`Moniker`] (never `None` — see the no-silent-dropout contract
-    /// on [`crate::navigate`]). When that moniker resolves to a scope
-    /// distinct from `from`, this method emits a [`FocusChangedEvent`]
-    /// in the same shape [`Self::focus`] would. When it resolves back
-    /// to `from` (semantic "stay put") or fails to resolve at all, this
-    /// method returns `None` so the adapter does not emit a redundant
-    /// focus-changed event.
+    /// [`FullyQualifiedMoniker`], and the focused entry's
+    /// [`SegmentMoniker`] (read from the registry by `from`). The
+    /// strategy always returns an FQM (never `None` — see the
+    /// no-silent-dropout contract on [`crate::navigate`]). When that
+    /// FQM resolves to a scope distinct from `from`, this method emits
+    /// a [`FocusChangedEvent`] in the same shape [`Self::focus`] would.
+    /// When it resolves back to `from` (semantic "stay put") or fails
+    /// to resolve at all, this method returns `None` so the adapter
+    /// does not emit a redundant focus-changed event.
     ///
     /// Returns `None` when:
     /// - `from` is not registered in `registry`, or
-    /// - the strategy returns a moniker for which no scope is
-    ///   registered, or
-    /// - the resolved key is already focused in its window (the
+    /// - the strategy returns an FQM for which no scope is registered
+    ///   (torn state), or
+    /// - the resolved FQM is already focused in its window (the
     ///   common "stay put" outcome under the no-silent-dropout
-    ///   contract — the strategy echoed `focused_moniker`).
+    ///   contract — the strategy echoed the focused FQM).
     ///
     /// This is the seam used by [`crate::navigate::BeamNavStrategy`] —
     /// adapters that want the default Android-beam-search behavior pass
@@ -697,33 +604,29 @@ impl SpatialState {
         &mut self,
         registry: &SpatialRegistry,
         strategy: &dyn crate::navigate::NavStrategy,
-        from: SpatialKey,
+        from: FullyQualifiedMoniker,
         direction: Direction,
     ) -> Option<FocusChangedEvent> {
         // Validate the starting point belongs to the registry. A
-        // strategy invocation on an unknown key would otherwise stamp
+        // strategy invocation on an unknown FQM would otherwise stamp
         // a focus event into a window that has no record of the move.
-        // The strategy itself also handles unknown keys (echoes the
-        // input moniker with a tracing::error!), but at the
-        // `navigate_with` boundary we read the focused moniker from
+        // The strategy itself also handles unknown FQMs (echoes the
+        // input FQM with a tracing::error!), but at the
+        // `navigate_with` boundary we read the focused segment from
         // the registry, which requires a real entry.
-        let focused_moniker = registry.entry(&from)?.moniker().clone();
+        let focused_segment = registry.entry(&from)?.segment().clone();
 
-        let target_moniker = strategy.next(registry, &from, &focused_moniker, direction);
-        // The strategy speaks in monikers; we focus by SpatialKey. The
-        // registry is keyed by SpatialKey, so we walk values to find a
-        // scope whose moniker matches. The scope set is small (one per
-        // mounted scope per window), so a linear scan is cheap relative
-        // to a Tauri IPC round-trip.
-        let target_key = registry
-            .entries_iter()
-            .find(|s| s.moniker() == &target_moniker)
-            .map(|s| s.key().clone())?;
-        // `focus` short-circuits when the resolved key already holds
+        let target_fq = strategy.next(registry, &from, &focused_segment, direction);
+        // The strategy speaks in FQMs already — they ARE the registry
+        // keys. Look up the target directly.
+        if !registry.is_registered(&target_fq) {
+            return None;
+        }
+        // `focus` short-circuits when the resolved FQM already holds
         // focus — that is the common "stay put" outcome under the new
-        // contract (the strategy returned `focused_moniker`). No
+        // contract (the strategy returned the focused FQM). No
         // additional check is required here.
-        self.focus(registry, target_key)
+        self.focus(registry, target_fq)
     }
 
     /// Clear focus for `window`.
@@ -735,15 +638,10 @@ impl SpatialState {
     /// prior focus, returns `None` (no-op — adapters do not need to
     /// emit a redundant event).
     ///
-    /// This is the explicit-clear counterpart of [`Self::focus`] /
-    /// [`Self::focus_by_moniker`]. It exists so the React-side
-    /// `setFocus(null)` path can dispatch through the kernel and let
-    /// the bridge handle the store write — keeping the
-    /// "store is a pure projection" invariant from card
-    /// `01KQD0WK54G0FRD7SZVZASA9ST`. Without this method, `setFocus(null)`
-    /// would have to mutate the React store synchronously to clear
-    /// focus, producing exactly the kernel/React drift the card was
-    /// filed to eliminate.
+    /// This is the explicit-clear counterpart of [`Self::focus`].
+    /// It exists so the React-side `setFocus(null)` path can dispatch
+    /// through the kernel and let the bridge handle the store write —
+    /// keeping the "store is a pure projection" invariant.
     ///
     /// Related: [`Self::handle_unregister`] also produces a
     /// `Some(prev) → None` event when its fallback resolution is
@@ -752,17 +650,17 @@ impl SpatialState {
     /// scope-deregistration, `clear_focus` runs on an explicit
     /// React-side request.
     pub fn clear_focus(&mut self, window: &WindowLabel) -> Option<FocusChangedEvent> {
-        let prev_key = self.focus_by_window.remove(window)?;
+        let prev_fq = self.focus_by_window.remove(window)?;
         Some(FocusChangedEvent {
             window_label: window.clone(),
-            prev_key: Some(prev_key),
-            next_key: None,
-            next_moniker: None,
+            prev_fq: Some(prev_fq),
+            next_fq: None,
+            next_segment: None,
         })
     }
 
-    /// Read the focused [`SpatialKey`] for `window`, if any.
-    pub fn focused_in(&self, window: &WindowLabel) -> Option<&SpatialKey> {
+    /// Read the focused [`FullyQualifiedMoniker`] for `window`, if any.
+    pub fn focused_in(&self, window: &WindowLabel) -> Option<&FullyQualifiedMoniker> {
         self.focus_by_window.get(window)
     }
 }
@@ -779,7 +677,7 @@ mod tests {
     use super::*;
     use crate::layer::FocusLayer;
     use crate::scope::FocusScope;
-    use crate::types::{LayerKey, LayerName, Pixels, Rect};
+    use crate::types::{FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker};
     use std::collections::HashMap;
 
     fn rect_zero() -> Rect {
@@ -792,21 +690,22 @@ mod tests {
     }
 
     /// Build a single-layer registry with one focus scope leaf bound to
-    /// `(window, moniker)`.
-    fn registry_with_scope(window: &str, layer: &str, key: &str, moniker: &str) -> SpatialRegistry {
+    /// `(window, segment)` at `fq`.
+    fn registry_with_scope(window: &str, layer: &str, fq: &str, segment: &str) -> SpatialRegistry {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(FocusLayer {
-            key: LayerKey::from_string(layer),
+            fq: FullyQualifiedMoniker::from_string(layer),
+            segment: SegmentMoniker::from_string("window"),
             name: LayerName::from_string("window"),
             parent: None,
             window_label: WindowLabel::from_string(window),
             last_focused: None,
         });
         reg.register_scope(FocusScope {
-            key: SpatialKey::from_string(key),
-            moniker: Moniker::from_string(moniker),
+            fq: FullyQualifiedMoniker::from_string(fq),
+            segment: SegmentMoniker::from_string(segment),
             rect: rect_zero(),
-            layer_key: LayerKey::from_string(layer),
+            layer_fq: FullyQualifiedMoniker::from_string(layer),
             parent_zone: None,
             overrides: HashMap::new(),
         });
@@ -814,36 +713,39 @@ mod tests {
     }
 
     #[test]
-    fn focus_returns_event_with_window_and_moniker() {
-        let registry = registry_with_scope("main", "L", "k1", "task:01");
+    fn focus_returns_event_with_window_and_segment() {
+        let registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
         let mut state = SpatialState::new();
-        let key = SpatialKey::from_string("k1");
+        let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
         let event = state
-            .focus(&registry, key.clone())
+            .focus(&registry, fq.clone())
             .expect("focus emits an event");
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
-        assert_eq!(event.prev_key, None);
-        assert_eq!(event.next_key, Some(key));
-        assert_eq!(event.next_moniker, Some(Moniker::from_string("task:01")));
+        assert_eq!(event.prev_fq, None);
+        assert_eq!(event.next_fq, Some(fq));
+        assert_eq!(
+            event.next_segment,
+            Some(SegmentMoniker::from_string("task:01"))
+        );
     }
 
     #[test]
-    fn focus_unknown_key_is_noop() {
+    fn focus_unknown_fq_is_noop() {
         let registry = SpatialRegistry::new();
         let mut state = SpatialState::new();
         assert!(state
-            .focus(&registry, SpatialKey::from_string("ghost"))
+            .focus(&registry, FullyQualifiedMoniker::from_string("/ghost"))
             .is_none());
     }
 
     #[test]
-    fn focus_same_key_twice_emits_once() {
-        let registry = registry_with_scope("main", "L", "k1", "task:01");
+    fn focus_same_fq_twice_emits_once() {
+        let registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
         let mut state = SpatialState::new();
-        let key = SpatialKey::from_string("k1");
+        let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
-        assert!(state.focus(&registry, key.clone()).is_some());
-        assert!(state.focus(&registry, key).is_none());
+        assert!(state.focus(&registry, fq.clone()).is_some());
+        assert!(state.focus(&registry, fq).is_none());
     }
 }

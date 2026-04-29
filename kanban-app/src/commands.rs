@@ -2157,8 +2157,8 @@ pub async fn show_context_menu(
 
 use swissarmyhammer_focus::{
     BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope,
-    FocusZone, LayerKey, LayerName, Moniker, Rect, RegisterEntry, SpatialKey, SpatialRegistry,
-    SpatialState, WindowLabel,
+    FocusZone, FullyQualifiedMoniker, LayerName, Rect, RegisterEntry, SegmentMoniker,
+    SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Tauri event name for spatial focus changes — mirrors the listener
@@ -2221,18 +2221,18 @@ fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), 
 #[allow(clippy::too_many_arguments)]
 fn spatial_register_scope_inner(
     registry: &mut SpatialRegistry,
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layer_key: LayerKey,
-    parent_zone: Option<SpatialKey>,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) {
     registry.register_scope(FocusScope {
-        key,
-        moniker,
+        fq,
+        segment,
         rect,
-        layer_key,
+        layer_fq,
         parent_zone,
         overrides,
     });
@@ -2247,19 +2247,19 @@ fn spatial_register_scope_inner(
 #[allow(clippy::too_many_arguments)]
 fn spatial_register_zone_inner(
     registry: &mut SpatialRegistry,
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layer_key: LayerKey,
-    parent_zone: Option<SpatialKey>,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) {
-    let last_focused = registry.zone(&key).and_then(|z| z.last_focused.clone());
+    let last_focused = registry.zone(&fq).and_then(|z| z.last_focused.clone());
     registry.register_zone(FocusZone {
-        key,
-        moniker,
+        fq,
+        segment,
         rect,
-        layer_key,
+        layer_fq,
         parent_zone,
         last_focused,
         overrides,
@@ -2276,10 +2276,10 @@ fn spatial_register_zone_inner(
 fn spatial_unregister_scope_inner(
     registry: &mut SpatialRegistry,
     spatial_state: &mut SpatialState,
-    key: &SpatialKey,
+    fq: &FullyQualifiedMoniker,
 ) -> Option<FocusChangedEvent> {
-    let event = spatial_state.handle_unregister(registry, key);
-    registry.unregister_scope(key);
+    let event = spatial_state.handle_unregister(registry, fq);
+    registry.unregister_scope(fq);
     event
 }
 
@@ -2306,13 +2306,15 @@ fn spatial_register_batch_inner(
 /// React side because Tauri webviews are server-tracked, not client-known.
 fn spatial_push_layer_inner(
     registry: &mut SpatialRegistry,
-    key: LayerKey,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     name: LayerName,
-    parent: Option<LayerKey>,
+    parent: Option<FullyQualifiedMoniker>,
     window_label: WindowLabel,
 ) {
     registry.push_layer(FocusLayer {
-        key,
+        fq,
+        segment,
         name,
         parent,
         window_label,
@@ -2336,20 +2338,20 @@ fn spatial_push_layer_inner(
 pub async fn spatial_register_scope(
     _window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layer_key: LayerKey,
-    parent_zone: Option<SpatialKey>,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
         spatial_register_scope_inner(
             registry,
-            key,
-            moniker,
+            fq,
+            segment,
             rect,
-            layer_key,
+            layer_fq,
             parent_zone,
             overrides,
         );
@@ -2374,20 +2376,20 @@ pub async fn spatial_register_scope(
 pub async fn spatial_register_zone(
     _window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
-    moniker: Moniker,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     rect: Rect,
-    layer_key: LayerKey,
-    parent_zone: Option<SpatialKey>,
-    overrides: HashMap<Direction, Option<Moniker>>,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 ) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
         spatial_register_zone_inner(
             registry,
-            key,
-            moniker,
+            fq,
+            segment,
             rect,
-            layer_key,
+            layer_fq,
             parent_zone,
             overrides,
         );
@@ -2447,10 +2449,10 @@ pub async fn spatial_register_batch(
 pub async fn spatial_unregister_scope(
     window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
+    fq: FullyQualifiedMoniker,
 ) -> Result<(), String> {
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_unregister_scope_inner(registry, spatial_state, &key)
+        spatial_unregister_scope_inner(registry, spatial_state, &fq)
     })
     .await;
 
@@ -2471,11 +2473,11 @@ pub async fn spatial_unregister_scope(
 #[tauri::command]
 pub async fn spatial_update_rect(
     state: State<'_, AppState>,
-    key: SpatialKey,
+    fq: FullyQualifiedMoniker,
     rect: Rect,
 ) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
-        registry.update_rect(&key, rect);
+        registry.update_rect(&fq, rect);
     })
     .await;
     Ok(())
@@ -2494,61 +2496,12 @@ pub async fn spatial_update_rect(
 pub async fn spatial_focus(
     window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
+    fq: FullyQualifiedMoniker,
 ) -> Result<(), String> {
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus(registry, key)
+        spatial_state.focus(registry, fq)
     })
     .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// Move focus to the scope identified by `moniker`.
-///
-/// Moniker-keyed counterpart of [`spatial_focus`]. The React side owns
-/// moniker identity (`"task:01ABC"`, `"field:task:01ABC.title"`); the
-/// kernel owns spatial-key identity (ULIDs minted per mount). Wiring
-/// `setFocus(moniker)` through this command keeps the kernel as the
-/// single source of truth for focus state — the React store is
-/// downstream of `focus-changed` events the kernel emits.
-///
-/// Delegates to [`SpatialState::focus_by_moniker`], which resolves the
-/// moniker once via [`SpatialRegistry::find_by_moniker`], advances the
-/// per-window focus map, and returns the resulting
-/// [`FocusChangedEvent`]. Returns:
-///
-/// - `Ok(())` and emits `focus-changed` when the moniker resolved to a
-///   different scope than the currently-focused one.
-/// - `Ok(())` with no emit when the resolved key is already focused
-///   (idempotent on repeat calls).
-/// - `Err(_)` when the moniker is not registered. The kernel logs a
-///   `tracing::error!` per the no-silent-dropout contract; the adapter
-///   surfaces the error to the React caller so its `setFocus`
-///   dispatch can `console.error` for dev-mode visibility.
-#[tauri::command]
-pub async fn spatial_focus_by_moniker(
-    window: Window,
-    state: State<'_, AppState>,
-    moniker: Moniker,
-) -> Result<(), String> {
-    let event = with_spatial(&state, |registry, spatial_state| {
-        let resolved = registry.find_by_moniker(&moniker).is_some();
-        let event = spatial_state.focus_by_moniker(registry, &moniker);
-        (resolved, event)
-    })
-    .await;
-
-    let (resolved, event) = event;
-    if !resolved {
-        // Surface the unknown-moniker case to the React caller so the
-        // dispatch site can `console.error`. The kernel already logged
-        // `tracing::error!` inside `focus_by_moniker`.
-        return Err(format!("unknown moniker: {moniker}"));
-    }
 
     if let Some(event) = event {
         emit_focus_changed(&window, &event)?;
@@ -2607,12 +2560,12 @@ pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> 
 pub async fn spatial_navigate(
     window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
+    focused_fq: FullyQualifiedMoniker,
     direction: Direction,
 ) -> Result<(), String> {
     let strategy = BeamNavStrategy::new();
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate_with(registry, &strategy, key, direction)
+        spatial_state.navigate_with(registry, &strategy, focused_fq, direction)
     })
     .await;
 
@@ -2638,13 +2591,14 @@ pub async fn spatial_navigate(
 pub async fn spatial_push_layer(
     window: Window,
     state: State<'_, AppState>,
-    key: LayerKey,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
     name: LayerName,
-    parent: Option<LayerKey>,
+    parent: Option<FullyQualifiedMoniker>,
 ) -> Result<(), String> {
     let window_label = window_label_from(&window);
     with_spatial(&state, |registry, _spatial_state| {
-        spatial_push_layer_inner(registry, key, name, parent, window_label);
+        spatial_push_layer_inner(registry, fq, segment, name, parent, window_label);
     })
     .await;
     Ok(())
@@ -2660,9 +2614,12 @@ pub async fn spatial_push_layer(
 /// No `focus-changed` event is emitted; layer pops are not focus
 /// transitions on their own.
 #[tauri::command]
-pub async fn spatial_pop_layer(state: State<'_, AppState>, key: LayerKey) -> Result<(), String> {
+pub async fn spatial_pop_layer(
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
-        registry.remove_layer(&key);
+        registry.remove_layer(&fq);
     })
     .await;
     Ok(())
@@ -2696,14 +2653,14 @@ pub async fn spatial_pop_layer(state: State<'_, AppState>, key: LayerKey) -> Res
 pub async fn spatial_drill_in(
     _window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
-    focused_moniker: Moniker,
-) -> Result<Moniker, String> {
-    let moniker = with_spatial(&state, |registry, _spatial_state| {
-        registry.drill_in(key, &focused_moniker)
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+) -> Result<FullyQualifiedMoniker, String> {
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_in(fq, &focused_fq)
     })
     .await;
-    Ok(moniker)
+    Ok(next_fq)
 }
 
 /// Compute the [`Moniker`] to focus when the user drills *out of* the
@@ -2736,14 +2693,14 @@ pub async fn spatial_drill_in(
 pub async fn spatial_drill_out(
     _window: Window,
     state: State<'_, AppState>,
-    key: SpatialKey,
-    focused_moniker: Moniker,
-) -> Result<Moniker, String> {
-    let moniker = with_spatial(&state, |registry, _spatial_state| {
-        registry.drill_out(key, &focused_moniker)
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+) -> Result<FullyQualifiedMoniker, String> {
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_out(fq, &focused_fq)
     })
     .await;
-    Ok(moniker)
+    Ok(next_fq)
 }
 
 #[cfg(test)]
@@ -3224,45 +3181,58 @@ mod spatial_command_tests {
         }
     }
 
-    /// Push a window-root layer into `registry`, returning the layer key
+    /// Compose an FQM by appending `child_segment` to `parent_fq` with the
+    /// `/` separator — mirrors what the React `FullyQualifiedMonikerContext`
+    /// composes on the consumer side before the IPC call.
+    fn compose_fq(parent_fq: &FullyQualifiedMoniker, child_segment: &str) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(parent_fq, &SegmentMoniker::from_string(child_segment))
+    }
+
+    /// Push a window-root layer into `registry`, returning the layer FQM
     /// the test should pass to subsequent register calls.
-    fn push_root_layer(registry: &mut SpatialRegistry, window: &str, layer: &str) -> LayerKey {
-        let key = LayerKey::from_string(layer);
+    fn push_root_layer(
+        registry: &mut SpatialRegistry,
+        window: &str,
+        layer_segment: &str,
+    ) -> FullyQualifiedMoniker {
+        let segment = SegmentMoniker::from_string(layer_segment);
+        let fq = FullyQualifiedMoniker::root(&segment);
         spatial_push_layer_inner(
             registry,
-            key.clone(),
+            fq.clone(),
+            segment,
             LayerName::from_string("window"),
             None,
             WindowLabel::from_string(window),
         );
-        key
+        fq
     }
 
-    /// Register a leaf with a deterministic key/moniker pair into
-    /// `registry`. Returns the `(key, moniker)` for assertions.
+    /// Register a leaf with a deterministic FQM into `registry`. The leaf's
+    /// FQM is composed as `<layer_fq>/<segment>`. Returns the FQM and
+    /// segment for assertions.
     fn register_leaf(
         registry: &mut SpatialRegistry,
-        layer: &LayerKey,
-        key: &str,
-        moniker: &str,
+        layer_fq: &FullyQualifiedMoniker,
+        segment_str: &str,
         rect: Rect,
-    ) -> (SpatialKey, Moniker) {
-        let k = SpatialKey::from_string(key);
-        let m = Moniker::from_string(moniker);
+    ) -> (FullyQualifiedMoniker, SegmentMoniker) {
+        let segment = SegmentMoniker::from_string(segment_str);
+        let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
         spatial_register_scope_inner(
             registry,
-            k.clone(),
-            m.clone(),
+            fq.clone(),
+            segment.clone(),
             rect,
-            layer.clone(),
+            layer_fq.clone(),
             None,
             HashMap::new(),
         );
-        (k, m)
+        (fq, segment)
     }
 
     /// `spatial_focus` invokes `SpatialState::focus` and the kernel returns
-    /// a `FocusChangedEvent` carrying the focused window, key, and moniker.
+    /// a `FocusChangedEvent` carrying the focused window, FQM, and segment.
     /// This is the same code path the Tauri command takes before
     /// emitting on the window — so an event from this inner call is
     /// exactly what the React side would receive over IPC.
@@ -3271,22 +3241,21 @@ mod spatial_command_tests {
         let mut registry = SpatialRegistry::new();
         let mut state = SpatialState::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (key, moniker) = register_leaf(
+        let (fq, segment) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "task:01",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
 
         let event = state
-            .focus(&registry, key.clone())
+            .focus(&registry, fq.clone())
             .expect("focus emits an event for a freshly registered scope");
 
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
-        assert_eq!(event.prev_key, None);
-        assert_eq!(event.next_key, Some(key));
-        assert_eq!(event.next_moniker, Some(moniker));
+        assert_eq!(event.prev_fq, None);
+        assert_eq!(event.next_fq, Some(fq));
+        assert_eq!(event.next_segment, Some(segment));
     }
 
     /// Registering a leaf scope inserts it into the registry and the
@@ -3297,21 +3266,20 @@ mod spatial_command_tests {
     fn spatial_register_scope_round_trips() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (key, moniker) = register_leaf(
+        let (fq, segment) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "ui:button",
             rect_at(5.0, 5.0, 20.0, 30.0),
         );
 
-        let scope = registry.scope(&key).expect("scope was registered");
-        assert_eq!(scope.moniker, moniker);
-        assert_eq!(scope.layer_key, layer);
+        let scope = registry.scope(&fq).expect("scope was registered");
+        assert_eq!(scope.segment, segment);
+        assert_eq!(scope.layer_fq, layer);
         assert_eq!(scope.parent_zone, None);
     }
 
-    /// Registering a zone with the same key as a previous zone preserves
+    /// Registering a zone with the same FQM as a previous zone preserves
     /// any existing `last_focused` slot — the kernel's placeholder/real-
     /// mount swap requires drill-out memory to survive a re-register.
     /// Verifies the inner helper applies the same preservation logic that
@@ -3321,12 +3289,12 @@ mod spatial_command_tests {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
 
-        let zone_key = SpatialKey::from_string("z1");
-        let leaf_key = SpatialKey::from_string("leaf");
+        let zone_fq = compose_fq(&layer, "ui:zone");
+        let leaf_fq = compose_fq(&zone_fq, "ui:leaf");
         spatial_register_zone_inner(
             &mut registry,
-            zone_key.clone(),
-            Moniker::from_string("ui:zone"),
+            zone_fq.clone(),
+            SegmentMoniker::from_string("ui:zone"),
             rect_at(0.0, 0.0, 100.0, 100.0),
             layer.clone(),
             None,
@@ -3340,12 +3308,12 @@ mod spatial_command_tests {
             // Use a fresh inserted zone with a populated last_focused via
             // a new FocusZone — emulates the navigator's mutation.
             registry.register_zone(FocusZone {
-                key: zone_key.clone(),
-                moniker: Moniker::from_string("ui:zone"),
+                fq: zone_fq.clone(),
+                segment: SegmentMoniker::from_string("ui:zone"),
                 rect: rect_at(0.0, 0.0, 100.0, 100.0),
-                layer_key: layer.clone(),
+                layer_fq: layer.clone(),
                 parent_zone: None,
-                last_focused: Some(leaf_key.clone()),
+                last_focused: Some(leaf_fq.clone()),
                 overrides: HashMap::new(),
             });
         }
@@ -3353,18 +3321,18 @@ mod spatial_command_tests {
         // Re-register through the inner helper — the real wire path.
         spatial_register_zone_inner(
             &mut registry,
-            zone_key.clone(),
-            Moniker::from_string("ui:zone"),
+            zone_fq.clone(),
+            SegmentMoniker::from_string("ui:zone"),
             rect_at(0.0, 0.0, 200.0, 200.0),
             layer,
             None,
             HashMap::new(),
         );
 
-        let zone = registry.zone(&zone_key).expect("zone still registered");
+        let zone = registry.zone(&zone_fq).expect("zone still registered");
         assert_eq!(
             zone.last_focused.as_ref(),
-            Some(&leaf_key),
+            Some(&leaf_fq),
             "re-register should preserve last_focused for placeholder/real-mount swap"
         );
     }
@@ -3376,7 +3344,7 @@ mod spatial_command_tests {
     ///
     /// 1. A `focus-changed` event was produced (proves
     ///    `handle_unregister` saw the lost entry's metadata).
-    /// 2. The lost key is no longer in the registry (proves
+    /// 2. The lost FQM is no longer in the registry (proves
     ///    `unregister_scope` ran).
     /// 3. The fallback target is the surviving sibling (proves the
     ///    fallback resolver had the metadata it needed).
@@ -3389,14 +3357,12 @@ mod spatial_command_tests {
         let (k1, _) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "task:01",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
         let (k2, m2) = register_leaf(
             &mut registry,
             &layer,
-            "k2",
             "task:02",
             rect_at(20.0, 0.0, 10.0, 10.0),
         );
@@ -3407,9 +3373,9 @@ mod spatial_command_tests {
         let event = spatial_unregister_scope_inner(&mut registry, &mut state, &k1)
             .expect("unregistering the focused scope must produce a focus-changed event");
 
-        assert_eq!(event.prev_key, Some(k1.clone()));
-        assert_eq!(event.next_key, Some(k2.clone()));
-        assert_eq!(event.next_moniker, Some(m2));
+        assert_eq!(event.prev_fq, Some(k1.clone()));
+        assert_eq!(event.next_fq, Some(k2.clone()));
+        assert_eq!(event.next_segment, Some(m2));
         assert!(
             registry.scope(&k1).is_none(),
             "unregister_scope ran after handle_unregister"
@@ -3429,30 +3395,28 @@ mod spatial_command_tests {
         let mut registry = SpatialRegistry::new();
         let mut state = SpatialState::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (key, _) = register_leaf(
+        let (fq, _) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "task:01",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
 
-        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &key);
+        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &fq);
         assert!(
             event.is_none(),
             "unregistering an unfocused scope produces no event"
         );
         assert!(
-            registry.scope(&key).is_none(),
+            registry.scope(&fq).is_none(),
             "scope is still removed from the registry"
         );
     }
 
     /// `spatial_navigate(Down)` from the top leaf moves focus to the
     /// bottom leaf in the same zone. Exercises the full kernel pipeline:
-    /// `BeamNavStrategy::next` resolves the moniker, `navigate_with`
-    /// turns the moniker back into a `SpatialKey`, and `focus` emits the
-    /// transition.
+    /// `BeamNavStrategy::next` resolves the FQM, `navigate_with` updates
+    /// the per-window slot, and `focus` emits the transition.
     #[test]
     fn spatial_navigate_down_moves_focus_to_below_neighbor() {
         let mut registry = SpatialRegistry::new();
@@ -3462,14 +3426,12 @@ mod spatial_command_tests {
         let (top, _) = register_leaf(
             &mut registry,
             &layer,
-            "top",
             "task:top",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
         let (bottom, m_bottom) = register_leaf(
             &mut registry,
             &layer,
-            "bottom",
             "task:bottom",
             rect_at(0.0, 20.0, 10.0, 10.0),
         );
@@ -3480,9 +3442,9 @@ mod spatial_command_tests {
             .navigate_with(&registry, &strategy, top.clone(), Direction::Down)
             .expect("Down from top hits bottom");
 
-        assert_eq!(event.prev_key, Some(top));
-        assert_eq!(event.next_key, Some(bottom));
-        assert_eq!(event.next_moniker, Some(m_bottom));
+        assert_eq!(event.prev_fq, Some(top));
+        assert_eq!(event.next_fq, Some(bottom));
+        assert_eq!(event.next_segment, Some(m_bottom));
     }
 
     /// `spatial_push_layer_inner` derives `window_label` from the calling
@@ -3491,9 +3453,12 @@ mod spatial_command_tests {
     #[test]
     fn spatial_push_layer_associates_window_label() {
         let mut registry = SpatialRegistry::new();
+        let segment = SegmentMoniker::from_string("L1");
+        let fq = FullyQualifiedMoniker::root(&segment);
         spatial_push_layer_inner(
             &mut registry,
-            LayerKey::from_string("L1"),
+            fq.clone(),
+            segment,
             LayerName::from_string("window"),
             None,
             WindowLabel::from_string("board-abc"),
@@ -3502,40 +3467,37 @@ mod spatial_command_tests {
         let root = registry
             .root_for_window(&WindowLabel::from_string("board-abc"))
             .expect("root layer registered for the window");
-        assert_eq!(root.key, LayerKey::from_string("L1"));
+        assert_eq!(root.fq, fq);
         assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
     }
 
     /// `update_rect` refreshes the geometry of a registered scope.
-    /// No-op when the key is unknown — the kernel does not invent a new
+    /// No-op when the FQM is unknown — the kernel does not invent a new
     /// scope from a stray rect update.
     #[test]
     fn spatial_update_rect_refreshes_registered_scope() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (key, _) = register_leaf(
+        let (fq, _) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "task:01",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
 
         let new_rect = rect_at(50.0, 60.0, 70.0, 80.0);
-        registry.update_rect(&key, new_rect);
-        let scope = registry.scope(&key).unwrap();
+        registry.update_rect(&fq, new_rect);
+        let scope = registry.scope(&fq).unwrap();
         assert_eq!(scope.rect, new_rect);
 
-        // Unknown key: pure no-op.
-        registry.update_rect(
-            &SpatialKey::from_string("ghost"),
-            rect_at(1.0, 2.0, 3.0, 4.0),
-        );
-        assert!(!registry.is_registered(&SpatialKey::from_string("ghost")));
+        // Unknown FQM: pure no-op.
+        let ghost = FullyQualifiedMoniker::from_string("/ghost");
+        registry.update_rect(&ghost, rect_at(1.0, 2.0, 3.0, 4.0));
+        assert!(!registry.is_registered(&ghost));
     }
 
     /// `spatial_pop_layer` removes the layer from the registry.
-    /// Consistent with `remove_layer`: no-op when the key is unknown.
+    /// Consistent with `remove_layer`: no-op when the FQM is unknown.
     #[test]
     fn spatial_pop_layer_removes_layer() {
         let mut registry = SpatialRegistry::new();
@@ -3557,20 +3519,23 @@ mod spatial_command_tests {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
 
+        let z1 = compose_fq(&layer, "task:01");
+        let k1 = compose_fq(&layer, "ui:button");
+
         let entries = vec![
             RegisterEntry::Zone {
-                key: SpatialKey::from_string("z1"),
-                moniker: Moniker::from_string("task:01"),
+                fq: z1.clone(),
+                segment: SegmentMoniker::from_string("task:01"),
                 rect: rect_at(0.0, 0.0, 10.0, 10.0),
-                layer_key: layer.clone(),
+                layer_fq: layer.clone(),
                 parent_zone: None,
                 overrides: HashMap::new(),
             },
             RegisterEntry::Scope {
-                key: SpatialKey::from_string("k1"),
-                moniker: Moniker::from_string("ui:button"),
+                fq: k1.clone(),
+                segment: SegmentMoniker::from_string("ui:button"),
                 rect: rect_at(20.0, 0.0, 10.0, 10.0),
-                layer_key: layer,
+                layer_fq: layer,
                 parent_zone: None,
                 overrides: HashMap::new(),
             },
@@ -3578,17 +3543,11 @@ mod spatial_command_tests {
 
         spatial_register_batch_inner(&mut registry, entries).expect("batch apply succeeds");
 
-        assert!(
-            registry.is_registered(&SpatialKey::from_string("z1")),
-            "zone entry registered"
-        );
-        assert!(
-            registry.is_registered(&SpatialKey::from_string("k1")),
-            "leaf scope entry registered"
-        );
+        assert!(registry.is_registered(&z1), "zone entry registered");
+        assert!(registry.is_registered(&k1), "leaf scope entry registered");
     }
 
-    /// A kind-mismatch (zone entry for a key already registered as a
+    /// A kind-mismatch (zone entry for an FQM already registered as a
     /// leaf scope) bubbles up as `BatchRegisterError::KindMismatch` and
     /// leaves the registry unchanged. Verifies the inner helper does not
     /// silently swallow the error — the Tauri command stringifies it for
@@ -3600,17 +3559,16 @@ mod spatial_command_tests {
         let (existing, _) = register_leaf(
             &mut registry,
             &layer,
-            "k1",
             "ui:button",
             rect_at(0.0, 0.0, 10.0, 10.0),
         );
 
-        // Try to re-register `k1` as a zone — must fail kind-stability.
+        // Try to re-register the same FQM as a zone — must fail kind-stability.
         let entries = vec![RegisterEntry::Zone {
-            key: existing.clone(),
-            moniker: Moniker::from_string("ui:button"),
+            fq: existing.clone(),
+            segment: SegmentMoniker::from_string("ui:button"),
             rect: rect_at(0.0, 0.0, 10.0, 10.0),
-            layer_key: layer,
+            layer_fq: layer,
             parent_zone: None,
             overrides: HashMap::new(),
         }];

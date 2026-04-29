@@ -99,14 +99,14 @@ impl FocusEventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Moniker, SpatialKey, WindowLabel};
+    use crate::types::{FullyQualifiedMoniker, SegmentMoniker, WindowLabel};
 
-    fn event(key: &str) -> FocusChangedEvent {
+    fn event(name: &str) -> FocusChangedEvent {
         FocusChangedEvent {
             window_label: WindowLabel::from_string("main"),
-            prev_key: None,
-            next_key: Some(SpatialKey::from_string(key)),
-            next_moniker: Some(Moniker::from_string(format!("ui:{key}"))),
+            prev_fq: None,
+            next_fq: Some(FullyQualifiedMoniker::from_string(format!("/L/{name}"))),
+            next_segment: Some(SegmentMoniker::from_string(name)),
         }
     }
 
@@ -130,10 +130,13 @@ mod tests {
 
         let captured = sink.events.lock().unwrap();
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].next_key, Some(SpatialKey::from_string("first")));
         assert_eq!(
-            captured[1].next_key,
-            Some(SpatialKey::from_string("second"))
+            captured[0].next_fq,
+            Some(FullyQualifiedMoniker::from_string("/L/first"))
+        );
+        assert_eq!(
+            captured[1].next_fq,
+            Some(FullyQualifiedMoniker::from_string("/L/second"))
         );
     }
 

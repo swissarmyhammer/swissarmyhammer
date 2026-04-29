@@ -436,7 +436,7 @@ pub(crate) struct AppState {
     /// register / unregister; using the async mutex matches the pattern
     /// used by the rest of `AppState`'s shared state.
     pub(crate) spatial_registry: TokioMutex<SpatialRegistry>,
-    /// Per-window focused [`swissarmyhammer_focus::SpatialKey`] tracker.
+    /// Per-window focused [`swissarmyhammer_focus::FullyQualifiedMoniker`] tracker.
     /// Mutated by every `spatial_focus`, `spatial_navigate`, and
     /// `spatial_unregister_scope` command. Held under `tokio::sync::Mutex`
     /// because spatial commands routinely take both `spatial_registry` and
