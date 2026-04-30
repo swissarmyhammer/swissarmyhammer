@@ -10,7 +10,7 @@ depends_on:
 - 01KQD0HN9GCXPJW4364W5XDCGZ
 - 01KQD0HVD3AVKHZ0T9YNCWNW5G
 - 01KQD0HYXBPSFAPX4MBWDJANPZ
-position_column: doing
+position_column: review
 position_ordinal: '80'
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: agent_trait_impl.rs → builder/handler reshape'
