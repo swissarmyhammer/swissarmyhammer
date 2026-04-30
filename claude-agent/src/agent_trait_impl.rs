@@ -1,11 +1,20 @@
-//! Agent trait implementation for ClaudeAgent
+//! ACP protocol entry-points for ClaudeAgent.
 //!
-//! This module contains the implementation of the Agent trait from agent_client_protocol
-//! for the ClaudeAgent struct. It handles the core ACP protocol methods including:
-//! - initialize/authenticate
-//! - new_session/load_session/set_session_mode
-//! - prompt/cancel
-//! - ext_method/ext_notification
+//! In ACP 0.10 these methods lived under `impl Agent for ClaudeAgent`, where
+//! `Agent` was a trait the SDK invoked via dynamic dispatch. ACP 0.11 removes
+//! that trait — `agent_client_protocol::Agent` is now a unit Role marker —
+//! and replaces it with a typed builder/handler runtime. The connection
+//! layer (`Agent.builder().on_receive_request(...).connect_with(...)`) is
+//! wired up by the server module; this file holds the inherent methods
+//! that the per-method handlers delegate to:
+//! - `initialize` / `authenticate`
+//! - `new_session` / `load_session` / `set_session_mode`
+//! - `prompt` / `cancel`
+//! - `ext_method` / `ext_notification`
+//!
+//! The method bodies are unchanged from the 0.10 trait impl — only the
+//! wrapping syntax has flipped from `impl Agent for ClaudeAgent` to
+//! `impl ClaudeAgent`.
 
 use crate::agent::ClaudeAgent;
 use crate::agent_file_operations::{ReadTextFileParams, WriteTextFileParams};
@@ -15,11 +24,12 @@ use agent_client_protocol::schema::{
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, RawValue, SessionId,
     SetSessionModeRequest, SetSessionModeResponse,
 };
-use agent_client_protocol::Agent;
 use std::sync::Arc;
 
-#[async_trait::async_trait(?Send)]
-impl Agent for ClaudeAgent {
+// ACP protocol entry-points used by the SDK 0.11 builder/handler layer.
+// Each method matches a JSON-RPC request handler registered on
+// `Agent.builder().on_receive_request(...)` by the server module.
+impl ClaudeAgent {
     // ACP AGENT PROTOCOL FLOW WITHOUT AUTHENTICATION:
     // 1. Client sends initialize request
     // 2. Agent responds with capabilities and authMethods: []
@@ -28,7 +38,13 @@ impl Agent for ClaudeAgent {
     //
     // This is the correct flow for local development tools.
 
-    async fn initialize(
+    /// Handle the ACP `initialize` request.
+    ///
+    /// Validates the request, negotiates protocol version, stores the client
+    /// capabilities for capability gating, and returns the agent's advertised
+    /// capabilities. Authentication methods are intentionally empty — see the
+    /// architectural note in the body for the rationale.
+    pub async fn initialize(
         &self,
         request: InitializeRequest,
     ) -> Result<InitializeResponse, agent_client_protocol::Error> {
@@ -108,7 +124,12 @@ impl Agent for ClaudeAgent {
         Ok(response)
     }
 
-    async fn authenticate(
+    /// Handle the ACP `authenticate` request.
+    ///
+    /// Always returns `method_not_found`: claude-agent declares no auth methods
+    /// in `initialize`, so the client should never call this. If it does anyway,
+    /// reject explicitly per the ACP spec.
+    pub async fn authenticate(
         &self,
         request: AuthenticateRequest,
     ) -> Result<AuthenticateResponse, agent_client_protocol::Error> {
@@ -126,7 +147,12 @@ impl Agent for ClaudeAgent {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
-    async fn new_session(
+    /// Handle the ACP `session/new` request.
+    ///
+    /// Validates MCP transport requirements, creates a new session, spawns the
+    /// underlying Claude process, sends the initial session commands, and
+    /// returns the response (including any configured session modes).
+    pub async fn new_session(
         &self,
         request: NewSessionRequest,
     ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
@@ -157,7 +183,12 @@ impl Agent for ClaudeAgent {
         Ok(response)
     }
 
-    async fn load_session(
+    /// Handle the ACP `session/load` request.
+    ///
+    /// Parses the session id, looks up the session in the session manager, and
+    /// either returns the load response (replaying messages and returning any
+    /// configured modes) or surfaces a session-not-found error.
+    pub async fn load_session(
         &self,
         request: LoadSessionRequest,
     ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
@@ -183,7 +214,12 @@ impl Agent for ClaudeAgent {
         }
     }
 
-    async fn set_session_mode(
+    /// Handle the ACP `session/set_mode` request.
+    ///
+    /// Validates the requested mode against the configured set, updates the
+    /// session's current mode, and (if the mode actually changed) replaces the
+    /// underlying Claude process so the next prompt runs under the new mode.
+    pub async fn set_session_mode(
         &self,
         request: SetSessionModeRequest,
     ) -> Result<SetSessionModeResponse, agent_client_protocol::Error> {
@@ -211,7 +247,14 @@ impl Agent for ClaudeAgent {
         Ok(response)
     }
 
-    async fn prompt(
+    /// Handle the ACP `session/prompt` request.
+    ///
+    /// Validates the request, sends user-message chunks back as session updates
+    /// for transparency, honours any per-request `_meta.max_tokens` cap, and
+    /// dispatches to the streaming or non-streaming prompt handler. Resets the
+    /// per-session cancellation flag once the turn finishes so the next prompt
+    /// starts fresh.
+    pub async fn prompt(
         &self,
         request: PromptRequest,
     ) -> Result<PromptResponse, agent_client_protocol::Error> {
@@ -283,7 +326,13 @@ impl Agent for ClaudeAgent {
         Ok(response)
     }
 
-    async fn cancel(
+    /// Handle the ACP `session/cancel` notification.
+    ///
+    /// Marks the session cancelled, fans out cancellation to ongoing Claude
+    /// requests, tool executions, and pending permission prompts, and emits
+    /// final status updates. The original `session/prompt` call observes the
+    /// cancellation flag and responds with the cancelled stop reason.
+    pub async fn cancel(
         &self,
         notification: CancelNotification,
     ) -> Result<(), agent_client_protocol::Error> {
@@ -362,7 +411,7 @@ impl Agent for ClaudeAgent {
     /// This implementation satisfies the ACP requirement that agents must respond to
     /// extension method calls, even if they don't implement any specific extensions.
     /// Returning a structured response (rather than an error) maintains client compatibility.
-    async fn ext_method(
+    pub async fn ext_method(
         &self,
         request: ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
@@ -383,7 +432,13 @@ impl Agent for ClaudeAgent {
         }
     }
 
-    async fn ext_notification(
+    /// Handle ACP extension notifications.
+    ///
+    /// Extension notifications are fire-and-forget messages outside the core
+    /// ACP protocol. Claude Agent currently logs and ignores them; this hook
+    /// exists so future extensions can be wired in without churn at the
+    /// builder layer.
+    pub async fn ext_notification(
         &self,
         notification: ExtNotification,
     ) -> Result<(), agent_client_protocol::Error> {
