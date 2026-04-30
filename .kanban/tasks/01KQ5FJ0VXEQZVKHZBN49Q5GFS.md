@@ -6,7 +6,7 @@ depends_on:
 position_column: todo
 position_ordinal: 7f8180
 project: single-changelog
-title: 'single-changelog: stop the entity dual-writer; delete orphaned entity-layer UndoStack module'
+title: 'jsingle-changelog: stop the entity dual-writer; delete orphaned entity-layer UndoStack module'
 ---
 #single-changelog #refactor #entity #tech-debt
 

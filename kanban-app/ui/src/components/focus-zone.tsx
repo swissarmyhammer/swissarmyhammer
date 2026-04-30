@@ -517,7 +517,7 @@ function SpatialFocusZoneBody({
         >
           {showFocusBar && <FocusIndicator focused={focused} />}
           {debugEnabled && (
-            <FocusDebugOverlay kind="zone" label={fq} hostRef={ref} />
+            <FocusDebugOverlay kind="zone" label={segment} hostRef={ref} />
           )}
           {children}
         </div>

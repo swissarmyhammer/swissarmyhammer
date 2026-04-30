@@ -418,7 +418,7 @@ function SpatialFocusScopeBody({
       >
         {showFocusBar && <FocusIndicator focused={focused} />}
         {debugEnabled && (
-          <FocusDebugOverlay kind="scope" label={fq} hostRef={ref} />
+          <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
         )}
         {children}
       </div>
