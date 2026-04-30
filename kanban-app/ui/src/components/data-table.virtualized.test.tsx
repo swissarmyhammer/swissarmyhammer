@@ -255,14 +255,18 @@ describe("DataTable row virtualization", () => {
     // is significantly past the initial viewport.
     const grid500 = makeGrid({ row: 500, col: 0 });
     rerender(
-      <EntityFocusProvider>
-        <DataTable
-          columns={COLUMNS}
-          rows={entities}
-          grid={grid500}
-          showRowSelector={true}
-        />
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <DataTable
+              columns={COLUMNS}
+              rows={entities}
+              grid={grid500}
+              showRowSelector={true}
+            />
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
 
     await waitFor(
@@ -336,14 +340,18 @@ describe("DataTable row virtualization", () => {
         <TooltipProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{ actor: actors, task: rows }}>
-              <EntityFocusProvider>
-                <DataTable
-                  columns={heightColumns}
-                  rows={rows}
-                  grid={makeGrid()}
-                  showRowSelector={true}
-                />
-              </EntityFocusProvider>
+              <SpatialFocusProvider>
+                <FocusLayer name={asSegment("window")}>
+                  <EntityFocusProvider>
+                    <DataTable
+                      columns={heightColumns}
+                      rows={rows}
+                      grid={makeGrid()}
+                      showRowSelector={true}
+                    />
+                  </EntityFocusProvider>
+                </FocusLayer>
+              </SpatialFocusProvider>
             </EntityStoreProvider>
           </SchemaProvider>
         </TooltipProvider>,

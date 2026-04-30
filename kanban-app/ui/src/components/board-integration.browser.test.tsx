@@ -532,10 +532,13 @@ describe("Board integration — real .kanban data", () => {
       ).items;
       const doThisNext = items.find((i) => i.cmd === "task.doThisNext");
       expect(doThisNext).toBeTruthy();
-      // Scope chain should contain the task moniker
-      expect(doThisNext!.scope_chain.some((s) => s.startsWith("task:"))).toBe(
-        true,
-      );
+      // Scope chain should contain a path whose trailing segment is the
+      // task entity moniker. Under the FQM model the scope chain entries
+      // are fully-qualified paths (`/window/.../task:<id>`), so we
+      // match on the trailing segment rather than the start.
+      expect(
+        doThisNext!.scope_chain.some((s) => /(?:^|\/)task:/.test(s)),
+      ).toBe(true);
 
       // No task.move should have been dispatched (old workaround gone)
       const moveCall = mockInvoke.mock.calls.find(
