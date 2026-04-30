@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQD0DF12DJ1WPZ4MMWF69DAQ
 - 01KQD0DW1GAW3KF2A33FQ0JZT3
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa880
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: tool modules'
 ---
