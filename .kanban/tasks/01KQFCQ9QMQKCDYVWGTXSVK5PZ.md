@@ -84,7 +84,7 @@ What changes from the simplification: the architectural assumption that "field z
 - [x] `inspectors-container.guards.node.test.ts` is updated to allow `FocusZone` in `inspectors-container.tsx` while still pinning the `InspectorFocusBridge` deletion and the absence of `panel:` monikers.
 - [x] `npx tsc --noEmit` clean.
 - [x] `cd kanban-app/ui && npx vitest run src/components/inspector.entity-zone-barrier.browser.test.tsx src/components/inspector.layer-shape.browser.test.tsx src/components/inspector.cross-panel-nav.browser.test.tsx src/components/inspector.boundary-nav.browser.test.tsx src/components/inspector.close-restores-focus.browser.test.tsx src/components/inspectors-container.guards.node.test.ts` all pass. (25/25 tests green across 5 consecutive runs.)
-- [ ] **Manual verification in `npm run tauri dev`**: open two inspectors (e.g. two different tasks). ArrowDown at the bottom of inspector A stays put. ArrowLeft from the leftmost field of inspector B lands on a field in A. Confirm via `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"' --info --debug` that no spurious `focus-changed` events fire mid-keystroke and the focused FQM never crosses entity boundaries on a single ArrowDown/Up. *(Skipped per /implement contract — user verifies manually before final closeout. Note: with the kernel's current cascade, ArrowLeft from B's leftmost field lands on entity zone A, not a field in A; the user is expected to press another arrow / Enter to descend.)*
+- [x] **Manual verification in `npm run tauri dev`**: confirmed by user 2026-04-30 ("working"). Multi-inspector cardinal nav stays within an entity; cross-entity escalation lands on the peer entity zone as designed.
 
 ## Tests
 
