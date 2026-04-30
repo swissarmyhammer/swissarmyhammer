@@ -296,12 +296,14 @@ fn find_by_fq_unknown_returns_none() {
         .is_none());
 }
 
-/// Registering the same FQM twice replaces the prior entry — same
-/// semantics as today's "register_zone replaces any prior scope under
-/// the same key". A real duplicate FQM is a programmer mistake (two
-/// `<FocusScope>` mounts whose composed paths collide); the kernel
-/// surfaces it via `tracing::error!` and lets the second registration
-/// win so re-mounts under the same path stay idempotent.
+/// Registering the same FQM twice with the same structural shape (only
+/// the `rect` differs) replaces the prior entry silently. This is the
+/// placeholder→real-mount swap path, which is part of the normal
+/// virtualizer + spatial-nav lifecycle: the column placeholder hook
+/// registers a rect estimate, and the `<EntityCard>` `<FocusScope>`
+/// later registers its real `getBoundingClientRect()` at the same FQM.
+/// Same-shape re-registers must NOT trip a programmer-mistake error —
+/// see `register_scope` docstring for the full rationale.
 #[test]
 fn duplicate_fq_registration_replaces_prior_entry() {
     let mut reg = SpatialRegistry::new();

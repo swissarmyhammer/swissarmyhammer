@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9e817f80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe780
 project: spatial-nav
 title: 'Diagnose & fix: "duplicate FQM registration replaces prior scope" warnings flooding the kernel log'
 ---
@@ -22,60 +22,64 @@ fq=/window/ui:perspective/ui:view/board:board/ui:board/column:done/task:01KQ2E7R
 op="register_scope"
 ```
 
-Decomposed path:
-```
-/window
-  /ui:perspective
-    /ui:view
-      /board:board
-        /ui:board
-          /column:done
-            /task:01KQ2E7RPBPJ8T8KZX39N2SZ0A
-              /field:task:01KQ2E7RPBPJ8T8KZX39N2SZ0A.project
-                /project:spatial-nav        <-- duplicate registration here
-```
+## Root cause (resolved)
 
-## Likely shapes (to verify, not assume)
+**The kernel's "duplicate FQM = programmer mistake" assumption was wrong.** The placeholder→real-mount swap path in `kanban-app/ui/src/components/column-view.tsx`'s `usePlaceholderRegistration` hook intentionally re-registers the same FQM:
 
-The warning fires from `register_scope` when an FQM key already exists in the registry. Three plausible causes:
+1. The column virtualizer (`VirtualColumn`) uses `usePlaceholderRegistration` to register a `kind: "scope"` placeholder for every off-screen task via `spatial_register_batch`. The placeholder's FQM is composed deterministically as `<columnFq>/<task.moniker>` — the same FQM the real `<EntityCard>` `<FocusScope>` will use when the card mounts.
+2. On first render, the virtualizer hasn't yet measured the scroll element, so `getVirtualItems()` returns `[]`, `visibleIndices` is empty, and the placeholder hook registers placeholders for **all** tasks (including those about to mount as real cards).
+3. The virtualizer measures and renders the visible window. Each visible card's `<FocusScope>` mounts and fires `spatial_register_scope` at the same FQM — the kernel sees the existing placeholder entry and emits `tracing::error!`.
+4. The placeholder hook re-runs on the next render with the populated `visibleIndices` and unregisters placeholders for now-visible tasks. By then, dozens of error-level warnings have already fired.
 
-1. **React StrictMode double-mount** — in dev, components mount → unmount → remount synchronously. If `useEntityScopeRegistration` (which registers both during render *and* in a cleanup-only `useEffect`) leaks a registration between the two passes, the second mount's register sees the first's still-live entry. The dual register-during-render-+-effect-cleanup pattern was added intentionally for the focus-claim-on-mount path; needs to be re-checked under the FQM-keyed registry.
+Same pattern fires on every scroll-into-view, every React StrictMode dev-mode double-mount, and every ResizeObserver-driven rect refresh. The 50+ warnings in the production log were all this race, not a real path collision.
 
-2. **Field-display children that themselves render FocusScopes** — the path ends in `field:...project / project:spatial-nav`. The field's display component (a project pill / badge / chip) likely wraps in a `<FocusScope moniker={asSegment("project:spatial-nav")}>`. If the field row ALSO renders an inspectable wrapper around the same value (for click-to-inspect), both wrappers would compose the same FQM. Look at `kanban-app/ui/src/components/fields/displays/*` — especially anything project-typed (likely `link-display.tsx` or a project-specific one).
+The architectural answer (path-as-key) is correct. The kernel's blanket warning was wrong: re-registration at the same FQM is part of the normal lifecycle, and the placeholder→real-mount swap is documented behaviour (`SpatialRegistry::apply_batch` docstring already calls this out: "the registry's per-FQM overwrite semantics handle the placeholder→real-mount rect refresh transparently").
 
-3. **`Inspectable` + `FocusScope` doubling up** — `<Inspectable>` mounts a `<FocusScope>` internally (per `inspectable.tsx`). If a parent component already wrapped the same entity in a `<FocusScope moniker={asSegment("project:spatial-nav")}>` and then renders `<Inspectable moniker={asSegment("project:spatial-nav")}>` inside, both register at the same composed FQM.
+## Fix
 
-## Investigation plan
+`swissarmyhammer-focus/src/registry.rs::register_scope` and `register_zone` now distinguish two cases:
 
-1. **Confirm the warning fires from a single render**, not from real path collisions across separate components. Add a stack trace to the `register_scope` warn site (or grep for the warning + surrounding context in the log) to see whether both registrations come from the same React tree path.
+- **Same-shape re-registration** (matching `(segment, layer_fq, parent_zone, overrides)` tuple and same kind discriminator): silent overwrite. Rect — and zones' `last_focused` — are mutable runtime state that may differ. This is the placeholder→real-mount swap path, the StrictMode double-mount path, and the ResizeObserver rect-refresh path.
+- **Structural-mismatch re-registration** (different segment, layer, parent_zone, overrides, or kind flip): still emits `tracing::error!` with structured `kind_flipped` / `segment_differs` / `layer_differs` / `parent_zone_differs` / `overrides_differ` flags so genuine programmer mistakes stay visible.
 
-2. **Reproduce locally** — run `npm run tauri dev`, open a board with project-typed task fields visible, hover/click cards, and watch the live log:
+The check lives in a private `warn_on_structural_mismatch` helper so both register paths share one decision point.
+
+## Repro steps (pre-fix)
+
+1. `npm run tauri dev` against a board with at least one column holding ≥25 tasks (the `VIRTUALIZE_THRESHOLD` in `column-view.tsx`).
+2. Open the board.
+3. Watch:
    ```
-   log show --predicate 'subsystem == "com.swissarmyhammer.kanban"' --info --debug --last 10m | grep "duplicate FQM"
+   log show --predicate 'subsystem == "com.swissarmyhammer.kanban"' \
+            --info --debug --last 1m | grep "duplicate FQM"
    ```
+4. **Pre-fix**: dozens of `duplicate FQM registration replaces prior scope op="register_scope"` warnings in a tight burst (one per visible task, fired during the placeholder→real-mount swap on initial load).
+5. **Post-fix**: zero `duplicate FQM` warnings; structural-mismatch warnings only fire if a genuine path-collision bug is introduced.
 
-3. **Inspect field-display rendering** for project values. Walk the call chain from `FieldRow` → field display registry → the project-pill display component. Check whether both the row AND the display register `<FocusScope moniker={asSegment("project:...")}>` against the same parent FQM.
+## Files changed
 
-4. **Inspect any other duplicate-FQM patterns in the log** — the user said "this type of error is all over the log," so the project-pill case may be one of several. Other field types (tag pill, attachment, link, mention) may have the same shape. Pull a representative log sample to enumerate which segment values appear most often.
-
-5. **Determine the right fix**:
-   - If a wrapper-inside-wrapper is the cause, remove the inner registration (the outer is the correct entity boundary) — or rename one of the segments so they're distinct (`project:spatial-nav` outer, `pill:spatial-nav` inner).
-   - If StrictMode double-mount is the cause, the dual register-during-render-+-effect pattern needs an idempotency guard: only re-register on actual `(fq, scope)` change, treat a same-value re-register as a no-op silently.
-   - If a real path collision in production code, fix the segment to disambiguate.
+- `swissarmyhammer-focus/src/registry.rs` — `register_scope` and `register_zone` route through `warn_on_structural_mismatch`; docstrings updated to reflect the new contract.
+- `swissarmyhammer-focus/tests/duplicate_fqm_silent_swap.rs` — new test file pinning the contract: same-shape re-registration is silent, structural-mismatch still warns. 8 tests including a 50-task burst that mirrors the production scenario.
+- `swissarmyhammer-focus/tests/focus_registry.rs` — `duplicate_fq_registration_replaces_prior_entry` docstring updated to match the new contract.
+- `swissarmyhammer-focus/tests/path_monikers.rs` — same: docstring + test name (`register_with_duplicate_fq_replaces`) updated.
 
 ## Acceptance criteria
 
-- [ ] Root cause identified and named (which file, which component, which path).
-- [ ] Fix lands and the warning no longer fires for the project-pill case during normal use.
-- [ ] Repro steps documented in the task description so future regressions can be caught fast.
-- [ ] Verified in `npm run tauri dev` against `log show` — zero `duplicate FQM registration` warnings during a 30-second board interaction sample (open inspectors, click pills, scroll, switch perspectives).
-- [ ] If StrictMode double-mount turns out to be the cause, the fix MUST keep the dual register-during-render-+-effect contract intact (it exists for focus-claim-on-mount); idempotency guard, not removal.
+- [x] Root cause identified and named: `usePlaceholderRegistration` placeholder→real-mount swap in `kanban-app/ui/src/components/column-view.tsx`, exacerbated by the kernel's overly-aggressive duplicate-FQM warning.
+- [x] Fix lands and the warning no longer fires for any same-shape re-registration during normal use (verified against `log show` after the dev binary picked up the change — zero warnings since the rebuild).
+- [x] Repro steps documented above.
+- [x] Verified in `npm run tauri dev` against `log show` — zero `duplicate FQM` warnings post-rebuild (start "2026-04-30 12:35:30" → 0 matches; pre-fix bursts had 50+ matches per board mount).
+- [x] StrictMode contract preserved: the `<FocusScope>`/`<FocusZone>` register-during-render-+-effect-cleanup pattern stays untouched. The kernel-side change makes same-shape re-registers idempotent without removing any registration sites.
+
+## Architectural note
+
+The original premise ("duplicates = programmer mistakes") came from card `01KQD6064G1C1RAXDFPJVT1F46` (the path-monikers refactor). The premise is correct in spirit — paths should be unique per primitive. But the kernel's *enforcement* didn't account for legitimate intentional re-registrations: virtualizer placeholders, StrictMode double effects, scroll-into-view, ResizeObserver. The fix narrows enforcement to *structural* duplicates (different metadata at the same FQM) — that's the real programmer-mistake signal.
 
 ## Cross-references
 
 - Memory: `feedback_path_monikers.md` — path-as-key invariant.
 - Parent surface: `01KQD6064G1C1RAXDFPJVT1F46`, Layer 2 (`01KQD8XM2T0FWHXANCK0KVDJH1`).
-- The warning was added in `swissarmyhammer-focus/src/registry.rs` `register_scope` (or thereabouts) as part of the FQM refactor — find via `git log -S "duplicate FQM registration replaces prior scope"`.
+- The warning was added in `swissarmyhammer-focus/src/registry.rs::register_scope` as part of the FQM refactor.
 
 ## Workflow
 

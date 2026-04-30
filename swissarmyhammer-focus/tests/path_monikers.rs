@@ -353,17 +353,19 @@ fn segment_moniker_does_not_compile_at_fq_lookup_callsite() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: register_with_duplicate_fq_logs_error_and_replaces
+// Test 6: register_with_duplicate_fq_replaces
 // ---------------------------------------------------------------------------
 
-/// Registering the same FQM twice replaces the prior entry — same
-/// semantics as today's "register_zone replaces any prior scope under
-/// the same key", just on the new identifier. A real duplicate FQM is
-/// a programmer mistake (two `<FocusZone>` with the same composed
-/// path), so the kernel surfaces the duplication via `tracing::error!`
-/// while keeping the registry in a consistent state.
+/// Registering the same FQM twice with the same structural shape (only
+/// the `rect` differs) replaces the prior entry. This is the
+/// placeholder→real-mount swap path used by the column virtualizer,
+/// the StrictMode dev-mode double-mount path, and the
+/// ResizeObserver-driven rect refresh — all legitimate parts of the
+/// React lifecycle. Same-shape re-registration is a silent overwrite;
+/// see `SpatialRegistry::register_zone` docstring for the structural-
+/// mismatch contract that DOES still log an error.
 #[test]
-fn register_with_duplicate_fq_logs_error_and_replaces() {
+fn register_with_duplicate_fq_replaces() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/window", "window", None));
 
@@ -380,10 +382,11 @@ fn register_with_duplicate_fq_logs_error_and_replaces() {
     let first = reg.find_by_fq(&fq(path)).unwrap();
     assert_eq!(first.rect().width, Pixels::new(100.0));
 
-    // Second registration at the same FQM with a different rect — replaces
-    // the prior entry. The kernel logs an error to surface the duplicate;
-    // we don't capture tracing output here (Layer 2's React tests do), but
-    // the registry must end up holding the SECOND entry's data.
+    // Second registration at the same FQM with the same structural
+    // shape but a different rect — replaces the prior entry silently
+    // (no `tracing::error!` since the structural identity matches; the
+    // legitimate placeholder→real-mount swap and StrictMode
+    // double-mount paths land here every render).
     reg.register_zone(make_zone(
         path,
         "card:T1",

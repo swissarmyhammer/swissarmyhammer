@@ -73,6 +73,80 @@ use super::types::{
     pixels_cmp, Direction, FullyQualifiedMoniker, Rect, SegmentMoniker, WindowLabel,
 };
 
+/// Emit `tracing::error!` only when re-registering at an already-occupied
+/// FQM with a *structurally different* entry — i.e. a mismatch in the
+/// kind discriminator (zone vs scope) or in any of the structural
+/// fields (`segment`, `layer_fq`, `parent_zone`, `overrides`).
+///
+/// Same-shape re-registration is silent. The legitimate paths that hit
+/// this case repeatedly:
+///
+/// * **Virtualizer placeholder → real-mount swap.** The board column's
+///   `usePlaceholderRegistration` hook in `column-view.tsx` registers
+///   off-screen task FQMs as placeholder scopes via
+///   `spatial_register_batch`. When a task scrolls into view (or mounts
+///   on the first render after measurement) its `<EntityCard>`
+///   `<FocusScope>` registers at the same FQM with an identical
+///   structural shape — only the rect (placeholder estimate vs. real
+///   `getBoundingClientRect()`) differs. The placeholder hook
+///   unregisters its entry on the next render commit; in between, the
+///   kernel sees a same-shape re-register that is part of the
+///   intentional swap.
+///
+/// * **React StrictMode dev double-mount.** The `<FocusScope>` /
+///   `<FocusZone>` register effect runs, cleans up, and re-runs in a
+///   single mount under StrictMode. Both register IPCs ship with
+///   identical structural data; the cleanup's unregister IPC sits in
+///   between, so this is *normally* not even a duplicate at the kernel.
+///   But if any IPC reordering or batching causes the second register
+///   to land before the cleanup unregister, the kernel still sees a
+///   same-shape re-register.
+///
+/// * **ResizeObserver-driven rect refresh.** The same `<FocusScope>`
+///   re-fires its register effect when its dependency tuple shifts
+///   (e.g. `parent_zone` or `layer_fq` recomputed identically by
+///   context, but the React reconciler still re-runs the effect).
+///
+/// A genuine programmer mistake — two primitives whose composed paths
+/// collide with conflicting metadata (different segments, different
+/// enclosing zones / layers, different override sets) or with a kind
+/// flip — still trips the error log so it stays visible.
+///
+/// `op` is the calling registration op for log readability
+/// (`"register_scope"` or `"register_zone"`).
+fn warn_on_structural_mismatch(
+    op: &'static str,
+    existing: &RegisteredScope,
+    new_segment: &SegmentMoniker,
+    new_layer_fq: &FullyQualifiedMoniker,
+    new_parent_zone: Option<&FullyQualifiedMoniker>,
+    new_overrides: &HashMap<Direction, Option<FullyQualifiedMoniker>>,
+    new_is_zone: bool,
+) {
+    let kind_flipped = existing.is_zone() != new_is_zone;
+    let segment_differs = existing.segment() != new_segment;
+    let layer_differs = existing.layer_fq() != new_layer_fq;
+    let parent_zone_differs = existing.parent_zone() != new_parent_zone;
+    let overrides_differ = existing.overrides() != new_overrides;
+
+    if kind_flipped || segment_differs || layer_differs || parent_zone_differs || overrides_differ {
+        tracing::error!(
+            op,
+            fq = %existing.fq(),
+            kind_flipped,
+            segment_differs,
+            layer_differs,
+            parent_zone_differs,
+            overrides_differ,
+            "duplicate FQM registration with structural mismatch — \
+             two primitives composed the same path but disagree on \
+             segment / layer / parent_zone / overrides / kind. \
+             Replacing prior entry; nav may be inconsistent until \
+             the offending primitive is fixed."
+        );
+    }
+}
+
 /// Headless store for spatial scopes and layers.
 ///
 /// See module docs for the threading model and the split between scopes
@@ -104,19 +178,32 @@ impl SpatialRegistry {
 
     /// Register a [`FocusScope`] leaf.
     ///
-    /// Replaces any prior scope under the same FQM. A duplicate FQM is
-    /// a programmer mistake (two `<FocusScope>` mounts whose composed
-    /// paths collide); the kernel surfaces the duplication via
-    /// `tracing::error!` and lets the second registration replace the
-    /// first so re-mounts under the same path stay idempotent.
+    /// Replaces any prior scope under the same FQM. Re-registration at
+    /// the same FQM is part of the normal lifecycle — the virtualizer's
+    /// placeholder→real-mount swap, React StrictMode dev-mode double
+    /// effects, scroll-into-view, and ResizeObserver-driven rect
+    /// refreshes all funnel through here repeatedly under the same
+    /// path. The registry treats those silently: same `(segment,
+    /// layer_fq, parent_zone, overrides)` tuple is a structural
+    /// no-op and only the `rect` is refreshed.
+    ///
+    /// A *structural* duplicate — same FQM but a different
+    /// `(segment, layer_fq, parent_zone, overrides)` tuple, or a kind
+    /// flip from zone→scope — IS a programmer mistake (two primitives
+    /// whose composed paths collide with conflicting metadata, or two
+    /// disagreeing variants). Those still surface via `tracing::error!`
+    /// so the noise stays bounded to genuine bugs while the second
+    /// registration replaces the first to keep the registry consistent.
     pub fn register_scope(&mut self, f: FocusScope) {
-        if self.scopes.contains_key(&f.fq) {
-            tracing::error!(
-                op = "register_scope",
-                fq = %f.fq,
-                "duplicate FQM registration replaces prior scope — \
-                 a real duplicate FQM is a programmer mistake (two primitives \
-                 whose composed paths collide)"
+        if let Some(existing) = self.scopes.get(&f.fq) {
+            warn_on_structural_mismatch(
+                "register_scope",
+                existing,
+                /* new_segment */ &f.segment,
+                /* new_layer_fq */ &f.layer_fq,
+                /* new_parent_zone */ f.parent_zone.as_ref(),
+                /* new_overrides */ &f.overrides,
+                /* new_is_zone */ false,
             );
         }
         self.scopes.insert(f.fq.clone(), RegisteredScope::Scope(f));
@@ -125,17 +212,22 @@ impl SpatialRegistry {
     /// Register a [`FocusZone`] container.
     ///
     /// Replaces any prior scope under the same FQM. Same semantics as
-    /// [`register_scope`].
+    /// [`register_scope`] — same-shape re-registration is a silent
+    /// no-op (the placeholder→real-mount and StrictMode-double-mount
+    /// paths land here every render); a structural mismatch still
+    /// surfaces via `tracing::error!`.
     ///
     /// [`register_scope`]: SpatialRegistry::register_scope
     pub fn register_zone(&mut self, z: FocusZone) {
-        if self.scopes.contains_key(&z.fq) {
-            tracing::error!(
-                op = "register_zone",
-                fq = %z.fq,
-                "duplicate FQM registration replaces prior zone — \
-                 a real duplicate FQM is a programmer mistake (two primitives \
-                 whose composed paths collide)"
+        if let Some(existing) = self.scopes.get(&z.fq) {
+            warn_on_structural_mismatch(
+                "register_zone",
+                existing,
+                /* new_segment */ &z.segment,
+                /* new_layer_fq */ &z.layer_fq,
+                /* new_parent_zone */ z.parent_zone.as_ref(),
+                /* new_overrides */ &z.overrides,
+                /* new_is_zone */ true,
             );
         }
         self.scopes.insert(z.fq.clone(), RegisteredScope::Zone(z));
