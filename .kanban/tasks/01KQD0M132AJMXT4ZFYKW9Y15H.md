@@ -6,8 +6,8 @@ depends_on:
 - 01KQD0G0N3KDEZAHRJEQT5SS9W
 - 01KQD0MMR7W64307S03XBV69BH
 - 01KQD0NS3EFZ6Q7WCN5FME36VY
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffae80
 project: acp-upgrade
 title: 'ACP 0.11: avp-common: validator/runner.rs mock Agent + RecordingAgent wiring'
 ---

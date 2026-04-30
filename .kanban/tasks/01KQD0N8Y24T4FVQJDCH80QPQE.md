@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD0MMR7W64307S03XBV69BH
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffad80
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: integration tests + common helpers'
 ---
