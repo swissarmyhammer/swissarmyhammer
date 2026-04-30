@@ -746,7 +746,7 @@ function bridgeWrapper({ children }: { children: ReactNode }) {
 }
 
 describe("EntityFocusProvider — spatial focus bridge", () => {
-  it("mirrors focus-changed.next_segment into the entity-focus store", async () => {
+  it("mirrors focus-changed.next_fq into the entity-focus store", async () => {
     const { result } = renderHook(() => useEntityFocus(), {
       wrapper: bridgeWrapper,
     });
@@ -763,7 +763,7 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
       });
     });
 
-    expect(result.current.focusedFq).toBe("task:01ABC");
+    expect(result.current.focusedFq).toBe("k1");
   });
 
   it("clears focus when next_fq is null", async () => {
@@ -780,7 +780,7 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
         next_segment: asSegment("task:01ABC"),
       });
     });
-    expect(result.current.focusedFq).toBe("task:01ABC");
+    expect(result.current.focusedFq).toBe("k1");
 
     await act(async () => {
       emitFocusChanged({
@@ -825,7 +825,7 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
         next_segment: asSegment("column:todo"),
       });
     });
-    expect(capturedRef!.current).toBe("column:todo");
+    expect(capturedRef!.current).toBe("ka");
 
     await act(async () => {
       emitFocusChanged({
@@ -835,7 +835,7 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
         next_segment: asSegment("task:01"),
       });
     });
-    expect(capturedRef!.current).toBe("task:01");
+    expect(capturedRef!.current).toBe("kb");
   });
 
   it("is a no-op when SpatialFocusProvider is absent", () => {

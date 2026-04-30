@@ -278,7 +278,7 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
  * received fresh rects after a scroll.
  */
 function updateRectCalls(): Array<{
-  key: FullyQualifiedMoniker;
+  fq: FullyQualifiedMoniker;
   rect: { x: number; y: number; width: number; height: number };
 }> {
   return mockInvoke.mock.calls
@@ -286,7 +286,7 @@ function updateRectCalls(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: FullyQualifiedMoniker;
+          fq: FullyQualifiedMoniker;
           rect: { x: number; y: number; width: number; height: number };
         },
     );
@@ -447,7 +447,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
       { x: number; y: number; width: number; height: number }
     >();
     for (const u of updates) {
-      lastRectByKey.set(u.key, u.rect);
+      lastRectByKey.set(u.fq, u.rect);
     }
 
     const visibleCards = container.querySelectorAll(
@@ -473,15 +473,15 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     for (const [cmd, args] of mockInvoke.mock.calls) {
       if (cmd !== "spatial_register_scope") continue;
       const a = args as {
-        key?: FullyQualifiedMoniker;
+        fq?: FullyQualifiedMoniker;
         rect?: { x: number; y: number; width: number; height: number };
       };
-      if (a.key && a.rect) lastRegisterRectByKey.set(a.key, a.rect);
+      if (a.fq && a.rect) lastRegisterRectByKey.set(a.fq, a.rect);
     }
 
     let assertedAtLeastOne = false;
     for (const card of visibleCards) {
-      const moniker = card.getAttribute("data-moniker")!;
+      const moniker = card.getAttribute("data-segment")!;
       const key = monikerToKeyAfter.get(moniker) ?? monikerToKey.get(moniker);
       if (!key) continue;
       const kernelRect =
@@ -540,7 +540,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     ) as HTMLElement[];
     expect(cards.length).toBeGreaterThan(0);
     const topCard = cards[0];
-    const moniker = topCard.getAttribute("data-moniker")!;
+    const moniker = topCard.getAttribute("data-segment")!;
     const monikerToKey = taskMonikerToKey();
     const expectedKey = monikerToKey.get(moniker)!;
     expect(expectedKey).toBeTruthy();
@@ -587,7 +587,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     // registered key. Reset the mock between clicks so each click's
     // IPC count starts fresh.
     for (const card of visibleCards) {
-      const moniker = card.getAttribute("data-moniker")!;
+      const moniker = card.getAttribute("data-segment")!;
       const expectedKey = monikerToKey.get(moniker);
       if (!expectedKey) continue;
 
@@ -641,7 +641,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     ) as HTMLElement[];
     expect(cards.length).toBeGreaterThan(0);
     const candidate = cards[Math.floor(cards.length / 2)];
-    const moniker = candidate.getAttribute("data-moniker")!;
+    const moniker = candidate.getAttribute("data-segment")!;
     const monikerToKey = taskMonikerToKey();
     const expectedKey = monikerToKey.get(moniker)!;
     expect(expectedKey).toBeTruthy();
@@ -679,7 +679,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     expect(cards.length).toBe(3);
 
     for (const card of cards) {
-      const moniker = card.getAttribute("data-moniker")!;
+      const moniker = card.getAttribute("data-segment")!;
       const expectedKey = monikerToKey.get(moniker);
       if (!expectedKey) continue;
 

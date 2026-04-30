@@ -1307,7 +1307,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         boardZone,
         "ui:board zone must register so columns can hang off it",
       ).toBeTruthy();
-      const boardKey = boardZone!.key as FullyQualifiedMoniker;
+      const boardKey = boardZone!.fq as FullyQualifiedMoniker;
 
       for (const colId of ["TODO", "DOING", "DONE"]) {
         const moniker = `column:${colId}`;

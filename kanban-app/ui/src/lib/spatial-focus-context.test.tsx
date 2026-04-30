@@ -132,7 +132,7 @@ describe("SpatialFocusProvider", () => {
       await result.current.focus(key);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_focus", { key });
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_focus", { fq: key });
 
     unmount();
   });
@@ -164,10 +164,10 @@ describe("SpatialFocusProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_register_scope", {
-      key,
-      moniker,
+      fq: key,
+      segment: moniker,
       rect,
-      layerKey,
+      layerFq: layerKey,
       parentZone: null,
       overrides: {},
     });
@@ -315,7 +315,7 @@ describe("SpatialFocusProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_navigate", {
-      key,
+      focusedFq: key,
       direction: "right",
     });
 
@@ -390,7 +390,7 @@ describe("drillIn", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_in", {
-      key,
+      fq: key,
       focusedFq,
     });
     expect(returned).toBe(targetMoniker);
@@ -443,7 +443,7 @@ describe("drillOut", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_out", {
-      key,
+      fq: key,
       focusedFq,
     });
     expect(returned).toBe(parentMoniker);

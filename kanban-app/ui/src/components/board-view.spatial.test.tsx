@@ -420,7 +420,7 @@ describe("BoardView — browser spatial behaviour", () => {
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
     expect(boardZone).toBeTruthy();
-    expect(typeof boardZone!.key).toBe("string");
+    expect(typeof boardZone!.fq).toBe("string");
     expect(boardZone!.layerFq).toBeTruthy();
     // The board zone is rooted directly under the window layer — no
     // enclosing FocusZone wraps it, so `parentZone` must be null.
@@ -434,7 +434,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
     ) as HTMLElement;
@@ -469,7 +469,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
     ) as HTMLElement;
@@ -516,7 +516,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.up/down/left/right`'s execute
     // closures see a non-null `focusedKey()` and dispatch
@@ -581,7 +581,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed focus so `nav.right`/`nav.left`'s execute closures see a
     // non-null `focusedKey()` — same setup as the arrow-key test.
@@ -622,7 +622,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
     // Capture the column key BEFORE clearing the mock — the column
     // registered during mount and that record lives in
     // `mockInvoke.mock.calls` until we clear it.
@@ -630,7 +630,7 @@ describe("BoardView — browser spatial behaviour", () => {
       (a) => a.segment === "column:col-todo",
     );
     expect(todoColumn).toBeTruthy();
-    const todoColumnKey = todoColumn!.key as FullyQualifiedMoniker;
+    const todoColumnKey = todoColumn!.fq as FullyQualifiedMoniker;
 
     // Seed the focus so `nav.drillIn`'s execute closure sees a non-null
     // focused key. The closure hands that key to `spatial_drill_in`
@@ -685,7 +685,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -702,7 +702,7 @@ describe("BoardView — browser spatial behaviour", () => {
     // Exercise mount + click + a focus claim — the three lifecycle
     // points where legacy code would have called the banned commands.
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
     ) as HTMLElement;
@@ -743,14 +743,14 @@ describe("BoardView — browser spatial behaviour", () => {
     await flushSetup();
 
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
-    const boardKey = boardZone.key as FullyQualifiedMoniker;
+    const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const todoColumn = registerZoneArgs().find(
       (a) => a.segment === "column:col-todo",
     )!;
-    const todoColumnKey = todoColumn.key as FullyQualifiedMoniker;
+    const todoColumnKey = todoColumn.fq as FullyQualifiedMoniker;
     const t1Card = registerScopeArgs().find((a) => a.segment === "task:t1");
     expect(t1Card, "task:t1 leaf should be registered").toBeTruthy();
-    const t1CardKey = t1Card!.key as FullyQualifiedMoniker;
+    const t1CardKey = t1Card!.fq as FullyQualifiedMoniker;
 
     // Step 1: focus a card (task:t1).
     await fireFocusChanged({ next_fq: t1CardKey });

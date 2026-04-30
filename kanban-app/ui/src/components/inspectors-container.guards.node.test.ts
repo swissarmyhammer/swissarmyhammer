@@ -57,10 +57,10 @@ describe("InspectorsContainer source-level guards", () => {
     const src = readSource();
     // The inspector layer must be mounted via <FocusLayer ... name=INSPECTOR_LAYER_NAME>.
     expect(src).toMatch(/<FocusLayer\b[\s\S]*?name=\{INSPECTOR_LAYER_NAME\}/);
-    // The parentLayerKey prop must be threaded through.
-    expect(src).toMatch(/parentLayerFq=\{windowLayerKey\}/);
-    // And `windowLayerKey` is read from the layer context, not synthesized.
-    expect(src).toMatch(/useEnclosingLayerFq\s*\(\s*\)/);
+    // The parentLayerFq prop must be threaded through.
+    expect(src).toMatch(/parentLayerFq=\{windowLayerFq\}/);
+    // And `windowLayerFq` is read from the FQM context, not synthesized.
+    expect(src).toMatch(/useFullyQualifiedMoniker\s*\(\s*\)/);
   });
 
   it("does not register a panel zone (deleted in card 01KQCTJY1QZ710A05SE975GHNR)", () => {

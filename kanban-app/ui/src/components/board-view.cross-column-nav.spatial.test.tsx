@@ -306,9 +306,14 @@ const taskColumnById = new Map<string, string>([
  * Returns `null` when the moniker matches neither shape.
  */
 function columnOfMoniker(moniker: string): string | null {
-  const taskMatch = /^task:([0-9A-Za-z]+)$/.exec(moniker);
+  // Accept the FQM shape (`/window/.../task:T1`) by extracting the
+  // trailing segment, then match against the legacy moniker shape.
+  const segment = moniker.includes("/")
+    ? moniker.slice(moniker.lastIndexOf("/") + 1)
+    : moniker;
+  const taskMatch = /^task:([0-9A-Za-z]+)$/.exec(segment);
   if (taskMatch) return taskColumnById.get(taskMatch[1]) ?? null;
-  const columnMatch = /^column:([0-9A-Za-z]+)$/.exec(moniker);
+  const columnMatch = /^column:([0-9A-Za-z]+)$/.exec(segment);
   if (columnMatch) return columnMatch[1];
   return null;
 }
@@ -638,7 +643,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       boardZone,
       "ui:board zone must register so columns can hang off it",
     ).toBeTruthy();
-    const boardKey = boardZone!.key as FullyQualifiedMoniker;
+    const boardKey = boardZone!.fq as FullyQualifiedMoniker;
 
     for (const colId of ["colA", "colB", "colC"]) {
       const moniker = `column:${colId}`;
@@ -668,7 +673,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       expect(
         taskRec.record.parentZone,
         `${taskMoniker}'s parent_zone must equal its column zone (${colMoniker})`,
-      ).toBe(colZone.key);
+      ).toBe(colZone.fq);
     }
 
     // Single layer across the whole board — every register call carries
@@ -772,7 +777,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A");
     expect(task1A, "task:1A must register before nav fires").toBeTruthy();
-    const task1AKey = task1A!.record.key as FullyQualifiedMoniker;
+    const task1AKey = task1A!.record.fq as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.right`'s execute closure sees
     // task:1A's key as the focused key. Without this, the global nav
@@ -797,7 +802,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(focused, "right-press must select something").not.toBeNull();
-    const moniker = focused!.getAttribute("data-moniker") ?? "";
+    const moniker = focused!.getAttribute("data-segment") ?? "";
     expect(
       moniker,
       "right from task:1A must not land on a board: scope",
@@ -823,7 +828,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.key as FullyQualifiedMoniker;
+    const task1AKey = task1A.record.fq as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
       next_fq: task1AKey,
@@ -837,7 +842,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
-    const moniker = focused!.getAttribute("data-moniker") ?? "";
+    const moniker = focused!.getAttribute("data-segment") ?? "";
     const column = columnOfMoniker(moniker);
     expect(
       column,
@@ -872,7 +877,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_fq: task1A.record.key as FullyQualifiedMoniker,
+      next_fq: task1A.record.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1A"),
     });
 
@@ -883,7 +888,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
-    const moniker = focused!.getAttribute("data-moniker") ?? "";
+    const moniker = focused!.getAttribute("data-segment") ?? "";
     const column = columnOfMoniker(moniker);
     expect(column).toBe("colB");
 
@@ -900,7 +905,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1B = findRegisterRecord("task:1B")!;
     await harness.fireFocusChanged({
-      next_fq: task1B.record.key as FullyQualifiedMoniker,
+      next_fq: task1B.record.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1B"),
     });
 
@@ -911,7 +916,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
-    const moniker = focused!.getAttribute("data-moniker") ?? "";
+    const moniker = focused!.getAttribute("data-segment") ?? "";
     const column = columnOfMoniker(moniker);
     expect(column).toBe("colA");
 
@@ -933,7 +938,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_fq: task1A.record.key as FullyQualifiedMoniker,
+      next_fq: task1A.record.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1A"),
     });
 
@@ -944,7 +949,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(afterFirst).not.toBeNull();
-    const firstMoniker = afterFirst!.getAttribute("data-moniker") ?? "";
+    const firstMoniker = afterFirst!.getAttribute("data-segment") ?? "";
     expect(columnOfMoniker(firstMoniker)).toBe("colB");
 
     await userEvent.keyboard("{ArrowRight}");
@@ -954,7 +959,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(afterSecond).not.toBeNull();
-    const secondMoniker = afterSecond!.getAttribute("data-moniker") ?? "";
+    const secondMoniker = afterSecond!.getAttribute("data-segment") ?? "";
     const secondColumn = columnOfMoniker(secondMoniker);
     // Either C (advances) or stays at B (no further candidate). Must
     // NEVER bounce back to A.
@@ -979,7 +984,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.key as FullyQualifiedMoniker;
+    const task1AKey = task1A.record.fq as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
       next_fq: task1AKey,
@@ -993,14 +998,14 @@ describe("BoardView — cross-column spatial navigation", () => {
       "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
-    expect(focused!.getAttribute("data-moniker")).toBe("task:2A");
+    expect(focused!.getAttribute("data-segment")).toBe("task:2A");
 
     await userEvent.keyboard("{ArrowDown}");
     await flushSetup();
 
     focused = container.querySelector("[data-focused='true'][data-segment]");
     expect(focused).not.toBeNull();
-    expect(focused!.getAttribute("data-moniker")).toBe("task:3A");
+    expect(focused!.getAttribute("data-segment")).toBe("task:3A");
 
     unmount();
   });

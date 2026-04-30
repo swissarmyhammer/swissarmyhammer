@@ -360,7 +360,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
     const p1Tab = tabRegistrations.find(
-      (r) => r.moniker === "perspective_tab:p1",
+      (r) => r.segment === "perspective_tab:p1",
     );
     expect(p1Tab).toBeTruthy();
 

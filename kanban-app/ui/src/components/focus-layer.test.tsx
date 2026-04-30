@@ -63,7 +63,7 @@ function lastPushArgs() {
   );
   if (calls.length === 0) throw new Error("expected spatial_push_layer call");
   return calls[calls.length - 1][1] as {
-    key: FullyQualifiedMoniker;
+    fq: FullyQualifiedMoniker;
     name: string;
     parent: FullyQualifiedMoniker | null;
   };
@@ -81,8 +81,8 @@ describe("<FocusLayer>", () => {
     const args = lastPushArgs();
     expect(args.name).toBe("window");
     expect(args.parent).toBeNull();
-    expect(typeof args.key).toBe("string");
-    expect(args.key.length).toBeGreaterThan(0);
+    expect(typeof args.fq).toBe("string");
+    expect(args.fq.length).toBeGreaterThan(0);
 
     unmount();
   });
@@ -104,7 +104,7 @@ describe("<FocusLayer>", () => {
       (c) => c[0] === "spatial_pop_layer",
     );
     expect(popCalls).toHaveLength(1);
-    expect(popCalls[0][1]).toEqual({ key: pushed.key });
+    expect(popCalls[0][1]).toEqual({ fq: pushed.fq });
   });
 
   it("nested layers: child resolves parent from context", async () => {
@@ -125,20 +125,20 @@ describe("<FocusLayer>", () => {
     );
     await flushSetup();
 
-    // Two pushes: window root (parent=null), and inspector (parent=outer.key).
+    // Two pushes: window root (parent=null), and inspector (parent=outer.fq).
     // React commits child effects before parent effects, so we look up
     // pushes by name rather than relying on call order.
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
       .map(
-        (c) => c[1] as { key: FullyQualifiedMoniker; name: string; parent: FullyQualifiedMoniker | null },
+        (c) => c[1] as { fq: FullyQualifiedMoniker; name: string; parent: FullyQualifiedMoniker | null },
       );
     expect(pushes).toHaveLength(2);
     expect(outerKey).not.toBeNull();
     const windowPush = pushes.find((p) => p.name === "window")!;
     const inspectorPush = pushes.find((p) => p.name === "inspector")!;
     expect(windowPush.parent).toBeNull();
-    expect(windowPush.key).toBe(outerKey);
+    expect(windowPush.fq).toBe(outerKey);
     expect(inspectorPush.parent).toBe(outerKey);
 
     unmount();
@@ -210,7 +210,7 @@ describe("<FocusLayer>", () => {
     await flushSetup();
 
     const args = lastPushArgs();
-    expect(observed).toBe(args.key);
+    expect(observed).toBe(args.fq);
 
     unmount();
   });

@@ -94,12 +94,12 @@ describe("<FocusZone>", () => {
 
     const args = lastRegisterZoneArgs();
     expect(args).toMatchObject({
-      moniker: "ui:toolbar.actions",
+      segment: "ui:toolbar.actions",
       parentZone: null,
       overrides: {},
     });
-    expect(typeof args.key).toBe("string");
-    expect((args.key as string).length).toBeGreaterThan(0);
+    expect(typeof args.fq).toBe("string");
+    expect((args.fq as string).length).toBeGreaterThan(0);
     expect(args.layerFq).toBeTruthy();
     expect(args.rect).toMatchObject({
       x: expect.any(Number),
@@ -129,7 +129,7 @@ describe("<FocusZone>", () => {
       (c) => c[0] === "spatial_unregister_scope",
     );
     expect(unregisters).toHaveLength(1);
-    expect(unregisters[0][1]).toEqual({ key: registered.key });
+    expect(unregisters[0][1]).toEqual({ fq: registered.fq });
   });
 
   it("publishes its key via FocusZoneContext", async () => {
@@ -151,7 +151,7 @@ describe("<FocusZone>", () => {
     await flushSetup();
 
     const args = lastRegisterZoneArgs();
-    expect(observed).toBe(args.key);
+    expect(observed).toBe(args.fq);
 
     unmount();
   });
@@ -211,7 +211,7 @@ describe("<FocusZone>", () => {
       (c) => c[0] === "spatial_focus",
     );
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0][1]).toEqual({ key: registered.key });
+    expect(focusCalls[0][1]).toEqual({ fq: registered.fq });
 
     unmount();
   });
@@ -247,7 +247,7 @@ describe("<FocusZone>", () => {
       (c) => c[0] === "spatial_focus",
     );
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0][1]).toEqual({ key: innerArgs.key });
+    expect(focusCalls[0][1]).toEqual({ fq: innerArgs.fq });
 
     unmount();
   });
@@ -340,7 +340,7 @@ describe("<FocusZone>", () => {
 
     const node = container.querySelector("[data-segment='ui:zone']");
     expect(externalRef.current).toBe(node);
-    expect(externalRef.current?.getAttribute("data-moniker")).toBe("ui:zone");
+    expect(externalRef.current?.getAttribute("data-segment")).toBe("ui:zone");
 
     unmount();
     // Callback-ref cleanup nulls out the external ref on unmount.
@@ -371,7 +371,7 @@ describe("<FocusZone>", () => {
     expect(calls[0]).toBe(node);
     // Internal ref is still wired: spatial_register_zone ran on mount.
     const registered = lastRegisterZoneArgs();
-    expect(registered.moniker).toBe("ui:zone");
+    expect(registered.segment).toBe("ui:zone");
 
     unmount();
     expect(calls[calls.length - 1]).toBeNull();
@@ -398,7 +398,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
+        payload: makePayload({ next_fq: args.fq as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() =>
@@ -407,7 +407,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_fq: args.key as FullyQualifiedMoniker }),
+        payload: makePayload({ prev_fq: args.fq as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() => expect(node!.getAttribute("data-focused")).toBeNull());
@@ -437,7 +437,7 @@ describe("<FocusZone>", () => {
     const args = lastRegisterZoneArgs();
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
+        payload: makePayload({ next_fq: args.fq as FullyQualifiedMoniker }),
       });
     });
 
@@ -453,7 +453,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_fq: args.key as FullyQualifiedMoniker }),
+        payload: makePayload({ prev_fq: args.fq as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() => expect(queryByTestId("focus-indicator")).toBeNull());
@@ -480,7 +480,7 @@ describe("<FocusZone>", () => {
     const args = lastRegisterZoneArgs();
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
+        payload: makePayload({ next_fq: args.fq as FullyQualifiedMoniker }),
       });
     });
 

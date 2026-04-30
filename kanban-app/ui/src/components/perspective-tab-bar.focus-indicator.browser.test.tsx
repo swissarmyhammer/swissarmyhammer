@@ -296,7 +296,7 @@ function findTabKey(perspectiveId: string): FullyQualifiedMoniker | undefined {
   const scope = registerScopeArgs().find(
     (a) => a.segment === `perspective_tab:${perspectiveId}`,
   );
-  return scope?.key as FullyQualifiedMoniker | undefined;
+  return scope?.fq as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------

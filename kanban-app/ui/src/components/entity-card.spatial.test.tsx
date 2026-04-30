@@ -518,11 +518,11 @@ describe("EntityCard — browser spatial behaviour", () => {
       (a) => a.segment === "task:task-1",
     );
     expect(cardScope).toBeTruthy();
-    expect(typeof cardScope!.key).toBe("string");
+    expect(typeof cardScope!.fq).toBe("string");
     // The key matches the `^task:[0-9A-Z-]+$` shape — runtime key minted
     // via `crypto.randomUUID()` in `<FocusScope>`. The moniker is the
     // production task moniker; the spatial key is opaque per-mount.
-    expect(cardScope!.moniker).toMatch(/^task:[A-Za-z0-9-]+$/);
+    expect(cardScope!.segment).toMatch(/^task:[A-Za-z0-9-]+$/);
     expect(cardScope!.layerFq).toBeTruthy();
     // In this isolated harness the card has no surrounding `<FocusZone>`,
     // so its `parentZone` is null. In production the card is wrapped by
@@ -563,7 +563,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const cardScope = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as FullyQualifiedMoniker;
+    const cardKey = cardScope.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
 
@@ -594,7 +594,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const cardScope = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as FullyQualifiedMoniker;
+    const cardKey = cardScope.fq as FullyQualifiedMoniker;
 
     // Before the focus claim, the card has no FocusIndicator descendant
     // attributable to it: the card body is `data-focused === undefined`
@@ -737,7 +737,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const cardScope = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as FullyQualifiedMoniker;
+    const cardKey = cardScope.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -861,7 +861,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(titleNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_fq: titleZone.key as FullyQualifiedMoniker,
+        next_fq: titleZone.fq as FullyQualifiedMoniker,
         next_segment: asSegment("field:task:task-1.title"),
       });
 
@@ -888,16 +888,16 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       // One `<FocusScope>` leaf per pill, with moniker `tag:{slug}`.
       const tagPillScopes = registerScopeArgs().filter(
-        (a) => typeof a.segment === "string" && /^tag:/.test(a.moniker as string),
+        (a) => typeof a.segment === "string" && /^tag:/.test(a.segment as string),
       );
-      const monikers = tagPillScopes.map((a) => a.moniker as string).sort();
+      const monikers = tagPillScopes.map((a) => a.segment as string).sort();
       expect(monikers).toEqual(["tag:bug", "tag:ui"]);
 
       // The pill leaves' parent_zone is the tags field zone — they
       // nest under the field zone in the spatial graph, not directly
       // under the card.
       for (const scope of tagPillScopes) {
-        expect(scope.parentZone).toBe(tagsZone!.key);
+        expect(scope.parentZone).toBe(tagsZone!.fq);
       }
 
       // Each pill renders with a `data-moniker` attribute the
@@ -971,7 +971,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(bugNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_fq: bugTag.key as FullyQualifiedMoniker,
+        next_fq: bugTag.fq as FullyQualifiedMoniker,
         next_segment: asSegment("tag:bug"),
       });
 
@@ -1000,16 +1000,16 @@ describe("EntityCard — browser spatial behaviour", () => {
       // One leaf per assignee, with moniker `actor:{id}`.
       const assigneePillScopes = registerScopeArgs().filter(
         (a) =>
-          typeof a.segment === "string" && /^actor:/.test(a.moniker as string),
+          typeof a.segment === "string" && /^actor:/.test(a.segment as string),
       );
       const monikers = assigneePillScopes
-        .map((a) => a.moniker as string)
+        .map((a) => a.segment as string)
         .sort();
       expect(monikers).toEqual(["actor:alice", "actor:bob"]);
 
       // Pills nest under the assignees field zone.
       for (const scope of assigneePillScopes) {
-        expect(scope.parentZone).toBe(assigneesZone!.key);
+        expect(scope.parentZone).toBe(assigneesZone!.fq);
       }
 
       // DOM exposure for e2e selectors.
@@ -1080,7 +1080,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(aliceNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_fq: alice.key as FullyQualifiedMoniker,
+        next_fq: alice.fq as FullyQualifiedMoniker,
         next_segment: asSegment("actor:alice"),
       });
 

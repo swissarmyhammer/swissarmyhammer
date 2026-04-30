@@ -311,9 +311,9 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const { unmount } = renderBar();
     await flushSetup();
 
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker));
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment));
     expect(barZone).toBeTruthy();
-    expect(typeof barZone!.key).toBe("string");
+    expect(typeof barZone!.fq).toBe("string");
     expect(barZone!.layerFq).toBeTruthy();
     expect(barZone!.parentZone).toBeNull();
 
@@ -325,16 +325,16 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const tabScopes = registerScopeArgs().filter((a) =>
-      isTabMoniker(a.moniker),
+      isTabMoniker(a.segment),
     );
-    const monikers = tabScopes.map((a) => a.moniker as string).sort();
+    const monikers = tabScopes.map((a) => a.segment as string).sort();
     expect(monikers).toEqual(["perspective_tab:p1", "perspective_tab:p2"]);
 
     // Each tab's parentZone is the bar zone's key — the leaves are siblings
     // inside the bar so beam-search picks them up as horizontal neighbors.
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
     for (const tab of tabScopes) {
-      expect(tab.parentZone).toBe(barZone.key);
+      expect(tab.parentZone).toBe(barZone.fq);
       expect(tab.layerFq).toBe(barZone.layerFq);
     }
 
@@ -346,7 +346,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     // Capture the bar's key plus the p1 tab's key from the registration calls.
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
     const p1Tab = registerScopeArgs().find(
       (a) => a.segment === "perspective_tab:p1",
     )!;
@@ -382,7 +382,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // No indicator before the focus claim.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: p1Tab.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
 
     // After the claim flips, the indicator renders inside the matching tab.
     await waitFor(() => {
@@ -407,14 +407,14 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderBar();
     await flushSetup();
 
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
     const barNode = container.querySelector(
-      `[data-segment='${barZone.moniker as string}']`,
+      `[data-segment='${barZone.segment as string}']`,
     ) as HTMLElement;
     expect(barNode).not.toBeNull();
     expect(barNode.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: barZone.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: barZone.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(barNode.getAttribute("data-focused")).not.toBeNull();
@@ -443,10 +443,10 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const tabScopes = registerScopeArgs().filter((a) =>
-      isTabMoniker(a.moniker),
+      isTabMoniker(a.segment),
     );
     expect(tabScopes.length).toBeGreaterThanOrEqual(2);
-    const tabKeys = tabScopes.map((a) => a.key as FullyQualifiedMoniker);
+    const tabKeys = tabScopes.map((a) => a.fq as FullyQualifiedMoniker);
 
     mockInvoke.mockClear();
     unmount();
@@ -509,7 +509,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       (a) => a.segment === "perspective_tab:p2",
     )!;
 
-    await fireFocusChanged({ next_fq: p1Tab.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
     await waitFor(() => {
       const indicator = queryByTestId("focus-indicator");
       expect(indicator).not.toBeNull();
@@ -521,8 +521,8 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
 
     // Move the claim from p1 → p2.
     await fireFocusChanged({
-      prev_fq: p1Tab.key as FullyQualifiedMoniker,
-      next_fq: p2Tab.key as FullyQualifiedMoniker,
+      prev_fq: p1Tab.fq as FullyQualifiedMoniker,
+      next_fq: p2Tab.fq as FullyQualifiedMoniker,
     });
     await waitFor(() => {
       const indicators = container.querySelectorAll(

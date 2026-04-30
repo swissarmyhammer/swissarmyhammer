@@ -342,7 +342,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf!.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -380,7 +380,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf!.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -415,7 +415,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf!.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -460,7 +460,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: zone!.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: zone!.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -532,7 +532,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     );
     expect(firstInspect, "inspect leaf must register on first mount").toBeDefined();
 
-    await fireFocusChanged({ next_fq: firstInspect!.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: firstInspect!.fq as FullyQualifiedMoniker });
     await waitFor(() => {
       const node = container.querySelector(
         "[data-segment='ui:navbar.inspect']",
@@ -549,7 +549,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     ).length;
 
     // Flip board → null. The inspect leaf unmounts; the kernel still
-    // believes inspect.key is focused, but the wrapper is gone.
+    // believes inspect.fq is focused, but the wrapper is gone.
     await act(async () => {
       getByTestId("toggle-board").click();
       await Promise.resolve();
@@ -580,16 +580,22 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     const remountedInspect =
       allInspectRegistrations[allInspectRegistrations.length - 1];
+    // Under the path-monikers identity model the FQM is deterministic
+    // (`<parent-fq>/<segment>`) — remount of the same primitive in the
+    // same parent path produces the SAME FQM. The fresh-UUID semantics
+    // from the legacy `crypto.randomUUID()` model no longer apply; what
+    // we care about is that a register call fired again so the kernel
+    // restored the entry, which the count check above already pins.
     expect(
-      remountedInspect.key,
-      "remount must mint a fresh FullyQualifiedMoniker distinct from the original",
-    ).not.toBe(firstInspect!.key);
+      remountedInspect.fq,
+      "remount under path-monikers re-uses the deterministic FQM",
+    ).toBe(firstInspect!.fq);
 
     // The user lands on the remounted leaf via `spatial_focus(newKey)`.
-    // The kernel emits `focus-changed` with `next_fq = remounted.key`,
+    // The kernel emits `focus-changed` with `next_fq = remounted.fq`,
     // and the new leaf's `useFocusClaim` subscription should fire,
     // mounting the indicator on the new wrapper.
-    await fireFocusChanged({ next_fq: remountedInspect.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: remountedInspect.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(

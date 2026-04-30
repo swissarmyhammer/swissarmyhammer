@@ -9,6 +9,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -90,22 +93,26 @@ const tasks: Entity[] = [
 
 function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
   const result = render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              <DragSessionProvider>
-                <BoardView
-                  board={overrides?.board ?? board}
-                  tasks={overrides?.tasks ?? tasks}
-                />
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/board">
+                  <DragSessionProvider>
+                    <BoardView
+                      board={overrides?.board ?? board}
+                      tasks={overrides?.tasks ?? tasks}
+                    />
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
   return result;
 }
@@ -196,29 +203,33 @@ describe("BoardView scrollContainer layout", () => {
 
     try {
       const { container } = render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={wideBoard} tasks={manyTasks} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={wideBoard} tasks={manyTasks} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 

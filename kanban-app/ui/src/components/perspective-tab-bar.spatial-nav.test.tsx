@@ -251,7 +251,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     const calls = registerScopeCalls();
-    const monikers = calls.map((c) => c.moniker as string);
+    const monikers = calls.map((c) => c.segment as string);
     expect(monikers).toContain("perspective_tab:p1");
     expect(monikers).toContain("perspective_tab:p2");
     // Grid perspective is filtered by view kind and must not produce a tab leaf.
@@ -276,7 +276,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const tabFocusable = registerScopeCalls().find(
       (c) => c.segment === "perspective_tab:p1",
     )!;
-    expect(tabFocusable.parentZone).toBe(barZone.key);
+    expect(tabFocusable.parentZone).toBe(barZone.fq);
     expect(tabFocusable.layerFq).toBe(barZone.layerFq);
 
     unmount();

@@ -37,6 +37,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Mocks — Tauri APIs must be mocked before importing presenters.
@@ -253,7 +256,9 @@ function renderAppLayout() {
   document.body.appendChild(mount);
 
   const ui = (
-    <EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+      <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
           <TooltipProvider>
@@ -293,6 +298,8 @@ function renderAppLayout() {
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 
   const result = render(ui, { container: mount });
@@ -477,29 +484,33 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
 
     try {
       render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide-columns">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={boardFixture} tasks={[]} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide-columns">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={boardFixture} tasks={[]} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
@@ -579,19 +590,23 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
 
     try {
       render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/class">
-                  <DragSessionProvider>
-                    <BoardView board={boardFixture} tasks={[]} />
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/class">
+                      <DragSessionProvider>
+                        <BoardView board={boardFixture} tasks={[]} />
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 

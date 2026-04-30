@@ -378,7 +378,7 @@ describe("FocusIndicator — single variant contract", () => {
       expect(leaf, `expected register call for ${moniker}`).toBeDefined();
 
       // Focus the leaf and wait for the indicator to mount.
-      await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
+      await fireFocusChanged({ next_fq: leaf!.fq as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).not.toBeNull();
       });
@@ -398,7 +398,7 @@ describe("FocusIndicator — single variant contract", () => {
       expect(cls).not.toContain("ring-ring");
 
       // Unfocus before moving on so the next iteration starts clean.
-      await fireFocusChanged({ prev_fq: leaf!.key as FullyQualifiedMoniker });
+      await fireFocusChanged({ prev_fq: leaf!.fq as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).toBeNull();
       });
@@ -437,7 +437,7 @@ describe("FocusIndicator — single variant contract", () => {
 
     for (const moniker of monikers) {
       const leaf = registerScopeArgs().find((a) => a.segment === moniker)!;
-      await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+      await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -458,7 +458,7 @@ describe("FocusIndicator — single variant contract", () => {
         `${moniker} indicator left edge must be inside the viewport`,
       ).toBeGreaterThanOrEqual(0);
 
-      await fireFocusChanged({ prev_fq: leaf.key as FullyQualifiedMoniker });
+      await fireFocusChanged({ prev_fq: leaf.fq as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).toBeNull();
       });
@@ -482,7 +482,7 @@ describe("FocusIndicator — single variant contract", () => {
     const leaf = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.inspect",
     )!;
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(

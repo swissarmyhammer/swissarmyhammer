@@ -366,7 +366,7 @@ function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
 /** True when any registered scope has the given moniker. */
 function findScopeKey(moniker: string): FullyQualifiedMoniker | undefined {
   const scope = registerScopeArgs().find((a) => a.segment === moniker);
-  return scope?.key as FullyQualifiedMoniker | undefined;
+  return scope?.fq as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +516,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     const taskKey = registerScopeArgs().find(
       (a) => a.segment === "task:01ABC",
-    )?.key as FullyQualifiedMoniker | undefined;
+    )?.fq as FullyQualifiedMoniker | undefined;
     expect(taskKey).toBeTruthy();
 
     await fireFocusChanged({

@@ -61,6 +61,9 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import "@/components/fields/registrations";
 import type { Entity, FieldDef } from "@/types/kanban";
 import type { UseGridReturn } from "@/hooks/use-grid";
@@ -166,15 +169,19 @@ function renderTable(
   props: Partial<React.ComponentProps<typeof DataTable>> = {},
 ) {
   return render(
-    <EntityFocusProvider>
-      <DataTable
-        columns={COLUMNS}
-        rows={props.rows ?? []}
-        grid={props.grid ?? makeGrid()}
-        showRowSelector={true}
-        {...props}
-      />
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <DataTable
+            columns={COLUMNS}
+            rows={props.rows ?? []}
+            grid={props.grid ?? makeGrid()}
+            showRowSelector={true}
+            {...props}
+          />
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

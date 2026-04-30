@@ -122,6 +122,9 @@ import { PerspectiveProvider } from "@/lib/perspective-context";
 import { PerspectiveContainer } from "@/components/perspective-container";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test state — populated by beforeAll from real .kanban data
@@ -211,31 +214,35 @@ function renderIntegrationBoard() {
   const tasks = testTasks.map(taskToEntity);
 
   return render(
-    <FileDropProvider>
-      <EntityFocusProvider>
-        <SchemaProvider>
-          <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
-            <TooltipProvider>
-              <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
-                <FieldUpdateProvider>
-                  <UIStateProvider>
-                    <ViewsProvider>
-                      <PerspectiveProvider>
-                        <PerspectiveContainer>
-                          <DragSessionProvider>
-                            <BoardView board={board} tasks={tasks} />
-                          </DragSessionProvider>
-                        </PerspectiveContainer>
-                      </PerspectiveProvider>
-                    </ViewsProvider>
-                  </UIStateProvider>
-                </FieldUpdateProvider>
-              </ActiveBoardPathProvider>
-            </TooltipProvider>
-          </EntityStoreProvider>
-        </SchemaProvider>
-      </EntityFocusProvider>
-    </FileDropProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <FileDropProvider>
+          <EntityFocusProvider>
+            <SchemaProvider>
+              <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
+                <TooltipProvider>
+                  <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
+                    <FieldUpdateProvider>
+                      <UIStateProvider>
+                        <ViewsProvider>
+                          <PerspectiveProvider>
+                            <PerspectiveContainer>
+                              <DragSessionProvider>
+                                <BoardView board={board} tasks={tasks} />
+                              </DragSessionProvider>
+                            </PerspectiveContainer>
+                          </PerspectiveProvider>
+                        </ViewsProvider>
+                      </UIStateProvider>
+                    </FieldUpdateProvider>
+                  </ActiveBoardPathProvider>
+                </TooltipProvider>
+              </EntityStoreProvider>
+            </SchemaProvider>
+          </EntityFocusProvider>
+        </FileDropProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

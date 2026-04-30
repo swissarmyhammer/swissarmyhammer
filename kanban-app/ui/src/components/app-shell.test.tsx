@@ -45,15 +45,15 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       recent_boards: [],
     });
   if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
-    const a = (args ?? {}) as { key?: string; moniker?: string };
-    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    const a = (args ?? {}) as { fq?: string; segment?: string };
+    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);
   }
   if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { key?: string };
-    if (a.key) {
+    const a = (args ?? {}) as { fq?: string };
+    if (a.fq) {
       for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.key) {
+        if (k === a.fq) {
           monikerToKey.delete(m);
           break;
         }
@@ -66,10 +66,10 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
     // moniker — typically the focused moniker (echoed) when no descent
     // / drill-out is possible. Tests override this when they want a
     // specific drill result.
-    const a = (args ?? {}) as { focusedMoniker?: string };
-    return Promise.resolve(a.focusedMoniker ?? null);
+    const a = (args ?? {}) as { focusedFq?: string };
+    return Promise.resolve(a.focusedFq ?? null);
   }
-  if (cmd === "spatial_focus_by_moniker") {
+  if (cmd === "spatial_focus") {
     // Synthesize the kernel's focus-changed emit so the
     // entity-focus bridge writes the React store. Mirrors the real
     // kernel behavior under card `01KQD0WK54G0FRD7SZVZASA9ST`: the
@@ -84,12 +84,16 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
     // a synchronous `store.set(moniker)` in `setFocus`). Tests that
     // need to observe the post-emit state should drain the microtask
     // queue inside an `act(...)` block.
-    const a = (args ?? {}) as { moniker?: string };
-    const moniker = a.moniker ?? null;
-    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
-    if (moniker) {
+    const a = (args ?? {}) as { fq?: string };
+    const fq = a.fq ?? null;
+    let moniker: string | null = null;
+    for (const [s, k] of monikerToKey.entries()) {
+      if (k === fq) { moniker = s; break; }
+    }
+    
+    if (fq) {
       const prev = currentFocusKey.key;
-      currentFocusKey.key = key;
+      currentFocusKey.key = fq;
       queueMicrotask(() => {
         const cb = listenCallbacks["focus-changed"];
         if (cb) {
@@ -97,7 +101,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
             payload: {
               window_label: "main",
               prev_fq: prev,
-              next_fq: key,
+              next_fq: fq,
               next_segment: moniker,
             },
           });
@@ -636,7 +640,7 @@ describe("AppShell", () => {
       (c: unknown[]) => c[0] === "spatial_drill_in",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).key).toBe(
+    expect((drillCall![1] as Record<string, unknown>).fq).toBe(
       asFq("k:zone"),
     );
   });
@@ -734,7 +738,7 @@ describe("AppShell", () => {
       (c: unknown[]) => c[0] === "spatial_drill_out",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).key).toBe(
+    expect((drillCall![1] as Record<string, unknown>).fq).toBe(
       asFq("k:leaf"),
     );
 

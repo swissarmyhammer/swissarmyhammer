@@ -129,9 +129,16 @@ export const E2E_TASK_COLUMN_BY_ID = new Map<string, string>(
  * Returns `null` when the moniker matches neither shape.
  */
 export function columnOfTaskMoniker(moniker: string): string | null {
-  const taskMatch = /^task:([0-9A-Za-z]+)$/.exec(moniker);
+  // Accept either the bare segment shape (`task:T1`, `column:TODO`) or
+  // the path-monikers FQM shape (`/window/.../task:T1`,
+  // `/window/.../column:TODO`). The FQM's trailing segment after the
+  // last `/` is the legacy moniker.
+  const segment = moniker.includes("/")
+    ? moniker.slice(moniker.lastIndexOf("/") + 1)
+    : moniker;
+  const taskMatch = /^task:([0-9A-Za-z]+)$/.exec(segment);
   if (taskMatch) return E2E_TASK_COLUMN_BY_ID.get(taskMatch[1]) ?? null;
-  const columnMatch = /^column:([0-9A-Za-z]+)$/.exec(moniker);
+  const columnMatch = /^column:([0-9A-Za-z]+)$/.exec(segment);
   if (columnMatch) return columnMatch[1];
   return null;
 }

@@ -778,10 +778,10 @@ describe("PerspectiveTabBar", () => {
       const tabRects = new Map<string, RectArg>();
       for (const call of mockInvoke.mock.calls) {
         if (call[0] !== "spatial_register_scope") continue;
-        const args = call[1] as { moniker: string; rect: RectArg };
-        if (typeof args?.moniker !== "string") continue;
-        if (!args.moniker.startsWith("perspective_tab:")) continue;
-        tabRects.set(args.moniker, args.rect);
+        const args = call[1] as { segment: string; rect: RectArg };
+        if (typeof args?.segment !== "string") continue;
+        if (!args.segment.startsWith("perspective_tab:")) continue;
+        tabRects.set(args.segment, args.rect);
       }
 
       expect(

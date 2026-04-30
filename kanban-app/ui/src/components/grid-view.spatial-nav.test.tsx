@@ -340,8 +340,8 @@ describe("GridView (spatial-nav)", () => {
     // Zone must be inside a layer (production layer key) and carry a
     // minted FullyQualifiedMoniker suitable for use as the cells' `parentZone`.
     expect(gridZones[0].layerFq).toBeTruthy();
-    expect(typeof gridZones[0].key).toBe("string");
-    expect((gridZones[0].key as string).length).toBeGreaterThan(0);
+    expect(typeof gridZones[0].fq).toBe("string");
+    expect((gridZones[0].fq as string).length).toBeGreaterThan(0);
   });
 
   it("emits a wrapper element with data-moniker='ui:grid'", async () => {
@@ -371,7 +371,7 @@ describe("GridView (spatial-nav)", () => {
 
     const focusableCalls = registerScopeCalls();
     const cellMonikers = focusableCalls
-      .map((c) => c.moniker)
+      .map((c) => c.segment)
       .filter(
         (m): m is string => typeof m === "string" && m.startsWith("grid_cell:"),
       );
@@ -402,7 +402,7 @@ describe("GridView (spatial-nav)", () => {
     const zoneCalls = registerZoneCalls();
     const gridZone = zoneCalls.find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.key;
+    const gridZoneKey = gridZone!.fq;
     expect(gridZoneKey).toBeTruthy();
 
     const focusableCalls = registerScopeCalls();
@@ -437,14 +437,14 @@ describe("GridView (spatial-nav)", () => {
     // Capture the bar key + the target cell's key from the registration calls.
     const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.key;
+    const gridZoneKey = gridZone!.fq;
 
     const targetMoniker = "grid_cell:1:status";
     const targetCell = registerScopeCalls().find(
       (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
-    const targetCellKey = targetCell!.key;
+    const targetCellKey = targetCell!.fq;
 
     // Reset invoke before the click so we measure only the click's IPC. The
     // `mockClear` does not affect the `listeners` map, so the SpatialFocusProvider's
@@ -476,11 +476,11 @@ describe("GridView (spatial-nav)", () => {
     // Exactly one `spatial_focus` call, addressed to the cell's key.
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(targetCellKey);
+    expect(focusCalls[0].fq).toBe(targetCellKey);
 
     // The grid zone key must NOT also receive a focus call — the leaf
     // stops propagation so the click does not bubble to the wrapping zone.
-    expect(focusCalls.find((c) => c.key === gridZoneKey)).toBeUndefined();
+    expect(focusCalls.find((c) => c.fq === gridZoneKey)).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------
@@ -503,7 +503,7 @@ describe("GridView (spatial-nav)", () => {
 
     const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.key as FullyQualifiedMoniker;
+    const gridZoneKey = gridZone!.fq as FullyQualifiedMoniker;
 
     const gridNode = result.container.querySelector(
       "[data-segment='ui:grid']",
@@ -545,7 +545,7 @@ describe("GridView (spatial-nav)", () => {
       (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
-    const targetCellKey = targetCell!.key as FullyQualifiedMoniker;
+    const targetCellKey = targetCell!.fq as FullyQualifiedMoniker;
 
     // Drive `focus-changed` on the target cell. The provider's listener
     // fires the cell's `useFocusClaim` callback (flips `data-focused`)
@@ -605,7 +605,7 @@ describe("GridView (spatial-nav)", () => {
       (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
-    const targetCellKey = targetCell!.key as FullyQualifiedMoniker;
+    const targetCellKey = targetCell!.fq as FullyQualifiedMoniker;
 
     // Drive focus to the target cell via the spatial event path only
     // (no click, no direct setFocus call).
@@ -657,11 +657,11 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid")!;
-    const gridZoneKey = gridZone.key as FullyQualifiedMoniker;
+    const gridZoneKey = gridZone.fq as FullyQualifiedMoniker;
     const cellRegistrations = registerScopeCalls().filter(
       (c) =>
         typeof c.segment === "string" &&
-        (c.moniker as string).startsWith("grid_cell:"),
+        (c.segment as string).startsWith("grid_cell:"),
     );
     expect(cellRegistrations.length).toBe(6);
 
@@ -672,8 +672,8 @@ describe("GridView (spatial-nav)", () => {
     //     in-grid moves through the kernel's `ui:grid` subgraph)
     //   - a layer key (so the kernel knows which modal layer the cell lives in)
     for (const cell of cellRegistrations) {
-      expect(typeof cell.key).toBe("string");
-      expect((cell.key as string).length).toBeGreaterThan(0);
+      expect(typeof cell.fq).toBe("string");
+      expect((cell.fq as string).length).toBeGreaterThan(0);
       expect(cell.moniker).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
       expect(cell.parentZone).toBe(gridZoneKey);
       expect(cell.layerFq).toBe(gridZone.layerFq);
@@ -696,14 +696,14 @@ describe("GridView (spatial-nav)", () => {
     // Snapshot the keys we expect to be unregistered.
     const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.key;
+    const gridZoneKey = gridZone!.fq;
 
     const cellRegistrations = registerScopeCalls().filter(
       (c) =>
         typeof c.segment === "string" &&
-        (c.moniker as string).startsWith("grid_cell:"),
+        (c.segment as string).startsWith("grid_cell:"),
     );
-    const cellKeys = cellRegistrations.map((c) => c.key as string);
+    const cellKeys = cellRegistrations.map((c) => c.fq as string);
     expect(cellKeys.length).toBe(6);
 
     // Listener slot has at least one entry (the SpatialFocusProvider's
@@ -717,7 +717,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key as string);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq as string);
 
     // The grid zone key reaches `spatial_unregister_scope`. (The Rust
     // kernel deletes both `Zone` and `Scope` entries through the same
@@ -768,7 +768,7 @@ describe("GridView (spatial-nav)", () => {
       (c) => c.segment === "grid_cell:0:title",
     )!;
     await fireFocusChanged({
-      next_fq: targetCell.key as FullyQualifiedMoniker,
+      next_fq: targetCell.fq as FullyQualifiedMoniker,
       next_segment: asSegment("grid_cell:0:title"),
     });
 
@@ -814,8 +814,8 @@ describe("GridView (spatial-nav)", () => {
     expect(cellNodes.length).toBe(6);
 
     for (const node of cellNodes) {
-      // `data-moniker` matches the canonical wire shape.
-      const moniker = node.getAttribute("data-moniker") ?? "";
+      // `data-segment` matches the canonical relative-segment wire shape.
+      const moniker = node.getAttribute("data-segment") ?? "";
       expect(moniker).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
       // `data-focused` slot exists in the React element shape (the
       // primitive emits `data-focused={focused || undefined}`, so the
@@ -828,12 +828,12 @@ describe("GridView (spatial-nav)", () => {
     // Drive focus to a specific cell and assert its `data-focused`
     // attribute toggles. This exercises the same `useFocusClaim` →
     // React state → `data-focused` toggle path the indicator uses.
-    const targetMoniker = cellNodes[0].getAttribute("data-moniker")!;
+    const targetMoniker = cellNodes[0].getAttribute("data-segment")!;
     const targetCell = registerScopeCalls().find(
       (c) => c.segment === targetMoniker,
     )!;
     await fireFocusChanged({
-      next_fq: targetCell.key as FullyQualifiedMoniker,
+      next_fq: targetCell.fq as FullyQualifiedMoniker,
       next_segment: targetMoniker,
     });
 

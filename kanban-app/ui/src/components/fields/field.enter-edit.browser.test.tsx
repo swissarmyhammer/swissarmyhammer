@@ -367,7 +367,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
     // Drive a focus-changed event for the field zone.
     await fireFocusChanged({
-      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
@@ -416,7 +416,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     expect(titleZone).toBeTruthy();
 
     await fireFocusChanged({
-      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
@@ -522,7 +522,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     expect(idZone).toBeTruthy();
 
     await fireFocusChanged({
-      next_fq: idZone!.key as FullyQualifiedMoniker,
+      next_fq: idZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.id"),
     });
     await flushSetup();

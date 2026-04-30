@@ -100,6 +100,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
   asSegment,
+  fqLastSegment,
   type FullyQualifiedMoniker
 } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
@@ -240,8 +241,9 @@ const WINDOW_LAYER_NAME = asSegment("window");
 
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
+  const segment = focusedFq ? fqLastSegment(focusedFq) : null;
   return (
-    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
   );
 }
 

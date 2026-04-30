@@ -394,7 +394,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -419,7 +419,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -444,7 +444,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -481,7 +481,7 @@ describe("NavBar — browser spatial behaviour", () => {
       (a) => a.segment === "ui:navbar.inspect",
     )!;
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -506,7 +506,7 @@ describe("NavBar — browser spatial behaviour", () => {
       (a) => a.segment === "ui:navbar.search",
     )!;
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -526,7 +526,7 @@ describe("NavBar — browser spatial behaviour", () => {
       (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
-    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -560,7 +560,7 @@ describe("NavBar — browser spatial behaviour", () => {
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: navbarZone.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: navbarZone.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(node.getAttribute("data-focused")).not.toBeNull();
@@ -666,7 +666,7 @@ describe("NavBar — browser spatial behaviour", () => {
     // assertion locks in the navbar's role as the parent that
     // descendant zones can find.
     expect(navbarZone!.parentZone).toBeNull();
-    expect(navbarZone!.key).toBeTruthy();
+    expect(navbarZone!.fq).toBeTruthy();
 
     unmount();
   });

@@ -46,6 +46,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { DataTable, type DataTableColumn } from "./data-table";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 import type { UseGridReturn } from "@/hooks/use-grid";
 
@@ -128,15 +131,19 @@ async function renderTable(
   let result!: ReturnType<typeof render>;
   await act(async () => {
     result = render(
-      <EntityFocusProvider>
-        <DataTable
-          columns={COLUMNS}
-          rows={ENTITIES}
-          grid={makeGrid()}
-          showRowSelector={true}
-          {...props}
-        />
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <DataTable
+              columns={COLUMNS}
+              rows={ENTITIES}
+              grid={makeGrid()}
+              showRowSelector={true}
+              {...props}
+            />
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
   });
   return result;
@@ -201,8 +208,8 @@ describe("DataTable row structure", () => {
     const { container } = await renderTable();
     const tbody = container.querySelector("tbody")!;
     const rows = tbody.querySelectorAll("tr");
-    expect(rows[0].getAttribute("data-moniker")).toBe("task:t1");
-    expect(rows[1].getAttribute("data-moniker")).toBe("task:t2");
+    expect(rows[0].getAttribute("data-segment")).toBe("task:t1");
+    expect(rows[1].getAttribute("data-segment")).toBe("task:t2");
   });
 
   it("column count matches with showRowSelector=false", async () => {
@@ -222,7 +229,9 @@ describe("DataTable grouping sync", () => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
       result = render(
-        <EntityFocusProvider>
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
           <DataTable
             columns={COLUMNS}
             rows={ENTITIES}
@@ -230,7 +239,9 @@ describe("DataTable grouping sync", () => {
             showRowSelector={true}
             grouping={["status"]}
           />
-        </EntityFocusProvider>,
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
     });
     const { container, rerender } = result;
@@ -239,7 +250,9 @@ describe("DataTable grouping sync", () => {
     // to verify the table returns to a flat layout.
     await act(async () => {
       rerender(
-        <EntityFocusProvider>
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
           <DataTable
             columns={COLUMNS}
             rows={ENTITIES}
@@ -247,7 +260,9 @@ describe("DataTable grouping sync", () => {
             showRowSelector={true}
             grouping={undefined}
           />
-        </EntityFocusProvider>,
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
     });
 
@@ -269,7 +284,9 @@ describe("DataTable container context menu", () => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
       result = render(
-        <EntityFocusProvider>
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
           <DataTable
             columns={COLUMNS}
             rows={ENTITIES}
@@ -277,7 +294,9 @@ describe("DataTable container context menu", () => {
             showRowSelector={true}
             onContainerContextMenu={handler}
           />
-        </EntityFocusProvider>,
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
     });
     const { container } = result;
@@ -305,7 +324,9 @@ describe("DataTable container context menu", () => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
       result = render(
-        <EntityFocusProvider>
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
           <DataTable
             columns={COLUMNS}
             rows={ENTITIES}
@@ -313,7 +334,9 @@ describe("DataTable container context menu", () => {
             showRowSelector={true}
             onContainerContextMenu={containerHandler}
           />
-        </EntityFocusProvider>,
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
     });
     const { container } = result;
@@ -342,7 +365,9 @@ describe("DataTable container context menu", () => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
       result = render(
-        <EntityFocusProvider>
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
           <DataTable
             columns={COLUMNS}
             rows={ENTITIES}
@@ -350,7 +375,9 @@ describe("DataTable container context menu", () => {
             showRowSelector={true}
             onContainerContextMenu={containerHandler}
           />
-        </EntityFocusProvider>,
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
     });
     const { container } = result;

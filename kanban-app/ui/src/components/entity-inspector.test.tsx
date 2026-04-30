@@ -245,21 +245,25 @@ function makeEntity(fields: Record<string, unknown> = {}): Entity {
 
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   const result = render(
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>
-                <CommandScopeProvider commands={[]}>
-                  <EntityInspector entity={entity} />
-                </CommandScopeProvider>
-              </UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <CommandScopeProvider commands={[]}>
+                      <EntityInspector entity={entity} />
+                    </CommandScopeProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
   // Wait for async schema load
   await act(async () => {
@@ -512,7 +516,7 @@ describe("EntityInspector", () => {
     // Filter to field-zone monikers so we don't count nested pill scopes.
     const focused = Array.from(
       container.querySelectorAll("[data-focused]"),
-    ).filter((el) => el.getAttribute("data-moniker")?.startsWith("field:"));
+    ).filter((el) => el.getAttribute("data-segment")?.startsWith("field:"));
     expect(focused.length).toBe(1);
   });
 

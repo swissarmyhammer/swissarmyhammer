@@ -232,15 +232,15 @@ async function defaultInvokeImpl(
   // (no resolvable child) which is the expected leaf-card path.
   if (cmd === "spatial_drill_in") return null;
   if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
-    const a = (args ?? {}) as { key?: string; moniker?: string };
-    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    const a = (args ?? {}) as { fq?: string; segment?: string };
+    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return undefined;
   }
   if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { key?: string };
-    if (a.key) {
+    const a = (args ?? {}) as { fq?: string };
+    if (a.fq) {
       for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.key) {
+        if (k === a.fq) {
           monikerToKey.delete(m);
           break;
         }
@@ -248,16 +248,20 @@ async function defaultInvokeImpl(
     }
     return undefined;
   }
-  if (cmd === "spatial_focus_by_moniker") {
+  if (cmd === "spatial_focus") {
     // Queued via `queueMicrotask` to match the kernel simulator and
     // real Tauri events — emitting synchronously would hide
     // regressions where `setFocus` writes the store synchronously.
-    const a = (args ?? {}) as { moniker?: string };
-    const moniker = a.moniker ?? null;
-    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
-    if (moniker) {
+    const a = (args ?? {}) as { fq?: string };
+    const fq = a.fq ?? null;
+    let moniker: string | null = null;
+    for (const [s, k] of monikerToKey.entries()) {
+      if (k === fq) { moniker = s; break; }
+    }
+    
+    if (fq) {
       const prev = currentFocusKey.key;
-      currentFocusKey.key = key;
+      currentFocusKey.key = fq;
       queueMicrotask(() => {
         const handlers = listeners.get("focus-changed") ?? [];
         for (const handler of handlers) {
@@ -265,7 +269,7 @@ async function defaultInvokeImpl(
             payload: {
               window_label: "main",
               prev_fq: prev,
-              next_fq: key,
+              next_fq: fq,
               next_segment: moniker,
             },
           });
@@ -416,9 +420,9 @@ function inspectDispatches(): Array<Record<string, unknown>> {
  */
 function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
   const zone = registerZoneArgs().find((a) => a.segment === moniker);
-  if (zone) return zone.key as FullyQualifiedMoniker;
+  if (zone) return zone.fq as FullyQualifiedMoniker;
   const scope = registerScopeArgs().find((a) => a.segment === moniker);
-  return scope?.key as FullyQualifiedMoniker | undefined;
+  return scope?.fq as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------

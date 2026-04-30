@@ -304,7 +304,7 @@ describe("NavBar", () => {
       (c) => c.segment === "ui:navbar.board-selector",
     );
     expect(leaf).toBeDefined();
-    expect(leaf!.parentZone).toBe(navbarZone!.key);
+    expect(leaf!.parentZone).toBe(navbarZone!.fq);
   });
 
   it("registers ui:navbar.inspect as a FocusScope child only when a board is loaded", async () => {
@@ -320,7 +320,7 @@ describe("NavBar", () => {
     const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.inspect");
     expect(leaf).toBeDefined();
-    expect(leaf!.parentZone).toBe(navbarZone!.key);
+    expect(leaf!.parentZone).toBe(navbarZone!.fq);
   });
 
   it("does not register ui:navbar.inspect when no board is loaded", async () => {
@@ -346,7 +346,7 @@ describe("NavBar", () => {
     const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.search");
     expect(leaf).toBeDefined();
-    expect(leaf!.parentZone).toBe(navbarZone!.key);
+    expect(leaf!.parentZone).toBe(navbarZone!.fq);
   });
 
   it("regression: does not attach a global keydown listener for legacy nav", () => {

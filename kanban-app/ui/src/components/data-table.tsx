@@ -981,7 +981,8 @@ function EntityRow({
 
   return (
     <TableRow
-      data-moniker={entityMk}
+      data-moniker={rowFq}
+      data-segment={entityMk}
       className={cn(
         "border-b border-border/50 transition-colors",
         isCursorRow && !isEditing && "bg-accent/30",

@@ -308,9 +308,9 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker));
+    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment));
     expect(viewZone).toBeTruthy();
-    expect(typeof viewZone!.key).toBe("string");
+    expect(typeof viewZone!.fq).toBe("string");
     expect(viewZone!.layerFq).toBeTruthy();
     // The zone's parent is the surrounding `ui:perspective` zone — both
     // chrome zones live under the window layer.
@@ -318,7 +318,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
       (a) => a.segment === "ui:perspective",
     );
     expect(perspectiveZone).toBeTruthy();
-    expect(viewZone!.parentZone).toBe(perspectiveZone!.key);
+    expect(viewZone!.parentZone).toBe(perspectiveZone!.fq);
 
     unmount();
   });
@@ -332,14 +332,14 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, queryByTestId, unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
+    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
     const viewNode = container.querySelector(
-      `[data-segment='${viewZone.moniker as string}']`,
+      `[data-segment='${viewZone.segment as string}']`,
     ) as HTMLElement;
     expect(viewNode).not.toBeNull();
     expect(viewNode.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: viewZone.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: viewZone.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(viewNode.getAttribute("data-focused")).not.toBeNull();
@@ -364,9 +364,9 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
+    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
     const viewNode = container.querySelector(
-      `[data-segment='${viewZone.moniker as string}']`,
+      `[data-segment='${viewZone.segment as string}']`,
     ) as HTMLElement;
 
     // Pretend an inner board/grid leaf was focused first; we use a unique
@@ -380,7 +380,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // view zone. Mimic the kernel's resulting `focus-changed` payload.
     await fireFocusChanged({
       prev_fq: phantomInnerKey,
-      next_fq: viewZone.key as FullyQualifiedMoniker,
+      next_fq: viewZone.fq as FullyQualifiedMoniker,
     });
 
     await waitFor(() => {
@@ -394,8 +394,8 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
-    const expectedKey = viewZone.key as FullyQualifiedMoniker;
+    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
+    const expectedKey = viewZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -422,7 +422,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     ) as HTMLElement;
     expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: perspectiveZone.key as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: perspectiveZone.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(node.getAttribute("data-focused")).not.toBeNull();

@@ -311,7 +311,7 @@ describe("Inspector field — Space → ui.inspect", () => {
     // and `extractScopeBindings` will see the new chain on the next
     // keydown.
     await fireFocusChanged({
-      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();

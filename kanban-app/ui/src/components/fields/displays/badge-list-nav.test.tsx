@@ -516,7 +516,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_fq: bugPill.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-1"),
     });
 
@@ -554,7 +554,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_fq: bugPill.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-1"),
     });
 
@@ -595,7 +595,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
 
     // Step 1: focus on pill A.
     await fireFocusChanged({
-      next_fq: pillA.key as FullyQualifiedMoniker,
+      next_fq: pillA.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-1"),
     });
     expect(
@@ -608,8 +608,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     // Step 2: focus moves to pill B. A's indicator must unmount; B's
     // must mount.
     await fireFocusChanged({
-      prev_fq: pillA.key as FullyQualifiedMoniker,
-      next_fq: pillB.key as FullyQualifiedMoniker,
+      prev_fq: pillA.fq as FullyQualifiedMoniker,
+      next_fq: pillB.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-2"),
     });
     expect(

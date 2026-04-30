@@ -464,7 +464,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_fq: titleZone.key as FullyQualifiedMoniker,
+      next_fq: titleZone.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:task-1.title"),
     });
 
@@ -504,7 +504,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_fq: progressZone.key as FullyQualifiedMoniker,
+      next_fq: progressZone.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:task-1.progress"),
     });
 
@@ -540,7 +540,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_fq: bugPill.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-bug"),
     });
 
@@ -583,7 +583,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     // Step 1: focus lands on the pill — indicator is on the pill, not
     // the field row.
     await fireFocusChanged({
-      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_fq: bugPill.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-bug"),
     });
     expect(
@@ -593,8 +593,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
 
     // Step 2: drill-out to the field-row zone — the indicator follows.
     await fireFocusChanged({
-      prev_fq: bugPill.key as FullyQualifiedMoniker,
-      next_fq: tagsZone.key as FullyQualifiedMoniker,
+      prev_fq: bugPill.fq as FullyQualifiedMoniker,
+      next_fq: tagsZone.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:task-1.tags"),
     });
     expect(tagsNode.getAttribute("data-focused")).toBe("true");

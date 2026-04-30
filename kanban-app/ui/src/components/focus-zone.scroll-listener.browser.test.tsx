@@ -116,14 +116,14 @@ function lastRegisterZoneArgs() {
     throw new Error("expected spatial_register_zone call");
   }
   return calls[calls.length - 1][1] as {
-    key: string;
+    fq: string;
     rect: { x: number; y: number; width: number; height: number };
   };
 }
 
 /** Pull every `spatial_update_rect` invocation. */
 function updateRectCalls(): Array<{
-  key: string;
+  fq: string;
   rect: { x: number; y: number; width: number; height: number };
 }> {
   return mockInvoke.mock.calls
@@ -131,7 +131,7 @@ function updateRectCalls(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: string;
+          fq: string;
           rect: { x: number; y: number; width: number; height: number };
         },
     );
@@ -180,7 +180,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     await flushSetup();
 
     const initial = lastRegisterZoneArgs();
-    const initialKey = initial.key;
+    const initialKey = initial.fq;
     const initialY = initial.rect.y;
 
     const scroller = container.querySelector(
@@ -201,7 +201,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     expect(updates.length).toBeGreaterThan(0);
 
     const last = updates[updates.length - 1];
-    expect(last.key).toBe(initialKey);
+    expect(last.fq).toBe(initialKey);
     // Within 1px tolerance for sub-pixel rounding. The Y must have
     // moved by approximately -100 from the initial register.
     expect(Math.abs(last.rect.y - (initialY - 100))).toBeLessThanOrEqual(1);
@@ -242,7 +242,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     await flushSetup();
 
     const initial = lastRegisterZoneArgs();
-    const initialKey = initial.key;
+    const initialKey = initial.fq;
     const initialY = initial.rect.y;
 
     const outer = container.querySelector(
@@ -274,7 +274,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     expect(updates.length).toBeGreaterThan(0);
 
     const last = updates[updates.length - 1];
-    expect(last.key).toBe(initialKey);
+    expect(last.fq).toBe(initialKey);
     // Combined offset is 60 + 90 = 150. Both scrolls subtract from
     // the zone's viewport-y; tolerance 1px for sub-pixel rounding.
     expect(Math.abs(last.rect.y - (initialY - 150))).toBeLessThanOrEqual(1);

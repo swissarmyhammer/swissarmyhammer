@@ -314,7 +314,7 @@ describe("Field (spatial-nav)", () => {
     const pills = zoneNode!.querySelectorAll('[data-segment^="tag:"]');
     expect(pills.length).toBe(2);
     const monikers = Array.from(pills).map((p) =>
-      p.getAttribute("data-moniker"),
+      p.getAttribute("data-segment"),
     );
     expect(monikers).toEqual(["tag:bug", "tag:ui"]);
   });

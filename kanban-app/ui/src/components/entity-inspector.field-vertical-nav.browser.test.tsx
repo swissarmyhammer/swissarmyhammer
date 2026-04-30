@@ -368,7 +368,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // Seed focus on the first (title) field zone so `nav.down`'s
     // execute closure sees `focusedKey() === titleKey`.
     await fireFocusChanged({
-      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
@@ -393,7 +393,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
       navCalls.length,
       "ArrowDown on a focused field zone must dispatch spatial_navigate exactly once",
     ).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(titleZone!.focusedFq);
+    expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 
     // Now simulate the kernel's response — the next field zone is the
@@ -401,7 +401,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // focus bridge mirrors the moniker into the store and the tags
     // zone's wrapper flips `data-focused="true"`.
     await fireFocusChanged({
-      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
@@ -439,7 +439,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     // Seed focus on the body field zone (the last in document order).
     await fireFocusChanged({
-      next_fq: bodyZone!.key as FullyQualifiedMoniker,
+      next_fq: bodyZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.body"),
     });
     await flushSetup();
@@ -455,13 +455,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(bodyZone!.focusedFq);
+    expect(navCalls[0].focusedFq).toBe(bodyZone!.fq);
     expect(navCalls[0].direction).toBe("up");
 
     // Simulate the kernel's response — beam-up resolves to the tags
     // zone (the one above body in document order).
     await fireFocusChanged({
-      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
@@ -500,7 +500,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     // Seed focus on the title field zone.
     await fireFocusChanged({
-      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_fq: titleZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
@@ -532,7 +532,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // At least one of the update calls must target the title zone's
     // key — the listener fires for every registered descendant.
     const titleUpdateCall = updateCalls.find(
-      (c) => c.key === titleZone!.key,
+      (c) => c.fq === titleZone!.fq,
     );
     expect(
       titleUpdateCall,
@@ -552,7 +552,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(titleZone!.focusedFq);
+    expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 
     unmount();
@@ -590,7 +590,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // Pretend tags is the last field "in view" and the focused one;
     // body is below the fold.
     await fireFocusChanged({
-      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
@@ -606,7 +606,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(tagsZone!.focusedFq);
+    expect(navCalls[0].focusedFq).toBe(tagsZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 
     // Spy on body zone's `scrollIntoView` (jsdom / chromium-test
@@ -620,7 +620,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     // Synthesize the kernel's response: focus advances to body.
     await fireFocusChanged({
-      next_fq: bodyZone!.key as FullyQualifiedMoniker,
+      next_fq: bodyZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.body"),
     });
     await flushSetup();

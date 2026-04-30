@@ -120,7 +120,8 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
-  asSegment
+  asSegment,
+  fqLastSegment
 } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
@@ -232,8 +233,9 @@ const WINDOW_LAYER_NAME = asSegment("window");
  */
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
+  const segment = focusedFq ? fqLastSegment(focusedFq) : null;
   return (
-    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
   );
 }
 
@@ -384,7 +386,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     // Find every `spatial_navigate` call in the IPC trace; assert at
-    // least one fired with `key === titleField.key`. Under the bug,
+    // least one fired with `key === titleField.fq`. Under the bug,
     // `actions.focusedFq()` returned null (or worse: a board card's
     // key) because `setFocus` never advanced the kernel — so the
     // dispatched key would be wrong (or no dispatch would fire at all).
@@ -396,11 +398,11 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
       "ArrowDown must dispatch spatial_navigate at least once",
     ).toBeGreaterThanOrEqual(1);
     const navigateArgs = navigateCalls.map((call) => call[1]) as Array<{
-      key: string;
+      focusedFq: string;
       direction: string;
     }>;
     const dispatchedFromTitle = navigateArgs.find(
-      (a) => a.key === titleField.fq && a.direction === "down",
+      (a) => a.focusedFq === titleField.fq && a.direction === "down",
     );
     expect(
       dispatchedFromTitle,

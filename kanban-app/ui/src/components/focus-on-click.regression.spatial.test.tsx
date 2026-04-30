@@ -504,7 +504,7 @@ async function assertClickProducesIndicator({
   expect(node, `[data-segment='${moniker}'] must be in the DOM`).not.toBeNull();
 
   const registration = findRegistration(moniker);
-  const capturedKey = registration.key as FullyQualifiedMoniker;
+  const capturedKey = registration.fq as FullyQualifiedMoniker;
   expect(typeof capturedKey).toBe("string");
 
   // Capture the parent zones' registered keys before the click so we can
@@ -512,7 +512,7 @@ async function assertClickProducesIndicator({
   // them first because mockInvoke.mockClear() below wipes the history.
   const parentKeys = parentMonikers.map((m) => {
     const reg = findRegistration(m);
-    return reg.key as FullyQualifiedMoniker;
+    return reg.fq as FullyQualifiedMoniker;
   });
 
   // Clear so the assertion measures only the click's IPC.
@@ -778,7 +778,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // invoke mock — `findRegistration` reads from the mock's call log.
       const moniker = "perspective_tab:p1";
       const tabRegistration = findRegistration(moniker);
-      const tabKey = tabRegistration.key as FullyQualifiedMoniker;
+      const tabKey = tabRegistration.fq as FullyQualifiedMoniker;
 
       const tabNode = container.querySelector(
         `[data-segment='${moniker}']`,
@@ -787,7 +787,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       // Capture the bar zone's key for the negative-guard assertion.
       const barRegistration = findRegistration("ui:perspective-bar");
-      const barKey = barRegistration.key as FullyQualifiedMoniker;
+      const barKey = barRegistration.fq as FullyQualifiedMoniker;
 
       // Click the INNER button — the user's click target. This exercises
       // the full `<button onClick={...}>` → bubble → `<FocusScope>
@@ -864,7 +864,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(barNode).not.toBeNull();
 
       const barRegistration = findRegistration("ui:perspective-bar");
-      const barKey = barRegistration.key as FullyQualifiedMoniker;
+      const barKey = barRegistration.fq as FullyQualifiedMoniker;
 
       // The bar carries `showFocusBar={false}` (it's viewport-spanning
       // chrome — see `PerspectiveBarSpatialZone` in
@@ -1038,7 +1038,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(node).not.toBeNull();
 
       const registration = findRegistration(moniker);
-      const cardKey = registration.key as FullyQualifiedMoniker;
+      const cardKey = registration.fq as FullyQualifiedMoniker;
 
       mockInvoke.mockClear();
       mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -1094,7 +1094,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(node).not.toBeNull();
 
       const registration = findRegistration(moniker);
-      const cardKey = registration.key as FullyQualifiedMoniker;
+      const cardKey = registration.fq as FullyQualifiedMoniker;
 
       mockInvoke.mockClear();
       mockInvoke.mockImplementation(defaultInvokeImpl);

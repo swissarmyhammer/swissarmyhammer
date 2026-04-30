@@ -411,7 +411,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     expect(
       focusCalls[0].fq,
       "the focus key must be the field zone's key (icon click bubbles to the zone)",
-    ).toBe(fieldZone!.key);
+    ).toBe(fieldZone!.fq);
 
     unmount();
   });
@@ -475,7 +475,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
 
     // Drive a focus claim for the field zone.
     await fireFocusChanged({
-      next_fq: zoneArgs!.key as FullyQualifiedMoniker,
+      next_fq: zoneArgs!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();

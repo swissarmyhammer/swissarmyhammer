@@ -223,9 +223,9 @@ async function defaultInvokeImpl(
   if (cmd === "list_commands_for_scope") return [];
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "spatial_drill_in") {
-    const key = (args as { key?: string })?.key ?? "";
+    const key = (args as { fq?: string })?.fq ?? "";
     const focusedMoniker =
-      (args as { focusedMoniker?: string })?.focusedMoniker ?? "";
+      (args as { focusedFq?: string })?.focusedFq ?? "";
     // Under the no-silent-dropout contract the kernel echoes the
     // focused moniker when there's nothing to descend into. Test
     // entries with non-null values mean "drill walked to a child" —
@@ -243,20 +243,20 @@ async function defaultInvokeImpl(
     // Same echo contract for drill-out — the layer-root edge returns
     // the focused moniker so the React side dispatches app.dismiss.
     const focusedMoniker =
-      (args as { focusedMoniker?: string })?.focusedMoniker ?? "";
+      (args as { focusedFq?: string })?.focusedFq ?? "";
     return focusedMoniker;
   }
   if (cmd === "spatial_navigate") return null;
   if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
-    const a = (args ?? {}) as { key?: string; moniker?: string };
-    if (a.key && a.moniker) monikerToKey.set(a.moniker, a.key);
+    const a = (args ?? {}) as { fq?: string; segment?: string };
+    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return undefined;
   }
   if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { key?: string };
-    if (a.key) {
+    const a = (args ?? {}) as { fq?: string };
+    if (a.fq) {
       for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.key) {
+        if (k === a.fq) {
           monikerToKey.delete(m);
           break;
         }
@@ -264,16 +264,20 @@ async function defaultInvokeImpl(
     }
     return undefined;
   }
-  if (cmd === "spatial_focus_by_moniker") {
+  if (cmd === "spatial_focus") {
     // Queued via `queueMicrotask` to match the kernel simulator and
     // real Tauri events — emitting synchronously would hide
     // regressions where `setFocus` writes the store synchronously.
-    const a = (args ?? {}) as { moniker?: string };
-    const moniker = a.moniker ?? null;
-    const key = moniker ? (monikerToKey.get(moniker) ?? null) : null;
-    if (moniker) {
+    const a = (args ?? {}) as { fq?: string };
+    const fq = a.fq ?? null;
+    let moniker: string | null = null;
+    for (const [s, k] of monikerToKey.entries()) {
+      if (k === fq) { moniker = s; break; }
+    }
+    
+    if (fq) {
       const prev = currentFocusKey.key;
-      currentFocusKey.key = key;
+      currentFocusKey.key = fq;
       queueMicrotask(() => {
         const handlers = listeners.get("focus-changed") ?? [];
         for (const handler of handlers) {
@@ -281,7 +285,7 @@ async function defaultInvokeImpl(
             payload: {
               window_label: "main",
               prev_fq: prev,
-              next_fq: key,
+              next_fq: fq,
               next_segment: moniker,
             },
           });
@@ -487,11 +491,11 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Stub the kernel so drill-in on the tags zone returns the first
     // pill's moniker.
-    drillInResponses.set(tagsZone!.key as string, "tag:tag-bug");
+    drillInResponses.set(tagsZone!.fq as string, "tag:tag-bug");
 
     // Seed focus on the tags field zone.
     await fireFocusChanged({
-      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
@@ -579,7 +583,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Seed the bug pill as the focused entity (mid-drill state).
     await fireFocusChanged({
-      next_fq: bugPill!.key as FullyQualifiedMoniker,
+      next_fq: bugPill!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-bug"),
     });
     await flushSetup();
@@ -604,7 +608,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Synthesize the kernel's response: focus advances to the ui pill.
     await fireFocusChanged({
-      next_fq: uiPill!.key as FullyQualifiedMoniker,
+      next_fq: uiPill!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-ui"),
     });
     await flushSetup();
@@ -646,7 +650,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Seed the bug pill as the focused entity (mid-drill state).
     await fireFocusChanged({
-      next_fq: bugPill!.key as FullyQualifiedMoniker,
+      next_fq: bugPill!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-bug"),
     });
     await flushSetup();
@@ -712,7 +716,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // Seed focus on the name field zone (default drill-in returns
     // null — no pills).
     await fireFocusChanged({
-      next_fq: nameZone!.key as FullyQualifiedMoniker,
+      next_fq: nameZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.name"),
     });
     await flushSetup();
@@ -779,7 +783,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Seed focus on the id field zone.
     await fireFocusChanged({
-      next_fq: idZone!.key as FullyQualifiedMoniker,
+      next_fq: idZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.id"),
     });
     await flushSetup();
@@ -832,7 +836,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // Default drill-in returns null (no pills registered for an empty
     // tags value). Seed focus on the tags field zone.
     await fireFocusChanged({
-      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_fq: tagsZone!.fq as FullyQualifiedMoniker,
       next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
