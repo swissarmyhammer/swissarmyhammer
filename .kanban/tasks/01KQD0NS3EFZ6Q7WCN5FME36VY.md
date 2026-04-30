@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD0NNG9DPHWATDNN61EERE2
-position_column: review
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa480
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: agent.rs + acp_stdio example'
 ---

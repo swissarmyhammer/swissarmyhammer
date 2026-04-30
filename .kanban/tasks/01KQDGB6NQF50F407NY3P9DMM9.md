@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa580
 project: acp-upgrade
 title: 'ACP 0.11: Update ARCHITECTURE.md to reflect builder/handler API'
 ---
