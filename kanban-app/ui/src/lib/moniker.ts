@@ -67,8 +67,14 @@ export function gridCellMoniker(row: number, colKey: string): string {
 export function parseGridCellMoniker(
   m: string,
 ): { row: number; colKey: string } | null {
-  if (!m.startsWith("grid_cell:")) return null;
-  const rest = m.slice("grid_cell:".length);
+  // Accept either a bare segment (`grid_cell:R:K`) or a fully-qualified
+  // moniker (`/window/.../grid_cell:R:K`). Under the FQM identity model
+  // the focused moniker is the full path; the trailing segment after the
+  // final `/` is the spatial-segment we parse against.
+  const lastSlash = m.lastIndexOf("/");
+  const segment = lastSlash >= 0 ? m.slice(lastSlash + 1) : m;
+  if (!segment.startsWith("grid_cell:")) return null;
+  const rest = segment.slice("grid_cell:".length);
   const idx = rest.indexOf(":");
   if (idx === -1) return null;
   const rowStr = rest.slice(0, idx);

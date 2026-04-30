@@ -597,7 +597,7 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
       (c) => c[0] === "spatial_register_scope",
     );
     const targetRegistration = registerCalls.find(
-      (c) => (c[1] as { moniker?: string })?.moniker === targetMoniker,
+      (c) => (c[1] as { segment?: string })?.segment === targetMoniker,
     );
     expect(targetRegistration).toBeTruthy();
     const targetKey = (targetRegistration![1] as { fq: FullyQualifiedMoniker }).fq;

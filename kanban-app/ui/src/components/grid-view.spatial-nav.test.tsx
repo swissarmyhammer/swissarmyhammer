@@ -409,7 +409,7 @@ describe("GridView (spatial-nav)", () => {
     const cellFocusables = focusableCalls.filter(
       (c) =>
         typeof c.segment === "string" &&
-        (c.moniker as string).startsWith("grid_cell:"),
+        (c.segment as string).startsWith("grid_cell:"),
     );
     expect(cellFocusables.length).toBeGreaterThan(0);
 
@@ -674,7 +674,7 @@ describe("GridView (spatial-nav)", () => {
     for (const cell of cellRegistrations) {
       expect(typeof cell.fq).toBe("string");
       expect((cell.fq as string).length).toBeGreaterThan(0);
-      expect(cell.moniker).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
+      expect(cell.segment).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
       expect(cell.parentZone).toBe(gridZoneKey);
       expect(cell.layerFq).toBe(gridZone.layerFq);
     }

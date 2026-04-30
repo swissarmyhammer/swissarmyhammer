@@ -490,17 +490,19 @@ function renderGridCellEditor(
 }
 
 function useGridCallbacks(
-  columns: DataTableColumn[],
-  focusCell: (cellSegment: string) => void,
+  _columns: DataTableColumn[],
+  _focusCell: (cellSegment: string) => void,
 ) {
-  const handleCellClick = useCallback(
-    (row: number, col: number) => {
-      const colKey = columns[col]?.field.name;
-      if (!colKey) return;
-      focusCell(gridCellMoniker(row, colKey));
-    },
-    [columns, focusCell],
-  );
+  // The cell-click → focus update is owned by the per-cell `<FocusScope>`'s
+  // `onClick` handler in `GridCellFocusable`, which calls `focus(fq)` on
+  // the cell's FQM. The inner-div click handler in `<GridCellFocusable>`
+  // exists for non-focus side effects (e.g. `enterEdit` on double-click).
+  // Calling `focusCell` here would dispatch a redundant `spatial_focus`
+  // for the same FQM, which the kernel would short-circuit but tests
+  // counting IPC calls would see as a double-fire.
+  const handleCellClick = useCallback((_row: number, _col: number) => {
+    // No-op — FocusScope owns focus updates for the cell.
+  }, []);
 
   return {
     handleCellClick,
