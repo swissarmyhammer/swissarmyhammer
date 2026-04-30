@@ -25,11 +25,10 @@
 //!    - Terminal output for embedded sessions
 //!    - Locations for follow-along tracking
 
-use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion,
-    TextContent,
+use agent_client_protocol::schema::{
+    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion, TextContent,
 };
-use agent_client_protocol_extras::recording::RecordedSession;
+use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from fixture verification
@@ -51,17 +50,23 @@ pub struct ToolCallStats {
 /// - tool_call notification (initial report)
 /// - tool_call_update notifications (progress updates)
 /// - MCP logging and progress notifications are captured
-pub async fn test_tool_call_notifications<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_tool_call_notifications(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing tool call notifications with TestMcpServer");
 
     // Initialize
     agent
-        .initialize(InitializeRequest::new(ProtocolVersion::V1))
+        .connection()
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .block_task()
         .await?;
 
     // Create session - TestMcpServer is already configured in agent factory
     let cwd = std::env::temp_dir();
-    let response = agent.new_session(NewSessionRequest::new(cwd)).await?;
+    let response = agent
+        .connection()
+        .send_request(NewSessionRequest::new(cwd))
+        .block_task()
+        .await?;
     let session_id = response.session_id;
 
     tracing::info!("Session created with id: {}", session_id);
@@ -76,7 +81,11 @@ pub async fn test_tool_call_notifications<A: Agent + ?Sized>(agent: &A) -> crate
     ))];
     let prompt_request = PromptRequest::new(session_id, prompt);
 
-    let response = agent.prompt(prompt_request).await?;
+    let response = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await?;
 
     // Verify we got a response
     tracing::info!(
@@ -210,15 +219,21 @@ pub fn verify_tool_call_fixture(
 }
 
 /// Test that agents send available_commands_update when commands change
-pub async fn test_commands_update_notification<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_commands_update_notification(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing available_commands_update notification");
 
     agent
-        .initialize(InitializeRequest::new(ProtocolVersion::V1))
+        .connection()
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .block_task()
         .await?;
 
     let cwd = std::env::temp_dir();
-    let response = agent.new_session(NewSessionRequest::new(cwd)).await?;
+    let response = agent
+        .connection()
+        .send_request(NewSessionRequest::new(cwd))
+        .block_task()
+        .await?;
     let session_id = response.session_id;
 
     tracing::info!("Session created with id: {}", session_id);
@@ -226,7 +241,11 @@ pub async fn test_commands_update_notification<A: Agent + ?Sized>(agent: &A) -> 
     // Send a simple prompt to trigger command updates
     let prompt = vec![ContentBlock::Text(TextContent::new("Hello"))];
     let prompt_request = PromptRequest::new(session_id, prompt);
-    let _response = agent.prompt(prompt_request).await?;
+    let _response = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await?;
 
     Ok(())
 }
@@ -283,77 +302,41 @@ pub fn verify_commands_update_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-        NewSessionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{
+        InitializeResponse, NewSessionResponse, PromptResponse, StopReason,
     };
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent for tool call tests
+    /// Mock agent for tool call tests.
+    ///
+    /// The unit-test path doesn't actually exercise tool execution — fixture
+    /// verification carries that load. The mock just needs to make
+    /// initialize / new_session / prompt return cleanly so the production
+    /// helpers reach the recording boundary without errors.
     struct ToolCallMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for ToolCallMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for ToolCallMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(ProtocolVersion::V1)) })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
+        fn new_session<'a>(
+            &'a self,
             _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("tool-call-test-session"))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("tool-call-test-session")) })
         }
 
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
-            Ok(agent_client_protocol::PromptResponse::new(
-                StopReason::EndTurn,
-            ))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
@@ -392,16 +375,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_notifications_mock() {
-        let agent = ToolCallMockAgent;
-        let result = test_tool_call_notifications(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(ToolCallMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_tool_call_notifications(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_commands_update_notification_mock() {
-        let agent = ToolCallMockAgent;
-        let result = test_commands_update_notification(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(ToolCallMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_commands_update_notification(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[test]
