@@ -42,14 +42,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use agent_client_protocol::schema::SessionNotification;
-use agent_client_protocol::Agent;
+use agent_client_protocol::{ConnectTo, ConnectionTo, DynConnectTo};
 use agent_client_protocol_extras::RecordingAgent;
 use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 
 use swissarmyhammer_config::model::{ModelConfig, ModelExecutorType, ModelManager, ModelPaths};
 
@@ -117,107 +116,93 @@ pub struct ValidatorEvent<'a> {
     pub hook_type: &'a str,
 }
 
-/// Holds the agent and notification sender.
+/// State of an agent connection that has not yet been "armed" — i.e. the
+/// recording wrap and the in-process connection have not yet been built.
 ///
-/// `recording_wrap_applied` is the latch that records whether
-/// [`AvpContext::wrap_with_recording`] has run against this handle's
-/// `agent`. The lazy [`AvpContext::init`] path and the eager
-/// [`AvpContext::with_agent`]/[`AvpContext::with_agent_and_model`] paths both
-/// install the handle with `recording_wrap_applied: false`; the wrap is then
-/// applied (in-place) on the first call to [`AvpContext::agent`]. This is
-/// what makes [`AvpContext::set_session_id`] take effect for both
-/// construction paths — the recording filename is snapshotted at first
-/// agent use, not at construction time, so a session id installed between
-/// the constructor returning and the first `agent()` call propagates into
-/// the recording.
+/// Both the lazy [`AvpContext::init`] path and the eager
+/// [`AvpContext::with_agent`]/[`AvpContext::with_agent_and_model`] paths
+/// install a `Pending` handle and rely on the deferred-arm mechanism in
+/// [`AvpContext::agent`] to materialise the live connection. Deferring the
+/// arm is what makes [`AvpContext::set_session_id`] take effect on both
+/// construction paths — the recording filename is computed at arm-time
+/// (first `agent()` call), not at construction time, so a session id
+/// installed between the constructor returning and the first `agent()` call
+/// propagates into the recording filename.
 ///
-/// Once `recording_wrap_applied` flips to `true`, `agent` is the final
-/// [`RecordingAgent`] wrapper returned to callers; subsequent `agent()`
-/// calls return this cached value without re-wrapping.
-struct AgentHandle {
-    agent: Arc<dyn Agent + Send + Sync>,
-    notifier: Arc<claude_agent::NotificationSender>,
-    recording_wrap_applied: bool,
+/// The lazy variant carries no inner agent — it builds one on first use via
+/// [`swissarmyhammer_agent::create_agent_with_options`]. The eager variant
+/// carries the externally-supplied inner agent component, type-erased into
+/// [`DynConnectTo<Client>`] so the eager-path constructors don't have to be
+/// generic over the concrete agent type.
+///
+/// In ACP 0.11 there is no side-channel broadcast for notifications — they
+/// flow through the JSON-RPC connection itself, captured by the
+/// `on_receive_notification` handler installed during arm. This is why the
+/// eager variant carries only the inner agent; no separate notifications
+/// receiver is needed.
+///
+/// [`PlaybackAgent`]: agent_client_protocol_extras::PlaybackAgent
+enum PendingAgent {
+    /// Lazy path: no inner agent yet. The first call to [`AvpContext::agent`]
+    /// will build one from `model_config` via swissarmyhammer-agent.
+    Lazy,
+    /// Eager path: caller has supplied the inner agent. The first call to
+    /// [`AvpContext::agent`] will wrap the inner in [`RecordingAgent`] and
+    /// run the connection-establishment dance.
+    Eager {
+        /// The externally-supplied inner agent component (type-erased so the
+        /// eager-path constructors don't have to be generic over the concrete
+        /// agent type).
+        inner: DynConnectTo<agent_client_protocol::Client>,
+    },
 }
 
-/// Newtype wrapper that adapts `Arc<dyn Agent + Send + Sync>` into a sized
-/// type implementing [`Agent`].
+/// State of an agent connection that has been wired up — recording wrap
+/// applied, in-process connection running, client-side handle and per-session
+/// notifier ready for use.
+struct ActiveAgent {
+    /// Client-side handle for sending requests to the wrapped inner agent.
+    /// Cheap to clone (it is a shared message-routing handle backed by mpsc
+    /// channels — see the SDK's [`ConnectionTo`] docs).
+    connection: ConnectionTo<agent_client_protocol::Agent>,
+    /// Per-session notification fan-out used by the validator runner.
+    notifier: Arc<claude_agent::NotificationSender>,
+    /// Background task driving `Client.builder().connect_with(...)`.
+    ///
+    /// Held so the SDK's actor loops keep running for the context's
+    /// lifetime; aborted on drop so dropping [`AvpContext`] tears the
+    /// connection down. We can't rely on `JoinHandle`'s drop alone — tokio
+    /// deliberately keeps detached tasks running — so the abort is wired up
+    /// via [`AbortOnDrop`].
+    _task: AbortOnDrop,
+}
+
+/// RAII guard that aborts the wrapped tokio task on drop.
 ///
-/// This shim exists because [`RecordingAgent<A>`] is parameterized by a sized
-/// inner agent type (`A: Agent`), and trait objects like `dyn Agent` are not
-/// `Sized`. The blanket impl `impl<T: Agent> Agent for Arc<T>` requires
-/// `T: Sized`, so wrapping `Arc<dyn Agent>` directly in `RecordingAgent` does
-/// not compile. `ArcAgent` forwards every `Agent` method to the underlying
-/// trait object, giving us a sized wrapper that `RecordingAgent` can hold.
+/// Used by [`ActiveAgent`] to ensure dropping [`AvpContext`] also stops the
+/// background `connect_with` task driving the validator agent connection.
+/// Plain [`tokio::task::JoinHandle`] drop merely detaches; `AbortOnDrop`
+/// gives us cancel-on-drop semantics without pulling in `tokio_util`.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Holds the connection-related state for the validator agent.
 ///
-/// The runtime cost is one virtual dispatch per call — the same cost the
-/// runner already paid before recording was introduced.
-struct ArcAgent(Arc<dyn Agent + Send + Sync>);
-
-#[async_trait::async_trait(?Send)]
-impl Agent for ArcAgent {
-    async fn initialize(
-        &self,
-        request: agent_client_protocol::schema::InitializeRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::InitializeResponse> {
-        self.0.initialize(request).await
-    }
-
-    async fn authenticate(
-        &self,
-        request: agent_client_protocol::schema::AuthenticateRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::AuthenticateResponse> {
-        self.0.authenticate(request).await
-    }
-
-    async fn new_session(
-        &self,
-        request: agent_client_protocol::schema::NewSessionRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse> {
-        self.0.new_session(request).await
-    }
-
-    async fn load_session(
-        &self,
-        request: agent_client_protocol::schema::LoadSessionRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::LoadSessionResponse> {
-        self.0.load_session(request).await
-    }
-
-    async fn set_session_mode(
-        &self,
-        request: agent_client_protocol::schema::SetSessionModeRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::SetSessionModeResponse> {
-        self.0.set_session_mode(request).await
-    }
-
-    async fn prompt(
-        &self,
-        request: agent_client_protocol::schema::PromptRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
-        self.0.prompt(request).await
-    }
-
-    async fn cancel(
-        &self,
-        notification: agent_client_protocol::schema::CancelNotification,
-    ) -> agent_client_protocol::Result<()> {
-        self.0.cancel(notification).await
-    }
-
-    async fn ext_method(
-        &self,
-        request: agent_client_protocol::schema::ExtRequest,
-    ) -> agent_client_protocol::Result<agent_client_protocol::schema::ExtResponse> {
-        self.0.ext_method(request).await
-    }
-
-    async fn ext_notification(
-        &self,
-        notification: agent_client_protocol::schema::ExtNotification,
-    ) -> agent_client_protocol::Result<()> {
-        self.0.ext_notification(notification).await
-    }
+/// The handle starts in [`AgentHandle::Pending`] form (either `Lazy` or
+/// `Eager`) and transitions to [`AgentHandle::Active`] on the first call to
+/// [`AvpContext::agent`]. This deferred-arming is what lets
+/// [`AvpContext::set_session_id`] take effect on both construction paths:
+/// the recording filename is computed at arm-time, not at construction time.
+enum AgentHandle {
+    /// Not yet wired to a live connection.
+    Pending(PendingAgent),
+    /// Live connection ready to serve validator requests.
+    Active(ActiveAgent),
 }
 
 /// AVP Context - manages the AVP directory, logging, agent access, turn state, and validator execution.
@@ -243,8 +228,10 @@ pub struct AvpContext {
     /// Resolved model configuration (defaults to claude-code)
     model_config: ModelConfig,
 
-    /// Agent handle (lazily created or injected)
-    agent_handle: Arc<Mutex<Option<AgentHandle>>>,
+    /// Agent handle. Starts in [`AgentHandle::Pending`] (lazy or eager) and
+    /// transitions to [`AgentHandle::Active`] on the first call to
+    /// [`Self::agent`].
+    agent_handle: Arc<Mutex<AgentHandle>>,
 
     /// Turn state manager for tracking file changes during a turn
     turn_state: Arc<TurnStateManager>,
@@ -326,45 +313,57 @@ impl AvpContext {
         Ok(Self::new_without_agent(project_dir, home_dir, model_config))
     }
 
-    /// Create an AVP context with an injected agent.
+    /// Create an AVP context with an injected inner agent.
     ///
-    /// This is primarily for testing with PlaybackAgent or other test agents.
-    /// The agent is used immediately without lazy creation.
+    /// This is primarily for testing with [`PlaybackAgent`] or other leaf
+    /// agents implementing [`ConnectTo<Client>`]. The inner agent is stashed
+    /// in [`AgentHandle::Pending::Eager`] and the connection-establishment
+    /// dance (recording wrap + builder + `connect_with`) is deferred until
+    /// the first call to [`Self::agent`] so [`Self::set_session_id`] can run
+    /// between this constructor returning and the first agent use.
     ///
     /// # Arguments
     ///
-    /// * `agent` - The agent to use for validator execution
-    /// * `notifications` - Notification receiver from the agent for streaming responses
+    /// * `inner` - Any [`ConnectTo<Client>`] component (typically a
+    ///   [`PlaybackAgent`]). Recording wrap and the in-process connection are
+    ///   layered on top during [`Self::agent`]. Notifications flow through
+    ///   the JSON-RPC connection itself in ACP 0.11, captured by the
+    ///   `on_receive_notification` handler installed during arm — there is
+    ///   no longer a separate broadcast receiver to thread through.
+    ///
+    /// [`PlaybackAgent`]: agent_client_protocol_extras::PlaybackAgent
+    /// [`ConnectTo<Client>`]: agent_client_protocol::ConnectTo
     ///
     /// # Example
     ///
     /// ```ignore
     /// let playback = PlaybackAgent::new(fixture_path, "test");
-    /// let notifications = playback.subscribe_notifications();
-    /// let context = AvpContext::with_agent(Arc::new(playback), notifications)?;
+    /// let context = AvpContext::with_agent(playback)?;
     /// ```
-    pub fn with_agent(
-        agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Receiver<SessionNotification>,
-    ) -> Result<Self, AvpError> {
+    pub fn with_agent<A>(inner: A) -> Result<Self, AvpError>
+    where
+        A: ConnectTo<agent_client_protocol::Client> + Send + 'static,
+    {
         let model_config = Self::resolve_model_config();
-        Self::init_with_agent_and_model(agent, notifications, model_config)
+        Self::init_with_agent_and_model(DynConnectTo::new(inner), model_config)
     }
 
-    /// Create an AVP context with an injected agent and explicit model configuration.
+    /// Create an AVP context with an injected inner agent and explicit model
+    /// configuration.
     ///
-    /// Like `with_agent()`, but allows specifying the model config directly
-    /// instead of resolving it from the project config file. This is useful
-    /// for testing the full pipeline with a specific model configuration.
-    pub fn with_agent_and_model(
-        agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Receiver<SessionNotification>,
-        model_config: ModelConfig,
-    ) -> Result<Self, AvpError> {
-        Self::init_with_agent_and_model(agent, notifications, model_config)
+    /// Like [`Self::with_agent`], but allows specifying the model config
+    /// directly instead of resolving it from the project config file. This is
+    /// useful for testing the full pipeline with a specific model
+    /// configuration.
+    pub fn with_agent_and_model<A>(inner: A, model_config: ModelConfig) -> Result<Self, AvpError>
+    where
+        A: ConnectTo<agent_client_protocol::Client> + Send + 'static,
+    {
+        Self::init_with_agent_and_model(DynConnectTo::new(inner), model_config)
     }
 
-    /// Build a context that has no agent yet (the lazy-init [`Self::init`] path).
+    /// Build a context whose agent handle starts in [`PendingAgent::Lazy`]
+    /// (the [`Self::init`] path).
     ///
     /// Factored out so [`Self::init`] and [`Self::init_with_agent_and_model`]
     /// share a single source of truth for field initialization. Callers must
@@ -382,7 +381,7 @@ impl AvpContext {
             project_dir,
             home_dir,
             model_config,
-            agent_handle: Arc::new(Mutex::new(None)),
+            agent_handle: Arc::new(Mutex::new(AgentHandle::Pending(PendingAgent::Lazy))),
             turn_state,
             runner_cache: Mutex::new(None),
             session_id: OnceLock::new(),
@@ -393,36 +392,34 @@ impl AvpContext {
     /// Shared constructor for the eager-agent paths ([`Self::with_agent`] and
     /// [`Self::with_agent_and_model`]).
     ///
-    /// Builds the context, bridges notifications, and installs the inner agent
-    /// in the handle **without** the recording wrap applied. The wrap is
-    /// applied lazily on the first [`Self::agent`] call. This means
-    /// [`Self::set_session_id`] can be called between this constructor and the
-    /// first agent use and still propagate into the recording filename — the
-    /// same invariant the lazy [`Self::init`] path provides.
+    /// Builds the context and installs the externally-supplied inner agent
+    /// (and its notification receiver) in [`PendingAgent::Eager`]. The
+    /// recording wrap and the in-process connection are layered on top
+    /// during the first call to [`Self::agent`], not here. This deferred-arm
+    /// invariant is what lets [`Self::set_session_id`] take effect on the
+    /// eager path: a session id installed between this constructor returning
+    /// and the first `agent()` call still propagates into the recording
+    /// filename (same shape as the lazy [`Self::init`] path).
     ///
     /// The two public eager-path entry points only differ in how
     /// `model_config` is resolved.
     fn init_with_agent_and_model(
-        agent: Arc<dyn Agent + Send + Sync>,
-        notifications: broadcast::Receiver<SessionNotification>,
+        inner: DynConnectTo<agent_client_protocol::Client>,
         model_config: ModelConfig,
     ) -> Result<Self, AvpError> {
         let (project_dir, home_dir) = Self::init_directories()?;
-        let notifier = Self::bridge_notifications(notifications);
 
         let ctx = Self::new_without_agent(project_dir, home_dir, model_config);
 
-        // Install the inner agent unwrapped. `recording_wrap_applied: false`
-        // tells `agent()` to apply `wrap_with_recording` on first use,
-        // which is what makes `set_session_id` work after this constructor.
+        // Install the inner agent in the Pending::Eager state. The arm-time
+        // logic in `agent()` will wrap this with `RecordingAgent` and run the
+        // connection-establishment dance on first observation, which is what
+        // gives `set_session_id` its window of effect.
         // No lock contention here: the mutex is fresh and uncontended.
         *ctx.agent_handle
             .try_lock()
-            .expect("fresh agent_handle is uncontended") = Some(AgentHandle {
-            agent,
-            notifier,
-            recording_wrap_applied: false,
-        });
+            .expect("fresh agent_handle is uncontended") =
+            AgentHandle::Pending(PendingAgent::Eager { inner });
 
         Ok(ctx)
     }
@@ -569,36 +566,37 @@ impl AvpContext {
             .join(format!("{}-{}.json", session, stamp))
     }
 
-    /// Wrap an inner validator agent with [`RecordingAgent`].
+    /// Wrap an inner validator agent component with [`RecordingAgent`].
     ///
-    /// Recording is unconditional — every Agent method call routed through the
-    /// returned `Arc<dyn Agent>` is recorded to a JSON file along with the
-    /// notifications streamed during that call. The recording is flushed when
-    /// the wrapper is dropped (i.e. when [`AvpContext`] itself is dropped).
+    /// Recording is unconditional — every JSON-RPC message flowing through
+    /// the returned wrapper is captured to a JSON file. The recording is
+    /// flushed at every prompt response and again when the wrapper is
+    /// dropped (i.e. when the connection driving [`AvpContext`] is torn
+    /// down).
+    ///
+    /// In ACP 0.11 [`RecordingAgent<A>`] is itself a [`ConnectTo<Client>`]
+    /// middleware, not an [`Agent`]-trait wrapper, so it is composed at
+    /// connection-setup time rather than around an already-built agent
+    /// object. The notification routing that used to be threaded through a
+    /// side-channel is handled internally by `RecordingAgent` from the
+    /// JSON-RPC stream — there is no longer a `with_notifications`
+    /// constructor.
     ///
     /// The session id used in the filename is resolved by
     /// [`Self::resolved_session_id`] — explicit setter first, env var second.
-    fn wrap_with_recording(
-        &self,
-        inner: Arc<dyn Agent + Send + Sync>,
-        notifier: &claude_agent::NotificationSender,
-    ) -> Arc<dyn Agent + Send + Sync> {
+    fn wrap_with_recording<A>(&self, inner: A) -> RecordingAgent<A>
+    where
+        A: ConnectTo<agent_client_protocol::Client> + Send + 'static,
+    {
         let session_id = self.resolved_session_id();
         let path = self.recording_path(session_id.as_deref());
-
-        // Subscribe to the global notification channel so the RecordingAgent
-        // capture thread can attach notifications to the recorded calls.
-        let notification_rx = notifier.sender().subscribe();
 
         tracing::info!(
             "Wrapping validator agent with RecordingAgent (path={})",
             path.display()
         );
 
-        // ArcAgent gives RecordingAgent a sized inner type to hold; the
-        // resulting wrapper is then re-erased back to Arc<dyn Agent>.
-        let recording = RecordingAgent::with_notifications(ArcAgent(inner), path, notification_rx);
-        Arc::new(recording)
+        RecordingAgent::new(inner, path)
     }
 
     /// Decide whether the in-process validator MCP server should register agent tools.
@@ -735,110 +733,221 @@ impl AvpContext {
 
     /// Get the agent for validator execution.
     ///
-    /// Creates an agent on first access based on the resolved model configuration.
-    /// For ClaudeCode models, creates an ephemeral ClaudeAgent.
-    /// For LlamaAgent models, creates a local LlamaAgent.
-    /// Returns a reference to the agent and the notification sender (for per-session subscribing).
+    /// Returns a [`ConnectionTo<agent_client_protocol::Agent>`] (the client-side
+    /// handle for issuing typed requests against the wrapped inner agent) and
+    /// the [`claude_agent::NotificationSender`] used by callers to subscribe
+    /// to per-session streaming updates.
     ///
-    /// Recording is applied lazily on the first call — both for the lazy
-    /// [`Self::init`] path (where the inner agent is created here) and for the
-    /// eager [`Self::with_agent`]/[`Self::with_agent_and_model`] paths (where
-    /// the inner agent was installed at construction time but left unwrapped).
-    /// This deferred wrap is what makes [`Self::set_session_id`] take effect
+    /// On first access, this method **arms** the handle:
+    /// - For the lazy [`Self::init`] path it builds the inner agent via
+    ///   [`swissarmyhammer_agent::create_agent_with_options`].
+    /// - For the eager [`Self::with_agent`]/[`Self::with_agent_and_model`]
+    ///   paths it consumes the inner agent stashed at construction time.
+    /// - In both cases the inner agent is wrapped with [`RecordingAgent`] and
+    ///   wired into a background `Client.builder().connect_with(...)` task,
+    ///   yielding a `ConnectionTo<Agent>` handle and a per-session notifier.
+    ///
+    /// This deferred-arm is what makes [`Self::set_session_id`] take effect
     /// in *both* construction paths: the recording filename is computed at
-    /// first agent use, never at construction time.
+    /// arm-time (here), never at construction time.
     pub async fn agent(
         &self,
     ) -> Result<
         (
-            Arc<dyn Agent + Send + Sync>,
+            ConnectionTo<agent_client_protocol::Agent>,
             Arc<claude_agent::NotificationSender>,
         ),
         AvpError,
     > {
         let mut guard = self.agent_handle.lock().await;
 
-        if guard.is_none() {
-            tracing::debug!(
-                "Creating {:?} agent for validator execution...",
-                self.model_config.executor()
-            );
-            let start = std::time::Instant::now();
-
-            // Point the validator agent at `/mcp/validator` and disable
-            // built-in tools so it only has code_context + read-only files.
-            // This starts the in-process sah MCP server (held on
-            // `self.mcp_server_handle` for the lifetime of the context) so the
-            // validator agent — particularly llama-agent (qwen) which has no
-            // built-in tools — always has tools to call. There is no env-var
-            // short-circuit and no fallback path: the in-process server is
-            // the validator agent's only tool surface.
-            let (mcp_config, tools_override) = self.resolve_validator_mcp_config().await?;
-
-            let options = swissarmyhammer_agent::CreateAgentOptions {
-                ephemeral: true,
-                tools_override: Some(tools_override),
-            };
-            let handle = swissarmyhammer_agent::create_agent_with_options(
-                &self.model_config,
-                Some(mcp_config),
-                options,
-            )
-            .await
-            .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
-
-            tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
-
-            let notifier = Self::bridge_notifications(handle.notification_rx);
-            // Install the raw inner agent with `recording_wrap_applied: false`.
-            // The wrap is applied immediately below by the shared codepath
-            // that also handles the eager-agent paths. Wrapping must happen
-            // *after* the notification bridge is built so the recorder and
-            // the bridge subscribe to the same broadcast — otherwise the
-            // recorder would steal the receiver from the bridge.
-            *guard = Some(AgentHandle {
-                agent: handle.agent,
-                notifier,
-                recording_wrap_applied: false,
-            });
+        // Fast path: already armed. Just clone out the handles.
+        if let AgentHandle::Active(active) = &*guard {
+            return Ok((active.connection.clone(), Arc::clone(&active.notifier)));
         }
 
-        // Apply the recording wrap lazily on first observation. This is the
-        // single point where `wrap_with_recording` is called for both
-        // construction paths, which means `set_session_id` consistently
-        // propagates into the recording filename regardless of whether the
-        // caller used `init` or `with_agent`.
-        let handle = guard.as_mut().unwrap();
-        if !handle.recording_wrap_applied {
-            handle.agent = self.wrap_with_recording(Arc::clone(&handle.agent), &handle.notifier);
-            handle.recording_wrap_applied = true;
-        }
+        // Take the pending state so we own its inner agent / receiver.
+        // Replace with a sentinel `Lazy` while we work — if we panic before
+        // installing the Active state the handle reverts to "lazy", which is
+        // a safe (if expensive) recovery: the next caller will re-attempt.
+        let pending = std::mem::replace(&mut *guard, AgentHandle::Pending(PendingAgent::Lazy));
+        let pending = match pending {
+            AgentHandle::Pending(p) => p,
+            AgentHandle::Active(_) => unreachable!("checked above"),
+        };
 
-        Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
+        // Materialise an inner agent regardless of which Pending variant we
+        // started in.
+        let inner = match pending {
+            PendingAgent::Lazy => self.build_lazy_inner_agent().await?,
+            PendingAgent::Eager { inner } => inner,
+        };
+
+        // Arm the connection: wrap with RecordingAgent, spawn the Client
+        // builder task, and capture the resulting `ConnectionTo<Agent>`
+        // handle. Notifications are routed by the
+        // `on_receive_notification` handler installed inside arm.
+        let active = self.arm_agent_connection(inner).await?;
+
+        let result = (active.connection.clone(), Arc::clone(&active.notifier));
+        *guard = AgentHandle::Active(active);
+        Ok(result)
     }
 
-    /// Bridge a broadcast receiver into a NotificationSender with per-session subscribe.
-    fn bridge_notifications(
-        notification_rx: broadcast::Receiver<SessionNotification>,
-    ) -> Arc<claude_agent::NotificationSender> {
-        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+    /// Build the inner agent for the lazy [`Self::init`] path.
+    ///
+    /// Resolves the validator MCP config (starting the in-process sah server
+    /// on first call, held on `self.mcp_server_handle` for the context's
+    /// lifetime), then dispatches to
+    /// [`swissarmyhammer_agent::create_agent_with_options`] for the configured
+    /// model. Returns the unwrapped inner agent component, type-erased into
+    /// [`DynConnectTo<Client>`] so `agent()` can treat the lazy and eager
+    /// paths uniformly downstream.
+    ///
+    /// In ACP 0.11 notifications flow through the JSON-RPC connection itself
+    /// rather than a side-channel broadcast, so this helper no longer
+    /// returns a separate `broadcast::Receiver<SessionNotification>` — the
+    /// `on_receive_notification` handler installed during arm captures
+    /// everything we need.
+    async fn build_lazy_inner_agent(
+        &self,
+    ) -> Result<DynConnectTo<agent_client_protocol::Client>, AvpError> {
+        tracing::debug!(
+            "Creating {:?} agent for validator execution...",
+            self.model_config.executor()
+        );
+        let start = std::time::Instant::now();
+
+        // Point the validator agent at `/mcp/validator` and disable
+        // built-in tools so it only has code_context + read-only files.
+        // This starts the in-process sah MCP server (held on
+        // `self.mcp_server_handle` for the lifetime of the context) so the
+        // validator agent — particularly llama-agent (qwen) which has no
+        // built-in tools — always has tools to call. There is no env-var
+        // short-circuit and no fallback path: the in-process server is the
+        // validator agent's only tool surface.
+        let (mcp_config, tools_override) = self.resolve_validator_mcp_config().await?;
+
+        let options = swissarmyhammer_agent::CreateAgentOptions {
+            ephemeral: true,
+            tools_override: Some(tools_override),
+        };
+        let handle = swissarmyhammer_agent::create_agent_with_options(
+            &self.model_config,
+            Some(mcp_config),
+            options,
+        )
+        .await
+        .map_err(|e| AvpError::Agent(format!("Failed to create agent: {}", e)))?;
+
+        tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
+
+        // After the upstream `swissarmyhammer-agent` migration to ACP 0.11,
+        // `AcpAgentHandle.agent` is a `DynConnectTo<Client>` value (the
+        // unwrapped inner agent component) rather than the now-removed
+        // `Arc<dyn Agent + Send + Sync>`. This file's compile-time
+        // dependency on that shape is the design contract D2 lays down for
+        // the swissarmyhammer-agent task to satisfy.
+        Ok(handle.agent)
+    }
+
+    /// Arm the agent handle: wrap with [`RecordingAgent`], spawn the
+    /// `Client.builder().connect_with(...)` task, and assemble the
+    /// [`ActiveAgent`].
+    ///
+    /// The connection is driven by a background tokio task whose handle is
+    /// held on `ActiveAgent::_task` (via [`AbortOnDrop`]) so dropping
+    /// [`AvpContext`] tears the connection down. The task hands its
+    /// `ConnectionTo<Agent>` back via a `oneshot` channel before parking on
+    /// `pending()` — keeping the connection alive until the task is aborted.
+    ///
+    /// Notifications flowing from the agent to the client are forwarded into
+    /// a freshly-built [`claude_agent::NotificationSender`] via an
+    /// `on_receive_notification` handler installed on the builder. In ACP
+    /// 0.11 this is the only path notifications travel — there is no
+    /// side-channel broadcast.
+    async fn arm_agent_connection(
+        &self,
+        inner: DynConnectTo<agent_client_protocol::Client>,
+    ) -> Result<ActiveAgent, AvpError> {
+        // Build a fresh per-session notifier. In ACP 0.11 notifications
+        // flow through the JSON-RPC channel, so the notifier is fed by the
+        // `on_receive_notification` handler below — there is no separate
+        // broadcast receiver to bridge.
+        let (notifier, _global_rx) =
+            claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
         let notifier = Arc::new(notifier);
-        let notifier_clone = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = notification_rx;
-            loop {
-                match rx.recv().await {
-                    Ok(notification) => {
-                        let _ = notifier_clone.send_update(notification).await;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "agent notification forwarder lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+
+        // Wrap the inner agent with RecordingAgent at connection-setup time.
+        // RecordingAgent is itself ConnectTo<Client> middleware, so the
+        // resulting type is what we hand to the builder's connect_with(...).
+        let recording = self.wrap_with_recording(inner);
+
+        // Install an `on_receive_notification` handler so SessionNotifications
+        // flowing agent→client are routed into the per-session NotificationSender
+        // for the validator runner to consume. Other notification variants
+        // (extension notifications) are ignored — they are not part of the
+        // validator agent's contract.
+        let notifier_for_handler = Arc::clone(&notifier);
+
+        // Channel for the spawned task to publish its ConnectionTo<Agent>
+        // handle back to us before parking. Using oneshot rather than mpsc:
+        // exactly one cx is yielded per task lifetime.
+        let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            let result = agent_client_protocol::Client
+                .builder()
+                .name("avp-validator")
+                .on_receive_notification(
+                    move |notif: agent_client_protocol::AgentNotification, _cx| {
+                        let notifier = Arc::clone(&notifier_for_handler);
+                        async move {
+                            if let agent_client_protocol::AgentNotification::SessionNotification(
+                                update,
+                            ) = notif
+                            {
+                                if let Err(e) = notifier.send_update(update).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "validator notifier failed to forward session/update"
+                                    );
+                                }
+                            }
+                            Ok(())
+                        }
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(recording, async move |cx| {
+                    // Publish the connection handle so the caller can issue
+                    // requests, then park: the connection lives until this
+                    // task is aborted (which happens when AvpContext drops).
+                    let _ = cx_tx.send(cx);
+                    std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                })
+                .await;
+
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "validator agent connection ended with error");
             }
         });
-        notifier
+
+        // Wait for the spawned task to publish its ConnectionTo<Agent> handle.
+        // If the task failed before reaching the main_fn closure (e.g. the
+        // builder rejected our handler signature), the oneshot will be
+        // dropped and we report a setup error.
+        let connection = cx_rx.await.map_err(|_| {
+            AvpError::Agent(
+                "validator agent connection task aborted before yielding handle".to_string(),
+            )
+        })?;
+
+        Ok(ActiveAgent {
+            connection,
+            notifier,
+            _task: AbortOnDrop(task),
+        })
     }
 
     /// Get the project AVP directory path.
@@ -1326,19 +1435,20 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp.path()).unwrap();
 
-        // Create a fixture file for the playback agent
+        // Create a fixture file for the playback agent. The on-disk schema
+        // changed in 0.11 — fixtures use `{"calls": []}` rather than the
+        // legacy `{"messages": []}`.
         let fixture_dir = temp.path().join("fixtures");
         fs::create_dir_all(&fixture_dir).unwrap();
-        fs::write(fixture_dir.join("test.json"), r#"{"messages": []}"#).unwrap();
+        fs::write(fixture_dir.join("test.json"), r#"{"calls": []}"#).unwrap();
 
-        // Create a PlaybackAgent and inject it
+        // Inject a PlaybackAgent. In ACP 0.11 it implements `ConnectTo<Client>`
+        // directly — there is no separate notifications broadcast to thread.
         let playback = PlaybackAgent::new(fixture_dir.join("test.json"), "test");
-        let notifications = playback.subscribe_notifications();
-        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(playback);
 
-        let ctx = AvpContext::with_agent(agent, notifications).unwrap();
+        let ctx = AvpContext::with_agent(playback).unwrap();
 
-        // agent() should return the injected agent
+        // agent() should arm the connection and return the live handle.
         let result = ctx.agent().await;
 
         std::env::set_current_dir(&original_dir).unwrap();
@@ -1656,21 +1766,20 @@ mod tests {
 
         // Build an empty fixture for PlaybackAgent — we never actually drive
         // the recorded wrapper through any real calls, we only need to push
-        // it past the deferred-wrap point.
+        // it past the deferred-wrap point. The on-disk schema in 0.11 is
+        // `{"calls": []}`.
         let fixture_dir = temp.path().join("fixtures");
         fs::create_dir_all(&fixture_dir).unwrap();
         let fixture = fixture_dir.join("empty.json");
-        fs::write(&fixture, r#"{"messages": []}"#).unwrap();
+        fs::write(&fixture, r#"{"calls": []}"#).unwrap();
 
         let record_dir = {
             let agent = PlaybackAgent::new(fixture, "test");
-            let notifications = agent.subscribe_notifications();
-            let agent_arc: Arc<dyn Agent + Send + Sync> = Arc::new(agent);
 
-            let ctx = AvpContext::with_agent(agent_arc, notifications).unwrap();
+            let ctx = AvpContext::with_agent(agent).unwrap();
 
             // Installed *after* the eager constructor returned, *before* the
-            // first agent() call. Under the deferred-wrap design this must
+            // first agent() call. Under the deferred-arm design this must
             // make it into the recording filename.
             ctx.set_session_id("eager-session-id");
 
@@ -1724,14 +1833,12 @@ mod tests {
         let fixture_dir = temp.path().join("fixtures");
         fs::create_dir_all(&fixture_dir).unwrap();
         let fixture = fixture_dir.join("empty.json");
-        fs::write(&fixture, r#"{"messages": []}"#).unwrap();
+        fs::write(&fixture, r#"{"calls": []}"#).unwrap();
 
         let record_dir = {
             let agent = PlaybackAgent::new(fixture, "test");
-            let notifications = agent.subscribe_notifications();
-            let agent_arc: Arc<dyn Agent + Send + Sync> = Arc::new(agent);
 
-            let ctx = AvpContext::with_agent(agent_arc, notifications).unwrap();
+            let ctx = AvpContext::with_agent(agent).unwrap();
             let _ = ctx.agent().await.unwrap();
             let dir = ctx.recording_dir();
             // ctx is dropped here, flushing the recording to disk.
