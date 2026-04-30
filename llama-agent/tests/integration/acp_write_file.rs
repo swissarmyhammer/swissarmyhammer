@@ -107,8 +107,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_path_security() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory for server config
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -176,8 +174,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_relative_path() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -241,8 +237,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_overwrite() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory and initial test file
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let test_file_path = temp_dir.path().join("overwrite.txt");
@@ -316,8 +310,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_empty() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let test_file_path = temp_dir.path().join("empty.txt");
@@ -385,8 +377,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_subdirectory() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory and subdirectory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let subdir = temp_dir.path().join("subdir");
@@ -460,8 +450,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_unicode() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let test_file_path = temp_dir.path().join("unicode.txt");
@@ -533,8 +521,6 @@ mod acp_write_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_write_text_file_nonexistent_parent() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let test_file_path = temp_dir.path().join("nonexistent").join("test.txt");

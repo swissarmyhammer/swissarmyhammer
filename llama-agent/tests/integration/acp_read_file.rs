@@ -106,8 +106,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_path_security() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory for server config
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -175,8 +173,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_not_found() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let nonexistent_file = temp_dir.path().join("nonexistent.txt");
@@ -240,8 +236,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_relative_path() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -304,8 +298,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_size_limit() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory and large test file
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let large_file = temp_dir.path().join("large.txt");

@@ -96,8 +96,6 @@ mod acp_tests {
     #[tokio::test]
     #[serial]
     async fn test_basic_acp_protocol() {
-        use agent_client_protocol::Agent;
-
         let server = create_test_server().await.expect("Failed to create server");
 
         // Test initialize
@@ -226,7 +224,6 @@ mod acp_tests {
     #[tokio::test]
     #[serial]
     async fn test_load_session_nonexistent() {
-        use agent_client_protocol::Agent;
         use std::path::PathBuf;
 
         let server = create_test_server().await.expect("Failed to create server");
@@ -252,7 +249,6 @@ mod acp_tests {
     #[tokio::test]
     #[serial]
     async fn test_load_session_invalid_id_format() {
-        use agent_client_protocol::Agent;
         use std::path::PathBuf;
 
         let server = create_test_server().await.expect("Failed to create server");
