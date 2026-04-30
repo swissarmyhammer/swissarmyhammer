@@ -779,14 +779,12 @@ impl crate::agent::ClaudeAgent {
     /// Request user permission for a tool call
     ///
     /// Sends an ACP `session/request_permission` request back to the client over
-    /// the provided connection, awaits the response on the spawned-task event
+    /// the provided connection, awaits the response without blocking the event
     /// loop, and dispatches the outcome to [`Self::handle_permission_response`].
     ///
-    /// The `client` parameter is a `ConnectionTo<Agent>`: the agent-side handle
-    /// to the JSON-RPC connection whose counterpart is the client. In ACP 0.11
-    /// the `Client` role is a unit struct (not a trait), so requests flow
-    /// through `ConnectionTo::send_request` rather than a trait method on a
-    /// `dyn Client` object.
+    /// The `client` parameter is a `ConnectionTo<Client>`: the agent-side handle
+    /// to the JSON-RPC connection whose counterpart is the `Client` role.
+    /// Requests flow through `ConnectionTo::send_request`.
     ///
     /// # Arguments
     ///
@@ -807,7 +805,7 @@ impl crate::agent::ClaudeAgent {
         session_id_str: &str,
         tool_call_id: &str,
         tool_name: &str,
-        client: &agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
+        client: &agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
         options: &[crate::tools::PermissionOption],
     ) {
         // Convert our internal types to ACP protocol types
@@ -848,8 +846,11 @@ impl crate::agent::ClaudeAgent {
         );
 
         // ACP 0.11: dispatch to the counterpart Client role over the
-        // ConnectionTo handle. `block_task` is safe here because this method
-        // runs inside the spawned prompt task, not on the event loop itself.
+        // ConnectionTo handle. Calling `block_task` here is safe iff the caller
+        // has already spawned this work off the JSON-RPC event loop (e.g. via
+        // `cx.spawn(...)` from the `prompt` dispatch handler) — invoking it
+        // directly inside an `on_receive_request` handler would deadlock. The
+        // dispatch-layer wiring landing in B5/B6/B9 must uphold this contract.
         match client.send_request(acp_request).block_task().await {
             Ok(response) => {
                 self.handle_permission_response(tool_name, response, options)
