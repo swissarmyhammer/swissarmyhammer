@@ -106,3 +106,23 @@ Second of three sequenced sub-tasks. Depends on Layer 1 (kernel newtypes) landin
 ## Related
 
 - Parent: `01KQD6064G1C1RAXDFPJVT1F46`
+
+## Review Findings (2026-04-30 07:07)
+
+Verified the four user-stated invariants directly in code:
+
+1. Consumer `moniker={...}` props are typed `SegmentMoniker` on `<FocusScope>`, `<FocusZone>`, `<Inspectable>`, and `<FocusLayer name=...>`.
+2. `useFullyQualifiedMoniker()` exists in `kanban-app/ui/src/components/fully-qualified-moniker-context.tsx` and throws when called outside a primitive.
+3. `setFocus(fq: FullyQualifiedMoniker | null)` and the Tauri commands (`spatial_focus`, `spatial_navigate`, `spatial_drill_in/out`, `spatial_push_layer`, `spatial_pop_layer`, `spatial_clear_focus`) accept only the FQM newtype; `path-monikers.kernel-driven.browser.test.tsx` test 6 pins the compile-error contract via `// @ts-expect-error`.
+4. `FocusChangedPayload` carries `prev_fq` / `next_fq` / `next_segment`; `next_segment` is read-only display data, not an alternate identity.
+
+Re-ran verification: `npx tsc --noEmit` 0 errors; `npx vitest run` reports `Test Files 179 passed (179) / Tests 1849 passed | 4 skipped (1853)`; `cargo test -p kanban-app` 93 passed; `cargo clippy -p kanban-app --all-targets -- -D warnings` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean. (`cargo test --workspace` had a flaky failure in `shelltool-cli::commands::registry::tests::test_init_and_deinit_register_success_path` triggered by a malformed `.mcp.json` parse during another test's parallel run; passes when run in isolation, no shelltool-cli code touched on this branch.)
+
+### Warnings
+- [ ] `ARCHITECTURE.md:27` — The Tier-0 spatial-focus-engine description still says the surface is "opaque `Moniker` strings, abstract `Rect`s, and `WindowLabel`s." That's now stale: after Layer 1 + Layer 2 the surface is `FullyQualifiedMoniker` + `SegmentMoniker` (distinct branded newtypes), not a single opaque `Moniker` type. The path-monikers identity model is the load-bearing change in this refactor — readers reaching for ARCHITECTURE.md to learn the focus-engine surface will be misled. Update the sentence to reflect the new newtype pair (and reference the `01KQD6064G1C1RAXDFPJVT1F46` rationale).
+
+### Nits
+- [ ] `kanban-app/ui/src/components/inspectable.tsx:43-48,68` — Doc-comment usage examples still call `asMoniker(\`task:${task.id}\`)` and `asMoniker(entityMk)`. `asMoniker` was deleted in Section B and the example would not compile if it were real code. Update the examples to use `asSegment(...)` (since `<Inspectable moniker={...}>` takes a `SegmentMoniker`).
+- [ ] `kanban-app/ui/src/components/board-view.tsx:1122` — Doc comment for `BoardSpatialZone` says `<FocusZone moniker={asMoniker("ui:board")}>`; replace `asMoniker` with `asSegment`.
+- [ ] `kanban-app/ui/src/components/app-shell.tsx:219, 272, 324` — Three doc-comment references describe the command closures as reading "the currently-focused [`SpatialKey`]" / "the currently-focused `(SpatialKey, Moniker)` pair". `SpatialKey` and the flat `Moniker` no longer exist; the closures read a `FullyQualifiedMoniker` via `actions.focusedFq()`. Update the prose to match.
+- [ ] `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts:119` — Param doc says "the `SpatialKey` to push rect updates against." It is now a `FullyQualifiedMoniker`. (The same drift appears in a few other doc comments — `entity-card.tsx:270`, `focus-indicator.tsx:34` — but they are accurate when read as historical context; this one is on a current parameter and is misleading.)

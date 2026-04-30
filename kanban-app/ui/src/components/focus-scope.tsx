@@ -195,8 +195,8 @@ export function FocusScope({
     for (const cmd of commands) {
       map.set(cmd.id, cmd);
     }
-    return { commands: map, parent, moniker: focusKey };
-  }, [commands, parent, focusKey]);
+    return { commands: map, parent, moniker: segment };
+  }, [commands, parent, segment]);
 
   const isDirectFocus = showFocusBar && isFocused;
 

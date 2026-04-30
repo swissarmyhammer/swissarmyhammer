@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe080
 project: spatial-nav
 title: 'Path monikers Layer 1: Rust newtypes + kernel registry FQM rewire (cargo test green)'
 ---
@@ -25,12 +25,12 @@ This is the first of three sequenced sub-tasks decomposed from the omnibus path-
 
 ## Acceptance Criteria
 
-- [ ] `SegmentMoniker` and `FullyQualifiedMoniker` are distinct newtypes (no `String` aliases).
-- [ ] `SpatialKey` (UUID) deleted from `swissarmyhammer-focus`.
-- [ ] `find_by_fq` is the only lookup-by-identifier API; takes `&FullyQualifiedMoniker`.
-- [ ] New file `swissarmyhammer-focus/tests/path_monikers.rs` contains the six named Layer 1 tests from the parent card.
-- [ ] `cargo test -p swissarmyhammer-focus` passes.
-- [ ] `cargo clippy -p swissarmyhammer-focus --all-targets -- -D warnings` clean.
+- [x] `SegmentMoniker` and `FullyQualifiedMoniker` are distinct newtypes (no `String` aliases).
+- [x] `SpatialKey` (UUID) deleted from `swissarmyhammer-focus`.
+- [x] `find_by_fq` is the only lookup-by-identifier API; takes `&FullyQualifiedMoniker`.
+- [x] New file `swissarmyhammer-focus/tests/path_monikers.rs` contains the six named Layer 1 tests from the parent card.
+- [x] `cargo test -p swissarmyhammer-focus` passes.
+- [x] `cargo clippy -p swissarmyhammer-focus --all-targets -- -D warnings` clean.
 
 ## Out of scope (handled in follow-up cards)
 
@@ -44,3 +44,16 @@ These will block on this sub-task landing first.
 
 - Parent: `01KQD6064G1C1RAXDFPJVT1F46`
 - Cross-ref: `01KQAW97R9XTCNR1PJAWYSKBC7` (no-silent-dropout)
+
+## Review Findings (2026-04-30 14:42)
+
+Clean — zero findings. Verified by `/review`:
+
+- All six named Layer 1 tests are present in `swissarmyhammer-focus/tests/path_monikers.rs` and pass: `register_zone_keyed_by_fq_moniker`, `two_zones_same_segment_different_layers_have_distinct_fq_keys`, `find_by_fq_unknown_path_returns_none_and_traces_error`, `cascade_does_not_cross_layers`, `segment_moniker_does_not_compile_at_fq_lookup_callsite`, `register_with_duplicate_fq_logs_error_and_replaces`.
+- `cargo test -p swissarmyhammer-focus` passes (path_monikers 6/6, perspective_bar_arrow_nav 5/5, traits_object_safe 5/5, unified_trajectories 4/4, doc-tests 1/1, all other suites green).
+- `cargo clippy -p swissarmyhammer-focus --all-targets -- -D warnings` clean.
+- `SpatialKey` only appears in historical-context doc comments (no source uses).
+- Every kernel API (`register_zone`, `unregister_scope`, `update_rect`, `scope`, `zone`, `layer`, `is_registered`, `ancestor_zones`, `remove_layer`, `children_of_layer`, `ancestors_of_layer`, `drill_in`, `drill_out`, `apply_batch`, `SpatialState::focus`, `clear_focus`, `handle_unregister`, `focused_in`) takes `&FullyQualifiedMoniker`.
+- Newtypes built via `define_id!` (`#[serde(transparent)]`, `Display`, `AsRef<str>`, `FromStr`, etc.) match the workspace ID-newtype pattern. `FullyQualifiedMoniker::root` and `compose` are the well-formed constructors; `FQ_SEPARATOR = '/'` matches the React-side composition.
+
+Acceptance-criteria boxes flipped on this review.

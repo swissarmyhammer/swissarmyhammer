@@ -195,13 +195,19 @@ const FocusStoreContext = createContext<FocusStore | null>(null);
 // Provider
 // ---------------------------------------------------------------------------
 
-/** Build scope chain by walking the registry from a moniker to root. */
+/** Build scope chain by walking the registry from a moniker to root.
+ *
+ * Each entry pushed is the registered scope's segment moniker (e.g.
+ * `"task:abc"`), not the registry key (which is the FQM in production).
+ * The Rust side parses each entry with `split_once(':')` to extract an
+ * entity type, so chain entries must be segment-shaped.
+ */
 function buildScopeChain(
   mk: string,
   registry: Map<string, CommandScope>,
 ): string[] {
-  const chain: string[] = [mk];
-  let current = registry.get(mk)?.parent ?? null;
+  const chain: string[] = [];
+  let current = registry.get(mk) ?? null;
   while (current !== null) {
     if (current.moniker) chain.push(current.moniker);
     current = current.parent;
@@ -621,11 +627,13 @@ export function useIsFocused(moniker: string): boolean {
   if (focusedFq === null) return false;
   if (focusedFq === moniker) return true;
 
-  // Walk the ancestor chain of the focused scope
+  // Walk the focused scope chain (leaf included). The leaf's `moniker`
+  // is its segment (e.g. `field:task:abc.title`); the registry key is the
+  // FQM. Callers pass a segment, so the leaf segment must be checked too.
   const scope = getScope(focusedFq);
   if (!scope) return false;
 
-  let current = scope.parent;
+  let current: CommandScope | null = scope;
   while (current !== null) {
     if (current.moniker === moniker) return true;
     current = current.parent;
@@ -685,7 +693,9 @@ export function useFocusedMoniker(): FullyQualifiedMoniker | null {
  * window-root layer, so the no-context branch is reachable only in
  * pre-spatial-nav unit tests.
  */
-export function useFocusBySegmentPath(): (...segments: SegmentMoniker[]) => void {
+export function useFocusBySegmentPath(): (
+  ...segments: SegmentMoniker[]
+) => void {
   const parent = useOptionalFullyQualifiedMoniker();
   const { setFocus } = useFocusActions();
   return useCallback(

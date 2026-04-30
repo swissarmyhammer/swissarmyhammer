@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNPGC2K0ETKC255A29PA4V0D
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe180
 title: 'Unify entity creation path: route board + column (+) buttons through `entity.add:{type}`, fix project view registration'
 ---
 ## What

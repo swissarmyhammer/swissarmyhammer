@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQD8X3PYXQAJN593HR11T7R4
 - 01KQD8XM2T0FWHXANCK0KVDJH1
-position_column: todo
-position_ordinal: ab80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffff817f80
 project: spatial-nav
 title: 'Path monikers Layer 3: Manual log verification in npm run tauri dev (mandatory acceptance gate)'
 ---
