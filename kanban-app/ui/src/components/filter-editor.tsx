@@ -172,9 +172,6 @@ function useDebouncedTimer() {
   }, []);
 
   const flush = useCallback(() => {
-    console.warn("[filter-diag] debounce FLUSH", {
-      hadPending: pendingFnRef.current !== null,
-    });
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -188,11 +185,9 @@ function useDebouncedTimer() {
   useEffect(() => flush, [flush]);
 
   const schedule = useCallback((fn: () => void, delayMs: number) => {
-    console.warn("[filter-diag] debounce SCHEDULE", { delayMs });
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     pendingFnRef.current = fn;
     timerRef.current = setTimeout(() => {
-      console.warn("[filter-diag] debounce FIRE");
       timerRef.current = null;
       pendingFnRef.current = null;
       fn();
@@ -411,16 +406,6 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
     { filter, perspectiveId, onClose = () => {} },
     ref,
   ) {
-    console.warn("[filter-diag] FilterEditor RENDER", {
-      perspectiveId,
-      filter,
-    });
-    useEffect(() => {
-      console.warn("[filter-diag] FilterEditor MOUNT", { perspectiveId });
-      return () => {
-        console.warn("[filter-diag] FilterEditor UNMOUNT", { perspectiveId });
-      };
-    }, [perspectiveId]);
     const {
       error,
       handleFlush,
@@ -502,10 +487,6 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
       const next = filter ?? "";
       if (next === lastDispatchedRef.current) return;
       if (next === innerRef.current?.getValue()) return;
-      console.warn("[filter-diag] FilterEditor RECONCILE external->buffer", {
-        perspectiveId,
-        next,
-      });
       // Stamp first, then setValue. The setValue triggers onChange which
       // schedules a debounced applyFilter; that apply path also stamps the
       // ref to the same value and dispatches an idempotent echo. Stamping
