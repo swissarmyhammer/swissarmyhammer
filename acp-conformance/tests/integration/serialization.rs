@@ -13,7 +13,7 @@
 // =============================================================================
 
 mod command_serialization {
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::{
         AvailableCommand, AvailableCommandInput, UnstructuredCommandInput,
     };
 
@@ -111,7 +111,7 @@ mod command_serialization {
 // =============================================================================
 
 mod filesystem_serialization {
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::{
         ReadTextFileRequest, ReadTextFileResponse, SessionId, WriteTextFileRequest,
         WriteTextFileResponse,
     };
@@ -258,7 +258,7 @@ mod filesystem_serialization {
 // =============================================================================
 
 mod plan_serialization {
-    use agent_client_protocol::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
 
     #[test]
     fn test_plan_entry_basic_serialization() {
