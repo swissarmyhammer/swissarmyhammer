@@ -113,7 +113,11 @@ pub struct RecordedSession {
 /// ```
 pub struct RecordingAgent<A> {
     inner: A,
-    path: PathBuf,
+    /// Shared recording state. Owning a clone here keeps the in-memory
+    /// recording buffer alive for the duration of `connect_to` and lets the
+    /// fixture-recording wrappers in [`crate::fixture`] register additional
+    /// notification drainage handles against the same state.
+    state: Arc<RecordingState>,
 }
 
 impl<A> RecordingAgent<A> {
@@ -124,7 +128,22 @@ impl<A> RecordingAgent<A> {
     /// on demand by the first flush.
     pub fn new(inner: A, path: PathBuf) -> Self {
         tracing::info!("RecordingAgent: Will record to {}", Pretty(&path));
-        Self { inner, path }
+        Self {
+            inner,
+            state: Arc::new(RecordingState::new(path)),
+        }
+    }
+
+    /// Create a `RecordingAgent` that shares an existing
+    /// [`RecordingState`].
+    ///
+    /// Used by [`crate::fixture::RecordingAgentWithFixture`] so the wrapper
+    /// can register additional notification drainage handles
+    /// ([`spawn_mcp_drain`], [`spawn_session_notification_drain`]) against
+    /// the same state that the wire-side copy loops feed.
+    pub(crate) fn with_state(inner: A, state: Arc<RecordingState>) -> Self {
+        tracing::info!("RecordingAgent: Will record to {}", Pretty(&state.path));
+        Self { inner, state }
     }
 
     /// Borrow the wrapped inner component.
@@ -139,7 +158,43 @@ impl<A> RecordingAgent<A> {
 
     /// Path to the on-disk recording file.
     pub fn path(&self) -> &std::path::Path {
-        &self.path
+        &self.state.path
+    }
+}
+
+impl<A> RecordingAgent<A>
+where
+    A: ConnectTo<Client> + Send + 'static,
+{
+    /// Build a [`crate::RecordingAgentWithFixture`] that records `inner`'s
+    /// traffic to `path` and folds an additional
+    /// `broadcast::Receiver<SessionNotification>` into the resulting
+    /// fixture.
+    ///
+    /// Forwards to
+    /// [`crate::RecordingAgentWithFixture::with_notifications`] and is
+    /// re-exposed here so callers that already have a `RecordingAgent` in
+    /// scope can construct the fixture wrapper without an extra import.
+    ///
+    /// # Arguments
+    /// * `inner` - Any `ConnectTo<Client>` agent component (typically a
+    ///   builder-built ACP agent or another middleware).
+    /// * `path` - Destination JSON file. Parent directories are created on
+    ///   demand by the first flush.
+    /// * `agent_type` - Static identifier
+    ///   ([`crate::AgentWithFixture::agent_type`]) used in fixture paths
+    ///   and log lines.
+    /// * `notifications` - Side-channel receiver to fold into the fixture.
+    pub async fn with_notifications(
+        inner: A,
+        path: PathBuf,
+        agent_type: &'static str,
+        notifications: tokio::sync::broadcast::Receiver<
+            agent_client_protocol::schema::SessionNotification,
+        >,
+    ) -> Result<crate::RecordingAgentWithFixture, agent_client_protocol::Error> {
+        crate::RecordingAgentWithFixture::with_notifications(inner, path, agent_type, notifications)
+            .await
     }
 }
 
@@ -159,7 +214,7 @@ where
         self,
         client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
     ) -> AcpResult<()> {
-        let state = Arc::new(RecordingState::new(self.path));
+        let state = self.state;
 
         // Internal pipe between us and the inner agent.
         let (to_inner, inner_side) = Channel::duplex();
@@ -249,9 +304,15 @@ async fn record_and_copy_messages(
 /// routed, and the destination path. All access is protected by a single
 /// `Mutex` because the per-message work (a few hashmap lookups + a vector
 /// push) is trivial relative to the I/O cost of a flush.
-struct RecordingState {
+///
+/// Visibility is `pub(crate)` so that [`crate::fixture::RecordingAgentWithFixture`]
+/// can hold an `Arc<RecordingState>` and feed it from extra notification
+/// sources via [`spawn_mcp_drain`] / [`spawn_session_notification_drain`].
+/// Outside the crate, the type is opaque — wrappers expose only the methods
+/// they actually need.
+pub(crate) struct RecordingState {
     inner: Mutex<RecordingInner>,
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 /// Mutable interior of [`RecordingState`].
@@ -307,7 +368,7 @@ impl From<&Id> for IdKey {
 }
 
 impl RecordingState {
-    fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self {
             inner: Mutex::new(RecordingInner {
                 calls: Vec::new(),
@@ -317,6 +378,21 @@ impl RecordingState {
             }),
             path,
         }
+    }
+
+    /// Buffer a notification observed on a side channel (not the wire).
+    ///
+    /// Used by [`spawn_session_notification_drain`] to fold a
+    /// `broadcast::Receiver<SessionNotification>` into the recording, and
+    /// by [`spawn_mcp_drain`] (via [`Self::observe_external_notification`])
+    /// to fold MCP-proxy traffic into the same buffer.
+    ///
+    /// The notification routing in [`distribute_notifications_by_session`]
+    /// later sorts these by `sessionId` like any other buffered entry.
+    pub(crate) fn observe_external_notification(&self, value: serde_json::Value) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.notifications.push(value);
+        inner.clean = false;
     }
 
     /// React to one observed message. Records pending requests, pairs
@@ -739,6 +815,134 @@ fn distribute_notifications_by_session(
         routed_by_session,
         routed_to_fallback
     );
+}
+
+// ---------------------------------------------------------------------------
+// External notification sources (session-side broadcast, MCP proxy)
+// ---------------------------------------------------------------------------
+
+/// RAII handle for a notification-drain task spawned via
+/// [`spawn_session_notification_drain`] or [`spawn_mcp_drain`].
+///
+/// Dropping the handle aborts the background drain. The fixture wrappers in
+/// [`crate::fixture`] hold a `Vec<SourceHandle>` for the wrapper's lifetime
+/// so drains stay alive while tests are running and shut down cleanly when
+/// the wrapper is dropped.
+pub(crate) struct SourceHandle {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl SourceHandle {
+    fn new(task: tokio::task::JoinHandle<()>) -> Self {
+        Self { task }
+    }
+}
+
+impl Drop for SourceHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Drain a `broadcast::Receiver<SessionNotification>` into the recording
+/// buffer.
+///
+/// Used by [`crate::fixture::RecordingAgentWithFixture::with_notifications`]
+/// when the inner agent broadcasts `SessionNotification`s on a side channel
+/// in addition to (or instead of) the JSON-RPC duplex. Each received
+/// notification is serialized with `serde_json::to_value` and folded into
+/// the same buffer the wire-side observer pushes to, so the per-prompt
+/// routing in [`distribute_notifications_by_session`] handles both sources
+/// uniformly.
+///
+/// The drain task exits cleanly when:
+/// - The receiver reports `Closed` (all senders dropped).
+/// - The drain handle is dropped (which aborts the task).
+///
+/// `Lagged` errors are logged and swallowed — the broadcast channel is
+/// best-effort; a slow drain that loses a few notifications is preferable
+/// to bringing down the whole recording.
+pub(crate) fn spawn_session_notification_drain(
+    state: Arc<RecordingState>,
+    mut rx: tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
+) -> SourceHandle {
+    let task = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(notification) => match serde_json::to_value(&notification) {
+                    Ok(value) => state.observe_external_notification(value),
+                    Err(e) => {
+                        tracing::warn!(
+                            "session notification drain: failed to serialize notification: {}",
+                            e
+                        );
+                    }
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("session notification drain: channel closed, exiting");
+                    return;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        "session notification drain: lagged, skipped {} notifications",
+                        skipped
+                    );
+                }
+            }
+        }
+    });
+    SourceHandle::new(task)
+}
+
+/// Drain a `broadcast::Receiver<McpNotification>` into the recording buffer.
+///
+/// Used by [`crate::fixture::RecordingAgentWithFixture::add_mcp_source`] to
+/// fold MCP-proxy traffic captured by
+/// [`model_context_protocol_extras::McpProxy`] into the same recorded
+/// fixture as the ACP wire traffic. Each received [`McpNotification`] is
+/// encoded as JSON and folded into the same buffer the wire-side observer
+/// pushes to.
+///
+/// MCP notifications carry no `sessionId`, so the routing in
+/// [`distribute_notifications_by_session`] sends them to the most recent
+/// prompt call as a fallback. This matches the 0.10 behaviour where MCP
+/// notifications were always attached to the surrounding prompt.
+///
+/// The drain task exits cleanly when:
+/// - The receiver reports `Closed` (all senders dropped).
+/// - The drain handle is dropped (which aborts the task).
+///
+/// [`McpNotification`]: model_context_protocol_extras::McpNotification
+pub(crate) fn spawn_mcp_drain(
+    state: Arc<RecordingState>,
+    mut rx: tokio::sync::broadcast::Receiver<model_context_protocol_extras::McpNotification>,
+) -> SourceHandle {
+    let task = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(notification) => match serde_json::to_value(&notification) {
+                    Ok(value) => state.observe_external_notification(value),
+                    Err(e) => {
+                        tracing::warn!(
+                            "mcp notification drain: failed to serialize notification: {}",
+                            e
+                        );
+                    }
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("mcp notification drain: channel closed, exiting");
+                    return;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        "mcp notification drain: lagged, skipped {} notifications",
+                        skipped
+                    );
+                }
+            }
+        }
+    });
+    SourceHandle::new(task)
 }
 
 // ---------------------------------------------------------------------------

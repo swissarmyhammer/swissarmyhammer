@@ -23,18 +23,25 @@
 //!   JSON file for later replay.
 //! - [`playback`] — the [`PlaybackAgent`] leaf agent that replays a recorded
 //!   JSON session over an ACP 0.11 connection (inverse of [`recording`]).
-//!
-//! The `test_mcp_server` module is migrated by a sibling task (D-series)
-//! and is not yet wired in here. The fixture-recording entry points
-//! (`with_fixture`, `AgentWithFixture`, `start_test_mcp_server_with_capture`)
-//! are likewise rebuilt by those tasks.
+//! - [`fixture`] — the [`AgentWithFixture`] dyn-compatible facade plus the
+//!   [`PlaybackAgentWithFixture`] / [`RecordingAgentWithFixture`] concrete
+//!   wrappers used by the conformance suite.
+//! - [`test_mcp_server`] — an in-process MCP test server with a notification
+//!   capture proxy ([`start_test_mcp_server_with_capture`]) for use in the
+//!   conformance fixture-recording flow.
 
+pub mod fixture;
 pub mod hook_config;
 pub mod hookable_agent;
 pub mod playback;
 pub mod recording;
+pub mod test_mcp_server;
 pub mod tracing_agent;
 
+pub use fixture::{
+    get_fixture_path_for, get_test_name_from_thread, AgentWithFixture, PlaybackAgentWithFixture,
+    RecordingAgentWithFixture,
+};
 pub use hook_config::{
     HookCommandContext, HookConfig, HookConfigError, HookDecision, HookDecisionValue,
     HookEvaluator, HookEvent, HookEventKind, HookEventKindConfig, HookHandler, HookHandlerConfig,
@@ -43,6 +50,7 @@ pub use hook_config::{
 };
 pub use hookable_agent::{hookable_agent_from_config, HookableAgent};
 pub use playback::PlaybackAgent;
+pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // NOTE: The A3 task acceptance criteria mentioned `RecordedEvent` alongside
 // `RecordedCall`/`RecordedSession`, but no `RecordedEvent` type ever existed
 // — neither in 0.10 nor here. The on-disk schema has only ever been
