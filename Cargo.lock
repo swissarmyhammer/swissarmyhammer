@@ -8777,7 +8777,6 @@ dependencies = [
 name = "swissarmyhammer-tools"
 version = "0.12.11"
 dependencies = [
- "agent-client-protocol",
  "anyhow",
  "async-trait",
  "async-watcher",

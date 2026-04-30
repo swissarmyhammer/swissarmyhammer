@@ -6,8 +6,8 @@ depends_on:
 - 01KQD0MMR7W64307S03XBV69BH
 - 01KQD0NS3EFZ6Q7WCN5FME36VY
 - 01KQD0KW8SMGT4YYCNH7QN0ANQ
-position_column: todo
-position_ordinal: ffa080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffb080
 project: acp-upgrade
 title: Adapt ACP consumers (swissarmyhammer-agent + drop swissarmyhammer-tools dep)
 ---
