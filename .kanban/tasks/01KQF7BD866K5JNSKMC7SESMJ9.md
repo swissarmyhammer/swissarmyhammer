@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: a980
+position_ordinal: 9e817f80
 project: spatial-nav
 title: 'Diagnose & fix: "duplicate FQM registration replaces prior scope" warnings flooding the kernel log'
 ---
