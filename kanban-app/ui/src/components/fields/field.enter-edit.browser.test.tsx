@@ -180,12 +180,12 @@ async function defaultInvokeImpl(
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "spatial_drill_in") {
     // Under the no-silent-dropout contract the kernel echoes the
-    // focused moniker when there's nothing to descend into. The field
+    // focused FQM when there's nothing to descend into. The field
     // tests below never set up children for the field zones they
-    // exercise — drill-in must echo the focused moniker so the
-    // closure's compare-to-focused fall-through opens the editor.
+    // exercise — drill-in must echo the focused FQM so the closure's
+    // compare-to-focused fall-through opens the editor.
     return (
-      (args as { focusedMoniker?: string } | undefined)?.focusedMoniker ?? null
+      (args as { focusedFq?: string } | undefined)?.focusedFq ?? null
     );
   }
   return undefined;
