@@ -160,6 +160,71 @@ impl<A> RecordingAgent<A> {
     pub fn path(&self) -> &std::path::Path {
         &self.state.path
     }
+
+    /// Return a [`RecordingFlushHandle`] sharing this wrapper's recording
+    /// state.
+    ///
+    /// The handle holds an `Arc` clone of the underlying [`RecordingState`],
+    /// so it stays valid even after the wrapper is consumed by
+    /// [`agent_client_protocol::Client::connect_with`] and moved into the
+    /// background task that drives the connection.
+    ///
+    /// Callers that need to ensure the recording reaches disk on a
+    /// synchronous teardown path (for example: a struct's `Drop` impl that
+    /// aborts the connection task) must:
+    ///
+    /// 1. Call [`Self::flush_handle`] **before** handing the wrapper to
+    ///    `connect_with`, and
+    /// 2. Call [`RecordingFlushHandle::flush`] from the synchronous teardown
+    ///    point — `tokio::task::JoinHandle::abort` is asynchronous and a
+    ///    parked task may be dropped *after* the caller observes its
+    ///    side-effects, which means relying on the task's drop chain to
+    ///    flush the recording is racy on a single-threaded runtime.
+    pub fn flush_handle(&self) -> RecordingFlushHandle {
+        RecordingFlushHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
+/// Synchronously-flushable handle to a [`RecordingAgent`]'s recording state.
+///
+/// Created via [`RecordingAgent::flush_handle`]. Carries an `Arc` clone of
+/// the same [`RecordingState`] that the wrapper's connection loop feeds, so
+/// the handle can flush the recording to disk without going through the
+/// connection task.
+///
+/// This exists because `tokio::task::JoinHandle::abort` only *signals* a
+/// task; it doesn't synchronously run the task's drop chain. On a
+/// single-threaded runtime, a synchronous caller (for example: a `Drop`
+/// impl that tears the connection down) may observe its own work complete
+/// before the aborted task's owned futures are dropped — meaning
+/// [`RecordingState`]'s drop-time flush never lands. Holding a flush handle
+/// outside the task and explicitly calling [`Self::flush`] on teardown
+/// closes that gap.
+pub struct RecordingFlushHandle {
+    state: Arc<RecordingState>,
+}
+
+impl RecordingFlushHandle {
+    /// Persist the current recording to disk.
+    ///
+    /// Drains buffered notifications, routes them to their matching prompt
+    /// calls, writes the resulting [`RecordedSession`] atomically to the
+    /// recording path, and marks the state clean so the eventual
+    /// [`RecordingState`] drop does not redundantly re-write the file.
+    ///
+    /// I/O failures are logged via `tracing::error!` and swallowed —
+    /// recording is best-effort and never propagates errors into the
+    /// caller's teardown path.
+    pub fn flush(&self) {
+        self.state.flush_now();
+    }
+
+    /// Path to the on-disk recording file.
+    pub fn path(&self) -> &std::path::Path {
+        &self.state.path
+    }
 }
 
 impl<A> RecordingAgent<A>

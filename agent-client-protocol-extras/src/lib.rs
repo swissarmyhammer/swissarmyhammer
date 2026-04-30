@@ -58,7 +58,7 @@ pub use test_mcp_server::{start_test_mcp_server_with_capture, TestMcpServer};
 // inaccurate; the public surface re-exported below is the complete public
 // surface of the recording module, so future reviewers shouldn't go hunting
 // for a phantom `RecordedEvent`.
-pub use recording::{RecordedCall, RecordedSession, RecordingAgent};
+pub use recording::{RecordedCall, RecordedSession, RecordingAgent, RecordingFlushHandle};
 pub use tracing_agent::{trace_notifications, TracingAgent};
 
 // Re-export MCP notification types for convenience

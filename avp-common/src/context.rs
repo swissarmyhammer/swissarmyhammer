@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use agent_client_protocol::{ConnectTo, ConnectionTo, DynConnectTo};
-use agent_client_protocol_extras::RecordingAgent;
+use agent_client_protocol_extras::{RecordingAgent, RecordingFlushHandle};
 use swissarmyhammer_directory::{AvpConfig, DirectoryConfig, ManagedDirectory};
 use swissarmyhammer_tools::mcp::unified_server::{
     start_mcp_server_with_options, McpServerHandle, McpServerMode,
@@ -167,6 +167,16 @@ struct ActiveAgent {
     connection: ConnectionTo<agent_client_protocol::Agent>,
     /// Per-session notification fan-out used by the validator runner.
     notifier: Arc<claude_agent::NotificationSender>,
+    /// Synchronous flush handle for the [`RecordingAgent`] wrapping the
+    /// validator agent. The wrapper itself is owned by the spawned
+    /// [`Self::_task`] (it was moved into `connect_with`), so we cannot
+    /// reach into it from a synchronous teardown path. The flush handle
+    /// holds an `Arc` clone of the recording state, lets us call
+    /// `flush()` from [`Drop`], and ensures the recording reaches disk
+    /// before [`Self::_task`]'s `abort()` races teardown — `abort` is a
+    /// signal, not a synchronous join, and a parked task may be dropped
+    /// strictly *after* the caller observes its side-effects.
+    recording_flush: RecordingFlushHandle,
     /// Background task driving `Client.builder().connect_with(...)`.
     ///
     /// Held so the SDK's actor loops keep running for the context's
@@ -175,6 +185,28 @@ struct ActiveAgent {
     /// deliberately keeps detached tasks running — so the abort is wired up
     /// via [`AbortOnDrop`].
     _task: AbortOnDrop,
+}
+
+impl Drop for ActiveAgent {
+    /// Flush the recording before the connection task is aborted.
+    ///
+    /// The recording lives inside the spawned task's future (it was moved
+    /// into `connect_with`). Aborting that task is asynchronous: it sets a
+    /// cancellation flag and the task's drop chain only runs the next time
+    /// the runtime polls it. On a single-threaded runtime, a synchronous
+    /// caller (e.g. a test that drops [`AvpContext`] then immediately
+    /// reads the recordings directory) can race past the abort and observe
+    /// no file on disk.
+    ///
+    /// We close that gap here by explicitly flushing through the held
+    /// [`RecordingFlushHandle`] before the field-drop chain reaches
+    /// [`Self::_task`] (which performs the abort). Because [`Self::_task`]
+    /// is the *last* field declared in the struct, it drops last —
+    /// `recording_flush` has already pushed the latest snapshot to disk by
+    /// the time the task is signalled.
+    fn drop(&mut self) {
+        self.recording_flush.flush();
+    }
 }
 
 /// RAII guard that aborts the wrapped tokio task on drop.
@@ -883,6 +915,13 @@ impl AvpContext {
         // resulting type is what we hand to the builder's connect_with(...).
         let recording = self.wrap_with_recording(inner);
 
+        // Grab a flush handle *before* `recording` is moved into the spawned
+        // `connect_with` task below. The handle is an `Arc` clone of the
+        // recording state; it stays valid for the entire context lifetime
+        // and lets `ActiveAgent`'s `Drop` impl push a final snapshot to
+        // disk synchronously, ahead of the asynchronous task abort.
+        let recording_flush = recording.flush_handle();
+
         // Install an `on_receive_notification` handler so SessionNotifications
         // flowing agent→client are routed into the per-session NotificationSender
         // for the validator runner to consume. Other notification variants
@@ -946,6 +985,7 @@ impl AvpContext {
         Ok(ActiveAgent {
             connection,
             notifier,
+            recording_flush,
             _task: AbortOnDrop(task),
         })
     }
