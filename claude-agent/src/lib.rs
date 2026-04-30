@@ -79,7 +79,6 @@ use agent_client_protocol::schema::{
     ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
     SessionUpdate, StopReason, TextContent,
 };
-use agent_client_protocol::Agent;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -176,12 +175,18 @@ pub async fn execute_prompt(
     execute_prompt_with_agent(agent, notifications, prompt).await
 }
 
-/// Execute a prompt with any Agent implementation.
+/// Execute a prompt against a [`ClaudeAgent`] and collect the streamed
+/// response.
 ///
-/// This is a lower-level function that works with any type implementing the Agent trait,
-/// making it suitable for use with PlaybackAgent in tests.
-pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
-    agent: &A,
+/// In ACP 0.10 this function was generic over an `Agent` trait so callers could
+/// inject a `PlaybackAgent` for tests. ACP 0.11 removed the `Agent` trait —
+/// `agent_client_protocol::Agent` is now a unit Role marker, and the inherent
+/// methods on [`ClaudeAgent`] (`initialize`, `new_session`, `prompt`) are the
+/// only thing this helper needs to drive a turn. Test-time injection of a
+/// recorded session is now handled by wiring [`agent_client_protocol_extras::PlaybackAgent`]
+/// to a real `ConnectionTo` peer rather than by parameterising this helper.
+pub async fn execute_prompt_with_agent(
+    agent: &ClaudeAgent,
     notifications: broadcast::Receiver<SessionNotification>,
     prompt: impl Into<String>,
 ) -> Result<CollectedResponse> {
@@ -214,7 +219,7 @@ pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
 }
 
 /// Initialize the agent (required by ACP protocol).
-async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
+async fn initialize_agent(agent: &ClaudeAgent) -> Result<()> {
     let init_request = InitializeRequest::new(1.into());
     agent
         .initialize(init_request)
@@ -224,8 +229,8 @@ async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
 }
 
 /// Create a new session with the agent.
-async fn create_session<A: Agent + ?Sized>(
-    agent: &A,
+async fn create_session(
+    agent: &ClaudeAgent,
 ) -> Result<agent_client_protocol::schema::SessionId> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
     let session_request = NewSessionRequest::new(cwd);

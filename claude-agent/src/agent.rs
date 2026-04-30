@@ -29,7 +29,6 @@ use agent_client_protocol::schema::{
     NewSessionResponse, PromptRequest, PromptResponse, SessionId, SessionNotification,
     SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent,
 };
-use agent_client_protocol_extras::AgentWithFixture;
 use std::sync::Arc;
 use std::time::SystemTime;
 use swissarmyhammer_common::Pretty;
@@ -66,9 +65,12 @@ pub struct ClaudeAgent {
     pub(crate) raw_message_manager: Option<RawMessageManager>,
     /// Client connection for sending requests back to the client (e.g., request_permission)
     ///
-    /// Per ACP protocol, Agent can send requests TO the Client. This is the AgentSideConnection
-    /// that implements the Client trait and sends JSON-RPC messages.
-    pub(crate) client: Option<Arc<dyn agent_client_protocol::Client + Send + Sync>>,
+    /// Per ACP protocol, Agent can send requests TO the Client. In ACP 0.11 the
+    /// `Client` trait is gone — `agent_client_protocol::Client` is a unit Role
+    /// marker, and outbound calls flow over a typed [`ConnectionTo<Client>`]
+    /// handle obtained from the connection builder. The handle is `Clone`, so
+    /// it does not need to be wrapped in an `Arc`.
+    pub(crate) client: Option<agent_client_protocol::ConnectionTo<agent_client_protocol::Client>>,
     /// Storage for user permission preferences
     ///
     /// Stores "always" decisions (allow-always, reject-always) across tool calls
@@ -405,9 +407,15 @@ impl ClaudeAgent {
 
     /// Set the client connection for bidirectional communication
     ///
-    /// This should be called with the AgentSideConnection after creating the agent.
-    /// Required for the agent to send client/request_permission and other client requests.
-    pub fn set_client(&mut self, client: Arc<dyn agent_client_protocol::Client + Send + Sync>) {
+    /// This should be called with a [`ConnectionTo<Client>`] after creating the
+    /// agent — typically the handle obtained inside the
+    /// `Agent.builder().on_receive_request(...).connect_with(...)` closure. It
+    /// is required for the agent to send `session/request_permission` and
+    /// other client-bound requests outside of a per-request handler context.
+    pub fn set_client(
+        &mut self,
+        client: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
+    ) {
         self.client = Some(client);
     }
 
@@ -2215,7 +2223,14 @@ impl ClaudeAgent {
         let acp_options = Self::convert_to_acp_options(permission_options);
         let acp_request = self.build_acp_permission_request(request, acp_options);
 
-        match client.request_permission(acp_request).await {
+        // ACP 0.11: dispatch the permission request to the counterpart Client
+        // role over the stored `ConnectionTo<Client>` handle. `block_task` is
+        // safe here because this method is called from outside the JSON-RPC
+        // event loop (e.g. from a tool-call lifecycle path that has already
+        // been spawned via `cx.spawn(...)` by the dispatch handler) — invoking
+        // `block_task` directly inside an `on_receive_request` callback would
+        // deadlock the dispatch loop.
+        match client.send_request(acp_request).block_task().await {
             Ok(response) => {
                 self.process_acp_permission_response(response, tool_name, permission_options)
                     .await
@@ -2427,10 +2442,3 @@ impl ClaudeAgent {
     }
 }
 
-impl AgentWithFixture for ClaudeAgent {
-    fn agent_type(&self) -> &'static str {
-        "claude"
-    }
-}
-
-// Fixture support

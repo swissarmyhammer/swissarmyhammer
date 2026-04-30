@@ -4,7 +4,6 @@
 //! that wraps the ClaudeAgent to provide JSON-RPC communication over custom streams.
 
 use crate::{agent::ClaudeAgent, config::AgentConfig, error::AgentError};
-use agent_client_protocol::Agent;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
