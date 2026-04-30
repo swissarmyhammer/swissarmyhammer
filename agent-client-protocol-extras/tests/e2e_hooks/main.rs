@@ -18,12 +18,7 @@
 
 // `avp_schema_tests` exercises `HookEvent::to_command_input_full` against
 // AVP's strongly-typed `HookInput` schema (see `avp_common::HookInput`).
-// `avp-common` is currently unbuildable under ACP 0.11 — it depends
-// transitively on `claude-agent` and `llama-agent`, which still target the
-// 0.10 `Agent` trait. Once those sibling tasks land, add `avp-common` back
-// to `[dev-dependencies]` in this crate's `Cargo.toml` and re-enable this
-// module. The test source is preserved so re-enabling is a one-line change.
-//mod avp_schema_tests;
+mod avp_schema_tests;
 mod cross_cutting_tests;
 mod exit2_tests;
 mod helpers;

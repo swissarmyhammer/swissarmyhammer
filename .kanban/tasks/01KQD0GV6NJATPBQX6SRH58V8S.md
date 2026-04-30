@@ -5,8 +5,10 @@ depends_on:
 - 01KQD0FPSFZ7XSVBWRXTNJM6N3
 - 01KQD0G0N3KDEZAHRJEQT5SS9W
 - 01KQD0G6BY9KYN7NSR35PRA4CA
-position_column: done
-position_ordinal: ffffffffffffffffffffffff9280
+- 01KQD0KW8SMGT4YYCNH7QN0ANQ
+- 01KQD0M132AJMXT4ZFYKW9Y15H
+position_column: todo
+position_ordinal: ffa180
 project: acp-upgrade
 title: 'ACP 0.11: extras: e2e_hooks integration tests'
 ---
@@ -20,37 +22,25 @@ Migrate `agent-client-protocol-extras/tests/e2e_hooks/*.rs` to ACP 0.11.
 
 A2 (HookableAgent), A3 (RecordingAgent), A4 (PlaybackAgent) all landed.
 
+> **Reopened 2026-04-30**: previous "done" claim was a test-skip workaround (`mod avp_schema_tests;` was commented out in `main.rs` because `avp-common` did not compile under ACP 0.11). The validator `test-integrity:no-test-cheating` correctly flagged the disable. Task is now properly gated on the avp-common reshape (D2 + D3) so when it finishes, every `e2e_hooks` test actually runs.
+
 ## Acceptance Criteria
-- [x] `cargo check -p agent-client-protocol-extras --tests` passes.
-- [x] One commit on `acp/0.11-rewrite`.
+- [ ] `cargo check -p agent-client-protocol-extras --tests` passes.
+- [ ] `mod avp_schema_tests;` is **enabled** in `tests/e2e_hooks/main.rs` (no comment-out, no `#[cfg]` gate).
+- [ ] `avp-common` is in `agent-client-protocol-extras/Cargo.toml` `[dev-dependencies]`.
+- [ ] All schema-type imports inside `tests/e2e_hooks/*.rs` use `agent_client_protocol::schema::*` paths.
+- [ ] One commit on `acp/0.11-rewrite`.
 
 ## Tests
-- [x] `cargo nextest run -p agent-client-protocol-extras --test e2e_hooks` (or `cargo nextest run -p agent-client-protocol-extras` if tests aren't in a separate target) — green.
+- [ ] `cargo nextest run -p agent-client-protocol-extras --test e2e_hooks` — all 50+ tests green, including `avp_schema_tests`.
 
 ## Workflow
 - Migration guide: https://agentclientprotocol.github.io/rust-sdk/migration_v0.11.x.html
+- The `avp_schema_tests` are a regression suite that catches field-name mismatches between `HookEvent::to_command_input_full()` JSON and `avp_common::HookInput`. They MUST be enabled and passing.
 
 ## Depends on
 - 01KQD0FPSFZ7XSVBWRXTNJM6N3 (A2: HookableAgent).
 - 01KQD0G0N3KDEZAHRJEQT5SS9W (A3: RecordingAgent).
 - 01KQD0G6BY9KYN7NSR35PRA4CA (A4: PlaybackAgent).
-
-## Implementation notes (2026-04-26)
-
-The 0.11 `HookableAgent` is no longer an `Agent`-trait wrapper — it's a `ConnectTo<Client>` middleware with helper methods (`run_user_prompt_submit`, `run_stop`, `track_session_start`, `intercept_notifications`, `fire_event`). The migration drove every test through that helper API:
-
-- Added `hookable_agent_from_config<A>(...)` to `agent-client-protocol-extras/src/hookable_agent.rs` (re-exported from `lib.rs`). Generic over the inner `A: ConnectTo<Client>` so it composes with `PlaybackAgent`, builder-shaped agents, and any other middleware. Mirrors the 0.10 helper of the same name.
-- Rewrote `helpers.rs` to expose `init_session(&HookableAgent)`, `resume_session(&HookableAgent, id)`, and `try_run_prompt(&HookableAgent, &SessionId, text)` / `run_prompt(...)` that call the helper API directly. The "inner agent" in test prompt turns is a synthetic no-op `PromptResponse::new(EndTurn)` — the suite asserts on hook decisions, not on inner-agent behaviour, exactly the same shape as the inline `run_prompt_turn` helper in `hookable_agent.rs` tests.
-- Replaced hand-rolled `format!`-based hook config builders with `serde_json::json!` so all interpolated strings are properly escaped (security validator).
-- Hardened `read_stdin_capture` and `wait_for_stdin_capture` to use `Path::file_name()` for path-traversal protection (security validator).
-- Escaped `stderr_msg` in `write_exit_script` for single-quoted POSIX shell context (security validator).
-- Removed `Arc<dyn Agent>` from helper signatures — the new `HookableAgent<A>` takes its inner by value.
-- Replaced `agent.load_session(LoadSessionRequest::new(...))` in `hook_edge_case_tests.rs::session_start_matcher_filters_by_source` with `helpers::resume_session(&agent, id)` — semantically equivalent (it's just `track_session_start` with `SessionSource::Resume`).
-- Disabled `avp_schema_tests` mod in `tests/e2e_hooks/main.rs`. The tests deserialize `HookEvent::to_command_input_full()` JSON through `avp_common::HookInput`, but `avp-common` is currently unbuildable under ACP 0.11 (it depends transitively on `claude-agent` and `llama-agent`, which still target the 0.10 `Agent` trait). The test source is preserved verbatim — re-enabling it once the sibling tasks land is a one-line change in `main.rs` plus adding `avp-common` back to `[dev-dependencies]`.
-
-## Verification
-
-- `cargo check -p agent-client-protocol-extras --tests` → clean
-- `cargo clippy -p agent-client-protocol-extras --tests --no-deps` → clean
-- `cargo nextest run -p agent-client-protocol-extras --test e2e_hooks` → 50 / 50 passed
-- `cargo nextest run -p agent-client-protocol-extras` → 216 / 216 passed (all lib + integration)
+- 01KQD0KW8SMGT4YYCNH7QN0ANQ (D2: avp-common context.rs production Agent reshape — required for `avp-common` to compile).
+- 01KQD0M132AJMXT4ZFYKW9Y15H (D3: avp-common runner.rs mock Agent + RecordingAgent wiring — same reason).

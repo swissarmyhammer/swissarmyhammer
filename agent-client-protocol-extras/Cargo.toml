@@ -26,11 +26,7 @@ model-context-protocol-extras = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 
 [dev-dependencies]
-# `avp-common` is the workspace's validator/fixture library — used by the
-# `tests/e2e_hooks/*` integration test suite (sibling task A5). It depends
-# transitively on `claude-agent` and `llama-agent`, which do not yet
-# compile under ACP 0.11. The dep is omitted while the foundation lands;
-# task A5 will re-add it when migrating the e2e_hooks suite.
+avp-common = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
 
