@@ -212,8 +212,8 @@ pub async fn test_audio_content_with_capability(agent: &dyn AgentWithFixture) ->
 }
 
 /// Test that agents properly handle embedded resource content
-pub async fn test_embedded_resource_with_capability<A: Agent + ?Sized>(
-    agent: &A,
+pub async fn test_embedded_resource_with_capability(
+    agent: &dyn AgentWithFixture,
 ) -> crate::Result<()> {
     tracing::info!("Testing embedded resource with capability");
 
