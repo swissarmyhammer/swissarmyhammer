@@ -1,5 +1,29 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+
+// Hoisted mocks: capture invoke and listen so the kernel simulator can drive
+// `focus-changed` events through the production spatial-focus bridge.
+type ListenCallback = (event: { payload: unknown }) => void;
+const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
+  const listeners = new Map<string, ListenCallback[]>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockInvoke = vi.fn(async (..._args: any[]): Promise<unknown> => undefined);
+  const mockListen = vi.fn(
+    (eventName: string, cb: ListenCallback): Promise<() => void> => {
+      const cbs = listeners.get(eventName) ?? [];
+      cbs.push(cb);
+      listeners.set(eventName, cbs);
+      return Promise.resolve(() => {
+        const arr = listeners.get(eventName);
+        if (arr) {
+          const idx = arr.indexOf(cb);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+      });
+    },
+  );
+  return { mockInvoke, mockListen, listeners };
+});
 
 // Schema with sections matching the new YAML definitions
 const TASK_SCHEMA = {
@@ -154,16 +178,17 @@ const SCHEMAS: Record<string, unknown> = {
   actor: ACTOR_SCHEMA,
 };
 
+// Fallback handler for non-spatial IPCs. The kernel simulator routes
+// spatial_* commands through itself; everything else falls through to here.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((...args: any[]) => {
-  if (args[0] === "list_entity_types")
-    return Promise.resolve(["task", "tag", "actor"]);
-  if (args[0] === "get_entity_schema") {
-    const entityType = args[1]?.entityType as string;
-    return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
+const fallbackInvoke = async (cmd: string, args?: any): Promise<unknown> => {
+  if (cmd === "list_entity_types") return ["task", "tag", "actor"];
+  if (cmd === "get_entity_schema") {
+    const entityType = args?.entityType as string;
+    return SCHEMAS[entityType] ?? TASK_SCHEMA;
   }
-  if (args[0] === "get_ui_state")
-    return Promise.resolve({
+  if (cmd === "get_ui_state")
+    return {
       palette_open: false,
       palette_mode: "command",
       keymap_mode: "cua",
@@ -171,11 +196,10 @@ const mockInvoke = vi.fn((...args: any[]) => {
       open_boards: [],
       windows: {},
       recent_boards: [],
-    });
-  if (args[0] === "update_entity_field")
-    return Promise.resolve({ id: "test-id" });
-  return Promise.resolve("ok");
-});
+    };
+  if (cmd === "update_entity_field") return { id: "test-id" };
+  return "ok";
+};
 
 vi.mock("@tauri-apps/api/core", async () => {
   // Preserve the real exports (SERIALIZE_TO_IPC_FN, Resource, Channel, …)
@@ -196,7 +220,7 @@ vi.mock("@tauri-apps/api/event", async () => {
   );
   return {
     ...actual,
-    listen: vi.fn(() => Promise.resolve(() => {})),
+    listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
   };
 });
 // `window-container.tsx` calls `getCurrentWindow()` at module-load time;
@@ -233,6 +257,19 @@ import {
   asSegment
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
+import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
+
+beforeEach(() => {
+  // Reset captured listeners and install a fresh kernel simulator wired
+  // to the hoisted `mockInvoke` / `mockListen`. The simulator routes
+  // every spatial-nav IPC through the in-process cascade and emits
+  // synthetic `focus-changed` events so the entity-focus-context bridge
+  // updates the React store on `setFocus(fq)`.
+  listeners.clear();
+  mockInvoke.mockReset();
+  mockListen.mockClear();
+  installKernelSimulator(mockInvoke, listeners, fallbackInvoke);
+});
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
   return {
@@ -1027,57 +1064,37 @@ describe("EntityInspector", () => {
     };
 
     async function renderWithSectionedSchema(entity: Entity) {
-      // Swap the mock to return the sectioned schema for this block. The
-      // `any` cast matches the original mockInvoke's signature, which infers
-      // a return-type union from its declaration site — our sectioned schema
-      // shape isn't part of that union by construction, so we widen here.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockInvoke.mockImplementation(((...args: any[]) => {
-        if (args[0] === "list_entity_types")
-          return Promise.resolve(["task", "tag", "actor"]);
-        if (args[0] === "get_entity_schema")
-          return Promise.resolve(SECTIONED_TASK_SCHEMA);
-        if (args[0] === "get_ui_state")
-          return Promise.resolve({
-            palette_open: false,
-            palette_mode: "command",
-            keymap_mode: "cua",
-            scope_chain: [],
-            open_boards: [],
-            windows: {},
-            recent_boards: [],
-          });
-        if (args[0] === "update_entity_field")
-          return Promise.resolve({ id: "test-id" });
-        return Promise.resolve("ok");
+      // Reset the kernel simulator with a fallback that returns the
+      // sectioned-schema shape for `get_entity_schema`. The simulator
+      // routes spatial-nav IPCs through itself; everything else falls
+      // through to this handler.
+      mockInvoke.mockReset();
+      installKernelSimulator(
+        mockInvoke,
+        listeners,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) as any);
+        async (cmd: string, _args?: any) => {
+          if (cmd === "list_entity_types") return ["task", "tag", "actor"];
+          if (cmd === "get_entity_schema") return SECTIONED_TASK_SCHEMA;
+          if (cmd === "get_ui_state")
+            return {
+              palette_open: false,
+              palette_mode: "command",
+              keymap_mode: "cua",
+              scope_chain: [],
+              open_boards: [],
+              windows: {},
+              recent_boards: [],
+            };
+          if (cmd === "update_entity_field") return { id: "test-id" };
+          return "ok";
+        },
+      );
       const result = await renderInspector(entity);
-      // Restore the default mock after render so subsequent tests are unaffected.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockInvoke.mockImplementation(((...args: any[]) => {
-        if (args[0] === "list_entity_types")
-          return Promise.resolve(["task", "tag", "actor"]);
-        if (args[0] === "get_entity_schema") {
-          const entityType = (args[1] as Record<string, unknown>)
-            ?.entityType as string;
-          return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
-        }
-        if (args[0] === "get_ui_state")
-          return Promise.resolve({
-            palette_open: false,
-            palette_mode: "command",
-            keymap_mode: "cua",
-            scope_chain: [],
-            open_boards: [],
-            windows: {},
-            recent_boards: [],
-          });
-        if (args[0] === "update_entity_field")
-          return Promise.resolve({ id: "test-id" });
-        return Promise.resolve("ok");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) as any);
+      // Restore the default kernel simulator after render so subsequent
+      // tests in this file see the per-entity schema fallback again.
+      mockInvoke.mockReset();
+      installKernelSimulator(mockInvoke, listeners, fallbackInvoke);
       return result;
     }
 
