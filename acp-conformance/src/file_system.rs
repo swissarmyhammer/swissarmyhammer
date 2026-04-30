@@ -98,30 +98,57 @@ pub async fn test_read_text_file_capability_check(
         Arc::from(serde_json::value::to_raw_value(&params)?),
     );
 
-    // Should return an error because capability is not declared
+    // Should return an error because capability is not declared.
     let result = send_ext_method(agent, ext_request).await;
 
     match result {
         Err(e) => {
-            // Agent correctly rejected the request
-            // The error should be Invalid params (-32602) according to JSON-RPC spec
-            let error_msg = format!("{:?}", e);
-            if error_msg.contains("Invalid params") || error_msg.contains("-32602") {
-                tracing::info!("Agent correctly rejected fs/read_text_file without capability (Invalid params)");
-                Ok(())
-            } else if error_msg.contains("capability") || error_msg.contains("not supported") {
-                tracing::info!("Agent correctly rejected fs/read_text_file without capability");
-                Ok(())
-            } else {
-                Err(crate::Error::Validation(format!(
-                    "Agent rejected fs/read_text_file but with unexpected error: {}",
-                    error_msg
-                )))
-            }
+            // Agent correctly rejected the request. ACP 0.10 agents typically
+            // returned `Invalid params` (-32602) with a capability-related
+            // message; ACP 0.11's typed-handler runtime returns
+            // `Method not found` (-32601) when the agent has no handler
+            // registered for the wire method, which is equally valid for
+            // "capability not declared, request refused".
+            assert_capability_rejected(
+                &e,
+                "fs/read_text_file",
+                "Agent correctly rejected fs/read_text_file without capability",
+            )
         }
         Ok(_) => Err(crate::Error::Validation(
             "Agent should reject fs/read_text_file when capability not declared".to_string(),
         )),
+    }
+}
+
+/// Centralised capability-rejection assertion used by the file-system and
+/// terminal capability scenarios.
+///
+/// Returns `Ok(())` if the SDK error matches one of the known
+/// "rejected because capability not declared" shapes (Invalid params,
+/// Method not found, or a capability-mention in the error string), and
+/// surfaces a `crate::Error::Validation` otherwise so unexpected error
+/// shapes don't masquerade as success.
+fn assert_capability_rejected(
+    error: &agent_client_protocol::Error,
+    method: &str,
+    success_message: &str,
+) -> crate::Result<()> {
+    let error_msg = format!("{:?}", error);
+    let rejected = error_msg.contains("Invalid params")
+        || error_msg.contains("-32602")
+        || error_msg.contains("Method not found")
+        || error_msg.contains("-32601")
+        || error_msg.contains("capability")
+        || error_msg.contains("not supported");
+    if rejected {
+        tracing::info!("{}", success_message);
+        Ok(())
+    } else {
+        Err(crate::Error::Validation(format!(
+            "Agent rejected {} but with unexpected error: {}",
+            method, error_msg
+        )))
     }
 }
 
@@ -165,27 +192,15 @@ pub async fn test_write_text_file_capability_check(
         Arc::from(serde_json::value::to_raw_value(&params)?),
     );
 
-    // Should return an error because capability is not declared
+    // Should return an error because capability is not declared.
     let result = send_ext_method(agent, ext_request).await;
 
     match result {
-        Err(e) => {
-            // Agent correctly rejected the request
-            // The error should be Invalid params (-32602) according to JSON-RPC spec
-            let error_msg = format!("{:?}", e);
-            if error_msg.contains("Invalid params") || error_msg.contains("-32602") {
-                tracing::info!("Agent correctly rejected fs/write_text_file without capability (Invalid params)");
-                Ok(())
-            } else if error_msg.contains("capability") || error_msg.contains("not supported") {
-                tracing::info!("Agent correctly rejected fs/write_text_file without capability");
-                Ok(())
-            } else {
-                Err(crate::Error::Validation(format!(
-                    "Agent rejected fs/write_text_file but with unexpected error: {}",
-                    error_msg
-                )))
-            }
-        }
+        Err(e) => assert_capability_rejected(
+            &e,
+            "fs/write_text_file",
+            "Agent correctly rejected fs/write_text_file without capability",
+        ),
         Ok(_) => Err(crate::Error::Validation(
             "Agent should reject fs/write_text_file when capability not declared".to_string(),
         )),

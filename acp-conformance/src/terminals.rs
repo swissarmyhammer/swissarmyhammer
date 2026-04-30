@@ -117,31 +117,50 @@ pub async fn test_terminal_capability_check(agent: &dyn AgentWithFixture) -> cra
         Arc::from(serde_json::value::to_raw_value(&params)?),
     );
 
-    // Should return an error because capability is not declared
+    // Should return an error because capability is not declared.
     let result = send_ext_method(agent, ext_request).await;
 
     match result {
-        Err(e) => {
-            // Agent correctly rejected the request
-            let error_msg = format!("{:?}", e);
-            if error_msg.contains("Invalid params") || error_msg.contains("-32602") {
-                tracing::info!(
-                    "Agent correctly rejected terminal/create without capability (Invalid params)"
-                );
-                Ok(())
-            } else if error_msg.contains("capability") || error_msg.contains("not supported") {
-                tracing::info!("Agent correctly rejected terminal/create without capability");
-                Ok(())
-            } else {
-                Err(crate::Error::Validation(format!(
-                    "Agent rejected terminal/create but with unexpected error: {}",
-                    error_msg
-                )))
-            }
-        }
+        Err(e) => assert_capability_rejected(
+            &e,
+            "terminal/create",
+            "Agent correctly rejected terminal/create without capability",
+        ),
         Ok(_) => Err(crate::Error::Validation(
             "Agent should reject terminal/create when capability not declared".to_string(),
         )),
+    }
+}
+
+/// Centralised capability-rejection assertion mirroring the helper in
+/// `file_system::assert_capability_rejected`.
+///
+/// Returns `Ok(())` when the SDK error matches one of the known
+/// "rejected because capability not declared" shapes (Invalid params,
+/// Method not found, or a capability-mention in the error string), and
+/// surfaces a `crate::Error::Validation` otherwise so unexpected error
+/// shapes don't masquerade as success. Duplicated rather than shared so
+/// each scenario keeps its imports local.
+fn assert_capability_rejected(
+    error: &agent_client_protocol::Error,
+    method: &str,
+    success_message: &str,
+) -> crate::Result<()> {
+    let error_msg = format!("{:?}", error);
+    let rejected = error_msg.contains("Invalid params")
+        || error_msg.contains("-32602")
+        || error_msg.contains("Method not found")
+        || error_msg.contains("-32601")
+        || error_msg.contains("capability")
+        || error_msg.contains("not supported");
+    if rejected {
+        tracing::info!("{}", success_message);
+        Ok(())
+    } else {
+        Err(crate::Error::Validation(format!(
+            "Agent rejected {} but with unexpected error: {}",
+            method, error_msg
+        )))
     }
 }
 
