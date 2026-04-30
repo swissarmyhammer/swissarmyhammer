@@ -197,7 +197,9 @@ fn avp_schema_stop() {
 /// Notification JSON deserializes, `notification_type` correct.
 #[test]
 fn avp_schema_notification() {
-    use agent_client_protocol::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
+    use agent_client_protocol::schema::{
+        ContentChunk, SessionId, SessionNotification, SessionUpdate,
+    };
 
     let content = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
     let notification = SessionNotification::new(
