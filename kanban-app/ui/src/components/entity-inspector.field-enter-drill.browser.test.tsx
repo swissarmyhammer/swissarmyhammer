@@ -603,7 +603,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       .filter((c) => c[0] === "spatial_navigate")
       .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].focusedFq).toBe(bugPill!.focusedFq);
+    expect(navCalls[0].focusedFq).toBe(bugPill!.fq);
     expect(navCalls[0].direction).toBe("right");
 
     // Synthesize the kernel's response: focus advances to the ui pill.

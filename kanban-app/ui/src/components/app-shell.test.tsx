@@ -767,9 +767,12 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
-      // Kernel echoes the focused moniker — layer-root edge.
+      // Kernel echoes the focused FQM — layer-root edge. The closure
+      // compares against the focused FQM ("k:rootLeaf") for equality,
+      // so the mock must return the same FQM string the focus state
+      // already holds.
       if (cmd === "spatial_drill_out")
-        return Promise.resolve(asSegment("ui:rootLeaf"));
+        return Promise.resolve(asFq("k:rootLeaf"));
       return defaultInvoke(cmd, args);
     });
 
@@ -919,9 +922,13 @@ describe("AppShell", () => {
 
     renderShell(<FocusedCard />);
 
-    // Drive focus through the spatial-nav kernel only.
+    // Drive focus through the spatial-nav kernel only. Under the FQM
+    // model the scope registers at `/window/task:t-bridge`, so the
+    // synthetic `focus-changed` payload must carry that exact FQM —
+    // the entity-focus bridge looks up the scope chain by the FQM the
+    // payload reports.
     await act(async () => {
-      emitFocusChanged("k:t-bridge", "task:t-bridge");
+      emitFocusChanged("/window/task:t-bridge", "task:t-bridge");
     });
 
     await act(async () => {
