@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD8X3PYXQAJN593HR11T7R4
-position_column: review
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe380
 project: spatial-nav
 title: 'Path monikers Layer 2: Tauri command boundary + React adapter FQM rewire (bun run test:browser green)'
 ---

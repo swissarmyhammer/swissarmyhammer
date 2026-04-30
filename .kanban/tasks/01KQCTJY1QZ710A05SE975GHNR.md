@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe480
 project: spatial-nav
 title: 'Inspector layer simplification: drop panel zone + InspectorFocusBridge; field zones at layer root; pin barrier and cross-panel nav with TDD'
 ---
