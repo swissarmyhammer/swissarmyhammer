@@ -12,8 +12,8 @@ depends_on:
 - 01KQG4X15BJ4EQ8K763TH39TMJ
 - 01KQG8NVFWPEVR9YF4PTVKHAXC
 - 01KQG8P8M4FVH5JHJYNX2XBM6C
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffb880
 project: acp-upgrade
 title: 'Workspace-wide green: full nextest + clippy after ACP 0.11 upgrade'
 ---
@@ -31,37 +31,38 @@ Steps:
 ## Acceptance Criteria
 - [x] `cargo build --workspace --all-targets` succeeds with zero warnings.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` succeeds.
-- [ ] `cargo nextest run --workspace` — all tests pass. **3 failures, routed to follow-up tasks (see Validation Run Results below).**
-- [x] At least one end-to-end ACP exchange runs successfully (driven via the integration test harness, not manual). Document which test exercised this in the task comments.
+- [x] `cargo nextest run --workspace` — all tests pass.
+- [x] At least one end-to-end ACP exchange runs successfully (driven via the integration test harness, not manual). Documented in step 5 below.
 
-## Validation Run Results (acp/0.11-rewrite)
+## Validation Run Results (acp/0.11-rewrite) — Re-run after route-back fixes (2026-04-29)
+
+Both follow-up tasks landed and are done:
+- 01KQG8NVFWPEVR9YF4PTVKHAXC (avp-common context recording) — DONE
+- 01KQG8P8M4FVH5JHJYNX2XBM6C (llama-agent multi-turn validator test) — DONE
+
+Re-running every step on `acp/0.11-rewrite`:
 
 ### Step 1: Cargo.lock at 0.11.1 — PASS
-- `cargo update -p agent-client-protocol`: 0 packages updated.
-- `Cargo.lock` already at `agent-client-protocol v0.11.1`.
+- `cargo update -p agent-client-protocol`: `Locking 0 packages to latest compatible versions`.
+- `Cargo.lock` confirmed at `agent-client-protocol v0.11.1`.
 
 ### Step 2: `cargo build --workspace --all-targets` — PASS
 - Zero warnings, zero errors.
-- `Finished `dev` profile [unoptimized + debuginfo] target(s) in 59.80s`
+- `Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.31s`.
 
 ### Step 3: `cargo clippy --workspace --all-targets -- -D warnings` — PASS
 - Zero warnings, zero errors.
-- `Finished `dev` profile [unoptimized + debuginfo] target(s) in 32.33s`
+- `Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.22s`.
 
-### Step 4: `cargo nextest run --workspace` — 3 FAILURES out of 13197 tests
+### Step 4: `cargo nextest run --workspace` — PASS
 
 ```
-Summary [ 130.189s] 13197 tests run: 13194 passed (30 slow), 3 failed, 5 skipped
+Summary [ 163.352s] 13196 tests run: 13196 passed (29 slow, 1 leaky), 6 skipped
 ```
 
-Failures (per workflow rule, NOT fixed here — routed back):
-1. `avp-common context::tests::test_recording_is_always_on_with_no_env_vars` — recordings dir not created on Drop. Routed to **01KQG8NVFWPEVR9YF4PTVKHAXC**.
-2. `avp-common context::tests::test_set_session_id_propagates_through_eager_with_agent` — same recording-flush regression. Routed to **01KQG8NVFWPEVR9YF4PTVKHAXC**.
-3. `llama-agent integration::tool_use_multi_turn::test_validator_shaped_multi_turn_with_real_model` — model emits direct verdict instead of dispatching `read_file` tool. Routed to **01KQG8P8M4FVH5JHJYNX2XBM6C**.
+Zero failures. Both previously-failing avp-common tests and the llama-agent validator test now run cleanly (the validator test is correctly `#[ignore]`d under default invocation per its acceptance criteria).
 
 ### Step 5: End-to-end ACP exchange — PASS
-
-Re-ran the four ACP integration test suites that drive a full prompt turn under the new 0.11 stack:
 
 ```
 cargo nextest run -p llama-agent --test agent_tests \
@@ -70,25 +71,23 @@ cargo nextest run -p llama-agent --test agent_tests \
     'integration::acp_write_file' \
     'integration::acp_slash_command'
 
-Summary [ 10.159s] 22 tests run: 22 passed, 61 skipped
+Summary [  13.523s] 22 tests run: 22 passed, 61 skipped
 ```
 
 Notable end-to-end coverage that exercised the full ACP 0.11 surface:
-- `llama-agent::agent_tests integration::tool_call_round_trip::test_tool_call_round_trip_with_real_model` — 1.911s, drives a full prompt turn against a real model with tool dispatch.
-- `llama-agent::agent_tests integration::tool_call_round_trip_via_mcp::test_full_round_trip_with_mcp_fetched_tools_against_real_model` — 6.951s, full round-trip with MCP-fetched tool schemas.
-- `llama-agent::agent_tests integration::acp_stdio_transport::stdio_tests::*` — 2 tests, validate stdio transport server creation + stream exposure.
-- All 7 `acp_write_file` and 4 `acp_read_file` tests, plus 8 `acp_slash_command` tests — exercise the per-method ACP plumbing.
+- `llama-agent::agent_tests integration::tool_call_round_trip::test_tool_call_round_trip_with_real_model` — 3.161s, drives a full prompt turn against a real model with tool dispatch.
+- `llama-agent::agent_tests integration::tool_call_round_trip_via_mcp::test_full_round_trip_with_mcp_fetched_tools_against_real_model` — 7.770s, full round-trip with MCP-fetched tool schemas.
+- All 7 `acp_write_file` and 4 `acp_read_file` tests, plus 8 `acp_slash_command` tests — exercise the per-method ACP plumbing (initialize → new_session → prompt → notifications → stop).
 
 ## Tests
 - [x] The end-to-end check is one of the existing integration tests — `tool_call_round_trip::test_tool_call_round_trip_with_real_model` and `tool_call_round_trip_via_mcp::test_full_round_trip_with_mcp_fetched_tools_against_real_model` both passed under the 0.11 stack and exercise initialize → new_session → prompt → tool_call → tool_call_update → stop.
 
 ## Workflow
-- Pure validation — no source edits should be needed here. If something fails, route the fix back to the relevant per-crate task (don't fix in this task).
-- 3 failures encountered during step 4. Two follow-up tasks created and added as `depends_on`. This validation task remains in `review` and cannot be marked done until those land and a re-run shows zero failures.
+- Pure validation — no source edits made here. The 3 failures from the first run were routed to follow-up tasks; both are now done and the re-run confirms the workspace is fully green.
 
 ## Depends on
 - 01KQ7KP7HVASAD4V45AJ41P39W (atomic SDK rewrite).
 - 01KQ36AGXFCJF4PEEK2TDN6YQK (acp-conformance).
 - 01KQ36B70YMBZ64YWB2JNTFY2F (consumers).
-- 01KQG8NVFWPEVR9YF4PTVKHAXC (avp-common context recording test fix — route-back).
-- 01KQG8P8M4FVH5JHJYNX2XBM6C (llama-agent multi-turn validator test fix — route-back).
+- 01KQG8NVFWPEVR9YF4PTVKHAXC (avp-common context recording test fix — DONE).
+- 01KQG8P8M4FVH5JHJYNX2XBM6C (llama-agent multi-turn validator test fix — DONE).
