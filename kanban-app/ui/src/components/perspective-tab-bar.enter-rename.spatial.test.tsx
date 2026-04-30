@@ -202,11 +202,10 @@ import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -267,25 +266,25 @@ async function flushSetup() {
  * Drive a `focus-changed` event into the React tree as if the Rust kernel
  * had emitted one for the active window.
  *
- * The payload's `prev_key` / `next_key` mirror the kernel's emit shape
+ * The payload's `prev_fq` / `next_fq` mirror the kernel's emit shape
  * after `spatial_focus` / `spatial_navigate`. Wrapping the dispatch in
  * `act()` flushes React state updates so callers can assert against
  * post-update DOM in the next tick.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -305,7 +304,7 @@ async function fireFocusChanged({
 function renderInAppShell(extraChildren?: ReactElement) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <AppModeProvider>
             <UndoProvider>
@@ -358,16 +357,16 @@ function findDispatch(target: string):
 }
 
 /** Capture every `spatial_drill_in` call's args. */
-function spatialDrillInCalls(): Array<{ key: SpatialKey }> {
+function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** True when any registered scope has the given moniker. */
-function findScopeKey(moniker: string): SpatialKey | undefined {
-  const scope = registerScopeArgs().find((a) => a.moniker === moniker);
-  return scope?.key as SpatialKey | undefined;
+function findScopeKey(moniker: string): FullyQualifiedMoniker | undefined {
+  const scope = registerScopeArgs().find((a) => a.segment === moniker);
+  return scope?.key as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,8 +428,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
 
     await waitFor(() => {
@@ -470,8 +469,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p2Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p2Key!,
-      next_moniker: "perspective_tab:p2",
+      next_fq: p2Key!,
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
@@ -509,20 +508,20 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // the new `ui.entity.startRename: Enter` binding is scope-local and
     // does not leak to other focus contexts.
     const { container, unmount } = renderInAppShell(
-      <FocusScope moniker={asMoniker("task:01ABC")} commands={[]}>
+      <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
         <div data-testid="non-perspective-leaf">leaf</div>
       </FocusScope>,
     );
     await flushSetup();
 
     const taskKey = registerScopeArgs().find(
-      (a) => a.moniker === "task:01ABC",
-    )?.key as SpatialKey | undefined;
+      (a) => a.segment === "task:01ABC",
+    )?.key as FullyQualifiedMoniker | undefined;
     expect(taskKey).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: taskKey!,
-      next_moniker: "task:01ABC",
+      next_fq: taskKey!,
+      next_segment: asSegment("task:01ABC"),
     });
 
     await waitFor(() => {
@@ -566,8 +565,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -602,8 +601,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -637,8 +636,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -716,8 +715,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -777,8 +776,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -845,8 +844,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
@@ -918,8 +917,8 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     expect(p1Key).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(

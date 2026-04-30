@@ -145,12 +145,12 @@ vi.mock("@/lib/schema-context", () => ({
 // the zone registration and let a zero-rect bug pass.
 vi.mock("@/components/fields/field", async () => {
   const { FocusZone } = await import("@/components/focus-zone");
-  const { asMoniker } = await import("@/types/spatial");
+  const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
       const fieldName = (props.fieldDef as { field_name?: string })
         ?.field_name ?? "unknown";
-      const moniker = asMoniker(
+      const moniker = asSegment(
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
       return (
@@ -170,10 +170,10 @@ import { NavBar } from "./nav-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Wait for register effects scheduled in `useEffect` to flush. */
 async function flushSetup() {
@@ -196,17 +196,17 @@ async function flushSetup() {
  * `perspective-bar.spatial.test.tsx`.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
+  prev_fq = null,
+  next_fq = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: null,
+    prev_fq,
+    next_fq,
+    next_segment: null,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -246,10 +246,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.board-selector",
+      (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(leaf).toBeDefined();
 
@@ -339,7 +339,7 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     );
     expect(leaf).toBeDefined();
 
@@ -364,7 +364,7 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.search",
+      (a) => a.segment === "ui:navbar.search",
     );
     expect(leaf).toBeDefined();
 
@@ -389,12 +389,12 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.board-selector",
+      (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -414,12 +414,12 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     )!;
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -439,12 +439,12 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.search",
+      (a) => a.segment === "ui:navbar.search",
     )!;
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -478,10 +478,10 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     )!;
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -503,10 +503,10 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.search",
+      (a) => a.segment === "ui:navbar.search",
     )!;
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -523,10 +523,10 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.board-selector",
+      (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -552,7 +552,7 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const navbarZone = registerZoneArgs().find(
-      (a) => a.moniker === "ui:navbar",
+      (a) => a.segment === "ui:navbar",
     )!;
     const node = container.querySelector(
       "[data-moniker='ui:navbar']",
@@ -560,7 +560,7 @@ describe("NavBar — browser spatial behaviour", () => {
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_key: navbarZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: navbarZone.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(node.getAttribute("data-focused")).not.toBeNull();
@@ -618,7 +618,7 @@ describe("NavBar — browser spatial behaviour", () => {
   // zone registration is the responsibility of the Field-as-zone card
   // and is verified by that card's tests. From the navbar's side, the
   // verification is structural: the navbar zone publishes its
-  // SpatialKey via `FocusZoneContext`, so any nested `<FocusZone>` (such
+  // FullyQualifiedMoniker via `FocusZoneContext`, so any nested `<FocusZone>` (such
   // as the Field) reads that key as its `parent_zone`.
   //
   // This test confirms the navbar end of the contract: a nested
@@ -637,7 +637,7 @@ describe("NavBar — browser spatial behaviour", () => {
   // the navbar as their parent.
   // -------------------------------------------------------------------------
 
-  it("nested zones read the navbar zone's SpatialKey as their parent_zone", async () => {
+  it("nested zones read the navbar zone's FullyQualifiedMoniker as their parent_zone", async () => {
     // Use the existing render helper (mock `<Field>` is harmless because
     // we're injecting a separate zone via children, not via Field).
     // The mock for Field is module-level so we can't unmock it for one
@@ -654,13 +654,13 @@ describe("NavBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const navbarZone = registerZoneArgs().find(
-      (a) => a.moniker === "ui:navbar",
+      (a) => a.segment === "ui:navbar",
     );
     expect(navbarZone).toBeDefined();
 
     // The navbar zone's moniker must be registered as a layer-root zone
     // (parentZone === null) so descendant zones — like the
-    // percent-complete Field — discover it through `useParentZoneKey()`
+    // percent-complete Field — discover it through `useParentZoneFq()`
     // and register their own `parent_zone` against the navbar zone's
     // key. The Field-as-zone card asserts the descendant side; this
     // assertion locks in the navbar's role as the parent that
@@ -716,7 +716,7 @@ describe("NavBar — browser spatial behaviour", () => {
     };
 
     const navbarZoneEntries = registerZoneArgs().filter(
-      (a) => a.moniker === "ui:navbar",
+      (a) => a.segment === "ui:navbar",
     );
     expect(navbarZoneEntries.length).toBeGreaterThan(0);
     for (const entry of navbarZoneEntries) {
@@ -728,7 +728,7 @@ describe("NavBar — browser spatial behaviour", () => {
     }
 
     const fieldZoneEntries = registerZoneArgs().filter(
-      (a) => a.moniker === "field:board:b1.percent_complete",
+      (a) => a.segment === "field:board:b1.percent_complete",
     );
     expect(
       fieldZoneEntries.length,
@@ -748,7 +748,7 @@ describe("NavBar — browser spatial behaviour", () => {
       "ui:navbar.search",
     ] as const;
     for (const moniker of navbarLeafMonikers) {
-      const entries = registerScopeArgs().filter((a) => a.moniker === moniker);
+      const entries = registerScopeArgs().filter((a) => a.segment === moniker);
       expect(
         entries.length,
         `${moniker} leaf must register at first paint`,

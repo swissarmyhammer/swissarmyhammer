@@ -21,7 +21,7 @@
  * `inspectors-container.spatial-nav.test.tsx`:
  *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
  *   - The Tauri mocks capture `spatial_register_zone` /
- *     `spatial_register_scope` payloads so we know which `SpatialKey`
+ *     `spatial_register_scope` payloads so we know which `FullyQualifiedMoniker`
  *     each zone and pill owns.
  *   - The `listen("focus-changed", cb)` mock records the React-side
  *     handler so `fireFocusChanged(key)` can simulate the kernel
@@ -110,10 +110,10 @@ import { CommandBusyProvider, CommandScopeProvider } from "@/lib/command-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -272,19 +272,19 @@ async function flushSetup() {
  * primitive's `<div>`.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -308,10 +308,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /**
@@ -329,7 +329,7 @@ function renderInspector(entity: Entity = makeTask({ title: "Hello", tags: ["bug
   return render(
     <CommandBusyProvider>
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <TooltipProvider delayDuration={100}>
             <SchemaProvider>
               <EntityStoreProvider
@@ -373,7 +373,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
   // Click → spatial_focus dispatch
   //
   // The first half of the chain: clicking the leaf must invoke
-  // `spatial_focus` with that leaf's `SpatialKey`. The Rust kernel echoes
+  // `spatial_focus` with that leaf's `FullyQualifiedMoniker`. The Rust kernel echoes
   // back a `focus-changed` event in production; here we drive that
   // synthetically below in the second half of each test.
   // -------------------------------------------------------------------------
@@ -383,7 +383,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:task-1.title",
+      (a) => a.segment === "field:task:task-1.title",
     );
     expect(titleZone).toBeTruthy();
 
@@ -406,12 +406,12 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:task-1.tags",
+      (a) => a.segment === "field:task:task-1.tags",
     );
     expect(tagsZone).toBeTruthy();
 
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-bug",
+      (a) => a.segment === "tag:tag-bug",
     );
     expect(bugPill).toBeTruthy();
 
@@ -436,7 +436,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
   // Focus claim → visible <FocusIndicator>
   //
   // The second half of the chain: when the kernel echoes a
-  // `focus-changed` event with the leaf's `SpatialKey` as the new
+  // `focus-changed` event with the leaf's `FullyQualifiedMoniker` as the new
   // focused key, the `useFocusClaim` subscription on the matching
   // primitive flips `data-focused` and mounts a `<FocusIndicator>`
   // child. This is the user-visible affordance that was missing per the
@@ -448,7 +448,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:task-1.title",
+      (a) => a.segment === "field:task:task-1.title",
     )!;
     const titleNode = container.querySelector(
       `[data-moniker='field:task:task-1.title']`,
@@ -464,8 +464,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: titleZone.key as SpatialKey,
-      next_moniker: "field:task:task-1.title",
+      next_fq: titleZone.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:task-1.title"),
     });
 
     // The row's data-focused flips to "true" and a FocusIndicator
@@ -493,7 +493,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const progressZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:task-1.progress",
+      (a) => a.segment === "field:task:task-1.progress",
     )!;
     const progressNode = container.querySelector(
       `[data-moniker='field:task:task-1.progress']`,
@@ -504,8 +504,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: progressZone.key as SpatialKey,
-      next_moniker: "field:task:task-1.progress",
+      next_fq: progressZone.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:task-1.progress"),
     });
 
     expect(progressNode.getAttribute("data-focused")).toBe("true");
@@ -529,7 +529,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-bug",
+      (a) => a.segment === "tag:tag-bug",
     )!;
     const pillNode = container.querySelector(
       `[data-moniker='tag:tag-bug']`,
@@ -540,8 +540,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: bugPill.key as SpatialKey,
-      next_moniker: "tag:tag-bug",
+      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-bug"),
     });
 
     expect(pillNode.getAttribute("data-focused")).toBe("true");
@@ -567,10 +567,10 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:task-1.tags",
+      (a) => a.segment === "field:task:task-1.tags",
     )!;
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-bug",
+      (a) => a.segment === "tag:tag-bug",
     )!;
 
     const pillNode = container.querySelector(
@@ -583,8 +583,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     // Step 1: focus lands on the pill — indicator is on the pill, not
     // the field row.
     await fireFocusChanged({
-      next_key: bugPill.key as SpatialKey,
-      next_moniker: "tag:tag-bug",
+      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-bug"),
     });
     expect(
       pillNode.querySelector("[data-testid='focus-indicator']"),
@@ -593,9 +593,9 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
 
     // Step 2: drill-out to the field-row zone — the indicator follows.
     await fireFocusChanged({
-      prev_key: bugPill.key as SpatialKey,
-      next_key: tagsZone.key as SpatialKey,
-      next_moniker: "field:task:task-1.tags",
+      prev_fq: bugPill.key as FullyQualifiedMoniker,
+      next_fq: tagsZone.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:task-1.tags"),
     });
     expect(tagsNode.getAttribute("data-focused")).toBe("true");
     expect(

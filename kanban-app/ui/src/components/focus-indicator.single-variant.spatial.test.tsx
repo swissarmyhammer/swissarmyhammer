@@ -165,18 +165,17 @@ import { FocusScope } from "./focus-scope";
 import { FocusZone } from "./focus-zone";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Tailwind utility shim — the Vitest browser harness doesn't compile
@@ -233,17 +232,17 @@ async function flushSetup() {
 
 /** Drive a `focus-changed` event into the React tree. */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
+  prev_fq = null,
+  next_fq = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: null,
+    prev_fq,
+    next_fq,
+    next_segment: null,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -339,7 +338,7 @@ describe("FocusIndicator — single variant contract", () => {
     );
     const _scope = (
       <FocusScope
-        moniker={asMoniker("ui:test")}
+        moniker={asSegment("ui:test")}
         // @ts-expect-error focusIndicatorVariant prop has been removed.
         focusIndicatorVariant="ring"
       >
@@ -348,7 +347,7 @@ describe("FocusIndicator — single variant contract", () => {
     );
     const _zone = (
       <FocusZone
-        moniker={asMoniker("ui:test")}
+        moniker={asSegment("ui:test")}
         // @ts-expect-error focusIndicatorVariant prop has been removed.
         focusIndicatorVariant="ring"
       >
@@ -375,11 +374,11 @@ describe("FocusIndicator — single variant contract", () => {
     ] as const;
 
     for (const moniker of monikers) {
-      const leaf = registerScopeArgs().find((a) => a.moniker === moniker);
+      const leaf = registerScopeArgs().find((a) => a.segment === moniker);
       expect(leaf, `expected register call for ${moniker}`).toBeDefined();
 
       // Focus the leaf and wait for the indicator to mount.
-      await fireFocusChanged({ next_key: leaf!.key as SpatialKey });
+      await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).not.toBeNull();
       });
@@ -399,7 +398,7 @@ describe("FocusIndicator — single variant contract", () => {
       expect(cls).not.toContain("ring-ring");
 
       // Unfocus before moving on so the next iteration starts clean.
-      await fireFocusChanged({ prev_key: leaf!.key as SpatialKey });
+      await fireFocusChanged({ prev_fq: leaf!.key as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).toBeNull();
       });
@@ -437,8 +436,8 @@ describe("FocusIndicator — single variant contract", () => {
     ] as const;
 
     for (const moniker of monikers) {
-      const leaf = registerScopeArgs().find((a) => a.moniker === moniker)!;
-      await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+      const leaf = registerScopeArgs().find((a) => a.segment === moniker)!;
+      await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).not.toBeNull();
@@ -459,7 +458,7 @@ describe("FocusIndicator — single variant contract", () => {
         `${moniker} indicator left edge must be inside the viewport`,
       ).toBeGreaterThanOrEqual(0);
 
-      await fireFocusChanged({ prev_key: leaf.key as SpatialKey });
+      await fireFocusChanged({ prev_fq: leaf.key as FullyQualifiedMoniker });
       await waitFor(() => {
         expect(queryByTestId("focus-indicator")).toBeNull();
       });
@@ -481,9 +480,9 @@ describe("FocusIndicator — single variant contract", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     )!;
-    await fireFocusChanged({ next_key: leaf.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(

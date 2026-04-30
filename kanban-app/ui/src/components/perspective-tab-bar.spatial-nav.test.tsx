@@ -4,8 +4,8 @@
  * Mounts the tab bar inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
  * spatial-nav branches light up:
- *   - the tab-bar root becomes a `<FocusZone moniker={asMoniker("ui:perspective-bar")}>`
- *   - each tab becomes a `<FocusScope moniker={asMoniker(`perspective_tab:${id}`)}>` leaf
+ *   - the tab-bar root becomes a `<FocusZone moniker={asSegment("ui:perspective-bar")}>`
+ *   - each tab becomes a `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>` leaf
  *
  * The Tauri `invoke` boundary is mocked so we can inspect the
  * `spatial_register_zone` and `spatial_register_scope` calls each
@@ -128,7 +128,9 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,7 +147,7 @@ async function flushSetup() {
 function renderWithSpatialStack() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <TooltipProvider delayDuration={100}>
           <PerspectiveTabBar />
         </TooltipProvider>
@@ -199,10 +201,10 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     const calls = registerZoneCalls();
-    const barZone = calls.find((c) => c.moniker === "ui:perspective-bar");
+    const barZone = calls.find((c) => c.segment === "ui:perspective-bar");
     expect(barZone).toBeTruthy();
     expect(barZone?.parentZone).toBeNull();
-    expect(barZone?.layerKey).toBeTruthy();
+    expect(barZone?.layerFq).toBeTruthy();
 
     unmount();
   });
@@ -269,13 +271,13 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     const barZone = registerZoneCalls().find(
-      (c) => c.moniker === "ui:perspective-bar",
+      (c) => c.segment === "ui:perspective-bar",
     )!;
     const tabFocusable = registerScopeCalls().find(
-      (c) => c.moniker === "perspective_tab:p1",
+      (c) => c.segment === "perspective_tab:p1",
     )!;
     expect(tabFocusable.parentZone).toBe(barZone.key);
-    expect(tabFocusable.layerKey).toBe(barZone.layerKey);
+    expect(tabFocusable.layerFq).toBe(barZone.layerFq);
 
     unmount();
   });

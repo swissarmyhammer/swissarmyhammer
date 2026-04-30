@@ -106,7 +106,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -218,7 +220,7 @@ async function defaultInvokeImpl(
   return null;
 }
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Mount the production-shaped inspector chain via `InspectorsContainer`,
@@ -283,23 +285,15 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     await flushSetup();
     await waitFor(() => {
       expect(
-        sim.findByMonikerPrefix("field:task:T1.").length,
+        sim.findBySegmentPrefix("field:task:T1.").length,
         "fields must register before assertions run",
       ).toBeGreaterThan(0);
     });
 
     const inspectorPushes = sim.history
       .filter((h) => h.type === "push_layer")
-      .map(
-        (h) =>
-          (
-            h as {
-              type: "push_layer";
-              record: { name: string; parent: string | null; key: string };
-            }
-          ).record,
-      )
-      .filter((l) => l.name === "inspector");
+      .map((h) => h.record)
+      .filter((l) => "name" in l && l.name === "inspector");
 
     expect(
       inspectorPushes.length,
@@ -321,14 +315,14 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     const { unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMonikerPrefix("field:task:T1.").length).toBeGreaterThan(
+      expect(sim.findBySegmentPrefix("field:task:T1.").length).toBeGreaterThan(
         0,
       );
     });
 
-    const panelZones = sim.findByMonikerPrefix("panel:");
+    const panelZones = sim.findBySegmentPrefix("panel:");
     expect(
-      panelZones.map((z) => z.moniker),
+      panelZones.map((z) => z.segment),
       "no zone should register with a panel:* moniker — the panel zone is gone",
     ).toEqual([]);
     unmount();
@@ -343,12 +337,12 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     const { unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMonikerPrefix("field:task:T1.").length).toBeGreaterThan(
+      expect(sim.findBySegmentPrefix("field:task:T1.").length).toBeGreaterThan(
         0,
       );
     });
 
-    const entityScope = sim.findByMoniker("task:T1");
+    const entityScope = sim.findBySegment("task:T1");
     expect(
       entityScope,
       "InspectorFocusBridge's <FocusScope moniker={entityMoniker}> must not register — the bridge is gone",
@@ -365,37 +359,33 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     const { unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMonikerPrefix("field:task:T1.").length).toBeGreaterThan(
+      expect(sim.findBySegmentPrefix("field:task:T1.").length).toBeGreaterThan(
         0,
       );
     });
 
     const inspectorPush = sim.history
       .filter((h) => h.type === "push_layer")
-      .map(
-        (h) =>
-          (h as { type: "push_layer"; record: { name: string; key: string } })
-            .record,
-      )
-      .find((l) => l.name === "inspector");
+      .map((h) => h.record)
+      .find((l) => "name" in l && l.name === "inspector");
     expect(inspectorPush, "inspector layer must be pushed").toBeDefined();
 
-    const fields = sim.findByMonikerPrefix("field:task:T1.");
+    const fields = sim.findBySegmentPrefix("field:task:T1.");
     expect(
       fields.length,
       "at least one field zone must register",
     ).toBeGreaterThan(0);
 
-    const wrongLayer = fields.filter((f) => f.layerKey !== inspectorPush!.key);
+    const wrongLayer = fields.filter((f) => f.layerFq !== inspectorPush!.fq);
     expect(
-      wrongLayer.map((f) => ({ moniker: f.moniker, layerKey: f.layerKey })),
+      wrongLayer.map((f) => ({ moniker: f.segment, layerKey: f.layerFq })),
       "every field zone must register under the inspector layer's key",
     ).toEqual([]);
 
     const wrongParent = fields.filter((f) => f.parentZone !== null);
     expect(
       wrongParent.map((f) => ({
-        moniker: f.moniker,
+        moniker: f.segment,
         parentZone: f.parentZone,
       })),
       "every field zone must register with parentZone === null (no panel zone wrap)",
@@ -412,7 +402,7 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     const { unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMonikerPrefix("field:task:T1.").length).toBeGreaterThan(
+      expect(sim.findBySegmentPrefix("field:task:T1.").length).toBeGreaterThan(
         0,
       );
     });
@@ -421,7 +411,7 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     // every field-zone registration.
     const firstFieldRegisterIdx = sim.history.findIndex(
       (h) =>
-        h.type === "register" && h.record.moniker.startsWith("field:task:T1."),
+        h.type === "register" && h.record.segment.startsWith("field:task:T1."),
     );
     const firstInspectorPushIdx = sim.history.findIndex(
       (h) => h.type === "push_layer" && h.record.name === "inspector",

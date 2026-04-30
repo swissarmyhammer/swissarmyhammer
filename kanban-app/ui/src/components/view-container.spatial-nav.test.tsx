@@ -3,7 +3,7 @@
  *
  * Mounts the container inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<ViewSpatialZone>` lights up its `<FocusZone moniker={asMoniker("ui:view")}>`
+ * `<ViewSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:view")}>`
  * branch. The Tauri `invoke` boundary is mocked at the module level so we can
  * inspect the `spatial_register_zone` calls the zone makes on mount.
  */
@@ -91,7 +91,9 @@ import { ViewContainer } from "./view-container";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test data
@@ -139,7 +141,7 @@ async function flushSetup() {
 function renderWithSpatialStack() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <ViewContainer />
         </EntityFocusProvider>
@@ -177,10 +179,10 @@ describe("ViewContainer (spatial-nav)", () => {
     await flushSetup();
 
     const calls = registerZoneCalls();
-    const viewZone = calls.find((c) => c.moniker === "ui:view");
+    const viewZone = calls.find((c) => c.segment === "ui:view");
     expect(viewZone).toBeTruthy();
     expect(viewZone?.parentZone).toBeNull();
-    expect(viewZone?.layerKey).toBeTruthy();
+    expect(viewZone?.layerFq).toBeTruthy();
 
     unmount();
   });

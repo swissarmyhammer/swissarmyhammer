@@ -60,7 +60,9 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandBusyProvider } from "@/lib/command-scope";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const TITLE_FIELD: FieldDef = {
@@ -141,7 +143,7 @@ function FieldHarness({
   return (
     <CommandBusyProvider>
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <TooltipProvider>
             <SchemaProvider>
               <EntityStoreProvider entities={{ task: [entity] }}>
@@ -245,7 +247,7 @@ describe("Field (spatial-nav)", () => {
     await flushSetup();
 
     const zones = registerZoneCalls().filter(
-      (c) => c.moniker === "field:task:t1.title",
+      (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);
 
@@ -276,7 +278,7 @@ describe("Field (spatial-nav)", () => {
     await flushSetup();
 
     const zones = registerZoneCalls().filter(
-      (c) => c.moniker === "field:task:t1.title",
+      (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);
 
@@ -335,7 +337,7 @@ describe("Field (spatial-nav)", () => {
     await flushSetup();
 
     const zones = registerZoneCalls().filter(
-      (c) => c.moniker === "field:task:t1.title",
+      (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);
   });

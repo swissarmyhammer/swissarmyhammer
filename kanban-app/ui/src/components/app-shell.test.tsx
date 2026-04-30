@@ -8,7 +8,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
  * `useAppShellUIState` hook can read `uiState.windows?.[label]` without
  * a null-deref.
  *
- * Also tracks the moniker → SpatialKey mapping that the kernel would
+ * Also tracks the moniker → FullyQualifiedMoniker mapping that the kernel would
  * normally maintain, so `spatial_focus_by_moniker` can synthesize the
  * `focus-changed` event the React-side bridge expects. Card
  * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
@@ -74,7 +74,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
     // entity-focus bridge writes the React store. Mirrors the real
     // kernel behavior under card `01KQD0WK54G0FRD7SZVZASA9ST`: the
     // kernel resolves the moniker, advances `focus_by_window`, and
-    // emits `focus-changed` with both `next_key` and `next_moniker`.
+    // emits `focus-changed` with both `next_fq` and `next_segment`.
     //
     // The emit is queued via `queueMicrotask` to match the kernel
     // simulator's timing contract (see `test-helpers/kernel-simulator.ts`):
@@ -96,9 +96,9 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
           cb({
             payload: {
               window_label: "main",
-              prev_key: prev,
-              next_key: key,
-              next_moniker: moniker,
+              prev_fq: prev,
+              next_fq: key,
+              next_segment: moniker,
             },
           });
         }
@@ -109,7 +109,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
   if (cmd === "spatial_clear_focus") {
     // Explicit-clear counterpart of `spatial_focus_by_moniker`. The
     // kernel removes the per-window focus slot and emits
-    // `focus-changed { next_key: null, next_moniker: null }`. Mirror
+    // `focus-changed { next_fq: null, next_segment: null }`. Mirror
     // that here so the bridge flips the React store back to `null`.
     const prev = currentFocusKey.key;
     if (prev === null) {
@@ -122,9 +122,9 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
         cb({
           payload: {
             window_label: "main",
-            prev_key: prev,
-            next_key: null,
-            next_moniker: null,
+            prev_fq: prev,
+            next_fq: null,
+            next_segment: null,
           },
         });
       }
@@ -159,12 +159,15 @@ import {
   useEntityFocus,
 } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { asLayerName, asMoniker, asSpatialKey } from "@/types/spatial";
+import {
+  asFq,
+  asSegment,
+} from "@/types/spatial";
 import { useAvailableCommands } from "@/lib/command-scope";
 import { invoke } from "@tauri-apps/api/core";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Helper component that renders inside AppShell to inspect commands
@@ -185,7 +188,7 @@ function CommandInspector() {
 
 /** Render AppShell with all required parent providers.
  *
- * AppShell calls `useCurrentLayerKey()` to thread the window-root layer key
+ * AppShell calls `useEnclosingLayerFq()` to thread the window-root layer key
  * into the palette's `<FocusLayer>` (the palette portals to `document.body`,
  * so the React ancestor chain is severed at render time). The hook throws
  * outside any `<FocusLayer>`, so the test harness must mirror App.tsx's
@@ -304,8 +307,8 @@ describe("AppShell", () => {
     function FocusedCard() {
       const { setFocus } = useEntityFocus();
       return (
-        <FocusScope moniker={asMoniker("task:t1")} commands={[]}>
-          <button onClick={() => setFocus("task:t1")}>Focus Card</button>
+        <FocusScope moniker={asSegment("task:t1")} commands={[]}>
+          <button onClick={() => setFocus(asFq("task:t1"))}>Focus Card</button>
         </FocusScope>
       );
     }
@@ -355,7 +358,7 @@ describe("AppShell", () => {
       const { setFocus } = useEntityFocus();
       return (
         <FocusScope
-          moniker={asMoniker("task:test")}
+          moniker={asSegment("task:test")}
           commands={[
             {
               id: "app.dismiss",
@@ -364,7 +367,7 @@ describe("AppShell", () => {
             },
           ]}
         >
-          <button onClick={() => setFocus("task:test")}>Focus Me</button>
+          <button onClick={() => setFocus(asFq("task:test"))}>Focus Me</button>
         </FocusScope>
       );
     }
@@ -553,14 +556,14 @@ describe("AppShell", () => {
   // Drill commands route through the global CommandScope: the closures
   // read `focusedKey()` from `SpatialFocusProvider`, await the matching
   // Tauri invoke (`spatial_drill_in` / `spatial_drill_out`), and on a
-  // non-null `Moniker` result dispatch `setFocus(moniker)` (which the
+  // non-null `SegmentMoniker` result dispatch `setFocus(moniker)` (which the
   // entity focus provider in turn fans out as `ui.setFocus`).
   //
   // The tests below exercise each branch — non-null result, null
   // result, leading focus state — by:
   //   1. Setting `focus-changed` payload via the captured `listen`
   //      callback so the provider's internal `focusedKeyRef` reflects
-  //      a known focused `SpatialKey`.
+  //      a known focused `FullyQualifiedMoniker`.
   //   2. Stubbing `invoke()` to return a chosen value for the drill
   //      command under test.
   //   3. Pressing Enter / Escape and asserting the resulting
@@ -570,7 +573,7 @@ describe("AppShell", () => {
   /**
    * Push a synthetic `focus-changed` payload through the captured
    * listener so the SpatialFocusProvider records `nextKey` as the
-   * latest focused SpatialKey.
+   * latest focused FullyQualifiedMoniker.
    *
    * Tauri normally emits these from the Rust kernel after a successful
    * `spatial_focus` / `spatial_navigate`; in the test environment the
@@ -579,10 +582,10 @@ describe("AppShell", () => {
    *
    * The drill-in / drill-out tests don't care which moniker the
    * spatially-focused key resolves to — those tests gate on
-   * `focusedKeyRef`, which is keyed on the SpatialKey, not the
-   * Moniker. They pass `nextKey` straight through as `next_moniker`
+   * `focusedKeyRef`, which is keyed on the FullyQualifiedMoniker, not the
+   * SegmentMoniker. They pass `nextKey` straight through as `next_segment`
    * so the bridge in `EntityFocusProvider` (which mirrors
-   * `payload.next_moniker` into the entity-focus store) doesn't fire
+   * `payload.next_segment` into the entity-focus store) doesn't fire
    * spurious `setFocus` calls; the moniker spy in those tests asserts
    * only on `dispatch_command` payloads, not the bridge side effect.
    * The Space-on-leaf bridge test below passes a real moniker via
@@ -597,14 +600,14 @@ describe("AppShell", () => {
     cb({
       payload: {
         window_label: "main",
-        prev_key: null,
-        next_key: nextKey,
-        next_moniker: nextMoniker,
+        prev_fq: null,
+        next_fq: nextKey,
+        next_segment: nextMoniker,
       },
     });
   }
 
-  it("nav.drillIn invokes spatial_drill_in for the focused SpatialKey on Enter", async () => {
+  it("nav.drillIn invokes spatial_drill_in for the focused FullyQualifiedMoniker on Enter", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
 
@@ -621,7 +624,7 @@ describe("AppShell", () => {
     // break `useAppShellUIState`'s `uiState.windows?.[label]` read.
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_in")
-        return Promise.resolve(asMoniker("task:child"));
+        return Promise.resolve(asSegment("task:child"));
       return defaultInvoke(cmd, args);
     });
 
@@ -634,11 +637,11 @@ describe("AppShell", () => {
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).key).toBe(
-      asSpatialKey("k:zone"),
+      asFq("k:zone"),
     );
   });
 
-  it("nav.drillIn dispatches ui.setFocus when the kernel returns a Moniker", async () => {
+  it("nav.drillIn dispatches ui.setFocus when the kernel returns a SegmentMoniker", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
 
@@ -649,7 +652,7 @@ describe("AppShell", () => {
     mockInvoke.mockClear();
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_in")
-        return Promise.resolve(asMoniker("task:child"));
+        return Promise.resolve(asSegment("task:child"));
       return defaultInvoke(cmd, args);
     });
 
@@ -688,7 +691,7 @@ describe("AppShell", () => {
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       // Kernel echoes the focused moniker — semantic "stay put".
       if (cmd === "spatial_drill_in")
-        return Promise.resolve(asMoniker("ui:leaf"));
+        return Promise.resolve(asSegment("ui:leaf"));
       return defaultInvoke(cmd, args);
     });
 
@@ -708,7 +711,7 @@ describe("AppShell", () => {
     expect(dismissCall).toBeUndefined();
   });
 
-  it("nav.drillOut invokes spatial_drill_out for the focused SpatialKey on Escape", async () => {
+  it("nav.drillOut invokes spatial_drill_out for the focused FullyQualifiedMoniker on Escape", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
 
@@ -719,7 +722,7 @@ describe("AppShell", () => {
     mockInvoke.mockClear();
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "spatial_drill_out")
-        return Promise.resolve(asMoniker("ui:zone"));
+        return Promise.resolve(asSegment("ui:zone"));
       return defaultInvoke(cmd, args);
     });
 
@@ -732,7 +735,7 @@ describe("AppShell", () => {
     );
     expect(drillCall).toBeTruthy();
     expect((drillCall![1] as Record<string, unknown>).key).toBe(
-      asSpatialKey("k:leaf"),
+      asFq("k:leaf"),
     );
 
     // Non-null result → setFocus, no app.dismiss.
@@ -762,7 +765,7 @@ describe("AppShell", () => {
     mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
       // Kernel echoes the focused moniker — layer-root edge.
       if (cmd === "spatial_drill_out")
-        return Promise.resolve(asMoniker("ui:rootLeaf"));
+        return Promise.resolve(asSegment("ui:rootLeaf"));
       return defaultInvoke(cmd, args);
     });
 
@@ -833,7 +836,7 @@ describe("AppShell", () => {
       const { setFocus } = useEntityFocus();
       return (
         <FocusScope
-          moniker={asMoniker("task:t-space")}
+          moniker={asSegment("task:t-space")}
           commands={[
             {
               id: "ui.inspect",
@@ -843,7 +846,7 @@ describe("AppShell", () => {
             },
           ]}
         >
-          <button onClick={() => setFocus("task:t-space")}>Focus</button>
+          <button onClick={() => setFocus(asFq("task:t-space"))}>Focus</button>
         </FocusScope>
       );
     }
@@ -869,7 +872,7 @@ describe("AppShell", () => {
   //
   // After the spatial-nav refactor, leaf clicks call `spatial_focus(key)`
   // and let the kernel emit `focus-changed`. The bridge in
-  // `EntityFocusProvider` mirrors `payload.next_moniker` into the
+  // `EntityFocusProvider` mirrors `payload.next_segment` into the
   // entity-focus store so `useFocusedScope()` — the data source the
   // global keymap handler reads via `extractScopeBindings` — stays in
   // sync. Without the bridge, Space would look like a no-op because
@@ -895,7 +898,7 @@ describe("AppShell", () => {
     function FocusedCard() {
       return (
         <FocusScope
-          moniker={asMoniker("task:t-bridge")}
+          moniker={asSegment("task:t-bridge")}
           commands={[
             {
               id: "ui.inspect",

@@ -109,7 +109,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -213,15 +215,15 @@ async function defaultInvokeImpl(
   return null;
 }
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Reads `useFocusedMoniker()` and exposes it as text for assertions.
  */
 function FocusedMonikerProbe() {
-  const { focusedMoniker } = useEntityFocus();
+  const { focusedFq } = useEntityFocus();
   return (
-    <span data-testid="focused-moniker-probe">{focusedMoniker ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
   );
 }
 
@@ -288,15 +290,15 @@ describe("Inspector layer simplification — boundary navigation", () => {
     // the navigateInShadow port has nothing to score and would always
     // return null. We post an `update_rect` for each field zone in
     // top-down order so iter 0 has real geometry.
-    const fields = sim.findByMonikerPrefix("field:task:T1.");
+    const fields = sim.findBySegmentPrefix("field:task:T1.");
     expect(fields.length).toBeGreaterThanOrEqual(2);
     const orderedNames = ["title", "status", "body"];
     orderedNames.forEach((name, idx) => {
-      const f = sim.findByMoniker(`field:task:T1.${name}`);
+      const f = sim.findBySegment(`field:task:T1.${name}`);
       if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
     });
 
-    const last = sim.findByMoniker("field:task:T1.body");
+    const last = sim.findBySegment("field:task:T1.body");
     expect(last, "body field zone must register").toBeDefined();
 
     // Seed focus on the last field via a focus-changed event.
@@ -306,9 +308,9 @@ describe("Inspector layer simplification — boundary navigation", () => {
         h({
           payload: {
             window_label: "main",
-            prev_key: null,
-            next_key: last!.key,
-            next_moniker: last!.moniker,
+            prev_fq: null,
+            next_fq: last!.fq,
+            next_segment: last!.segment,
           },
         });
       }
@@ -347,11 +349,11 @@ describe("Inspector layer simplification — boundary navigation", () => {
 
     const orderedNames = ["title", "status", "body"];
     orderedNames.forEach((name, idx) => {
-      const f = sim.findByMoniker(`field:task:T1.${name}`);
+      const f = sim.findBySegment(`field:task:T1.${name}`);
       if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
     });
 
-    const first = sim.findByMoniker("field:task:T1.title");
+    const first = sim.findBySegment("field:task:T1.title");
     expect(first, "title field zone must register").toBeDefined();
 
     const handlers = listeners.get("focus-changed") ?? [];
@@ -360,9 +362,9 @@ describe("Inspector layer simplification — boundary navigation", () => {
         h({
           payload: {
             window_label: "main",
-            prev_key: null,
-            next_key: first!.key,
-            next_moniker: first!.moniker,
+            prev_fq: null,
+            next_fq: first!.fq,
+            next_segment: first!.segment,
           },
         });
       }
@@ -398,11 +400,11 @@ describe("Inspector layer simplification — boundary navigation", () => {
 
     const orderedNames = ["title", "status", "body"];
     orderedNames.forEach((name, idx) => {
-      const f = sim.findByMoniker(`field:task:T1.${name}`);
+      const f = sim.findBySegment(`field:task:T1.${name}`);
       if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
     });
 
-    const last = sim.findByMoniker("field:task:T1.body");
+    const last = sim.findBySegment("field:task:T1.body");
     expect(last).toBeDefined();
     const handlers = listeners.get("focus-changed") ?? [];
     await act(async () => {
@@ -410,9 +412,9 @@ describe("Inspector layer simplification — boundary navigation", () => {
         h({
           payload: {
             window_label: "main",
-            prev_key: null,
-            next_key: last!.key,
-            next_moniker: last!.moniker,
+            prev_fq: null,
+            next_fq: last!.fq,
+            next_segment: last!.segment,
           },
         });
       }

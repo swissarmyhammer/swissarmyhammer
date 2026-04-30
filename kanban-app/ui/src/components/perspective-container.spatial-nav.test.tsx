@@ -4,7 +4,7 @@
  * Mounts the container inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the
  * conditional `<PerspectiveSpatialZone>` lights up its
- * `<FocusZone moniker={asMoniker("ui:perspective")}>` branch. The Tauri
+ * `<FocusZone moniker={asSegment("ui:perspective")}>` branch. The Tauri
  * `invoke` boundary is mocked so we can inspect the
  * `spatial_register_zone` calls the zone makes on mount.
  */
@@ -80,7 +80,9 @@ import { PerspectiveContainer } from "./perspective-container";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,7 +99,7 @@ async function flushSetup() {
 function renderWithSpatialStack(children: React.ReactNode = null) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <PerspectiveContainer>{children}</PerspectiveContainer>
         </EntityFocusProvider>
@@ -135,10 +137,10 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     await flushSetup();
 
     const calls = registerZoneCalls();
-    const perspectiveZone = calls.find((c) => c.moniker === "ui:perspective");
+    const perspectiveZone = calls.find((c) => c.segment === "ui:perspective");
     expect(perspectiveZone).toBeTruthy();
     expect(perspectiveZone?.parentZone).toBeNull();
-    expect(perspectiveZone?.layerKey).toBeTruthy();
+    expect(perspectiveZone?.layerFq).toBeTruthy();
 
     unmount();
   });

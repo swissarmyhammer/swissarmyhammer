@@ -64,12 +64,12 @@ describe("GridView source-level guards", () => {
   });
 
   it("wraps the grid body via FocusZone with moniker ui:grid", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asMoniker\("ui:grid"\)/);
+    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:grid"\)/);
   });
 
-  it("uses the asMoniker brand helper from @/types/spatial", () => {
+  it("uses the asSegment brand helper from @/types/spatial", () => {
     expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
-    expect(SRC).toMatch(/\basMoniker\b/);
+    expect(SRC).toMatch(/\basSegment\b/);
   });
 
   it("imports gridCellMoniker / parseGridCellMoniker from @/lib/moniker", () => {
@@ -121,10 +121,10 @@ describe("DataTable source-level guards", () => {
     expect(SRC).toMatch(/\bgridCellMoniker\b/);
   });
 
-  it("uses asMoniker on the cell moniker before passing to FocusScope", () => {
+  it("uses asSegment on the cell moniker before passing to FocusScope", () => {
     // Mirrors the convention in `nav-bar.tsx` and other call sites: the
-    // `asMoniker(...)` brand helper applies at the boundary, not inside
+    // `asSegment(...)` brand helper applies at the boundary, not inside
     // the `FocusScope` props elsewhere.
-    expect(SRC).toMatch(/asMoniker\(gridCellMoniker\(/);
+    expect(SRC).toMatch(/asSegment\(gridCellMoniker\(/);
   });
 });

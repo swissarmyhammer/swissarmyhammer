@@ -3,12 +3,12 @@
  *
  * The layer is responsible for:
  *
- *  - Minting a fresh `LayerKey` per instance (stable across re-renders).
+ *  - Minting a fresh `FullyQualifiedMoniker` per instance (stable across re-renders).
  *  - Calling `spatial_push_layer` with `(key, name, parent)` on mount.
  *  - Calling `spatial_pop_layer` on unmount.
  *  - Resolving `parent` via the (prop > ancestor context > null) chain.
  *  - Publishing its key via `FocusLayerContext` so descendants can read it.
- *  - Throwing from `useCurrentLayerKey` when called outside any layer.
+ *  - Throwing from `useEnclosingLayerFq` when called outside any layer.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -32,13 +32,17 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+import { FocusLayer } from "./focus-layer";
 import {
-  FocusLayer,
-  FocusLayerContext,
-  useCurrentLayerKey,
-} from "./focus-layer";
+  LayerFqContext,
+  useEnclosingLayerFq,
+} from "./layer-fq-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { asLayerKey, asLayerName, type LayerKey } from "@/types/spatial";
+import {
+  asFq,
+  asSegment,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 
 /** Microtask flush so the provider's `listen()` setup completes. */
 async function flushSetup() {
@@ -59,9 +63,9 @@ function lastPushArgs() {
   );
   if (calls.length === 0) throw new Error("expected spatial_push_layer call");
   return calls[calls.length - 1][1] as {
-    key: LayerKey;
+    key: FullyQualifiedMoniker;
     name: string;
-    parent: LayerKey | null;
+    parent: FullyQualifiedMoniker | null;
   };
 }
 
@@ -69,7 +73,7 @@ describe("<FocusLayer>", () => {
   it("pushes a layer with parent=null when mounted at the root", async () => {
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>{null}</FocusLayer>
+        <FocusLayer name={asSegment("window")}>{null}</FocusLayer>
       </SpatialFocusProvider>,
     );
     await flushSetup();
@@ -86,7 +90,7 @@ describe("<FocusLayer>", () => {
   it("invokes spatial_pop_layer on unmount", async () => {
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("inspector")}>{null}</FocusLayer>
+        <FocusLayer name={asSegment("inspector")}>{null}</FocusLayer>
       </SpatialFocusProvider>,
     );
     await flushSetup();
@@ -104,18 +108,18 @@ describe("<FocusLayer>", () => {
   });
 
   it("nested layers: child resolves parent from context", async () => {
-    let outerKey: LayerKey | null = null;
+    let outerKey: FullyQualifiedMoniker | null = null;
     function CaptureOuter() {
-      const k = useCurrentLayerKey();
+      const k = useEnclosingLayerFq();
       outerKey = k;
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <CaptureOuter />
-          <FocusLayer name={asLayerName("inspector")}>{null}</FocusLayer>
+          <FocusLayer name={asSegment("inspector")}>{null}</FocusLayer>
         </FocusLayer>
       </SpatialFocusProvider>,
     );
@@ -127,7 +131,7 @@ describe("<FocusLayer>", () => {
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
       .map(
-        (c) => c[1] as { key: LayerKey; name: string; parent: LayerKey | null },
+        (c) => c[1] as { key: FullyQualifiedMoniker; name: string; parent: FullyQualifiedMoniker | null },
       );
     expect(pushes).toHaveLength(2);
     expect(outerKey).not.toBeNull();
@@ -141,14 +145,14 @@ describe("<FocusLayer>", () => {
   });
 
   it("explicit parentLayerKey prop overrides the ancestor context", async () => {
-    const explicitParent = asLayerKey("explicit-parent-id");
+    const explicitParent = asFq("explicit-parent-id");
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <FocusLayer
-            name={asLayerName("dialog")}
-            parentLayerKey={explicitParent}
+            name={asSegment("dialog")}
+            parentLayerFq={explicitParent}
           >
             {null}
           </FocusLayer>
@@ -159,7 +163,7 @@ describe("<FocusLayer>", () => {
 
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
-      .map((c) => c[1] as { name: string; parent: LayerKey | null });
+      .map((c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null });
     // The inner ("dialog") layer should ignore the ancestor context.
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBe(explicitParent);
@@ -167,11 +171,11 @@ describe("<FocusLayer>", () => {
     unmount();
   });
 
-  it("explicit parentLayerKey={null} forces a root mount", async () => {
+  it("explicit parentLayerFq={null} forces a root mount", async () => {
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusLayer name={asLayerName("dialog")} parentLayerKey={null}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusLayer name={asSegment("dialog")} parentLayerFq={null}>
             {null}
           </FocusLayer>
         </FocusLayer>
@@ -181,7 +185,7 @@ describe("<FocusLayer>", () => {
 
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
-      .map((c) => c[1] as { name: string; parent: LayerKey | null });
+      .map((c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null });
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBeNull();
 
@@ -189,16 +193,16 @@ describe("<FocusLayer>", () => {
   });
 
   it("publishes the minted key via FocusLayerContext", async () => {
-    let observed: LayerKey | null = null;
+    let observed: FullyQualifiedMoniker | null = null;
     function CaptureContext() {
-      const k = useCurrentLayerKey();
+      const k = useEnclosingLayerFq();
       observed = k;
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <CaptureContext />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -220,7 +224,7 @@ describe("<FocusLayer>", () => {
 
     const { rerender, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <Bumper tick={1} />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -230,7 +234,7 @@ describe("<FocusLayer>", () => {
 
     rerender(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <Bumper tick={2} />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -264,7 +268,7 @@ describe("<FocusLayer>", () => {
 //
 // The second case is the whole reason `<FocusLayer>` exposes the
 // `parentLayerKey` prop: openers explicitly pass their own layer key
-// (read at the call site via `useCurrentLayerKey`) so the layer parent
+// (read at the call site via `useEnclosingLayerFq`) so the layer parent
 // reflects the *logical* opener regardless of how the dialog is mounted
 // in the DOM.
 // ---------------------------------------------------------------------------
@@ -277,26 +281,26 @@ describe("<FocusLayer> overlay scenarios", () => {
       .map(
         (c) =>
           c[1] as {
-            key: LayerKey;
+            key: FullyQualifiedMoniker;
             name: string;
-            parent: LayerKey | null;
+            parent: FullyQualifiedMoniker | null;
           },
       );
   }
 
   it("dialog opened from a window-rooted leaf has the window as its parent", async () => {
     // The dialog's opener — which lives directly under the window layer —
-    // captures the window's `LayerKey` from `useCurrentLayerKey()` and
+    // captures the window's `FullyQualifiedMoniker` from `useEnclosingLayerFq()` and
     // forwards it to the dialog's `<FocusLayer>` via `parentLayerKey`.
-    let openerLayerKey: LayerKey | null = null;
+    let openerLayerKey: FullyQualifiedMoniker | null = null;
     function Opener() {
-      openerLayerKey = useCurrentLayerKey();
+      openerLayerKey = useEnclosingLayerFq();
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <Opener />
           {/* The dialog renders elsewhere in the React tree (mimicking a
               portal) — but it still receives the window's layer key as
@@ -316,8 +320,8 @@ describe("<FocusLayer> overlay scenarios", () => {
     const dialog = render(
       <SpatialFocusProvider>
         <FocusLayer
-          name={asLayerName("dialog")}
-          parentLayerKey={openerLayerKey}
+          name={asSegment("dialog")}
+          parentLayerFq={openerLayerKey}
         >
           {null}
         </FocusLayer>
@@ -339,16 +343,16 @@ describe("<FocusLayer> overlay scenarios", () => {
     // explicit `parentLayerKey` keeps it logically rooted at the
     // inspector — exactly what we need for arrow-key capture and
     // `last_focused` restoration on dismiss.
-    let inspectorLayerKey: LayerKey | null = null;
+    let inspectorLayerKey: FullyQualifiedMoniker | null = null;
     function InspectorOpener() {
-      inspectorLayerKey = useCurrentLayerKey();
+      inspectorLayerKey = useEnclosingLayerFq();
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusLayer name={asLayerName("inspector")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusLayer name={asSegment("inspector")}>
             <InspectorOpener />
           </FocusLayer>
         </FocusLayer>
@@ -368,8 +372,8 @@ describe("<FocusLayer> overlay scenarios", () => {
     const dialog = render(
       <SpatialFocusProvider>
         <FocusLayer
-          name={asLayerName("dialog")}
-          parentLayerKey={inspectorLayerKey}
+          name={asSegment("dialog")}
+          parentLayerFq={inspectorLayerKey}
         >
           {null}
         </FocusLayer>
@@ -391,14 +395,14 @@ describe("<FocusLayer> overlay scenarios", () => {
     // Mirrors the `AppShell` -> `CommandPalette` topology: the palette
     // sits one level deep under the window layer, and explicitly receives
     // the window's key so the portaled overlay roots correctly.
-    let windowLayerKey: LayerKey | null = null;
+    let windowLayerKey: FullyQualifiedMoniker | null = null;
     function PaletteOpener({ open }: { open: boolean }) {
-      windowLayerKey = useCurrentLayerKey();
+      windowLayerKey = useEnclosingLayerFq();
       if (!open) return null;
       return (
         <FocusLayer
-          name={asLayerName("palette")}
-          parentLayerKey={windowLayerKey}
+          name={asSegment("palette")}
+          parentLayerFq={windowLayerKey}
         >
           {null}
         </FocusLayer>
@@ -407,7 +411,7 @@ describe("<FocusLayer> overlay scenarios", () => {
 
     const { rerender, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <PaletteOpener open={false} />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -420,7 +424,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     // Open the palette.
     rerender(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <PaletteOpener open={true} />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -434,7 +438,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     mockInvoke.mockClear();
     rerender(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <PaletteOpener open={false} />
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -445,31 +449,31 @@ describe("<FocusLayer> overlay scenarios", () => {
       (c) => c[0] === "spatial_pop_layer",
     );
     expect(pops).toHaveLength(1);
-    expect((pops[0][1] as { key: LayerKey }).key).toBe(palette.key);
+    expect((pops[0][1] as { key: FullyQualifiedMoniker }).key).toBe(palette.key);
 
     unmount();
   });
 });
 
-describe("useCurrentLayerKey", () => {
+describe("useEnclosingLayerFq", () => {
   it("throws when called outside any <FocusLayer>", () => {
     // renderHook surfaces the throw; assert directly on the call.
     expect(() =>
-      renderHook(() => useCurrentLayerKey(), {
+      renderHook(() => useEnclosingLayerFq(), {
         wrapper: ({ children }) => (
           <SpatialFocusProvider>{children}</SpatialFocusProvider>
         ),
       }),
-    ).toThrow(/useCurrentLayerKey must be called inside a <FocusLayer>/);
+    ).toThrow(/useEnclosingLayerFq must be called inside a <FocusLayer>/);
   });
 
-  it("returns the LayerKey provided by FocusLayerContext directly", () => {
-    const injected = asLayerKey("injected-key");
-    const { result } = renderHook(() => useCurrentLayerKey(), {
+  it("returns the FullyQualifiedMoniker provided by LayerFqContext directly", () => {
+    const injected = asFq("injected-key");
+    const { result } = renderHook(() => useEnclosingLayerFq(), {
       wrapper: ({ children }) => (
-        <FocusLayerContext.Provider value={injected}>
+        <LayerFqContext.Provider value={injected}>
           {children}
-        </FocusLayerContext.Provider>
+        </LayerFqContext.Provider>
       ),
     });
     expect(result.current).toBe(injected);

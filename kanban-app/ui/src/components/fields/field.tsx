@@ -514,29 +514,27 @@ export function Field({
     // CommandDef shape does not support).
     const editClosure = async () => {
       // Drill into spatial children first — pills (`<FocusScope>`
-      // leaves) win over edit mode. Read the focused key + moniker
-      // off the spatial provider: the command only fires when this
-      // field zone is the focused entity, so `focusedKey()` /
-      // `focusedMoniker()` return this field's `(SpatialKey,
-      // Moniker)` pair.
+      // leaves) win over edit mode. Read the focused FQM off the
+      // spatial provider: the command only fires when this field
+      // zone is the focused entity, so `focusedFq()` returns this
+      // field's FQM.
       //
       // Under the no-silent-dropout contract the kernel always
-      // returns a moniker; we detect "no descent happened" by
-      // comparing the result to the focused moniker. Equality
+      // returns an FQM; we detect "no descent happened" by
+      // comparing the result to the focused FQM. Equality
       // means the field has no spatial children — fall through to
       // the editor.
       if (spatialActions && focusActions) {
-        const key = spatialActions.focusedKey();
-        const focusedMoniker = spatialActions.focusedMoniker();
-        if (key !== null && focusedMoniker !== null) {
-          const result = await spatialActions.drillIn(key, focusedMoniker);
-          if (result !== focusedMoniker) {
+        const focusedFq = spatialActions.focusedFq();
+        if (focusedFq !== null) {
+          const result = await spatialActions.drillIn(focusedFq, focusedFq);
+          if (result !== focusedFq) {
             focusActions.setFocus(result);
             return;
           }
         }
       }
-      // Kernel echoed the focused moniker (no spatial children) —
+      // Kernel echoed the focused FQM (no spatial children) —
       // fall through to the editor. `onEdit` is optional: a
       // read-only field with no children produces a no-op, which
       // matches the "Enter on a leaf with nothing to do" contract.

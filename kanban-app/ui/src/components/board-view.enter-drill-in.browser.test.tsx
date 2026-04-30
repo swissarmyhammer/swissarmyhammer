@@ -119,10 +119,10 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ const tasks: Entity[] = [
 let mockKeymapMode: "cua" | "vim" | "emacs" = "cua";
 
 /**
- * Tracks the moniker → SpatialKey mapping so `spatial_focus_by_moniker`
+ * Tracks the moniker → FullyQualifiedMoniker mapping so `spatial_focus_by_moniker`
  * can synthesize the kernel's `focus-changed` emit. Card
  * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
  * projection of kernel events; tests that mock `invoke` without a
@@ -264,9 +264,9 @@ async function defaultInvokeImpl(
           handler({
             payload: {
               window_label: "main",
-              prev_key: prev,
-              next_key: key,
-              next_moniker: moniker,
+              prev_fq: prev,
+              next_fq: key,
+              next_segment: moniker,
             },
           });
         }
@@ -284,9 +284,9 @@ async function defaultInvokeImpl(
         handler({
           payload: {
             window_label: "main",
-            prev_key: prev,
-            next_key: null,
-            next_moniker: null,
+            prev_fq: prev,
+            next_fq: null,
+            next_segment: null,
           },
         });
       }
@@ -311,27 +311,27 @@ async function flushSetup() {
  * Drive a `focus-changed` event into the React tree as if the Rust kernel
  * had emitted one for the active window.
  *
- * The `next_moniker` argument is REQUIRED for keystroke tests: the
+ * The `next_segment` argument is REQUIRED for keystroke tests: the
  * spatial → entity bridge in `<EntityFocusProvider>` calls
- * `actions.setFocus(payload.next_moniker)` on every focus-changed
+ * `actions.setFocus(payload.next_segment)` on every focus-changed
  * event. The entity-focus store's `focusedScope` is what AppShell's
  * `<KeybindingHandler>` walks via `extractScopeBindings` to resolve
  * scope-level command keys.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -353,7 +353,7 @@ async function fireFocusChanged({
 function renderBoardWithShell() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -395,10 +395,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ key: SpatialKey }> {
+function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -410,15 +410,15 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /**
- * Find the registered SpatialKey for a given moniker. The board zone
+ * Find the registered FullyQualifiedMoniker for a given moniker. The board zone
  * registers via `spatial_register_zone`; cards are leaves and register
  * via `spatial_register_scope`.
  */
-function keyForMoniker(moniker: string): SpatialKey | undefined {
-  const zone = registerZoneArgs().find((a) => a.moniker === moniker);
-  if (zone) return zone.key as SpatialKey;
-  const scope = registerScopeArgs().find((a) => a.moniker === moniker);
-  return scope?.key as SpatialKey | undefined;
+function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
+  const zone = registerZoneArgs().find((a) => a.segment === moniker);
+  if (zone) return zone.key as FullyQualifiedMoniker;
+  const scope = registerScopeArgs().find((a) => a.segment === moniker);
+  return scope?.key as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,8 +460,8 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // the card moniker. `extractScopeBindings` reads the focused
     // scope chain on the next keydown.
     await fireFocusChanged({
-      next_key: cardKey!,
-      next_moniker: "task:t1",
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
     });
     await flushSetup();
 
@@ -497,8 +497,8 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(cardKey).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: cardKey!,
-      next_moniker: "task:t1",
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
     });
     await flushSetup();
 
@@ -533,8 +533,8 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(cardKey).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: cardKey!,
-      next_moniker: "task:t1",
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
     });
     await flushSetup();
 
@@ -579,12 +579,12 @@ describe("BoardView — Enter drills in, not inspect", () => {
       "the col-todo column must register a spatial zone",
     ).toBeTruthy();
 
-    // Seed focus to the column zone. The bridge mirrors next_moniker
+    // Seed focus to the column zone. The bridge mirrors next_segment
     // into the entity-focus store so `extractScopeBindings` walks the
     // column's scope chain on the next Enter keydown.
     await fireFocusChanged({
-      next_key: columnKey!,
-      next_moniker: "column:col-todo",
+      next_fq: columnKey!,
+      next_segment: asSegment("column:col-todo"),
     });
     await flushSetup();
 
@@ -655,7 +655,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     const columnKey = keyForMoniker("column:col-todo");
     expect(columnKey).toBeTruthy();
-    // Capture the t2 card's SpatialKey before clearing the mock call
+    // Capture the t2 card's FullyQualifiedMoniker before clearing the mock call
     // log — its registration happened during mount.
     const t2Key = keyForMoniker("task:t2");
     expect(
@@ -664,8 +664,8 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: columnKey!,
-      next_moniker: "column:col-todo",
+      next_fq: columnKey!,
+      next_segment: asSegment("column:col-todo"),
     });
     await flushSetup();
 
@@ -706,9 +706,9 @@ describe("BoardView — Enter drills in, not inspect", () => {
     // Belt-and-suspenders: a synthetic focus-changed event for the
     // remembered card flips its data-focused on the DOM side.
     await fireFocusChanged({
-      prev_key: columnKey!,
-      next_key: t2Key!,
-      next_moniker: "task:t2",
+      prev_fq: columnKey!,
+      next_fq: t2Key!,
+      next_segment: asSegment("task:t2"),
     });
     await waitFor(() => {
       const t2Node = document.querySelector(

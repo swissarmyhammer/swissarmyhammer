@@ -22,7 +22,7 @@
  *     shaken out of the build).
  *   - Neither flips → subscription bug (e.g. the leaf's `useFocusClaim`
  *     subscription was scoped to the wrong window or layer, or the
- *     event payload's `next_key` didn't match the registered key).
+ *     event payload's `next_fq` didn't match the registered key).
  *   - Both flip but no `<FocusIndicator>` mounts → visible-bar wiring
  *     bug (e.g. `showFocusBar` was forced to `false` somewhere).
  *
@@ -37,7 +37,7 @@
  *   5. `inspect_leaf_remount_does_not_lose_focus_indicator` — the
  *      conditional-render race regression guard. The inspect leaf is
  *      gated on `{board && <FocusScope>...}`. Toggling `board` from
- *      non-null → null → non-null mints a fresh `SpatialKey` on the
+ *      non-null → null → non-null mints a fresh `FullyQualifiedMoniker` on the
  *      remounted leaf; this test asserts the kernel can still focus
  *      the new key and the indicator appears on the remounted node.
  *
@@ -178,12 +178,12 @@ vi.mock("@/lib/schema-context", () => ({
 
 vi.mock("@/components/fields/field", async () => {
   const { FocusZone } = await import("@/components/focus-zone");
-  const { asMoniker } = await import("@/types/spatial");
+  const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
       const fieldName = (props.fieldDef as { field_name?: string })
         ?.field_name ?? "unknown";
-      const moniker = asMoniker(
+      const moniker = asSegment(
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
       return (
@@ -204,10 +204,10 @@ import { NavBar } from "./nav-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Wait for register effects scheduled in `useEffect` to flush. */
 async function flushSetup() {
@@ -230,17 +230,17 @@ async function flushSetup() {
  * `nav-bar.spatial-nav.test.tsx`.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
+  prev_fq = null,
+  next_fq = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: null,
+    prev_fq,
+    next_fq,
+    next_segment: null,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -336,13 +336,13 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.board-selector",
+      (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(leaf, "board-selector leaf must register").toBeDefined();
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf!.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -374,13 +374,13 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     );
     expect(leaf, "inspect leaf must register when board is loaded").toBeDefined();
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf!.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -409,13 +409,13 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     const leaf = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.search",
+      (a) => a.segment === "ui:navbar.search",
     );
     expect(leaf, "search leaf must register").toBeDefined();
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: leaf!.key as SpatialKey });
+    await fireFocusChanged({ next_fq: leaf!.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -451,7 +451,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     const zone = registerZoneArgs().find(
-      (a) => a.moniker === "field:board:b1.percent_complete",
+      (a) => a.segment === "field:board:b1.percent_complete",
     );
     expect(
       zone,
@@ -460,7 +460,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: zone!.key as SpatialKey });
+    await fireFocusChanged({ next_fq: zone!.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -486,7 +486,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
   //
   // The inspect leaf is gated on `{board && <FocusScope>...}`. When
   // `board` flips from non-null → null → non-null, the leaf unmounts
-  // and re-mounts, minting a fresh `SpatialKey` on the new mount
+  // and re-mounts, minting a fresh `FullyQualifiedMoniker` on the new mount
   // (`<FocusScope>`'s `useRef(crypto.randomUUID())`). The kernel's
   // `focused_key` may still point at the old key after an unmount; the
   // regression guard is that focusing the **fresh** key produces a
@@ -528,11 +528,11 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     // Focus the inspect leaf on the first mount and confirm the indicator
     // appears — establishes the baseline wiring before the remount.
     const firstInspect = registerScopeArgs().find(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     );
     expect(firstInspect, "inspect leaf must register on first mount").toBeDefined();
 
-    await fireFocusChanged({ next_key: firstInspect!.key as SpatialKey });
+    await fireFocusChanged({ next_fq: firstInspect!.key as FullyQualifiedMoniker });
     await waitFor(() => {
       const node = container.querySelector(
         "[data-moniker='ui:navbar.inspect']",
@@ -545,7 +545,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     // Snapshot the count of inspect-leaf register calls so we can detect
     // the remount minted a fresh key.
     const beforeRemountInspectCount = registerScopeArgs().filter(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     ).length;
 
     // Flip board → null. The inspect leaf unmounts; the kernel still
@@ -562,7 +562,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     ).toBeNull();
 
     // Flip board back → non-null. The inspect leaf re-mounts. A fresh
-    // `<FocusScope>` mints a new SpatialKey on its `useRef`, so the
+    // `<FocusScope>` mints a new FullyQualifiedMoniker on its `useRef`, so the
     // kernel sees a new register call with a new key.
     await act(async () => {
       getByTestId("toggle-board").click();
@@ -571,7 +571,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     const allInspectRegistrations = registerScopeArgs().filter(
-      (a) => a.moniker === "ui:navbar.inspect",
+      (a) => a.segment === "ui:navbar.inspect",
     );
     expect(
       allInspectRegistrations.length,
@@ -582,14 +582,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
       allInspectRegistrations[allInspectRegistrations.length - 1];
     expect(
       remountedInspect.key,
-      "remount must mint a fresh SpatialKey distinct from the original",
+      "remount must mint a fresh FullyQualifiedMoniker distinct from the original",
     ).not.toBe(firstInspect!.key);
 
     // The user lands on the remounted leaf via `spatial_focus(newKey)`.
-    // The kernel emits `focus-changed` with `next_key = remounted.key`,
+    // The kernel emits `focus-changed` with `next_fq = remounted.key`,
     // and the new leaf's `useFocusClaim` subscription should fire,
     // mounting the indicator on the new wrapper.
-    await fireFocusChanged({ next_key: remountedInspect.key as SpatialKey });
+    await fireFocusChanged({ next_fq: remountedInspect.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(

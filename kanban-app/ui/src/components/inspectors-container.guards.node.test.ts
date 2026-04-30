@@ -53,14 +53,14 @@ describe("InspectorsContainer source-level guards", () => {
     expect(code).not.toMatch(/\buseRestoreFocus\b/);
   });
 
-  it("mounts a single inspector FocusLayer with parentLayerKey wired to useCurrentLayerKey", () => {
+  it("mounts a single inspector FocusLayer with parentLayerKey wired to useEnclosingLayerFq", () => {
     const src = readSource();
     // The inspector layer must be mounted via <FocusLayer ... name=INSPECTOR_LAYER_NAME>.
     expect(src).toMatch(/<FocusLayer\b[\s\S]*?name=\{INSPECTOR_LAYER_NAME\}/);
     // The parentLayerKey prop must be threaded through.
-    expect(src).toMatch(/parentLayerKey=\{windowLayerKey\}/);
+    expect(src).toMatch(/parentLayerFq=\{windowLayerKey\}/);
     // And `windowLayerKey` is read from the layer context, not synthesized.
-    expect(src).toMatch(/useCurrentLayerKey\s*\(\s*\)/);
+    expect(src).toMatch(/useEnclosingLayerFq\s*\(\s*\)/);
   });
 
   it("does not register a panel zone (deleted in card 01KQCTJY1QZ710A05SE975GHNR)", () => {
@@ -86,9 +86,9 @@ describe("InspectorsContainer source-level guards", () => {
     expect(code).not.toMatch(/inspector-focus-bridge/);
   });
 
-  it("uses the asLayerName brand helper (no raw string casts)", () => {
+  it("uses the asSegment brand helper (no raw string casts)", () => {
     const src = readSource();
-    // The branded layer name must come from `asLayerName(...)`.
-    expect(src).toMatch(/asLayerName\(\s*"inspector"\s*\)/);
+    // The branded layer name must come from `asSegment(...)`.
+    expect(src).toMatch(/asSegment\(\s*"inspector"\s*\)/);
   });
 });

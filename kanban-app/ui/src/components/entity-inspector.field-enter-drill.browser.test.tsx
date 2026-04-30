@@ -7,7 +7,7 @@
  * field-zone scope-level `field.edit` `CommandDef` (keys: vim Enter /
  * cua Enter) was extended to:
  *
- *   1. Read the focused field-zone `SpatialKey` from the spatial
+ *   1. Read the focused field-zone `FullyQualifiedMoniker` from the spatial
  *      provider.
  *   2. `await actions.drillIn(key)` — kernel returns the first
  *      spatial child's moniker (e.g. a pill in a badge-list field) or
@@ -35,13 +35,13 @@ type ListenCallback = (event: { payload: unknown }) => void;
 
 /**
  * Per-test storage for `spatial_drill_in` responses keyed by
- * `SpatialKey`. Tests set entries here before pressing Enter so the
+ * `FullyQualifiedMoniker`. Tests set entries here before pressing Enter so the
  * mock kernel returns the right child moniker for the focused field.
  */
 const drillInResponses = new Map<string, string | null>();
 
 /**
- * Tracks the moniker → SpatialKey mapping so `spatial_focus_by_moniker`
+ * Tracks the moniker → FullyQualifiedMoniker mapping so `spatial_focus_by_moniker`
  * can synthesize the kernel's `focus-changed` emit. Card
  * `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus store a pure
  * projection of kernel events; tests that mock `invoke` without a
@@ -123,10 +123,10 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -280,9 +280,9 @@ async function defaultInvokeImpl(
           handler({
             payload: {
               window_label: "main",
-              prev_key: prev,
-              next_key: key,
-              next_moniker: moniker,
+              prev_fq: prev,
+              next_fq: key,
+              next_segment: moniker,
             },
           });
         }
@@ -300,9 +300,9 @@ async function defaultInvokeImpl(
         handler({
           payload: {
             window_label: "main",
-            prev_key: prev,
-            next_key: null,
-            next_moniker: null,
+            prev_fq: prev,
+            next_fq: null,
+            next_segment: null,
           },
         });
       }
@@ -373,10 +373,10 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /** Filter `spatial_drill_in` calls. */
-function drillInCalls(): Array<{ key: SpatialKey }> {
+function drillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /**
@@ -384,19 +384,19 @@ function drillInCalls(): Array<{ key: SpatialKey }> {
  * kernel had emitted one for the current window.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -414,7 +414,7 @@ async function fireFocusChanged({
 function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -481,7 +481,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(tagsZone, "tags field zone must register").toBeTruthy();
 
@@ -491,8 +491,8 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // Seed focus on the tags field zone.
     await fireFocusChanged({
-      next_key: tagsZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 
@@ -572,15 +572,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     const registeredScopes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
-    const bugPill = registeredScopes.find((s) => s.moniker === "tag:tag-bug");
-    const uiPill = registeredScopes.find((s) => s.moniker === "tag:tag-ui");
+    const bugPill = registeredScopes.find((s) => s.segment === "tag:tag-bug");
+    const uiPill = registeredScopes.find((s) => s.segment === "tag:tag-ui");
     expect(bugPill, "first pill must register").toBeTruthy();
     expect(uiPill, "second pill must register").toBeTruthy();
 
     // Seed the bug pill as the focused entity (mid-drill state).
     await fireFocusChanged({
-      next_key: bugPill!.key as SpatialKey,
-      next_moniker: "tag:tag-bug",
+      next_fq: bugPill!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-bug"),
     });
     await flushSetup();
 
@@ -597,15 +597,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
     const navCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_navigate")
-      .map((c) => c[1] as { key: SpatialKey; direction: string });
+      .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
     expect(navCalls.length).toBe(1);
     expect(navCalls[0].key).toBe(bugPill!.key);
     expect(navCalls[0].direction).toBe("right");
 
     // Synthesize the kernel's response: focus advances to the ui pill.
     await fireFocusChanged({
-      next_key: uiPill!.key as SpatialKey,
-      next_moniker: "tag:tag-ui",
+      next_fq: uiPill!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-ui"),
     });
     await flushSetup();
 
@@ -641,13 +641,13 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     const registeredScopes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
-    const bugPill = registeredScopes.find((s) => s.moniker === "tag:tag-bug");
+    const bugPill = registeredScopes.find((s) => s.segment === "tag:tag-bug");
     expect(bugPill).toBeTruthy();
 
     // Seed the bug pill as the focused entity (mid-drill state).
     await fireFocusChanged({
-      next_key: bugPill!.key as SpatialKey,
-      next_moniker: "tag:tag-bug",
+      next_fq: bugPill!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-bug"),
     });
     await flushSetup();
 
@@ -669,7 +669,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // pill's key.
     const drillOutCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_drill_out")
-      .map((c) => c[1] as { key: SpatialKey });
+      .map((c) => c[1] as { key: FullyQualifiedMoniker });
     expect(drillOutCalls.length).toBe(1);
     expect(drillOutCalls[0].key).toBe(bugPill!.key);
 
@@ -705,15 +705,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     const nameZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.name",
+      (a) => a.segment === "field:task:T1.name",
     );
     expect(nameZone).toBeTruthy();
 
     // Seed focus on the name field zone (default drill-in returns
     // null — no pills).
     await fireFocusChanged({
-      next_key: nameZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.name",
+      next_fq: nameZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.name"),
     });
     await flushSetup();
 
@@ -773,14 +773,14 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     const idZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.id",
+      (a) => a.segment === "field:task:T1.id",
     );
     expect(idZone).toBeTruthy();
 
     // Seed focus on the id field zone.
     await fireFocusChanged({
-      next_key: idZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.id",
+      next_fq: idZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.id"),
     });
     await flushSetup();
 
@@ -825,15 +825,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(tagsZone, "tags field zone must register").toBeTruthy();
 
     // Default drill-in returns null (no pills registered for an empty
     // tags value). Seed focus on the tags field zone.
     await fireFocusChanged({
-      next_key: tagsZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 

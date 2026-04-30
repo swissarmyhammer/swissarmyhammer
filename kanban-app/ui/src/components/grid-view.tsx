@@ -6,7 +6,11 @@ import { useContextMenu } from "@/lib/context-menu";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useFocusActions, useFocusedMoniker } from "@/lib/entity-focus-context";
+import {
+  useFocusActions,
+  useFocusedMoniker,
+  useFocusBySegmentPath,
+} from "@/lib/entity-focus-context";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
@@ -197,16 +201,16 @@ function resolveCursorFromFocus(
 function useInitialCellFocus(
   firstCellMoniker: string | null,
   derivedCursor: { row: number; col: number } | null,
-  setFocus: (mk: string) => void,
+  focusCellSegment: (cellSegment: string) => void,
 ) {
   const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker || hasInitialFocusRef.current) return;
     if (!derivedCursor) {
-      setFocus(firstCellMoniker);
+      focusCellSegment(firstCellMoniker);
       hasInitialFocusRef.current = true;
     }
-  }, [firstCellMoniker, setFocus, derivedCursor]);
+  }, [firstCellMoniker, focusCellSegment, derivedCursor]);
 }
 
 function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
@@ -215,7 +219,17 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     setVisibleRowCount(entities.length);
   }, [entities.length]);
 
-  const { setFocus, broadcastNavCommand } = useFocusActions();
+  const { broadcastNavCommand } = useFocusActions();
+  const focusCellSegment = useFocusBySegmentPath();
+  // Adapt the multi-segment focus helper to a single-cell-segment caller —
+  // every cell-focus mutation in the grid is one segment under the grid
+  // zone (`grid_cell:R:K`).
+  const focusCell = useCallback(
+    (cellSegment: string) => {
+      focusCellSegment(asSegment(cellSegment));
+    },
+    [focusCellSegment],
+  );
   const focusedMoniker = useFocusedMoniker();
 
   // Cursor derivation: the focused moniker is the single source of truth.
@@ -265,12 +279,12 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     return gridCellMoniker(0, columns[0].field.name);
   }, [entities.length, columns]);
 
-  useInitialCellFocus(firstCellMoniker, derivedCursor, setFocus);
+  useInitialCellFocus(firstCellMoniker, derivedCursor, focusCell);
 
   return {
     setVisibleRowCount,
     grid,
-    setFocus,
+    focusCell,
     broadcastNavCommand,
     gridCellCursor,
   };
@@ -477,15 +491,15 @@ function renderGridCellEditor(
 
 function useGridCallbacks(
   columns: DataTableColumn[],
-  setFocus: (mk: string) => void,
+  focusCell: (cellSegment: string) => void,
 ) {
   const handleCellClick = useCallback(
     (row: number, col: number) => {
       const colKey = columns[col]?.field.name;
       if (!colKey) return;
-      setFocus(gridCellMoniker(row, colKey));
+      focusCell(gridCellMoniker(row, colKey));
     },
-    [columns, setFocus],
+    [columns, focusCell],
   );
 
   return {
@@ -764,7 +778,7 @@ export function GridView({ view }: GridViewProps) {
     data.entityType,
     dispatch,
   );
-  const callbacks = useGridCallbacks(data.columns, nav.setFocus);
+  const callbacks = useGridCallbacks(data.columns, nav.focusCell);
 
   // Guard on the sanitized `entityType`, not raw `view.entity_type`.
   // `useGridData` reduces invalid values to the empty string via

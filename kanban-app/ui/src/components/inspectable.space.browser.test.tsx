@@ -105,7 +105,11 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { asLayerName, asMoniker } from "@/types/spatial";
+import {
+  asFq,
+  asSegment,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,7 +126,7 @@ async function flushSetup() {
 }
 
 /**
- * Tracks the moniker → SpatialKey mapping that the kernel would normally
+ * Tracks the moniker → FullyQualifiedMoniker mapping that the kernel would normally
  * maintain. Card `01KQD0WK54G0FRD7SZVZASA9ST` made the entity-focus
  * store a pure projection of kernel events; tests that mock `invoke`
  * without a kernel simulator need this minimal stub so click-driven
@@ -196,9 +200,9 @@ async function defaultInvokeImpl(
           h({
             payload: {
               window_label: "main",
-              prev_key: prev,
-              next_key: key,
-              next_moniker: moniker,
+              prev_fq: prev,
+              next_fq: key,
+              next_segment: moniker,
             },
           });
         }
@@ -220,9 +224,9 @@ async function defaultInvokeImpl(
         h({
           payload: {
             window_label: "main",
-            prev_key: prev,
-            next_key: null,
-            next_moniker: null,
+            prev_fq: prev,
+            next_fq: null,
+            next_segment: null,
           },
         });
       }
@@ -248,7 +252,7 @@ async function defaultInvokeImpl(
 function withAppShell(ui: React.ReactElement): React.ReactElement {
   return (
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -280,7 +284,7 @@ function inspectDispatches(): Array<Record<string, unknown>> {
  * call so Space can be tested with a moniker actually selected in the
  * entity-focus store.
  */
-function FocusButton({ moniker }: { moniker: string }) {
+function FocusButton({ moniker }: { moniker: FullyQualifiedMoniker }) {
   const { setFocus } = useEntityFocus();
   return (
     <button type="button" onClick={() => setFocus(moniker)}>
@@ -314,9 +318,9 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   it("space_on_focused_inspectable_dispatches_inspect_with_wrapper_moniker", async () => {
     const { getByText, unmount } = render(
       withAppShell(
-        <Inspectable moniker={asMoniker("task:T1")}>
-          <FocusScope moniker={asMoniker("task:T1")}>
-            <FocusButton moniker="task:T1" />
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
+            <FocusButton moniker={asFq("task:T1")} />
           </FocusScope>
         </Inspectable>,
       ),
@@ -361,10 +365,10 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   it("space_on_focused_descendant_dispatches_inspect_with_nearest_inspectable_moniker", async () => {
     const { getByText, unmount } = render(
       withAppShell(
-        <Inspectable moniker={asMoniker("task:T1")}>
-          <Inspectable moniker={asMoniker("field:task:T1.title")}>
-            <FocusScope moniker={asMoniker("field:task:T1.title")}>
-              <FocusButton moniker="field:task:T1.title" />
+        <Inspectable moniker={asSegment("task:T1")}>
+          <Inspectable moniker={asSegment("field:task:T1.title")}>
+            <FocusScope moniker={asSegment("field:task:T1.title")}>
+              <FocusButton moniker={asFq("field:task:T1.title")} />
             </FocusScope>
           </Inspectable>
         </Inspectable>,
@@ -403,8 +407,8 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   it("space_inside_input_does_not_dispatch_inspect", async () => {
     const { getByTestId, unmount } = render(
       withAppShell(
-        <Inspectable moniker={asMoniker("task:T1")}>
-          <FocusScope moniker={asMoniker("task:T1")}>
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
             <input data-testid="text-input" type="text" />
           </FocusScope>
         </Inspectable>,
@@ -442,8 +446,8 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   it("space_inside_contenteditable_does_not_dispatch_inspect", async () => {
     const { getByTestId, unmount } = render(
       withAppShell(
-        <Inspectable moniker={asMoniker("task:T1")}>
-          <FocusScope moniker={asMoniker("task:T1")}>
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
             <div
               data-testid="ce-host"
               contentEditable
@@ -484,8 +488,8 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
   it("dblclick_on_inspectable_still_dispatches_inspect", async () => {
     const { getByTestId, unmount } = render(
       withAppShell(
-        <Inspectable moniker={asMoniker("task:T1")}>
-          <FocusScope moniker={asMoniker("task:T1")}>
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
             <div data-testid="card-body">card</div>
           </FocusScope>
         </Inspectable>,

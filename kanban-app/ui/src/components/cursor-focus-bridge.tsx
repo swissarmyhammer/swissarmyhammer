@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef } from "react";
 import { CommandScopeContext } from "@/lib/command-scope";
 import { useFocusActions } from "@/lib/entity-focus-context";
+import type { FullyQualifiedMoniker } from "@/types/spatial";
 
 /**
  * Renderless component that bridges a navigation cursor to entity focus.
@@ -13,25 +14,29 @@ import { useFocusActions } from "@/lib/entity-focus-context";
  * Shared by BoardView and GridView — both need identical cursor-to-focus
  * bridging behaviour.
  */
-export function CursorFocusBridge({ moniker: mk }: { moniker: string }) {
+export function CursorFocusBridge({
+  moniker: fq,
+}: {
+  moniker: FullyQualifiedMoniker;
+}) {
   const scope = useContext(CommandScopeContext);
   const { setFocus, registerScope, unregisterScope } = useFocusActions();
-  const prevMonikerRef = useRef<string | null>(null);
+  const prevFqRef = useRef<FullyQualifiedMoniker | null>(null);
 
   // Register scope — fires on any change to keep registry current
   useEffect(() => {
-    if (scope) registerScope(mk, scope);
-    return () => unregisterScope(mk);
-  }, [mk, scope, registerScope, unregisterScope]);
+    if (scope) registerScope(fq, scope);
+    return () => unregisterScope(fq);
+  }, [fq, scope, registerScope, unregisterScope]);
 
-  // Set focus only on cursor movement (moniker change), not on initial mount.
+  // Set focus only on cursor movement (FQM change), not on initial mount.
   // On mount, something else may already have focus (e.g. inspector).
   useEffect(() => {
-    if (prevMonikerRef.current !== null && prevMonikerRef.current !== mk) {
-      setFocus(mk);
+    if (prevFqRef.current !== null && prevFqRef.current !== fq) {
+      setFocus(fq);
     }
-    prevMonikerRef.current = mk;
-  }, [mk, setFocus]);
+    prevFqRef.current = fq;
+  }, [fq, setFocus]);
 
   return null;
 }

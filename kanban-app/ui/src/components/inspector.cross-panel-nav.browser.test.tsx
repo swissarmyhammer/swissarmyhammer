@@ -98,7 +98,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -210,12 +212,12 @@ async function defaultInvokeImpl(
   return null;
 }
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 function FocusedMonikerProbe() {
-  const { focusedMoniker } = useEntityFocus();
+  const { focusedFq } = useEntityFocus();
   return (
-    <span data-testid="focused-moniker-probe">{focusedMoniker ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
   );
 }
 
@@ -270,7 +272,7 @@ function stampRects(
   taskIds.forEach((tid, panelIdx) => {
     const xBase = panelIdx * 500;
     fieldNames.forEach((name, fieldIdx) => {
-      const f = sim.findByMoniker(`field:task:${tid}.${name}`);
+      const f = sim.findBySegment(`field:task:${tid}.${name}`);
       if (f)
         f.rect = {
           x: xBase,
@@ -283,7 +285,7 @@ function stampRects(
 }
 
 async function fireFocus(
-  key: import("@/types/spatial").SpatialKey,
+  key: import("@/types/spatial").FullyQualifiedMoniker,
   moniker: string,
 ) {
   const handlers = listeners.get("focus-changed") ?? [];
@@ -292,9 +294,9 @@ async function fireFocus(
       h({
         payload: {
           window_label: "main",
-          prev_key: null,
-          next_key: key,
-          next_moniker: moniker,
+          prev_fq: null,
+          next_fq: key,
+          next_segment: moniker,
         },
       });
     }
@@ -323,14 +325,14 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TA.title")).toBeDefined();
-      expect(sim.findByMoniker("field:task:TB.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TB.title")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
 
-    const aTitle = sim.findByMoniker("field:task:TA.title")!;
-    await fireFocus(aTitle.key, aTitle.moniker);
+    const aTitle = sim.findBySegment("field:task:TA.title")!;
+    await fireFocus(aTitle.fq, aTitle.segment);
     await flushSetup();
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:TA.title",
@@ -358,13 +360,13 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TB.status")).toBeDefined();
+      expect(sim.findBySegment("field:task:TB.status")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
 
-    const bStatus = sim.findByMoniker("field:task:TB.status")!;
-    await fireFocus(bStatus.key, bStatus.moniker);
+    const bStatus = sim.findBySegment("field:task:TB.status")!;
+    await fireFocus(bStatus.fq, bStatus.segment);
     await flushSetup();
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:TB.status",
@@ -392,8 +394,8 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TA.status")).toBeDefined();
-      expect(sim.findByMoniker("field:task:TB.body")).toBeDefined();
+      expect(sim.findBySegment("field:task:TA.status")).toBeDefined();
+      expect(sim.findBySegment("field:task:TB.body")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
@@ -401,8 +403,8 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     // Focus the middle field in panel A. ArrowRight must land on the
     // middle field in panel B because beam search prefers the candidate
     // closest to the source's y-center.
-    const aStatus = sim.findByMoniker("field:task:TA.status")!;
-    await fireFocus(aStatus.key, aStatus.moniker);
+    const aStatus = sim.findBySegment("field:task:TA.status")!;
+    await fireFocus(aStatus.fq, aStatus.segment);
     await flushSetup();
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:TA.status",
@@ -430,13 +432,13 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TA.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
 
-    const aTitle = sim.findByMoniker("field:task:TA.title")!;
-    await fireFocus(aTitle.key, aTitle.moniker);
+    const aTitle = sim.findBySegment("field:task:TA.title")!;
+    await fireFocus(aTitle.fq, aTitle.segment);
     await flushSetup();
 
     const observations: string[] = [];

@@ -12,7 +12,7 @@
  *    `tsc --noEmit` and the test build with it.
  *
  * The path-monikers refactor (card `01KQD6064G1C1RAXDFPJVT1F46`) collapsed
- * the legacy `SpatialKey` (UUID) and flat `Moniker` types into a single
+ * the legacy `FullyQualifiedMoniker` (UUID) and flat `SegmentMoniker` types into a single
  * fully-qualified path. Callers declare a relative `SegmentMoniker` per
  * primitive; the FQM is composed via context. The two newtypes are
  * deliberately distinct — a `SegmentMoniker` cannot be passed where a
@@ -23,8 +23,8 @@ import { describe, it, expect } from "vitest";
 import {
   asFq,
   asLayerName,
-  asPixels,
   asSegment,
+  asPixels,
   asWindowLabel,
   composeFq,
   fqLastSegment,
@@ -44,7 +44,7 @@ describe("brand helpers", () => {
     expect(asFq("/window/inspector/field:T1.title")).toBe(
       "/window/inspector/field:T1.title",
     );
-    expect(asLayerName("window")).toBe("window");
+    expect(asSegment("window")).toBe("window");
     expect(asPixels(42)).toBe(42);
   });
 

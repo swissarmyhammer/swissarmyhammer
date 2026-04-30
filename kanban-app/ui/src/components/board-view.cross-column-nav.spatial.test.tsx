@@ -100,7 +100,7 @@
  *      shadow registry, runs the in-test BeamNavStrategy port (mirroring
  *      `BeamNavStrategy::next` in `swissarmyhammer-focus/src/navigate.rs`),
  *      and emits a `focus-changed` event with the resulting
- *      `next_key` / `next_moniker` so the React tree updates as if the
+ *      `next_fq` / `next_segment` so the React tree updates as if the
  *      kernel had answered.
  *
  * The shadow registry walks the **same registration calls the production
@@ -206,7 +206,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
-import { asLayerName, type SpatialKey } from "@/types/spatial";
+import {
+  asSegment,
+  type FullyQualifiedMoniker
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -462,7 +465,7 @@ function renderBoardWithShell() {
       }}
     >
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
             <UIStateProvider>
               <AppModeProvider>
@@ -576,7 +579,7 @@ describe("BoardView — cross-column spatial navigation", () => {
    * The harness is recreated per test — each test gets a fresh shadow
    * registry and a fresh `mockInvoke` call log. Tests that need to
    * inspect the post-mount focus state read it via the harness handle
-   * (`harness.fireFocusChanged`, `harness.getRegisteredKeyByMoniker`).
+   * (`harness.fireFocusChanged`, `harness.getRegisteredFqBySegment`).
    */
   let harness: SpatialHarness;
 
@@ -611,7 +614,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     for (const taskId of taskColumnById.keys()) {
       const taskMoniker = `task:${taskId}`;
       const zoneCalls = registerZoneArgs().filter(
-        (a) => a.moniker === taskMoniker,
+        (a) => a.segment === taskMoniker,
       );
       expect(
         zoneCalls,
@@ -630,16 +633,16 @@ describe("BoardView — cross-column spatial navigation", () => {
     // mounts. This pins the column-as-zone shape the kernel test
     // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
     // (the unified-cascade successor to the old rule-2 test) assumes.
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board");
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
     expect(
       boardZone,
       "ui:board zone must register so columns can hang off it",
     ).toBeTruthy();
-    const boardKey = boardZone!.key as SpatialKey;
+    const boardKey = boardZone!.key as FullyQualifiedMoniker;
 
     for (const colId of ["colA", "colB", "colC"]) {
       const moniker = `column:${colId}`;
-      const colZone = registerZoneArgs().find((a) => a.moniker === moniker);
+      const colZone = registerZoneArgs().find((a) => a.segment === moniker);
       expect(
         colZone,
         `${moniker} must register via spatial_register_zone`,
@@ -659,7 +662,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       const taskMoniker = `task:${taskId}`;
       const colMoniker = `column:${columnId}`;
       const colZone = registerZoneArgs().find(
-        (a) => a.moniker === colMoniker,
+        (a) => a.segment === colMoniker,
       )!;
       const taskRec = findRegisterRecord(taskMoniker)!;
       expect(
@@ -672,8 +675,8 @@ describe("BoardView — cross-column spatial navigation", () => {
     // the same `layer_key`. A second layer would fragment the shadow
     // registry and make `leaves_in_layer` exclude half the candidates.
     const layerKeys = new Set<unknown>();
-    for (const a of registerZoneArgs()) layerKeys.add(a.layerKey);
-    for (const a of registerScopeArgs()) layerKeys.add(a.layerKey);
+    for (const a of registerZoneArgs()) layerKeys.add(a.layerFq);
+    for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
     for (const e of registerBatchEntries()) layerKeys.add(e.layer_key);
     expect(
       layerKeys.size,
@@ -769,14 +772,14 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A");
     expect(task1A, "task:1A must register before nav fires").toBeTruthy();
-    const task1AKey = task1A!.record.key as SpatialKey;
+    const task1AKey = task1A!.record.key as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.right`'s execute closure sees
     // task:1A's key as the focused key. Without this, the global nav
     // command short-circuits.
     await harness.fireFocusChanged({
-      next_key: task1AKey,
-      next_moniker: "task:1A",
+      next_fq: task1AKey,
+      next_segment: asSegment("task:1A"),
     });
 
     // ArrowRight is the cua binding for `nav.right`. The keymap pipeline
@@ -820,11 +823,11 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.key as SpatialKey;
+    const task1AKey = task1A.record.key as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
-      next_key: task1AKey,
-      next_moniker: "task:1A",
+      next_fq: task1AKey,
+      next_segment: asSegment("task:1A"),
     });
 
     await userEvent.keyboard("{ArrowRight}");
@@ -869,8 +872,8 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_key: task1A.record.key as SpatialKey,
-      next_moniker: "task:1A",
+      next_fq: task1A.record.key as FullyQualifiedMoniker,
+      next_segment: asSegment("task:1A"),
     });
 
     await userEvent.keyboard("l");
@@ -897,8 +900,8 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1B = findRegisterRecord("task:1B")!;
     await harness.fireFocusChanged({
-      next_key: task1B.record.key as SpatialKey,
-      next_moniker: "task:1B",
+      next_fq: task1B.record.key as FullyQualifiedMoniker,
+      next_segment: asSegment("task:1B"),
     });
 
     await userEvent.keyboard("{ArrowLeft}");
@@ -930,8 +933,8 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_key: task1A.record.key as SpatialKey,
-      next_moniker: "task:1A",
+      next_fq: task1A.record.key as FullyQualifiedMoniker,
+      next_segment: asSegment("task:1A"),
     });
 
     await userEvent.keyboard("{ArrowRight}");
@@ -976,11 +979,11 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.key as SpatialKey;
+    const task1AKey = task1A.record.key as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
-      next_key: task1AKey,
-      next_moniker: "task:1A",
+      next_fq: task1AKey,
+      next_segment: asSegment("task:1A"),
     });
 
     await userEvent.keyboard("{ArrowDown}");

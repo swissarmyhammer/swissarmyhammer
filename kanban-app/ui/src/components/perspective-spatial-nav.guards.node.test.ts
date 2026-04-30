@@ -54,19 +54,19 @@ describe("PerspectiveTabBar source-level guards", () => {
 
   it("wraps the tab-bar root via FocusZone with moniker ui:perspective-bar", () => {
     expect(SRC).toMatch(
-      /<FocusZone\s+moniker=\{asMoniker\("ui:perspective-bar"\)/,
+      /<FocusZone\s+moniker=\{asSegment\("ui:perspective-bar"\)/,
     );
   });
 
   it("wraps each tab in FocusScope with moniker perspective_tab:${id}", () => {
     expect(SRC).toMatch(
-      /<FocusScope\s+moniker=\{asMoniker\(`perspective_tab:\$\{id\}`\)/,
+      /<FocusScope\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
     );
   });
 
-  it("uses the asMoniker brand helper from @/types/spatial", () => {
+  it("uses the asSegment brand helper from @/types/spatial", () => {
     expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
-    expect(SRC).toMatch(/\basMoniker\b/);
+    expect(SRC).toMatch(/\basSegment\b/);
   });
 });
 
@@ -90,16 +90,16 @@ describe("PerspectiveContainer source-level guards", () => {
   });
 
   it("wraps the perspective body in FocusZone with moniker ui:perspective", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asMoniker\("ui:perspective"\)/);
+    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:perspective"\)/);
   });
 
   it("preserves the flex chain via className on the perspective zone", () => {
     expect(SRC).toMatch(/flex\s+flex-col\s+flex-1\s+min-h-0\s+min-w-0/);
   });
 
-  it("uses the asMoniker brand helper from @/types/spatial", () => {
+  it("uses the asSegment brand helper from @/types/spatial", () => {
     expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
-    expect(SRC).toMatch(/\basMoniker\b/);
+    expect(SRC).toMatch(/\basSegment\b/);
   });
 });
 
@@ -123,15 +123,15 @@ describe("ViewContainer source-level guards", () => {
   });
 
   it("wraps the rendered view in FocusZone with moniker ui:view", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asMoniker\("ui:view"\)/);
+    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:view"\)/);
   });
 
   it("preserves the flex chain via className on the view zone", () => {
     expect(SRC).toMatch(/flex-1\s+flex\s+flex-col\s+min-h-0\s+min-w-0/);
   });
 
-  it("uses the asMoniker brand helper from @/types/spatial", () => {
+  it("uses the asSegment brand helper from @/types/spatial", () => {
     expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
-    expect(SRC).toMatch(/\basMoniker\b/);
+    expect(SRC).toMatch(/\basSegment\b/);
   });
 });

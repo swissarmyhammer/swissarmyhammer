@@ -95,9 +95,8 @@ import {
 import { SpatialFocusProvider } from "./spatial-focus-context";
 import { type CommandScope } from "./command-scope";
 import {
-  asLayerKey,
-  asMoniker,
-  asSpatialKey,
+  asFq,
+  asSegment,
   asWindowLabel,
   type Pixels,
   type Rect,
@@ -136,10 +135,10 @@ async function seedRegistration(
   moniker: string,
 ): Promise<void> {
   await mockInvoke("spatial_register_scope", {
-    key: asSpatialKey(scopeKey),
-    moniker: asMoniker(moniker),
+    key: asFq(scopeKey),
+    moniker: asSegment(moniker),
     rect: ZERO_RECT,
-    layerKey: asLayerKey(layerKey),
+    layerKey: asFq(layerKey),
     parentZone: null,
     overrides: {},
   });
@@ -165,16 +164,16 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     await flushListenSetup();
 
     await act(async () => {
-      result.current.setFocus("task:01ABC");
+      result.current.setFocus(asFq("task:01ABC"));
       await new Promise((r) => setTimeout(r, 0));
     });
 
     // Count every IPC that targets the kernel's focus-by-moniker entry
     // point. The signature must accept a moniker; the simulator
-    // resolves it to a SpatialKey internally. The exact command name
+    // resolves it to a FullyQualifiedMoniker internally. The exact command name
     // depends on the implementation choice (Step 3) — accept either
     // `spatial_focus_by_moniker` or a `spatial_focus(key)` call where
-    // the key was looked up React-side via `findByMoniker`.
+    // the key was looked up React-side via `findBySegment`.
     const focusByMonikerCalls = mockInvoke.mock.calls.filter(
       (c) => c[0] === "spatial_focus_by_moniker",
     );
@@ -202,19 +201,19 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
     await flushListenSetup();
 
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
 
     // Fire setFocus *without* awaiting microtasks. The kernel simulator
     // will queue its emit; before the queue drains, the React store
     // must still be null — proving setFocus does not write the store
     // directly.
     act(() => {
-      result.current.setFocus("task:01ABC");
+      result.current.setFocus(asFq("task:01ABC"));
     });
 
     // Read synchronously, before any microtask flush.
     expect(
-      result.current.focusedMoniker,
+      result.current.focusedFq,
       "store must NOT update synchronously from setFocus — only the kernel event drives it",
     ).toBeNull();
 
@@ -223,8 +222,8 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(result.current.focusedMoniker).toBe("task:01ABC");
-    expect(sim.currentFocus.key).toBe("k1");
+    expect(result.current.focusedFq).toBe("task:01ABC");
+    expect(sim.currentFocus.fq).toBe("k1");
   });
 
   it("setFocus(moniker) for an unknown moniker leaves the store untouched and logs an error", async () => {
@@ -237,10 +236,10 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     await flushListenSetup();
 
     await act(async () => {
-      result.current.setFocus("task:known");
+      result.current.setFocus(asFq("task:known"));
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(result.current.focusedMoniker).toBe("task:known");
+    expect(result.current.focusedFq).toBe("task:known");
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -250,12 +249,12 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
       // emission). The React-side dispatch awaits an `Err` from
       // `spatial_focus_by_moniker` and surfaces it as console.error.
       await act(async () => {
-        result.current.setFocus("task:does-not-exist");
+        result.current.setFocus(asFq("task:does-not-exist"));
         await new Promise((r) => setTimeout(r, 0));
       });
 
       expect(
-        result.current.focusedMoniker,
+        result.current.focusedFq,
         "store must remain at its previous value when the kernel rejects the moniker",
       ).toBe("task:known");
 
@@ -295,7 +294,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
 
     // Drive the kernel; wait for the bridge.
     await act(async () => {
-      result.current.actions.setFocus("task:01ABC");
+      result.current.actions.setFocus(asFq("task:01ABC"));
       await new Promise((r) => setTimeout(r, 0));
     });
 
@@ -315,10 +314,10 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     // Drive focus to a known moniker first so we can prove the store
     // does NOT regress synchronously on `setFocus(null)`.
     await act(async () => {
-      result.current.setFocus("task:01ABC");
+      result.current.setFocus(asFq("task:01ABC"));
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(result.current.focusedMoniker).toBe("task:01ABC");
+    expect(result.current.focusedFq).toBe("task:01ABC");
 
     mockInvoke.mockClear();
 
@@ -331,7 +330,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     });
 
     expect(
-      result.current.focusedMoniker,
+      result.current.focusedFq,
       "setFocus(null) must NOT mutate the store synchronously — the store stays at its previous value until the kernel emits a clear event",
     ).toBe("task:01ABC");
 
@@ -355,7 +354,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
   });
 
   it("focusedMonikerRef.current survives a single kernel cycle without blinking through null", async () => {
@@ -386,7 +385,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     expect(captured!.current).toBeNull();
 
     await act(async () => {
-      capturedActions!.setFocus("task:01ABC");
+      capturedActions!.setFocus(asFq("task:01ABC"));
       await new Promise((r) => setTimeout(r, 0));
     });
 

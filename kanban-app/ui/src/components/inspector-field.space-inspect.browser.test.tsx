@@ -107,10 +107,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -218,19 +218,19 @@ function inspectDispatches(): Array<Record<string, unknown>> {
  * in sync.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -250,7 +250,7 @@ async function fireFocusChanged({
 function renderInspector(entity: Entity = makeTask({ title: "Hello" })) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -296,9 +296,9 @@ describe("Inspector field — Space → ui.inspect", () => {
     await flushSetup();
 
     // Find the title field's `<FocusZone>` registration so we know
-    // the SpatialKey to drive into `focus-changed`.
+    // the FullyQualifiedMoniker to drive into `focus-changed`.
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.title",
+      (a) => a.segment === "field:task:T1.title",
     );
     expect(
       titleZone,
@@ -311,8 +311,8 @@ describe("Inspector field — Space → ui.inspect", () => {
     // and `extractScopeBindings` will see the new chain on the next
     // keydown.
     await fireFocusChanged({
-      next_key: titleZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.title",
+      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
 

@@ -69,7 +69,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { FocusZone } from "./focus-zone";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { asLayerName, asMoniker } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -157,7 +159,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     // taller than the wrapper so the wrapper genuinely scrolls.
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <div
             data-testid="scroller"
             style={{
@@ -167,7 +169,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
             }}
           >
             <div style={{ height: "1000px", padding: "20px" }}>
-              <FocusZone moniker={asMoniker("ui:tracked-zone")}>
+              <FocusZone moniker={asSegment("ui:tracked-zone")}>
                 <span style={{ display: "block", padding: "20px" }}>zone</span>
               </FocusZone>
             </div>
@@ -214,7 +216,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
   it("focus_zone_rect_tracks_nested_scrollable_ancestors", async () => {
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <div
             data-testid="outer"
             style={{ height: "400px", overflowY: "auto" }}
@@ -225,7 +227,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
                 style={{ height: "200px", overflowY: "auto" }}
               >
                 <div style={{ height: "1000px", padding: "20px" }}>
-                  <FocusZone moniker={asMoniker("ui:nested-zone")}>
+                  <FocusZone moniker={asSegment("ui:nested-zone")}>
                     <span style={{ display: "block", padding: "20px" }}>
                       nested
                     </span>
@@ -287,13 +289,13 @@ describe("<FocusZone> — ancestor scroll listener", () => {
   it("focus_zone_unmount_removes_scroll_listeners", async () => {
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <div
             data-testid="scroller"
             style={{ height: "200px", overflowY: "auto" }}
           >
             <div style={{ height: "1000px" }}>
-              <FocusZone moniker={asMoniker("ui:cleanup-zone")}>
+              <FocusZone moniker={asSegment("ui:cleanup-zone")}>
                 <span style={{ display: "block", padding: "20px" }}>x</span>
               </FocusZone>
             </div>

@@ -119,7 +119,9 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -637,7 +639,7 @@ describe("EntityCard", () => {
                 <FieldUpdateProvider>
                   <UIStateProvider>
                     <SpatialFocusProvider>
-                      <FocusLayer name={asLayerName("window")}>{ui}</FocusLayer>
+                      <FocusLayer name={asSegment("window")}>{ui}</FocusLayer>
                     </SpatialFocusProvider>
                   </UIStateProvider>
                 </FieldUpdateProvider>
@@ -662,7 +664,7 @@ describe("EntityCard", () => {
       const scopeCalls = mockInvoke.mock.calls
         .filter((c) => c[0] === "spatial_register_scope")
         .map((c) => c[1] as Record<string, unknown>);
-      expect(scopeCalls.find((a) => a.moniker === "task:task-1")).toBeTruthy();
+      expect(scopeCalls.find((a) => a.segment === "task:task-1")).toBeTruthy();
     });
 
     it("does not register the card root as a FocusZone — the card is a leaf, not a zone", async () => {
@@ -680,14 +682,14 @@ describe("EntityCard", () => {
         .filter((c) => c[0] === "spatial_register_zone")
         .map((c) => c[1] as Record<string, unknown>);
       expect(
-        zoneCalls.find((a) => a.moniker === "task:task-1"),
+        zoneCalls.find((a) => a.segment === "task:task-1"),
       ).toBeUndefined();
     });
 
     it("the card scope's parent_zone follows the enclosing FocusZone (null when none, here the layer root)", async () => {
       // The card is a leaf (`<FocusScope>`) — it does NOT push a
       // `FocusZoneContext.Provider`. Its own `parentZone` is whatever
-      // `useParentZoneKey()` returns at the call site. In this isolated
+      // `useParentZoneFq()` returns at the call site. In this isolated
       // harness there is no surrounding `<FocusZone>`, so the card's
       // parent zone is null. In production the card is wrapped by a
       // `column:` `<FocusZone>` and that zone's spatial key flows
@@ -700,11 +702,11 @@ describe("EntityCard", () => {
       const cardScope = mockInvoke.mock.calls
         .filter((c) => c[0] === "spatial_register_scope")
         .map((c) => c[1] as Record<string, unknown>)
-        .find((a) => a.moniker === "task:task-1");
+        .find((a) => a.segment === "task:task-1");
       expect(cardScope).toBeTruthy();
       expect(cardScope!.parentZone).toBeNull();
       // Anchored to the window layer the FocusLayer wrapper provides.
-      expect(cardScope!.layerKey).toBeTruthy();
+      expect(cardScope!.layerFq).toBeTruthy();
     });
 
     it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {

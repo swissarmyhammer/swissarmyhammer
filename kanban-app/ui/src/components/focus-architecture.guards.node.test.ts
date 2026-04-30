@@ -288,7 +288,7 @@ describe("focus-decoration architecture", () => {
   //     `ui.inspect` from non-double-click sources (keyboard, navbar
   //     button, command-palette) are explicitly allowlisted.
   //
-  //   - Guard B: every `<Inspectable …moniker={asMoniker("<prefix>…")}>`
+  //   - Guard B: every `<Inspectable …moniker={asSegment("<prefix>…")}>`
   //     JSX hit has a prefix in ENTITY_PREFIXES — chrome cannot
   //     accidentally be wrapped in `<Inspectable>`.
   //
@@ -302,7 +302,7 @@ describe("focus-decoration architecture", () => {
   // ---------------------------------------------------------------------
 
   /**
-   * Moniker prefixes that identify real, inspectable entities. Both
+   * SegmentMoniker prefixes that identify real, inspectable entities. Both
    * Guard B (Inspectable monikers must use one of these) and Guard C
    * (entity-prefixed primitives need an Inspectable in the same file)
    * read from this list.
@@ -387,7 +387,7 @@ describe("focus-decoration architecture", () => {
 
   it("Guard B: every <Inspectable> wraps an entity-prefixed moniker", () => {
     // Walks every `*.tsx` source file under `src/`, finds every
-    // `<Inspectable …moniker={asMoniker("<prefix>…")}>` JSX hit, and
+    // `<Inspectable …moniker={asSegment("<prefix>…")}>` JSX hit, and
     // asserts the prefix is in `ENTITY_PREFIXES`. UI-chrome monikers
     // (`ui:*`, `perspective_tab:`, `cell:*`, `grid_cell:*`) cannot be
     // wrapped in `<Inspectable>` — chrome is not inspectable.
@@ -402,12 +402,12 @@ describe("focus-decoration architecture", () => {
     const ELEMENT_RE = /<Inspectable\b([\s\S]*?)(\/>|>)/g;
 
     /**
-     * Match a `moniker={asMoniker("...")}` prop with a statically-
+     * Match a `moniker={asSegment("...")}` prop with a statically-
      * readable string literal. Variables are not followed — the goal
      * is hygiene for the common case (every production call site uses
      * a literal).
      */
-    const MONIKER_RE = /moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/;
+    const MONIKER_RE = /moniker=\{\s*asSegment\(\s*[`"']([^`"']+)[`"']/;
 
     /** Match `moniker={someVar}` so we can warn rather than skip. */
     const MONIKER_VAR_RE = /moniker=\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}/;
@@ -442,7 +442,7 @@ describe("focus-decoration architecture", () => {
         }
         // `<Inspectable moniker={var}>` — accept; literal-prefix
         // checking is best-effort. The wrapping component itself
-        // accepts any `Moniker`, and call-site review during PR is
+        // accepts any `SegmentMoniker`, and call-site review during PR is
         // expected to confirm the variable resolves to an entity
         // moniker.
         const _varMatch = attrs.match(MONIKER_VAR_RE);
@@ -472,7 +472,7 @@ describe("focus-decoration architecture", () => {
     //
     // The match is on the moniker prefix-and-tail substring rather
     // than the full literal so that a `<FocusScope moniker="task:01">`
-    // and a sibling `<Inspectable moniker={asMoniker(`task:${id}`)}>`
+    // and a sibling `<Inspectable moniker={asSegment(`task:${id}`)}>`
     // (template literal that the prefix scan can't fully read) still
     // pair up. The architectural intent — "this entity wrapper is
     // accompanied by an Inspectable wrapper in the same file" — is
@@ -499,11 +499,11 @@ describe("focus-decoration architecture", () => {
     const PRIMITIVE_RE =
       /<(FocusScope|FocusZone)\b([\s\S]*?)(\/>|>)/g;
 
-    const MONIKER_RE = /moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/;
+    const MONIKER_RE = /moniker=\{\s*asSegment\(\s*[`"']([^`"']+)[`"']/;
 
-    /** Match `<Inspectable moniker={asMoniker("...")}>` literals in the file. */
+    /** Match `<Inspectable moniker={asSegment("...")}>` literals in the file. */
     const INSPECTABLE_RE =
-      /<Inspectable\b[\s\S]*?moniker=\{\s*asMoniker\(\s*[`"']([^`"']+)[`"']/g;
+      /<Inspectable\b[\s\S]*?moniker=\{\s*asSegment\(\s*[`"']([^`"']+)[`"']/g;
 
     /**
      * True when the element opener is preceded — in the original (un-

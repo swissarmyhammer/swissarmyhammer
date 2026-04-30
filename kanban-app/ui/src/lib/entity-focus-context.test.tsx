@@ -16,8 +16,8 @@ import {
 import { SpatialFocusProvider } from "./spatial-focus-context";
 import { type CommandScope } from "./command-scope";
 import {
-  asMoniker,
-  asSpatialKey,
+  asSegment,
+  asFq,
   asWindowLabel,
   type FocusChangedPayload,
 } from "@/types/spatial";
@@ -63,26 +63,26 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 describe("useEntityFocus", () => {
   it("returns null initially", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
   });
 
   it("setFocus updates focusedMoniker", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.setFocus(asFq("task:abc"));
     });
-    expect(result.current.focusedMoniker).toBe("task:abc");
+    expect(result.current.focusedFq).toBe("task:abc");
   });
 
   it("setFocus(null) clears focus", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.setFocus(asFq("task:abc"));
     });
     act(() => {
       result.current.setFocus(null);
     });
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
   });
 
   it("throws outside provider", () => {
@@ -142,7 +142,7 @@ describe("useFocusedScope", () => {
 
     act(() => {
       result.current.focus.registerScope("task:abc", scope);
-      result.current.focus.setFocus("task:abc");
+      result.current.focus.setFocus(asFq("task:abc"));
     });
 
     expect(result.current.focusedScope).toBe(scope);
@@ -159,7 +159,7 @@ describe("useFocusedScope", () => {
     );
 
     act(() => {
-      result.current.focus.setFocus("task:missing");
+      result.current.focus.setFocus(asFq("task:missing"));
     });
     expect(result.current.focusedScope).toBeNull();
   });
@@ -188,7 +188,7 @@ describe("useIsFocused", () => {
 
     act(() => {
       result.current.focus.registerScope("task:abc", scope);
-      result.current.focus.setFocus("task:abc");
+      result.current.focus.setFocus(asFq("task:abc"));
     });
     expect(result.current.isFocused).toBe(true);
   });
@@ -217,7 +217,7 @@ describe("useIsFocused", () => {
     act(() => {
       result.current.focus.registerScope("column:col1", parentScope);
       result.current.focus.registerScope("task:abc", childScope);
-      result.current.focus.setFocus("task:abc");
+      result.current.focus.setFocus(asFq("task:abc"));
     });
     // column:col1 is an ancestor of task:abc, so it should be focused
     expect(result.current.isFocused).toBe(true);
@@ -240,7 +240,7 @@ describe("useIsFocused", () => {
 
     act(() => {
       result.current.focus.registerScope("task:abc", scope);
-      result.current.focus.setFocus("task:abc");
+      result.current.focus.setFocus(asFq("task:abc"));
     });
     expect(result.current.isFocused).toBe(false);
   });
@@ -274,7 +274,7 @@ describe("window moniker in scope chain", () => {
 
     act(() => {
       result.current.registerScope("task:abc", taskScope);
-      result.current.setFocus("task:abc");
+      result.current.setFocus(asFq("task:abc"));
     });
 
     // Wait for the async dispatch to flush
@@ -387,10 +387,10 @@ describe("useFocusActions", () => {
     const first = result.current;
 
     act(() => {
-      first.setFocus("A");
+      first.setFocus(asFq("A"));
     });
     act(() => {
-      first.setFocus("B");
+      first.setFocus(asFq("B"));
     });
     act(() => {
       first.setFocus(null);
@@ -438,7 +438,7 @@ describe("useFocusedMoniker", () => {
     expect(result.current.moniker).toBeNull();
 
     act(() => {
-      result.current.actions.setFocus("task:abc");
+      result.current.actions.setFocus(asFq("task:abc"));
     });
     expect(result.current.moniker).toBe("task:abc");
 
@@ -489,10 +489,10 @@ describe("useFocusedMonikerRef", () => {
     const ref = capturedRef!;
 
     act(() => {
-      capturedActions.setFocus("A");
+      capturedActions.setFocus(asFq("A"));
     });
     act(() => {
-      capturedActions.setFocus("B");
+      capturedActions.setFocus(asFq("B"));
     });
     act(() => {
       capturedActions.setFocus(null);
@@ -504,7 +504,7 @@ describe("useFocusedMonikerRef", () => {
     expect(ref.current).toBeNull();
 
     act(() => {
-      capturedActions.setFocus("final");
+      capturedActions.setFocus(asFq("final"));
     });
     expect(renderCount).toBe(beforeMoves);
     expect(ref.current).toBe("final");
@@ -566,7 +566,7 @@ describe("useIsDirectFocus", () => {
     const base = { ...counts };
 
     act(() => {
-      actions.setFocus("A");
+      actions.setFocus(asFq("A"));
     });
     // A must have re-rendered; B and C must NOT have.
     expect(counts.A).toBe(base.A + 1);
@@ -575,7 +575,7 @@ describe("useIsDirectFocus", () => {
     expect(utils.getByTestId("probe-A").textContent).toBe("yes");
 
     act(() => {
-      actions.setFocus("B");
+      actions.setFocus(asFq("B"));
     });
     // A lost focus → re-rendered. B gained focus → re-rendered. C untouched.
     expect(counts.A).toBe(base.A + 2);
@@ -589,7 +589,7 @@ describe("useIsDirectFocus", () => {
     const { getActions, utils } = renderProbes(["A", "B"]);
 
     act(() => {
-      getActions().setFocus("A");
+      getActions().setFocus(asFq("A"));
     });
     expect(utils.getByTestId("probe-A").textContent).toBe("yes");
     expect(utils.getByTestId("probe-B").textContent).toBe("no");
@@ -599,7 +599,7 @@ describe("useIsDirectFocus", () => {
     const { counts, getActions } = renderProbes(["A", "B", "C"]);
     const actions = getActions();
     act(() => {
-      actions.setFocus("A");
+      actions.setFocus(asFq("A"));
     });
     const afterSet = { ...counts };
 
@@ -630,7 +630,7 @@ describe("useEntityFocus (compat shim)", () => {
       // Shape check — every action plus the moniker must be present.
       onActions(focus);
       return (
-        <span data-testid="moniker">{focus.focusedMoniker ?? "null"}</span>
+        <span data-testid="moniker">{focus.focusedFq ?? "null"}</span>
       );
     }
 
@@ -647,13 +647,13 @@ describe("useEntityFocus (compat shim)", () => {
     const base = renderCount;
 
     act(() => {
-      actions!.setFocus("A");
+      actions!.setFocus(asFq("A"));
     });
     expect(utils.getByTestId("moniker").textContent).toBe("A");
     expect(renderCount).toBe(base + 1);
 
     act(() => {
-      actions!.setFocus("B");
+      actions!.setFocus(asFq("B"));
     });
     expect(utils.getByTestId("moniker").textContent).toBe("B");
     expect(renderCount).toBe(base + 2);
@@ -689,14 +689,14 @@ describe("broadcastNavCommand", () => {
     // touch the store — all real navigation lives in the Rust kernel.
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.setFocus(asFq("task:abc"));
     });
-    expect(result.current.focusedMoniker).toBe("task:abc");
+    expect(result.current.focusedFq).toBe("task:abc");
 
     act(() => {
       result.current.broadcastNavCommand("nav.right");
     });
-    expect(result.current.focusedMoniker).toBe("task:abc");
+    expect(result.current.focusedFq).toBe("task:abc");
   });
 });
 
@@ -705,7 +705,7 @@ describe("broadcastNavCommand", () => {
 //
 // The spatial-nav kernel emits `focus-changed` events whenever a
 // `<FocusScope>` click or arrow-key navigation moves focus, and
-// `EntityFocusProvider` is responsible for mirroring `payload.next_moniker`
+// `EntityFocusProvider` is responsible for mirroring `payload.next_segment`
 // into its own moniker-keyed `FocusStore` so downstream consumers — most
 // importantly the `focusedMonikerRef` API and the `useFocusedScope`
 // chain that drives `extractScopeBindings` — stay in sync without each
@@ -746,27 +746,27 @@ function bridgeWrapper({ children }: { children: ReactNode }) {
 }
 
 describe("EntityFocusProvider — spatial focus bridge", () => {
-  it("mirrors focus-changed.next_moniker into the entity-focus store", async () => {
+  it("mirrors focus-changed.next_segment into the entity-focus store", async () => {
     const { result } = renderHook(() => useEntityFocus(), {
       wrapper: bridgeWrapper,
     });
     await flushListenSetup();
 
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
 
     await act(async () => {
       emitFocusChanged({
         window_label: asWindowLabel("main"),
-        prev_key: null,
-        next_key: asSpatialKey("k1"),
-        next_moniker: asMoniker("task:01ABC"),
+        prev_fq: null,
+        next_fq: asFq("k1"),
+        next_segment: asSegment("task:01ABC"),
       });
     });
 
-    expect(result.current.focusedMoniker).toBe("task:01ABC");
+    expect(result.current.focusedFq).toBe("task:01ABC");
   });
 
-  it("clears focus when next_key is null", async () => {
+  it("clears focus when next_fq is null", async () => {
     const { result } = renderHook(() => useEntityFocus(), {
       wrapper: bridgeWrapper,
     });
@@ -775,23 +775,23 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
     await act(async () => {
       emitFocusChanged({
         window_label: asWindowLabel("main"),
-        prev_key: null,
-        next_key: asSpatialKey("k1"),
-        next_moniker: asMoniker("task:01ABC"),
+        prev_fq: null,
+        next_fq: asFq("k1"),
+        next_segment: asSegment("task:01ABC"),
       });
     });
-    expect(result.current.focusedMoniker).toBe("task:01ABC");
+    expect(result.current.focusedFq).toBe("task:01ABC");
 
     await act(async () => {
       emitFocusChanged({
         window_label: asWindowLabel("main"),
-        prev_key: asSpatialKey("k1"),
-        next_key: null,
-        next_moniker: null,
+        prev_fq: asFq("k1"),
+        next_fq: null,
+        next_segment: null,
       });
     });
 
-    expect(result.current.focusedMoniker).toBeNull();
+    expect(result.current.focusedFq).toBeNull();
   });
 
   it("keeps focusedMonikerRef in sync with successive spatial moves", async () => {
@@ -820,9 +820,9 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
     await act(async () => {
       emitFocusChanged({
         window_label: asWindowLabel("main"),
-        prev_key: null,
-        next_key: asSpatialKey("ka"),
-        next_moniker: asMoniker("column:todo"),
+        prev_fq: null,
+        next_fq: asFq("ka"),
+        next_segment: asSegment("column:todo"),
       });
     });
     expect(capturedRef!.current).toBe("column:todo");
@@ -830,9 +830,9 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
     await act(async () => {
       emitFocusChanged({
         window_label: asWindowLabel("main"),
-        prev_key: asSpatialKey("ka"),
-        next_key: asSpatialKey("kb"),
-        next_moniker: asMoniker("task:01"),
+        prev_fq: asFq("ka"),
+        next_fq: asFq("kb"),
+        next_segment: asSegment("task:01"),
       });
     });
     expect(capturedRef!.current).toBe("task:01");
@@ -845,8 +845,8 @@ describe("EntityFocusProvider — spatial focus bridge", () => {
     // store as before.
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
     act(() => {
-      result.current.setFocus("task:abc");
+      result.current.setFocus(asFq("task:abc"));
     });
-    expect(result.current.focusedMoniker).toBe("task:abc");
+    expect(result.current.focusedFq).toBe("task:abc");
   });
 });

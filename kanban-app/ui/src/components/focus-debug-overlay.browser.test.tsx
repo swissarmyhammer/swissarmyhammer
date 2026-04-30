@@ -66,7 +66,9 @@ import { FocusLayer } from "./focus-layer";
 import { FocusDebugOverlay, type FocusDebugKind } from "./focus-debug-overlay";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
-import { asLayerName, asMoniker } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -176,8 +178,8 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
-            <FocusZone moniker={asMoniker("ui:test")}>
+          <FocusLayer name={asSegment("window")}>
+            <FocusZone moniker={asSegment("ui:test")}>
               <span>zone-content</span>
             </FocusZone>
           </FocusLayer>
@@ -206,8 +208,8 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
-            <FocusScope moniker={asMoniker("ui:test.leaf")}>
+          <FocusLayer name={asSegment("window")}>
+            <FocusScope moniker={asSegment("ui:test.leaf")}>
               <span>scope-content</span>
             </FocusScope>
           </FocusLayer>
@@ -233,7 +235,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <span>layer-content</span>
           </FocusLayer>
         </SpatialFocusProvider>
@@ -258,9 +260,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled={false}>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
-            <FocusZone moniker={asMoniker("ui:test")}>
-              <FocusScope moniker={asMoniker("ui:test.leaf")}>
+          <FocusLayer name={asSegment("window")}>
+            <FocusZone moniker={asSegment("ui:test")}>
+              <FocusScope moniker={asSegment("ui:test.leaf")}>
                 <span>content</span>
               </FocusScope>
             </FocusZone>
@@ -279,9 +281,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   it("no_overlay_when_no_provider", async () => {
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:test")}>
-            <FocusScope moniker={asMoniker("ui:test.leaf")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:test")}>
+            <FocusScope moniker={asSegment("ui:test.leaf")}>
               <span>content</span>
             </FocusScope>
           </FocusZone>
@@ -306,9 +308,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <FocusZone
-              moniker={asMoniker("ui:positioned")}
+              moniker={asSegment("ui:positioned")}
               style={{
                 position: "fixed",
                 left: "100px",
@@ -340,9 +342,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
-            <FocusZone moniker={asMoniker("ui:zone-test")}>
-              <FocusScope moniker={asMoniker("ui:scope-test")}>
+          <FocusLayer name={asSegment("window")}>
+            <FocusZone moniker={asSegment("ui:zone-test")}>
+              <FocusScope moniker={asSegment("ui:scope-test")}>
                 <span>nested</span>
               </FocusScope>
             </FocusZone>
@@ -390,8 +392,8 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
-            <FocusScope moniker={asMoniker("ui:click-test")}>
+          <FocusLayer name={asSegment("window")}>
+            <FocusScope moniker={asSegment("ui:click-test")}>
               <span data-testid="click-target">click me</span>
             </FocusScope>
           </FocusLayer>
@@ -429,7 +431,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const { container, unmount } = render(
       <FocusDebugProvider enabled={false}>
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <span data-testid="layer-child">child</span>
           </FocusLayer>
         </SpatialFocusProvider>

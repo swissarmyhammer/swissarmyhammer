@@ -48,7 +48,7 @@
  *   - **#4 Keystrokes → navigate**: NOT covered here. Arrow / vim keys
  *     are bound at `<AppShell>` to `nav.left` / `nav.right` / `nav.up` /
  *     `nav.down`. The card itself attaches no `keydown` listener — the
- *     navigation pipeline runs on the focused `SpatialKey` from
+ *     navigation pipeline runs on the focused `FullyQualifiedMoniker` from
  *     `SpatialFocusProvider`'s ref. The app-shell side of that contract
  *     is covered in `app-shell.test.tsx`; the card side is "do nothing",
  *     verified indirectly by the legacy-nav-stripped assertions below.
@@ -60,9 +60,9 @@
  *     `ui.inspect` dispatch shape on the (i) button.
  *   - **#6 Enter → drill-in**: NOT covered here. Enter is bound at
  *     `<AppShell>` to `nav.drillIn`, which reads the focused
- *     `SpatialKey` and invokes `spatial_drill_in`. Covered in
+ *     `FullyQualifiedMoniker` and invokes `spatial_drill_in`. Covered in
  *     `app-shell.test.tsx` (`nav.drillIn invokes spatial_drill_in for
- *     the focused SpatialKey on Enter`).
+ *     the focused FullyQualifiedMoniker on Enter`).
  *   - **#7 Unmount**: `unmount unregisters the card scope`.
  *   - **#8 Legacy-nav stripped**: `no entity_focus_* / claim_when_* /
  *     broadcast_nav_* IPCs fire on click`.
@@ -148,10 +148,10 @@ import { CommandBusyProvider } from "@/lib/command-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -406,19 +406,19 @@ async function flushSetup() {
  * caller asserts against post-update DOM in the next tick.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -442,17 +442,17 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: SpatialKey }> {
+function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /**
@@ -469,7 +469,7 @@ function renderCard(entity: Entity = makeTask()) {
   return render(
     <CommandBusyProvider>
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <TooltipProvider delayDuration={100}>
             <SchemaProvider>
               <EntityStoreProvider
@@ -515,7 +515,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const cardScope = registerScopeArgs().find(
-      (a) => a.moniker === "task:task-1",
+      (a) => a.segment === "task:task-1",
     );
     expect(cardScope).toBeTruthy();
     expect(typeof cardScope!.key).toBe("string");
@@ -523,7 +523,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     // via `crypto.randomUUID()` in `<FocusScope>`. The moniker is the
     // production task moniker; the spatial key is opaque per-mount.
     expect(cardScope!.moniker).toMatch(/^task:[A-Za-z0-9-]+$/);
-    expect(cardScope!.layerKey).toBeTruthy();
+    expect(cardScope!.layerFq).toBeTruthy();
     // In this isolated harness the card has no surrounding `<FocusZone>`,
     // so its `parentZone` is null. In production the card is wrapped by
     // a `column:` zone and that zone's key flows through here.
@@ -546,7 +546,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const zoneCalls = registerZoneArgs().filter(
-      (a) => a.moniker === "task:task-1",
+      (a) => a.segment === "task:task-1",
     );
     expect(zoneCalls).toEqual([]);
 
@@ -561,9 +561,9 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const cardScope = registerScopeArgs().find(
-      (a) => a.moniker === "task:task-1",
+      (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as SpatialKey;
+    const cardKey = cardScope.key as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
 
@@ -592,9 +592,9 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const cardScope = registerScopeArgs().find(
-      (a) => a.moniker === "task:task-1",
+      (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as SpatialKey;
+    const cardKey = cardScope.key as FullyQualifiedMoniker;
 
     // Before the focus claim, the card has no FocusIndicator descendant
     // attributable to it: the card body is `data-focused === undefined`
@@ -608,8 +608,8 @@ describe("EntityCard — browser spatial behaviour", () => {
     expect(cardNode.getAttribute("data-focused")).toBeNull();
 
     await fireFocusChanged({
-      next_key: cardKey,
-      next_moniker: "task:task-1",
+      next_fq: cardKey,
+      next_segment: asSegment("task:task-1"),
     });
 
     await waitFor(() => {
@@ -630,7 +630,7 @@ describe("EntityCard — browser spatial behaviour", () => {
   // ArrowUp/Down/Left/Right and `k`/`j`/`h`/`l` are bound at `<AppShell>`
   // to `nav.up` / `nav.down` / `nav.left` / `nav.right`. The card itself
   // attaches no `keydown` listener — the navigation pipeline runs on the
-  // currently-focused `SpatialKey` from `SpatialFocusProvider`. The
+  // currently-focused `FullyQualifiedMoniker` from `SpatialFocusProvider`. The
   // app-shell side of the contract is covered by `app-shell.test.tsx`
   // (which exercises `nav.drillIn` and the surrounding global handler);
   // this test asserts the card-side contract — "do nothing" — by
@@ -700,7 +700,7 @@ describe("EntityCard — browser spatial behaviour", () => {
   // #6 Enter → drill-in (deferred — covered by app-shell.test.tsx)
   // ---------------------------------------------------------------------
   // Enter is bound at `<AppShell>` to `nav.drillIn`, which reads the
-  // focused `SpatialKey` from `SpatialFocusProvider` and invokes
+  // focused `FullyQualifiedMoniker` from `SpatialFocusProvider` and invokes
   // `spatial_drill_in`. The app-shell test pins that pipeline; the
   // card-side contract is "no own Enter listener". We assert that here.
 
@@ -735,9 +735,9 @@ describe("EntityCard — browser spatial behaviour", () => {
     await flushSetup();
 
     const cardScope = registerScopeArgs().find(
-      (a) => a.moniker === "task:task-1",
+      (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.key as SpatialKey;
+    const cardKey = cardScope.key as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -784,7 +784,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const titleZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.title",
+        (a) => a.segment === "field:task:task-1.title",
       );
       expect(titleZone).toBeTruthy();
 
@@ -795,7 +795,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       // shared parent is the column zone; in this isolated harness
       // there is no enclosing zone, so both `parentZone` slots are null.
       const cardScope = registerScopeArgs().find(
-        (a) => a.moniker === "task:task-1",
+        (a) => a.segment === "task:task-1",
       )!;
       expect(titleZone!.parentZone).toBe(cardScope.parentZone);
       expect(titleZone!.parentZone).toBeNull();
@@ -814,10 +814,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const cardScope = registerScopeArgs().find(
-        (a) => a.moniker === "task:task-1",
+        (a) => a.segment === "task:task-1",
       )!;
       const titleZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.title",
+        (a) => a.segment === "field:task:task-1.title",
       )!;
 
       mockInvoke.mockClear();
@@ -847,7 +847,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const titleZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.title",
+        (a) => a.segment === "field:task:task-1.title",
       )!;
 
       const titleNode = container.querySelector(
@@ -861,8 +861,8 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(titleNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_key: titleZone.key as SpatialKey,
-        next_moniker: "field:task:task-1.title",
+        next_fq: titleZone.key as FullyQualifiedMoniker,
+        next_segment: asSegment("field:task:task-1.title"),
       });
 
       await waitFor(() => {
@@ -882,13 +882,13 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       // The tags field zone is registered.
       const tagsZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.tags",
+        (a) => a.segment === "field:task:task-1.tags",
       );
       expect(tagsZone).toBeTruthy();
 
       // One `<FocusScope>` leaf per pill, with moniker `tag:{slug}`.
       const tagPillScopes = registerScopeArgs().filter(
-        (a) => typeof a.moniker === "string" && /^tag:/.test(a.moniker as string),
+        (a) => typeof a.segment === "string" && /^tag:/.test(a.moniker as string),
       );
       const monikers = tagPillScopes.map((a) => a.moniker as string).sort();
       expect(monikers).toEqual(["tag:bug", "tag:ui"]);
@@ -913,13 +913,13 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const cardScope = registerScopeArgs().find(
-        (a) => a.moniker === "task:task-1",
+        (a) => a.segment === "task:task-1",
       )!;
       const tagsZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.tags",
+        (a) => a.segment === "field:task:task-1.tags",
       )!;
       const bugTag = registerScopeArgs().find(
-        (a) => a.moniker === "tag:bug",
+        (a) => a.segment === "tag:bug",
       )!;
 
       mockInvoke.mockClear();
@@ -958,7 +958,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const bugTag = registerScopeArgs().find(
-        (a) => a.moniker === "tag:bug",
+        (a) => a.segment === "tag:bug",
       )!;
 
       const bugNode = container.querySelector(
@@ -971,8 +971,8 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(bugNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_key: bugTag.key as SpatialKey,
-        next_moniker: "tag:bug",
+        next_fq: bugTag.key as FullyQualifiedMoniker,
+        next_segment: asSegment("tag:bug"),
       });
 
       await waitFor(() => {
@@ -993,14 +993,14 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const assigneesZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.assignees",
+        (a) => a.segment === "field:task:task-1.assignees",
       );
       expect(assigneesZone).toBeTruthy();
 
       // One leaf per assignee, with moniker `actor:{id}`.
       const assigneePillScopes = registerScopeArgs().filter(
         (a) =>
-          typeof a.moniker === "string" && /^actor:/.test(a.moniker as string),
+          typeof a.segment === "string" && /^actor:/.test(a.moniker as string),
       );
       const monikers = assigneePillScopes
         .map((a) => a.moniker as string)
@@ -1024,13 +1024,13 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const cardScope = registerScopeArgs().find(
-        (a) => a.moniker === "task:task-1",
+        (a) => a.segment === "task:task-1",
       )!;
       const assigneesZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.assignees",
+        (a) => a.segment === "field:task:task-1.assignees",
       )!;
       const alice = registerScopeArgs().find(
-        (a) => a.moniker === "actor:alice",
+        (a) => a.segment === "actor:alice",
       )!;
 
       mockInvoke.mockClear();
@@ -1067,7 +1067,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const alice = registerScopeArgs().find(
-        (a) => a.moniker === "actor:alice",
+        (a) => a.segment === "actor:alice",
       )!;
 
       const aliceNode = container.querySelector(
@@ -1080,8 +1080,8 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(aliceNode.getAttribute("data-focused")).toBeNull();
 
       await fireFocusChanged({
-        next_key: alice.key as SpatialKey,
-        next_moniker: "actor:alice",
+        next_fq: alice.key as FullyQualifiedMoniker,
+        next_segment: asSegment("actor:alice"),
       });
 
       await waitFor(() => {
@@ -1104,7 +1104,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const statusZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.status",
+        (a) => a.segment === "field:task:task-1.status",
       );
       expect(statusZone).toBeTruthy();
 
@@ -1121,10 +1121,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       const cardScope = registerScopeArgs().find(
-        (a) => a.moniker === "task:task-1",
+        (a) => a.segment === "task:task-1",
       )!;
       const statusZone = registerZoneArgs().find(
-        (a) => a.moniker === "field:task:task-1.status",
+        (a) => a.segment === "field:task:task-1.status",
       )!;
 
       mockInvoke.mockClear();

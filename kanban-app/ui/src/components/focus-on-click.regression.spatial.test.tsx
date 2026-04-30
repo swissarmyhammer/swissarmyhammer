@@ -23,14 +23,14 @@
  *      because the spatial-focus path is the load-bearing one for visible
  *      indicator rendering — the entity-focus chrome silently degrades
  *      when missing per `<FocusScope>`'s contract.
- *   2. Captures the registered `SpatialKey` from the corresponding
+ *   2. Captures the registered `FullyQualifiedMoniker` from the corresponding
  *      `mockInvoke("spatial_register_*", ...)` call so the test fires
  *      `focus-changed` against the right key.
  *   3. Clicks the `[data-moniker="<expected>"]` element via
  *      `fireEvent.click()`.
  *   4. Asserts exactly one `mockInvoke("spatial_focus", { key })` call
  *      whose `key` matches the captured registered key.
- *   5. Fires `focus-changed` with `next_key = capturedKey` and asserts
+ *   5. Fires `focus-changed` with `next_fq = capturedKey` and asserts
  *      `[data-moniker="<expected>"]` carries `data-focused="true"` and
  *      contains a `[data-testid="focus-indicator"]` descendant.
  *   6. Negative guard: after the click, no parent zone's `spatial_focus`
@@ -241,11 +241,10 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { CommandBusyProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -253,7 +252,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Two ULID-shaped column ids for the suite's small board fixture. */
 const COLUMN_ID_A = "01ABCDEFGHJKMNPQRSTVWXYZ01";
@@ -411,19 +410,19 @@ async function flushSetup() {
  * DOM in the next tick.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -447,10 +446,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /**
@@ -482,7 +481,7 @@ function findRegistration(moniker: string): Record<string, unknown> {
  *   5. Assert exactly one `spatial_focus` call whose `key` equals the
  *      captured registered key.
  *   6. Negative guard: zero focus calls against any of `parentMonikers`.
- *   7. Fire `focus-changed { next_key: capturedKey }`.
+ *   7. Fire `focus-changed { next_fq: capturedKey }`.
  *   8. Assert the node carries `data-focused="true"` and a
  *      `[data-testid="focus-indicator"]` descendant.
  *
@@ -505,7 +504,7 @@ async function assertClickProducesIndicator({
   expect(node, `[data-moniker='${moniker}'] must be in the DOM`).not.toBeNull();
 
   const registration = findRegistration(moniker);
-  const capturedKey = registration.key as SpatialKey;
+  const capturedKey = registration.key as FullyQualifiedMoniker;
   expect(typeof capturedKey).toBe("string");
 
   // Capture the parent zones' registered keys before the click so we can
@@ -513,7 +512,7 @@ async function assertClickProducesIndicator({
   // them first because mockInvoke.mockClear() below wipes the history.
   const parentKeys = parentMonikers.map((m) => {
     const reg = findRegistration(m);
-    return reg.key as SpatialKey;
+    return reg.key as FullyQualifiedMoniker;
   });
 
   // Clear so the assertion measures only the click's IPC.
@@ -542,7 +541,7 @@ async function assertClickProducesIndicator({
   }
 
   // Drive the focus-changed event the kernel would emit after spatial_focus.
-  await fireFocusChanged({ next_key: capturedKey, next_moniker: moniker });
+  await fireFocusChanged({ next_fq: capturedKey, next_segment: moniker });
 
   // Re-resolve the node — `<FocusScope>`'s body re-renders once when its
   // claim listener fires, but `data-moniker` stays stable on the same
@@ -622,7 +621,7 @@ function renderColumnInBoard(column: Entity, tasks: Entity[]) {
           <EntityFocusProvider>
             <FieldUpdateProvider>
               <UIStateProvider>
-                <FocusZone moniker={asMoniker("ui:board")}>
+                <FocusZone moniker={asSegment("ui:board")}>
                   <ColumnView column={column} tasks={tasks} />
                 </FocusZone>
               </UIStateProvider>
@@ -779,7 +778,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // invoke mock — `findRegistration` reads from the mock's call log.
       const moniker = "perspective_tab:p1";
       const tabRegistration = findRegistration(moniker);
-      const tabKey = tabRegistration.key as SpatialKey;
+      const tabKey = tabRegistration.key as FullyQualifiedMoniker;
 
       const tabNode = container.querySelector(
         `[data-moniker='${moniker}']`,
@@ -788,7 +787,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       // Capture the bar zone's key for the negative-guard assertion.
       const barRegistration = findRegistration("ui:perspective-bar");
-      const barKey = barRegistration.key as SpatialKey;
+      const barKey = barRegistration.key as FullyQualifiedMoniker;
 
       // Click the INNER button — the user's click target. This exercises
       // the full `<button onClick={...}>` → bubble → `<FocusScope>
@@ -825,7 +824,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       ).toBeUndefined();
 
       // Drive the focus-changed event the kernel would emit.
-      await fireFocusChanged({ next_key: tabKey, next_moniker: moniker });
+      await fireFocusChanged({ next_fq: tabKey, next_segment: moniker });
 
       await waitFor(() => {
         expect(tabNode!.getAttribute("data-focused")).toBe("true");
@@ -865,7 +864,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(barNode).not.toBeNull();
 
       const barRegistration = findRegistration("ui:perspective-bar");
-      const barKey = barRegistration.key as SpatialKey;
+      const barKey = barRegistration.key as FullyQualifiedMoniker;
 
       // The bar carries `showFocusBar={false}` (it's viewport-spanning
       // chrome — see `PerspectiveBarSpatialZone` in
@@ -888,8 +887,8 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(focusCalls[0].key).toBe(barKey);
 
       await fireFocusChanged({
-        next_key: barKey,
-        next_moniker: "ui:perspective-bar",
+        next_fq: barKey,
+        next_segment: asSegment("ui:perspective-bar"),
       });
 
       await waitFor(() => {
@@ -1039,7 +1038,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(node).not.toBeNull();
 
       const registration = findRegistration(moniker);
-      const cardKey = registration.key as SpatialKey;
+      const cardKey = registration.key as FullyQualifiedMoniker;
 
       mockInvoke.mockClear();
       mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -1063,7 +1062,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // by a per-leaf field selector elsewhere — we re-check focusCalls
       // length above so any extra hop would already have failed.
 
-      await fireFocusChanged({ next_key: cardKey, next_moniker: moniker });
+      await fireFocusChanged({ next_fq: cardKey, next_segment: moniker });
 
       await waitFor(() => {
         expect(node!.getAttribute("data-focused")).toBe("true");
@@ -1095,7 +1094,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(node).not.toBeNull();
 
       const registration = findRegistration(moniker);
-      const cardKey = registration.key as SpatialKey;
+      const cardKey = registration.key as FullyQualifiedMoniker;
 
       mockInvoke.mockClear();
       mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -1110,7 +1109,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       expect(focusCalls).toHaveLength(1);
       expect(focusCalls[0].key).toBe(cardKey);
 
-      await fireFocusChanged({ next_key: cardKey, next_moniker: moniker });
+      await fireFocusChanged({ next_fq: cardKey, next_segment: moniker });
 
       await waitFor(() => {
         expect(node!.getAttribute("data-focused")).toBe("true");

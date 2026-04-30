@@ -3,7 +3,7 @@
  *
  * The zone is responsible for:
  *
- *  - Minting a fresh `SpatialKey` per instance (stable across re-renders).
+ *  - Minting a fresh `FullyQualifiedMoniker` per instance (stable across re-renders).
  *  - Calling `spatial_register_zone` on mount with the kernel-types record.
  *  - Calling `spatial_unregister_scope` on unmount.
  *  - Publishing its key via `FocusZoneContext` so descendants pick it up
@@ -33,14 +33,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-import { FocusZone, FocusZoneContext, useParentZoneKey } from "./focus-zone";
+import { FocusZone, FocusZoneContext, useParentZoneFq } from "./focus-zone";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
+  type FullyQualifiedMoniker
 } from "@/types/spatial";
 
 async function flushSetup() {
@@ -58,9 +57,9 @@ function makePayload(
 ): FocusChangedPayload {
   return {
     window_label: "main" as FocusChangedPayload["window_label"],
-    prev_key: null,
-    next_key: null,
-    next_moniker: null,
+    prev_fq: null,
+    next_fq: null,
+    next_segment: null,
     ...overrides,
   };
 }
@@ -84,8 +83,8 @@ describe("<FocusZone>", () => {
   it("registers via spatial_register_zone with branded args on mount", async () => {
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:toolbar.actions")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:toolbar.actions")}>
             <span>zone</span>
           </FocusZone>
         </FocusLayer>
@@ -101,7 +100,7 @@ describe("<FocusZone>", () => {
     });
     expect(typeof args.key).toBe("string");
     expect((args.key as string).length).toBeGreaterThan(0);
-    expect(args.layerKey).toBeTruthy();
+    expect(args.layerFq).toBeTruthy();
     expect(args.rect).toMatchObject({
       x: expect.any(Number),
       y: expect.any(Number),
@@ -115,8 +114,8 @@ describe("<FocusZone>", () => {
   it("unregisters via spatial_unregister_scope on unmount", async () => {
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")}>{null}</FocusZone>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")}>{null}</FocusZone>
         </FocusLayer>
       </SpatialFocusProvider>,
     );
@@ -134,16 +133,16 @@ describe("<FocusZone>", () => {
   });
 
   it("publishes its key via FocusZoneContext", async () => {
-    let observed: SpatialKey | null = null;
+    let observed: FullyQualifiedMoniker | null = null;
     function Capture() {
-      observed = useParentZoneKey();
+      observed = useParentZoneFq();
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")}>
             <Capture />
           </FocusZone>
         </FocusLayer>
@@ -158,18 +157,18 @@ describe("<FocusZone>", () => {
   });
 
   it("forwards parentZone from an outer FocusZone to a child register call", async () => {
-    let outerKey: SpatialKey | null = null;
+    let outerKey: FullyQualifiedMoniker | null = null;
     function CaptureOuter() {
-      outerKey = useParentZoneKey();
+      outerKey = useParentZoneFq();
       return null;
     }
 
     const { unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:outer")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:outer")}>
             <CaptureOuter />
-            <FocusZone moniker={asMoniker("ui:inner")}>{null}</FocusZone>
+            <FocusZone moniker={asSegment("ui:inner")}>{null}</FocusZone>
           </FocusZone>
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -182,8 +181,8 @@ describe("<FocusZone>", () => {
       .filter((c) => c[0] === "spatial_register_zone")
       .map((c) => c[1] as Record<string, unknown>);
     expect(registers).toHaveLength(2);
-    const outerArgs = registers.find((a) => a.moniker === "ui:outer")!;
-    const innerArgs = registers.find((a) => a.moniker === "ui:inner")!;
+    const outerArgs = registers.find((a) => a.segment === "ui:outer")!;
+    const innerArgs = registers.find((a) => a.segment === "ui:inner")!;
 
     expect(outerArgs.parentZone).toBeNull();
     expect(innerArgs.parentZone).toBe(outerKey);
@@ -194,8 +193,8 @@ describe("<FocusZone>", () => {
   it("clicks invoke spatial_focus on the zone's key", async () => {
     const { getByText, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")}>
             <span>zone-content</span>
           </FocusZone>
         </FocusLayer>
@@ -223,9 +222,9 @@ describe("<FocusZone>", () => {
     // Mirrors the long-standing `<FocusScope>` convention.
     const { getByText, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:outer")}>
-            <FocusZone moniker={asMoniker("ui:inner")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:outer")}>
+            <FocusZone moniker={asSegment("ui:inner")}>
               <span>inner-content</span>
             </FocusZone>
           </FocusZone>
@@ -239,7 +238,7 @@ describe("<FocusZone>", () => {
     const registers = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_zone")
       .map((c) => c[1] as Record<string, unknown>);
-    const innerArgs = registers.find((a) => a.moniker === "ui:inner")!;
+    const innerArgs = registers.find((a) => a.segment === "ui:inner")!;
 
     mockInvoke.mockClear();
     fireEvent.click(getByText("inner-content"));
@@ -262,7 +261,7 @@ describe("<FocusZone>", () => {
     // no `<FocusIndicator>` because there is no Rust-side focus state to
     // follow.
     const { container, unmount } = render(
-      <FocusZone moniker={asMoniker("ui:orphan")}>{null}</FocusZone>,
+      <FocusZone moniker={asSegment("ui:orphan")}>{null}</FocusZone>,
     );
     const node = container.querySelector("[data-moniker='ui:orphan']");
     expect(node).not.toBeNull();
@@ -274,9 +273,9 @@ describe("<FocusZone>", () => {
   });
 
   it("FocusZoneContext default is null when no zone wraps the consumer", () => {
-    let observed: SpatialKey | null | undefined;
+    let observed: FullyQualifiedMoniker | null | undefined;
     function Capture() {
-      observed = useParentZoneKey();
+      observed = useParentZoneFq();
       return null;
     }
     render(
@@ -290,8 +289,8 @@ describe("<FocusZone>", () => {
   it("renders data-moniker on the wrapper for CSS targeting / debugging", async () => {
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone-attr-test")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone-attr-test")}>
             <span>content</span>
           </FocusZone>
         </FocusLayer>
@@ -312,7 +311,7 @@ describe("<FocusZone>", () => {
     // ts-expect-error checks the type rejection.
     const _check = (
       <FocusZone
-        moniker={asMoniker("ui:zone")}
+        moniker={asSegment("ui:zone")}
         // @ts-expect-error onClick is omitted from FocusZone's passthrough type.
         onClick={() => {}}
       >
@@ -330,8 +329,8 @@ describe("<FocusZone>", () => {
     const externalRef = createRef<HTMLDivElement>();
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")} ref={externalRef}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")} ref={externalRef}>
             <span>zone</span>
           </FocusZone>
         </FocusLayer>
@@ -359,8 +358,8 @@ describe("<FocusZone>", () => {
     };
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")} ref={externalRef}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")} ref={externalRef}>
             <span>zone</span>
           </FocusZone>
         </FocusLayer>
@@ -381,8 +380,8 @@ describe("<FocusZone>", () => {
   it("toggles data-focused via the focus claim registry", async () => {
     const { container, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")}>
             <span>body</span>
           </FocusZone>
         </FocusLayer>
@@ -399,7 +398,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: args.key as SpatialKey }),
+        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() =>
@@ -408,7 +407,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_key: args.key as SpatialKey }),
+        payload: makePayload({ prev_fq: args.key as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() => expect(node!.getAttribute("data-focused")).toBeNull());
@@ -424,8 +423,8 @@ describe("<FocusZone>", () => {
     // selector to draw the bar.
     const { container, queryByTestId, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:zone")}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:zone")}>
             <span>body</span>
           </FocusZone>
         </FocusLayer>
@@ -438,7 +437,7 @@ describe("<FocusZone>", () => {
     const args = lastRegisterZoneArgs();
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: args.key as SpatialKey }),
+        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
       });
     });
 
@@ -454,7 +453,7 @@ describe("<FocusZone>", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_key: args.key as SpatialKey }),
+        payload: makePayload({ prev_fq: args.key as FullyQualifiedMoniker }),
       });
     });
     await waitFor(() => expect(queryByTestId("focus-indicator")).toBeNull());
@@ -469,8 +468,8 @@ describe("<FocusZone>", () => {
     // decoration is suppressed.
     const { container, queryByTestId, unmount } = render(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
-          <FocusZone moniker={asMoniker("ui:board")} showFocusBar={false}>
+        <FocusLayer name={asSegment("window")}>
+          <FocusZone moniker={asSegment("ui:board")} showFocusBar={false}>
             <span>body</span>
           </FocusZone>
         </FocusLayer>
@@ -481,7 +480,7 @@ describe("<FocusZone>", () => {
     const args = lastRegisterZoneArgs();
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: args.key as SpatialKey }),
+        payload: makePayload({ next_fq: args.key as FullyQualifiedMoniker }),
       });
     });
 

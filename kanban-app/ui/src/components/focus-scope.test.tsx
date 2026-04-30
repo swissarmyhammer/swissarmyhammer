@@ -22,7 +22,11 @@ import {
 } from "@/lib/entity-focus-context";
 import { FocusScope, useParentFocusScope } from "./focus-scope";
 import { CommandScopeProvider } from "@/lib/command-scope";
-import { asMoniker, asLayerName } from "@/types/spatial";
+import {
+  asFq,
+  asSegment,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "./focus-layer";
 
@@ -55,8 +59,8 @@ function mockListCommands(commands: ResolvedCommand[]) {
 
 /** Helper to read focus state from inside the provider. */
 function FocusReader() {
-  const { focusedMoniker } = useEntityFocus();
-  return <div data-testid="focus-reader">{focusedMoniker ?? "null"}</div>;
+  const { focusedFq } = useEntityFocus();
+  return <div data-testid="focus-reader">{focusedFq ?? "null"}</div>;
 }
 
 function renderWithFocus(ui: React.ReactElement) {
@@ -76,7 +80,7 @@ describe("FocusScope", () => {
 
   it("click sets entity focus to moniker", () => {
     const { getByTestId, getByText } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <span>card</span>
       </FocusScope>,
     );
@@ -97,7 +101,7 @@ describe("FocusScope", () => {
     const execute = vi.fn();
     const { getByTestId, getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
         ]}
@@ -122,7 +126,7 @@ describe("FocusScope", () => {
 
   it("clicking input inside does not change entity focus", () => {
     const { getByTestId, getByRole } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <input type="text" />
       </FocusScope>,
     );
@@ -132,9 +136,9 @@ describe("FocusScope", () => {
 
   it("nested FocusScope: inner click sets inner moniker", () => {
     const { getByTestId, getByText } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <span>card</span>
-        <FocusScope moniker={asMoniker("tag:xyz")} commands={[]}>
+        <FocusScope moniker={asSegment("tag:xyz")} commands={[]}>
           <span>tag</span>
         </FocusScope>
       </FocusScope>,
@@ -165,7 +169,7 @@ describe("FocusScope", () => {
     const innerExec = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           {
             id: "outer.cmd",
@@ -177,7 +181,7 @@ describe("FocusScope", () => {
       >
         <span>card</span>
         <FocusScope
-          moniker={asMoniker("tag:xyz")}
+          moniker={asSegment("tag:xyz")}
           commands={[
             {
               id: "inner.cmd",
@@ -225,7 +229,7 @@ describe("FocusScope", () => {
     const innerExec = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           {
             id: "entity.inspect",
@@ -237,7 +241,7 @@ describe("FocusScope", () => {
       >
         <span>card</span>
         <FocusScope
-          moniker={asMoniker("tag:xyz")}
+          moniker={asSegment("tag:xyz")}
           commands={[
             {
               id: "entity.inspect",
@@ -295,7 +299,7 @@ describe("FocusScope", () => {
     const innerExec = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           {
             id: "entity.inspect",
@@ -308,7 +312,7 @@ describe("FocusScope", () => {
       >
         <span>card</span>
         <FocusScope
-          moniker={asMoniker("tag:xyz")}
+          moniker={asSegment("tag:xyz")}
           commands={[
             {
               id: "entity.inspect",
@@ -361,7 +365,7 @@ describe("FocusScope", () => {
     const innerExec = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           {
             id: "entity.inspect",
@@ -374,7 +378,7 @@ describe("FocusScope", () => {
       >
         <span>card</span>
         <FocusScope
-          moniker={asMoniker("tag:xyz")}
+          moniker={asSegment("tag:xyz")}
           commands={[
             {
               id: "entity.inspect",
@@ -409,7 +413,7 @@ describe("FocusScope", () => {
     const outerExec = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           {
             id: "entity.inspect",
@@ -421,7 +425,7 @@ describe("FocusScope", () => {
       >
         <span>card</span>
         <FocusScope
-          moniker={asMoniker("tag:xyz")}
+          moniker={asSegment("tag:xyz")}
           commands={[
             {
               id: "entity.inspect",
@@ -459,7 +463,7 @@ describe("FocusScope", () => {
 
   it("data-focused attribute set when focused", () => {
     const { container, getByText } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <span>card</span>
       </FocusScope>,
     );
@@ -470,7 +474,7 @@ describe("FocusScope", () => {
 
   it("data-focused attribute absent when not focused", () => {
     const { container } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <span>card</span>
       </FocusScope>,
     );
@@ -480,7 +484,7 @@ describe("FocusScope", () => {
 
   it("data-moniker attribute always set", () => {
     const { container } = renderWithFocus(
-      <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+      <FocusScope moniker={asSegment("task:abc")} commands={[]}>
         <span>card</span>
       </FocusScope>,
     );
@@ -502,7 +506,7 @@ describe("FocusScope", () => {
     const execute = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("task:abc")}
+        moniker={asSegment("task:abc")}
         commands={[
           { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
         ]}
@@ -536,7 +540,7 @@ describe("FocusScope", () => {
     const { unmount } = render(
       <EntityFocusProvider>
         <ScopeProbe />
-        <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+        <FocusScope moniker={asSegment("task:abc")} commands={[]}>
           <span>card</span>
         </FocusScope>
       </EntityFocusProvider>,
@@ -562,7 +566,7 @@ describe("FocusScope", () => {
     const execute = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("tag:xyz")}
+        moniker={asSegment("tag:xyz")}
         showFocusBar={false}
         commands={[
           {
@@ -602,7 +606,7 @@ describe("FocusScope", () => {
     const execute = vi.fn();
     const { getByText } = renderWithFocus(
       <FocusScope
-        moniker={asMoniker("tag:xyz")}
+        moniker={asSegment("tag:xyz")}
         showFocusBar={true}
         handleEvents={false}
         commands={[
@@ -636,7 +640,7 @@ describe("FocusScope", () => {
     it("returns parent FocusScope moniker", () => {
       const { getByTestId } = render(
         <EntityFocusProvider>
-          <FocusScope moniker={asMoniker("column:col1")} commands={[]}>
+          <FocusScope moniker={asSegment("column:col1")} commands={[]}>
             <ParentScopeReader />
           </FocusScope>
         </EntityFocusProvider>,
@@ -647,10 +651,10 @@ describe("FocusScope", () => {
     it("skips CommandScopeProvider, returns grandparent FocusScope moniker", () => {
       const { getByTestId } = render(
         <EntityFocusProvider>
-          <FocusScope moniker={asMoniker("column:col1")} commands={[]}>
+          <FocusScope moniker={asSegment("column:col1")} commands={[]}>
             <CommandScopeProvider
               commands={[]}
-              moniker={asMoniker("inner-cmd")}
+              moniker={asSegment("inner-cmd")}
             >
               <ParentScopeReader />
             </CommandScopeProvider>
@@ -690,9 +694,9 @@ describe("FocusScope", () => {
 
     const { getByTestId, getByText } = render(
       <EntityFocusProvider>
-        <FocusScope moniker={asMoniker("column:col1")} commands={[]}>
-          <ColumnWithFocus moniker={asMoniker("column:col1")}>
-            <FocusScope moniker={asMoniker("task:abc")} commands={[]}>
+        <FocusScope moniker={asSegment("column:col1")} commands={[]}>
+          <ColumnWithFocus moniker={asSegment("column:col1")}>
+            <FocusScope moniker={asSegment("task:abc")} commands={[]}>
               <span>card</span>
             </FocusScope>
           </ColumnWithFocus>
@@ -727,11 +731,11 @@ describe("FocusScope", () => {
    */
   it("FocusScope re-renders exactly when its own moniker's focus state flips", () => {
     const monikers = [
-      asMoniker("scope:a"),
-      asMoniker("scope:b"),
-      asMoniker("scope:c"),
-      asMoniker("scope:d"),
-      asMoniker("scope:e"),
+      asSegment("scope:a"),
+      asSegment("scope:b"),
+      asSegment("scope:c"),
+      asSegment("scope:d"),
+      asSegment("scope:e"),
     ] as const;
 
     const counts: Record<string, number> = Object.fromEntries(
@@ -752,7 +756,7 @@ describe("FocusScope", () => {
     }
 
     /** Helper button to set focus via the hot-path `setFocus`. */
-    function SetFocus({ moniker }: { moniker: string | null }) {
+    function SetFocus({ moniker }: { moniker: FullyQualifiedMoniker | null }) {
       const { setFocus } = useEntityFocus();
       return (
         <button
@@ -772,8 +776,8 @@ describe("FocusScope", () => {
         {monikers.map((m) => (
           <SubscribedCounter key={`sub-${m}`} moniker={m} />
         ))}
-        <SetFocus moniker={asMoniker("scope:a")} />
-        <SetFocus moniker={asMoniker("scope:b")} />
+        <SetFocus moniker={asFq("scope:a")} />
+        <SetFocus moniker={asFq("scope:b")} />
       </EntityFocusProvider>,
     );
 
@@ -817,9 +821,9 @@ describe("FocusScope", () => {
     it("registers via spatial_register_scope as a leaf when wrapped in <FocusLayer>", async () => {
       const { container } = render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-              <FocusScope moniker={asMoniker("task:abc")}>
+              <FocusScope moniker={asSegment("task:abc")}>
                 <span>card</span>
               </FocusScope>
             </EntityFocusProvider>
@@ -852,9 +856,9 @@ describe("FocusScope", () => {
       // Containers that want zone semantics use `<FocusZone>` directly.
       const { container } = render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-              <FocusScope moniker={asMoniker("column:doing")}>
+              <FocusScope moniker={asSegment("column:doing")}>
                 <span>body</span>
               </FocusScope>
             </EntityFocusProvider>
@@ -882,10 +886,10 @@ describe("FocusScope", () => {
 
       render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
               <FocusScope
-                moniker={asMoniker("task:abc")}
+                moniker={asSegment("task:abc")}
                 navOverride={navOverride}
               >
                 <span>card</span>
@@ -909,9 +913,9 @@ describe("FocusScope", () => {
     it("click invokes spatial_focus with the primitive's key", async () => {
       const { getByText } = render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-              <FocusScope moniker={asMoniker("task:abc")}>
+              <FocusScope moniker={asSegment("task:abc")}>
                 <span>card</span>
               </FocusScope>
             </EntityFocusProvider>
@@ -948,7 +952,7 @@ describe("FocusScope", () => {
       // FocusLayer; this is the explicit assertion that the fallback
       // path renders without throwing and still emits data-moniker.
       const { container } = renderWithFocus(
-        <FocusScope moniker={asMoniker("task:abc")}>
+        <FocusScope moniker={asSegment("task:abc")}>
           <span>card</span>
         </FocusScope>,
       );
@@ -986,10 +990,10 @@ describe("FocusScope", () => {
     it("flex className lays children as direct flex items (no inner wrapper)", async () => {
       const { container } = render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
               <FocusScope
-                moniker={asMoniker("task:row")}
+                moniker={asSegment("task:row")}
                 className="flex flex-row"
               >
                 <span data-testid="child-a">a</span>

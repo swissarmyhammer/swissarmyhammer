@@ -11,7 +11,7 @@
  * originating card, while the React store reported the inspector field.
  *
  * Concrete consequence: `nav.down`'s execute closure in `app-shell.tsx`
- * reads `actions.focusedKey()` (the kernel's focus mirror) and threads it
+ * reads `actions.focusedFq()` (the kernel's focus mirror) and threads it
  * into `spatial_navigate`. With the kernel out of sync, ArrowDown from an
  * open inspector dispatched `spatial_navigate(cardKey, "down")` — which
  * cascades on the *board*, not the inspector — and focus visually
@@ -29,7 +29,7 @@
  * key stays in lockstep with whatever the user is looking at.
  *
  * This test exercises the bug reproduction path end-to-end: render the
- * inspector with a kernel simulator that tracks `currentFocus.key` like
+ * inspector with a kernel simulator that tracks `currentFocus.fq` like
  * the real Rust kernel does, drive the first-field auto-focus on mount,
  * assert the simulator's focused key is the inspector field (not the
  * originating card), and dispatch ArrowDown to verify `spatial_navigate`
@@ -119,7 +119,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -223,15 +225,15 @@ async function defaultInvokeImpl(
   return null;
 }
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Reads `useFocusedMoniker()` and exposes it as text for assertions.
  */
 function FocusedMonikerProbe() {
-  const { focusedMoniker } = useEntityFocus();
+  const { focusedFq } = useEntityFocus();
   return (
-    <span data-testid="focused-moniker-probe">{focusedMoniker ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
   );
 }
 
@@ -285,7 +287,7 @@ function stampFieldRects(
   fieldNames: string[],
 ): void {
   fieldNames.forEach((name, idx) => {
-    const f = sim.findByMoniker(`field:task:${taskId}.${name}`);
+    const f = sim.findBySegment(`field:task:${taskId}.${name}`);
     if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
   });
 }
@@ -312,27 +314,27 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:T1.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:T1.title")).toBeDefined();
     });
     stampFieldRects(sim, "T1", ["title", "status", "body"]);
     await flushSetup();
 
-    const titleField = sim.findByMoniker("field:task:T1.title");
+    const titleField = sim.findBySegment("field:task:T1.title");
     expect(titleField, "title field zone must register").toBeDefined();
 
     // The first-field auto-focus runs from `useFirstFieldFocus` on mount.
     // Under the new contract, that hook calls `setFocus(firstFieldMoniker)`,
     // which dispatches a kernel command (`spatial_focus_by_moniker` or
-    // equivalent) — the kernel resolves the moniker to a SpatialKey,
+    // equivalent) — the kernel resolves the moniker to a FullyQualifiedMoniker,
     // updates `focus_by_window`, and emits `focus-changed`. The
-    // simulator's `currentFocus.key` mirrors the real kernel's focused
+    // simulator's `currentFocus.fq` mirrors the real kernel's focused
     // slot, so it must equal the title field's key.
     await waitFor(
       () => {
         expect(
-          sim.currentFocus.key,
+          sim.currentFocus.fq,
           "kernel's focused key must advance to the inspector's first field after mount",
-        ).toBe(titleField!.key);
+        ).toBe(titleField!.fq);
       },
       { timeout: 200 },
     );
@@ -356,18 +358,18 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:T1.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:T1.title")).toBeDefined();
     });
     stampFieldRects(sim, "T1", ["title", "status", "body"]);
     await flushSetup();
 
-    const titleField = sim.findByMoniker("field:task:T1.title")!;
-    const statusField = sim.findByMoniker("field:task:T1.status")!;
+    const titleField = sim.findBySegment("field:task:T1.title")!;
+    const statusField = sim.findBySegment("field:task:T1.status")!;
 
     // Wait for the first-field auto-focus to settle the kernel.
     await waitFor(
       () => {
-        expect(sim.currentFocus.key).toBe(titleField.key);
+        expect(sim.currentFocus.fq).toBe(titleField.fq);
       },
       { timeout: 200 },
     );
@@ -383,7 +385,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
 
     // Find every `spatial_navigate` call in the IPC trace; assert at
     // least one fired with `key === titleField.key`. Under the bug,
-    // `actions.focusedKey()` returned null (or worse: a board card's
+    // `actions.focusedFq()` returned null (or worse: a board card's
     // key) because `setFocus` never advanced the kernel — so the
     // dispatched key would be wrong (or no dispatch would fire at all).
     const navigateCalls = mockInvoke.mock.calls.filter(
@@ -398,7 +400,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
       direction: string;
     }>;
     const dispatchedFromTitle = navigateArgs.find(
-      (a) => a.key === titleField.key && a.direction === "down",
+      (a) => a.key === titleField.fq && a.direction === "down",
     );
     expect(
       dispatchedFromTitle,
@@ -407,7 +409,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
 
     // Sanity: kernel landed on the next field (status) after the cascade.
     await waitFor(() => {
-      expect(sim.currentFocus.key).toBe(statusField.key);
+      expect(sim.currentFocus.fq).toBe(statusField.fq);
     });
     unmount();
   });
@@ -422,15 +424,15 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:T1.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:T1.title")).toBeDefined();
     });
     stampFieldRects(sim, "T1", ["title", "status", "body"]);
     await flushSetup();
 
-    const titleField = sim.findByMoniker("field:task:T1.title")!;
+    const titleField = sim.findBySegment("field:task:T1.title")!;
     await waitFor(
       () => {
-        expect(sim.currentFocus.key).toBe(titleField.key);
+        expect(sim.currentFocus.fq).toBe(titleField.fq);
       },
       { timeout: 200 },
     );
@@ -472,24 +474,24 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:T1.body")).toBeDefined();
+      expect(sim.findBySegment("field:task:T1.body")).toBeDefined();
     });
     stampFieldRects(sim, "T1", ["title", "status", "body"]);
     await flushSetup();
 
-    const lastField = sim.findByMoniker("field:task:T1.body")!;
+    const lastField = sim.findBySegment("field:task:T1.body")!;
 
     // Drive the kernel to the last field via the entity-focus setter — the
     // user-visible flow that matters most here. After the new contract,
     // `setFocus("field:task:T1.body")` calls the kernel; the kernel
     // emits `focus-changed`; the React store mirrors it.
-    const focusedKeyBefore = sim.currentFocus.key;
-    expect(focusedKeyBefore).not.toBe(lastField.key); // first field auto-focused, not last
+    const focusedKeyBefore = sim.currentFocus.fq;
+    expect(focusedKeyBefore).not.toBe(lastField.fq); // first field auto-focused, not last
     // Move via spatial_focus from inside React: invoke setFocus directly
     // by firing a keystroke loop until we land on body. Cleaner than
     // poking React internals — beam search drives the move.
     for (let i = 0; i < 5; i++) {
-      if (sim.currentFocus.key === lastField.key) break;
+      if (sim.currentFocus.fq === lastField.fq) break;
       await act(async () => {
         fireEvent.keyDown(document, { key: "ArrowDown", code: "ArrowDown" });
         await new Promise((r) => setTimeout(r, 50));
@@ -497,7 +499,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
       await flushSetup();
     }
     await waitFor(() => {
-      expect(sim.currentFocus.key).toBe(lastField.key);
+      expect(sim.currentFocus.fq).toBe(lastField.fq);
     });
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:T1.body",
@@ -511,7 +513,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     });
     await flushSetup();
 
-    expect(sim.currentFocus.key).toBe(lastField.key);
+    expect(sim.currentFocus.fq).toBe(lastField.fq);
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:T1.body",
     );

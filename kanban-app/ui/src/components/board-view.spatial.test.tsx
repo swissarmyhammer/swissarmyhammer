@@ -140,10 +140,10 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -269,35 +269,35 @@ async function flushSetup() {
  * kernel emitting one for the active window.
  *
  * The provider's listener decides which side of the swap fires — we
- * always pass both `prev_key` and `next_key` to mimic the kernel's
+ * always pass both `prev_fq` and `next_fq` to mimic the kernel's
  * payload shape. Wrapping the dispatch in `act()` flushes the React
  * state updates so the caller can assert against post-update DOM in
  * the next tick.
  *
- * The `next_moniker` argument is REQUIRED for keystroke tests: the
+ * The `next_segment` argument is REQUIRED for keystroke tests: the
  * spatial→entity bridge in `<EntityFocusProvider>` calls
- * `actions.setFocus(payload.next_moniker)` on every focus-changed
+ * `actions.setFocus(payload.next_segment)` on every focus-changed
  * event. The entity-focus store's `focusedScope` is what AppShell's
  * `<KeybindingHandler>` walks via `extractScopeBindings` to resolve
  * scope-level command keys (including `nav.up`/`nav.down`/`nav.left`/
- * `nav.right`'s `keys.cua` arrow bindings). When `next_moniker` is
+ * `nav.right`'s `keys.cua` arrow bindings). When `next_segment` is
  * null, the entity-focus store is cleared, `focusedScope` becomes
  * null, and arrow keys never resolve to a command.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -314,13 +314,13 @@ async function fireFocusChanged({
  * listener on `document` and dispatches the focused scope's commands.
  * That is what wires arrow keys / hjkl to the global `nav.up`/`nav.down`/
  * `nav.left`/`nav.right` commands whose `execute` closures invoke
- * `spatial_navigate` against the currently-focused `SpatialKey`. Without
+ * `spatial_navigate` against the currently-focused `FullyQualifiedMoniker`. Without
  * the AppShell those keystrokes would land in the void.
  */
 function renderBoardWithShell() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -368,34 +368,34 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Pull every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_navigate` call's args, in order. */
 function spatialNavigateCalls(): Array<{
-  key: SpatialKey;
+  key: FullyQualifiedMoniker;
   direction: string;
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: SpatialKey; direction: string });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ key: SpatialKey }> {
+function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: SpatialKey }> {
+function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -418,10 +418,10 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board");
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
     expect(boardZone).toBeTruthy();
     expect(typeof boardZone!.key).toBe("string");
-    expect(boardZone!.layerKey).toBeTruthy();
+    expect(boardZone!.layerFq).toBeTruthy();
     // The board zone is rooted directly under the window layer — no
     // enclosing FocusZone wraps it, so `parentZone` must be null.
     expect(boardZone!.parentZone).toBeNull();
@@ -433,8 +433,8 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-moniker='ui:board']",
     ) as HTMLElement;
@@ -468,15 +468,15 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-moniker='ui:board']",
     ) as HTMLElement;
     expect(boardNode).not.toBeNull();
     expect(boardNode.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_key: boardKey });
+    await fireFocusChanged({ next_fq: boardKey });
 
     await waitFor(() => {
       expect(boardNode.getAttribute("data-focused")).not.toBeNull();
@@ -515,8 +515,8 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.up/down/left/right`'s execute
     // closures see a non-null `focusedKey()` and dispatch
@@ -524,13 +524,13 @@ describe("BoardView — browser spatial behaviour", () => {
     // commands short-circuit (focused key is null on a fresh
     // SpatialFocusProvider).
     //
-    // `next_moniker` is also seeded so the entity-focus bridge mirrors
+    // `next_segment` is also seeded so the entity-focus bridge mirrors
     // the focused moniker into the entity-focus store. The
     // `<KeybindingHandler>` resolves scope-level command bindings
     // (`nav.up.keys.cua = "ArrowUp"` etc.) by walking the focused
     // entity scope chain — when no entity is focused, no scope-level
     // bindings are visible and arrow keys never resolve.
-    await fireFocusChanged({ next_key: boardKey, next_moniker: "ui:board" });
+    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
 
     mockInvoke.mockClear();
 
@@ -580,12 +580,12 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
 
     // Seed focus so `nav.right`/`nav.left`'s execute closures see a
     // non-null `focusedKey()` — same setup as the arrow-key test.
-    await fireFocusChanged({ next_key: boardKey, next_moniker: "ui:board" });
+    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
 
     const tabExpectations: Array<{
       key: string;
@@ -621,24 +621,24 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
     // Capture the column key BEFORE clearing the mock — the column
     // registered during mount and that record lives in
     // `mockInvoke.mock.calls` until we clear it.
     const todoColumn = registerZoneArgs().find(
-      (a) => a.moniker === "column:col-todo",
+      (a) => a.segment === "column:col-todo",
     );
     expect(todoColumn).toBeTruthy();
-    const todoColumnKey = todoColumn!.key as SpatialKey;
+    const todoColumnKey = todoColumn!.key as FullyQualifiedMoniker;
 
     // Seed the focus so `nav.drillIn`'s execute closure sees a non-null
     // focused key. The closure hands that key to `spatial_drill_in`
-    // directly. `next_moniker` is also seeded so the keybinding handler
+    // directly. `next_segment` is also seeded so the keybinding handler
     // resolves Enter to `nav.drillIn` via the focused scope's bindings
     // (Enter is bound globally too, but the contract under test is the
     // scope-level resolution).
-    await fireFocusChanged({ next_key: boardKey, next_moniker: "ui:board" });
+    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
 
     mockInvoke.mockClear();
 
@@ -665,8 +665,8 @@ describe("BoardView — browser spatial behaviour", () => {
     expect(drillCalls[0].key).toBe(boardKey);
 
     await fireFocusChanged({
-      prev_key: boardKey,
-      next_key: todoColumnKey,
+      prev_fq: boardKey,
+      next_fq: todoColumnKey,
     });
 
     await waitFor(() => {
@@ -684,8 +684,8 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -701,13 +701,13 @@ describe("BoardView — browser spatial behaviour", () => {
 
     // Exercise mount + click + a focus claim — the three lifecycle
     // points where legacy code would have called the banned commands.
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-moniker='ui:board']",
     ) as HTMLElement;
     fireEvent.click(boardNode);
-    await fireFocusChanged({ next_key: boardKey });
+    await fireFocusChanged({ next_fq: boardKey });
 
     const banned = /^(entity_focus_|claim_when_|broadcast_nav_)/;
     const offenders = mockInvoke.mock.calls
@@ -742,18 +742,18 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
-    const boardKey = boardZone.key as SpatialKey;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardKey = boardZone.key as FullyQualifiedMoniker;
     const todoColumn = registerZoneArgs().find(
-      (a) => a.moniker === "column:col-todo",
+      (a) => a.segment === "column:col-todo",
     )!;
-    const todoColumnKey = todoColumn.key as SpatialKey;
-    const t1Card = registerScopeArgs().find((a) => a.moniker === "task:t1");
+    const todoColumnKey = todoColumn.key as FullyQualifiedMoniker;
+    const t1Card = registerScopeArgs().find((a) => a.segment === "task:t1");
     expect(t1Card, "task:t1 leaf should be registered").toBeTruthy();
-    const t1CardKey = t1Card!.key as SpatialKey;
+    const t1CardKey = t1Card!.key as FullyQualifiedMoniker;
 
     // Step 1: focus a card (task:t1).
-    await fireFocusChanged({ next_key: t1CardKey });
+    await fireFocusChanged({ next_fq: t1CardKey });
     await waitFor(() => {
       const cardNode = container.querySelector(
         "[data-moniker='task:t1']",
@@ -764,8 +764,8 @@ describe("BoardView — browser spatial behaviour", () => {
 
     // Step 2: Escape pops focus to the column.
     await fireFocusChanged({
-      prev_key: t1CardKey,
-      next_key: todoColumnKey,
+      prev_fq: t1CardKey,
+      next_fq: todoColumnKey,
     });
     await waitFor(() => {
       const cardNode = container.querySelector(
@@ -781,8 +781,8 @@ describe("BoardView — browser spatial behaviour", () => {
 
     // Step 3: Escape pops focus to the board zone.
     await fireFocusChanged({
-      prev_key: todoColumnKey,
-      next_key: boardKey,
+      prev_fq: todoColumnKey,
+      next_fq: boardKey,
     });
     await waitFor(() => {
       const columnNode = container.querySelector(
@@ -801,8 +801,8 @@ describe("BoardView — browser spatial behaviour", () => {
     // Step 4: Escape pops focus to the window-root layer (no spatial
     // key — the layer's `last_focused` clears).
     await fireFocusChanged({
-      prev_key: boardKey,
-      next_key: null,
+      prev_fq: boardKey,
+      next_fq: null,
     });
     await waitFor(() => {
       const boardNode = container.querySelector(

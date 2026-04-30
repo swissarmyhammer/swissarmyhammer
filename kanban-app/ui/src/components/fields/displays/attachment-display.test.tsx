@@ -37,7 +37,7 @@ import {
 } from "./attachment-display";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { asMoniker } from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 /** Wraps component in providers needed by hooks (useDispatchCommand, useFileDrop). */
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -301,7 +301,7 @@ describe("AttachmentItem", () => {
     const FocusScope = (await import("@/components/focus-scope")).FocusScope;
     const { container } = render(
       <Wrapper>
-        <FocusScope moniker={asMoniker("task:01ABC")} commands={[]}>
+        <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
           <AttachmentItem attachment={imageAttachment} />
         </FocusScope>
       </Wrapper>,

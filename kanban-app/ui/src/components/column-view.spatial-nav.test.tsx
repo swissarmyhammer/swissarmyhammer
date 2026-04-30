@@ -81,7 +81,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { asLayerName, asMoniker } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -134,13 +136,13 @@ async function flushSetup() {
 function renderColumnInBoard(ui: React.ReactElement) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{}}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusZone moniker={asMoniker("ui:board")}>{ui}</FocusZone>
+                  <FocusZone moniker={asSegment("ui:board")}>{ui}</FocusZone>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>
@@ -153,10 +155,10 @@ function renderColumnInBoard(ui: React.ReactElement) {
 
 /** Pull every `spatial_register_zone` call as a typed record. */
 function registeredZones(): Array<{
-  key: string;
-  moniker: string;
+  fq: string;
+  segment: string;
   rect: unknown;
-  layerKey: string;
+  layerFq: string;
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
@@ -164,10 +166,10 @@ function registeredZones(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: string;
-          moniker: string;
+          fq: string;
+          segment: string;
           rect: unknown;
-          layerKey: string;
+          layerFq: string;
           parentZone: string | null;
         },
     );
@@ -175,10 +177,10 @@ function registeredZones(): Array<{
 
 /** Pull every `spatial_register_scope` call as a typed record. */
 function registeredScopes(): Array<{
-  key: string;
-  moniker: string;
+  fq: string;
+  segment: string;
   rect: unknown;
-  layerKey: string;
+  layerFq: string;
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
@@ -186,20 +188,20 @@ function registeredScopes(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: string;
-          moniker: string;
+          fq: string;
+          segment: string;
           rect: unknown;
-          layerKey: string;
+          layerFq: string;
           parentZone: string | null;
         },
     );
 }
 
-/** Pull every `spatial_unregister_scope` call's `key` argument. */
+/** Pull every `spatial_unregister_scope` call's `fq` argument. */
 function unregisteredScopeKeys(): string[] {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => (c[1] as { key: string }).key);
+    .map((c) => (c[1] as { fq: string }).fq);
 }
 
 /**
@@ -210,10 +212,10 @@ function unregisteredScopeKeys(): string[] {
  */
 interface BatchScopeEntry {
   kind: string;
-  key: string;
-  moniker: string;
+  fq: string;
+  segment: string;
   rect: { x: number; y: number; width: number; height: number };
-  layer_key: string;
+  layer_fq: string;
   parent_zone: string | null;
   overrides: Record<string, unknown>;
 }
@@ -245,7 +247,7 @@ describe("ColumnView (spatial-nav)", () => {
     await flushSetup();
 
     const columnZones = registeredZones().filter(
-      (z) => z.moniker === "column:col-doing",
+      (z) => z.segment === "column:col-doing",
     );
     expect(columnZones).toHaveLength(1);
 
@@ -258,14 +260,14 @@ describe("ColumnView (spatial-nav)", () => {
     );
     await flushSetup();
 
-    const boardZone = registeredZones().find((z) => z.moniker === "ui:board");
+    const boardZone = registeredZones().find((z) => z.segment === "ui:board");
     expect(boardZone).toBeTruthy();
 
     const columnZone = registeredZones().find(
-      (z) => z.moniker === "column:col-doing",
+      (z) => z.segment === "column:col-doing",
     );
     expect(columnZone).toBeTruthy();
-    expect(columnZone!.parentZone).toBe(boardZone!.key);
+    expect(columnZone!.parentZone).toBe(boardZone!.fq);
 
     unmount();
   });
@@ -277,15 +279,15 @@ describe("ColumnView (spatial-nav)", () => {
     await flushSetup();
 
     const columnZone = registeredZones().find(
-      (z) => z.moniker === "column:col-doing",
+      (z) => z.segment === "column:col-doing",
     );
     expect(columnZone).toBeTruthy();
 
     const headerLeaf = registeredScopes().find(
-      (f) => f.moniker === "column:col-doing.name",
+      (f) => f.segment === "column:col-doing.name",
     );
     expect(headerLeaf).toBeTruthy();
-    expect(headerLeaf!.parentZone).toBe(columnZone!.key);
+    expect(headerLeaf!.parentZone).toBe(columnZone!.fq);
 
     unmount();
   });
@@ -307,21 +309,21 @@ describe("ColumnView (spatial-nav)", () => {
     await flushSetup();
 
     const columnZone = registeredZones().find(
-      (z) => z.moniker === "column:col-doing",
+      (z) => z.segment === "column:col-doing",
     );
     expect(columnZone).toBeTruthy();
 
     for (const id of ["t1", "t2"]) {
       const taskScope = registeredScopes().find(
-        (s) => s.moniker === `task:${id}`,
+        (s) => s.segment === `task:${id}`,
       );
       expect(taskScope, `task:${id} leaf registered`).toBeTruthy();
-      expect(taskScope!.parentZone).toBe(columnZone!.key);
+      expect(taskScope!.parentZone).toBe(columnZone!.fq);
 
       // And no `task:${id}` is registered as a zone — the card is a
       // leaf, never a zone.
       const taskZone = registeredZones().find(
-        (z) => z.moniker === `task:${id}`,
+        (z) => z.segment === `task:${id}`,
       );
       expect(
         taskZone,
@@ -417,28 +419,28 @@ describe("ColumnView (spatial-nav)", () => {
     expect(args.entries.length).toBeGreaterThan(0);
     const first = args.entries[0] as {
       kind: string;
-      key: string;
-      moniker: string;
+      fq: string;
+      segment: string;
       rect: { x: number; y: number; width: number; height: number };
-      layer_key: string;
+      layer_fq: string;
       parent_zone: string | null;
       overrides: Record<string, unknown>;
     };
     expect(first.kind).toBe("scope");
-    expect(typeof first.key).toBe("string");
-    expect(first.moniker).toMatch(/^task:/);
+    expect(typeof first.fq).toBe("string");
+    expect(first.segment).toMatch(/^task:/);
     expect(typeof first.rect.x).toBe("number");
-    expect(typeof first.layer_key).toBe("string");
+    expect(typeof first.layer_fq).toBe("string");
 
     // The off-screen entries must parent at the column zone, not at the
     // surrounding ui:board — this matches how real-mounted task cards
     // register so kind/parent_zone stability holds across the
     // placeholder→real swap.
     const columnZone = registeredZones().find(
-      (z) => z.moniker === "column:col-doing",
+      (z) => z.segment === "column:col-doing",
     );
     expect(columnZone).toBeTruthy();
-    expect(first.parent_zone).toBe(columnZone!.key);
+    expect(first.parent_zone).toBe(columnZone!.fq);
 
     unmount();
   });
@@ -447,7 +449,7 @@ describe("ColumnView (spatial-nav)", () => {
     // Regression test for an effect-ordering leak. The column body uses
     // two refs that both depend on `tasks`:
     //
-    //   1. `useStableSpatialKeys` — prunes its (id → SpatialKey) map for
+    //   1. `useStableFullyQualifiedMonikers` — prunes its (id → FullyQualifiedMoniker) map for
     //      tasks that have left the list.
     //   2. `usePlaceholderRegistration` — emits `spatial_unregister_scope`
     //      for placeholders whose task IDs are no longer off-screen.
@@ -456,7 +458,7 @@ describe("ColumnView (spatial-nav)", () => {
     // in commit order. If (2) reads the deleted task's key from the live
     // (and now-pruned) `stableKeys` map during the unregister loop, the
     // lookup misses and the kernel keeps a stale `RegisterEntry::Zone`
-    // under an orphaned `SpatialKey` — a beam-search dead-end after
+    // under an orphaned `FullyQualifiedMoniker` — a beam-search dead-end after
     // delete. (2) must therefore remember the key it registered against,
     // independent of the live `stableKeys` map.
     const N = 60;
@@ -487,13 +489,13 @@ describe("ColumnView (spatial-nav)", () => {
     // ~80px rows. Find its placeholder key from the batch entries.
     const targetTaskId = "t50";
     const targetEntry = batchEntries().find(
-      (e) => e.moniker === `task:${targetTaskId}`,
+      (e) => e.segment === `task:${targetTaskId}`,
     );
     expect(
       targetEntry,
       "the off-screen task we're about to delete had a placeholder shipped",
     ).toBeTruthy();
-    const targetKey = targetEntry!.key;
+    const targetKey = targetEntry!.fq;
 
     // Snapshot unregister calls so we can detect the *new* one fired by
     // the rerender below.
@@ -504,13 +506,13 @@ describe("ColumnView (spatial-nav)", () => {
     const tasksAfter = tasks.filter((t) => t.id !== targetTaskId);
     rerender(
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
             <SchemaProvider>
               <EntityStoreProvider entities={{}}>
                 <TooltipProvider>
                   <ActiveBoardPathProvider value="/test/board">
-                    <FocusZone moniker={asMoniker("ui:board")}>
+                    <FocusZone moniker={asSegment("ui:board")}>
                       <ColumnView
                         column={makeColumn("col-doing")}
                         tasks={tasksAfter}
@@ -604,7 +606,7 @@ describe("ColumnView (spatial-nav)", () => {
       // Look for the most recent placeholder for an early-index task
       // (e.g. t1) that has now scrolled out of view. Its y must reflect
       // the viewport coordinate frame, not the document frame.
-      const t1Entries = batchEntries().filter((e) => e.moniker === "task:t1");
+      const t1Entries = batchEntries().filter((e) => e.segment === "task:t1");
       expect(t1Entries.length).toBeGreaterThan(0);
       const lastT1 = t1Entries[t1Entries.length - 1];
       // `t1`'s content-y is ~80px and the user has scrolled ~1600px,
@@ -645,7 +647,7 @@ describe("ColumnView (spatial-nav)", () => {
 
     // Snapshot the set of placeholder keys the column has registered so
     // far (the off-screen tasks at first paint).
-    const liveKeys = new Set(batchEntries().map((e) => e.key));
+    const liveKeys = new Set(batchEntries().map((e) => e.fq));
     expect(liveKeys.size).toBeGreaterThan(0);
 
     const unregistersBefore = unregisteredScopeKeys().length;

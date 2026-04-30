@@ -15,7 +15,7 @@
  * 2. **Click → indicator chain** (production-shaped spatial provider
  *    stack) — pins the user-visible affordance the parent card
  *    `01KNQY0P9J03T24FSM8AVPFPZ9` reopened on: clicking a pill must
- *    dispatch `spatial_focus` for that pill's `SpatialKey`, and when
+ *    dispatch `spatial_focus` for that pill's `FullyQualifiedMoniker`, and when
  *    the kernel echoes a matching `focus-changed` event the per-pill
  *    `useFocusClaim` subscription mounts a visible `<FocusIndicator>`.
  *    The earlier `MentionView` revision hard-suppressed `showFocusBar`
@@ -151,10 +151,9 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
+  type FullyQualifiedMoniker,
   type WindowLabel,
 } from "@/types/spatial";
 
@@ -205,19 +204,19 @@ async function flushSetup() {
  * kernel had emitted one for the current window.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -241,10 +240,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +267,7 @@ function NavHarness({
     <EntityFocusProvider>
       <TooltipProvider>
         <FocusScope
-          moniker={asMoniker(parentMoniker)}
+          moniker={asSegment(parentMoniker)}
 
           commands={[]}
         >
@@ -299,7 +298,7 @@ function RefNavHarness({
     <EntityFocusProvider>
       <TooltipProvider>
         <FocusScope
-          moniker={asMoniker(parentMoniker)}
+          moniker={asSegment(parentMoniker)}
 
           commands={[]}
         >
@@ -338,10 +337,10 @@ function SpatialHarness({
 }) {
   return (
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <TooltipProvider>
-            <FocusZone moniker={asMoniker(parentMoniker)}>
+            <FocusZone moniker={asSegment(parentMoniker)}>
               <BadgeListDisplay
                 field={tagField}
                 value={values}
@@ -470,12 +469,12 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     await flushSetup();
 
     const fieldZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:tags",
+      (a) => a.segment === "field:tags",
     );
     expect(fieldZone).toBeTruthy();
 
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-1",
+      (a) => a.segment === "tag:tag-1",
     );
     expect(bugPill).toBeTruthy();
 
@@ -505,7 +504,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     await flushSetup();
 
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-1",
+      (a) => a.segment === "tag:tag-1",
     )!;
     const pillNode = container.querySelector(
       "[data-moniker='tag:tag-1']",
@@ -517,8 +516,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: bugPill.key as SpatialKey,
-      next_moniker: "tag:tag-1",
+      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-1"),
     });
 
     expect(pillNode.getAttribute("data-focused")).toBe("true");
@@ -544,7 +543,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     await flushSetup();
 
     const bugPill = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-1",
+      (a) => a.segment === "tag:tag-1",
     )!;
     const pillNode = container.querySelector(
       "[data-moniker='tag:tag-1']",
@@ -555,8 +554,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: bugPill.key as SpatialKey,
-      next_moniker: "tag:tag-1",
+      next_fq: bugPill.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-1"),
     });
 
     expect(pillNode.getAttribute("data-focused")).toBe("true");
@@ -581,10 +580,10 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     await flushSetup();
 
     const pillA = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-1",
+      (a) => a.segment === "tag:tag-1",
     )!;
     const pillB = registerScopeArgs().find(
-      (a) => a.moniker === "tag:tag-2",
+      (a) => a.segment === "tag:tag-2",
     )!;
 
     const aNode = container.querySelector(
@@ -596,8 +595,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
 
     // Step 1: focus on pill A.
     await fireFocusChanged({
-      next_key: pillA.key as SpatialKey,
-      next_moniker: "tag:tag-1",
+      next_fq: pillA.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-1"),
     });
     expect(
       aNode.querySelector("[data-testid='focus-indicator']"),
@@ -609,9 +608,9 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     // Step 2: focus moves to pill B. A's indicator must unmount; B's
     // must mount.
     await fireFocusChanged({
-      prev_key: pillA.key as SpatialKey,
-      next_key: pillB.key as SpatialKey,
-      next_moniker: "tag:tag-2",
+      prev_fq: pillA.key as FullyQualifiedMoniker,
+      next_fq: pillB.key as FullyQualifiedMoniker,
+      next_segment: asSegment("tag:tag-2"),
     });
     expect(
       aNode.querySelector("[data-testid='focus-indicator']"),

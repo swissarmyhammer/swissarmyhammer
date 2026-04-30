@@ -183,7 +183,10 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { asLayerName, type SpatialKey } from "@/types/spatial";
+import {
+  asSegment,
+  type FullyQualifiedMoniker
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -205,7 +208,7 @@ async function flushSetup() {
 function renderBar(): ReturnType<typeof render> {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <TooltipProvider delayDuration={100}>
           <PerspectiveTabBar />
         </TooltipProvider>
@@ -222,10 +225,10 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_register_zone` invocation argument bag. */
@@ -387,7 +390,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     await flushSetup();
 
     const barZone = registerZoneArgs().find(
-      (a) => a.moniker === "ui:perspective-bar",
+      (a) => a.segment === "ui:perspective-bar",
     );
     expect(barZone).toBeTruthy();
 

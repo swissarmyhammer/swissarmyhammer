@@ -3,7 +3,7 @@
  *
  * Mounts the board inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<BoardSpatialZone>` lights up its `<FocusZone moniker={asMoniker("ui:board")}>`
+ * `<BoardSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:board")}>`
  * branch. The Tauri `invoke` boundary is mocked at the module level so we can
  * inspect the `spatial_register_zone` calls the zone makes on mount.
  *
@@ -70,7 +70,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -149,7 +151,7 @@ async function flushSetup() {
 function renderBoardWithSpatialStack() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{}}>
@@ -189,10 +191,10 @@ function renderBoardWithoutSpatialStack() {
 
 /** Pull every `spatial_register_zone` call as a typed record. */
 function registeredZones(): Array<{
-  key: string;
-  moniker: string;
+  fq: string;
+  segment: string;
   rect: unknown;
-  layerKey: string;
+  layerFq: string;
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
@@ -200,10 +202,10 @@ function registeredZones(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: string;
-          moniker: string;
+          fq: string;
+          segment: string;
           rect: unknown;
-          layerKey: string;
+          layerFq: string;
           parentZone: string | null;
         },
     );
@@ -211,7 +213,7 @@ function registeredZones(): Array<{
 
 /** Pull every `spatial_push_layer` push as a typed record. */
 function pushedLayers(): Array<{
-  key: string;
+  fq: string;
   name: string;
   parent: string | null;
 }> {
@@ -220,7 +222,7 @@ function pushedLayers(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: string;
+          fq: string;
           name: string;
           parent: string | null;
         },
@@ -242,7 +244,7 @@ describe("BoardView (spatial-nav)", () => {
 
     // The `ui:board` zone must mount exactly once.
     const boardZones = registeredZones().filter(
-      (z) => z.moniker === "ui:board",
+      (z) => z.segment === "ui:board",
     );
     expect(boardZones).toHaveLength(1);
     const boardZone = boardZones[0];
@@ -254,7 +256,7 @@ describe("BoardView (spatial-nav)", () => {
     // The `layerKey` must match the window-root layer that was just pushed.
     const windowLayer = pushedLayers().find((l) => l.name === "window");
     expect(windowLayer).toBeTruthy();
-    expect(boardZone.layerKey).toBe(windowLayer!.key);
+    expect(boardZone.layerFq).toBe(windowLayer!.fq);
 
     unmount();
   });
@@ -281,7 +283,7 @@ describe("BoardView (spatial-nav)", () => {
     // the provider absence means the optional-context lookups return null
     // and the wrapper is bypassed entirely.
     const boardZones = registeredZones().filter(
-      (z) => z.moniker === "ui:board",
+      (z) => z.segment === "ui:board",
     );
     expect(boardZones).toHaveLength(0);
 

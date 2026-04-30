@@ -21,18 +21,23 @@ import {
 } from "@/lib/keybindings";
 import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
-import { FocusLayer, useCurrentLayerKey } from "@/components/focus-layer";
-import { asLayerName, type Direction } from "@/types/spatial";
+import { FocusLayer } from "@/components/focus-layer";
+import { useEnclosingLayerFq } from "@/components/layer-fq-context";
+import {
+  asSegment,
+  type Direction,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
 
 /**
- * Identity-stable `LayerName` for the command-palette overlay layer.
+ * Identity-stable `SegmentMoniker` for the command-palette overlay layer.
  *
  * Pulled to module scope so re-renders never mint a fresh value — the
  * `<FocusLayer>` push effect depends on `name`, and a fresh-identity literal
  * in JSX would force a tear-down / re-push cycle on every parent render.
  */
-const PALETTE_LAYER_NAME = asLayerName("palette");
+const PALETTE_LAYER_NAME = asSegment("palette");
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -287,9 +292,9 @@ function buildNavCommands(
     keys: spec.keys,
     execute: async () => {
       const actions = spatialActionsRef.current;
-      const key = actions.focusedKey();
-      if (key === null) return;
-      await actions.navigate(key, spec.direction);
+      const fq = actions.focusedFq();
+      if (fq === null) return;
+      await actions.navigate(fq, spec.direction);
     },
   }));
 }
@@ -305,7 +310,9 @@ function buildNavCommands(
  */
 interface DrillRefs {
   spatialActionsRef: React.MutableRefObject<SpatialFocusActions>;
-  setFocusRef: React.MutableRefObject<(moniker: string | null) => void>;
+  setFocusRef: React.MutableRefObject<
+    (fq: FullyQualifiedMoniker | null) => void
+  >;
   dismissRef: React.MutableRefObject<
     (opts?: DispatchOptions) => Promise<unknown>
   >;
@@ -343,15 +350,14 @@ function buildDrillCommands(refs: DrillRefs): CommandDef[] {
       keys: { vim: "Enter", cua: "Enter" },
       execute: async () => {
         const actions = refs.spatialActionsRef.current;
-        const key = actions.focusedKey();
-        const focusedMoniker = actions.focusedMoniker();
-        if (key === null || focusedMoniker === null) return;
-        const result = await actions.drillIn(key, focusedMoniker);
-        // The kernel always returns a moniker. When `result === focusedMoniker`
+        const focusedFq = actions.focusedFq();
+        if (focusedFq === null) return;
+        const result = await actions.drillIn(focusedFq, focusedFq);
+        // The kernel always returns an FQM. When `result === focusedFq`
         // the caller's setFocus call is idempotent (entity-focus store
-        // detects identity-stable monikers and emits no event), which
+        // detects identity-stable FQMs and emits no event), which
         // visually matches the legacy "null → no-op" behavior. When
-        // `result !== focusedMoniker` setFocus moves focus to the new
+        // `result !== focusedFq` setFocus moves focus to the new
         // target.
         refs.setFocusRef.current(result);
       },
@@ -362,17 +368,16 @@ function buildDrillCommands(refs: DrillRefs): CommandDef[] {
       keys: { vim: "Escape", cua: "Escape" },
       execute: async () => {
         const actions = refs.spatialActionsRef.current;
-        const key = actions.focusedKey();
-        const focusedMoniker = actions.focusedMoniker();
-        if (key === null || focusedMoniker === null) {
+        const focusedFq = actions.focusedFq();
+        if (focusedFq === null) {
           // No spatial focus → nothing to drill out of; honour the
           // existing Escape chain (close topmost modal layer).
           await refs.dismissRef.current();
           return;
         }
-        const result = await actions.drillOut(key, focusedMoniker);
-        if (result === focusedMoniker) {
-          // Kernel echoed the focused moniker — layer-root edge or
+        const result = await actions.drillOut(focusedFq, focusedFq);
+        if (result === focusedFq) {
+          // Kernel echoed the focused FQM — layer-root edge or
           // torn state. Fall through to `app.dismiss` to close the
           // topmost modal layer; the user-observable behavior is
           // identical to the legacy `null` fall-through.
@@ -494,13 +499,13 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const dismissRef = useRef(dismiss);
   dismissRef.current = dismiss;
 
-  // Window-root layer key — passed explicitly to the palette `<FocusLayer>`
+  // Window-root layer FQ — passed explicitly to the palette `<FocusLayer>`
   // because the command palette renders via `createPortal(document.body)`,
   // which severs the React ancestor chain a `<FocusLayer>` would otherwise
-  // walk. Reading the key here, where `<FocusLayer name="window">` (mounted
+  // walk. Reading the FQ here, where `<FocusLayer name="window">` (mounted
   // in `App.tsx`) is still a direct ancestor, captures the right parent
   // regardless of how the palette portals out at render time.
-  const windowLayerKey = useCurrentLayerKey();
+  const windowLayerFq = useEnclosingLayerFq();
 
   usePaletteModeSync(paletteOpen);
 
@@ -546,12 +551,12 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
           layer, so dismissing the palette with Escape returns focus to
           whichever leaf was focused before the palette opened.
 
-          `parentLayerKey={windowLayerKey}` is required because the
+          `parentLayerFq={windowLayerFq}` is required because the
           palette portals to `document.body`; without an explicit parent
           the FocusLayer would compute `parent=null` and mint a second
           window-root, which the Rust registry rejects as a corruption. */}
       {paletteOpen && (
-        <FocusLayer name={PALETTE_LAYER_NAME} parentLayerKey={windowLayerKey}>
+        <FocusLayer name={PALETTE_LAYER_NAME} parentLayerFq={windowLayerFq}>
           <CommandPalette
             open={paletteOpen}
             onClose={closePalette}

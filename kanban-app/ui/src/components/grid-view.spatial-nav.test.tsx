@@ -3,7 +3,7 @@
  *
  * Mounts the grid inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<GridSpatialZone>` lights up its `<FocusZone moniker={asMoniker("ui:grid")}>`
+ * `<GridSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:grid")}>`
  * branch, and the per-cell `<GridCellFocusable>` lights up its `<FocusScope>`
  * leaf branch (after the architecture-fix card collapsed the leaf primitive
  * onto `<FocusScope>`). The Tauri `invoke` and `listen` boundaries are mocked at
@@ -13,9 +13,9 @@
  *     each primitive makes on mount.
  *   - Drive synthetic `focus-changed` payloads through the captured `listen`
  *     callback to simulate the Rust kernel asserting focus on a specific
- *     `SpatialKey`. The provider's listener fans out to per-key claim
+ *     `FullyQualifiedMoniker`. The provider's listener fans out to per-key claim
  *     callbacks and broad `subscribeFocusChanged` subscribers (which the
- *     `EntityFocusProvider` bridge uses to mirror `next_moniker` into the
+ *     `EntityFocusProvider` bridge uses to mirror `next_segment` into the
  *     entity-focus store, driving the `data-cell-cursor` ring).
  *
  * Asserts the contract from kanban task `01KNQXZZ9VQBHFX091P0K4F4YC`:
@@ -34,7 +34,7 @@
  *      mounts the `<FocusIndicator>` inside that cell.
  *   5. Keystrokes → navigate — deferred per the card's AC #5 (owned by
  *      follow-up `01KNQY1GQ9...`); assertion below pins the precondition
- *      that each cell has a stable `SpatialKey` ready to be passed to
+ *      that each cell has a stable `FullyQualifiedMoniker` ready to be passed to
  *      `spatial_navigate` once arrow-key nav lands.
  *   6. Unmount — every registered zone / cell key reaches
  *      `spatial_unregister_scope` and the `focus-changed` listener slot
@@ -134,11 +134,10 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandBusyProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -185,7 +184,7 @@ function GridHarness({ entities }: { entities: Record<string, Entity[]> }) {
   return (
     <CommandBusyProvider>
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <TooltipProvider>
             <SchemaProvider>
               <EntityStoreProvider entities={entities}>
@@ -265,7 +264,7 @@ function spatialFocusCalls(): Array<Record<string, unknown>> {
 
 /**
  * Wait for register effects scheduled inside `useEffect` to flush. The
- * primitives mint their `SpatialKey` and invoke `spatial_register_*` from
+ * primitives mint their `FullyQualifiedMoniker` and invoke `spatial_register_*` from
  * a mount-effect, so the calls don't land on the mock until React has
  * committed and run effects. A `setTimeout(0)` round-trip is sufficient
  * — the providers don't await any further async chain after registration.
@@ -285,19 +284,19 @@ async function flushSetup() {
  * before the caller asserts against post-update DOM.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker === null ? null : asMoniker(next_moniker),
+    prev_fq,
+    next_fq,
+    next_segment: next_segment === null ? null : asSegment(next_segment),
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -335,12 +334,12 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     const calls = registerZoneCalls();
-    const gridZones = calls.filter((c) => c.moniker === "ui:grid");
+    const gridZones = calls.filter((c) => c.segment === "ui:grid");
     expect(gridZones.length).toBe(1);
 
     // Zone must be inside a layer (production layer key) and carry a
-    // minted SpatialKey suitable for use as the cells' `parentZone`.
-    expect(gridZones[0].layerKey).toBeTruthy();
+    // minted FullyQualifiedMoniker suitable for use as the cells' `parentZone`.
+    expect(gridZones[0].layerFq).toBeTruthy();
     expect(typeof gridZones[0].key).toBe("string");
     expect((gridZones[0].key as string).length).toBeGreaterThan(0);
   });
@@ -401,7 +400,7 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     const zoneCalls = registerZoneCalls();
-    const gridZone = zoneCalls.find((c) => c.moniker === "ui:grid");
+    const gridZone = zoneCalls.find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.key;
     expect(gridZoneKey).toBeTruthy();
@@ -409,7 +408,7 @@ describe("GridView (spatial-nav)", () => {
     const focusableCalls = registerScopeCalls();
     const cellFocusables = focusableCalls.filter(
       (c) =>
-        typeof c.moniker === "string" &&
+        typeof c.segment === "string" &&
         (c.moniker as string).startsWith("grid_cell:"),
     );
     expect(cellFocusables.length).toBeGreaterThan(0);
@@ -436,13 +435,13 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     // Capture the bar key + the target cell's key from the registration calls.
-    const gridZone = registerZoneCalls().find((c) => c.moniker === "ui:grid");
+    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.key;
 
     const targetMoniker = "grid_cell:1:status";
     const targetCell = registerScopeCalls().find(
-      (c) => c.moniker === targetMoniker,
+      (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
     const targetCellKey = targetCell!.key;
@@ -502,9 +501,9 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const gridZone = registerZoneCalls().find((c) => c.moniker === "ui:grid");
+    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.key as SpatialKey;
+    const gridZoneKey = gridZone!.key as FullyQualifiedMoniker;
 
     const gridNode = result.container.querySelector(
       "[data-moniker='ui:grid']",
@@ -513,8 +512,8 @@ describe("GridView (spatial-nav)", () => {
 
     // Drive a `focus-changed` payload claiming the grid zone's key.
     await fireFocusChanged({
-      next_key: gridZoneKey,
-      next_moniker: "ui:grid",
+      next_fq: gridZoneKey,
+      next_segment: asSegment("ui:grid"),
     });
 
     // `data-focused` flips on the zone but no `<FocusIndicator>` is
@@ -543,20 +542,20 @@ describe("GridView (spatial-nav)", () => {
 
     const targetMoniker = "grid_cell:1:status";
     const targetCell = registerScopeCalls().find(
-      (c) => c.moniker === targetMoniker,
+      (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
-    const targetCellKey = targetCell!.key as SpatialKey;
+    const targetCellKey = targetCell!.key as FullyQualifiedMoniker;
 
     // Drive `focus-changed` on the target cell. The provider's listener
     // fires the cell's `useFocusClaim` callback (flips `data-focused`)
     // AND the broad `subscribeFocusChanged` subscribers. The
     // `EntityFocusProvider` bridge is one such subscriber: it mirrors
-    // `next_moniker` into the entity-focus store so the cursor ring
+    // `next_segment` into the entity-focus store so the cursor ring
     // (derived from `focusedMoniker`) updates to point at this cell.
     await fireFocusChanged({
-      next_key: targetCellKey,
-      next_moniker: targetMoniker,
+      next_fq: targetCellKey,
+      next_segment: targetMoniker,
     });
 
     // After the claim flips, the FocusIndicator renders inside the
@@ -587,7 +586,7 @@ describe("GridView (spatial-nav)", () => {
   it("the cursor ring (data-cell-cursor) tracks focused cell across spatial-focus events", async () => {
     // End-to-end of the bridge from spatial-focus events to entity-focus.
     // The `EntityFocusProvider` subscribes to `subscribeFocusChanged` and
-    // mirrors `payload.next_moniker` into the legacy entity-focus store.
+    // mirrors `payload.next_segment` into the legacy entity-focus store.
     // The grid's `gridCellCursor` is derived from that store, and the
     // matching cell stamps `data-cell-cursor`. This test pins the
     // contract that focusing a cell via the kernel's `focus-changed`
@@ -603,16 +602,16 @@ describe("GridView (spatial-nav)", () => {
 
     const targetMoniker = "grid_cell:2:title";
     const targetCell = registerScopeCalls().find(
-      (c) => c.moniker === targetMoniker,
+      (c) => c.segment === targetMoniker,
     );
     expect(targetCell).toBeTruthy();
-    const targetCellKey = targetCell!.key as SpatialKey;
+    const targetCellKey = targetCell!.key as FullyQualifiedMoniker;
 
     // Drive focus to the target cell via the spatial event path only
     // (no click, no direct setFocus call).
     await fireFocusChanged({
-      next_key: targetCellKey,
-      next_moniker: targetMoniker,
+      next_fq: targetCellKey,
+      next_segment: targetMoniker,
     });
 
     // The matching cell stamps `data-cell-cursor` once the bridge
@@ -643,13 +642,13 @@ describe("GridView (spatial-nav)", () => {
   //
   // The cell-side precondition the grid CAN guarantee — and that the
   // follow-up will rely on — is that each cell registers a stable
-  // `SpatialKey` in the spatial graph that `spatial_navigate` can be
+  // `FullyQualifiedMoniker` in the spatial graph that `spatial_navigate` can be
   // dispatched against. The assertion below pins that precondition by
   // checking the registration shape (key + moniker + parentZone) is
   // valid for every visible cell.
   // -------------------------------------------------------------------------
 
-  it("each cell's SpatialKey is registered with a complete shape ready for spatial_navigate", async () => {
+  it("each cell's FullyQualifiedMoniker is registered with a complete shape ready for spatial_navigate", async () => {
     const entities = { task: threeTasks() };
 
     await act(async () => {
@@ -657,17 +656,17 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const gridZone = registerZoneCalls().find((c) => c.moniker === "ui:grid")!;
-    const gridZoneKey = gridZone.key as SpatialKey;
+    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid")!;
+    const gridZoneKey = gridZone.key as FullyQualifiedMoniker;
     const cellRegistrations = registerScopeCalls().filter(
       (c) =>
-        typeof c.moniker === "string" &&
+        typeof c.segment === "string" &&
         (c.moniker as string).startsWith("grid_cell:"),
     );
     expect(cellRegistrations.length).toBe(6);
 
     // Each cell must have:
-    //   - a non-empty SpatialKey (the argument `spatial_navigate` would receive)
+    //   - a non-empty FullyQualifiedMoniker (the argument `spatial_navigate` would receive)
     //   - the canonical `grid_cell:R:K` moniker
     //   - `parentZone` pointing at the grid zone (so beam search routes
     //     in-grid moves through the kernel's `ui:grid` subgraph)
@@ -677,7 +676,7 @@ describe("GridView (spatial-nav)", () => {
       expect((cell.key as string).length).toBeGreaterThan(0);
       expect(cell.moniker).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
       expect(cell.parentZone).toBe(gridZoneKey);
-      expect(cell.layerKey).toBe(gridZone.layerKey);
+      expect(cell.layerFq).toBe(gridZone.layerFq);
     }
   });
 
@@ -695,13 +694,13 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     // Snapshot the keys we expect to be unregistered.
-    const gridZone = registerZoneCalls().find((c) => c.moniker === "ui:grid");
+    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.key;
 
     const cellRegistrations = registerScopeCalls().filter(
       (c) =>
-        typeof c.moniker === "string" &&
+        typeof c.segment === "string" &&
         (c.moniker as string).startsWith("grid_cell:"),
     );
     const cellKeys = cellRegistrations.map((c) => c.key as string);
@@ -766,11 +765,11 @@ describe("GridView (spatial-nav)", () => {
 
     // Drive a focus-changed event so the bridge fires too.
     const targetCell = registerScopeCalls().find(
-      (c) => c.moniker === "grid_cell:0:title",
+      (c) => c.segment === "grid_cell:0:title",
     )!;
     await fireFocusChanged({
-      next_key: targetCell.key as SpatialKey,
-      next_moniker: "grid_cell:0:title",
+      next_fq: targetCell.key as FullyQualifiedMoniker,
+      next_segment: asSegment("grid_cell:0:title"),
     });
 
     // The legacy pull-based nav stack used `claim_when_*` predicates and
@@ -831,11 +830,11 @@ describe("GridView (spatial-nav)", () => {
     // React state → `data-focused` toggle path the indicator uses.
     const targetMoniker = cellNodes[0].getAttribute("data-moniker")!;
     const targetCell = registerScopeCalls().find(
-      (c) => c.moniker === targetMoniker,
+      (c) => c.segment === targetMoniker,
     )!;
     await fireFocusChanged({
-      next_key: targetCell.key as SpatialKey,
-      next_moniker: targetMoniker,
+      next_fq: targetCell.key as FullyQualifiedMoniker,
+      next_segment: targetMoniker,
     });
 
     await waitFor(() => {
@@ -850,7 +849,7 @@ describe("GridView (spatial-nav)", () => {
   });
 
   it("re-rendering with the same data does not emit duplicate spatial_register_* calls per cell", async () => {
-    // Stable cell `SpatialKey`s are critical: every duplicate
+    // Stable cell `FullyQualifiedMoniker`s are critical: every duplicate
     // `spatial_register_scope` call would mint a fresh key in the
     // kernel registry under the same moniker, leaving the previous
     // entry orphaned (a beam-search dead-end) and inflating the

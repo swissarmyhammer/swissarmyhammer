@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useInspectOnDoubleClick } from "@/components/inspectable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
@@ -973,6 +974,9 @@ function EntityRow({
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
+  // Read the row's FQM from the surrounding `<FocusScope moniker={entityMk}>`
+  // — that's the spatial identity setFocus needs to dispatch against.
+  const rowFq = useFullyQualifiedMoniker();
   const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
 
   return (
@@ -983,7 +987,7 @@ function EntityRow({
         isCursorRow && !isEditing && "bg-accent/30",
       )}
       onContextMenu={(e) => {
-        setFocus(entityMk);
+        setFocus(rowFq);
         contextMenuHandler(e);
       }}
       onDoubleClick={onDoubleClick}

@@ -109,9 +109,8 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-  asLayerName,
-  asMoniker,
-  type SpatialKey,
+  asSegment,
+  type FullyQualifiedMoniker
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -252,26 +251,26 @@ async function flushScroll() {
  * Returns a `(moniker → key)` map so the test can convert visible
  * `data-moniker` attributes to the kernel-side keys for assertion.
  */
-function taskMonikerToKey(): Map<string, SpatialKey> {
-  const map = new Map<string, SpatialKey>();
+function taskMonikerToKey(): Map<string, FullyQualifiedMoniker> {
+  const map = new Map<string, FullyQualifiedMoniker>();
   for (const [cmd, args] of mockInvoke.mock.calls) {
     if (cmd !== "spatial_register_scope") continue;
-    const a = args as { moniker?: string; key?: SpatialKey };
-    if (typeof a.moniker === "string" && a.moniker.startsWith("task:") && a.key) {
+    const a = args as { segment?: string; fq?: FullyQualifiedMoniker };
+    if (typeof a.segment === "string" && a.segment.startsWith("task:") && a.fq) {
       // Last-write-wins. The most recent register for this moniker is
       // the live key (placeholders may have been registered first then
       // unregistered by the visibility hook).
-      map.set(a.moniker, a.key);
+      map.set(a.segment, a.fq);
     }
   }
   return map;
 }
 
 /** Pull every `spatial_focus` call argument, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -279,7 +278,7 @@ function spatialFocusCalls(): Array<{ key: SpatialKey }> {
  * received fresh rects after a scroll.
  */
 function updateRectCalls(): Array<{
-  key: SpatialKey;
+  key: FullyQualifiedMoniker;
   rect: { x: number; y: number; width: number; height: number };
 }> {
   return mockInvoke.mock.calls
@@ -287,7 +286,7 @@ function updateRectCalls(): Array<{
     .map(
       (c) =>
         c[1] as {
-          key: SpatialKey;
+          key: FullyQualifiedMoniker;
           rect: { x: number; y: number; width: number; height: number };
         },
     );
@@ -330,7 +329,7 @@ function findOuterScroller(container: HTMLElement): HTMLElement {
 function renderColumn(column: Entity, tasks: Entity[]) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{ task: tasks }}>
@@ -367,7 +366,7 @@ function renderColumn(column: Entity, tasks: Entity[]) {
                           overflowX: "hidden",
                         }}
                       >
-                        <FocusZone moniker={asMoniker("ui:board")}>
+                        <FocusZone moniker={asSegment("ui:board")}>
                           <ColumnView column={column} tasks={tasks} />
                         </FocusZone>
                       </div>
@@ -444,7 +443,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     // Build a `(key → most-recent rect)` table from the captured
     // updates; later writes overwrite earlier ones in last-write-wins.
     const lastRectByKey = new Map<
-      SpatialKey,
+      FullyQualifiedMoniker,
       { x: number; y: number; width: number; height: number }
     >();
     for (const u of updates) {
@@ -468,13 +467,13 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     // `spatial_register_scope` (cards that mounted at the post-scroll
     // position never needed an `update_rect`).
     const lastRegisterRectByKey = new Map<
-      SpatialKey,
+      FullyQualifiedMoniker,
       { x: number; y: number; width: number; height: number }
     >();
     for (const [cmd, args] of mockInvoke.mock.calls) {
       if (cmd !== "spatial_register_scope") continue;
       const a = args as {
-        key?: SpatialKey;
+        key?: FullyQualifiedMoniker;
         rect?: { x: number; y: number; width: number; height: number };
       };
       if (a.key && a.rect) lastRegisterRectByKey.set(a.key, a.rect);
@@ -554,7 +553,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls.length).toBe(1);
-    expect(focusCalls[0].key).toBe(expectedKey);
+    expect(focusCalls[0].fq).toBe(expectedKey);
 
     unmount();
   });
@@ -603,7 +602,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
         focusCalls.length,
         `click on '${moniker}' must produce exactly one spatial_focus`,
       ).toBe(1);
-      expect(focusCalls[0].key).toBe(expectedKey);
+      expect(focusCalls[0].fq).toBe(expectedKey);
     }
 
     unmount();
@@ -655,7 +654,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls.length).toBe(1);
-    expect(focusCalls[0].key).toBe(expectedKey);
+    expect(focusCalls[0].fq).toBe(expectedKey);
 
     unmount();
   });
@@ -692,7 +691,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls.length).toBe(1);
-      expect(focusCalls[0].key).toBe(expectedKey);
+      expect(focusCalls[0].fq).toBe(expectedKey);
     }
 
     unmount();

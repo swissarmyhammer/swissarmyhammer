@@ -86,7 +86,7 @@ vi.mock("@/lib/entity-focus-context", () => {
   };
   return {
     useEntityFocus: () => ({
-      focusedMoniker: null,
+      focusedFq: null,
       setFocus: vi.fn(),
       registerScope: vi.fn(),
       unregisterScope: vi.fn(),

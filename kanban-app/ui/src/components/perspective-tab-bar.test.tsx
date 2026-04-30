@@ -747,11 +747,11 @@ describe("PerspectiveTabBar", () => {
       const { SpatialFocusProvider } = await import(
         "@/lib/spatial-focus-context"
       );
-      const { asLayerName } = await import("@/types/spatial");
+      const { asSegment } = await import("@/types/spatial");
 
       const { unmount } = render(
         <SpatialFocusProvider>
-          <FocusLayer name={asLayerName("window")}>
+          <FocusLayer name={asSegment("window")}>
             <TooltipProvider delayDuration={100}>
               <PerspectiveTabBar />
             </TooltipProvider>

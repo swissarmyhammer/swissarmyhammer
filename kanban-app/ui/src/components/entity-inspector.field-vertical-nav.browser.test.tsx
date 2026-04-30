@@ -105,10 +105,10 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -242,10 +242,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Filter `spatial_navigate` calls. */
-function spatialNavigateCalls(): Array<{ key: SpatialKey; direction: string }> {
+function spatialNavigateCalls(): Array<{ key: FullyQualifiedMoniker; direction: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: SpatialKey; direction: string });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
 }
 
 /** Filter `spatial_update_rect` calls. */
@@ -260,19 +260,19 @@ function spatialUpdateRectCalls(): Array<Record<string, unknown>> {
  * kernel had emitted one for the current window.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -293,7 +293,7 @@ async function fireFocusChanged({
 function renderInspectorWithShell(entity: Entity) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -354,10 +354,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.title",
+      (a) => a.segment === "field:task:T1.title",
     );
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(
       titleZone,
@@ -368,8 +368,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // Seed focus on the first (title) field zone so `nav.down`'s
     // execute closure sees `focusedKey() === titleKey`.
     await fireFocusChanged({
-      next_key: titleZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.title",
+      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
 
@@ -401,8 +401,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // focus bridge mirrors the moniker into the store and the tags
     // zone's wrapper flips `data-focused="true"`.
     await fireFocusChanged({
-      next_key: tagsZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 
@@ -429,18 +429,18 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     const bodyZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.body",
+      (a) => a.segment === "field:task:T1.body",
     );
     expect(tagsZone).toBeTruthy();
     expect(bodyZone).toBeTruthy();
 
     // Seed focus on the body field zone (the last in document order).
     await fireFocusChanged({
-      next_key: bodyZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.body",
+      next_fq: bodyZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.body"),
     });
     await flushSetup();
 
@@ -461,8 +461,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // Simulate the kernel's response — beam-up resolves to the tags
     // zone (the one above body in document order).
     await fireFocusChanged({
-      next_key: tagsZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 
@@ -494,14 +494,14 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.title",
+      (a) => a.segment === "field:task:T1.title",
     );
     expect(titleZone).toBeTruthy();
 
     // Seed focus on the title field zone.
     await fireFocusChanged({
-      next_key: titleZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.title",
+      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
 
@@ -579,10 +579,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const tagsZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     const bodyZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.body",
+      (a) => a.segment === "field:task:T1.body",
     );
     expect(tagsZone).toBeTruthy();
     expect(bodyZone).toBeTruthy();
@@ -590,8 +590,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // Pretend tags is the last field "in view" and the focused one;
     // body is below the fold.
     await fireFocusChanged({
-      next_key: tagsZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: tagsZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 
@@ -620,8 +620,8 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     // Synthesize the kernel's response: focus advances to body.
     await fireFocusChanged({
-      next_key: bodyZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.body",
+      next_fq: bodyZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.body"),
     });
     await flushSetup();
     // Allow the scroll-into-view useEffect to run after the focus

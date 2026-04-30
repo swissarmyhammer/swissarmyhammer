@@ -95,7 +95,7 @@ vi.mock("@/lib/entity-focus-context", () => {
   };
   return {
     useEntityFocus: () => ({
-      focusedMoniker: null,
+      focusedFq: null,
       setFocusedMoniker: vi.fn(),
     }),
     useFocusActions: () => actions,
@@ -129,14 +129,17 @@ import { InspectorsContainer } from "./inspectors-container";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName, type LayerKey } from "@/types/spatial";
+import {
+  asSegment,
+  type FullyQualifiedMoniker
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Build a UIState snapshot with a given inspector_stack for the "main" window. */
 function uiStateWithStack(stack: string[]) {
@@ -164,7 +167,7 @@ function uiStateWithStack(stack: string[]) {
  * Render `InspectorsContainer` inside the spatial-focus + window-root
  * layer providers that the production tree mounts in `App.tsx`.
  *
- * `InspectorsContainer` calls `useCurrentLayerKey()` to thread the
+ * `InspectorsContainer` calls `useEnclosingLayerFq()` to thread the
  * window-root layer key into the inspector layer's `parentLayerKey`,
  * and the inspector `<FocusLayer>` it renders consumes
  * `useSpatialFocusActions()` for push/pop. Both throw outside the
@@ -199,9 +202,9 @@ function pushedLayers() {
     .map(
       (c) =>
         c[1] as {
-          key: LayerKey;
+          key: FullyQualifiedMoniker;
           name: string;
-          parent: LayerKey | null;
+          parent: FullyQualifiedMoniker | null;
         },
     );
 }
@@ -210,7 +213,7 @@ function pushedLayers() {
 function poppedLayers() {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_pop_layer")
-    .map((c) => c[1] as { key: LayerKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_register_zone` registration. */
@@ -223,7 +226,7 @@ function registeredZones() {
           key: string;
           moniker: string;
           rect: unknown;
-          layerKey: LayerKey;
+          layerKey: FullyQualifiedMoniker;
           parentZone: string | null;
         },
     );

@@ -142,6 +142,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandBusyProvider } from "@/lib/command-scope";
 import type { Entity, EntitySchema } from "@/types/kanban";
+import { asFq, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Task schema — matches the on-disk task entity shape the grid expects.
@@ -210,7 +211,7 @@ async function fireTauriEvent(eventName: string, payload: unknown) {
  */
 interface NavRef {
   broadcast: ((cmd: string) => boolean) | null;
-  setFocus: ((moniker: string | null) => void) | null;
+  setFocus: ((fq: FullyQualifiedMoniker | null) => void) | null;
 }
 
 function NavProbe({ navRef }: { navRef: NavRef }) {
@@ -366,11 +367,11 @@ describe("GridView — nav is event-driven", () => {
         navRef.broadcast?.("nav.down");
         navRef.broadcast?.("nav.right");
       }
-      navRef.setFocus?.("field:task:t1.title");
-      navRef.setFocus?.("field:task:t2.title");
-      navRef.setFocus?.("field:task:t3.title");
-      navRef.setFocus?.("field:task:t4.title");
-      navRef.setFocus?.("field:task:t5.title");
+      navRef.setFocus?.(asFq("field:task:t1.title"));
+      navRef.setFocus?.(asFq("field:task:t2.title"));
+      navRef.setFocus?.(asFq("field:task:t3.title"));
+      navRef.setFocus?.(asFq("field:task:t4.title"));
+      navRef.setFocus?.(asFq("field:task:t5.title"));
     });
 
     // Wait for any async dispatches to settle.
@@ -420,7 +421,7 @@ describe("GridView — nav is event-driven", () => {
 
     // A focus change should surface a ui.setFocus dispatch — nothing else.
     await act(async () => {
-      navRef.setFocus?.("field:task:t2.title");
+      navRef.setFocus?.(asFq("field:task:t2.title"));
     });
 
     await act(async () => {

@@ -93,16 +93,18 @@ import {
 } from "./window-container";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Wrap children in the spatial-focus + window-root layer providers that
- * `WindowContainer` (via `AppShell -> useCurrentLayerKey`) requires.
+ * `WindowContainer` (via `AppShell -> useEnclosingLayerFq`) requires.
  *
- * `WindowContainer` mounts `AppShell`, which calls `useCurrentLayerKey()` to
+ * `WindowContainer` mounts `AppShell`, which calls `useEnclosingLayerFq()` to
  * thread the window-root layer key into the palette's portal-out
  * `<FocusLayer>`. The hook throws outside any `<FocusLayer>`, so every
  * `render(...)` in this file must sit under this wrapping — mirroring

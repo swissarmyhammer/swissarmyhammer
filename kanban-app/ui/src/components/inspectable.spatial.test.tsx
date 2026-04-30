@@ -126,7 +126,9 @@ import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EntityCard } from "./entity-card";
 import { ColumnView } from "./column-view";
-import { asLayerName, asMoniker } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -162,7 +164,7 @@ async function defaultInvokeImpl(
 function withSpatialStack(ui: React.ReactElement): React.ReactElement {
   return (
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{}}>
@@ -215,7 +217,7 @@ describe("Inspectable — core dispatch contract", () => {
   it("dblclick inside <Inspectable> dispatches ui.inspect with target=moniker", async () => {
     const { getByTestId, unmount } = render(
       withSpatialStack(
-        <Inspectable moniker={asMoniker("task:fake")}>
+        <Inspectable moniker={asSegment("task:fake")}>
           <div data-testid="x">x</div>
         </Inspectable>,
       ),
@@ -239,7 +241,7 @@ describe("Inspectable — core dispatch contract", () => {
   it("dblclick on input / textarea / contenteditable inside <Inspectable> does NOT dispatch", async () => {
     const { getByTestId, unmount } = render(
       withSpatialStack(
-        <Inspectable moniker={asMoniker("task:fake")}>
+        <Inspectable moniker={asSegment("task:fake")}>
           <input data-testid="input" type="text" />
           <textarea data-testid="textarea" />
           <div data-testid="ce" contentEditable suppressContentEditableWarning>
@@ -269,8 +271,8 @@ describe("Inspectable — core dispatch contract", () => {
   it("<Inspectable> wrapping <FocusScope> dispatches exactly once", async () => {
     const { getByTestId, unmount } = render(
       withSpatialStack(
-        <Inspectable moniker={asMoniker("task:fake")}>
-          <FocusScope moniker={asMoniker("task:fake")}>
+        <Inspectable moniker={asSegment("task:fake")}>
+          <FocusScope moniker={asSegment("task:fake")}>
             <div data-testid="x">x</div>
           </FocusScope>
         </Inspectable>,
@@ -297,7 +299,7 @@ describe("Inspectable — core dispatch contract", () => {
 
     const { unmount } = render(
       withSpatialStack(
-        <FocusScope moniker={asMoniker("ui:chrome")}>
+        <FocusScope moniker={asSegment("ui:chrome")}>
           <div>x</div>
         </FocusScope>,
       ),
@@ -318,7 +320,7 @@ describe("Inspectable — core dispatch contract", () => {
 
     const { unmount } = render(
       withSpatialStack(
-        <FocusZone moniker={asMoniker("ui:perspective-bar")}>
+        <FocusZone moniker={asSegment("ui:perspective-bar")}>
           <div>x</div>
         </FocusZone>,
       ),
@@ -427,7 +429,7 @@ describe("Inspectable — real-world entity wrappers", () => {
 
     const { getByText, unmount } = render(
       withSpatialStack(
-        <Inspectable moniker={asMoniker("task:withbutton")}>
+        <Inspectable moniker={asSegment("task:withbutton")}>
           <button type="button" onDoubleClick={innerHandler}>
             X
           </button>

@@ -260,7 +260,7 @@ import {
 // ---------------------------------------------------------------------------
 
 import App from "@/App";
-import type { SpatialKey } from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Bootstrap-invoke handler — covers every Tauri command the production
@@ -445,25 +445,25 @@ function dispatchCallsFor(target: string): Array<{
 }
 
 /** Capture every `spatial_focus` call's args. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Capture every `spatial_navigate` call's args. */
-function spatialNavigateCalls(): Array<{ key: SpatialKey; direction: string }> {
+function spatialNavigateCalls(): Array<{ key: FullyQualifiedMoniker; direction: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: SpatialKey; direction: string });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
 }
 
 /** Capture every `spatial_drill_in` / `spatial_drill_out` call's args. */
-function spatialDrillCalls(direction: "in" | "out"): Array<{ key: SpatialKey }> {
+function spatialDrillCalls(direction: "in" | "out"): Array<{ key: FullyQualifiedMoniker }> {
   const cmd = direction === "in" ? "spatial_drill_in" : "spatial_drill_out";
   return mockInvoke.mock.calls
     .filter((c) => c[0] === cmd)
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_register_zone` invocation argument bag. */
@@ -593,7 +593,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       // Cards register as `task:T1`-style scopes. Find the T1 card key
       // from the captured registrations.
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(
         t1Key,
         "task:T1 must register before the click test runs",
@@ -653,7 +653,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       // Active perspective is `default`; the tab moniker is
       // `perspective_tab:default`.
-      const tabKey = harness.getRegisteredKeyByMoniker(
+      const tabKey = harness.getRegisteredFqBySegment(
         "perspective_tab:default",
       );
       expect(tabKey, "perspective_tab:default must register").not.toBeNull();
@@ -692,7 +692,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // The nav bar registers `ui:navbar.search` as a leaf (and
       // `ui:navbar.board-selector`, `ui:navbar.inspect`). Pick the
       // search button — it always renders.
-      const searchKey = harness.getRegisteredKeyByMoniker("ui:navbar.search");
+      const searchKey = harness.getRegisteredFqBySegment("ui:navbar.search");
       expect(searchKey, "ui:navbar.search must register").not.toBeNull();
 
       const searchNode = container.querySelector(
@@ -731,13 +731,13 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(t1Key).not.toBeNull();
 
       // Seed focus on T1 so the keymap pipeline knows the focused key.
       await harness.fireFocusChanged({
-        next_key: t1Key!,
-        next_moniker: "task:T1",
+        next_fq: t1Key!,
+        next_segment: asSegment("task:T1"),
       });
       await flushAppMount();
 
@@ -766,12 +766,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(t1Key).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: t1Key!,
-        next_moniker: "task:T1",
+        next_fq: t1Key!,
+        next_segment: asSegment("task:T1"),
       });
       await flushAppMount();
 
@@ -797,12 +797,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      const d1Key = harness.getRegisteredKeyByMoniker("task:D1");
+      const d1Key = harness.getRegisteredFqBySegment("task:D1");
       expect(d1Key).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: d1Key!,
-        next_moniker: "task:D1",
+        next_fq: d1Key!,
+        next_segment: asSegment("task:D1"),
       });
       await flushAppMount();
 
@@ -835,12 +835,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(t1Key).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: t1Key!,
-        next_moniker: "task:T1",
+        next_fq: t1Key!,
+        next_segment: asSegment("task:T1"),
       });
       await flushAppMount();
 
@@ -865,12 +865,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(t1Key).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: t1Key!,
-        next_moniker: "task:T1",
+        next_fq: t1Key!,
+        next_segment: asSegment("task:T1"),
       });
       await flushAppMount();
 
@@ -910,12 +910,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const t1Key = harness.getRegisteredKeyByMoniker("task:T1");
+      const t1Key = harness.getRegisteredFqBySegment("task:T1");
       expect(t1Key).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: t1Key!,
-        next_moniker: "task:T1",
+        next_fq: t1Key!,
+        next_segment: asSegment("task:T1"),
       });
       await flushAppMount();
 
@@ -949,14 +949,14 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const tabKey = harness.getRegisteredKeyByMoniker(
+      const tabKey = harness.getRegisteredFqBySegment(
         "perspective_tab:default",
       );
       expect(tabKey).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: tabKey!,
-        next_moniker: "perspective_tab:default",
+        next_fq: tabKey!,
+        next_segment: asSegment("perspective_tab:default"),
       });
       await flushAppMount();
 
@@ -989,14 +989,14 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      const tabKey = harness.getRegisteredKeyByMoniker(
+      const tabKey = harness.getRegisteredFqBySegment(
         "perspective_tab:default",
       );
       expect(tabKey).not.toBeNull();
 
       await harness.fireFocusChanged({
-        next_key: tabKey!,
-        next_moniker: "perspective_tab:default",
+        next_fq: tabKey!,
+        next_segment: asSegment("perspective_tab:default"),
       });
       await flushAppMount();
 
@@ -1194,11 +1194,11 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         "perspective_tab:default",
         "ui:navbar.search",
       ]) {
-        const key = harness.getRegisteredKeyByMoniker(moniker);
+        const key = harness.getRegisteredFqBySegment(moniker);
         if (!key) continue;
         await harness.fireFocusChanged({
-          next_key: key,
-          next_moniker: moniker,
+          next_fq: key,
+          next_segment: asSegment(moniker),
         });
         await flushAppMount();
       }
@@ -1285,7 +1285,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       for (const t of E2E_TASKS) {
         const taskMoniker = `task:${t.id}`;
         const scopeReg = registerScopeArgs().find(
-          (a) => a.moniker === taskMoniker,
+          (a) => a.segment === taskMoniker,
         );
         expect(
           scopeReg,
@@ -1301,17 +1301,17 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const boardZone = registerZoneArgs().find(
-        (a) => a.moniker === "ui:board",
+        (a) => a.segment === "ui:board",
       );
       expect(
         boardZone,
         "ui:board zone must register so columns can hang off it",
       ).toBeTruthy();
-      const boardKey = boardZone!.key as SpatialKey;
+      const boardKey = boardZone!.key as FullyQualifiedMoniker;
 
       for (const colId of ["TODO", "DOING", "DONE"]) {
         const moniker = `column:${colId}`;
-        const colZone = registerZoneArgs().find((a) => a.moniker === moniker);
+        const colZone = registerZoneArgs().find((a) => a.segment === moniker);
         expect(
           colZone,
           `${moniker} must register via spatial_register_zone`,
@@ -1354,8 +1354,8 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // entity scope. Either path is acceptable; the assertion is that
       // the board entity has SOMETHING in the registry.
       const boardReg =
-        registerScopeArgs().find((a) => a.moniker === E2E_BOARD_MONIKER) ??
-        registerZoneArgs().find((a) => a.moniker === E2E_BOARD_MONIKER);
+        registerScopeArgs().find((a) => a.segment === E2E_BOARD_MONIKER) ??
+        registerZoneArgs().find((a) => a.segment === E2E_BOARD_MONIKER);
       expect(
         boardReg,
         `${E2E_BOARD_MONIKER} must register on App mount`,
@@ -1379,13 +1379,13 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       // Mount the inline rename editor via the family-5 path.
-      const tabKey = harness.getRegisteredKeyByMoniker(
+      const tabKey = harness.getRegisteredFqBySegment(
         "perspective_tab:default",
       );
       expect(tabKey).not.toBeNull();
       await harness.fireFocusChanged({
-        next_key: tabKey!,
-        next_moniker: "perspective_tab:default",
+        next_fq: tabKey!,
+        next_segment: asSegment("perspective_tab:default"),
       });
       await flushAppMount();
       fireEvent.keyDown(document.body, { key: "Enter" });
@@ -1437,14 +1437,14 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
     for (const t of E2E_TASKS) {
       const taskMoniker = `task:${t.id}`;
       expect(
-        harness.getRegisteredKeyByMoniker(taskMoniker),
+        harness.getRegisteredFqBySegment(taskMoniker),
         `${taskMoniker} must register on App mount`,
       ).not.toBeNull();
     }
     for (const colId of ["TODO", "DOING", "DONE"]) {
       const moniker = `column:${colId}`;
       expect(
-        harness.getRegisteredKeyByMoniker(moniker),
+        harness.getRegisteredFqBySegment(moniker),
         `${moniker} must register on App mount`,
       ).not.toBeNull();
     }
@@ -1453,7 +1453,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
     for (const p of E2E_PERSPECTIVES) {
       const moniker = `perspective_tab:${p.id}`;
       expect(
-        harness.getRegisteredKeyByMoniker(moniker),
+        harness.getRegisteredFqBySegment(moniker),
         `${moniker} must register on App mount`,
       ).not.toBeNull();
     }

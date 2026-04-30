@@ -112,7 +112,9 @@ import { MentionView } from "./mention-view";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { asMoniker } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -309,7 +311,7 @@ describe("MentionView — list mode", () => {
     const { container } = render(
       <EntityFocusProvider>
         <TooltipProvider>
-          <FocusScope moniker={asMoniker(parentMoniker)} commands={[]}>
+          <FocusScope moniker={asSegment(parentMoniker)} commands={[]}>
             <MentionView
               items={[
                 { entityType: "tag", id: "tag-1" },

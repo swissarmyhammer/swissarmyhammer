@@ -12,7 +12,7 @@ title: 'Path monikers Layer 2: Tauri command boundary + React adapter FQM rewire
 
 Second of three sequenced sub-tasks. Depends on Layer 1 (kernel newtypes) landing first.
 
-## Status — Sections A-D + production-callsite migration done; Section E (test sweep + new test file) NOT done
+## Status — Sections A-D + production-callsite migration done; TS compile clean; vitest semantic fixes ongoing
 
 ### Done — Section A: Tauri command boundary (`kanban-app/src/commands.rs` + `main.rs`)
 
@@ -27,7 +27,7 @@ Second of three sequenced sub-tasks. Depends on Layer 1 (kernel newtypes) landin
 
 ### Done — Section C: React primitives
 
-- `fully-qualified-moniker-context.tsx` — `FullyQualifiedMonikerContext`, `useFullyQualifiedMoniker`, `useOptionalFullyQualifiedMoniker`, **NEW: `useChildFq(segment)`** convenience helper.
+- `fully-qualified-moniker-context.tsx` — `FullyQualifiedMonikerContext`, `useFullyQualifiedMoniker`, `useOptionalFullyQualifiedMoniker`, `useChildFq(segment)` convenience helper.
 - `layer-fq-context.tsx` — `LayerFqContext`, `useEnclosingLayerFq`, `useOptionalEnclosingLayerFq`.
 - `focus-layer.tsx`, `focus-zone.tsx`, `focus-scope.tsx` rewritten — take `SegmentMoniker`, compose own FQM via context.
 - `use-track-rect-on-ancestor-scroll.ts` updated.
@@ -35,73 +35,79 @@ Second of three sequenced sub-tasks. Depends on Layer 1 (kernel newtypes) landin
 ### Done — Section D: spatial-focus + entity-focus contexts
 
 - `lib/spatial-focus-context.tsx` rewritten — actions surface takes FQM.
-- `lib/entity-focus-context.tsx` rewritten — `setFocus(fq: FullyQualifiedMoniker | null)` strict. **NEW: `useFocusBySegmentPath()`** helper composes a multi-segment chain under the enclosing primitive's FQM and dispatches setFocus.
+- `lib/entity-focus-context.tsx` rewritten — `setFocus(fq: FullyQualifiedMoniker | null)` strict. `useFocusBySegmentPath()` helper.
 
-### Done in current session — Test infrastructure rewrites
+### Done — Test infrastructure rewrites
 
-- `kanban-app/ui/src/test/spatial-shadow-registry.ts` — fully rewritten to FQM identity. Map keys are now `FullyQualifiedMoniker`. `ShadowEntry` uses `fq`, `segment`, `layerFq`, `parentZone` (FQM). `fireFocusChanged` accepts `prev_fq`/`next_fq`/`next_segment`. Wire-decoders read `a.fq`/`a.segment`/`a.layerFq`/`a.parentZone`/`a.focusedFq` matching the new IPC shape. New: `getRegisteredFqBySegment` lookup; `setupSpatialHarness` returns FQM-shaped harness.
-- `kanban-app/ui/src/test-helpers/kernel-simulator.ts` — fully rewritten. `LayerRecord` has `fq`/`segment`/`name`/`parent`. `RegistrationRecord` keyed by FQM. Command dispatch table reads FQM args. Emit shape `{prev_fq, next_fq, next_segment}`. New: `findBySegment`, `findBySegmentPrefix`, `findByFq` lookups.
+- `kanban-app/ui/src/test/spatial-shadow-registry.ts` — fully rewritten to FQM identity.
+- `kanban-app/ui/src/test-helpers/kernel-simulator.ts` — fully rewritten to FQM identity.
 
-### Done in current session — Major production callsite migrations
+### Done — Production callsite migration
 
-- `inspectable.tsx` — `Moniker` import → `SegmentMoniker`; signature updates.
-- `board-view.tsx` — fully rewired. Action commands moved INSIDE `BoardSpatialZone` (where `useFullyQualifiedMoniker()` returns the board zone FQ). New `BoardSpatialBody` component houses `setFocus`/initial-focus/add-task plumbing. `useInitialFocusTarget` returns `{columnSegment, leafSegment}` so seed focus composes correctly. `focusCreatedTask(taskId, columnSegment)` composes the card FQM under the board-zone FQM.
-- `column-view.tsx` — fully rewired. `useStableSpatialKeys` (UUID minting) replaced with `useTaskPlaceholderFqs` (deterministic FQM composition under column FQM). `usePlaceholderRegistration` uses FQM identity. `ColumnHeader`/`AddTaskButton` accept `setFocus(fq: FullyQualifiedMoniker | null)`. `useParentZoneFq` swap. `useOptionalEnclosingLayerFq` swap.
-- Bulk `asMoniker → asSegment` in production: `data-table.tsx`, `nav-bar.tsx`, `perspective-container.tsx`, `view-container.tsx`, `mention-view.tsx`, `grid-view.tsx`, `command-palette.tsx`, `entity-card.tsx`, `avatar.tsx`, `fields/field.tsx`, `fields/displays/attachment-display.tsx`, `perspective-tab-bar.tsx`.
-- Bulk `useOptionalLayerKey → useOptionalEnclosingLayerFq` import path swap: `data-table.tsx`, `perspective-container.tsx`, `view-container.tsx`, `grid-view.tsx`, `perspective-tab-bar.tsx`.
+- All production .tsx/.ts files now compile clean against the new types:
+  - `app-shell.tsx` — `useEnclosingLayerFq`, `focusedFq()`, FQM-typed setFocus refs, `parentLayerFq` prop, `asSegment("palette")`.
+  - `board-view.tsx` — fully rewired (BoardSpatialZone composing FQs internally).
+  - `column-view.tsx` — fully rewired (FQM placeholder registration).
+  - `data-table.tsx` — `EntityRow` reads `useFullyQualifiedMoniker()` for setFocus dispatch.
+  - `entity-inspector.tsx` — `useFirstFieldFocus` takes FQM; composed under inspector layer FQ.
+  - `fields/field.tsx` — drillIn uses `focusedFq()` from spatial actions.
+  - `grid-view.tsx` — `useGridNavigation` uses `useFocusBySegmentPath` adapter for cell focus.
+  - `cursor-focus-bridge.tsx` — typed FQM.
+  - `focus-zone.tsx`, `focus-scope.tsx` — fallback paths compose FQM via `useOptionalFullyQualifiedMoniker` and skip dispatch if no parent.
+  - `focus-scope-context.tsx` — `FocusScopeContext` typed `FullyQualifiedMoniker | null`.
+
+### Done — TypeScript compile is CLEAN
+
+- `cd kanban-app/ui && npx tsc --noEmit` returns 0 errors (was 808 at session start, 416 carryover from previous pass).
+
+### Done — Bulk test file migration
+
+Mass sed/perl across all 130+ test files:
+- `asMoniker` → `asSegment`, `asLayerName` → `asSegment`, `asSpatialKey`/`asLayerKey` → `asFq`, `asFullyQualifiedMoniker` → `asFq`.
+- `SpatialKey`/`LayerKey` → `FullyQualifiedMoniker`, `Moniker` → `SegmentMoniker`.
+- `next_key`/`prev_key` → `next_fq`/`prev_fq`, `next_moniker` → `next_segment`.
+- `findByMoniker`/`findByMonikerPrefix` → `findBySegment`/`findBySegmentPrefix`.
+- `getRegisteredKeyByMoniker` → `getRegisteredFqBySegment`.
+- `useOptionalLayerKey` → `useOptionalEnclosingLayerFq`, `useCurrentLayerKey` → `useEnclosingLayerFq`, `useParentZoneKey` → `useParentZoneFq`.
+- `actions.focusedKey()` → `actions.focusedFq()`.
+- `EntityFocusContextValue.focusedMoniker` → `focusedFq` (destructure-aware).
+- `RegistrationRecord.key/moniker` → `.fq/.segment` (precise per-error patches).
+- `parentLayerKey=` → `parentLayerFq=`.
+- `currentFocus.key` → `currentFocus.fq`.
+- Many `setFocus("..")` → `setFocus(asFq(".."))` wrap-up at error sites.
+- `spatial_register_*` arg shape helpers in board/column tests rewritten with new `fq`/`segment`/`layerFq` field names.
+
+### NOT done — vitest semantic test failures
+
+- `npx vitest run` still has **59 failed test files / 278 failed tests** of 178/1768 total.
+- Root cause: many tests use `mockInvoke.mock.calls` to assert on the *runtime* IPC arg shape — they spelled `args.key`/`args.moniker`/`args.layerKey`/`args.parent` which now ship as `args.fq`/`args.segment`/`args.layerFq`. Some of these were caught by the typed-helper rewrites, but many tests do dynamic property access (`Record<string, unknown>`) and slip through TypeScript.
+- Each failing test file needs its `mockInvoke.mock.calls` accessors and assertion property names migrated. Pattern: change `(c) => c[1] as { key: string; moniker: string; layerKey: string }` to `(c) => c[1] as { fq: string; segment: string; layerFq: string }`, and update downstream `.key`/`.moniker`/`.layerKey` accesses.
+- Also: many `next_segment: "..."` strings need `asSegment("...")` wrapping; `setFocus(rawString)` calls need `asFq(...)` wrapping.
+
+### NOT done — New test file `path-monikers.kernel-driven.browser.test.tsx`
+
+The 7 named tests from parent `01KQD6064G1C1RAXDFPJVT1F46` have not yet been authored.
 
 ### Error count progression
 
 - Start of refactor: ~774 errors across ~80 files.
-- After this session's work: **~416 errors** remaining (down 358 from start, ~46% reduction).
-
-### NOT done — Section E + remaining migration sweep
-
-The remaining ~416 errors span:
-
-1. **`useCurrentLayerKey` references** — `app-shell.tsx`. Map to `useFullyQualifiedMoniker()`.
-2. **`focusedKey()`/`focusedMoniker()` on `SpatialFocusActions` → `focusedFq()`** — `app-shell.tsx`, `fields/field.tsx`, `cursor-focus-bridge.tsx`.
-3. **`setFocus` argument typing** — production callers in `cursor-focus-bridge.tsx`, `entity-inspector.tsx` (line 127, 129), `data-table.tsx` (line 986), `grid-view.tsx` (line 268, 767). Each needs FQM composition or signature update; the strategy mirrors what board-view did (compose at the call site under the enclosing primitive's FQM via `useFullyQualifiedMoniker()`).
-4. **Tail `setFocus` issues in `focus-scope.tsx`/`focus-zone.tsx`** — passing `SegmentMoniker` where `FullyQualifiedMoniker | null` is expected (lines 486/500 and 598/612). The primitives' fallback behavior dispatches `setFocus(moniker)` outside the spatial-nav stack — the segment cannot be composed without a parent FQ. Either compose via `useOptionalFullyQualifiedMoniker()` and skip the fallback when null, or accept a no-op when no parent FQ.
-5. **`focus-scope-context.tsx`** — imports `Moniker` (deleted). Split into `SegmentMoniker` or `FullyQualifiedMoniker` per usage.
-6. **Test files** — every `.test.tsx`/`.spec.tsx` that uses old types. Highest-error files:
-   - `lib/entity-focus-context.test.tsx` (40)
-   - `lib/spatial-focus-context.test.tsx` (29)
-   - `spatial-nav-end-to-end.spatial.test.tsx` (27)
-   - `components/focus-layer.test.tsx` (24)
-   - `components/focus-zone.test.tsx` (21)
-   - `components/inspector.kernel-focus-advance.browser.test.tsx` (20)
-   - `lib/entity-focus.kernel-projection.test.tsx` (19)
-   - `components/inspector-focus-bridge.layer-barrier.browser.test.tsx` (17)
-   - `components/inspector.close-restores-focus.browser.test.tsx` (15)
-   - `components/inspector.cross-panel-nav.browser.test.tsx` (14)
-   - + ~60 more files with 1–10 errors each.
-7. **New file `path-monikers.kernel-driven.browser.test.tsx`** — not yet authored. Should host the 7 named tests from parent task `01KQD6064G1C1RAXDFPJVT1F46`.
-
-### Files modified in current session
-
-- `kanban-app/ui/src/components/inspectable.tsx` (Moniker → SegmentMoniker)
-- `kanban-app/ui/src/components/fully-qualified-moniker-context.tsx` (added `useChildFq`)
-- `kanban-app/ui/src/components/board-view.tsx` (rewrote tail)
-- `kanban-app/ui/src/components/column-view.tsx` (rewrote placeholder + header)
-- `kanban-app/ui/src/test/spatial-shadow-registry.ts` (full rewrite, FQM identity)
-- `kanban-app/ui/src/test-helpers/kernel-simulator.ts` (full rewrite, FQM identity)
-- `kanban-app/ui/src/lib/entity-focus-context.tsx` (added `useFocusBySegmentPath`)
-- Bulk `asMoniker → asSegment` across production: `avatar.tsx`, `command-palette.tsx`, `data-table.tsx`, `entity-card.tsx`, `fields/field.tsx`, `fields/displays/attachment-display.tsx`, `grid-view.tsx`, `mention-view.tsx`, `nav-bar.tsx`, `perspective-container.tsx`, `perspective-tab-bar.tsx`, `view-container.tsx`.
-- Bulk `useOptionalLayerKey` import swap across same group.
-
-### Why the card stays in `doing`
-
-Per the `/implement` skill rules: *"If you cannot complete the task, do NOT move it forward. Add a comment describing what happened and report back."*
-
-The migration sweep across ~80 TS files plus the new browser test file is multi-day mechanical work that does not fit in a single `/implement` pass without context overflow. Each pass makes verifiable progress (this one took 765→416 errors, ~46% reduction). The structural foundation (Sections B/C/D + key production callsites) is in place and architecturally sound.
+- End of previous pass: 416 errors.
+- End of this pass: **0 TS errors** (clean).
+- vitest: 278 failures pending semantic migration.
 
 ### Suggested next pass
 
-1. Finish `app-shell.tsx`, `cursor-focus-bridge.tsx`, `entity-inspector.tsx`, `fields/field.tsx`, `data-table.tsx`, `grid-view.tsx`, `focus-scope.tsx`, `focus-zone.tsx`, `focus-scope-context.tsx` (production code).
-2. Migrate the 5 named mock files in the task scope.
-3. Migrate the wider test sweep — error groups can be addressed file-by-file in parallel.
-4. Author `path-monikers.kernel-driven.browser.test.tsx`.
+1. Fix the runtime IPC arg-shape assertions across remaining 59 test files. Each file roughly:
+   - Find `as { key:.*moniker:.*layerKey:` literal types — rewrite to FQM shape.
+   - Find `(args ?? {}) as { key?: .. moniker?: .. }` — same.
+   - Find body uses of `a.key`/`a.moniker`/`a.layerKey`/`a.parent` and rewrite to `a.fq`/`a.segment`/`a.layerFq`/(layer parent stays `parent`).
+   - Fix `setFocus("string")` → `setFocus(asFq("string"))` where types loosen.
+2. Author `path-monikers.kernel-driven.browser.test.tsx` with the 7 named tests.
+3. Move task to review.
+
+## Why the card stays in `doing`
+
+The TS migration is structurally complete — every production callsite compiles against the path-monikers identity model, and all type-level tests pass. The remaining work is mechanical wire-shape updates in vitest assertions. That work is parallelizable and has a clear pattern; a follow-on pass can knock it out file-by-file.
 
 ## What
 
@@ -150,8 +156,8 @@ The migration sweep across ~80 TS files plus the new browser test file is multi-
 - [x] `entity-focus-context` rewritten.
 - [x] Test infrastructure (spatial-shadow-registry + kernel-simulator) rewritten to FQM identity.
 - [x] Major production callsites (board-view, column-view + bulk `asMoniker → asSegment` sweep) migrated.
-- [ ] Migration sweep — `npx tsc --noEmit` clean (~416 errors remaining).
-- [ ] `bun run test:browser` (and node tests) pass.
+- [x] All production code migrated — `npx tsc --noEmit` is **zero errors**.
+- [ ] `bun run test:browser` (and node tests) pass — 278 vitest failures pending semantic IPC arg-shape migration in test files.
 - [ ] New file `path-monikers.kernel-driven.browser.test.tsx` with 7 named tests authored and passing.
 - [x] `cargo test --workspace` passes.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.

@@ -22,6 +22,12 @@ import {
   useIsFocused,
 } from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
+import {
+  asSegment,
+  composeFq,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 
 interface EntityInspectorProps {
   entity: Entity;
@@ -61,16 +67,23 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
   const fields = schema?.fields ?? [];
   const visibleFields = useVisibleFields(entity, fields);
   const sections = useEntitySections(schema?.entity.sections, visibleFields);
-  const firstFieldMoniker = useMemo(() => {
+  // The inspector mounts directly under the inspector layer's FQM; field
+  // zones register at that layer root, so the first-field FQM is composed
+  // by appending the field segment under the enclosing FQM (the inspector
+  // layer FQ, since no intermediate zone wraps the inspector body).
+  const parentFq = useFullyQualifiedMoniker();
+  const firstFieldFq = useMemo<FullyQualifiedMoniker | undefined>(() => {
     const first = sections.flatMap((s) => s.fields)[0];
-    return first
-      ? fieldMoniker(entity.entity_type, entity.id, first.name)
-      : undefined;
-  }, [sections, entity.entity_type, entity.id]);
+    if (!first) return undefined;
+    const segment = asSegment(
+      fieldMoniker(entity.entity_type, entity.id, first.name),
+    );
+    return composeFq(parentFq, segment);
+  }, [parentFq, sections, entity.entity_type, entity.id]);
 
   const nav = useInspectorNav();
 
-  useFirstFieldFocus(firstFieldMoniker);
+  useFirstFieldFocus(firstFieldFq);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -103,34 +116,36 @@ function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
 
 /**
  * Focus the first field on mount and restore the previously focused element
- * on unmount. Intentionally reruns only when the first-field moniker changes,
+ * on unmount. Intentionally reruns only when the first-field FQM changes,
  * not when focus state changes under us (see inline eslint-disable).
  */
-function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
+function useFirstFieldFocus(
+  firstFieldFq: FullyQualifiedMoniker | undefined,
+): void {
   const { setFocus } = useFocusActions();
-  // Ref-style read: we capture the previously focused moniker exactly once
+  // Ref-style read: we capture the previously focused FQM exactly once
   // at mount, so subscribing (and re-rendering this hook's caller on every
   // focus move) would be pure waste. The ref mirrors focus via subscribeAll.
   const focusedMonikerRef = useFocusedMonikerRef();
   const setFocusRef = useRef(setFocus);
   setFocusRef.current = setFocus;
-  const prevFocusRef = useRef<string | null>(null);
+  const prevFocusRef = useRef<FullyQualifiedMoniker | null>(null);
   const mountedRef = useRef(false);
 
   useEffect(() => {
-    if (!firstFieldMoniker) return;
+    if (!firstFieldFq) return;
     // Only capture previous focus on true first mount, not on re-runs
     if (!mountedRef.current) {
       prevFocusRef.current = focusedMonikerRef.current;
       mountedRef.current = true;
     }
-    setFocusRef.current(firstFieldMoniker);
+    setFocusRef.current(firstFieldFq);
     return () => {
       setFocusRef.current(prevFocusRef.current);
       mountedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstFieldMoniker]);
+  }, [firstFieldFq]);
 }
 
 interface InspectorSectionsProps {

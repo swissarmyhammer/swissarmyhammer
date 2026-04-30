@@ -6,7 +6,7 @@
  * nav focus-claim card:
  *
  * - Claim registry ignores events for unknown keys.
- * - Scope click invokes `spatial_focus` with its branded `SpatialKey`.
+ * - Scope click invokes `spatial_focus` with its branded `FullyQualifiedMoniker`.
  * - Provider unmount removes the listener.
  * - Scope unmount removes from claim registry.
  */
@@ -45,12 +45,11 @@ import {
 } from "./spatial-focus-context";
 import type {
   FocusChangedPayload,
-  LayerKey,
-  Moniker,
   Rect,
-  SpatialKey,
+  FullyQualifiedMoniker,
+  SegmentMoniker,
 } from "@/types/spatial";
-import { asLayerKey, asMoniker, asPixels, asSpatialKey } from "@/types/spatial";
+import { asFq, asSegment, asPixels } from "@/types/spatial";
 
 /* ---- Helpers ---- */
 
@@ -63,9 +62,9 @@ function makePayload(
 ): FocusChangedPayload {
   return {
     window_label: "main" as FocusChangedPayload["window_label"],
-    prev_key: null,
-    next_key: null,
-    next_moniker: null,
+    prev_fq: null,
+    next_fq: null,
+    next_segment: null,
     ...overrides,
   };
 }
@@ -93,18 +92,18 @@ beforeEach(() => {
 describe("SpatialFocusProvider", () => {
   it("ignores focus-changed events for unknown keys", async () => {
     const claimSpy = vi.fn();
-    const knownKey: SpatialKey = asSpatialKey("known");
+    const knownKey: FullyQualifiedMoniker = asFq("known");
 
     const { unmount } = renderHook(() => useFocusClaim(knownKey, claimSpy), {
       wrapper,
     });
     await flushListenSetup();
 
-    // Dispatch an event whose `next_key` is NOT registered. The unknown
+    // Dispatch an event whose `next_fq` is NOT registered. The unknown
     // lookup must be a silent no-op — no claim fires anywhere.
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: asSpatialKey("ghost") }),
+        payload: makePayload({ next_fq: asFq("ghost") }),
       });
     });
 
@@ -114,7 +113,7 @@ describe("SpatialFocusProvider", () => {
     // that the registry isn't broken by the unknown lookup.
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: knownKey }),
+        payload: makePayload({ next_fq: knownKey }),
       });
     });
     expect(claimSpy).toHaveBeenCalledWith(true);
@@ -122,13 +121,13 @@ describe("SpatialFocusProvider", () => {
     unmount();
   });
 
-  it("invokes spatial_focus with the branded SpatialKey on focus()", async () => {
+  it("invokes spatial_focus with the branded FullyQualifiedMoniker on focus()", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("01ABC");
+    const key: FullyQualifiedMoniker = asFq("01ABC");
     await act(async () => {
       await result.current.focus(key);
     });
@@ -144,15 +143,15 @@ describe("SpatialFocusProvider", () => {
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("k1");
-    const moniker: Moniker = asMoniker("task:01ABC");
+    const key: FullyQualifiedMoniker = asFq("k1");
+    const moniker: SegmentMoniker = asSegment("task:01ABC");
     const rect: Rect = {
       x: asPixels(0),
       y: asPixels(0),
       width: asPixels(100),
       height: asPixels(50),
     };
-    const layerKey: LayerKey = asLayerKey("L1");
+    const layerKey: FullyQualifiedMoniker = asFq("L1");
     await act(async () => {
       await result.current.registerScope(
         key,
@@ -193,7 +192,7 @@ describe("SpatialFocusProvider", () => {
 
   it("removes a scope from the claim registry on unmount", async () => {
     const claimSpy = vi.fn();
-    const key: SpatialKey = asSpatialKey("scope-1");
+    const key: FullyQualifiedMoniker = asFq("scope-1");
 
     function Probe() {
       useFocusClaim(key, claimSpy);
@@ -229,15 +228,15 @@ describe("SpatialFocusProvider", () => {
     // After unmount, dispatching the same event must not call the claim.
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: key }),
+        payload: makePayload({ next_fq: key }),
       });
     });
     expect(claimSpy).not.toHaveBeenCalled();
   });
 
-  it("dispatches false to prev_key and true to next_key on focus transfer", async () => {
-    const aKey: SpatialKey = asSpatialKey("a");
-    const bKey: SpatialKey = asSpatialKey("b");
+  it("dispatches false to prev_fq and true to next_fq on focus transfer", async () => {
+    const aKey: FullyQualifiedMoniker = asFq("a");
+    const bKey: FullyQualifiedMoniker = asFq("b");
     const aSpy = vi.fn();
     const bSpy = vi.fn();
 
@@ -256,7 +255,7 @@ describe("SpatialFocusProvider", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_key: aKey, next_key: bKey }),
+        payload: makePayload({ prev_fq: aKey, next_fq: bKey }),
       });
     });
 
@@ -267,7 +266,7 @@ describe("SpatialFocusProvider", () => {
   });
 
   it("does not break when a registered scope re-registers under the same key", async () => {
-    const key: SpatialKey = asSpatialKey("reused");
+    const key: FullyQualifiedMoniker = asFq("reused");
     const firstSpy = vi.fn();
     const secondSpy = vi.fn();
 
@@ -294,7 +293,7 @@ describe("SpatialFocusProvider", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: key }),
+        payload: makePayload({ next_fq: key }),
       });
     });
 
@@ -310,7 +309,7 @@ describe("SpatialFocusProvider", () => {
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("nav-from");
+    const key: FullyQualifiedMoniker = asFq("nav-from");
     await act(async () => {
       await result.current.navigate(key, "right");
     });
@@ -326,7 +325,7 @@ describe("SpatialFocusProvider", () => {
 
 describe("useFocusClaim listener identity", () => {
   it("reads the latest listener through the ref without re-registering", async () => {
-    const key: SpatialKey = asSpatialKey("k");
+    const key: FullyQualifiedMoniker = asFq("k");
     let calls: Array<[number, boolean]> = [];
 
     function Probe({ id }: { id: number }) {
@@ -360,7 +359,7 @@ describe("useFocusClaim listener identity", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: key }),
+        payload: makePayload({ next_fq: key }),
       });
     });
 
@@ -375,7 +374,7 @@ describe("useFocusClaim listener identity", () => {
 
 describe("drillIn", () => {
   it("invokes spatial_drill_in with the focused (key, moniker) pair and returns the moniker", async () => {
-    const targetMoniker: Moniker = asMoniker("ui:target");
+    const targetMoniker: FullyQualifiedMoniker = asFq("ui:target");
     mockInvoke.mockImplementationOnce(() => Promise.resolve(targetMoniker));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
@@ -383,16 +382,16 @@ describe("drillIn", () => {
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("zone-key");
-    const focusedMoniker: Moniker = asMoniker("ui:zone");
-    let returned: Moniker | undefined;
+    const key: FullyQualifiedMoniker = asFq("zone-key");
+    const focusedFq: FullyQualifiedMoniker = asFq("ui:zone");
+    let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
-      returned = await result.current.drillIn(key, focusedMoniker);
+      returned = await result.current.drillIn(key, focusedFq);
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_in", {
       key,
-      focusedMoniker,
+      focusedFq,
     });
     expect(returned).toBe(targetMoniker);
 
@@ -404,23 +403,23 @@ describe("drillIn", () => {
     // focused moniker (rather than returning null) when there's
     // nothing to descend into. The React layer just passes that
     // through verbatim.
-    const focusedMoniker: Moniker = asMoniker("ui:leaf");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedMoniker));
+    const focusedFq: FullyQualifiedMoniker = asFq("ui:leaf");
+    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedFq));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    let returned: Moniker | undefined;
+    let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
       returned = await result.current.drillIn(
-        asSpatialKey("leaf"),
-        focusedMoniker,
+        asFq("leaf"),
+        focusedFq,
       );
     });
 
-    expect(returned).toBe(focusedMoniker);
+    expect(returned).toBe(focusedFq);
 
     unmount();
   });
@@ -428,7 +427,7 @@ describe("drillIn", () => {
 
 describe("drillOut", () => {
   it("invokes spatial_drill_out with the focused (key, moniker) pair and returns the parent moniker", async () => {
-    const parentMoniker: Moniker = asMoniker("ui:parent-zone");
+    const parentMoniker: FullyQualifiedMoniker = asFq("ui:parent-zone");
     mockInvoke.mockImplementationOnce(() => Promise.resolve(parentMoniker));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
@@ -436,16 +435,16 @@ describe("drillOut", () => {
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("leaf-key");
-    const focusedMoniker: Moniker = asMoniker("ui:leaf");
-    let returned: Moniker | undefined;
+    const key: FullyQualifiedMoniker = asFq("leaf-key");
+    const focusedFq: FullyQualifiedMoniker = asFq("ui:leaf");
+    let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
-      returned = await result.current.drillOut(key, focusedMoniker);
+      returned = await result.current.drillOut(key, focusedFq);
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("spatial_drill_out", {
       key,
-      focusedMoniker,
+      focusedFq,
     });
     expect(returned).toBe(parentMoniker);
 
@@ -457,23 +456,23 @@ describe("drillOut", () => {
     // focused moniker (rather than returning null) at the layer root.
     // The React caller compares the result against the focused moniker
     // and dispatches `app.dismiss` on equality.
-    const focusedMoniker: Moniker = asMoniker("ui:root-leaf");
-    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedMoniker));
+    const focusedFq: FullyQualifiedMoniker = asFq("ui:root-leaf");
+    mockInvoke.mockImplementationOnce(() => Promise.resolve(focusedFq));
 
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    let returned: Moniker | undefined;
+    let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
       returned = await result.current.drillOut(
-        asSpatialKey("root-leaf"),
-        focusedMoniker,
+        asFq("root-leaf"),
+        focusedFq,
       );
     });
 
-    expect(returned).toBe(focusedMoniker);
+    expect(returned).toBe(focusedFq);
 
     unmount();
   });
@@ -486,57 +485,57 @@ describe("focusedKey", () => {
     });
     await flushListenSetup();
 
-    expect(result.current.focusedKey()).toBeNull();
+    expect(result.current.focusedFq()).toBeNull();
 
     unmount();
   });
 
-  it("tracks the latest next_key from focus-changed events", async () => {
+  it("tracks the latest next_fq from focus-changed events", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    const aKey: SpatialKey = asSpatialKey("a");
-    const bKey: SpatialKey = asSpatialKey("b");
+    const aKey: FullyQualifiedMoniker = asFq("a");
+    const bKey: FullyQualifiedMoniker = asFq("b");
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: aKey }),
+        payload: makePayload({ next_fq: aKey }),
       });
     });
-    expect(result.current.focusedKey()).toBe(aKey);
+    expect(result.current.focusedFq()).toBe(aKey);
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_key: aKey, next_key: bKey }),
+        payload: makePayload({ prev_fq: aKey, next_fq: bKey }),
       });
     });
-    expect(result.current.focusedKey()).toBe(bKey);
+    expect(result.current.focusedFq()).toBe(bKey);
 
     unmount();
   });
 
-  it("clears to null when focus-changed reports next_key as null", async () => {
+  it("clears to null when focus-changed reports next_fq as null", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    const key: SpatialKey = asSpatialKey("k");
+    const key: FullyQualifiedMoniker = asFq("k");
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: key }),
+        payload: makePayload({ next_fq: key }),
       });
     });
-    expect(result.current.focusedKey()).toBe(key);
+    expect(result.current.focusedFq()).toBe(key);
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ prev_key: key, next_key: null }),
+        payload: makePayload({ prev_fq: key, next_fq: null }),
       });
     });
-    expect(result.current.focusedKey()).toBeNull();
+    expect(result.current.focusedFq()).toBeNull();
 
     unmount();
   });
@@ -557,9 +556,9 @@ describe("subscribeFocusChanged", () => {
     const unsubB = result.current.subscribeFocusChanged(subscriberB);
 
     const payload = makePayload({
-      prev_key: asSpatialKey("a"),
-      next_key: asSpatialKey("b"),
-      next_moniker: asMoniker("task:b"),
+      prev_fq: asFq("a"),
+      next_fq: asFq("b"),
+      next_segment: asSegment("task:b"),
     });
     act(() => {
       listenHandlers["focus-changed"]?.({ payload });
@@ -584,7 +583,7 @@ describe("subscribeFocusChanged", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: asSpatialKey("a") }),
+        payload: makePayload({ next_fq: asFq("a") }),
       });
     });
     expect(subscriber).toHaveBeenCalledTimes(1);
@@ -593,7 +592,7 @@ describe("subscribeFocusChanged", () => {
 
     act(() => {
       listenHandlers["focus-changed"]?.({
-        payload: makePayload({ next_key: asSpatialKey("b") }),
+        payload: makePayload({ next_fq: asFq("b") }),
       });
     });
     expect(subscriber).toHaveBeenCalledTimes(1);
@@ -601,40 +600,40 @@ describe("subscribeFocusChanged", () => {
     unmount();
   });
 
-  it("delivers payloads with next_moniker so consumers can bridge to entity-focus", async () => {
+  it("delivers payloads with next_segment so consumers can bridge to entity-focus", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
     const seen: Array<{
-      key: SpatialKey | null;
-      moniker: Moniker | null;
+      key: FullyQualifiedMoniker | null;
+      moniker: SegmentMoniker | null;
     }> = [];
     result.current.subscribeFocusChanged((payload) => {
-      seen.push({ key: payload.next_key, moniker: payload.next_moniker });
+      seen.push({ key: payload.next_fq, moniker: payload.next_segment });
     });
 
     act(() => {
       listenHandlers["focus-changed"]?.({
         payload: makePayload({
-          next_key: asSpatialKey("k1"),
-          next_moniker: asMoniker("task:01ABC"),
+          next_fq: asFq("k1"),
+          next_segment: asSegment("task:01ABC"),
         }),
       });
     });
     act(() => {
       listenHandlers["focus-changed"]?.({
         payload: makePayload({
-          prev_key: asSpatialKey("k1"),
-          next_key: null,
-          next_moniker: null,
+          prev_fq: asFq("k1"),
+          next_fq: null,
+          next_segment: null,
         }),
       });
     });
 
     expect(seen).toEqual([
-      { key: asSpatialKey("k1"), moniker: asMoniker("task:01ABC") },
+      { key: asFq("k1"), moniker: asSegment("task:01ABC") },
       { key: null, moniker: null },
     ]);
 

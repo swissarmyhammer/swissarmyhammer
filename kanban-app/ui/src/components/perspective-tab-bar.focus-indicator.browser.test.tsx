@@ -23,7 +23,7 @@
  *     mounts on the leaf).
  *   - Neither flips → subscription bug (e.g. the leaf's `useFocusClaim`
  *     subscription was scoped to the wrong layer, or the event payload's
- *     `next_key` didn't match the registered key).
+ *     `next_fq` didn't match the registered key).
  *   - Both flip but no `<FocusIndicator>` mounts → visible-bar wiring
  *     bug (e.g. `showFocusBar` was forced to `false` somewhere on the
  *     leaf).
@@ -42,7 +42,7 @@
  *     inactive tab to make it active flips the `isActive` flag inside
  *     the unchanged `<FocusScope>` wrapper. Test #3 pins that the same
  *     wrapper still reports `data-focused="true"` and renders the
- *     indicator after activation — there is no SpatialKey churn from
+ *     indicator after activation — there is no FullyQualifiedMoniker churn from
  *     tab activation, unlike the navbar's inspect-leaf
  *     `{board && ...}` conditional.
  *   - **Inline rename editor**: when a tab is in rename mode, the
@@ -214,10 +214,10 @@ import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /** Wait for register effects scheduled in `useEffect` to flush. */
 async function flushSetup() {
@@ -245,19 +245,19 @@ async function flushSetup() {
  * had emitted one for the current window.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -291,12 +291,12 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Find the registered `SpatialKey` for a perspective tab moniker. */
-function findTabKey(perspectiveId: string): SpatialKey | undefined {
+/** Find the registered `FullyQualifiedMoniker` for a perspective tab moniker. */
+function findTabKey(perspectiveId: string): FullyQualifiedMoniker | undefined {
   const scope = registerScopeArgs().find(
-    (a) => a.moniker === `perspective_tab:${perspectiveId}`,
+    (a) => a.segment === `perspective_tab:${perspectiveId}`,
   );
-  return scope?.key as SpatialKey | undefined;
+  return scope?.key as FullyQualifiedMoniker | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     await flushSetup();
 
     // p1 is inactive (p2 is the active perspective). Locate its
-    // registered SpatialKey and drive a focus-changed event to it.
+    // registered FullyQualifiedMoniker and drive a focus-changed event to it.
     const p1Key = findTabKey("p1");
     expect(p1Key, "perspective_tab:p1 leaf must register").toBeDefined();
 
@@ -361,8 +361,8 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
 
     await waitFor(() => {
@@ -420,8 +420,8 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     ).toBeNull();
 
     await fireFocusChanged({
-      next_key: p2Key!,
-      next_moniker: "perspective_tab:p2",
+      next_fq: p2Key!,
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
@@ -453,7 +453,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   //
   // Pin that the `isActive` flag flips render content (extra inline
   // chrome appears) but not the wrapping `<FocusScope>` leaf. The
-  // SpatialKey on a registered leaf is held in a `useRef` minted once
+  // FullyQualifiedMoniker on a registered leaf is held in a `useRef` minted once
   // on mount; activation does not unmount the leaf, so the same key
   // remains focused through the activation cycle.
   //
@@ -474,8 +474,8 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     expect(p1Key, "perspective_tab:p1 leaf must register").toBeDefined();
 
     await fireFocusChanged({
-      next_key: p1Key!,
-      next_moniker: "perspective_tab:p1",
+      next_fq: p1Key!,
+      next_segment: asSegment("perspective_tab:p1"),
     });
 
     await waitFor(() => {
@@ -493,7 +493,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // Snapshot the count of p1 register calls. After activation, the
     // count must NOT grow — the leaf must not unmount + remount.
     const beforeActivationCount = registerScopeArgs().filter(
-      (a) => a.moniker === "perspective_tab:p1",
+      (a) => a.segment === "perspective_tab:p1",
     ).length;
 
     // Activate p1 by flipping the mock perspective context. Re-render
@@ -515,15 +515,15 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     await flushSetup();
 
     const afterActivationCount = registerScopeArgs().filter(
-      (a) => a.moniker === "perspective_tab:p1",
+      (a) => a.segment === "perspective_tab:p1",
     ).length;
     expect(
       afterActivationCount,
-      "activating a tab must NOT remount its <FocusScope> leaf — the SpatialKey stays stable",
+      "activating a tab must NOT remount its <FocusScope> leaf — the FullyQualifiedMoniker stays stable",
     ).toBe(beforeActivationCount);
 
     // The same wrapper still reports `data-focused="true"` and the
-    // indicator is still rendered inside it — no SpatialKey churn means
+    // indicator is still rendered inside it — no FullyQualifiedMoniker churn means
     // the kernel's focused_key still points at the same leaf.
     const node = container.querySelector(
       "[data-moniker='perspective_tab:p1']",
@@ -556,7 +556,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // The `<FocusScope>` wrapper around the tab is unchanged through the
   // entire rename round-trip — the rename mode flips render content
   // inside the `TabButton`, not the wrapping leaf. So the leaf's
-  // SpatialKey stays stable, the kernel's focused_key never moves, and
+  // FullyQualifiedMoniker stays stable, the kernel's focused_key never moves, and
   // the indicator remains mounted on the wrapper throughout.
   //
   // Pin via test: focus p2, drive rename via `triggerStartRename`,
@@ -573,8 +573,8 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     expect(p2Key).toBeDefined();
 
     await fireFocusChanged({
-      next_key: p2Key!,
-      next_moniker: "perspective_tab:p2",
+      next_fq: p2Key!,
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
@@ -670,8 +670,8 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     expect(p2Key).toBeDefined();
 
     await fireFocusChanged({
-      next_key: p2Key!,
-      next_moniker: "perspective_tab:p2",
+      next_fq: p2Key!,
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {

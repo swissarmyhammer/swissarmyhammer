@@ -102,10 +102,12 @@ vi.mock("@/components/fields/field", () => ({
 import { NavBar } from "./nav-bar";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Render `NavBar` inside the spatial-focus + window-root layer providers
@@ -280,10 +282,10 @@ describe("NavBar", () => {
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_zone");
-    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
     expect(navbarZone!.parentZone).toBeNull();
-    expect(navbarZone!.layerKey).toBeTruthy();
+    expect(navbarZone!.layerFq).toBeTruthy();
   });
 
   it("registers ui:navbar.board-selector as a FocusScope child of the navbar zone", async () => {
@@ -294,12 +296,12 @@ describe("NavBar", () => {
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_zone");
-    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
     const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find(
-      (c) => c.moniker === "ui:navbar.board-selector",
+      (c) => c.segment === "ui:navbar.board-selector",
     );
     expect(leaf).toBeDefined();
     expect(leaf!.parentZone).toBe(navbarZone!.key);
@@ -312,11 +314,11 @@ describe("NavBar", () => {
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_zone");
-    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
     const focusableCalls = callsFor("spatial_register_scope");
-    const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.inspect");
+    const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.inspect");
     expect(leaf).toBeDefined();
     expect(leaf!.parentZone).toBe(navbarZone!.key);
   });
@@ -329,7 +331,7 @@ describe("NavBar", () => {
 
     const focusableCalls = callsFor("spatial_register_scope");
     expect(
-      focusableCalls.find((c) => c.moniker === "ui:navbar.inspect"),
+      focusableCalls.find((c) => c.segment === "ui:navbar.inspect"),
     ).toBeUndefined();
   });
 
@@ -338,11 +340,11 @@ describe("NavBar", () => {
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_zone");
-    const navbarZone = zoneCalls.find((c) => c.moniker === "ui:navbar");
+    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
     const focusableCalls = callsFor("spatial_register_scope");
-    const leaf = focusableCalls.find((c) => c.moniker === "ui:navbar.search");
+    const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.search");
     expect(leaf).toBeDefined();
     expect(leaf!.parentZone).toBe(navbarZone!.key);
   });

@@ -206,7 +206,7 @@ export function FocusScope({
   const hasSpatialContext = fq !== null;
 
   return (
-    <FocusScopeContext.Provider value={focusKey}>
+    <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
         {!renderContainer ? (
           children
@@ -478,15 +478,26 @@ function FallbackFocusScopeBody({
     }
   }, [isDirectFocus]);
 
+  // No spatial ancestor → no parent FQM available, so this fallback can't
+  // compose a fully-qualified moniker for `setFocus`. Tests that mount
+  // a single primitive without `<SpatialFocusProvider>` only exercise
+  // render output, not focus mutations, so skipping the dispatch is the
+  // right behavior. Production code never enters this branch.
+  const parentFq = useOptionalFullyQualifiedMoniker();
+  const fallbackFq = useMemo(
+    () => (parentFq === null ? null : composeFq(parentFq, segment)),
+    [parentFq, segment],
+  );
+
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
       if (!handleEvents) return;
       e.preventDefault();
       e.stopPropagation();
-      if (setFocus) setFocus(segment);
+      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
       contextMenuHandler(e);
     },
-    [segment, setFocus, contextMenuHandler, handleEvents],
+    [fallbackFq, setFocus, contextMenuHandler, handleEvents],
   );
 
   const handleClick = useCallback(
@@ -497,9 +508,9 @@ function FallbackFocusScopeBody({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (target.closest("[contenteditable]")) return;
       e.stopPropagation();
-      if (setFocus) setFocus(segment);
+      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
     },
-    [segment, setFocus, handleEvents],
+    [fallbackFq, setFocus, handleEvents],
   );
 
   const { className: consumerClassName, ...restWithoutClassName } = htmlProps;

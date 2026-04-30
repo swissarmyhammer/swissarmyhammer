@@ -164,10 +164,10 @@ import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -186,22 +186,22 @@ async function flushSetup() {
  * had emitted one for the current window.
  *
  * The provider's listener decides which side of the swap fires — we always
- * pass both `prev_key` and `next_key` to mimic the kernel's payload shape.
+ * pass both `prev_fq` and `next_fq` to mimic the kernel's payload shape.
  * Wrapping the dispatch in `act()` flushes the React state updates so the
  * caller can assert against post-update DOM in the next tick.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
+  prev_fq = null,
+  next_fq = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: null,
+    prev_fq,
+    next_fq,
+    next_segment: null,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -214,7 +214,7 @@ async function fireFocusChanged({
 function renderBar(): ReturnType<typeof render> {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <TooltipProvider delayDuration={100}>
           <PerspectiveTabBar />
         </TooltipProvider>
@@ -227,7 +227,7 @@ function renderBar(): ReturnType<typeof render> {
 function withSpatialStack(children: ReactNode) {
   return (
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
       </FocusLayer>
     </SpatialFocusProvider>
@@ -249,17 +249,17 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: SpatialKey }> {
+function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** True when the moniker matches one of the two accepted bar-zone monikers. */
@@ -314,7 +314,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker));
     expect(barZone).toBeTruthy();
     expect(typeof barZone!.key).toBe("string");
-    expect(barZone!.layerKey).toBeTruthy();
+    expect(barZone!.layerFq).toBeTruthy();
     expect(barZone!.parentZone).toBeNull();
 
     unmount();
@@ -335,7 +335,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
     for (const tab of tabScopes) {
       expect(tab.parentZone).toBe(barZone.key);
-      expect(tab.layerKey).toBe(barZone.layerKey);
+      expect(tab.layerFq).toBe(barZone.layerFq);
     }
 
     unmount();
@@ -348,7 +348,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // Capture the bar's key plus the p1 tab's key from the registration calls.
     const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
     const p1Tab = registerScopeArgs().find(
-      (a) => a.moniker === "perspective_tab:p1",
+      (a) => a.segment === "perspective_tab:p1",
     )!;
 
     // Reset invoke before the click so we measure only the click's IPC.
@@ -376,13 +376,13 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const p1Tab = registerScopeArgs().find(
-      (a) => a.moniker === "perspective_tab:p1",
+      (a) => a.segment === "perspective_tab:p1",
     )!;
 
     // No indicator before the focus claim.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: p1Tab.key as SpatialKey });
+    await fireFocusChanged({ next_fq: p1Tab.key as FullyQualifiedMoniker });
 
     // After the claim flips, the indicator renders inside the matching tab.
     await waitFor(() => {
@@ -414,7 +414,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     expect(barNode).not.toBeNull();
     expect(barNode.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_key: barZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: barZone.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(barNode.getAttribute("data-focused")).not.toBeNull();
@@ -431,9 +431,9 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
   // `perspective-spatial-nav.guards.node.test.ts`). ArrowLeft / ArrowRight
   // and Enter are bound at `<AppShell>` to the `nav.left` / `nav.right` /
   // `nav.drillIn` commands, which dispatch `spatial_navigate` /
-  // `spatial_drill_in` for the currently-focused [`SpatialKey`]. The
+  // `spatial_drill_in` for the currently-focused [`FullyQualifiedMoniker`]. The
   // app-shell side of that contract is covered in `app-shell.test.tsx`
-  // (`nav.drillIn invokes spatial_drill_in for the focused SpatialKey on
+  // (`nav.drillIn invokes spatial_drill_in for the focused FullyQualifiedMoniker on
   // Enter`); the bar side of the contract is "do nothing", which the
   // source-level guards already enforce.
   // ---------------------------------------------------------------------
@@ -446,7 +446,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       isTabMoniker(a.moniker),
     );
     expect(tabScopes.length).toBeGreaterThanOrEqual(2);
-    const tabKeys = tabScopes.map((a) => a.key as SpatialKey);
+    const tabKeys = tabScopes.map((a) => a.key as FullyQualifiedMoniker);
 
     mockInvoke.mockClear();
     unmount();
@@ -497,19 +497,19 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
   it("only the focused tab's FocusIndicator is mounted at any time", async () => {
     // Belt-and-suspenders for #4: when focus moves between tabs, the
     // indicator must follow — exactly one indicator at a time, anchored to
-    // the focused tab. This exercises both the `next_key` and `prev_key`
+    // the focused tab. This exercises both the `next_fq` and `prev_fq`
     // sides of the focus-changed payload.
     const { container, queryByTestId, unmount } = withSpatialStackRendered();
     await flushSetup();
 
     const p1Tab = registerScopeArgs().find(
-      (a) => a.moniker === "perspective_tab:p1",
+      (a) => a.segment === "perspective_tab:p1",
     )!;
     const p2Tab = registerScopeArgs().find(
-      (a) => a.moniker === "perspective_tab:p2",
+      (a) => a.segment === "perspective_tab:p2",
     )!;
 
-    await fireFocusChanged({ next_key: p1Tab.key as SpatialKey });
+    await fireFocusChanged({ next_fq: p1Tab.key as FullyQualifiedMoniker });
     await waitFor(() => {
       const indicator = queryByTestId("focus-indicator");
       expect(indicator).not.toBeNull();
@@ -521,8 +521,8 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
 
     // Move the claim from p1 → p2.
     await fireFocusChanged({
-      prev_key: p1Tab.key as SpatialKey,
-      next_key: p2Tab.key as SpatialKey,
+      prev_fq: p1Tab.key as FullyQualifiedMoniker,
+      next_fq: p2Tab.key as FullyQualifiedMoniker,
     });
     await waitFor(() => {
       const indicators = container.querySelectorAll(

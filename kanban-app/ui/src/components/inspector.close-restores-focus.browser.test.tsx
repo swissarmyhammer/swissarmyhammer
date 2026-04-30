@@ -98,7 +98,10 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { asLayerName, type SpatialKey } from "@/types/spatial";
+import {
+  asSegment,
+  type FullyQualifiedMoniker
+} from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -233,12 +236,12 @@ async function defaultInvokeImpl(
   return null;
 }
 
-const WINDOW_LAYER_NAME = asLayerName("window");
+const WINDOW_LAYER_NAME = asSegment("window");
 
 function FocusedMonikerProbe() {
-  const { focusedMoniker } = useEntityFocus();
+  const { focusedFq } = useEntityFocus();
   return (
-    <span data-testid="focused-moniker-probe">{focusedMoniker ?? "null"}</span>
+    <span data-testid="focused-moniker-probe">{focusedFq ?? "null"}</span>
   );
 }
 
@@ -279,16 +282,16 @@ async function flushSetup() {
   });
 }
 
-async function fireFocus(key: SpatialKey, moniker: string) {
+async function fireFocus(key: FullyQualifiedMoniker, moniker: string) {
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
     for (const h of handlers) {
       h({
         payload: {
           window_label: "main",
-          prev_key: null,
-          next_key: key,
-          next_moniker: moniker,
+          prev_fq: null,
+          next_fq: key,
+          next_segment: moniker,
         },
       });
     }
@@ -318,13 +321,13 @@ describe("Inspector layer simplification — close panel restores focus", () => 
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TA.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
     });
 
     // Focus a field inside the panel — simulates the user navigating
     // into the panel after open.
-    const aTitle = sim.findByMoniker("field:task:TA.title")!;
-    await fireFocus(aTitle.key, aTitle.moniker);
+    const aTitle = sim.findBySegment("field:task:TA.title")!;
+    await fireFocus(aTitle.fq, aTitle.segment);
     await flushSetup();
     expect(getByTestId("focused-moniker-probe").textContent).toBe(
       "field:task:TA.title",
@@ -334,8 +337,8 @@ describe("Inspector layer simplification — close panel restores focus", () => 
     // verify the FocusLayer's pop unregisters them all (the contract
     // for the parent layer's last_focused fallback).
     const registeredBefore = sim
-      .findByMonikerPrefix("field:task:TA.")
-      .map((f) => f.key);
+      .findBySegmentPrefix("field:task:TA.")
+      .map((f) => f.fq);
     expect(registeredBefore.length).toBeGreaterThan(0);
 
     // Close the panel by mutating the backend state and emitting the
@@ -359,8 +362,8 @@ describe("Inspector layer simplification — close panel restores focus", () => 
 
     // All field zones from the closed panel must be unregistered.
     const stillRegistered = sim
-      .findByMonikerPrefix("field:task:TA.")
-      .map((f) => f.moniker);
+      .findBySegmentPrefix("field:task:TA.")
+      .map((f) => f.segment);
     expect(
       stillRegistered,
       "all field zones from the closed panel must be unregistered",
@@ -385,13 +388,13 @@ describe("Inspector layer simplification — close panel restores focus", () => 
     const { unmount } = renderInspectorChain();
     await flushSetup();
     await waitFor(() => {
-      expect(sim.findByMoniker("field:task:TB.title")).toBeDefined();
-      expect(sim.findByMoniker("field:task:TA.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TB.title")).toBeDefined();
+      expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
     });
 
     // Focus a field in panel B.
-    const bTitle = sim.findByMoniker("field:task:TB.title")!;
-    await fireFocus(bTitle.key, bTitle.moniker);
+    const bTitle = sim.findBySegment("field:task:TB.title")!;
+    await fireFocus(bTitle.fq, bTitle.segment);
     await flushSetup();
 
     // Close panel B.
@@ -413,13 +416,13 @@ describe("Inspector layer simplification — close panel restores focus", () => 
 
     // Panel B's fields must be unregistered.
     expect(
-      sim.findByMonikerPrefix("field:task:TB.").map((f) => f.moniker),
+      sim.findBySegmentPrefix("field:task:TB.").map((f) => f.segment),
       "panel B's field zones must be unregistered after close",
     ).toEqual([]);
 
     // Panel A's fields must still be registered — the kernel routes
     // focus back to one of them via `last_focused` memory.
-    const aFields = sim.findByMonikerPrefix("field:task:TA.");
+    const aFields = sim.findBySegmentPrefix("field:task:TA.");
     expect(
       aFields.length,
       "panel A's field zones must remain registered for the cross-panel restore",

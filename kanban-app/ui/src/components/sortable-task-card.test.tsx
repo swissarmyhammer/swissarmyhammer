@@ -83,7 +83,9 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import { asLayerName } from "@/types/spatial";
+import {
+  asSegment
+} from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 function makeEntity(): Entity {
@@ -115,7 +117,7 @@ function renderCard(ui: React.ReactElement) {
             <FieldUpdateProvider>
               <UIStateProvider>
                 <SpatialFocusProvider>
-                  <FocusLayer name={asLayerName("window")}>{ui}</FocusLayer>
+                  <FocusLayer name={asSegment("window")}>{ui}</FocusLayer>
                 </SpatialFocusProvider>
               </UIStateProvider>
             </FieldUpdateProvider>
@@ -145,7 +147,7 @@ describe("DraggableTaskCard", () => {
     const scopeCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
-    expect(scopeCalls.find((a) => a.moniker === "task:task-7")).toBeTruthy();
+    expect(scopeCalls.find((a) => a.segment === "task:task-7")).toBeTruthy();
   });
 
   it("does not register the card root as a FocusZone (the card is a leaf, not a zone)", async () => {
@@ -161,7 +163,7 @@ describe("DraggableTaskCard", () => {
     const zoneCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_zone")
       .map((c) => c[1] as Record<string, unknown>);
-    expect(zoneCalls.find((a) => a.moniker === "task:task-7")).toBeUndefined();
+    expect(zoneCalls.find((a) => a.segment === "task:task-7")).toBeUndefined();
   });
 
   it("renders the drag handle button", async () => {

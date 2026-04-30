@@ -100,10 +100,10 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { CommandBusyProvider, CommandScopeProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -222,10 +222,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /**
@@ -235,19 +235,19 @@ function spatialFocusCalls(): Array<{ key: SpatialKey }> {
  * visible `<FocusIndicator>`.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -270,7 +270,7 @@ function renderField(props: {
   return render(
     <CommandBusyProvider>
       <SpatialFocusProvider>
-        <FocusLayer name={asLayerName("window")}>
+        <FocusLayer name={asSegment("window")}>
           <TooltipProvider delayDuration={100}>
             <SchemaProvider>
               <EntityStoreProvider entities={{ task: [props.entity] }}>
@@ -390,7 +390,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const fieldZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(fieldZone).toBeTruthy();
 
@@ -429,7 +429,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const fieldZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(fieldZone).toBeTruthy();
 
@@ -469,14 +469,14 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const zoneArgs = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.tags",
+      (a) => a.segment === "field:task:T1.tags",
     );
     expect(zoneArgs).toBeTruthy();
 
     // Drive a focus claim for the field zone.
     await fireFocusChanged({
-      next_key: zoneArgs!.key as SpatialKey,
-      next_moniker: "field:task:T1.tags",
+      next_fq: zoneArgs!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.tags"),
     });
     await flushSetup();
 

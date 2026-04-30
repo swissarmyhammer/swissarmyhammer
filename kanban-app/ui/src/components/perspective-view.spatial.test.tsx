@@ -162,10 +162,10 @@ import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -217,17 +217,17 @@ async function flushSetup() {
  * before the next assertion.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
+  prev_fq = null,
+  next_fq = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: null,
+    prev_fq,
+    next_fq,
+    next_segment: null,
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -246,7 +246,7 @@ async function fireFocusChanged({
 function renderViewStack() {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <PerspectiveContainer>
             <ViewContainer />
@@ -265,10 +265,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: SpatialKey }> {
+function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Bar zones in this test accept either the dotted or hyphenated moniker. */
@@ -311,11 +311,11 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker));
     expect(viewZone).toBeTruthy();
     expect(typeof viewZone!.key).toBe("string");
-    expect(viewZone!.layerKey).toBeTruthy();
+    expect(viewZone!.layerFq).toBeTruthy();
     // The zone's parent is the surrounding `ui:perspective` zone — both
     // chrome zones live under the window layer.
     const perspectiveZone = registerZoneArgs().find(
-      (a) => a.moniker === "ui:perspective",
+      (a) => a.segment === "ui:perspective",
     );
     expect(perspectiveZone).toBeTruthy();
     expect(viewZone!.parentZone).toBe(perspectiveZone!.key);
@@ -339,7 +339,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     expect(viewNode).not.toBeNull();
     expect(viewNode.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_key: viewZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: viewZone.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(viewNode.getAttribute("data-focused")).not.toBeNull();
@@ -356,7 +356,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // Drill-out semantics: when the user is focused on an inner element
     // and Escape pops them out, focus eventually lands on the enclosing
     // `ui:view` zone. From the bar's point of view, "lands on view" means
-    // a `focus-changed` event arrives whose `next_key` matches the view
+    // a `focus-changed` event arrives whose `next_fq` matches the view
     // zone's spatial key. The bar test mirrors the kernel's emit by
     // dispatching that payload directly — drill-out routing itself lives
     // in the spatial-focus-context tests; what we verify here is that
@@ -372,15 +372,15 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // Pretend an inner board/grid leaf was focused first; we use a unique
     // key that the registry never minted so it doesn't accidentally match
     // any registered listener.
-    const phantomInnerKey = "ffffffff-ffff-4fff-8fff-ffffffffffff" as SpatialKey;
-    await fireFocusChanged({ next_key: phantomInnerKey });
+    const phantomInnerKey = "ffffffff-ffff-4fff-8fff-ffffffffffff" as FullyQualifiedMoniker;
+    await fireFocusChanged({ next_fq: phantomInnerKey });
     expect(viewNode.getAttribute("data-focused")).toBeNull();
 
     // Escape drives a drill-out chain that ultimately pushes focus to the
     // view zone. Mimic the kernel's resulting `focus-changed` payload.
     await fireFocusChanged({
-      prev_key: phantomInnerKey,
-      next_key: viewZone.key as SpatialKey,
+      prev_fq: phantomInnerKey,
+      next_fq: viewZone.key as FullyQualifiedMoniker,
     });
 
     await waitFor(() => {
@@ -395,7 +395,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     await flushSetup();
 
     const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
-    const expectedKey = viewZone.key as SpatialKey;
+    const expectedKey = viewZone.key as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -415,14 +415,14 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     await flushSetup();
 
     const perspectiveZone = registerZoneArgs().find(
-      (a) => a.moniker === "ui:perspective",
+      (a) => a.segment === "ui:perspective",
     )!;
     const node = container.querySelector(
       "[data-moniker='ui:perspective']",
     ) as HTMLElement;
     expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_key: perspectiveZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: perspectiveZone.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(node.getAttribute("data-focused")).not.toBeNull();

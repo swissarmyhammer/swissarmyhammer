@@ -111,10 +111,10 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
-  asLayerName,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -229,24 +229,24 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 /**
  * Drive a `focus-changed` event into the React tree as if the Rust
  * kernel had emitted one. The bridge in `<EntityFocusProvider>`
- * mirrors `payload.next_moniker` into the entity-focus store; the
+ * mirrors `payload.next_segment` into the entity-focus store; the
  * focused entity scope becomes the head of the chain that
  * `extractScopeBindings` walks on the next keydown.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -294,7 +294,7 @@ function renderFieldHarness(props: {
 
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -349,7 +349,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.title",
+      (a) => a.segment === "field:task:T1.title",
     );
     expect(
       titleZone,
@@ -367,8 +367,8 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
     // Drive a focus-changed event for the field zone.
     await fireFocusChanged({
-      next_key: titleZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.title",
+      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
 
@@ -411,13 +411,13 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     await flushSetup();
 
     const titleZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.title",
+      (a) => a.segment === "field:task:T1.title",
     );
     expect(titleZone).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: titleZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.title",
+      next_fq: titleZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.title"),
     });
     await flushSetup();
 
@@ -517,13 +517,13 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     await flushSetup();
 
     const idZone = registerZoneArgs().find(
-      (a) => a.moniker === "field:task:T1.id",
+      (a) => a.segment === "field:task:T1.id",
     );
     expect(idZone).toBeTruthy();
 
     await fireFocusChanged({
-      next_key: idZone!.key as SpatialKey,
-      next_moniker: "field:task:T1.id",
+      next_fq: idZone!.key as FullyQualifiedMoniker,
+      next_segment: asSegment("field:task:T1.id"),
     });
     await flushSetup();
 

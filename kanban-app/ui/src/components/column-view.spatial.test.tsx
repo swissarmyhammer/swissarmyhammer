@@ -117,11 +117,10 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import {
-  asLayerName,
-  asMoniker,
+  asSegment,
   type FocusChangedPayload,
-  type SpatialKey,
-  type WindowLabel,
+  type FullyQualifiedMoniker,
+  type WindowLabel
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -209,25 +208,25 @@ async function flushSetup() {
  * Drive a `focus-changed` event into the React tree as if the Rust
  * kernel had emitted one for the active window.
  *
- * The payload's `prev_key` / `next_key` mirror the kernel's
+ * The payload's `prev_fq` / `next_fq` mirror the kernel's
  * post-`spatial_focus` / `spatial_navigate` emit. Wrapping the
  * dispatch in `act()` flushes the React state updates so the caller
  * can assert against post-update DOM in the next tick.
  */
 async function fireFocusChanged({
-  prev_key = null,
-  next_key = null,
-  next_moniker = null,
+  prev_fq = null,
+  next_fq = null,
+  next_segment = null,
 }: {
-  prev_key?: SpatialKey | null;
-  next_key?: SpatialKey | null;
-  next_moniker?: string | null;
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+  next_segment?: string | null;
 }) {
   const payload: FocusChangedPayload = {
     window_label: "main" as WindowLabel,
-    prev_key,
-    next_key,
-    next_moniker: next_moniker as FocusChangedPayload["next_moniker"],
+    prev_fq,
+    next_fq,
+    next_segment: next_segment as FocusChangedPayload["next_segment"],
   };
   const handlers = listeners.get("focus-changed") ?? [];
   await act(async () => {
@@ -245,13 +244,13 @@ async function fireFocusChanged({
 function renderColumnInBoard(ui: React.ReactElement) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <SchemaProvider>
             <EntityStoreProvider entities={{}}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusZone moniker={asMoniker("ui:board")}>{ui}</FocusZone>
+                  <FocusZone moniker={asSegment("ui:board")}>{ui}</FocusZone>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>
@@ -277,7 +276,7 @@ function renderColumnInBoard(ui: React.ReactElement) {
 function renderColumnInAppShell(ui: React.ReactElement) {
   return render(
     <SpatialFocusProvider>
-      <FocusLayer name={asLayerName("window")}>
+      <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <UIStateProvider>
             <AppModeProvider>
@@ -287,7 +286,7 @@ function renderColumnInAppShell(ui: React.ReactElement) {
                     <TooltipProvider>
                       <ActiveBoardPathProvider value="/test/board">
                         <AppShell>
-                          <FocusZone moniker={asMoniker("ui:board")}>
+                          <FocusZone moniker={asSegment("ui:board")}>
                             {ui}
                           </FocusZone>
                         </AppShell>
@@ -312,34 +311,34 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: SpatialKey }> {
+function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_navigate` call's args, in order. */
 function spatialNavigateCalls(): Array<{
-  key: SpatialKey;
+  key: FullyQualifiedMoniker;
   direction: string;
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: SpatialKey; direction: string });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
 }
 
 /** Collect every `spatial_drill_out` call's args, in order. */
-function spatialDrillOutCalls(): Array<{ key: SpatialKey }> {
+function spatialDrillOutCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_out")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: SpatialKey }> {
+function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: SpatialKey });
+    .map((c) => c[1] as { key: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -370,17 +369,17 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     );
     expect(columnZone).toBeTruthy();
     expect(typeof columnZone!.key).toBe("string");
     expect((columnZone!.moniker as string)).toMatch(/^column:[0-9A-Z]{26}$/);
-    expect(columnZone!.layerKey).toBeTruthy();
+    expect(columnZone!.layerFq).toBeTruthy();
     expect(columnZone!.rect).toBeTruthy();
     expect(columnZone!.overrides).toEqual({});
 
     // Parent zone is the surrounding `ui:board` zone (mirrors production).
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board");
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
     expect(boardZone).toBeTruthy();
     expect(columnZone!.parentZone).toBe(boardZone!.key);
 
@@ -399,9 +398,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
-    const boardZone = registerZoneArgs().find((a) => a.moniker === "ui:board")!;
+    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
 
     // Clear so the assertion measures only the click's IPC.
     mockInvoke.mockClear();
@@ -449,7 +448,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(
       `[data-moniker='${column.moniker}']`,
@@ -459,7 +458,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     // No indicator before the focus claim.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_key: columnZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: columnZone.key as FullyQualifiedMoniker });
 
     await waitFor(() => {
       expect(columnNode.getAttribute("data-focused")).toBe("true");
@@ -484,9 +483,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
-    const columnKey = columnZone.key as SpatialKey;
+    const columnKey = columnZone.key as FullyQualifiedMoniker;
 
     // Seed both the SpatialFocusProvider's `focusedKeyRef` (for the
     // nav-command closure) AND the entity-focus moniker store (so
@@ -494,12 +493,12 @@ describe("ColumnView — browser spatial behaviour", () => {
     // turn lets `extractScopeBindings` reach the dynamic `nav.*`
     // commands' `keys[mode]` entries through the React-ancestor scope
     // chain). The moniker bridge in `EntityFocusProvider` mirrors
-    // `payload.next_moniker` into the moniker store; tests that omit
-    // `next_moniker` leave the store empty, the focused scope null, and
+    // `payload.next_segment` into the moniker store; tests that omit
+    // `next_segment` leave the store empty, the focused scope null, and
     // the keymap pipeline blind to the dynamic arrow-key bindings.
     await fireFocusChanged({
-      next_key: columnKey,
-      next_moniker: column.moniker,
+      next_fq: columnKey,
+      next_segment: column.moniker,
     });
 
     mockInvoke.mockClear();
@@ -523,12 +522,12 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnKey = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
-    )!.key as SpatialKey;
+      (a) => a.segment === column.moniker,
+    )!.key as FullyQualifiedMoniker;
 
     await fireFocusChanged({
-      next_key: columnKey,
-      next_moniker: column.moniker,
+      next_fq: columnKey,
+      next_segment: column.moniker,
     });
 
     mockInvoke.mockClear();
@@ -552,12 +551,12 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnKey = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
-    )!.key as SpatialKey;
+      (a) => a.segment === column.moniker,
+    )!.key as FullyQualifiedMoniker;
 
     await fireFocusChanged({
-      next_key: columnKey,
-      next_moniker: column.moniker,
+      next_fq: columnKey,
+      next_segment: column.moniker,
     });
 
     mockInvoke.mockClear();
@@ -581,12 +580,12 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnKey = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
-    )!.key as SpatialKey;
+      (a) => a.segment === column.moniker,
+    )!.key as FullyQualifiedMoniker;
 
     await fireFocusChanged({
-      next_key: columnKey,
-      next_moniker: column.moniker,
+      next_fq: columnKey,
+      next_segment: column.moniker,
     });
 
     mockInvoke.mockClear();
@@ -614,9 +613,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
-    const columnKey = columnZone.key as SpatialKey;
+    const columnKey = columnZone.key as FullyQualifiedMoniker;
 
     // Seed the focused-key ref AND the moniker store so the global
     // Escape handler sees the column as the current target. Same
@@ -625,8 +624,8 @@ describe("ColumnView — browser spatial behaviour", () => {
     // resolve the column's scope before the dynamic nav commands'
     // `keys[mode]` participate in the binding lookup.
     await fireFocusChanged({
-      next_key: columnKey,
-      next_moniker: column.moniker,
+      next_fq: columnKey,
+      next_segment: column.moniker,
     });
 
     const columnNode = container.querySelector(
@@ -642,7 +641,7 @@ describe("ColumnView — browser spatial behaviour", () => {
         // back for THIS test; we only verify the column key was the
         // input and that the React tree later reacts to the kernel's
         // follow-on `focus-changed` payload (asserted below).
-        return Promise.resolve(asMoniker("ui:board"));
+        return Promise.resolve(asSegment("ui:board"));
       }
       return defaultInvokeImpl(cmd, args);
     });
@@ -657,10 +656,10 @@ describe("ColumnView — browser spatial behaviour", () => {
     // Now mimic the kernel's resulting `focus-changed` (the column
     // de-focuses; its `data-focused` flips back to absent).
     const phantomBoardKey =
-      "ffffffff-ffff-4fff-8fff-fffffffffffe" as SpatialKey;
+      "ffffffff-ffff-4fff-8fff-fffffffffffe" as FullyQualifiedMoniker;
     await fireFocusChanged({
-      prev_key: columnKey,
-      next_key: phantomBoardKey,
+      prev_fq: columnKey,
+      next_fq: phantomBoardKey,
     });
 
     await waitFor(() => {
@@ -682,9 +681,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     await flushSetup();
 
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
-    const columnKey = columnZone.key as SpatialKey;
+    const columnKey = columnZone.key as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -714,14 +713,14 @@ describe("ColumnView — browser spatial behaviour", () => {
     // Drive a click + a synthetic focus-changed to exercise the same
     // hot paths the bug report covered.
     const columnZone = registerZoneArgs().find(
-      (a) => a.moniker === column.moniker,
+      (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(
       `[data-moniker='${column.moniker}']`,
     ) as HTMLElement;
     expect(columnNode).not.toBeNull();
     fireEvent.click(columnNode);
-    await fireFocusChanged({ next_key: columnZone.key as SpatialKey });
+    await fireFocusChanged({ next_fq: columnZone.key as FullyQualifiedMoniker });
 
     const banned = /^(entity_focus_|claim_when_|broadcast_nav_)/;
     const offenders = mockInvoke.mock.calls
