@@ -116,7 +116,7 @@ function findScrollableAncestors(node: Element): Element[] {
  * - `nodeRef`: ref to the rendered host element. The hook reads
  *   `.current` lazily so the first render's `null` is tolerated; the
  *   effect bails out when the ref is empty.
- * - `key`: the `SpatialKey` to push rect updates against.
+ * - `key`: the `FullyQualifiedMoniker` to push rect updates against.
  * - `updateRect`: the `spatial_update_rect` action from
  *   `useSpatialFocusActions`.
  *

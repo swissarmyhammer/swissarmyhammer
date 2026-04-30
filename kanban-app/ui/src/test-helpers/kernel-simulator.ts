@@ -128,7 +128,22 @@ export interface KernelSimulator {
   history: HistoryEntry[];
   /** The currently focused FQM, mutated by `spatial_focus` / `spatial_navigate`. */
   currentFocus: { fq: FullyQualifiedMoniker | null };
-  /** Find a registration by segment. Returns the most-recent live entry. */
+  /**
+   * Find the unique registration with the given segment.
+   *
+   * With path-based monikers (FQM identity), a `segment` is a *relative*
+   * name — not a unique identifier. Two zones in different layers may
+   * legitimately share the same segment (e.g. two open inspector panels
+   * each containing `field:task:T1.title`). Returning the first match
+   * silently would mask that ambiguity, so this method **throws** when
+   * more than one live registration matches the segment. Callers that
+   * need to enumerate matches should use {@link findBySegmentPrefix} or
+   * iterate `simulator.registrations` directly.
+   *
+   * @returns the matching registration, or `undefined` when no
+   *   registration matches.
+   * @throws when more than one live registration shares the segment.
+   */
   findBySegment(segment: string): RegistrationRecord | undefined;
   /** Find every registration whose segment has the given prefix. */
   findBySegmentPrefix(prefix: string): RegistrationRecord[];
@@ -324,10 +339,25 @@ export function installKernelSimulator(
     history,
     currentFocus,
     findBySegment(segment) {
+      let match: RegistrationRecord | undefined;
       for (const r of registrations.values()) {
-        if (r.segment === segment) return r;
+        if (r.segment !== segment) continue;
+        if (match !== undefined) {
+          // Surface ambiguity: with FQM identity, a segment is a relative
+          // name and may be reused across layers. Returning the first match
+          // silently would mask the duplicate and produce flaky tests when
+          // a future fixture introduces same-segment zones in different
+          // layers. Callers that legitimately want every match should use
+          // `findBySegmentPrefix` or iterate `registrations` directly.
+          throw new Error(
+            `findBySegment("${segment}"): more than one live registration matches; ` +
+              `segment is not unique under path-based monikers. ` +
+              `Use findBySegmentPrefix or iterate registrations to disambiguate.`,
+          );
+        }
+        match = r;
       }
-      return undefined;
+      return match;
     },
     findBySegmentPrefix(prefix) {
       const out: RegistrationRecord[] = [];

@@ -6,7 +6,7 @@ depends_on:
 - 01KQD8XM2T0FWHXANCK0KVDJH1
 - 01KQD8Y496CCACWN656SNFTRT8
 position_column: todo
-position_ordinal: a980
+position_ordinal: '7e80'
 project: spatial-nav
 title: 'Path monikers as spatial keys: SegmentMoniker (input) + FullyQualifiedMoniker (key); collapse SpatialKey/Moniker into one identifier'
 ---

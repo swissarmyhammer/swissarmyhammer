@@ -272,7 +272,6 @@ function useCompartmentReconfigure(
   useEffect(() => {
     const view = editorRef.current?.view;
     if (!view) return;
-    console.warn("[filter-diag] TextEditor compartment RECONFIGURE");
     view.dispatch({ effects: compartment.reconfigure(content) });
   }, [editorRef, compartment, content]);
 }

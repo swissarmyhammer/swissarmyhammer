@@ -395,7 +395,7 @@ describe("InspectorsContainer", () => {
   // register at the layer root. These tests pin the layer-level wiring
   // (push when stack non-empty, pop when stack empties); the field-zone
   // registration shape is pinned in
-  // `inspector-focus-bridge.layer-barrier.browser.test.tsx`.
+  // `inspector.layer-shape.browser.test.tsx`.
   // ---------------------------------------------------------------------
 
   it("does not push an inspector layer when no panels are open", async () => {

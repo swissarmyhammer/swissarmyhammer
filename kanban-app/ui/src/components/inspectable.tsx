@@ -40,8 +40,8 @@
  * # Usage — wrapper component
  *
  *   ```tsx
- *   <Inspectable moniker={asMoniker(`task:${task.id}`)}>
- *     <FocusScope moniker={asMoniker(`task:${task.id}`)}>
+ *   <Inspectable moniker={asSegment(`task:${task.id}`)}>
+ *     <FocusScope moniker={asSegment(`task:${task.id}`)}>
  *       {cardBody}
  *     </FocusScope>
  *   </Inspectable>
@@ -65,7 +65,7 @@
  *
  *   ```tsx
  *   function EntityRow({ entityMk, children }: Props) {
- *     const onDoubleClick = useInspectOnDoubleClick(asMoniker(entityMk));
+ *     const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
  *     return <tr onDoubleClick={onDoubleClick}>{children}</tr>;
  *   }
  *   ```

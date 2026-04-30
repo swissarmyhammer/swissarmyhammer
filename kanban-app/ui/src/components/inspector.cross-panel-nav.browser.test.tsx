@@ -340,16 +340,14 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TA.title",
     );
 
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    await flushSetup();
-
-    expect(
-      getByTestId("focused-moniker-probe").textContent,
-      "ArrowRight from a field in panel A must land on the spatially-nearest field in panel B",
-    ).toBe("field:task:TB.title");
+    fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
+    await waitFor(
+      () =>
+        expect(
+          getByTestId("focused-moniker-probe").textContent,
+          "ArrowRight from a field in panel A must land on the spatially-nearest field in panel B",
+        ).toBe("field:task:TB.title"),
+    );
     unmount();
   });
 
@@ -374,16 +372,14 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TB.status",
     );
 
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "ArrowLeft", code: "ArrowLeft" });
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    await flushSetup();
-
-    expect(
-      getByTestId("focused-moniker-probe").textContent,
-      "ArrowLeft from a field in panel B must land on the spatially-nearest field in panel A",
-    ).toBe("field:task:TA.status");
+    fireEvent.keyDown(document, { key: "ArrowLeft", code: "ArrowLeft" });
+    await waitFor(
+      () =>
+        expect(
+          getByTestId("focused-moniker-probe").textContent,
+          "ArrowLeft from a field in panel B must land on the spatially-nearest field in panel A",
+        ).toBe("field:task:TA.status"),
+    );
     unmount();
   });
 
@@ -412,16 +408,14 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TA.status",
     );
 
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    await flushSetup();
-
-    expect(
-      getByTestId("focused-moniker-probe").textContent,
-      "ArrowRight from panel A's middle field must pick panel B's middle field (same y)",
-    ).toBe("field:task:TB.status");
+    fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
+    await waitFor(
+      () =>
+        expect(
+          getByTestId("focused-moniker-probe").textContent,
+          "ArrowRight from panel A's middle field must pick panel B's middle field (same y)",
+        ).toBe("field:task:TB.status"),
+    );
     unmount();
   });
 
@@ -449,11 +443,20 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     observe();
 
     for (const dir of ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"]) {
-      await act(async () => {
-        fireEvent.keyDown(document, { key: dir, code: dir });
-        await new Promise((r) => setTimeout(r, 50));
+      fireEvent.keyDown(document, { key: dir, code: dir });
+      // Wait for React state to settle on an inspector-layer moniker
+      // before observing. The contract under test is that focus stays
+      // inside the inspector layer, so polling for a `field:task:T*.`
+      // segment converges on the post-nav state without racing the
+      // simulator's microtask `focus-changed` emit.
+      await waitFor(() => {
+        const text = getByTestId("focused-moniker-probe").textContent ?? "";
+        expect(
+          text.startsWith("field:task:TA.") ||
+            text.startsWith("field:task:TB."),
+          `focused moniker after ${dir} should be an inspector field, got ${text}`,
+        ).toBe(true);
       });
-      await flushSetup();
       observe();
     }
 

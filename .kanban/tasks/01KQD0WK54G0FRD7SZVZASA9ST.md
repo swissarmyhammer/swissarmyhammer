@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe280
 project: spatial-nav
 title: Kernel is the only source of focus state — entity-focus React store becomes a pure projection of kernel events
 ---

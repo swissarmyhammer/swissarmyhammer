@@ -2511,8 +2511,7 @@ pub async fn spatial_focus(
 
 /// Clear focus for the calling window.
 ///
-/// Explicit-clear counterpart of [`spatial_focus`] /
-/// [`spatial_focus_by_moniker`]. The React side calls this when the user
+/// Explicit-clear counterpart of [`spatial_focus`]. The React side calls this when the user
 /// (or a component-level handler) wants to drop focus altogether — for
 /// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
 /// the clear through the kernel preserves the architectural invariant

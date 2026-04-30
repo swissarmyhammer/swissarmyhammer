@@ -27,7 +27,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Hoisted Tauri-API spy triple.
@@ -465,6 +465,3 @@ describe("Inspector layer simplification — boundary navigation", () => {
     unmount();
   });
 });
-
-/** Suppress vitest warning about unused waitFor import. */
-void waitFor;

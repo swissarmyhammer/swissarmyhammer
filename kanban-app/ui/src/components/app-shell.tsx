@@ -216,8 +216,9 @@ const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
  *
  * The `direction` field is the wire-shape literal that `spatial_navigate`
  * accepts (matches `Direction` in `types/spatial.ts`). Each command's
- * `execute` closure threads the currently-focused [`SpatialKey`] plus this
- * direction string into `spatial_navigate` via the spatial-actions ref.
+ * `execute` closure threads the currently-focused [`FullyQualifiedMoniker`]
+ * (read via `actions.focusedFq()`) plus this direction string into
+ * `spatial_navigate` via the spatial-actions ref.
  *
  * Kept as a data table so `buildNavCommands` can produce the CommandDef[] in
  * a single pass without repetitive object literals.
@@ -269,11 +270,11 @@ const NAV_COMMAND_SPEC: ReadonlyArray<{
 /**
  * Build universal navigation CommandDefs that dispatch `spatial_navigate`.
  *
- * Each command reads the currently-focused [`SpatialKey`] from the
- * `SpatialFocusProvider`, then awaits the matching Tauri command
- * (`spatial_navigate`) with the per-spec `direction` literal. When the
- * registry has nothing focused (`focusedKey() === null`) the command is a
- * no-op — there is nothing to navigate from.
+ * Each command reads the currently-focused [`FullyQualifiedMoniker`] from
+ * the `SpatialFocusProvider` via `actions.focusedFq()`, then awaits the
+ * matching Tauri command (`spatial_navigate`) with the per-spec `direction`
+ * literal. When the registry has nothing focused (`focusedFq() === null`)
+ * the command is a no-op — there is nothing to navigate from.
  *
  * Historically this was the entry point for the pull-based predicate
  * registry: each FocusScope with a matching `claimWhen` predicate would
@@ -321,13 +322,13 @@ interface DrillRefs {
 /**
  * Build the `nav.drillIn` (Enter) and `nav.drillOut` (Escape) commands.
  *
- * Both read the currently-focused `(SpatialKey, Moniker)` pair from
- * the `SpatialFocusProvider`, await the matching Tauri command
- * (`spatial_drill_in` / `spatial_drill_out`), and dispatch
+ * Both read the currently-focused [`FullyQualifiedMoniker`] from the
+ * `SpatialFocusProvider` via `actions.focusedFq()`, await the matching
+ * Tauri command (`spatial_drill_in` / `spatial_drill_out`), and dispatch
  * `setFocus(result)` against the entity focus store on every result.
  * Under the no-silent-dropout contract the kernel always returns a
- * [`Moniker`]; the caller compares the result to the focused moniker
- * to detect the "no descent / no drill happened" case:
+ * [`FullyQualifiedMoniker`]; the caller compares the result to the focused
+ * FQM to detect the "no descent / no drill happened" case:
  *
  * - `nav.drillIn` falls through implicitly — `setFocus(focusedMoniker)`
  *   is idempotent on the entity-focus store, so a leaf without an

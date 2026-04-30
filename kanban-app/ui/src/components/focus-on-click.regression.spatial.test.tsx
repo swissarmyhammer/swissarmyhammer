@@ -1199,6 +1199,6 @@ describe("focus-on-click regression suite (every component class)", () => {
   // wrap is gone and the inspector body renders directly inside
   // `<SlidePanel>`. Field zones at the inspector layer root carry their
   // own click contracts (covered by the `<Field>` test above and by
-  // `inspector-focus-bridge.layer-barrier.browser.test.tsx`).
+  // `inspector.layer-shape.browser.test.tsx`).
   // -------------------------------------------------------------------------
 });

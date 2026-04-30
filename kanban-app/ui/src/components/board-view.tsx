@@ -1119,7 +1119,7 @@ interface BoardSpatialZoneProps {
 }
 
 /**
- * Wrap the board content in a `<FocusZone moniker={asMoniker("ui:board")}>`
+ * Wrap the board content in a `<FocusZone moniker={asSegment("ui:board")}>`
  * when the surrounding tree mounts the spatial-nav stack.
  *
  * `<FocusZone>` itself tolerates a missing `<FocusLayer>` ancestor by
