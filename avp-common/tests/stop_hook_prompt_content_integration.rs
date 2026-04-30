@@ -14,20 +14,23 @@
 //! - A `## Files Changed This Turn` section listing both paths.
 //! - The unified-diff content for each file in a fenced ```diff block.
 //!
-//! Strategy: wrap a [`PlaybackAgent`] in a recording proxy that snapshots
-//! every `PromptRequest` text payload as it passes through. After running
-//! `AvpContext::execute_rulesets`, assert on the captured prompt text.
+//! Strategy: wrap a [`PlaybackAgent`] in a `ConnectTo<Client>` middleware
+//! that snapshots the text payload of every `session/prompt` request as it
+//! flows through. After running `AvpContext::execute_rulesets`, assert on
+//! the captured prompt text.
+//!
+//! In ACP 0.11 the `Agent` trait was removed in favour of a builder/handler
+//! runtime, so the previous "wrap as `impl Agent`" approach is no longer
+//! possible — the wrapper is now a duplex-channel middleware that observes
+//! JSON-RPC messages on the wire, mirroring the shape of
+//! [`agent_client_protocol_extras::RecordingAgent`].
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::{
-    AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock, ExtNotification,
-    ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    SessionNotification, SetSessionModeRequest, SetSessionModeResponse,
-};
-use agent_client_protocol::Agent;
+use agent_client_protocol::jsonrpcmsg::{Message, Params};
+use agent_client_protocol::schema::{ContentBlock, PromptRequest};
+use agent_client_protocol::{Channel, Client, ConnectTo, Result as AcpResult};
 use agent_client_protocol_extras::PlaybackAgent;
 use avp_common::context::AvpContext;
 use avp_common::turn::FileDiff;
@@ -44,18 +47,26 @@ fn fixture_path() -> PathBuf {
         .join("rule_clean_pass.json")
 }
 
-/// Agent proxy that records every `PromptRequest` passed to `prompt()`.
+/// `ConnectTo<Client>` middleware that records the text payload of every
+/// `session/prompt` request as it flows through to the inner agent.
 ///
-/// Forwards all calls to the wrapped `PlaybackAgent` and exposes the captured
-/// prompt text payloads through [`captured_prompts`](Self::captured_prompts).
-struct PromptCapturingAgent {
-    inner: PlaybackAgent,
-    /// Concatenated text from every `PromptRequest` ever sent.
-    captured: Arc<Mutex<Vec<String>>>,
+/// Mirrors the duplex-channel wiring used by
+/// [`agent_client_protocol_extras::RecordingAgent`]: client and inner agent
+/// are connected through an internal pipe, and every JSON-RPC message
+/// observed in the client→agent direction is inspected for `session/prompt`
+/// requests. The full JSON params are captured so the test can assert on
+/// any field of the request, not just the text content blocks.
+struct PromptCapturingAgent<A> {
+    inner: A,
+    /// Captured `PromptRequest` instances in arrival order.
+    captured: Arc<Mutex<Vec<PromptRequest>>>,
 }
 
-impl PromptCapturingAgent {
-    fn new(inner: PlaybackAgent) -> (Self, Arc<Mutex<Vec<String>>>) {
+impl<A> PromptCapturingAgent<A> {
+    /// Wrap `inner` in a capturing tee. Returns the wrapper plus a shared
+    /// handle to the captured-prompts vector for the test to read after
+    /// the connection completes.
+    fn new(inner: A) -> (Self, Arc<Mutex<Vec<PromptRequest>>>) {
         let captured = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
@@ -65,82 +76,104 @@ impl PromptCapturingAgent {
             captured,
         )
     }
+}
 
-    fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<SessionNotification> {
-        self.inner.subscribe_notifications()
+impl<A> ConnectTo<Client> for PromptCapturingAgent<A>
+where
+    A: ConnectTo<Client> + Send + 'static,
+{
+    /// Wire the client transport to the inner agent through a capturing tee.
+    ///
+    /// Builds an internal duplex channel between us and the inner component
+    /// and runs three concurrent loops: the inner agent's own future,
+    /// copy-and-capture client→inner, and a plain copy of inner→client.
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
+    ) -> AcpResult<()> {
+        // Internal pipe between us and the inner agent.
+        let (to_inner, inner_side) = Channel::duplex();
+
+        // Drive the inner agent on its end of the duplex channel.
+        let inner_future = self.inner.connect_to(inner_side);
+
+        // Drive the real client transport — we expose ourselves as the agent
+        // it talks to.
+        let (client_channel, client_future) = client.into_channel_and_future();
+
+        let captured = self.captured;
+
+        // client → inner: peek at every message; capture prompt requests.
+        let capture_client_to_inner = capture_prompts(client_channel.rx, to_inner.tx, captured);
+
+        // inner → client: pass-through.
+        let copy_inner_to_client = copy_messages(to_inner.rx, client_channel.tx);
+
+        match futures::try_join!(
+            inner_future,
+            client_future,
+            capture_client_to_inner,
+            copy_inner_to_client,
+        ) {
+            Ok(((), (), (), ())) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl Agent for PromptCapturingAgent {
-    async fn initialize(
-        &self,
-        request: InitializeRequest,
-    ) -> agent_client_protocol::Result<InitializeResponse> {
-        self.inner.initialize(request).await
-    }
+/// Copy every message from `rx` to `tx`. Used for the inner→client direction
+/// where we have no inspection to perform.
+async fn copy_messages(
+    mut rx: futures::channel::mpsc::UnboundedReceiver<AcpResult<Message>>,
+    tx: futures::channel::mpsc::UnboundedSender<AcpResult<Message>>,
+) -> AcpResult<()> {
+    use futures::StreamExt;
 
-    async fn authenticate(
-        &self,
-        request: AuthenticateRequest,
-    ) -> agent_client_protocol::Result<AuthenticateResponse> {
-        self.inner.authenticate(request).await
+    while let Some(msg) = rx.next().await {
+        tx.unbounded_send(msg)
+            .map_err(|e| agent_client_protocol::util::internal_error(e.to_string()))?;
     }
+    Ok(())
+}
 
-    async fn new_session(
-        &self,
-        request: NewSessionRequest,
-    ) -> agent_client_protocol::Result<NewSessionResponse> {
-        self.inner.new_session(request).await
+/// Copy every message from `rx` to `tx`, capturing the parsed `PromptRequest`
+/// of every `session/prompt` request seen on the way through.
+///
+/// Failure to parse the params is logged and ignored — capturing must never
+/// break the wrapped agent's call.
+async fn capture_prompts(
+    mut rx: futures::channel::mpsc::UnboundedReceiver<AcpResult<Message>>,
+    tx: futures::channel::mpsc::UnboundedSender<AcpResult<Message>>,
+    captured: Arc<Mutex<Vec<PromptRequest>>>,
+) -> AcpResult<()> {
+    use futures::StreamExt;
+
+    while let Some(msg) = rx.next().await {
+        if let Ok(Message::Request(req)) = &msg {
+            if req.id.is_some() && req.method == "session/prompt" {
+                if let Some(prompt) = decode_prompt(req.params.as_ref()) {
+                    captured.lock().unwrap().push(prompt);
+                } else {
+                    tracing::warn!(
+                        "PromptCapturingAgent: failed to decode session/prompt params"
+                    );
+                }
+            }
+        }
+        tx.unbounded_send(msg)
+            .map_err(|e| agent_client_protocol::util::internal_error(e.to_string()))?;
     }
+    Ok(())
+}
 
-    async fn prompt(
-        &self,
-        request: PromptRequest,
-    ) -> agent_client_protocol::Result<PromptResponse> {
-        // Snapshot every text block in the prompt before delegating.
-        let text: String = request
-            .prompt
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(text) => Some(text.text.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        self.captured.lock().unwrap().push(text);
-
-        self.inner.prompt(request).await
-    }
-
-    async fn cancel(&self, request: CancelNotification) -> agent_client_protocol::Result<()> {
-        self.inner.cancel(request).await
-    }
-
-    async fn load_session(
-        &self,
-        request: LoadSessionRequest,
-    ) -> agent_client_protocol::Result<LoadSessionResponse> {
-        self.inner.load_session(request).await
-    }
-
-    async fn set_session_mode(
-        &self,
-        request: SetSessionModeRequest,
-    ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-        self.inner.set_session_mode(request).await
-    }
-
-    async fn ext_method(&self, request: ExtRequest) -> agent_client_protocol::Result<ExtResponse> {
-        self.inner.ext_method(request).await
-    }
-
-    async fn ext_notification(
-        &self,
-        notification: ExtNotification,
-    ) -> agent_client_protocol::Result<()> {
-        self.inner.ext_notification(notification).await
-    }
+/// Decode the `params` of a `session/prompt` JSON-RPC request into a typed
+/// [`PromptRequest`]. Returns `None` on shape mismatch.
+fn decode_prompt(params: Option<&Params>) -> Option<PromptRequest> {
+    let value = match params? {
+        Params::Object(map) => serde_json::Value::Object(map.clone()),
+        Params::Array(_) => return None,
+    };
+    serde_json::from_value(value).ok()
 }
 
 /// Construct a Stop-hook context, run a single-rule RuleSet through the
@@ -156,13 +189,11 @@ async fn stop_hook_rule_prompt_contains_changed_files_and_diffs() {
     let original_cwd = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(temp.path()).expect("chdir to temp");
 
-    // Wrap the playback fixture in a capturing proxy.
+    // Wrap the playback fixture in a capturing tee.
     let playback = PlaybackAgent::new(fixture_path(), "claude");
     let (capturing_agent, captured) = PromptCapturingAgent::new(playback);
-    let notifications = capturing_agent.subscribe_notifications();
-    let agent_arc: Arc<dyn Agent + Send + Sync> = Arc::new(capturing_agent);
 
-    let ctx = AvpContext::with_agent(agent_arc, notifications).expect("with_agent");
+    let ctx = AvpContext::with_agent(capturing_agent).expect("with_agent");
 
     // Lay down a single-rule RuleSet under <temp>/.avp/validators/.
     let avp_validators = temp
@@ -242,13 +273,22 @@ async fn stop_hook_rule_prompt_contains_changed_files_and_diffs() {
     }
     std::env::set_current_dir(&original_cwd).expect("restore cwd");
 
-    // The capturing proxy should have seen exactly one prompt (one rule).
+    // The capturing tee should have seen exactly one prompt (one rule).
     let prompts = captured.lock().unwrap().clone();
     assert!(
         !prompts.is_empty(),
         "expected at least one prompt to reach the agent, got none"
     );
-    let prompt_text = &prompts[0];
+    // Concatenate every text block in the first observed prompt.
+    let prompt_text: String = prompts[0]
+        .prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // 1. The `## Files Changed This Turn` section must appear with both paths.
     assert!(
