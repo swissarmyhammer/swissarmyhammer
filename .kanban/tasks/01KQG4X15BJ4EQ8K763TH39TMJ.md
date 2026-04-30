@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ff80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffb580
 project: acp-upgrade
 title: 'agent-client-protocol-extras: get_fixture_path_for() resolves to workspace root, not crate-local .fixtures/'
 ---
@@ -32,12 +32,41 @@ the bug could be either:
 
 ## Acceptance Criteria
 
-- [ ] Decide which layout is canonical (per-crate vs workspace) and
+- [x] Decide which layout is canonical (per-crate vs workspace) and
       document it in the helper.
-- [ ] Either the helper resolves to the canonical location, or the
+- [x] Either the helper resolves to the canonical location, or the
       existing fixture trees are moved to match.
-- [ ] `acp-conformance` integration tests can find the recorded
+- [x] `acp-conformance` integration tests can find the recorded
       fixtures without their fixture path being constructed manually.
+
+## Resolution
+
+Per-crate `<crate>/.fixtures/` is canonical (matches the existing
+fixture trees in `acp-conformance/`, `avp-common/`, and
+`agent-client-protocol-extras/`, and the `avp-common` test helpers
+that already resolve via `env!("CARGO_MANIFEST_DIR")`).
+
+Renamed `workspace_root` -> `fixture_root`. New resolution order:
+
+1. `CARGO_MANIFEST_DIR` directly (calling crate's manifest dir, which
+   cargo sets at test runtime to the test crate). This is the per-crate
+   layout the existing fixtures live under.
+2. Walk up to a `[workspace]` `Cargo.toml` from the manifest dir
+   (defensive fallback when the manifest dir doesn't resolve).
+3. Current working directory as a final fallback for non-cargo
+   callers (e.g. release binaries).
+
+Updated all docstrings (module-level, `get_fixture_path_for`, and
+`fixture_root`). Replaced the old `workspace_root_resolves_to_repo_root`
+unit test with a new `fixture_root_resolves_to_calling_crate_manifest_dir`
+test plus `get_fixture_path_for_lands_under_per_crate_dot_fixtures`.
+
+Removed the stale workspace-root `.fixtures/` directory and updated
+the `.gitignore` comment (kept the `/.fixtures/` ignore line so any
+historical or accidental drop stays quiet).
+
+Verified: `cargo test -p acp-conformance case_2_claude` -> 52 passed,
+0 failed. Conformance tests now resolve their per-crate fixtures.
 
 ## Discovered while
 

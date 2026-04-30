@@ -3,7 +3,7 @@
 //! The ACP 0.10 conformance test suite picked between a real recorded agent
 //! (`RecordingAgent`) and a stubbed-out replay (`PlaybackAgent`) through a
 //! single `Box<dyn AgentWithFixture>` factory pattern. Each per-agent factory
-//! looked up `<workspace>/.fixtures/<agent_type>/<test_name>.json` — if the
+//! looked up `<crate>/.fixtures/<agent_type>/<test_name>.json` — if the
 //! file existed it returned a `PlaybackAgent`, otherwise it returned a
 //! `RecordingAgent` wrapping the real agent so the next run would have a
 //! fixture.
@@ -47,11 +47,20 @@
 //! ## Path layout
 //!
 //! [`get_fixture_path_for`] returns
-//! `<workspace>/.fixtures/<agent_type>/<test_name>.json` relative to the
-//! cargo workspace root. [`get_test_name_from_thread`] reads the current
-//! `tokio::test`-flavoured thread name and returns its leaf component (so
-//! `tests::integration::initialization::test_minimal_initialization` becomes
-//! `test_minimal_initialization`).
+//! `<crate>/.fixtures/<agent_type>/<test_name>.json` rooted at the *calling*
+//! test crate's manifest directory — the per-crate layout used by
+//! `acp-conformance/.fixtures/`, `avp-common/.fixtures/`, and
+//! `agent-client-protocol-extras/.fixtures/`. This matches the layout
+//! inherited from ACP 0.10. When `CARGO_MANIFEST_DIR` is unset (e.g. a
+//! release binary calling the helper at runtime) it falls back to the
+//! workspace root, then to the current working directory.
+//!
+//! [`get_test_name_from_thread`] reads the current `tokio::test`-flavoured
+//! thread name and returns the test-function component (so
+//! `tests::integration::initialization::test_minimal_initialization` and the
+//! rstest variant
+//! `tests::integration::initialization::test_minimal_initialization::case_1_llama`
+//! both resolve to `test_minimal_initialization`).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -98,10 +107,14 @@ pub trait AgentWithFixture: Send + Sync {
 // Path / test-name helpers
 // ---------------------------------------------------------------------------
 
-/// Return `<workspace>/.fixtures/<agent_type>/<test_name>.json`.
+/// Return `<crate>/.fixtures/<agent_type>/<test_name>.json` for the calling
+/// test crate.
 ///
-/// The workspace root is detected via [`workspace_root`]. Parent directories
-/// are *not* created — callers that need them should call
+/// The fixture root is resolved by [`fixture_root`], which prefers the
+/// calling crate's `CARGO_MANIFEST_DIR` (the per-crate layout used by
+/// `acp-conformance`, `avp-common`, and this crate's own hook tests) and
+/// falls back to the workspace root, then the current working directory.
+/// Parent directories are *not* created — callers that need them should call
 /// [`std::fs::create_dir_all`] on `path.parent()` before writing.
 ///
 /// # Arguments
@@ -110,41 +123,105 @@ pub trait AgentWithFixture: Send + Sync {
 /// * `test_name` - Leaf test name like `"test_minimal_initialization"`. Used
 ///   verbatim as the file stem.
 pub fn get_fixture_path_for(agent_type: &str, test_name: &str) -> PathBuf {
-    workspace_root()
+    fixture_root()
         .join(".fixtures")
         .join(agent_type)
         .join(format!("{test_name}.json"))
 }
 
-/// Return the leaf component of the current thread's name.
+/// Return the test-function component of the current thread's name.
 ///
 /// `tokio::test`-flavoured threads inherit the test function's fully
 /// qualified path as the thread name (e.g.
 /// `integration::initialization::test_minimal_initialization`). The fixture
-/// pattern only cares about the leaf — the part after the final `::`. When
-/// the thread has no name (e.g. running in a custom executor), the literal
-/// string `"unknown"` is returned so callers don't have to handle a missing
-/// value.
+/// pattern only cares about the test-function component.
+///
+/// For plain `#[tokio::test]` threads, that's just the leaf — the part after
+/// the final `::`.
+///
+/// For `rstest` parametric cases, the framework appends a synthetic case
+/// suffix to the path (e.g.
+/// `integration::initialization::test_minimal_initialization::case_1_llama`).
+/// The leaf in that case is the case suffix, not the test function — using
+/// it as the fixture stem would produce one fixture file per parametric
+/// case with names like `case_1_llama.json`. The recorder and verifier
+/// agree on `<test_fn>.json`, so we must strip the case suffix when we
+/// see one and return the segment immediately before it.
+///
+/// When the thread has no name (e.g. running in a custom executor), the
+/// literal string `"unknown"` is returned so callers don't have to handle
+/// a missing value.
 pub fn get_test_name_from_thread() -> String {
     let thread = std::thread::current();
     let name = thread.name().unwrap_or("unknown");
-    name.rsplit("::").next().unwrap_or(name).to_string()
+    let mut segments = name.rsplit("::");
+    let Some(leaf) = segments.next() else {
+        return name.to_string();
+    };
+    if is_rstest_case_segment(leaf) {
+        if let Some(parent) = segments.next() {
+            return parent.to_string();
+        }
+    }
+    leaf.to_string()
 }
 
-/// Resolve the workspace root for fixture paths.
+/// Return `true` if `segment` matches the `rstest` synthetic case-name
+/// pattern: `case_<digits>` optionally followed by `_<label>`.
+///
+/// `rstest` generates one thread-name segment per parametric case, of the
+/// shape `case_01`, `case_1_llama`, `case_2_some_label`, etc. We need to
+/// recognise these so [`get_test_name_from_thread`] can step past them and
+/// return the real test-function name.
+///
+/// The check is intentionally strict — `case_xyz` (no digits) is *not* a
+/// case segment, and a real test function literally named `case_1` would
+/// collide here. That's an acceptable trade: rstest owns the `case_<n>`
+/// namespace by convention, and any conflicting hand-written test would be
+/// confusing for humans regardless.
+fn is_rstest_case_segment(segment: &str) -> bool {
+    let Some(rest) = segment.strip_prefix("case_") else {
+        return false;
+    };
+    // Consume one or more digits.
+    let digits_end = rest
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_digit())
+        .map(|(i, _)| i)
+        .unwrap_or(rest.len());
+    if digits_end == 0 {
+        return false;
+    }
+    // After the digits, either end-of-string or `_<label>`.
+    match &rest[digits_end..] {
+        "" => true,
+        tail => tail.starts_with('_'),
+    }
+}
+
+/// Resolve the root directory under which `.fixtures/` lives.
 ///
 /// Tries, in order:
-/// 1. The directory containing a top-level `Cargo.toml` discovered by walking
-///    up from `CARGO_MANIFEST_DIR`. This is the common case during
-///    `cargo test` / `cargo nextest`.
-/// 2. The current working directory as a final fallback.
+/// 1. `CARGO_MANIFEST_DIR` directly — when called from a test, cargo sets
+///    this to the *calling crate's* manifest directory, giving us the
+///    per-crate layout (`<crate>/.fixtures/...`). This is the canonical
+///    location for `acp-conformance`, `avp-common`, and this crate's own
+///    hook fixtures.
+/// 2. The directory containing a top-level `[workspace]` `Cargo.toml`
+///    discovered by walking up from `CARGO_MANIFEST_DIR`. This fallback is
+///    only reachable when the manifest dir itself doesn't exist (a defensive
+///    edge case) — under `cargo test`/`cargo nextest`, step 1 always wins.
+/// 3. The current working directory as a final fallback for non-cargo
+///    callers (e.g. release binaries invoking the helper at runtime).
 ///
-/// The function never panics — a missing workspace root degrades to a
-/// relative `.fixtures/` directory under cwd, matching the legacy 0.10
-/// behaviour.
-fn workspace_root() -> PathBuf {
+/// The function never panics — a missing root degrades to a relative
+/// `.fixtures/` directory under cwd, matching the legacy 0.10 behaviour.
+fn fixture_root() -> PathBuf {
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
         let start = PathBuf::from(manifest_dir);
+        if start.is_dir() {
+            return start;
+        }
         if let Some(root) = walk_up_for_workspace(&start) {
             return root;
         }
@@ -548,17 +625,94 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_resolves_to_repo_root() {
-        let root = workspace_root();
-        // The repo root must contain a Cargo.toml with [workspace] in it.
+    fn get_test_name_strips_rstest_case_suffix_with_label() {
+        // rstest parametric tests append `case_<n>_<label>` to the path. The
+        // helper must skip past the case segment and return the test
+        // function name (`test_minimal_initialization`).
+        let handle = std::thread::Builder::new()
+            .name(
+                "integration::initialization::test_minimal_initialization::case_1_llama"
+                    .to_string(),
+            )
+            .spawn(get_test_name_from_thread)
+            .expect("spawn named thread");
+        let leaf = handle.join().expect("thread join");
+        assert_eq!(leaf, "test_minimal_initialization");
+    }
+
+    #[test]
+    fn get_test_name_strips_rstest_case_suffix_without_label() {
+        // rstest also generates bare `case_<n>` segments when no description
+        // is provided. The helper must still strip them.
+        let handle = std::thread::Builder::new()
+            .name("integration::initialization::test_foo::case_01".to_string())
+            .spawn(get_test_name_from_thread)
+            .expect("spawn named thread");
+        let leaf = handle.join().expect("thread join");
+        assert_eq!(leaf, "test_foo");
+    }
+
+    #[test]
+    fn is_rstest_case_segment_recognises_canonical_shapes() {
+        assert!(is_rstest_case_segment("case_1"));
+        assert!(is_rstest_case_segment("case_01"));
+        assert!(is_rstest_case_segment("case_42"));
+        assert!(is_rstest_case_segment("case_1_llama"));
+        assert!(is_rstest_case_segment("case_2_some_long_label"));
+    }
+
+    #[test]
+    fn is_rstest_case_segment_rejects_non_case_segments() {
+        // Plain test-function names — no `case_` prefix.
+        assert!(!is_rstest_case_segment("test_minimal_initialization"));
+        assert!(!is_rstest_case_segment("test_foo"));
+        // `case_` prefix but no digits — not the rstest shape.
+        assert!(!is_rstest_case_segment("case_"));
+        assert!(!is_rstest_case_segment("case_label"));
+        assert!(!is_rstest_case_segment("case_abc_1"));
+        // Empty / too short.
+        assert!(!is_rstest_case_segment(""));
+        assert!(!is_rstest_case_segment("case"));
+        // Digits not immediately after the underscore (must start with digit).
+        assert!(!is_rstest_case_segment("case_x1"));
+    }
+
+    #[test]
+    fn fixture_root_resolves_to_calling_crate_manifest_dir() {
+        // Under `cargo test`, `CARGO_MANIFEST_DIR` is set to the calling
+        // crate's manifest directory — so for this in-crate unit test, the
+        // root must be `agent-client-protocol-extras/`.
+        let root = fixture_root();
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(
+            root, expected,
+            "fixture_root must equal the calling crate's CARGO_MANIFEST_DIR"
+        );
+        // Sanity-check that this is a real crate directory (has its own
+        // Cargo.toml), not the workspace root.
         let manifest = root.join("Cargo.toml");
         assert!(
             manifest.exists(),
-            "workspace_root must point at a directory containing Cargo.toml: {root:?}"
+            "fixture_root should contain a Cargo.toml: {root:?}"
         );
         assert!(
-            is_workspace_manifest(&manifest),
-            "Cargo.toml at {manifest:?} should be a workspace manifest"
+            !is_workspace_manifest(&manifest),
+            "fixture_root should be a crate manifest, not the workspace one: {manifest:?}"
+        );
+    }
+
+    #[test]
+    fn get_fixture_path_for_lands_under_per_crate_dot_fixtures() {
+        // The leading prefix of the resolved path must be the calling
+        // crate's manifest directory followed by `.fixtures/`. This is the
+        // canonical per-crate layout — fixtures live under
+        // `<crate>/.fixtures/<agent>/<test>.json`, NOT the workspace root.
+        let path = get_fixture_path_for("claude", "test_minimal_initialization");
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let expected_prefix = manifest_dir.join(".fixtures");
+        assert!(
+            path.starts_with(&expected_prefix),
+            "fixture path {path:?} must start with {expected_prefix:?}"
         );
     }
 

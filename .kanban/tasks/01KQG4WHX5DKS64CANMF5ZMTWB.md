@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: fe80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffb480
 project: acp-upgrade
 title: 'agent-client-protocol-extras: get_test_name_from_thread() picks wrong leaf for rstest cases'
 ---
@@ -30,16 +30,16 @@ verification step fails to find them.
 
 ## Acceptance Criteria
 
-- [ ] When the thread name ends in `::case_<digits>_<label>`, the
+- [x] When the thread name ends in `::case_<digits>_<label>`, the
       helper returns the function-name component (the segment before
       the case suffix), not the case suffix itself.
-- [ ] When the thread name has no case suffix, the existing leaf
+- [x] When the thread name has no case suffix, the existing leaf
       behaviour is preserved.
-- [ ] Unit tests cover both shapes (with and without case suffix).
+- [x] Unit tests cover both shapes (with and without case suffix).
 
 ## Tests
 
-- [ ] Add a unit test that spawns a thread named
+- [x] Add a unit test that spawns a thread named
       `integration::initialization::test_minimal_initialization::case_1_llama`
       and asserts the returned name is `test_minimal_initialization`.
 
