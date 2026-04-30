@@ -142,18 +142,15 @@ impl<M: MockAgent + 'static> ConnectTo<Client> for MockAgentAdapter<M> {
         self,
         client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
     ) -> agent_client_protocol::Result<()> {
-        let mock = Arc::clone(&self.0);
-        let mock_for_notifications = Arc::clone(&self.0);
+        let mock_for_requests = Arc::clone(&self.0);
+        let mock_for_notifications = self.0;
 
         agent_client_protocol::Agent
             .builder()
             .name("conformance-mock-agent")
             .on_receive_request(
-                {
-                    let mock = Arc::clone(&mock);
-                    async move |req: agent_client_protocol::ClientRequest, responder, cx| {
-                        dispatch_mock_request(&mock, req, responder, &cx)
-                    }
+                async move |req: agent_client_protocol::ClientRequest, responder, cx| {
+                    dispatch_mock_request(&mock_for_requests, req, responder, &cx)
                 },
                 agent_client_protocol::on_receive_request!(),
             )

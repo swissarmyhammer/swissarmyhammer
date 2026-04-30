@@ -6,7 +6,7 @@ depends_on:
 - 01KQD0N8Y24T4FVQJDCH80QPQE
 - 01KQD0NWYCZESV97RS8097W175
 - 01KQFSQM87VBRVHNDPRWHFJ5XD
-position_column: review
+position_column: doing
 position_ordinal: '80'
 project: acp-upgrade
 title: Adapt acp-conformance to ACP 0.11 (incl. mock Agent impls and fixtures)
@@ -44,8 +44,8 @@ Every scenario file under `acp-conformance/src/` defines a mock `Agent` to drive
 - [x] `cargo check -p acp-conformance --all-targets` passes.
 - [x] `cargo clippy -p acp-conformance --all-targets -- -D warnings` passes.
 - [x] All conformance tests pass for both `llama` and `claude` fixture sets.
-  - 175/175 lib unit tests pass.
-  - 21/21 serialization integration tests pass (including 54 claude + 53 llama fixture round-trip checks).
+  - 176/176 lib unit tests pass (added 1 new regression test for the `_`-prefix routing fix).
+  - 20/20 serialization integration tests pass (18 hand-rolled serialization tests + `claude_fixtures_round_trip` + `llama_fixtures_round_trip`, including 54 claude + 53 llama fixture round-trip checks).
   - Live recording integration tests are blocked by two latent bugs in `agent-client-protocol-extras` (`get_test_name_from_thread()` and `get_fixture_path_for()`) that were introduced when extras was rebuilt for 0.11. Captured as follow-up tasks 01KQG4WHX5DKS64CANMF5ZMTWB and 01KQG4X15BJ4EQ8K763TH39TMJ. The conformance crate itself is correctly wired against the new API.
 - [x] Any regenerated fixtures are committed; the diff is reviewed and the new wire format is documented in the task comments.
   - No fixtures were regenerated. The 54 claude + 53 llama existing fixtures all deserialize cleanly through the new `RecordedSession` shape — wire format is unchanged.
@@ -159,3 +159,19 @@ These two extras-side bugs are why the live-recording integration
 tests can't yet drive cleanly to green. The conformance crate itself
 is correctly wired against the new API and unblocks fully once those
 two follow-ups land.
+
+## Review Findings (2026-04-30 16:47)
+
+### Warnings
+- [x] `acp-conformance/src/terminals.rs:62-74` and `acp-conformance/src/file_system.rs:40-52` — `send_ext_method` constructs `ClientRequest::ExtMethodRequest(req)` with the bare wire method (e.g. `"terminal/create"`), but the ACP 0.11 SDK's `parse_message` for `ClientRequest` only routes `_`-prefixed wire methods to the `ExtMethodRequest` variant. Against any 0.11 SDK-builder receiver (mock, claude-agent or llama-agent adapter), bare-named ext requests will be rejected with `method_not_found` at SDK parse time **before** reaching `dispatch_*_request`.
+  - **FIXED 2026-04-30** (claude-code, third pass): Hoisted `send_ext_method` into a new module `acp-conformance/src/ext_method.rs` and changed it to prepend `_` to the wire method when constructing the outgoing `ExtRequest`. The SDK's `parse_message` strips the prefix on the receiver side so the typed handler sees the canonical bare method (`terminal/create`, `fs/read_text_file`) — exactly the form `claude-agent::Server::dispatch_ext_request` and `llama-agent::AcpServer::dispatch_ext_request` switch on. Added a regression test (`ext_method::tests::ext_method_prefixes_underscore_so_receiver_sees_canonical_name`) that captures the receiver-side `ExtRequest.method` and asserts it equals the canonical bare name. With the prefix in place the live-recording integration test path is no longer blocked by the SDK rejection — it's now blocked only by the two extras-side bugs (01KQG4WHX5DKS64CANMF5ZMTWB, 01KQG4X15BJ4EQ8K763TH39TMJ).
+- [x] `.fixtures/` (workspace root) — three stray fixture files (`case_1_llama.json`, `case_1_claude.json`, `case_2_claude.json`) are sitting at the workspace root as a side-effect of the extras-side `get_fixture_path_for()` bug (01KQG4X15BJ4EQ8K763TH39TMJ).
+  - **FIXED 2026-04-30**: Removed the stray files from the workspace root and added an anchored `/.fixtures/` rule to the root `.gitignore` (with a comment pointing at the extras-side follow-up). Per-crate `.fixtures/` directories are intentionally tracked and remain so; only the workspace-root one is now ignored. Verified `git status --ignored .fixtures` shows it as ignored after a test run.
+
+### Nits
+- [x] Implementation summary said "21/21 serialization integration tests pass" but the actual count from `cargo nextest run --test conformance_tests integration::serialization` is 20.
+  - **FIXED 2026-04-30**: Corrected to "20/20" in the Acceptance Criteria section above.
+- [x] `acp-conformance/src/test_utils.rs:140-170` — `MockAgentAdapter`'s two `Arc::clone(&self.0)` calls (line 145-146) shadow each other awkwardly.
+  - **FIXED 2026-04-30**: Inlined `Arc::clone(&self.0)` directly, leaving exactly two named `Arc` bindings (`mock_for_requests`, `mock_for_notifications`) consumed by their respective handler closures. No more redundant outer `mock` shadow.
+- [x] `acp-conformance/src/file_system.rs:34-39` — comment says "duplicated rather than shared so each scenario keeps its imports local"… consider hoisting `send_ext_method` into `test_utils` rather than tripling the duplication.
+  - **FIXED 2026-04-30**: Hoisted `send_ext_method` into `acp-conformance/src/ext_method.rs` (alongside the Warning 1 fix). `test_utils` is `#[cfg(test)]`-only and can't host production-visible helpers; `ext_method` is non-test and `pub(crate)`-visible. Both `terminals.rs` and `file_system.rs` now `use crate::ext_method::send_ext_method;` and the duplicate local copies are gone.

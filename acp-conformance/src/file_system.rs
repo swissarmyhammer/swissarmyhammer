@@ -22,34 +22,15 @@
 //!    - Response: `null` on success
 
 use agent_client_protocol::schema::{
-    ClientCapabilities, ExtRequest, ExtResponse, FileSystemCapabilities, InitializeRequest,
-    NewSessionRequest, ProtocolVersion,
+    ClientCapabilities, ExtRequest, FileSystemCapabilities, InitializeRequest, NewSessionRequest,
+    ProtocolVersion,
 };
-use agent_client_protocol::ClientRequest;
 use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer_common::Pretty;
 
-/// Send an `ExtRequest` over the wrapper's connection and reconstitute an
-/// [`ExtResponse`] for downstream code.
-///
-/// Mirrors `terminals::send_ext_method` — see that doc-comment for the
-/// rationale; the helper is duplicated rather than shared so each scenario
-/// keeps its imports local.
-async fn send_ext_method(
-    agent: &dyn AgentWithFixture,
-    request: ExtRequest,
-) -> agent_client_protocol::Result<ExtResponse> {
-    let value: serde_json::Value = agent
-        .connection()
-        .send_request(ClientRequest::ExtMethodRequest(request))
-        .block_task()
-        .await?;
-    let raw = serde_json::value::to_raw_value(&value)
-        .map_err(agent_client_protocol::Error::into_internal_error)?;
-    Ok(ExtResponse::new(Arc::from(raw)))
-}
+use crate::ext_method::send_ext_method;
 
 /// Statistics from file system fixture verification
 #[derive(Debug, Default, serde::Serialize)]
@@ -600,18 +581,21 @@ mod tests {
     /// In ACP 0.10 the `fs/read_text_file` and `fs/write_text_file` methods
     /// lived on the `Agent` trait as ext-method dispatch and the unit-test
     /// mock implemented them inline. ACP 0.11 dispatches arbitrary methods
-    /// through `ClientRequest::ExtMethodRequest`, but only methods prefixed
-    /// with `_` route through that variant — bare strings like
-    /// `fs/read_text_file` are rejected by the SDK's parse layer with
-    /// `method_not_found` *before* the mock sees them. That matches the
-    /// no-capability scenarios' "agent rejected" expectation, and the real
-    /// recording flow against `claude-agent` / `llama-agent` uses the
-    /// production agents' own typed handlers — not this mock — so the
-    /// mock only needs to make `initialize` and `new_session` succeed for
-    /// the production helpers to reach the SDK's rejection path. The
-    /// happy-path filesystem unit tests don't fit the new architecture and
-    /// are dropped; coverage for those flows comes from the integration
-    /// tests against real agents.
+    /// through `ClientRequest::ExtMethodRequest`. The
+    /// `crate::ext_method::send_ext_method` helper prepends `_` to the wire
+    /// method so the SDK's parse layer routes the request through that
+    /// variant; the receiver strips `_` back so the typed handler sees the
+    /// canonical bare method (`fs/read_text_file`).
+    ///
+    /// For the no-capability scenarios the mock's default
+    /// [`MockAgent::ext_method`] returns `method_not_found`, which satisfies
+    /// the "agent rejected" expectation. The real recording flow against
+    /// `claude-agent` / `llama-agent` uses the production agents' own typed
+    /// handlers — not this mock — so the mock only needs to make
+    /// `initialize` and `new_session` succeed for the production helpers to
+    /// reach the SDK's rejection path. The happy-path filesystem unit tests
+    /// don't fit the new architecture and are dropped; coverage for those
+    /// flows comes from the integration tests against real agents.
     struct FsMockAgent {
         /// Whether fs read capability was declared.
         read_enabled: AtomicBool,

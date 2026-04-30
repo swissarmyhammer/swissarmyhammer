@@ -24,6 +24,7 @@
 
 pub mod agent_plan;
 pub mod content;
+pub(crate) mod ext_method;
 pub mod file_system;
 pub mod initialization;
 pub mod prompt_turn;

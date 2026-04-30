@@ -79,6 +79,15 @@ doc/book
 # ACP transcript recordings
 .acp/
 
+# Stray fixture output at workspace root.
+# `agent-client-protocol-extras::get_fixture_path_for()` currently resolves to
+# the workspace root instead of the per-crate `<crate>/.fixtures/` layout
+# (tracked as 01KQG4X15BJ4EQ8K763TH39TMJ). Until that lands, integration tests
+# that exercise the recording path drop fixtures here as a side-effect.
+# Per-crate `.fixtures/` directories (acp-conformance, agent-client-protocol-extras,
+# avp-common) are intentionally tracked — only the workspace-root one is noise.
+/.fixtures/
+
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
 

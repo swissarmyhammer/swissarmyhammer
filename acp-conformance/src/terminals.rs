@@ -40,38 +40,14 @@
 //!    - Terminal ID becomes invalid after release
 
 use agent_client_protocol::schema::{
-    ClientCapabilities, ExtRequest, ExtResponse, InitializeRequest, NewSessionRequest,
-    ProtocolVersion,
+    ClientCapabilities, ExtRequest, InitializeRequest, NewSessionRequest, ProtocolVersion,
 };
-use agent_client_protocol::ClientRequest;
 use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer_common::Pretty;
 
-/// Send an `ExtRequest` over the wrapper's connection and reconstitute an
-/// [`ExtResponse`] for downstream code.
-///
-/// ACP 0.10 had `Agent::ext_method(ExtRequest) -> ExtResponse`. ACP 0.11
-/// drops the trait; ext requests now flow through
-/// [`ConnectionTo::send_request`] wrapped in
-/// [`ClientRequest::ExtMethodRequest`], with the response dispatched as a
-/// raw [`serde_json::Value`]. This helper bridges the two: the production
-/// scenarios still talk in terms of `ExtResponse(Arc<RawValue>)`, so we
-/// re-encode the wire JSON back into that shape for them.
-async fn send_ext_method(
-    agent: &dyn AgentWithFixture,
-    request: ExtRequest,
-) -> agent_client_protocol::Result<ExtResponse> {
-    let value: serde_json::Value = agent
-        .connection()
-        .send_request(ClientRequest::ExtMethodRequest(request))
-        .block_task()
-        .await?;
-    let raw =
-        serde_json::value::to_raw_value(&value).map_err(agent_client_protocol::Error::into_internal_error)?;
-    Ok(ExtResponse::new(Arc::from(raw)))
-}
+use crate::ext_method::send_ext_method;
 
 /// Statistics from terminals fixture verification
 #[derive(Debug, Default, serde::Serialize)]
@@ -778,18 +754,21 @@ mod tests {
     /// In ACP 0.10 the terminal methods (`terminal/create`, `terminal/output`,
     /// …) lived on the `Agent` trait as ext-method dispatch and the unit-test
     /// mock implemented all of them inline. ACP 0.11 dispatches arbitrary
-    /// methods through `ClientRequest::ExtMethodRequest`, but only methods
-    /// prefixed with `_` route through that variant — bare strings like
-    /// `terminal/create` are rejected by the SDK's parse layer with
-    /// `method_not_found` *before* the mock sees them. This actually matches
-    /// the no-capability scenario's expected outcome (the agent rejects),
-    /// and the real recording flow against `claude-agent` / `llama-agent`
-    /// uses the production agents' own typed handlers — not this mock — so
-    /// the mock only needs to make `initialize` and `new_session` succeed
-    /// for the production helpers to reach the SDK's terminal-rejection
-    /// path. The remaining terminal-state tracking fields are kept for
-    /// scenario-specific assertions inside the mock if future scenarios
-    /// reach them.
+    /// methods through `ClientRequest::ExtMethodRequest`. The
+    /// `crate::ext_method::send_ext_method` helper prepends `_` to the wire
+    /// method so the SDK's parse layer routes the request through that
+    /// variant; the receiver strips `_` back so the typed handler sees the
+    /// canonical bare method (`terminal/create`).
+    ///
+    /// For the no-capability scenarios the mock's default
+    /// [`MockAgent::ext_method`] returns `method_not_found`, which satisfies
+    /// the "agent rejected" expectation. The real recording flow against
+    /// `claude-agent` / `llama-agent` uses the production agents' own typed
+    /// handlers — not this mock — so the mock only needs to make
+    /// `initialize` and `new_session` succeed for the production helpers to
+    /// reach the SDK's rejection path. The terminal-state tracking field is
+    /// kept for scenario-specific assertions inside the mock if future
+    /// scenarios reach them.
     struct TerminalMockAgent {
         /// Whether terminal capability was declared during init.
         terminal_enabled: AtomicBool,
@@ -857,9 +836,10 @@ mod tests {
     }
 
     /// `test_terminal_capability_check` exercises the no-capability rejection
-    /// path. The SDK's wire-method parser rejects unknown methods like
-    /// `terminal/create` with `method_not_found` before the mock sees them,
-    /// which satisfies the scenario's "agent rejected" expectation.
+    /// path. `send_ext_method` prepends `_` so the SDK routes
+    /// `_terminal/create` through `ExtMethodRequest`; the mock's default
+    /// `ext_method` returns `method_not_found`, which satisfies the
+    /// scenario's "agent rejected" expectation.
     #[tokio::test]
     async fn test_terminal_capability_check_no_capability() {
         let mock = Arc::new(TerminalMockAgent::new());
