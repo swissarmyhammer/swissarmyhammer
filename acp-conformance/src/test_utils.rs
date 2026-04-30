@@ -32,6 +32,7 @@ use agent_client_protocol::schema::{
     SetSessionModeResponse,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectTo, ConnectionTo};
+use agent_client_protocol_extras::AgentWithFixture;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
@@ -274,6 +275,66 @@ where
     agent_task.abort();
     let _ = agent_task.await;
     result
+}
+
+/// `AgentWithFixture` adapter that exposes a raw [`ConnectionTo<Agent>`]
+/// through the same trait the conformance helpers consume.
+///
+/// The conformance scenario functions (`test_minimal_initialization`,
+/// `test_text_content_support`, …) take `&dyn AgentWithFixture` so they
+/// uniformly support every driving path (live recording, playback fixtures,
+/// inline test mocks). Unit tests inside the scenario modules drive a
+/// [`MockAgent`] via [`run_with_mock_agent`] and need to hand the resulting
+/// connection to those helpers — this adapter is the bridge.
+///
+/// `agent_type` is reported verbatim from [`AgentWithFixture::agent_type`].
+/// Unit tests typically pass `"test-mock"` since the fixture-path side of
+/// `AgentWithFixture` is unused for the in-process mock path.
+pub struct ConnectionAgentWithFixture {
+    agent_type: &'static str,
+    connection: ConnectionTo<Agent>,
+}
+
+impl ConnectionAgentWithFixture {
+    /// Wrap a `ConnectionTo<Agent>` in an `AgentWithFixture` facade.
+    pub fn new(agent_type: &'static str, connection: ConnectionTo<Agent>) -> Self {
+        Self {
+            agent_type,
+            connection,
+        }
+    }
+}
+
+impl AgentWithFixture for ConnectionAgentWithFixture {
+    fn agent_type(&self) -> &'static str {
+        self.agent_type
+    }
+
+    fn connection(&self) -> ConnectionTo<Agent> {
+        self.connection.clone()
+    }
+}
+
+/// Wire a [`MockAgent`] up to a fresh `Client`, wrap the resulting connection
+/// as an [`AgentWithFixture`], and run `body` against the wrapper.
+///
+/// Convenience layer over [`run_with_mock_agent`] for the unit tests at the
+/// bottom of every scenario file, which call the scenario's public
+/// `test_*<&dyn AgentWithFixture>` helper. The wrapper reports
+/// `agent_type = "test-mock"` since the fixture-path side of
+/// [`AgentWithFixture`] is unused in this path.
+pub async fn run_with_mock_agent_as_fixture<M, F, Fut, R>(mock: Arc<M>, body: F) -> R
+where
+    M: MockAgent + 'static,
+    F: FnOnce(ConnectionAgentWithFixture) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = R> + Send + 'static,
+    R: Send + 'static,
+{
+    run_with_mock_agent(mock, |conn| async move {
+        let wrapper = ConnectionAgentWithFixture::new("test-mock", conn);
+        body(wrapper).await
+    })
+    .await
 }
 
 #[cfg(test)]
