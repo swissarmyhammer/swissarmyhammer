@@ -1,18 +1,28 @@
 /**
- * Kernel-state shape-snapshot test for the inspector layer simplification.
+ * Kernel-state shape-snapshot test for the inspector entity-zone
+ * barrier.
  *
- * Source of truth for card `01KQCTJY1QZ710A05SE975GHNR`. Pins the new
- * inspector spatial structure: a single shared `<FocusLayer name="inspector">`
- * containing field zones directly at the layer root. After the
- * simplification:
+ * Originally authored for card `01KQCTJY1QZ710A05SE975GHNR` (layer
+ * simplification — field zones at the layer root with
+ * `parentZone === null`). Updated for card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`:
+ * each open inspector wraps its body in an entity-keyed
+ * `<FocusZone moniker={asSegment(\`${entityType}:${entityId}\`)}>`,
+ * so the spatial structure is now:
  *
- *   - `<InspectorFocusBridge>` is gone — `<EntityInspector>` renders
- *     directly inside `<InspectorPanel>`'s `<SlidePanel>`.
- *   - The per-panel `<FocusZone moniker="panel:type:id">` is gone.
- *   - The entity `<FocusScope moniker="task:T1">` the bridge wrapped
- *     around `<EntityInspector>` is gone.
- *   - Field zones register with `parentZone === null` at the inspector
- *     layer root.
+ *   - One shared `<FocusLayer name="inspector">` for the whole panel
+ *     stack (unchanged).
+ *   - One `<FocusZone moniker="task:T1">` per open inspector, keyed by
+ *     the entity moniker itself (NOT a `panel:` prefix). The zone
+ *     registers at the inspector layer root with `parentZone === null`.
+ *   - Field zones register with `parentZone === <entity zone FQM>` —
+ *     NOT `null`. This confines iter 0 of the kernel cascade to peers
+ *     within the same entity, fixing the multi-inspector bleed bug
+ *     (`field zone in inspector A` cascaded to field zones in
+ *     inspector B because they all shared `parentZone === null`).
+ *   - `<InspectorFocusBridge>` stays deleted (per
+ *     `01KQCTJY1QZ710A05SE975GHNR`), so no `<FocusScope>` registers
+ *     for the entity moniker as a leaf — the entity moniker is a
+ *     ZONE under the new contract.
  *
  * The test uses `installKernelSimulator` to capture every spatial-nav
  * IPC the production tree fires on mount, then asserts the registered
@@ -23,6 +33,7 @@
  *   - `01KQAXS8QKWCKFK8ENEMN7WHR1` — field-zone registration shape.
  *   - `01KQCKVN140DGBCK8NF8RZM4R5` — global nav unification.
  *   - `01KQ9X3A9NMRYK50GWP4S4ZMJ4` — `field.edit` drill-in/edit registration.
+ *   - `01KQFCQ9QMQKCDYVWGTXSVK5PZ` — entity-zone barrier.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -106,9 +117,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -266,7 +275,7 @@ async function flushSetup() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Inspector layer simplification — kernel-state shape", () => {
+describe("Inspector entity-zone barrier — kernel-state shape", () => {
   beforeEach(() => {
     backendState.inspector_stack = ["task:T1"];
     backendState.palette_open = false;
@@ -328,7 +337,14 @@ describe("Inspector layer simplification — kernel-state shape", () => {
     unmount();
   });
 
-  it("does not register any scope for the entity moniker (task:T1)", async () => {
+  it("registers a ZONE for the entity moniker (task:T1) — not a scope, no InspectorFocusBridge", async () => {
+    // The entity moniker IS a zone now, registered via
+    // `<FocusZone moniker={asSegment(\`${type}:${id}\`)}>` in
+    // `<InspectorPanel>` (card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`). The
+    // deleted `<InspectorFocusBridge>` would have registered the
+    // entity moniker as a leaf scope (`<FocusScope>`); the bridge
+    // stays deleted, so the only registration matching `task:T1` is
+    // the new entity zone.
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -342,15 +358,23 @@ describe("Inspector layer simplification — kernel-state shape", () => {
       );
     });
 
-    const entityScope = sim.findBySegment("task:T1");
+    const entityRegistration = sim.findBySegment("task:T1");
     expect(
-      entityScope,
-      "InspectorFocusBridge's <FocusScope moniker={entityMoniker}> must not register — the bridge is gone",
-    ).toBeUndefined();
+      entityRegistration,
+      "the entity moniker must register — it is the per-inspector zone wrap",
+    ).toBeDefined();
+    expect(
+      entityRegistration!.kind,
+      "the entity moniker registers as a zone (FocusZone), not a scope (FocusScope)",
+    ).toBe("zone");
+    expect(
+      entityRegistration!.parentZone,
+      "the entity zone registers at the inspector layer root (parentZone === null)",
+    ).toBeNull();
     unmount();
   });
 
-  it("every field zone registers with parentZone === null under the inspector layer", async () => {
+  it("every field zone registers with parentZone === <entity zone FQM> under the inspector layer", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -370,6 +394,16 @@ describe("Inspector layer simplification — kernel-state shape", () => {
       .find((l) => "name" in l && l.name === "inspector");
     expect(inspectorPush, "inspector layer must be pushed").toBeDefined();
 
+    const entityZone = sim.findBySegment("task:T1");
+    expect(
+      entityZone,
+      "the per-entity zone must register before field-parent assertions run",
+    ).toBeDefined();
+    expect(
+      entityZone!.kind,
+      "the entity moniker registers as a zone, not a leaf scope",
+    ).toBe("zone");
+
     const fields = sim.findBySegmentPrefix("field:task:T1.");
     expect(
       fields.length,
@@ -382,13 +416,13 @@ describe("Inspector layer simplification — kernel-state shape", () => {
       "every field zone must register under the inspector layer's key",
     ).toEqual([]);
 
-    const wrongParent = fields.filter((f) => f.parentZone !== null);
+    const wrongParent = fields.filter((f) => f.parentZone !== entityZone!.fq);
     expect(
       wrongParent.map((f) => ({
         moniker: f.segment,
         parentZone: f.parentZone,
       })),
-      "every field zone must register with parentZone === null (no panel zone wrap)",
+      "every field zone must register with parentZone === <entity zone FQM> (entity-zone barrier from card 01KQFCQ9QMQKCDYVWGTXSVK5PZ)",
     ).toEqual([]);
     unmount();
   });

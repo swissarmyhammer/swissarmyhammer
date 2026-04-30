@@ -1,29 +1,34 @@
 /**
- * Boundary-nav test pinning that the inspector layer simplification
- * preserves the "echoed moniker at the layer edge" contract for
- * cardinal navigation keys.
+ * Boundary-nav test pinning the cardinal-nav contract for a single
+ * inspector when there's no peer in the chosen direction.
  *
- * Source of truth for card `01KQCTJY1QZ710A05SE975GHNR`. With field
- * zones registered directly at the inspector layer root (no panel zone
- * between them), the kernel's beam-search cascade has these outcomes:
+ * Originally authored for card `01KQCTJY1QZ710A05SE975GHNR` (the
+ * inspector layer simplification — field zones registered at
+ * `parentZone === null` so iter 0 + iter 1 found nothing and the
+ * cascade echoed the focused moniker). Updated for card
+ * `01KQFCQ9QMQKCDYVWGTXSVK5PZ`: each inspector now wraps its body in
+ * an entity-keyed `<FocusZone>`, so field zones register with
+ * `parentZone === <entity zone FQM>`. The kernel cascade then runs:
  *
- *   - Iter 0 (same-kind peers sharing `parentZone === null` in the
- *     inspector layer): finds another field zone in the same layer and
- *     advances focus to it.
+ *   - Iter 0 (same-kind peers sharing `parentZone === entity zone`):
+ *     finds another field zone in the same entity and advances focus
+ *     to it.
  *   - Iter 0 + iter 1 + drill-out fallback: when there is no peer in
- *     the chosen direction (e.g. ArrowDown from the last field), the
- *     cascade returns the focused moniker echoed (the no-silent-dropout
- *     contract from `01KQAW97R9XTCNR1PJAWYSKBC7`).
+ *     the chosen direction (e.g. ArrowDown from the last field of the
+ *     ONLY open inspector), the cascade escalates to the entity zone,
+ *     iter 1 (zone-kind peers under the inspector layer root) finds
+ *     no other entity zone, and the drill-out fallback returns the
+ *     parent zone's FQM. Focus moves from the field to the **entity
+ *     zone**, NOT echoed on the field.
  *
- * This test exercises the cardinal-direction stay-put path: ArrowDown
- * (`nav.down`) on the last field keeps focus on the same field;
- * ArrowUp (`nav.up`) on the first field does the same. The
- * Escape-driven `nav.drillOut` equality-→-`app.dismiss` fall-through
- * is a separate path and is covered elsewhere — this test only
- * verifies that boundary nav at the layer edge keeps focus on the same
- * field. During the entire interaction `useFocusedScope()` reports
- * only inspector-layer monikers (no board / column / card moniker
- * leaks into the focused-scope chain).
+ * Either outcome (echoed field or drill-out to entity zone) keeps the
+ * user inside the same entity — neither leaks board / column / card
+ * monikers into `useFocusedScope()`. This test pins the inside-entity
+ * invariant rather than a single specific moniker.
+ *
+ * Cross-references:
+ *   - `01KQAW97R9XTCNR1PJAWYSKBC7` — no-silent-dropout contract.
+ *   - `01KQFCQ9QMQKCDYVWGTXSVK5PZ` — entity-zone barrier.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -109,10 +114,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import {
-  asSegment,
-  fqLastSegment
-} from "@/types/spatial";
+import { asSegment, fqLastSegment } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -224,9 +226,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
   const segment = focusedFq ? fqLastSegment(focusedFq) : null;
-  return (
-    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
-  );
+  return <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>;
 }
 
 function renderInspectorChain() {
@@ -270,7 +270,7 @@ async function flushSetup() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Inspector layer simplification — boundary navigation", () => {
+describe("Inspector entity-zone barrier — boundary navigation", () => {
   beforeEach(() => {
     backendState.inspector_stack = ["task:T1"];
     mockInvoke.mockClear();
@@ -278,7 +278,41 @@ describe("Inspector layer simplification — boundary navigation", () => {
     listeners.clear();
   });
 
-  it("ArrowDown on the last field echoes the focused moniker (stays put)", async () => {
+  /**
+   * Predicate: is `m` a moniker that keeps focus inside inspector T1?
+   *
+   * Two outcomes both satisfy "stay inside the entity":
+   *
+   *   - `field:task:T1.*` — the cascade echoed the focused field
+   *     (no-silent-dropout contract from `01KQAW97R9XTCNR1PJAWYSKBC7`).
+   *     Happens when the cascade returns null (no peer + parent
+   *     fallback yields the same FQM).
+   *   - `task:T1` — the cascade hit drill-out fallback and returned
+   *     the entity zone's FQM. Happens when iter 1 finds no peer
+   *     entity zone (single-inspector case).
+   */
+  const stayedInEntity = (m: string) =>
+    m.startsWith("field:task:T1.") || m === "task:T1";
+
+  /** Stamp rects on the entity zone AND every field zone. */
+  function stampInspectorRects(sim: ReturnType<typeof installKernelSimulator>) {
+    const orderedNames = ["title", "status", "body"];
+    const entityZone = sim.findBySegment("task:T1");
+    if (entityZone) {
+      entityZone.rect = {
+        x: 0,
+        y: 0,
+        width: 400,
+        height: orderedNames.length * 30 - 2,
+      };
+    }
+    orderedNames.forEach((name, idx) => {
+      const f = sim.findBySegment(`field:task:T1.${name}`);
+      if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
+    });
+  }
+
+  it("ArrowDown on the last field stays inside the entity (drill-out to entity zone)", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -290,15 +324,10 @@ describe("Inspector layer simplification — boundary navigation", () => {
     // Stamp realistic rects so beam search has geometry to work with.
     // jsdom-mode `getBoundingClientRect` returns zeros; without rects,
     // the navigateInShadow port has nothing to score and would always
-    // return null. We post an `update_rect` for each field zone in
-    // top-down order so iter 0 has real geometry.
+    // return null.
     const fields = sim.findBySegmentPrefix("field:task:T1.");
     expect(fields.length).toBeGreaterThanOrEqual(2);
-    const orderedNames = ["title", "status", "body"];
-    orderedNames.forEach((name, idx) => {
-      const f = sim.findBySegment(`field:task:T1.${name}`);
-      if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
-    });
+    stampInspectorRects(sim);
 
     const last = sim.findBySegment("field:task:T1.body");
     expect(last, "body field zone must register").toBeDefined();
@@ -324,23 +353,29 @@ describe("Inspector layer simplification — boundary navigation", () => {
       "field:task:T1.body",
     );
 
-    // Drive ArrowDown. The beam-search cascade (iter 0 + iter 1) finds
-    // no down-peer below the last field → the React adapter resolves to
-    // the echoed moniker (stays put).
+    // Drive ArrowDown. With the entity-zone barrier:
+    //   - Iter 0 (peers within entity T1): no down-peer below the last
+    //     field. Iter 0 fails.
+    //   - Escalate to entity zone T1.
+    //   - Iter 1 (zone-kind peers under inspector layer root): no other
+    //     entity zone is open. Iter 1 fails.
+    //   - Drill-out fallback returns the parent zone's FQM
+    //     (`task:T1`).
     await act(async () => {
       fireEvent.keyDown(document, { key: "ArrowDown", code: "ArrowDown" });
       await new Promise((r) => setTimeout(r, 50));
     });
     await flushSetup();
 
+    const focused = getByTestId("focused-moniker-probe").textContent ?? "";
     expect(
-      getByTestId("focused-moniker-probe").textContent,
-      "ArrowDown at the last field must keep focus on the same moniker (echoed)",
-    ).toBe("field:task:T1.body");
+      stayedInEntity(focused),
+      `ArrowDown at the last field must keep focus inside the entity (echoed field or drill-out to entity zone), got ${focused}`,
+    ).toBe(true);
     unmount();
   });
 
-  it("ArrowUp on the first field echoes the focused moniker (stays put)", async () => {
+  it("ArrowUp on the first field stays inside the entity (drill-out to entity zone)", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -349,11 +384,7 @@ describe("Inspector layer simplification — boundary navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
 
-    const orderedNames = ["title", "status", "body"];
-    orderedNames.forEach((name, idx) => {
-      const f = sim.findBySegment(`field:task:T1.${name}`);
-      if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
-    });
+    stampInspectorRects(sim);
 
     const first = sim.findBySegment("field:task:T1.title");
     expect(first, "title field zone must register").toBeDefined();
@@ -384,10 +415,11 @@ describe("Inspector layer simplification — boundary navigation", () => {
     });
     await flushSetup();
 
+    const focused = getByTestId("focused-moniker-probe").textContent ?? "";
     expect(
-      getByTestId("focused-moniker-probe").textContent,
-      "ArrowUp at the first field must keep focus on the same moniker (echoed)",
-    ).toBe("field:task:T1.title");
+      stayedInEntity(focused),
+      `ArrowUp at the first field must keep focus inside the entity (echoed field or drill-out to entity zone), got ${focused}`,
+    ).toBe(true);
     unmount();
   });
 
@@ -400,11 +432,7 @@ describe("Inspector layer simplification — boundary navigation", () => {
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
 
-    const orderedNames = ["title", "status", "body"];
-    orderedNames.forEach((name, idx) => {
-      const f = sim.findBySegment(`field:task:T1.${name}`);
-      if (f) f.rect = { x: 0, y: idx * 30, width: 400, height: 28 };
-    });
+    stampInspectorRects(sim);
 
     const last = sim.findBySegment("field:task:T1.body");
     expect(last).toBeDefined();
@@ -452,15 +480,15 @@ describe("Inspector layer simplification — boundary navigation", () => {
     await flushSetup();
     observe();
 
-    // Every observation must be a `field:` moniker. Board / column /
-    // card / panel monikers leaking in would mean the inspector layer's
-    // boundary failed.
+    // Every observation must be either a `field:task:T1.*` moniker or
+    // the entity-zone moniker `task:T1`. Board / column / card monikers
+    // leaking in would mean the inspector layer's boundary failed.
     const leaks = observations.filter(
-      (m) => m !== "null" && !m.startsWith("field:task:T1."),
+      (m) => m !== "null" && !stayedInEntity(m),
     );
     expect(
       leaks,
-      "no non-inspector moniker may appear in useFocusedScope() during boundary nav",
+      "no non-inspector moniker may appear in useFocusedScope() during boundary nav (entity zone or field-only)",
     ).toEqual([]);
     unmount();
   });

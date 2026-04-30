@@ -10,6 +10,20 @@
  * `useRestoreFocus()` call is a regression — these tests pin that
  * the import and the call site stay deleted.
  *
+ * The guards also pin the deletions from card
+ * `01KQCTJY1QZ710A05SE975GHNR`:
+ *
+ *   - The `<InspectorFocusBridge>` component is gone.
+ *   - The `panel:*` moniker shape is gone — the per-entity zone added
+ *     by card `01KQFCQ9QMQKCDYVWGTXSVK5PZ` uses the entity moniker
+ *     itself (e.g. `task:abc`) as the segment, not a `panel:` prefix.
+ *   - `inspector.edit / editEnter / exitEdit` commands stay deleted
+ *     (`field.edit / field.editEnter` cover the semantics).
+ *
+ * The guards explicitly *permit* a single `<FocusZone>` import — the
+ * entity-zone wrap inside `<InspectorPanel>` from card
+ * `01KQFCQ9QMQKCDYVWGTXSVK5PZ` is the only legitimate consumer.
+ *
  * Node-only because they read the source file from disk; lives under
  * the `*.node.test.ts` suffix recognized by `vite.config.ts`.
  */
@@ -63,27 +77,62 @@ describe("InspectorsContainer source-level guards", () => {
     expect(src).toMatch(/useFullyQualifiedMoniker\s*\(\s*\)/);
   });
 
-  it("does not register a panel zone (deleted in card 01KQCTJY1QZ710A05SE975GHNR)", () => {
-    // Per the card: the per-panel `<FocusZone moniker="panel:...">` wrap
-    // was deleted. Field zones inside the inspector now register at the
-    // layer root (`parentZone === null`); cross-panel nav uses the
-    // kernel's beam-search cascade across all field zones in the
-    // inspector layer, not a panel-as-parent fallback.
+  it("does not register a panel-prefixed zone (the panel:* moniker shape is deleted)", () => {
+    // Two stacked deletions stay pinned here:
+    //
+    //   - Card `01KQCTJY1QZ710A05SE975GHNR` deleted the per-panel
+    //     `<FocusZone moniker="panel:type:id">` wrap.
+    //   - Card `01KQFCQ9QMQKCDYVWGTXSVK5PZ` reintroduced a per-entity
+    //     `<FocusZone>`, but keyed by the **entity moniker itself**
+    //     (e.g. `task:abc`), NOT a `panel:*` prefix. The entity moniker
+    //     is the natural identity; the panel is just chrome.
+    //
+    // The guard therefore forbids `panel:*` template literals while
+    // allowing a `<FocusZone>` element so the entity-zone wrap can
+    // live in this file. Doc comments may still mention `panel:*` in
+    // migration context.
     const code = readCodeOnly();
-    // No `panel:` moniker template literal in code (comments may still
-    // mention it in migration context).
     expect(code).not.toMatch(/panel:\$\{/);
-    // No `<FocusZone>` element in code — `InspectorsContainer` mounts
-    // only `<FocusLayer>`. Field zones live inside `<EntityInspector>`
-    // descendants and are not its concern.
-    expect(code).not.toMatch(/<FocusZone\b/);
+  });
+
+  it("permits a single FocusZone import (the entity-zone wrap from card 01KQFCQ9QMQKCDYVWGTXSVK5PZ)", () => {
+    // The entity-zone wrap added in card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`
+    // imports `<FocusZone>` and uses it inside `<InspectorPanel>`. This
+    // guard confirms exactly one `<FocusZone>` element appears in code
+    // (a regression to multi-zone or panel-zone shapes would surface as
+    // a count mismatch).
+    const code = readCodeOnly();
+    const matches = code.match(/<FocusZone\b/g) ?? [];
+    expect(
+      matches.length,
+      "expected exactly one <FocusZone> in inspectors-container.tsx — the entity-zone wrap inside <InspectorPanel>",
+    ).toBe(1);
+    // The import must come from `@/components/focus-zone` (the
+    // production primitive), not from a renamed bridge or wrapper.
+    expect(code).toMatch(
+      /import\s*\{\s*FocusZone\s*\}\s*from\s*"@\/components\/focus-zone"/,
+    );
   });
 
   it("does not import the deleted InspectorFocusBridge", () => {
     const code = readCodeOnly();
-    // The bridge was deleted in card 01KQCTJY1QZ710A05SE975GHNR.
+    // The bridge was deleted in card 01KQCTJY1QZ710A05SE975GHNR and
+    // stays deleted under card 01KQFCQ9QMQKCDYVWGTXSVK5PZ — the
+    // entity-zone wrap is a direct `<FocusZone>` in this file, not a
+    // bridge component.
     expect(code).not.toMatch(/InspectorFocusBridge/);
     expect(code).not.toMatch(/inspector-focus-bridge/);
+  });
+
+  it("does not reintroduce the inspector.edit / editEnter / exitEdit commands", () => {
+    // Card `01KQCTJY1QZ710A05SE975GHNR` deleted these commands; the
+    // field-level equivalents (`field.edit` / `field.editEnter`) cover
+    // the semantics. Card `01KQFCQ9QMQKCDYVWGTXSVK5PZ` does not bring
+    // them back.
+    const code = readCodeOnly();
+    expect(code).not.toMatch(/inspector\.edit\b/);
+    expect(code).not.toMatch(/inspector\.editEnter\b/);
+    expect(code).not.toMatch(/inspector\.exitEdit\b/);
   });
 
   it("uses the asSegment brand helper (no raw string casts)", () => {

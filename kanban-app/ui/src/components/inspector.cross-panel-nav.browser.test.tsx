@@ -1,14 +1,28 @@
 /**
- * Cross-panel nav test pinning that the inspector layer simplification
- * supports nav between fields in different panels.
+ * Cross-panel nav test pinning that cardinal nav between adjacent
+ * inspector panels lands on the spatially-nearest peer entity zone via
+ * the kernel's iter-1 escalation.
  *
- * Source of truth for card `01KQCTJY1QZ710A05SE975GHNR`. With one
- * shared `<FocusLayer name="inspector">` wrapping the entire panel
- * stack and field zones registered at `parentZone === null`, all field
- * zones across all open panels are siblings in the kernel's iter 0
- * cascade. ArrowLeft / ArrowRight thus moves focus between adjacent
- * panels without any cross-zone fallback rule — the kernel's beam
- * search picks the spatially-nearest field.
+ * Originally authored for card `01KQCTJY1QZ710A05SE975GHNR` (the
+ * inspector layer simplification, which removed the per-panel zone and
+ * let cross-panel nav fall through to iter 0 across all field zones at
+ * the layer root). Updated for card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`: each
+ * inspector body is now wrapped in an entity-keyed `<FocusZone>`, so
+ * cardinal nav from a field looks like:
+ *
+ *   1. Iter 0 — peers within the same entity zone. ArrowLeft from the
+ *      leftmost field in inspector B has no peer → fail.
+ *   2. Escalate to the inspector-B entity zone.
+ *   3. Iter 1 — zone-kind peers under the inspector layer root. The
+ *      inspector-A entity zone qualifies; beam search picks it by rect.
+ *
+ * The cascade lands on the **entity zone** (e.g. `task:TA`), not a
+ * leaf field. The kernel's same-kind filter at iter 1 restricts
+ * candidates to zones (the parent is itself a zone, so iter 1 is the
+ * sibling-zone beam — see `swissarmyhammer-focus/src/navigate.rs`
+ * cascade docs and `beam_among_siblings`); fields are scopes and are
+ * not eligible at iter 1. From the entity zone, the user can press
+ * another arrow / Enter to descend into a specific field.
  *
  * The user direction:
  * > "One layer for the whole panel stack allowing navigation between
@@ -98,10 +112,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import {
-  asSegment,
-  fqLastSegment
-} from "@/types/spatial";
+import { asSegment, fqLastSegment } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -218,9 +229,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
   const segment = focusedFq ? fqLastSegment(focusedFq) : null;
-  return (
-    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
-  );
+  return <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>;
 }
 
 function renderInspectorChain() {
@@ -261,10 +270,17 @@ async function flushSetup() {
 }
 
 /**
- * Stamp realistic rects on every field zone so beam search has geometry
- * to score. The rect layout puts panel A on the left (x = 0) and panel
- * B on the right (x = 500), with three fields stacked vertically per
- * panel.
+ * Stamp realistic rects on every field zone AND on each per-entity
+ * zone so beam search has geometry to score at iter 0 (field zones
+ * within an entity) and iter 1 (entity zones under the inspector
+ * layer root). Panel A on the left (x = 0), panel B on the right
+ * (x = 500), three fields stacked vertically per panel.
+ *
+ * Entity-zone rects bound their fields. Without rects on the entity
+ * zones, `getBoundingClientRect` at mount time returns `(0, 0, 0, 0)`
+ * in some browser-mode harness configurations, which collapses both
+ * zones to the same point and lets iter-1 beam scoring pick the wrong
+ * peer.
  */
 function stampRects(
   sim: ReturnType<typeof installKernelSimulator>,
@@ -273,6 +289,15 @@ function stampRects(
 ) {
   taskIds.forEach((tid, panelIdx) => {
     const xBase = panelIdx * 500;
+    const entityZone = sim.findBySegment(`task:${tid}`);
+    if (entityZone) {
+      entityZone.rect = {
+        x: xBase,
+        y: 0,
+        width: 400,
+        height: fieldNames.length * 30 - 2,
+      };
+    }
     fieldNames.forEach((name, fieldIdx) => {
       const f = sim.findBySegment(`field:task:${tid}.${name}`);
       if (f)
@@ -310,7 +335,7 @@ async function fireFocus(
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Inspector layer simplification — cross-panel navigation", () => {
+describe("Inspector entity-zone barrier — cross-panel navigation", () => {
   beforeEach(() => {
     backendState.inspector_stack = ["task:TA", "task:TB"];
     mockInvoke.mockClear();
@@ -318,7 +343,7 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     listeners.clear();
   });
 
-  it("ArrowRight from a field in panel A lands on a field in panel B", async () => {
+  it("ArrowRight from a field in panel A lands on panel B's entity zone", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -329,6 +354,8 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     await waitFor(() => {
       expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
       expect(sim.findBySegment("field:task:TB.title")).toBeDefined();
+      expect(sim.findBySegment("task:TA")).toBeDefined();
+      expect(sim.findBySegment("task:TB")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
@@ -340,18 +367,22 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TA.title",
     );
 
+    // Re-stamp rects right before nav — see entity-zone-barrier test
+    // for the rationale (real ResizeObservers can overwrite our stamped
+    // rects mid-flush).
+    stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
+
     fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
-    await waitFor(
-      () =>
-        expect(
-          getByTestId("focused-moniker-probe").textContent,
-          "ArrowRight from a field in panel A must land on the spatially-nearest field in panel B",
-        ).toBe("field:task:TB.title"),
+    await waitFor(() =>
+      expect(
+        getByTestId("focused-moniker-probe").textContent,
+        "ArrowRight from a field in panel A must escalate via iter-1 to panel B's entity zone",
+      ).toBe("task:TB"),
     );
     unmount();
   });
 
-  it("ArrowLeft from a field in panel B lands on a field in panel A", async () => {
+  it("ArrowLeft from a field in panel B lands on panel A's entity zone", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -359,8 +390,15 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     );
     const { getByTestId, unmount } = renderInspectorChain();
     await flushSetup();
+    // Wait for both entity zones AND the focused field to register so
+    // `stampRects` updates rects on every relevant entry. Without this,
+    // stamping can race ahead of the entity-zone registrations and the
+    // iter-1 beam search runs against `(0, 0, 0, 0)` rects that
+    // collapse the candidate set.
     await waitFor(() => {
       expect(sim.findBySegment("field:task:TB.status")).toBeDefined();
+      expect(sim.findBySegment("task:TA")).toBeDefined();
+      expect(sim.findBySegment("task:TB")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
@@ -372,18 +410,21 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TB.status",
     );
 
+    // Re-stamp rects right before nav — see entity-zone-barrier test
+    // for the rationale.
+    stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
+
     fireEvent.keyDown(document, { key: "ArrowLeft", code: "ArrowLeft" });
-    await waitFor(
-      () =>
-        expect(
-          getByTestId("focused-moniker-probe").textContent,
-          "ArrowLeft from a field in panel B must land on the spatially-nearest field in panel A",
-        ).toBe("field:task:TA.status"),
+    await waitFor(() =>
+      expect(
+        getByTestId("focused-moniker-probe").textContent,
+        "ArrowLeft from a field in panel B must escalate via iter-1 to panel A's entity zone",
+      ).toBe("task:TA"),
     );
     unmount();
   });
 
-  it("cross-panel nav respects rect y-coordinate (picks the same-row field)", async () => {
+  it("cross-panel nav escalates to the spatially-nearest entity-zone peer (rect-driven)", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -394,13 +435,15 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     await waitFor(() => {
       expect(sim.findBySegment("field:task:TA.status")).toBeDefined();
       expect(sim.findBySegment("field:task:TB.body")).toBeDefined();
+      expect(sim.findBySegment("task:TA")).toBeDefined();
+      expect(sim.findBySegment("task:TB")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
 
-    // Focus the middle field in panel A. ArrowRight must land on the
-    // middle field in panel B because beam search prefers the candidate
-    // closest to the source's y-center.
+    // Focus the middle field in panel A. ArrowRight escalates to entity
+    // zone A → iter 1 picks entity zone B (the only other zone-kind
+    // sibling under the inspector layer root) by rect.
     const aStatus = sim.findBySegment("field:task:TA.status")!;
     await fireFocus(aStatus.fq, aStatus.segment);
     await flushSetup();
@@ -408,13 +451,16 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       "field:task:TA.status",
     );
 
+    // Re-stamp rects right before nav — see entity-zone-barrier test
+    // for the rationale.
+    stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
+
     fireEvent.keyDown(document, { key: "ArrowRight", code: "ArrowRight" });
-    await waitFor(
-      () =>
-        expect(
-          getByTestId("focused-moniker-probe").textContent,
-          "ArrowRight from panel A's middle field must pick panel B's middle field (same y)",
-        ).toBe("field:task:TB.status"),
+    await waitFor(() =>
+      expect(
+        getByTestId("focused-moniker-probe").textContent,
+        "ArrowRight from panel A's middle field must escalate to panel B's entity zone",
+      ).toBe("task:TB"),
     );
     unmount();
   });
@@ -429,6 +475,8 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
     await flushSetup();
     await waitFor(() => {
       expect(sim.findBySegment("field:task:TA.title")).toBeDefined();
+      expect(sim.findBySegment("task:TA")).toBeDefined();
+      expect(sim.findBySegment("task:TB")).toBeDefined();
     });
 
     stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
@@ -442,29 +490,42 @@ describe("Inspector layer simplification — cross-panel navigation", () => {
       observations.push(getByTestId("focused-moniker-probe").textContent ?? "");
     observe();
 
+    /**
+     * Predicate: is the leaf segment an inspector-layer moniker? After
+     * the entity-zone wrap, valid inspector targets are:
+     *   - `field:task:TA.*` / `field:task:TB.*` — leaf field zones.
+     *   - `task:TA` / `task:TB` — entity zones (cardinal nav lands
+     *     here at iter 1 escalation).
+     */
+    const isInspectorMoniker = (m: string) =>
+      m.startsWith("field:task:TA.") ||
+      m.startsWith("field:task:TB.") ||
+      m === "task:TA" ||
+      m === "task:TB";
+
     for (const dir of ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"]) {
+      // Re-stamp rects each iteration — see entity-zone-barrier test
+      // for the rationale (real ResizeObservers can overwrite our
+      // stamped rects mid-flush).
+      stampRects(sim, ["TA", "TB"], ["title", "status", "body"]);
       fireEvent.keyDown(document, { key: dir, code: dir });
       // Wait for React state to settle on an inspector-layer moniker
       // before observing. The contract under test is that focus stays
-      // inside the inspector layer, so polling for a `field:task:T*.`
-      // segment converges on the post-nav state without racing the
-      // simulator's microtask `focus-changed` emit.
+      // inside the inspector layer, so polling for an inspector moniker
+      // (field zone OR entity zone) converges on the post-nav state
+      // without racing the simulator's microtask `focus-changed` emit.
       await waitFor(() => {
         const text = getByTestId("focused-moniker-probe").textContent ?? "";
         expect(
-          text.startsWith("field:task:TA.") ||
-            text.startsWith("field:task:TB."),
-          `focused moniker after ${dir} should be an inspector field, got ${text}`,
+          isInspectorMoniker(text),
+          `focused moniker after ${dir} should be an inspector field or entity zone, got ${text}`,
         ).toBe(true);
       });
       observe();
     }
 
     const leaks = observations.filter(
-      (m) =>
-        m !== "null" &&
-        !m.startsWith("field:task:TA.") &&
-        !m.startsWith("field:task:TB."),
+      (m) => m !== "null" && !isInspectorMoniker(m),
     );
     expect(
       leaks,
