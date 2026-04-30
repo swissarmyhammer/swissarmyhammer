@@ -373,10 +373,10 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /** Filter `spatial_drill_in` calls. */
-function drillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function drillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -512,7 +512,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
       drillCalls.length,
       "Enter on a focused field zone must dispatch spatial_drill_in once",
     ).toBe(1);
-    expect(drillCalls[0].key).toBe(tagsZone!.key);
+    expect(drillCalls[0].fq).toBe(tagsZone!.fq);
 
     // The closure's success branch fanned out via `setFocus` → the
     // entity-focus bridge dispatched `ui.setFocus` whose
@@ -535,7 +535,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // `aria-readonly` and `contenteditable` attributes — both flip
     // when the multi-select editor mounts in their place.
     const cmContent = container.querySelector(
-      '[data-moniker="field:task:T1.tags"] .cm-content',
+      '[data-segment="field:task:T1.tags"] .cm-content',
     );
     expect(cmContent).not.toBeNull();
     expect(
@@ -597,9 +597,9 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
     const navCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_navigate")
-      .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
+      .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].key).toBe(bugPill!.key);
+    expect(navCalls[0].focusedFq).toBe(bugPill!.focusedFq);
     expect(navCalls[0].direction).toBe("right");
 
     // Synthesize the kernel's response: focus advances to the ui pill.
@@ -612,7 +612,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // The ui pill's `<FocusScope>` wrapper flips data-focused="true".
     // Pills render as MentionView spans with `data-moniker="tag:..."`.
     const uiPillNode = container.querySelector(
-      '[data-moniker="tag:tag-ui"]',
+      '[data-segment="tag:tag-ui"]',
     ) as HTMLElement | null;
     expect(uiPillNode).not.toBeNull();
     expect(
@@ -669,9 +669,9 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // pill's key.
     const drillOutCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_drill_out")
-      .map((c) => c[1] as { key: FullyQualifiedMoniker });
+      .map((c) => c[1] as { fq: FullyQualifiedMoniker });
     expect(drillOutCalls.length).toBe(1);
-    expect(drillOutCalls[0].key).toBe(bugPill!.key);
+    expect(drillOutCalls[0].fq).toBe(bugPill!.fq);
 
     // The success branch dispatched `ui.setFocus` with the field zone
     // moniker at the head of `args.scope_chain`.
@@ -729,7 +729,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     await waitFor(() => {
       const editor = container.querySelector(
-        '[data-moniker="field:task:T1.name"] .cm-editor',
+        '[data-segment="field:task:T1.name"] .cm-editor',
       );
       expect(
         editor,
@@ -740,7 +740,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // DOM focus lands inside the field zone (CM6's `.cm-content` is a
     // contenteditable child).
     const fieldZone = container.querySelector(
-      '[data-moniker="field:task:T1.name"]',
+      '[data-segment="field:task:T1.name"]',
     );
     expect(fieldZone).not.toBeNull();
     const active = document.activeElement;
@@ -795,7 +795,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
 
     // No editor mounts on the id field.
     expect(
-      container.querySelector('[data-moniker="field:task:T1.id"] .cm-editor'),
+      container.querySelector('[data-segment="field:task:T1.id"] .cm-editor'),
       "no editor must mount on a non-editable field after Enter",
     ).toBeNull();
     // No inspect dispatch fires.
@@ -857,7 +857,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // at all, while edit mode mounts one with `contenteditable="true"`.
     await waitFor(() => {
       const cmContent = container.querySelector(
-        '[data-moniker="field:task:T1.tags"] .cm-content',
+        '[data-segment="field:task:T1.tags"] .cm-content',
       );
       expect(
         cmContent,

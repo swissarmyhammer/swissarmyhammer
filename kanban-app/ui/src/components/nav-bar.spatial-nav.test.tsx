@@ -246,10 +246,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ describe("NavBar — browser spatial behaviour", () => {
     mockInvoke.mockClear();
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.board-selector']",
+      "[data-segment='ui:navbar.board-selector']",
     ) as HTMLElement | null;
     expect(node).not.toBeNull();
 
@@ -329,7 +329,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(leaf!.key);
+    expect(focusCalls[0].fq).toBe(leaf!.fq);
 
     unmount();
   });
@@ -346,7 +346,7 @@ describe("NavBar — browser spatial behaviour", () => {
     mockInvoke.mockClear();
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.inspect']",
+      "[data-segment='ui:navbar.inspect']",
     ) as HTMLElement | null;
     expect(node).not.toBeNull();
 
@@ -354,7 +354,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(leaf!.key);
+    expect(focusCalls[0].fq).toBe(leaf!.fq);
 
     unmount();
   });
@@ -371,7 +371,7 @@ describe("NavBar — browser spatial behaviour", () => {
     mockInvoke.mockClear();
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.search']",
+      "[data-segment='ui:navbar.search']",
     ) as HTMLElement | null;
     expect(node).not.toBeNull();
 
@@ -379,7 +379,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(leaf!.key);
+    expect(focusCalls[0].fq).toBe(leaf!.fq);
 
     unmount();
   });
@@ -400,7 +400,7 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.board-selector']",
+      "[data-segment='ui:navbar.board-selector']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator")!;
     expect(node.contains(indicator)).toBe(true);
@@ -425,7 +425,7 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.inspect']",
+      "[data-segment='ui:navbar.inspect']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator")!;
     expect(node.contains(indicator)).toBe(true);
@@ -450,7 +450,7 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.search']",
+      "[data-segment='ui:navbar.search']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator")!;
     expect(node.contains(indicator)).toBe(true);
@@ -555,7 +555,7 @@ describe("NavBar — browser spatial behaviour", () => {
       (a) => a.segment === "ui:navbar",
     )!;
     const node = container.querySelector(
-      "[data-moniker='ui:navbar']",
+      "[data-segment='ui:navbar']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBeNull();

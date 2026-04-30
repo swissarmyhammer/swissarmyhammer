@@ -311,34 +311,34 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_navigate` call's args, in order. */
 function spatialNavigateCalls(): Array<{
-  key: FullyQualifiedMoniker;
+  focusedFq: FullyQualifiedMoniker;
   direction: string;
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
+    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
 }
 
 /** Collect every `spatial_drill_out` call's args, in order. */
-function spatialDrillOutCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialDrillOutCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_out")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -407,7 +407,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     mockInvoke.mockImplementation(defaultInvokeImpl);
 
     const columnNode = container.querySelector(
-      `[data-moniker='${column.moniker}']`,
+      `[data-segment='${column.moniker}']`,
     ) as HTMLElement | null;
     expect(columnNode).not.toBeNull();
 
@@ -415,7 +415,7 @@ describe("ColumnView — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(columnZone.key);
+    expect(focusCalls[0].fq).toBe(columnZone.fq);
     // The board zone key must NOT also receive a focus call — the column
     // calls `e.stopPropagation()` so the click does not bubble to the
     // wrapping board zone. This is the regression-test side of the bug
@@ -423,7 +423,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     // `showFocusBar={false}`; the click itself was already correct, but
     // pinning bubble-blocking here keeps the click contract intact).
     expect(
-      focusCalls.find((c) => c.key === boardZone.key),
+      focusCalls.find((c) => c.fq === boardZone.fq),
     ).toBeUndefined();
 
     unmount();
@@ -451,7 +451,7 @@ describe("ColumnView — browser spatial behaviour", () => {
       (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(
-      `[data-moniker='${column.moniker}']`,
+      `[data-segment='${column.moniker}']`,
     ) as HTMLElement;
     expect(columnNode).not.toBeNull();
     expect(columnNode.getAttribute("data-focused")).toBeNull();
@@ -629,7 +629,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     });
 
     const columnNode = container.querySelector(
-      `[data-moniker='${column.moniker}']`,
+      `[data-segment='${column.moniker}']`,
     ) as HTMLElement;
     expect(columnNode.getAttribute("data-focused")).toBe("true");
 
@@ -651,7 +651,7 @@ describe("ColumnView — browser spatial behaviour", () => {
 
     const drillCalls = spatialDrillOutCalls();
     expect(drillCalls).toHaveLength(1);
-    expect(drillCalls[0].key).toBe(columnKey);
+    expect(drillCalls[0].fq).toBe(columnKey);
 
     // Now mimic the kernel's resulting `focus-changed` (the column
     // de-focuses; its `data-focused` flips back to absent).
@@ -691,7 +691,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     unmount();
     // Cleanup effects fire synchronously when React unmounts the tree;
     // collect from the call list directly.
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
     expect(unregisterKeys).toContain(columnKey);
   });
 
@@ -716,7 +716,7 @@ describe("ColumnView — browser spatial behaviour", () => {
       (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(
-      `[data-moniker='${column.moniker}']`,
+      `[data-segment='${column.moniker}']`,
     ) as HTMLElement;
     expect(columnNode).not.toBeNull();
     fireEvent.click(columnNode);

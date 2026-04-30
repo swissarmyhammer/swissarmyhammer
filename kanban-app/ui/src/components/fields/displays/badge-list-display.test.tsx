@@ -166,7 +166,7 @@ async function flush() {
 
 /** Get all FocusScope wrappers (elements with a data-moniker attribute). */
 function getScopes(container: HTMLElement) {
-  return Array.from(container.querySelectorAll("[data-moniker]"));
+  return Array.from(container.querySelectorAll("[data-segment]"));
 }
 
 /** Get all CM6 mention-pill widget spans. */

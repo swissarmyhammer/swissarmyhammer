@@ -26,12 +26,12 @@
  *   2. Captures the registered `FullyQualifiedMoniker` from the corresponding
  *      `mockInvoke("spatial_register_*", ...)` call so the test fires
  *      `focus-changed` against the right key.
- *   3. Clicks the `[data-moniker="<expected>"]` element via
+ *   3. Clicks the `[data-segment="<expected>"]` element via
  *      `fireEvent.click()`.
  *   4. Asserts exactly one `mockInvoke("spatial_focus", { key })` call
  *      whose `key` matches the captured registered key.
  *   5. Fires `focus-changed` with `next_fq = capturedKey` and asserts
- *      `[data-moniker="<expected>"]` carries `data-focused="true"` and
+ *      `[data-segment="<expected>"]` carries `data-focused="true"` and
  *      contains a `[data-testid="focus-indicator"]` descendant.
  *   6. Negative guard: after the click, no parent zone's `spatial_focus`
  *      was dispatched — the leaf's own `e.stopPropagation()` call must
@@ -446,10 +446,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -459,7 +459,7 @@ function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
  */
 function findRegistration(moniker: string): Record<string, unknown> {
   const all = [...registerZoneArgs(), ...registerScopeArgs()];
-  const reg = all.find((r) => r.moniker === moniker);
+  const reg = all.find((r) => r.segment === moniker);
   if (!reg) {
     const seen = all.map((r) => String(r.moniker)).join(", ");
     throw new Error(
@@ -474,7 +474,7 @@ function findRegistration(moniker: string): Record<string, unknown> {
  *
  * Captures every assertion the regression suite enforces in one helper:
  *
- *   1. Resolve the `[data-moniker="<expected>"]` DOM node.
+ *   1. Resolve the `[data-segment="<expected>"]` DOM node.
  *   2. Find the registration call for that moniker; capture its key.
  *   3. Clear the invoke mock so we measure only the click's IPCs.
  *   4. `fireEvent.click(node)`.
@@ -499,9 +499,9 @@ async function assertClickProducesIndicator({
   parentMonikers: readonly string[];
 }) {
   const node = container.querySelector(
-    `[data-moniker='${moniker}']`,
+    `[data-segment='${moniker}']`,
   ) as HTMLElement | null;
-  expect(node, `[data-moniker='${moniker}'] must be in the DOM`).not.toBeNull();
+  expect(node, `[data-segment='${moniker}'] must be in the DOM`).not.toBeNull();
 
   const registration = findRegistration(moniker);
   const capturedKey = registration.key as FullyQualifiedMoniker;
@@ -527,7 +527,7 @@ async function assertClickProducesIndicator({
     `expected exactly one spatial_focus call for moniker '${moniker}'`,
   ).toBe(1);
   expect(
-    focusCalls[0].key,
+    focusCalls[0].fq,
     `spatial_focus key must match the registered key for '${moniker}'`,
   ).toBe(capturedKey);
 
@@ -535,7 +535,7 @@ async function assertClickProducesIndicator({
   // its own spatial_focus call from this single click.
   for (const parentKey of parentKeys) {
     expect(
-      focusCalls.find((c) => c.key === parentKey),
+      focusCalls.find((c) => c.fq === parentKey),
       `click on '${moniker}' must NOT bubble to any parent zone`,
     ).toBeUndefined();
   }
@@ -781,7 +781,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       const tabKey = tabRegistration.key as FullyQualifiedMoniker;
 
       const tabNode = container.querySelector(
-        `[data-moniker='${moniker}']`,
+        `[data-segment='${moniker}']`,
       ) as HTMLElement | null;
       expect(tabNode).not.toBeNull();
 
@@ -811,7 +811,7 @@ describe("focus-on-click regression suite (every component class)", () => {
         "exactly one spatial_focus must fire on inner-button click",
       ).toBe(1);
       expect(
-        focusCalls[0].key,
+        focusCalls[0].fq,
         "spatial_focus key must match the perspective tab's registered key",
       ).toBe(tabKey);
 
@@ -819,7 +819,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // zone and re-fire spatial_focus against the bar's key. This pins
       // `<FocusScope>`'s `e.stopPropagation()` contract.
       expect(
-        focusCalls.find((c) => c.key === barKey),
+        focusCalls.find((c) => c.fq === barKey),
         "click on a perspective tab must NOT bubble to the bar zone",
       ).toBeUndefined();
 
@@ -859,7 +859,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       await flushSetup();
 
       const barNode = container.querySelector(
-        "[data-moniker='ui:perspective-bar']",
+        "[data-segment='ui:perspective-bar']",
       ) as HTMLElement | null;
       expect(barNode).not.toBeNull();
 
@@ -884,7 +884,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(barKey);
+      expect(focusCalls[0].fq).toBe(barKey);
 
       await fireFocusChanged({
         next_fq: barKey,
@@ -1033,7 +1033,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // what we assert against.
       const moniker = `task:${TASK_ID_A}`;
       const node = container.querySelector(
-        `[data-moniker='${moniker}']`,
+        `[data-segment='${moniker}']`,
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
 
@@ -1055,7 +1055,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(cardKey);
+      expect(focusCalls[0].fq).toBe(cardKey);
 
       // Negative guard: in this isolated harness the card has no
       // surrounding zone, but `data-entity-card` may itself be matched
@@ -1089,7 +1089,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       const moniker = `tag:${TAG_ID}`;
       const node = container.querySelector(
-        `[data-moniker='${moniker}']`,
+        `[data-segment='${moniker}']`,
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
 
@@ -1107,7 +1107,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(cardKey);
+      expect(focusCalls[0].fq).toBe(cardKey);
 
       await fireFocusChanged({ next_fq: cardKey, next_segment: moniker });
 

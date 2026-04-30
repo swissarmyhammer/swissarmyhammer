@@ -346,14 +346,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='ui:navbar.board-selector']",
+        "[data-segment='ui:navbar.board-selector']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.board-selector']",
+      "[data-segment='ui:navbar.board-selector']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(indicator, "indicator must mount when leaf is focused").not.toBeNull();
@@ -384,14 +384,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='ui:navbar.inspect']",
+        "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.inspect']",
+      "[data-segment='ui:navbar.inspect']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(indicator).not.toBeNull();
@@ -419,14 +419,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='ui:navbar.search']",
+        "[data-segment='ui:navbar.search']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.search']",
+      "[data-segment='ui:navbar.search']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(indicator).not.toBeNull();
@@ -464,14 +464,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='field:board:b1.percent_complete']",
+        "[data-segment='field:board:b1.percent_complete']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
     const node = container.querySelector(
-      "[data-moniker='field:board:b1.percent_complete']",
+      "[data-segment='field:board:b1.percent_complete']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(indicator).not.toBeNull();
@@ -535,7 +535,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await fireFocusChanged({ next_fq: firstInspect!.key as FullyQualifiedMoniker });
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='ui:navbar.inspect']",
+        "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
@@ -557,7 +557,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     await flushSetup();
 
     expect(
-      container.querySelector("[data-moniker='ui:navbar.inspect']"),
+      container.querySelector("[data-segment='ui:navbar.inspect']"),
       "inspect leaf must unmount when board flips to null",
     ).toBeNull();
 
@@ -593,14 +593,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='ui:navbar.inspect']",
+        "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
     const node = container.querySelector(
-      "[data-moniker='ui:navbar.inspect']",
+      "[data-segment='ui:navbar.inspect']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(

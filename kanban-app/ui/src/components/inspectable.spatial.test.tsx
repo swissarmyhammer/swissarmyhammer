@@ -368,7 +368,7 @@ describe("Inspectable — real-world entity wrappers", () => {
     await flushSetup();
 
     const node = container.querySelector(
-      "[data-moniker='task:01TASK001']",
+      "[data-segment='task:01TASK001']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
 
@@ -399,7 +399,7 @@ describe("Inspectable — real-world entity wrappers", () => {
     await flushSetup();
 
     const node = container.querySelector(
-      "[data-moniker='column:01ABCDEFGHJKMNPQRSTVWXYZ01']",
+      "[data-segment='column:01ABCDEFGHJKMNPQRSTVWXYZ01']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
 

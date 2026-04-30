@@ -49,7 +49,7 @@ describe("normalizeKeyEvent", () => {
 
   it("returns colon without Shift prefix (Shift produces the punctuation)", () => {
     // Real keyboard: colon is Shift+semicolon, so shiftKey is true
-    // but e.key is already ":", not ";". Shift should NOT be added.
+    // but e.fq is already ":", not ";". Shift should NOT be added.
     const e = fakeKeyEvent(":", { shiftKey: true });
     expect(normalizeKeyEvent(e)).toBe(":");
   });
@@ -136,9 +136,9 @@ describe("normalizeKeyEvent", () => {
     }
   });
 
-  it("canonicalises spacebar (e.key === ' ') to 'Space'", () => {
+  it("canonicalises spacebar (e.fq === ' ') to 'Space'", () => {
     // Browsers report the spacebar as a literal single space
-    // (`e.key === " "`). The binding tables and command-keys speak
+    // (`e.fq === " "`). The binding tables and command-keys speak
     // in symbolic names, so the normalizer must translate that
     // single character into the canonical "Space" token. Without
     // this rewrite, command-keys like `keys: { cua: "Space" }`
@@ -163,7 +163,7 @@ describe("normalizeKeyEvent", () => {
   });
 
   it("prefixes Shift on Space to distinguish Shift+Space from Space", () => {
-    // The browser delivers the spacebar as `e.key === " "` (literal
+    // The browser delivers the spacebar as `e.fq === " "` (literal
     // space) regardless of whether Shift is held — same disambiguation
     // problem as Tab/Shift+Tab. The normalizer rewrites `" "` to the
     // canonical `"Space"` token *before* the Shift-prefix check, so
@@ -179,14 +179,14 @@ describe("normalizeKeyEvent", () => {
   /* ---------- Shift on symbolic keys ---------- */
   //
   // Symbolic keys (Tab, Enter, Escape, arrows, Home/End/PageUp/PageDown,
-  // Insert/Delete/Backspace, F1–F12) report the same `e.key` whether
+  // Insert/Delete/Backspace, F1–F12) report the same `e.fq` whether
   // Shift is held or not — the only signal is `e.shiftKey`. Without an
   // explicit `Shift+` prefix, Shift+Tab and Tab hash to the same
   // canonical string and cannot bind to distinct commands. The
   // normalizer prepends `Shift+` for these keys when shiftKey is true.
   // Letter keys keep the existing uppercase-and-prefix behaviour;
   // punctuation produced by Shift (`:`, `?`, etc.) keeps no prefix
-  // because `e.key` is already the shifted character.
+  // because `e.fq` is already the shifted character.
 
   it("prefixes Shift on Tab to distinguish Shift+Tab from Tab", () => {
     expect(normalizeKeyEvent(fakeKeyEvent("Tab", { shiftKey: true }))).toBe(
@@ -251,7 +251,7 @@ describe("normalizeKeyEvent", () => {
   });
 
   it("does NOT prefix Shift on punctuation produced by Shift", () => {
-    // Real keyboard: `?` is Shift+`/`, but `e.key` is already `?`.
+    // Real keyboard: `?` is Shift+`/`, but `e.fq` is already `?`.
     // Adding `Shift+` would break the punctuation binding lookup.
     expect(normalizeKeyEvent(fakeKeyEvent("?", { shiftKey: true }))).toBe("?");
     // `:` from Shift+`;` — also already covered by an earlier test, but

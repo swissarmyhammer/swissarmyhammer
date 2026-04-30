@@ -284,7 +284,7 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
-    const card = container.querySelector("[data-moniker='task:task-1']")!;
+    const card = container.querySelector("[data-segment='task:task-1']")!;
     await act(async () => {
       fireEvent.contextMenu(card);
       // Flush the promise chain (list_commands_for_scope → show_context_menu)
@@ -715,7 +715,7 @@ describe("EntityCard", () => {
         <EntityCard entity={currentEntity} />,
       );
       mockInvoke.mockClear();
-      const card = container.querySelector("[data-moniker='task:task-1']")!;
+      const card = container.querySelector("[data-segment='task:task-1']")!;
       fireEvent.click(card);
       // The primitive's click handler routes through `spatial_focus`.
       const focusCall = mockInvoke.mock.calls.find(

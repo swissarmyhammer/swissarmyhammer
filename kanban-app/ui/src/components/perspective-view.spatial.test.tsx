@@ -265,10 +265,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Bar zones in this test accept either the dotted or hyphenated moniker. */
@@ -334,7 +334,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
 
     const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
     const viewNode = container.querySelector(
-      `[data-moniker='${viewZone.moniker as string}']`,
+      `[data-segment='${viewZone.moniker as string}']`,
     ) as HTMLElement;
     expect(viewNode).not.toBeNull();
     expect(viewNode.getAttribute("data-focused")).toBeNull();
@@ -366,7 +366,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
 
     const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.moniker))!;
     const viewNode = container.querySelector(
-      `[data-moniker='${viewZone.moniker as string}']`,
+      `[data-segment='${viewZone.moniker as string}']`,
     ) as HTMLElement;
 
     // Pretend an inner board/grid leaf was focused first; we use a unique
@@ -400,7 +400,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     mockInvoke.mockClear();
     unmount();
 
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
     expect(unregisterKeys).toContain(expectedKey);
   });
 
@@ -418,7 +418,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
       (a) => a.segment === "ui:perspective",
     )!;
     const node = container.querySelector(
-      "[data-moniker='ui:perspective']",
+      "[data-segment='ui:perspective']",
     ) as HTMLElement;
     expect(node.getAttribute("data-focused")).toBeNull();
 

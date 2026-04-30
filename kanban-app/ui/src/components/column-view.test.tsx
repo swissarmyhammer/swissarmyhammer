@@ -272,7 +272,7 @@ describe("ColumnView — Do This Next command", () => {
 
     // Right-click the task card's FocusScope
     const taskScope = document.querySelector(
-      "[data-moniker='task:t1']",
+      "[data-segment='task:t1']",
     ) as HTMLElement | null;
     expect(taskScope).toBeTruthy();
     fireEvent.contextMenu(taskScope!);
@@ -325,7 +325,7 @@ describe("ColumnView — Do This Next command", () => {
     );
 
     const taskScope = document.querySelector(
-      "[data-moniker='task:t2']",
+      "[data-segment='task:t2']",
     ) as HTMLElement | null;
     expect(taskScope).toBeTruthy();
     fireEvent.contextMenu(taskScope!);
@@ -435,7 +435,7 @@ describe("ColumnView layout (scroll + virtualization)", () => {
     const { container } = renderColumn(
       <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
     );
-    const columnNode = container.querySelector("[data-moniker='column:col-1']");
+    const columnNode = container.querySelector("[data-segment='column:col-1']");
     expect(columnNode).toBeTruthy();
     const className = (columnNode as HTMLElement).className;
     expect(className).toContain("flex");

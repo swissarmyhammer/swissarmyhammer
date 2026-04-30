@@ -195,14 +195,14 @@ async function flushSetup() {
   });
 }
 
-/** Pull every `spatial_push_layer` push as a `{ key, name, parent }` record. */
+/** Pull every `spatial_push_layer` push as a `{ fq, name, parent }` record. */
 function pushedLayers() {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_push_layer")
     .map(
       (c) =>
         c[1] as {
-          key: FullyQualifiedMoniker;
+          fq: FullyQualifiedMoniker;
           name: string;
           parent: FullyQualifiedMoniker | null;
         },
@@ -213,7 +213,7 @@ function pushedLayers() {
 function poppedLayers() {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_pop_layer")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_register_zone` registration. */
@@ -423,7 +423,7 @@ describe("InspectorsContainer", () => {
 
     // The inspector layer's parent is the window-root layer.
     const windowLayer = pushedLayers().find((l) => l.name === "window")!;
-    expect(inspectorLayers[0].parent).toBe(windowLayer.key);
+    expect(inspectorLayers[0].parent).toBe(windowLayer.fq);
   });
 
   it("opening a second panel does not push another inspector layer", async () => {
@@ -489,7 +489,7 @@ describe("InspectorsContainer", () => {
 
     // The inspector layer should still be alive — no pop_layer for it yet.
     const popsForInspector = poppedLayers().filter(
-      (p) => p.key === inspectorLayer.key,
+      (p) => p.fq === inspectorLayer.fq,
     );
     expect(popsForInspector).toHaveLength(0);
   });
@@ -517,7 +517,7 @@ describe("InspectorsContainer", () => {
 
     // Exactly one pop targeting the inspector layer's key.
     const popsForInspector = poppedLayers().filter(
-      (p) => p.key === inspectorLayer.key,
+      (p) => p.fq === inspectorLayer.fq,
     );
     expect(popsForInspector).toHaveLength(1);
   });

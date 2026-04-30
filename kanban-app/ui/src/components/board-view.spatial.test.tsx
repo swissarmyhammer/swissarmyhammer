@@ -368,34 +368,34 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Pull every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_navigate` call's args, in order. */
 function spatialNavigateCalls(): Array<{
-  key: FullyQualifiedMoniker;
+  focusedFq: FullyQualifiedMoniker;
   direction: string;
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
+    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +436,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-moniker='ui:board']",
+      "[data-segment='ui:board']",
     ) as HTMLElement;
     expect(boardNode).not.toBeNull();
 
@@ -453,7 +453,7 @@ describe("BoardView — browser spatial behaviour", () => {
     // chrome must not also fire `spatial_focus` for an inner column
     // unless the click was on the column.
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(boardKey);
+    expect(focusCalls[0].fq).toBe(boardKey);
 
     unmount();
   });
@@ -471,7 +471,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-moniker='ui:board']",
+      "[data-segment='ui:board']",
     ) as HTMLElement;
     expect(boardNode).not.toBeNull();
     expect(boardNode.getAttribute("data-focused")).toBeNull();
@@ -498,7 +498,7 @@ describe("BoardView — browser spatial behaviour", () => {
     // be the violators.
     const directBoardIndicators = Array.from(indicatorsInsideBoard).filter(
       (el) => {
-        const closestMoniker = el.parentElement?.closest("[data-moniker]");
+        const closestMoniker = el.parentElement?.closest("[data-segment]");
         return closestMoniker === boardNode;
       },
     );
@@ -559,7 +559,7 @@ describe("BoardView — browser spatial behaviour", () => {
       });
 
       const navCalls = spatialNavigateCalls().filter(
-        (c) => c.key === boardKey,
+        (c) => c.focusedFq === boardKey,
       );
       expect(navCalls.length, `${key} should dispatch spatial_navigate`).toBe(
         1,
@@ -604,7 +604,7 @@ describe("BoardView — browser spatial behaviour", () => {
       });
 
       const navCalls = spatialNavigateCalls().filter(
-        (c) => c.key === boardKey,
+        (c) => c.focusedFq === boardKey,
       );
       const label = shiftKey ? `Shift+${key}` : key;
       expect(
@@ -662,7 +662,7 @@ describe("BoardView — browser spatial behaviour", () => {
 
     const drillCalls = spatialDrillInCalls();
     expect(drillCalls).toHaveLength(1);
-    expect(drillCalls[0].key).toBe(boardKey);
+    expect(drillCalls[0].fq).toBe(boardKey);
 
     await fireFocusChanged({
       prev_fq: boardKey,
@@ -671,7 +671,7 @@ describe("BoardView — browser spatial behaviour", () => {
 
     await waitFor(() => {
       const todoNode = document.querySelector(
-        "[data-moniker='column:col-todo']",
+        "[data-segment='column:col-todo']",
       ) as HTMLElement;
       expect(todoNode).not.toBeNull();
       expect(todoNode.getAttribute("data-focused")).not.toBeNull();
@@ -691,7 +691,7 @@ describe("BoardView — browser spatial behaviour", () => {
     unmount();
     await flushSetup();
 
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
     expect(unregisterKeys).toContain(boardKey);
   });
 
@@ -704,7 +704,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.key as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-moniker='ui:board']",
+      "[data-segment='ui:board']",
     ) as HTMLElement;
     fireEvent.click(boardNode);
     await fireFocusChanged({ next_fq: boardKey });
@@ -756,7 +756,7 @@ describe("BoardView — browser spatial behaviour", () => {
     await fireFocusChanged({ next_fq: t1CardKey });
     await waitFor(() => {
       const cardNode = container.querySelector(
-        "[data-moniker='task:t1']",
+        "[data-segment='task:t1']",
       ) as HTMLElement;
       expect(cardNode).not.toBeNull();
       expect(cardNode.getAttribute("data-focused")).not.toBeNull();
@@ -769,10 +769,10 @@ describe("BoardView — browser spatial behaviour", () => {
     });
     await waitFor(() => {
       const cardNode = container.querySelector(
-        "[data-moniker='task:t1']",
+        "[data-segment='task:t1']",
       ) as HTMLElement;
       const columnNode = container.querySelector(
-        "[data-moniker='column:col-todo']",
+        "[data-segment='column:col-todo']",
       ) as HTMLElement;
       // Card has lost focus; column has gained it.
       expect(cardNode.getAttribute("data-focused")).toBeNull();
@@ -786,10 +786,10 @@ describe("BoardView — browser spatial behaviour", () => {
     });
     await waitFor(() => {
       const columnNode = container.querySelector(
-        "[data-moniker='column:col-todo']",
+        "[data-segment='column:col-todo']",
       ) as HTMLElement;
       const boardNode = container.querySelector(
-        "[data-moniker='ui:board']",
+        "[data-segment='ui:board']",
       ) as HTMLElement;
       // Column has lost focus; board zone has gained it (data-focused
       // flips even though the visible bar stays suppressed by
@@ -806,7 +806,7 @@ describe("BoardView — browser spatial behaviour", () => {
     });
     await waitFor(() => {
       const boardNode = container.querySelector(
-        "[data-moniker='ui:board']",
+        "[data-segment='ui:board']",
       ) as HTMLElement;
       // Board zone has lost focus; nothing in the React tree carries
       // `data-focused` at this point (the window-root layer does not

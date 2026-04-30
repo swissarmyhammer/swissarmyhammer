@@ -70,7 +70,7 @@
  * # Per-leaf coverage
  *
  * The card description requires per-leaf assertions: each visible field
- * under the card carries `[data-moniker]` and clicking it dispatches
+ * under the card carries `[data-segment]` and clicking it dispatches
  * `spatial_focus` for THAT leaf's key, not the card's key. Covered by
  * the `per-leaf clicks` describe block below — title (single-value
  * field zone), tag pills (badge-list inner leaves), assignee pills
@@ -442,17 +442,17 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -579,7 +579,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     // Exactly one focus call for the card; no extra call for ancestor
     // zones (the card stops propagation).
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(cardKey);
+    expect(focusCalls[0].fq).toBe(cardKey);
 
     unmount();
   });
@@ -602,7 +602,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     // existed at all — would belong to some other zone outside the
     // card subtree.
     const cardNode = container.querySelector(
-      `[data-moniker='task:task-1']`,
+      `[data-segment='task:task-1']`,
     ) as HTMLElement;
     expect(cardNode).not.toBeNull();
     expect(cardNode.getAttribute("data-focused")).toBeNull();
@@ -657,7 +657,7 @@ describe("EntityCard — browser spatial behaviour", () => {
 
     // Sanity: the card's outer FocusZone div also has no keydown handler.
     const cardZoneNode = container.querySelector(
-      `[data-moniker='task:task-1']`,
+      `[data-segment='task:task-1']`,
     ) as HTMLElement;
     expect(cardZoneNode.onkeydown).toBeNull();
 
@@ -742,7 +742,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     mockInvoke.mockClear();
     unmount();
 
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
     expect(unregisterKeys).toContain(cardKey);
   });
 
@@ -802,7 +802,7 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       // The DOM exposes the moniker for e2e selectors.
       const titleNode = container.querySelector(
-        `[data-moniker='field:task:task-1.title']`,
+        `[data-segment='field:task:task-1.title']`,
       );
       expect(titleNode).not.toBeNull();
 
@@ -822,17 +822,17 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       mockInvoke.mockClear();
       const titleNode = container.querySelector(
-        `[data-moniker='field:task:task-1.title']`,
+        `[data-segment='field:task:task-1.title']`,
       ) as HTMLElement;
       expect(titleNode).not.toBeNull();
       fireEvent.click(titleNode);
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(titleZone.key);
+      expect(focusCalls[0].fq).toBe(titleZone.fq);
       // Crucially, NOT the card's key — the title's `e.stopPropagation`
       // keeps the click from bubbling.
-      expect(focusCalls[0].key).not.toBe(cardScope.key);
+      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
 
       unmount();
     });
@@ -851,7 +851,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       )!;
 
       const titleNode = container.querySelector(
-        `[data-moniker='field:task:task-1.title']`,
+        `[data-segment='field:task:task-1.title']`,
       ) as HTMLElement;
       expect(titleNode).not.toBeNull();
 
@@ -902,7 +902,7 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       // Each pill renders with a `data-moniker` attribute the
       // selector keys off.
-      const pillNodes = container.querySelectorAll(`[data-moniker^='tag:']`);
+      const pillNodes = container.querySelectorAll(`[data-segment^='tag:']`);
       expect(pillNodes.length).toBe(2);
 
       unmount();
@@ -924,18 +924,18 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       mockInvoke.mockClear();
       const bugNode = container.querySelector(
-        `[data-moniker='tag:bug']`,
+        `[data-segment='tag:bug']`,
       ) as HTMLElement;
       expect(bugNode).not.toBeNull();
       fireEvent.click(bugNode);
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(bugTag.key);
+      expect(focusCalls[0].fq).toBe(bugTag.fq);
       // Not the card key, not the parent field zone key — the leaf
       // owns its own click.
-      expect(focusCalls[0].key).not.toBe(cardScope.key);
-      expect(focusCalls[0].key).not.toBe(tagsZone.key);
+      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(tagsZone.fq);
 
       unmount();
     });
@@ -962,7 +962,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       )!;
 
       const bugNode = container.querySelector(
-        `[data-moniker='tag:bug']`,
+        `[data-segment='tag:bug']`,
       ) as HTMLElement;
       expect(bugNode).not.toBeNull();
 
@@ -1013,7 +1013,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       }
 
       // DOM exposure for e2e selectors.
-      const pillNodes = container.querySelectorAll(`[data-moniker^='actor:']`);
+      const pillNodes = container.querySelectorAll(`[data-segment^='actor:']`);
       expect(pillNodes.length).toBe(2);
 
       unmount();
@@ -1035,16 +1035,16 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       mockInvoke.mockClear();
       const aliceNode = container.querySelector(
-        `[data-moniker='actor:alice']`,
+        `[data-segment='actor:alice']`,
       ) as HTMLElement;
       expect(aliceNode).not.toBeNull();
       fireEvent.click(aliceNode);
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(alice.key);
-      expect(focusCalls[0].key).not.toBe(cardScope.key);
-      expect(focusCalls[0].key).not.toBe(assigneesZone.key);
+      expect(focusCalls[0].fq).toBe(alice.fq);
+      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(assigneesZone.fq);
 
       unmount();
     });
@@ -1071,7 +1071,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       )!;
 
       const aliceNode = container.querySelector(
-        `[data-moniker='actor:alice']`,
+        `[data-segment='actor:alice']`,
       ) as HTMLElement;
       expect(aliceNode).not.toBeNull();
 
@@ -1109,7 +1109,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(statusZone).toBeTruthy();
 
       const statusNode = container.querySelector(
-        `[data-moniker='field:task:task-1.status']`,
+        `[data-segment='field:task:task-1.status']`,
       );
       expect(statusNode).not.toBeNull();
 
@@ -1129,15 +1129,15 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       mockInvoke.mockClear();
       const statusNode = container.querySelector(
-        `[data-moniker='field:task:task-1.status']`,
+        `[data-segment='field:task:task-1.status']`,
       ) as HTMLElement;
       expect(statusNode).not.toBeNull();
       fireEvent.click(statusNode);
 
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
-      expect(focusCalls[0].key).toBe(statusZone.key);
-      expect(focusCalls[0].key).not.toBe(cardScope.key);
+      expect(focusCalls[0].fq).toBe(statusZone.fq);
+      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
 
       unmount();
     });

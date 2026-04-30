@@ -242,10 +242,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Filter `spatial_navigate` calls. */
-function spatialNavigateCalls(): Array<{ key: FullyQualifiedMoniker; direction: string }> {
+function spatialNavigateCalls(): Array<{ focusedFq: FullyQualifiedMoniker; direction: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
+    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
 }
 
 /** Filter `spatial_update_rect` calls. */
@@ -393,7 +393,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
       navCalls.length,
       "ArrowDown on a focused field zone must dispatch spatial_navigate exactly once",
     ).toBe(1);
-    expect(navCalls[0].key).toBe(titleZone!.key);
+    expect(navCalls[0].focusedFq).toBe(titleZone!.focusedFq);
     expect(navCalls[0].direction).toBe("down");
 
     // Now simulate the kernel's response — the next field zone is the
@@ -407,7 +407,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const tagsNode = container.querySelector(
-      `[data-moniker="field:task:T1.tags"]`,
+      `[data-segment="field:task:T1.tags"]`,
     ) as HTMLElement | null;
     expect(tagsNode).not.toBeNull();
     expect(
@@ -455,7 +455,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].key).toBe(bodyZone!.key);
+    expect(navCalls[0].focusedFq).toBe(bodyZone!.focusedFq);
     expect(navCalls[0].direction).toBe("up");
 
     // Simulate the kernel's response — beam-up resolves to the tags
@@ -467,7 +467,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     const tagsNode = container.querySelector(
-      `[data-moniker="field:task:T1.tags"]`,
+      `[data-segment="field:task:T1.tags"]`,
     ) as HTMLElement;
     expect(tagsNode.getAttribute("data-focused")).toBe("true");
 
@@ -552,7 +552,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].key).toBe(titleZone!.key);
+    expect(navCalls[0].focusedFq).toBe(titleZone!.focusedFq);
     expect(navCalls[0].direction).toBe("down");
 
     unmount();
@@ -606,13 +606,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
     const navCalls = spatialNavigateCalls();
     expect(navCalls.length).toBe(1);
-    expect(navCalls[0].key).toBe(tagsZone!.key);
+    expect(navCalls[0].focusedFq).toBe(tagsZone!.focusedFq);
     expect(navCalls[0].direction).toBe("down");
 
     // Spy on body zone's `scrollIntoView` (jsdom / chromium-test
     // implementations differ — install a stub so we can observe it).
     const bodyNode = container.querySelector(
-      `[data-moniker="field:task:T1.body"]`,
+      `[data-segment="field:task:T1.body"]`,
     ) as HTMLElement;
     expect(bodyNode).not.toBeNull();
     const scrollSpy = vi.fn();

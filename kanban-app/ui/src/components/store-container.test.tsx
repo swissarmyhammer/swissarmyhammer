@@ -90,6 +90,6 @@ describe("StoreContainer", () => {
     // StoreContainer is a pure context provider (CommandScopeProvider): it
     // contributes a moniker to the scope chain but emits no DOM of its own,
     // so no element should carry a `data-moniker` attribute.
-    expect(container.querySelector("[data-moniker]")).toBeNull();
+    expect(container.querySelector("[data-segment]")).toBeNull();
   });
 });

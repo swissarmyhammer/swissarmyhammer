@@ -395,10 +395,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -612,7 +612,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
       drillCalls.length,
       "vim Enter on a focused column must dispatch spatial_drill_in exactly once",
     ).toBe(1);
-    expect(drillCalls[0].key).toBe(columnKey);
+    expect(drillCalls[0].fq).toBe(columnKey);
 
     // The closure's success branch dispatches setFocus for the
     // returned moniker. The bridge in `EntityFocusProvider` builds a
@@ -688,7 +688,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     const drillCalls = spatialDrillInCalls();
     expect(drillCalls.length).toBe(1);
-    expect(drillCalls[0].key).toBe(columnKey);
+    expect(drillCalls[0].fq).toBe(columnKey);
 
     const setFocusDispatch = mockInvoke.mock.calls.find(
       (c) =>
@@ -712,7 +712,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
     });
     await waitFor(() => {
       const t2Node = document.querySelector(
-        "[data-moniker='task:t2']",
+        "[data-segment='task:t2']",
       ) as HTMLElement | null;
       expect(t2Node).not.toBeNull();
       expect(t2Node!.getAttribute("data-focused")).not.toBeNull();

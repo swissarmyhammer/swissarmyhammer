@@ -360,7 +360,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     // mode (no `.cm-editor` inside the field zone).
     expect(
       container.querySelector(
-        "[data-moniker='field:task:T1.title'] .cm-editor",
+        "[data-segment='field:task:T1.title'] .cm-editor",
       ),
       "no editor mounts before Enter — field starts in display mode",
     ).toBeNull();
@@ -388,7 +388,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
     await waitFor(() => {
       const editor = container.querySelector(
-        "[data-moniker='field:task:T1.title'] .cm-editor",
+        "[data-segment='field:task:T1.title'] .cm-editor",
       );
       expect(
         editor,
@@ -434,7 +434,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
     await waitFor(() => {
       const fieldZone = container.querySelector(
-        "[data-moniker='field:task:T1.title']",
+        "[data-segment='field:task:T1.title']",
       );
       expect(fieldZone).not.toBeNull();
       const active = document.activeElement;
@@ -474,7 +474,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
 
     // Sanity: the editor mounted.
     const editor = container.querySelector(
-      "[data-moniker='field:task:T1.title'] .cm-editor",
+      "[data-segment='field:task:T1.title'] .cm-editor",
     );
     expect(
       editor,
@@ -547,7 +547,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     // nothing happens. The observable outcome is identical to the
     // pre-drill-in behaviour: no editor, no inspect dispatch.
     expect(
-      container.querySelector("[data-moniker='field:task:T1.id'] .cm-editor"),
+      container.querySelector("[data-segment='field:task:T1.id'] .cm-editor"),
       "no editor must mount on a non-editable field after Enter",
     ).toBeNull();
     expect(onEditSpy).not.toHaveBeenCalled();

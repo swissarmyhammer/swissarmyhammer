@@ -194,7 +194,7 @@ describe("DataTable row virtualization", () => {
     await waitFor(
       () => {
         const tbody = container.querySelector("tbody")!;
-        const dataRows = tbody.querySelectorAll("tr[data-moniker]");
+        const dataRows = tbody.querySelectorAll("tr[data-segment]");
         // 400px viewport / 36px per row = ~11 visible + overscan 5
         // each side -- well under 100.
         expect(dataRows.length).toBeGreaterThan(0);
@@ -204,7 +204,7 @@ describe("DataTable row virtualization", () => {
     );
 
     const tbody = container.querySelector("tbody")!;
-    const dataRows = tbody.querySelectorAll("tr[data-moniker]");
+    const dataRows = tbody.querySelectorAll("tr[data-segment]");
     // Hard upper bound proves we are virtualized.
     expect(dataRows.length).toBeLessThanOrEqual(50);
   });
@@ -227,7 +227,7 @@ describe("DataTable row virtualization", () => {
     // Wait for the initial virtualizer mount + measurement to settle.
     await waitFor(
       () => {
-        const dataRows = container.querySelectorAll("tbody tr[data-moniker]");
+        const dataRows = container.querySelectorAll("tbody tr[data-segment]");
         expect(dataRows.length).toBeLessThan(100);
       },
       { timeout: 2000 },
@@ -355,7 +355,7 @@ describe("DataTable row virtualization", () => {
     await waitFor(
       () => {
         const wrappers = populated.container.querySelectorAll(
-          "tbody tr[data-moniker] [data-compact-cell='true']",
+          "tbody tr[data-segment] [data-compact-cell='true']",
         );
         expect(wrappers.length).toBe(
           populatedRows.length * heightFields.length,
@@ -378,7 +378,7 @@ describe("DataTable row virtualization", () => {
     await waitFor(
       () => {
         const wrappers = empty.container.querySelectorAll(
-          "tbody tr[data-moniker] [data-compact-cell='true']",
+          "tbody tr[data-segment] [data-compact-cell='true']",
         );
         expect(wrappers.length).toBe(emptyRows.length * heightFields.length);
         emptyClassNames = Array.from(wrappers).map((w) => w.className);

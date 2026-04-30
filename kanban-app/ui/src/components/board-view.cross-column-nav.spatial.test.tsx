@@ -537,7 +537,7 @@ function findRegisterRecord(
     const cmd = c[0];
     if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
       const r = c[1] as Record<string, unknown>;
-      if (r && r.moniker === moniker) {
+      if (r && r.segment === moniker) {
         return {
           kind: cmd === "spatial_register_zone" ? "zone" : "scope",
           record: r,
@@ -548,17 +548,17 @@ function findRegisterRecord(
       const entries = (a.entries ?? []) as Array<Record<string, unknown>>;
       for (let j = entries.length - 1; j >= 0; j--) {
         const e = entries[j];
-        if (e.moniker === moniker) {
+        if (e.segment === moniker) {
           const k = (e.kind as string) === "zone" ? "zone" : "scope";
           // Batch entries use `layer_key` / `parent_zone` snake_case;
           // normalise to the camelCase shape the rest of the test reads.
           return {
             kind: k,
             record: {
-              key: e.key,
-              moniker: e.moniker,
+              fq: e.fq,
+              segment: e.segment,
               rect: e.rect,
-              layerKey: e.layer_key,
+              layerFq: e.layer_fq,
               parentZone: e.parent_zone,
               overrides: e.overrides ?? {},
             },
@@ -677,7 +677,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     const layerKeys = new Set<unknown>();
     for (const a of registerZoneArgs()) layerKeys.add(a.layerFq);
     for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
-    for (const e of registerBatchEntries()) layerKeys.add(e.layer_key);
+    for (const e of registerBatchEntries()) layerKeys.add(e.layer_fq);
     expect(
       layerKeys.size,
       "every spatial registration must share the same layer_key",
@@ -714,7 +714,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     for (const e of registerBatchEntries()) {
       expect(
         e.overrides,
-        `${String(e.moniker)} batch register must have empty overrides`,
+        `${String(e.segment)} batch register must have empty overrides`,
       ).toEqual({});
     }
 
@@ -794,7 +794,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     // cascade landed. A bug where `board:<id>` won the scoring would
     // surface as the board element being marked focused.
     const focused = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(focused, "right-press must select something").not.toBeNull();
     const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -834,7 +834,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const focused = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
     const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -880,7 +880,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const focused = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
     const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -908,7 +908,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const focused = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
     const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -941,7 +941,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const afterFirst = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(afterFirst).not.toBeNull();
     const firstMoniker = afterFirst!.getAttribute("data-moniker") ?? "";
@@ -951,7 +951,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const afterSecond = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(afterSecond).not.toBeNull();
     const secondMoniker = afterSecond!.getAttribute("data-moniker") ?? "";
@@ -990,7 +990,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     let focused = container.querySelector(
-      "[data-focused='true'][data-moniker]",
+      "[data-focused='true'][data-segment]",
     );
     expect(focused).not.toBeNull();
     expect(focused!.getAttribute("data-moniker")).toBe("task:2A");
@@ -998,7 +998,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await userEvent.keyboard("{ArrowDown}");
     await flushSetup();
 
-    focused = container.querySelector("[data-focused='true'][data-moniker]");
+    focused = container.querySelector("[data-focused='true'][data-segment]");
     expect(focused).not.toBeNull();
     expect(focused!.getAttribute("data-moniker")).toBe("task:3A");
 

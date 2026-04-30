@@ -44,7 +44,7 @@
  *
  * Plus per-component additions:
  *
- *   - Cell-as-FocusScope — each cell carries both `[data-moniker]` and the
+ *   - Cell-as-FocusScope — each cell carries both `[data-segment]` and the
  *     `data-focused` attribute slot (proves it's a `<FocusScope>` leaf, not
  *     a bare `<div>`).
  *   - Rect-update count — re-rendering with the same data does not produce
@@ -353,7 +353,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const node = result.container.querySelector("[data-moniker='ui:grid']");
+    const node = result.container.querySelector("[data-segment='ui:grid']");
     expect(node).not.toBeNull();
   });
 
@@ -453,9 +453,9 @@ describe("GridView (spatial-nav)", () => {
     mockInvoke.mockImplementation(defaultInvokeImpl);
 
     // Locate the cell's `<FocusScope>` leaf. It carries the canonical
-    // `[data-moniker="grid_cell:R:K"]` selector.
+    // `[data-segment="grid_cell:R:K"]` selector.
     const cellNode = result.container.querySelector(
-      `[data-moniker='${targetMoniker}']`,
+      `[data-segment='${targetMoniker}']`,
     ) as HTMLElement | null;
     expect(cellNode).not.toBeNull();
 
@@ -506,7 +506,7 @@ describe("GridView (spatial-nav)", () => {
     const gridZoneKey = gridZone!.key as FullyQualifiedMoniker;
 
     const gridNode = result.container.querySelector(
-      "[data-moniker='ui:grid']",
+      "[data-segment='ui:grid']",
     ) as HTMLElement | null;
     expect(gridNode).not.toBeNull();
 
@@ -570,7 +570,7 @@ describe("GridView (spatial-nav)", () => {
     });
 
     const cellNode = result.container.querySelector(
-      `[data-moniker='${targetMoniker}']`,
+      `[data-segment='${targetMoniker}']`,
     ) as HTMLElement | null;
     expect(cellNode).not.toBeNull();
 
@@ -755,7 +755,7 @@ describe("GridView (spatial-nav)", () => {
 
     // Click a cell so the click → spatial_focus path runs end-to-end.
     const cellNode = result.container.querySelector(
-      "[data-moniker='grid_cell:0:title']",
+      "[data-segment='grid_cell:0:title']",
     ) as HTMLElement | null;
     expect(cellNode).not.toBeNull();
     await act(async () => {
@@ -788,7 +788,7 @@ describe("GridView (spatial-nav)", () => {
   // Per-component additions
   // -------------------------------------------------------------------------
 
-  it("each cell carries [data-moniker] and the data-focused attribute slot (Cell-as-FocusScope)", async () => {
+  it("each cell carries [data-segment] and the data-focused attribute slot (Cell-as-FocusScope)", async () => {
     // Proves each cell's wrapping primitive is a real `<FocusScope>` leaf,
     // not a bare `<div>`. The `<FocusScope>` body always renders the
     // `data-moniker` attribute, and the `data-focused` slot is present
@@ -807,7 +807,7 @@ describe("GridView (spatial-nav)", () => {
     // `<FocusScope>` body is the only place this attribute is emitted.
     const cellNodes = Array.from(
       result.container.querySelectorAll<HTMLElement>(
-        "[data-moniker^='grid_cell:']",
+        "[data-segment^='grid_cell:']",
       ),
     );
     // 3 rows × 2 cols = 6 cells.

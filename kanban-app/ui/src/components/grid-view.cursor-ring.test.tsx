@@ -488,7 +488,7 @@ describe("GridView -- click-to-cursor regression (spatial path)", () => {
     // `<FocusScope>` with `data-moniker="grid_cell:1:status"`.
     const targetMoniker = "grid_cell:1:status";
     const focusableEl = result.container.querySelector(
-      `[data-moniker="${targetMoniker}"]`,
+      `[data-segment="${targetMoniker}"]`,
     ) as HTMLElement | null;
     expect(focusableEl).not.toBeNull();
 
@@ -596,7 +596,7 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
       (c) => (c[1] as { moniker?: string })?.moniker === targetMoniker,
     );
     expect(targetRegistration).toBeTruthy();
-    const targetKey = (targetRegistration![1] as { key: FullyQualifiedMoniker }).key;
+    const targetKey = (targetRegistration![1] as { fq: FullyQualifiedMoniker }).fq;
 
     await act(async () => {
       const payload: FocusChangedPayload = {
@@ -618,7 +618,7 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
     );
     expect(indicators.length).toBe(1);
     const focusedFocusable = container.querySelector(
-      `[data-moniker="${targetMoniker}"]`,
+      `[data-segment="${targetMoniker}"]`,
     ) as HTMLElement | null;
     expect(focusedFocusable).not.toBeNull();
     expect(focusedFocusable!.contains(indicators[0])).toBe(true);

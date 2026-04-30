@@ -263,7 +263,7 @@ describe("<FocusZone>", () => {
     const { container, unmount } = render(
       <FocusZone moniker={asSegment("ui:orphan")}>{null}</FocusZone>,
     );
-    const node = container.querySelector("[data-moniker='ui:orphan']");
+    const node = container.querySelector("[data-segment='ui:orphan']");
     expect(node).not.toBeNull();
     const registers = mockInvoke.mock.calls.filter(
       (c) => c[0] === "spatial_register_zone",
@@ -298,7 +298,7 @@ describe("<FocusZone>", () => {
     );
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:zone-attr-test']");
+    const node = container.querySelector("[data-segment='ui:zone-attr-test']");
     expect(node).not.toBeNull();
 
     unmount();
@@ -338,7 +338,7 @@ describe("<FocusZone>", () => {
     );
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:zone']");
+    const node = container.querySelector("[data-segment='ui:zone']");
     expect(externalRef.current).toBe(node);
     expect(externalRef.current?.getAttribute("data-moniker")).toBe("ui:zone");
 
@@ -367,7 +367,7 @@ describe("<FocusZone>", () => {
     );
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:zone']");
+    const node = container.querySelector("[data-segment='ui:zone']");
     expect(calls[0]).toBe(node);
     // Internal ref is still wired: spatial_register_zone ran on mount.
     const registered = lastRegisterZoneArgs();
@@ -391,7 +391,7 @@ describe("<FocusZone>", () => {
 
     const args = lastRegisterZoneArgs();
     const node = container.querySelector(
-      "[data-moniker='ui:zone']",
+      "[data-segment='ui:zone']",
     ) as HTMLElement | null;
     expect(node).not.toBeNull();
     expect(node!.getAttribute("data-focused")).toBeNull();
@@ -446,7 +446,7 @@ describe("<FocusZone>", () => {
     );
     const bar = queryByTestId("focus-indicator")!;
     const zone = container.querySelector(
-      "[data-moniker='ui:zone']",
+      "[data-segment='ui:zone']",
     ) as HTMLElement | null;
     expect(zone).not.toBeNull();
     expect(bar.parentElement).toBe(zone);
@@ -485,7 +485,7 @@ describe("<FocusZone>", () => {
     });
 
     const node = container.querySelector(
-      "[data-moniker='ui:board']",
+      "[data-segment='ui:board']",
     ) as HTMLElement | null;
     expect(node).not.toBeNull();
     await waitFor(() =>

@@ -249,17 +249,17 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_unregister_scope` call's args, in order. */
-function unregisterScopeCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_unregister_scope")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** True when the moniker matches one of the two accepted bar-zone monikers. */
@@ -355,7 +355,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     mockInvoke.mockClear();
 
     const tabNode = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
     expect(tabNode).not.toBeNull();
 
@@ -363,10 +363,10 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(p1Tab.key);
+    expect(focusCalls[0].fq).toBe(p1Tab.fq);
     // The bar zone key must NOT also receive a focus call — the leaf
     // stops propagation so the click does not bubble to the wrapping zone.
-    expect(focusCalls.find((c) => c.key === barZone.key)).toBeUndefined();
+    expect(focusCalls.find((c) => c.fq === barZone.fq)).toBeUndefined();
 
     unmount();
   });
@@ -389,7 +389,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const tabNode = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator")!;
     // The indicator's host must be the focused tab — not a sibling.
@@ -409,7 +409,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
 
     const barZone = registerZoneArgs().find((a) => isBarMoniker(a.moniker))!;
     const barNode = container.querySelector(
-      `[data-moniker='${barZone.moniker as string}']`,
+      `[data-segment='${barZone.moniker as string}']`,
     ) as HTMLElement;
     expect(barNode).not.toBeNull();
     expect(barNode.getAttribute("data-focused")).toBeNull();
@@ -451,7 +451,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     mockInvoke.mockClear();
     unmount();
 
-    const unregisterKeys = unregisterScopeCalls().map((c) => c.key);
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
     for (const k of tabKeys) {
       expect(unregisterKeys).toContain(k);
     }
@@ -462,7 +462,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     const tabNode = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
     expect(tabNode).not.toBeNull();
     fireEvent.click(tabNode!);
@@ -487,10 +487,10 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       </TooltipProvider>,
     );
     expect(
-      container.querySelector("[data-moniker='ui:perspective-bar']"),
+      container.querySelector("[data-segment='ui:perspective-bar']"),
     ).toBeNull();
     expect(
-      container.querySelector("[data-moniker^='perspective_tab:']"),
+      container.querySelector("[data-segment^='perspective_tab:']"),
     ).toBeNull();
   });
 
@@ -514,7 +514,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       const indicator = queryByTestId("focus-indicator");
       expect(indicator).not.toBeNull();
       const p1 = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(p1!.contains(indicator!)).toBe(true);
     });
@@ -530,7 +530,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
       );
       expect(indicators.length).toBe(1);
       const p2 = container.querySelector(
-        "[data-moniker='perspective_tab:p2']",
+        "[data-segment='perspective_tab:p2']",
       );
       expect(p2!.contains(indicators[0])).toBe(true);
     });

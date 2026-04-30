@@ -468,7 +468,7 @@ describe("FocusScope", () => {
       </FocusScope>,
     );
     fireEvent.click(getByText("card"));
-    const scopeDiv = container.querySelector("[data-moniker='task:abc']");
+    const scopeDiv = container.querySelector("[data-segment='task:abc']");
     expect(scopeDiv?.hasAttribute("data-focused")).toBe(true);
   });
 
@@ -478,7 +478,7 @@ describe("FocusScope", () => {
         <span>card</span>
       </FocusScope>,
     );
-    const scopeDiv = container.querySelector("[data-moniker='task:abc']");
+    const scopeDiv = container.querySelector("[data-segment='task:abc']");
     expect(scopeDiv?.hasAttribute("data-focused")).toBe(false);
   });
 
@@ -488,7 +488,7 @@ describe("FocusScope", () => {
         <span>card</span>
       </FocusScope>,
     );
-    const scopeDiv = container.querySelector("[data-moniker='task:abc']");
+    const scopeDiv = container.querySelector("[data-segment='task:abc']");
     expect(scopeDiv).not.toBeNull();
     expect(scopeDiv?.getAttribute("data-moniker")).toBe("task:abc");
   });
@@ -846,7 +846,7 @@ describe("FocusScope", () => {
       );
 
       // The primitive's div carries data-moniker
-      const node = container.querySelector("[data-moniker='task:abc']");
+      const node = container.querySelector("[data-segment='task:abc']");
       expect(node).not.toBeNull();
     });
 
@@ -877,7 +877,7 @@ describe("FocusScope", () => {
         expect.anything(),
       );
 
-      const node = container.querySelector("[data-moniker='column:doing']");
+      const node = container.querySelector("[data-segment='column:doing']");
       expect(node).not.toBeNull();
     });
 
@@ -956,7 +956,7 @@ describe("FocusScope", () => {
           <span>card</span>
         </FocusScope>,
       );
-      const node = container.querySelector("[data-moniker='task:abc']");
+      const node = container.querySelector("[data-segment='task:abc']");
       expect(node).not.toBeNull();
       // No primitive registration happened
       expect(invoke).not.toHaveBeenCalledWith(
@@ -1014,7 +1014,7 @@ describe("FocusScope", () => {
       });
 
       const node = container.querySelector(
-        "[data-moniker='task:row']",
+        "[data-segment='task:row']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       // Consumer's className lands on the primitive's root div.

@@ -356,7 +356,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // No indicator should render before focus moves to a tab leaf.
     expect(
       container.querySelector(
-        "[data-moniker='perspective_tab:p1'] [data-testid='focus-indicator']",
+        "[data-segment='perspective_tab:p1'] [data-testid='focus-indicator']",
       ),
     ).toBeNull();
 
@@ -367,14 +367,14 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(
@@ -415,7 +415,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     expect(
       container.querySelector(
-        "[data-moniker='perspective_tab:p2'] [data-testid='focus-indicator']",
+        "[data-segment='perspective_tab:p2'] [data-testid='focus-indicator']",
       ),
     ).toBeNull();
 
@@ -426,14 +426,14 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='perspective_tab:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(
-      "[data-moniker='perspective_tab:p2']",
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(
@@ -480,7 +480,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
@@ -526,7 +526,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // indicator is still rendered inside it — no FullyQualifiedMoniker churn means
     // the kernel's focused_key still points at the same leaf.
     const node = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");
@@ -579,7 +579,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='perspective_tab:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node?.getAttribute("data-focused")).toBe("true");
     });
@@ -599,7 +599,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // The CM6 rename editor mounts inside the active tab's wrapper.
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -607,7 +607,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // Commit the rename by dispatching Enter on the CM6 content. The
     // editor unmounts and the wrapper reverts to the plain name text.
     const cmContent = container.querySelector(
-      "[data-moniker='perspective_tab:p2'] .cm-content",
+      "[data-segment='perspective_tab:p2'] .cm-content",
     ) as HTMLElement;
     expect(cmContent).not.toBeNull();
     await act(async () => {
@@ -628,13 +628,13 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // round-trip.
     expect(
       container.querySelector(
-        "[data-moniker='perspective_tab:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       ),
       "rename editor must unmount after commit",
     ).toBeNull();
 
     const node = container.querySelector(
-      "[data-moniker='perspective_tab:p2']",
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");
@@ -676,7 +676,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-moniker='perspective_tab:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node?.getAttribute("data-focused")).toBe("true");
     });
@@ -689,7 +689,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -698,7 +698,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // `perspective.rename`; the editor unmounts the same way Enter
     // does.
     const cmContent = container.querySelector(
-      "[data-moniker='perspective_tab:p2'] .cm-content",
+      "[data-segment='perspective_tab:p2'] .cm-content",
     ) as HTMLElement;
     await act(async () => {
       cmContent.dispatchEvent(
@@ -714,13 +714,13 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     expect(
       container.querySelector(
-        "[data-moniker='perspective_tab:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       ),
       "rename editor must unmount after cancel",
     ).toBeNull();
 
     const node = container.querySelector(
-      "[data-moniker='perspective_tab:p2']",
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");

@@ -253,7 +253,7 @@ describe("Field (spatial-nav)", () => {
 
     // The DOM exposes the moniker via data-moniker for e2e selectors.
     const node = result.container.querySelector(
-      "[data-moniker='field:task:t1.title']",
+      "[data-segment='field:task:t1.title']",
     );
     expect(node).not.toBeNull();
   });
@@ -285,7 +285,7 @@ describe("Field (spatial-nav)", () => {
     // The DOM exposes the moniker via data-moniker for e2e selectors,
     // even in edit mode.
     const node = result.container.querySelector(
-      "[data-moniker='field:task:t1.title']",
+      "[data-segment='field:task:t1.title']",
     );
     expect(node).not.toBeNull();
   });
@@ -304,14 +304,14 @@ describe("Field (spatial-nav)", () => {
 
     // The field zone is registered.
     const zoneNode = result.container.querySelector(
-      "[data-moniker='field:task:t1.tags']",
+      "[data-segment='field:task:t1.tags']",
     );
     expect(zoneNode).not.toBeNull();
 
     // Each pill is a `<FocusScope>` leaf nested inside the field zone.
     // BadgeList renders MentionView, which wraps each item in FocusScope
     // with `tag:{slug}` monikers.
-    const pills = zoneNode!.querySelectorAll('[data-moniker^="tag:"]');
+    const pills = zoneNode!.querySelectorAll('[data-segment^="tag:"]');
     expect(pills.length).toBe(2);
     const monikers = Array.from(pills).map((p) =>
       p.getAttribute("data-moniker"),

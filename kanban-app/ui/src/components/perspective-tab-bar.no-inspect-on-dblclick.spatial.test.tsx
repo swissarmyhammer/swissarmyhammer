@@ -225,10 +225,10 @@ function dispatchCommandCalls(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Collect every `spatial_register_zone` invocation argument bag. */
@@ -282,7 +282,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     await flushSetup();
 
     const tabNode = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
     expect(tabNode).not.toBeNull();
 
@@ -329,7 +329,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     await flushSetup();
 
     const barNode = container.querySelector(
-      "[data-moniker='ui:perspective-bar']",
+      "[data-segment='ui:perspective-bar']",
     ) as HTMLElement | null;
     expect(barNode).not.toBeNull();
 
@@ -365,7 +365,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     expect(p1Tab).toBeTruthy();
 
     const tabNode = container.querySelector(
-      "[data-moniker='perspective_tab:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
     expect(tabNode).not.toBeNull();
 
@@ -375,7 +375,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(p1Tab!.key);
+    expect(focusCalls[0].fq).toBe(p1Tab!.fq);
 
     unmount();
   });

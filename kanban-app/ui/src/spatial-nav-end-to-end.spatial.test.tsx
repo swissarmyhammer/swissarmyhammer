@@ -445,25 +445,25 @@ function dispatchCallsFor(target: string): Array<{
 }
 
 /** Capture every `spatial_focus` call's args. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Capture every `spatial_navigate` call's args. */
-function spatialNavigateCalls(): Array<{ key: FullyQualifiedMoniker; direction: string }> {
+function spatialNavigateCalls(): Array<{ focusedFq: FullyQualifiedMoniker; direction: string }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker; direction: string });
+    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
 }
 
 /** Capture every `spatial_drill_in` / `spatial_drill_out` call's args. */
-function spatialDrillCalls(direction: "in" | "out"): Array<{ key: FullyQualifiedMoniker }> {
+function spatialDrillCalls(direction: "in" | "out"): Array<{ fq: FullyQualifiedMoniker }> {
   const cmd = direction === "in" ? "spatial_drill_in" : "spatial_drill_out";
   return mockInvoke.mock.calls
     .filter((c) => c[0] === cmd)
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** Pull every `spatial_register_zone` invocation argument bag. */
@@ -600,7 +600,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       ).not.toBeNull();
 
       const t1Node = container.querySelector(
-        "[data-moniker='task:T1']",
+        "[data-segment='task:T1']",
       ) as HTMLElement | null;
       expect(t1Node, "task:T1 DOM node must exist after bootstrap").not.toBeNull();
 
@@ -614,7 +614,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // wait for the React tree to flip `data-focused`.
       await waitFor(() => {
         const focused = container.querySelector(
-          "[data-moniker='task:T1'][data-focused='true']",
+          "[data-segment='task:T1'][data-focused='true']",
         );
         expect(focused, "task:T1 must carry data-focused=true after click").not.toBeNull();
       });
@@ -642,7 +642,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // The spatial_focus call carries the registered key for task:T1.
       const focusCalls = spatialFocusCalls();
       expect(focusCalls.length).toBeGreaterThan(0);
-      expect(focusCalls.some((c) => c.key === t1Key!)).toBe(true);
+      expect(focusCalls.some((c) => c.fq === t1Key!)).toBe(true);
 
       unmount();
     });
@@ -659,7 +659,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       expect(tabKey, "perspective_tab:default must register").not.toBeNull();
 
       const tabNode = container.querySelector(
-        "[data-moniker='perspective_tab:default']",
+        "[data-segment='perspective_tab:default']",
       ) as HTMLElement | null;
       expect(tabNode, "perspective_tab:default DOM node must exist").not.toBeNull();
 
@@ -668,7 +668,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       await waitFor(() => {
         const focused = container.querySelector(
-          "[data-moniker='perspective_tab:default'][data-focused='true']",
+          "[data-segment='perspective_tab:default'][data-focused='true']",
         );
         expect(focused).not.toBeNull();
       });
@@ -680,7 +680,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       // The focus call's key matches the registered tab key.
       const focusCalls = spatialFocusCalls();
-      expect(focusCalls.some((c) => c.key === tabKey!)).toBe(true);
+      expect(focusCalls.some((c) => c.fq === tabKey!)).toBe(true);
 
       unmount();
     });
@@ -696,7 +696,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       expect(searchKey, "ui:navbar.search must register").not.toBeNull();
 
       const searchNode = container.querySelector(
-        "[data-moniker='ui:navbar.search']",
+        "[data-segment='ui:navbar.search']",
       ) as HTMLElement | null;
       expect(searchNode).not.toBeNull();
 
@@ -705,7 +705,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       await waitFor(() => {
         const focused = container.querySelector(
-          "[data-moniker='ui:navbar.search'][data-focused='true']",
+          "[data-segment='ui:navbar.search'][data-focused='true']",
         );
         expect(focused).not.toBeNull();
       });
@@ -745,7 +745,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const focused = container.querySelector(
-        "[data-focused='true'][data-moniker]",
+        "[data-focused='true'][data-segment]",
       );
       expect(focused, "ArrowDown must produce a focus change").not.toBeNull();
       // The next focused element should be task:T2 (the next card in
@@ -779,7 +779,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const focused = container.querySelector(
-        "[data-focused='true'][data-moniker]",
+        "[data-focused='true'][data-segment]",
       );
       expect(focused).not.toBeNull();
       const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -810,7 +810,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const focused = container.querySelector(
-        "[data-focused='true'][data-moniker]",
+        "[data-focused='true'][data-segment]",
       );
       expect(focused).not.toBeNull();
       const moniker = focused!.getAttribute("data-moniker") ?? "";
@@ -856,7 +856,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         drillIn.length,
         "Enter on a focused card must dispatch spatial_drill_in",
       ).toBeGreaterThan(0);
-      expect(drillIn.some((c) => c.key === t1Key!)).toBe(true);
+      expect(drillIn.some((c) => c.fq === t1Key!)).toBe(true);
 
       unmount();
     });
@@ -883,7 +883,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         drillOut.length,
         "Escape on a focused card must dispatch spatial_drill_out",
       ).toBeGreaterThan(0);
-      expect(drillOut.some((c) => c.key === t1Key!)).toBe(true);
+      expect(drillOut.some((c) => c.fq === t1Key!)).toBe(true);
 
       unmount();
     });
@@ -1003,7 +1003,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // Confirm focus landed on the active tab.
       await waitFor(() => {
         const tab = container.querySelector(
-          "[data-moniker='perspective_tab:default'][data-focused='true']",
+          "[data-segment='perspective_tab:default'][data-focused='true']",
         );
         expect(tab).not.toBeNull();
       });
@@ -1016,7 +1016,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // inside the tab.
       await waitFor(() => {
         const editor = container.querySelector(
-          "[data-moniker='perspective_tab:default'] .cm-editor",
+          "[data-segment='perspective_tab:default'] .cm-editor",
         );
         expect(
           editor,
@@ -1043,7 +1043,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const t1Node = container.querySelector(
-        "[data-moniker='task:T1']",
+        "[data-segment='task:T1']",
       ) as HTMLElement | null;
       expect(t1Node).not.toBeNull();
 
@@ -1074,7 +1074,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const tabNode = container.querySelector(
-        "[data-moniker='perspective_tab:default']",
+        "[data-segment='perspective_tab:default']",
       ) as HTMLElement | null;
       expect(tabNode).not.toBeNull();
 
@@ -1107,7 +1107,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const barNode = container.querySelector(
-        "[data-moniker='ui:perspective-bar']",
+        "[data-segment='ui:perspective-bar']",
       ) as HTMLElement | null;
       expect(barNode).not.toBeNull();
 
@@ -1129,7 +1129,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const navNode = container.querySelector(
-        "[data-moniker='ui:navbar']",
+        "[data-segment='ui:navbar']",
       ) as HTMLElement | null;
       expect(navNode).not.toBeNull();
 
@@ -1151,7 +1151,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       const viewNode = container.querySelector(
-        "[data-moniker='ui:view']",
+        "[data-segment='ui:view']",
       ) as HTMLElement | null;
       expect(viewNode).not.toBeNull();
 
@@ -1393,7 +1393,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       const editor = await waitFor(() => {
         const ed = container.querySelector(
-          "[data-moniker='perspective_tab:default'] .cm-editor",
+          "[data-segment='perspective_tab:default'] .cm-editor",
         );
         expect(ed).not.toBeNull();
         return ed as HTMLElement;

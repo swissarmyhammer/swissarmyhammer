@@ -357,7 +357,7 @@ describe("ColumnView (spatial-nav)", () => {
     );
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='column:col-doing']");
+    const node = container.querySelector("[data-segment='column:col-doing']");
     expect(node).not.toBeNull();
 
     unmount();

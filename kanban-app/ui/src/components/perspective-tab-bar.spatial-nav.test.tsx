@@ -213,7 +213,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const { container, unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:perspective-bar']");
+    const node = container.querySelector("[data-segment='ui:perspective-bar']");
     expect(node).not.toBeNull();
 
     unmount();
@@ -224,7 +224,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     const node = container.querySelector(
-      "[data-moniker='ui:perspective-bar']",
+      "[data-segment='ui:perspective-bar']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     // The h-8 shrink-0 chain keeps the tab bar a fixed-height row.
@@ -296,10 +296,10 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     expect(
-      container.querySelector("[data-moniker='perspective_tab:p1']"),
+      container.querySelector("[data-segment='perspective_tab:p1']"),
     ).not.toBeNull();
     expect(
-      container.querySelector("[data-moniker='perspective_tab:p2']"),
+      container.querySelector("[data-segment='perspective_tab:p2']"),
     ).not.toBeNull();
 
     unmount();
@@ -320,10 +320,10 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
       </TooltipProvider>,
     );
     expect(
-      container.querySelector("[data-moniker='ui:perspective-bar']"),
+      container.querySelector("[data-segment='ui:perspective-bar']"),
     ).toBeNull();
     expect(
-      container.querySelector("[data-moniker='perspective_tab:p1']"),
+      container.querySelector("[data-segment='perspective_tab:p1']"),
     ).toBeNull();
   });
 });

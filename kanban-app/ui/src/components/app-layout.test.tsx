@@ -513,7 +513,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
       // Exclude "column:<id>.name" (the header's inner FocusScope for the
       // name field, used by keyboard navigation).
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]:not([data-segment*="."])',
       );
       expect(columnEls.length).toBe(6);
       for (const el of columnEls) {
@@ -596,7 +596,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
       );
 
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]:not([data-segment*="."])',
       );
       expect(columnEls.length).toBe(2);
       for (const el of columnEls) {

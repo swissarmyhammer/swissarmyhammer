@@ -457,13 +457,13 @@ describe("EntityInspector", () => {
     // the moniker-bearing FocusZone (driven by Field) lives inside it.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
     const titleFocusZone = titleRow!.querySelector(
-      "[data-moniker='field:task:test-id.title']",
+      "[data-segment='field:task:test-id.title']",
     );
     expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
     // Second field should not be focused
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
     const tagsFocusZone = tagsRow!.querySelector(
-      "[data-moniker='field:task:test-id.tags']",
+      "[data-segment='field:task:test-id.tags']",
     );
     expect(tagsFocusZone!.getAttribute("data-focused")).toBeNull();
   });
@@ -477,7 +477,7 @@ describe("EntityInspector", () => {
     // Field's FocusZone (a descendant of the row), not the row itself.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
     const titleFocusZone = titleRow!.querySelector(
-      "[data-moniker='field:task:test-id.title']",
+      "[data-segment='field:task:test-id.title']",
     );
     expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
@@ -497,7 +497,7 @@ describe("EntityInspector", () => {
     });
 
     const bodyFocusZone = bodyRow!.querySelector(
-      "[data-moniker='field:task:test-id.body']",
+      "[data-segment='field:task:test-id.body']",
     );
     // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
     expect(bodyFocusZone!.getAttribute("data-focused")).toBe("true");
@@ -588,7 +588,7 @@ describe("EntityInspector", () => {
         '[data-testid="field-row-title"]',
       );
       const titleFocusZone = titleRow!.querySelector(
-        "[data-moniker='field:task:test-id.title']",
+        "[data-segment='field:task:test-id.title']",
       );
       expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
@@ -624,7 +624,7 @@ describe("EntityInspector", () => {
         '[data-testid="field-row-title"]',
       );
       const titleFocusZone = titleRow!.querySelector(
-        "[data-moniker='field:task:test-id.title']",
+        "[data-segment='field:task:test-id.title']",
       );
       expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
@@ -1152,7 +1152,7 @@ describe("EntityInspector", () => {
         '[data-testid="field-row-title"]',
       );
       const titleFocusZone = titleRow!.querySelector(
-        "[data-moniker='field:task:test-id.title']",
+        "[data-segment='field:task:test-id.title']",
       );
       expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
@@ -1205,13 +1205,13 @@ describe("EntityInspector", () => {
       // from `makeEntity()` (task, test-id). The element bearing the
       // moniker is a descendant of the row (the Field's FocusZone div).
       expect(
-        titleRow!.querySelector("[data-moniker='field:task:test-id.title']"),
+        titleRow!.querySelector("[data-segment='field:task:test-id.title']"),
       ).toBeTruthy();
       expect(
-        tagsRow!.querySelector("[data-moniker='field:task:test-id.tags']"),
+        tagsRow!.querySelector("[data-segment='field:task:test-id.tags']"),
       ).toBeTruthy();
       expect(
-        bodyRow!.querySelector("[data-moniker='field:task:test-id.body']"),
+        bodyRow!.querySelector("[data-segment='field:task:test-id.body']"),
       ).toBeTruthy();
     });
 
@@ -1268,7 +1268,7 @@ describe("EntityInspector", () => {
       // The flex container lives inside the field zone (data-moniker
       // marker), not at the outer testid wrapper.
       const fieldZone = tagsRow!.querySelector(
-        '[data-moniker="field:task:test-id.tags"]',
+        '[data-segment="field:task:test-id.tags"]',
       );
       expect(
         fieldZone!.contains(flexAncestor),

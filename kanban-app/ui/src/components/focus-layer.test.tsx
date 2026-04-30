@@ -274,14 +274,14 @@ describe("<FocusLayer>", () => {
 // ---------------------------------------------------------------------------
 
 describe("<FocusLayer> overlay scenarios", () => {
-  /** Pull every `spatial_push_layer` push as a `{ key, name, parent }` record. */
+  /** Pull every `spatial_push_layer` push as a `{ fq, name, parent }` record. */
   function pushedLayers() {
     return mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
       .map(
         (c) =>
           c[1] as {
-            key: FullyQualifiedMoniker;
+            fq: FullyQualifiedMoniker;
             name: string;
             parent: FullyQualifiedMoniker | null;
           },
@@ -313,7 +313,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     // Sanity: the opener captured the window's layer key.
     expect(openerLayerKey).not.toBeNull();
     const windowPush = pushedLayers().find((p) => p.name === "window")!;
-    expect(windowPush.key).toBe(openerLayerKey);
+    expect(windowPush.fq).toBe(openerLayerKey);
 
     // Now mount the dialog as a sibling of the window layer (simulates
     // the portal — the dialog's React parent is NOT the window layer).
@@ -362,7 +362,7 @@ describe("<FocusLayer> overlay scenarios", () => {
 
     expect(inspectorLayerKey).not.toBeNull();
     const inspectorPush = pushedLayers().find((p) => p.name === "inspector")!;
-    expect(inspectorPush.key).toBe(inspectorLayerKey);
+    expect(inspectorPush.fq).toBe(inspectorLayerKey);
 
     // Mount the dialog with the captured inspector key. The dialog is a
     // tree-detached `render` to mirror a portaled overlay — the React
@@ -385,7 +385,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     expect(dialogPush.parent).toBe(inspectorLayerKey);
     // And critically, NOT the window root.
     const windowPush = pushedLayers().find((p) => p.name === "window")!;
-    expect(dialogPush.parent).not.toBe(windowPush.key);
+    expect(dialogPush.parent).not.toBe(windowPush.fq);
 
     dialog.unmount();
     unmount();
@@ -449,7 +449,7 @@ describe("<FocusLayer> overlay scenarios", () => {
       (c) => c[0] === "spatial_pop_layer",
     );
     expect(pops).toHaveLength(1);
-    expect((pops[0][1] as { key: FullyQualifiedMoniker }).key).toBe(palette.key);
+    expect((pops[0][1] as { fq: FullyQualifiedMoniker }).fq).toBe(palette.fq);
 
     unmount();
   });

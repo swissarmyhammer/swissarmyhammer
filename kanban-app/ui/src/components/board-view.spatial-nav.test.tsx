@@ -265,7 +265,7 @@ describe("BoardView (spatial-nav)", () => {
     const { container, unmount } = renderBoardWithSpatialStack();
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:board']");
+    const node = container.querySelector("[data-segment='ui:board']");
     expect(node).not.toBeNull();
 
     unmount();
@@ -277,7 +277,7 @@ describe("BoardView (spatial-nav)", () => {
     const { container, unmount } = renderBoardWithoutSpatialStack();
     await flushSetup();
 
-    expect(container.querySelector("[data-moniker='ui:board']")).toBeNull();
+    expect(container.querySelector("[data-segment='ui:board']")).toBeNull();
 
     // No zone-registration call should be issued for `ui:board` either —
     // the provider absence means the optional-context lookups return null

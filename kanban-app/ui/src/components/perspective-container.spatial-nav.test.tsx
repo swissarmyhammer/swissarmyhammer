@@ -151,7 +151,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     );
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:perspective']");
+    const node = container.querySelector("[data-segment='ui:perspective']");
     expect(node).not.toBeNull();
 
     unmount();
@@ -164,7 +164,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     await flushSetup();
 
     const node = container.querySelector(
-      "[data-moniker='ui:perspective']",
+      "[data-segment='ui:perspective']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     // The zone wraps the view chain — the flex chain must stay intact.
@@ -184,7 +184,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     await flushSetup();
 
     const zone = container.querySelector(
-      "[data-moniker='ui:perspective']",
+      "[data-segment='ui:perspective']",
     ) as HTMLElement;
     expect(zone).not.toBeNull();
     expect(zone.querySelector('[data-testid="child"]')).not.toBeNull();
@@ -203,7 +203,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
       </EntityFocusProvider>,
     );
     expect(
-      container.querySelector("[data-moniker='ui:perspective']"),
+      container.querySelector("[data-segment='ui:perspective']"),
     ).toBeNull();
   });
 });

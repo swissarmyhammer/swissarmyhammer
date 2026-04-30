@@ -308,10 +308,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -389,14 +389,14 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
 
     mockInvoke.mockClear();
     const titleNode = container.querySelector(
-      `[data-moniker='field:task:task-1.title']`,
+      `[data-segment='field:task:task-1.title']`,
     ) as HTMLElement | null;
     expect(titleNode).not.toBeNull();
     fireEvent.click(titleNode!);
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls.length).toBeGreaterThanOrEqual(1);
-    expect(focusCalls[0].key).toBe(titleZone!.key);
+    expect(focusCalls[0].fq).toBe(titleZone!.fq);
 
     unmount();
   });
@@ -417,7 +417,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
 
     mockInvoke.mockClear();
     const pillNode = container.querySelector(
-      `[data-moniker='tag:tag-bug']`,
+      `[data-segment='tag:tag-bug']`,
     ) as HTMLElement | null;
     expect(pillNode).not.toBeNull();
     fireEvent.click(pillNode!);
@@ -426,8 +426,8 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     // The leaf's click handler stops propagation so the parent zone
     // does not also fire a focus call.
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(bugPill!.key);
-    expect(focusCalls[0].key).not.toBe(tagsZone!.key);
+    expect(focusCalls[0].fq).toBe(bugPill!.fq);
+    expect(focusCalls[0].fq).not.toBe(tagsZone!.fq);
 
     unmount();
   });
@@ -451,7 +451,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
       (a) => a.segment === "field:task:task-1.title",
     )!;
     const titleNode = container.querySelector(
-      `[data-moniker='field:task:task-1.title']`,
+      `[data-segment='field:task:task-1.title']`,
     ) as HTMLElement;
 
     // Before the focus claim: no indicator descendant attributable to
@@ -496,7 +496,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
       (a) => a.segment === "field:task:task-1.progress",
     )!;
     const progressNode = container.querySelector(
-      `[data-moniker='field:task:task-1.progress']`,
+      `[data-segment='field:task:task-1.progress']`,
     ) as HTMLElement;
     expect(progressNode).not.toBeNull();
     expect(
@@ -532,7 +532,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
       (a) => a.segment === "tag:tag-bug",
     )!;
     const pillNode = container.querySelector(
-      `[data-moniker='tag:tag-bug']`,
+      `[data-segment='tag:tag-bug']`,
     ) as HTMLElement;
     expect(pillNode).not.toBeNull();
     expect(
@@ -574,10 +574,10 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     )!;
 
     const pillNode = container.querySelector(
-      `[data-moniker='tag:tag-bug']`,
+      `[data-segment='tag:tag-bug']`,
     ) as HTMLElement;
     const tagsNode = container.querySelector(
-      `[data-moniker='field:task:task-1.tags']`,
+      `[data-segment='field:task:task-1.tags']`,
     ) as HTMLElement;
 
     // Step 1: focus lands on the pill — indicator is on the pill, not

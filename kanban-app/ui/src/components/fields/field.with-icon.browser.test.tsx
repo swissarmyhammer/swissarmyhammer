@@ -222,10 +222,10 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /**
@@ -329,7 +329,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const fieldZone = container.querySelector(
-      '[data-moniker="field:task:T1.tags"]',
+      '[data-segment="field:task:T1.tags"]',
     );
     expect(
       fieldZone,
@@ -363,7 +363,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const fieldZone = container.querySelector(
-      '[data-moniker="field:task:T1.tags"]',
+      '[data-segment="field:task:T1.tags"]',
     );
     expect(fieldZone).not.toBeNull();
     const iconBadge = fieldZone!.querySelector(
@@ -409,7 +409,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
       "clicking the icon must dispatch spatial_focus exactly once",
     ).toBeGreaterThanOrEqual(1);
     expect(
-      focusCalls[0].key,
+      focusCalls[0].fq,
       "the focus key must be the field zone's key (icon click bubbles to the zone)",
     ).toBe(fieldZone!.key);
 
@@ -437,7 +437,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     // The content's flex-1 wrapper is the second sibling inside the
     // flex row. A click anywhere inside it bubbles to the field zone.
     const contentWrap = container.querySelector(
-      '[data-moniker="field:task:T1.tags"] .flex-1.min-w-0',
+      '[data-segment="field:task:T1.tags"] .flex-1.min-w-0',
     ) as HTMLElement | null;
     expect(contentWrap).not.toBeNull();
 
@@ -446,7 +446,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls.length).toBeGreaterThanOrEqual(1);
-    expect(focusCalls[0].key).toBe(fieldZone!.key);
+    expect(focusCalls[0].fq).toBe(fieldZone!.fq);
 
     unmount();
   });
@@ -481,7 +481,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const fieldZone = container.querySelector(
-      '[data-moniker="field:task:T1.tags"]',
+      '[data-segment="field:task:T1.tags"]',
     ) as HTMLElement;
     expect(fieldZone.getAttribute("data-focused")).toBe("true");
 
@@ -562,7 +562,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     // a stylesheet rename (without a real component swap) doesn't
     // make this test pass falsely.
     const svg = container.querySelector(
-      '[data-moniker="field:task:T1.tags"] svg',
+      '[data-segment="field:task:T1.tags"] svg',
     ) as SVGElement | null;
     expect(svg, "field with icon=tag must render an svg").not.toBeNull();
     expect(
@@ -603,7 +603,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const svg = container.querySelector(
-      '[data-moniker="field:task:T1.override_field"] svg',
+      '[data-segment="field:task:T1.override_field"] svg',
     ) as SVGElement | null;
     expect(svg).not.toBeNull();
     // CheckCircle's lucide class is `lucide-circle-check-big` (lucide
@@ -636,7 +636,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     await flushSetup();
 
     const svg = container.querySelector(
-      '[data-moniker="field:task:T1.bogus_icon_field"] svg',
+      '[data-segment="field:task:T1.bogus_icon_field"] svg',
     ) as SVGElement | null;
     expect(
       svg,

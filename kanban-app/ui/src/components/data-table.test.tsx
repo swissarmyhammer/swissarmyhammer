@@ -252,13 +252,13 @@ describe("DataTable grouping sync", () => {
     });
 
     // After clearing, all rows should be flat data rows with entity monikers
-    const flatRows = container.querySelectorAll("tbody tr[data-moniker]");
+    const flatRows = container.querySelectorAll("tbody tr[data-segment]");
     expect(flatRows.length).toBe(ENTITIES.length);
   });
 
   it("renders flat layout when no grouping prop is provided", async () => {
     const { container } = await renderTable();
-    const rows = container.querySelectorAll("tbody tr[data-moniker]");
+    const rows = container.querySelectorAll("tbody tr[data-segment]");
     expect(rows.length).toBe(ENTITIES.length);
   });
 });
@@ -356,7 +356,7 @@ describe("DataTable container context menu", () => {
     const { container } = result;
 
     const firstRow = container.querySelector(
-      "tbody tr[data-moniker]",
+      "tbody tr[data-segment]",
     ) as HTMLElement;
     expect(firstRow).not.toBeNull();
 

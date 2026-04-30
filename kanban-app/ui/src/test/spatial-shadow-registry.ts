@@ -78,12 +78,18 @@
 import { vi } from "vitest";
 import { act } from "@testing-library/react";
 import {
-  asFq,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
   type SegmentMoniker,
   type WindowLabel,
 } from "@/types/spatial";
+
+// Re-export `asFq` directly from `@/types/spatial` so test files can build
+// FQM literals without importing from `@/types/spatial`. This pass-through
+// re-export form (rather than `export { asFq }` after a named import)
+// avoids a Vite browser-mode SyntaxError where the live binding is not
+// always visible to downstream re-exporters.
+export { asFq } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Listener callback type — wraps the focus-changed payload shape.
@@ -726,6 +732,3 @@ export function setupSpatialHarness(opts?: {
   };
 }
 
-// Re-export `asFq` so test files can build FQM literals without importing
-// from `@/types/spatial` directly.
-export { asFq };

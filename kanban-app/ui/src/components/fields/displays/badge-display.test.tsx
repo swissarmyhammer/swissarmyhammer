@@ -173,7 +173,7 @@ describe("BadgeDisplay", () => {
     );
     await flush();
 
-    const scope = container.querySelector("[data-moniker='column:col-doing']");
+    const scope = container.querySelector("[data-segment='column:col-doing']");
     expect(scope).toBeTruthy();
   });
 

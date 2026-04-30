@@ -357,10 +357,10 @@ function findDispatch(target: string):
 }
 
 /** Capture every `spatial_drill_in` call's args. */
-function spatialDrillInCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 /** True when any registered scope has the given moniker. */
@@ -420,7 +420,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // editor is inside any tab button.
     expect(
       container.querySelectorAll(
-        "[data-moniker^='perspective_tab:'] .cm-editor",
+        "[data-segment^='perspective_tab:'] .cm-editor",
       ),
     ).toHaveLength(0);
 
@@ -434,7 +434,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -448,7 +448,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // The active tab now hosts the inline CM6 rename editor.
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -475,7 +475,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p2']",
+        "[data-segment='perspective_tab:p2']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -489,7 +489,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // the global `nav.drillIn`, which is a no-op for a leaf scope.
     expect(
       container.querySelectorAll(
-        "[data-moniker^='perspective_tab:'] .cm-editor",
+        "[data-segment^='perspective_tab:'] .cm-editor",
       ),
     ).toHaveLength(0);
 
@@ -526,7 +526,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     await waitFor(() => {
       const focused = container.querySelector(
-        "[data-moniker='task:01ABC']",
+        "[data-segment='task:01ABC']",
       );
       expect(focused?.getAttribute("data-focused")).toBe("true");
     });
@@ -540,12 +540,12 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     // Enter dispatched to the kernel as a drill-in for the focused leaf.
     expect(spatialDrillInCalls()).toHaveLength(1);
-    expect(spatialDrillInCalls()[0].key).toBe(taskKey);
+    expect(spatialDrillInCalls()[0].fq).toBe(taskKey);
 
     // No rename editor mounted in any perspective tab.
     expect(
       container.querySelectorAll(
-        "[data-moniker^='perspective_tab:'] .cm-editor",
+        "[data-segment^='perspective_tab:'] .cm-editor",
       ),
     ).toHaveLength(0);
 
@@ -570,7 +570,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -580,7 +580,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -606,7 +606,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -616,7 +616,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -641,7 +641,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -652,7 +652,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     const renameEditor = await waitFor(() => {
       const ed = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(ed).not.toBeNull();
       return ed as HTMLElement;
@@ -720,7 +720,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -730,7 +730,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     const renameEditor = await waitFor(() => {
       const ed = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(ed).not.toBeNull();
       return ed as HTMLElement;
@@ -781,7 +781,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -791,7 +791,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     const renameEditor = await waitFor(() => {
       const ed = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(ed).not.toBeNull();
       return ed as HTMLElement;
@@ -849,7 +849,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -859,7 +859,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
     const renameEditor = await waitFor(() => {
       const ed = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(ed).not.toBeNull();
       return ed as HTMLElement;
@@ -922,7 +922,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
     await waitFor(() => {
       const focusedTab = container.querySelector(
-        "[data-moniker='perspective_tab:p1']",
+        "[data-segment='perspective_tab:p1']",
       );
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
@@ -938,7 +938,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // resurrected `board.inspect` shadow).
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-moniker='perspective_tab:p1'] .cm-editor",
+        "[data-segment='perspective_tab:p1'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });

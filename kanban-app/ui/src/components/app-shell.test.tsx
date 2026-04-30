@@ -823,7 +823,7 @@ describe("AppShell", () => {
   // The CUA `keys.cua: "Space"` binding on the per-Inspectable
   // `entity.inspect` command (inspectable.tsx) requires
   // `normalizeKeyEvent` to canonicalise the physical spacebar
-  // (`e.key === " "`) to the string `"Space"`. The app-shell-level
+  // (`e.fq === " "`) to the string `"Space"`. The app-shell-level
   // test below verifies that the round-trip works for an arbitrary
   // scope-level command keyed to Space — the same code path
   // Inspectable uses when a focused entity is on the board.
@@ -858,7 +858,7 @@ describe("AppShell", () => {
     });
 
     await act(async () => {
-      // Browsers emit `e.key === " "` (a literal space) for the
+      // Browsers emit `e.fq === " "` (a literal space) for the
       // spacebar; `normalizeKeyEvent` is responsible for turning that
       // into `"Space"` so scope-level `keys: { cua: "Space" }` matches.
       fireEvent.keyDown(document, { key: " ", code: "Space" });

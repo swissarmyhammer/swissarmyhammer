@@ -191,7 +191,7 @@ describe("ViewContainer (spatial-nav)", () => {
     const { container, unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const node = container.querySelector("[data-moniker='ui:view']");
+    const node = container.querySelector("[data-segment='ui:view']");
     expect(node).not.toBeNull();
 
     unmount();
@@ -202,7 +202,7 @@ describe("ViewContainer (spatial-nav)", () => {
     await flushSetup();
 
     const node = container.querySelector(
-      "[data-moniker='ui:view']",
+      "[data-segment='ui:view']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     // The zone className must keep the BoardView / GridView chain alive.
@@ -223,6 +223,6 @@ describe("ViewContainer (spatial-nav)", () => {
         <ViewContainer />
       </EntityFocusProvider>,
     );
-    expect(container.querySelector("[data-moniker='ui:view']")).toBeNull();
+    expect(container.querySelector("[data-segment='ui:view']")).toBeNull();
   });
 });

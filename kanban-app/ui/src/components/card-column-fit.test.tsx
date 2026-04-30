@@ -296,7 +296,7 @@ describe("Card-column fit — cards never exceed their column", () => {
     });
 
     const columnEl = host.querySelector<HTMLElement>(
-      `[data-moniker="column:${column.id}"]`,
+      `[data-segment="column:${column.id}"]`,
     );
     expect(columnEl).toBeTruthy();
 

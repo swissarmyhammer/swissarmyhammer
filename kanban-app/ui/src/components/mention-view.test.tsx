@@ -209,7 +209,7 @@ describe("MentionView — single mode", () => {
     );
     await flush();
 
-    const scope = container.querySelector("[data-moniker='project:p1']");
+    const scope = container.querySelector("[data-segment='project:p1']");
     expect(scope).toBeTruthy();
   });
 
@@ -255,7 +255,7 @@ describe("MentionView — list mode", () => {
     await flush();
 
     // Three separate FocusScopes (one per item).
-    const scopes = container.querySelectorAll("[data-moniker]");
+    const scopes = container.querySelectorAll("[data-segment]");
     expect(scopes.length).toBe(3);
 
     // Three CM6 widgets with the expected display names.
@@ -294,7 +294,7 @@ describe("MentionView — list mode", () => {
     );
     await flush();
 
-    const scopes = container.querySelectorAll("[data-moniker]");
+    const scopes = container.querySelectorAll("[data-segment]");
     expect(scopes.length).toBe(0);
   });
 
@@ -328,13 +328,13 @@ describe("MentionView — list mode", () => {
 
     // The parent field-row scope sits at the top of the tree.
     const fieldRow = container.querySelector(
-      `[data-moniker="${parentMoniker}"]`,
+      `[data-segment="${parentMoniker}"]`,
     );
     expect(fieldRow).toBeTruthy();
 
     // Three pill scopes — one per item — are nested inside it.
     const pills = fieldRow!.querySelectorAll(
-      '[data-moniker]:not([data-moniker="field:mixed"])',
+      '[data-segment]:not([data-segment="field:mixed"])',
     ) as NodeListOf<HTMLElement>;
     const monikers = Array.from(pills).map((p) =>
       p.getAttribute("data-moniker"),
@@ -388,7 +388,7 @@ describe("MentionView — extraCommands", () => {
     await flush();
 
     const scope = container.querySelector(
-      "[data-moniker='tag:tag-1']",
+      "[data-segment='tag:tag-1']",
     ) as HTMLElement | null;
     expect(scope).toBeTruthy();
     fireEvent.contextMenu(scope!);

@@ -240,10 +240,10 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Collect every `spatial_focus` call's args, in order. */
-function spatialFocusCalls(): Array<{ key: FullyQualifiedMoniker }> {
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_focus")
-    .map((c) => c[1] as { key: FullyQualifiedMoniker });
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
 // ---------------------------------------------------------------------------
@@ -376,12 +376,12 @@ describe("BadgeListDisplay pill scope structure", () => {
     await flush();
 
     // Parent field row scope
-    const fieldRow = container.querySelector('[data-moniker="field:tags"]');
+    const fieldRow = container.querySelector('[data-segment="field:tags"]');
     expect(fieldRow).toBeTruthy();
 
     // Each pill is its own FocusScope nested inside the field row.
     const pills = fieldRow!.querySelectorAll(
-      '[data-moniker^="tag:"]',
+      '[data-segment^="tag:"]',
     ) as NodeListOf<HTMLElement>;
     expect(pills.length).toBe(3);
     const monikers = Array.from(pills).map((p) =>
@@ -402,7 +402,7 @@ describe("BadgeListDisplay pill scope structure", () => {
     );
     await flush();
 
-    expect(container.querySelectorAll("[data-moniker]").length).toBe(4); // field row + 3 pills
+    expect(container.querySelectorAll("[data-segment]").length).toBe(4); // field row + 3 pills
   });
 });
 
@@ -424,13 +424,13 @@ describe("BadgeListDisplay reference-field pill structure", () => {
 
     // The parent field row scope is present.
     const fieldRow = container.querySelector(
-      '[data-moniker="field:depends_on"]',
+      '[data-segment="field:depends_on"]',
     );
     expect(fieldRow).toBeTruthy();
 
     // Two pills, each carrying the raw task id as its moniker tail.
     const pills = fieldRow!.querySelectorAll(
-      '[data-moniker^="task:"]',
+      '[data-segment^="task:"]',
     ) as NodeListOf<HTMLElement>;
     expect(pills.length).toBe(2);
     const monikers = Array.from(pills).map((p) =>
@@ -480,7 +480,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
 
     mockInvoke.mockClear();
     const pillNode = container.querySelector(
-      "[data-moniker='tag:tag-1']",
+      "[data-segment='tag:tag-1']",
     ) as HTMLElement | null;
     expect(pillNode).not.toBeNull();
     fireEvent.click(pillNode!);
@@ -489,8 +489,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     // The leaf's click handler stops propagation, so only one focus
     // call fires — for the leaf's key, not the parent zone's.
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].key).toBe(bugPill!.key);
-    expect(focusCalls[0].key).not.toBe(fieldZone!.key);
+    expect(focusCalls[0].fq).toBe(bugPill!.fq);
+    expect(focusCalls[0].fq).not.toBe(fieldZone!.fq);
   });
 
   it("focus claim mounts <FocusIndicator> on a pill in mode=full", async () => {
@@ -507,7 +507,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
       (a) => a.segment === "tag:tag-1",
     )!;
     const pillNode = container.querySelector(
-      "[data-moniker='tag:tag-1']",
+      "[data-segment='tag:tag-1']",
     ) as HTMLElement;
     expect(pillNode).not.toBeNull();
     // Before the focus claim, no indicator descendant.
@@ -546,7 +546,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
       (a) => a.segment === "tag:tag-1",
     )!;
     const pillNode = container.querySelector(
-      "[data-moniker='tag:tag-1']",
+      "[data-segment='tag:tag-1']",
     ) as HTMLElement;
     expect(pillNode).not.toBeNull();
     expect(
@@ -587,10 +587,10 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     )!;
 
     const aNode = container.querySelector(
-      "[data-moniker='tag:tag-1']",
+      "[data-segment='tag:tag-1']",
     ) as HTMLElement;
     const bNode = container.querySelector(
-      "[data-moniker='tag:tag-2']",
+      "[data-segment='tag:tag-2']",
     ) as HTMLElement;
 
     // Step 1: focus on pill A.

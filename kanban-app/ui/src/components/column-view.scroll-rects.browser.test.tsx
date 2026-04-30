@@ -417,7 +417,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     // get unmounted by the virtualizer during the scroll keep their
     // entry in the snapshot, but the test only asserts against cards
     // that remain visible after the scroll — it filters by
-    // `[data-moniker^='task:']` afterwards.
+    // `[data-segment^='task:']` afterwards.
     const monikerToKey = taskMonikerToKey();
 
     // Scroll mid-list. 400 px is large enough to shift visible cards by
@@ -451,7 +451,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     }
 
     const visibleCards = container.querySelectorAll(
-      "[data-moniker^='task:']",
+      "[data-segment^='task:']",
     );
     expect(visibleCards.length).toBeGreaterThan(0);
 
@@ -536,7 +536,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     // is roughly the scroll container's top edge, while at mount-time
     // its rect was registered far further down in the document.
     const cards = Array.from(
-      container.querySelectorAll("[data-moniker^='task:']"),
+      container.querySelectorAll("[data-segment^='task:']"),
     ) as HTMLElement[];
     expect(cards.length).toBeGreaterThan(0);
     const topCard = cards[0];
@@ -578,7 +578,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
 
     const monikerToKey = taskMonikerToKey();
     const visibleCards = Array.from(
-      container.querySelectorAll("[data-moniker^='task:']"),
+      container.querySelectorAll("[data-segment^='task:']"),
     ) as HTMLElement[];
     expect(visibleCards.length).toBeGreaterThan(1);
 
@@ -637,7 +637,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
     await flushScroll();
 
     const cards = Array.from(
-      container.querySelectorAll("[data-moniker^='task:']"),
+      container.querySelectorAll("[data-segment^='task:']"),
     ) as HTMLElement[];
     expect(cards.length).toBeGreaterThan(0);
     const candidate = cards[Math.floor(cards.length / 2)];
@@ -674,7 +674,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
 
     const monikerToKey = taskMonikerToKey();
     const cards = Array.from(
-      container.querySelectorAll("[data-moniker^='task:']"),
+      container.querySelectorAll("[data-segment^='task:']"),
     ) as HTMLElement[];
     expect(cards.length).toBe(3);
 
