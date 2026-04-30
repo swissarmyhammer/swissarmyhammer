@@ -64,9 +64,59 @@ import {
   useOptionalFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
 import { LayerFqContext } from "@/components/layer-fq-context";
+import {
+  FocusLayerZTierContext,
+  OVERLAY_OFFSET_ABOVE_TIER,
+} from "@/components/focus-layer-z-tier-context";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
+
+// ---------------------------------------------------------------------------
+// Z-index tier table for layer-aware debug overlays
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-layer-name z-index tier baseline.
+ *
+ * Mirrors each layer's existing modal-content z-index so a debug overlay
+ * for a window-root descendant sits below the inspector backdrop (z-20)
+ * and SlidePanel (z-30); an inspector descendant sits above the panel
+ * but below the palette; a palette descendant sits above its own
+ * backdrop (z-50). Adding a new first-class layer is a one-line edit
+ * here.
+ *
+ * The actual debug-overlay z-index is `tier + OVERLAY_OFFSET_ABOVE_TIER`
+ * — `<FocusDebugOverlay>` applies the offset so the overlay paints just
+ * above its layer's modal content but below the next layer's overlays.
+ *
+ * Layers not in the table fall back to `parentTier + 20` (see the
+ * `myTier` derivation below); the gap is large enough that two unnamed
+ * nested layers do not collide with each other or with neighbouring
+ * named tiers.
+ *
+ * Cadence: the named tiers step in increments of 20 so a future
+ * first-class layer (e.g. `confirmation-modal`) can slot in between any
+ * two of the existing names without renumbering. `palette` deliberately
+ * sits at 70 (not 60) so the slot at 60 stays open for that purpose.
+ */
+const LAYER_Z_TIERS: Readonly<Record<string, number>> = {
+  /** Window root — flow content; overlays at 15 (below inspector backdrop). */
+  window: 10,
+  /** Inspector layer — SlidePanel z-30; overlays at 35 (above panel). */
+  inspector: 30,
+  /** Dialogs — confirm/alert; overlays at 55 (above inspector, below palette). */
+  dialog: 50,
+  /** Command palette — backdrop z-50; overlays at 75 (above palette backdrop). */
+  palette: 70,
+};
+
+// Re-export so consumers that already import from `focus-layer` (e.g.
+// the existing `FullyQualifiedMonikerContext`, `LayerFqContext`
+// re-exports below) can pick the tier context and overlay-offset
+// constant up from the same module. The canonical home for both is
+// `focus-layer-z-tier-context.tsx`.
+export { FocusLayerZTierContext, OVERLAY_OFFSET_ABOVE_TIER };
 
 // ---------------------------------------------------------------------------
 // Re-exports — descendants discover their owning FQM via the shared context
@@ -136,6 +186,14 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
     [parent, name],
   );
 
+  // Compute this layer's z-index tier — first-class names use the
+  // table; anything else (custom layers, future names not yet added)
+  // falls back to `parentTier + 20`, keeping the inner layer's
+  // overlays above the parent's. Read the parent tier from the
+  // ancestor `FocusLayerZTierContext` (default `0` if no ancestor).
+  const parentTier = useContext(FocusLayerZTierContext);
+  const myTier = LAYER_Z_TIERS[name] ?? parentTier + 20;
+
   const { pushLayer, popLayer } = useSpatialFocusActions();
 
   useEffect(() => {
@@ -169,18 +227,20 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
   return (
     <FullyQualifiedMonikerContext.Provider value={fq}>
       <LayerFqContext.Provider value={fq}>
-        {debugEnabled ? (
-          <div ref={debugHostRef} className="relative">
-            <FocusDebugOverlay
-              kind="layer"
-              label={name}
-              hostRef={debugHostRef}
-            />
-            {children}
-          </div>
-        ) : (
-          children
-        )}
+        <FocusLayerZTierContext.Provider value={myTier}>
+          {debugEnabled ? (
+            <div ref={debugHostRef} className="relative">
+              <FocusDebugOverlay
+                kind="layer"
+                label={name}
+                hostRef={debugHostRef}
+              />
+              {children}
+            </div>
+          ) : (
+            children
+          )}
+        </FocusLayerZTierContext.Provider>
       </LayerFqContext.Provider>
     </FullyQualifiedMonikerContext.Provider>
   );

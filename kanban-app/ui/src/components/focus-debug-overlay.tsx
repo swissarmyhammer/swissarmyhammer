@@ -43,8 +43,12 @@
  * inline TODO below.
  */
 
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useContext, useEffect, useRef, useState, type RefObject } from "react";
 import { cn } from "@/lib/utils";
+import {
+  FocusLayerZTierContext,
+  OVERLAY_OFFSET_ABOVE_TIER,
+} from "@/components/focus-layer-z-tier-context";
 
 /**
  * Which spatial primitive owns this overlay. Drives the colour-coded
@@ -190,11 +194,22 @@ export function FocusDebugOverlay({
       ? `${kind}:${label}`
       : `${kind}:${label} (${Math.round(rect.x)},${Math.round(rect.y)})`;
 
+  // Layer-aware z-index: read the enclosing `<FocusLayer>`'s tier from
+  // context and offset by 5 so the overlay paints just above its
+  // layer's modal content but below the next layer's overlays. An
+  // inline `style` is required because Tailwind cannot generate
+  // classes for runtime-computed values; the previous hardcoded
+  // `z-50` is removed because it placed every overlay at the same
+  // height regardless of layer membership, causing window-root
+  // overlays to bleed across modal surfaces.
+  const tier = useContext(FocusLayerZTierContext);
+
   return (
     <span
       data-debug={kind}
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 z-50"
+      className="pointer-events-none absolute inset-0"
+      style={{ zIndex: tier + OVERLAY_OFFSET_ABOVE_TIER }}
     >
       <span
         className={cn(
