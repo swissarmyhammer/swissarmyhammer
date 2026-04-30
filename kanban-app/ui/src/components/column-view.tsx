@@ -666,26 +666,19 @@ function ColumnHeader({
   setFocus,
 }: ColumnHeaderProps) {
   // Inside the column's `<FocusZone>` body — `useOptionalFullyQualifiedMoniker`
-  // returns the column's FQM. Compose the column-name leaf FQM and the
-  // column-zone FQM (for the AddTaskButton's setFocus call) by appending
-  // segments under it.
+  // returns the column's FQM. Compose the column-zone FQM (for the
+  // AddTaskButton's setFocus call) under it.
   const columnFq = useOptionalFullyQualifiedMoniker();
-  const columnNameFq =
-    columnFq !== null
-      ? composeFq(columnFq, asSegment(columnNameMoniker))
-      : null;
   return (
-    <div
-      className="px-3 py-2 flex items-center gap-2 rounded"
-      onClickCapture={() => {
-        if (columnNameFq) setFocus(columnNameFq);
-      }}
-    >
+    <div className="px-3 py-2 flex items-center gap-2 rounded">
       {/* inspect:exempt — `column:<id>.name` is a synthetic navigation
           leaf wrapping a `<Field>` zone (which itself owns the
           per-field inspect opt-in via `fields/field.tsx`). Double-click
           on the column name routes to the field editor's `onEdit`, not
-          to the inspector. */}
+          to the inspector.
+          The enclosing `<FocusScope>` owns click → `spatial_focus(fq)`
+          for this leaf; an outer `onClickCapture` would dispatch a
+          redundant focus IPC for the same FQM. */}
       <FocusScope moniker={asSegment(columnNameMoniker)} className="inline">
         <ColumnNameField
           column={column}
