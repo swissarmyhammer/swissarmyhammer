@@ -6,7 +6,7 @@ depends_on:
 - 01KQD0N8Y24T4FVQJDCH80QPQE
 - 01KQD0NWYCZESV97RS8097W175
 - 01KQFSQM87VBRVHNDPRWHFJ5XD
-position_column: doing
+position_column: review
 position_ordinal: '80'
 project: acp-upgrade
 title: Adapt acp-conformance to ACP 0.11 (incl. mock Agent impls and fixtures)
