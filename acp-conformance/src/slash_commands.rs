@@ -26,7 +26,8 @@
 //!    - Format: `/command_name [optional input]`
 //!    - Can be accompanied by other content types (images, audio, etc.)
 
-use agent_client_protocol::{Agent, ContentBlock, NewSessionRequest, PromptRequest, TextContent};
+use agent_client_protocol::schema::{ContentBlock, NewSessionRequest, PromptRequest, TextContent};
+use agent_client_protocol_extras::AgentWithFixture;
 use serde_json::Value;
 use swissarmyhammer_common::Pretty;
 
@@ -34,13 +35,17 @@ use swissarmyhammer_common::Pretty;
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// When agents advertise commands, they must have proper structure
-pub async fn test_command_structure_validation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_command_structure_validation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command structure validation");
 
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let _response = agent.new_session(request).await?;
+    let _response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // Note: Commands are advertised via session/update notifications
     // This test verifies that IF commands are advertised, they have valid structure
@@ -57,13 +62,17 @@ pub async fn test_command_structure_validation<A: Agent + ?Sized>(agent: &A) -> 
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// Agents MAY send available_commands_update notification
-pub async fn test_advertise_commands<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_advertise_commands(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command advertisement");
 
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let response = agent.new_session(request).await?;
+    let response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
     let session_id = response.session_id;
 
     tracing::info!(
@@ -81,12 +90,16 @@ pub async fn test_advertise_commands<A: Agent + ?Sized>(agent: &A) -> crate::Res
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// Commands are included as regular text in prompt requests
-pub async fn test_run_command<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_run_command(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command invocation via prompt");
 
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.new_session(new_request).await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Send a prompt with a slash command
@@ -97,7 +110,11 @@ pub async fn test_run_command<A: Agent + ?Sized>(agent: &A) -> crate::Result<()>
     let prompt_request = PromptRequest::new(session_id.clone(), prompt_content);
 
     // Agent should process the command (or reject if not available)
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(response) => {
@@ -117,13 +134,17 @@ pub async fn test_run_command<A: Agent + ?Sized>(agent: &A) -> crate::Result<()>
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// Commands must have non-empty name and description
-pub async fn test_command_field_validation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_command_field_validation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command field validation");
 
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let _response = agent.new_session(request).await?;
+    let _response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // This test would validate that any advertised commands have:
     // - Non-empty name
@@ -141,13 +162,17 @@ pub async fn test_command_field_validation<A: Agent + ?Sized>(agent: &A) -> crat
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// If input is specified, it must have a hint
-pub async fn test_command_input_hint<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_command_input_hint(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command input hint validation");
 
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let _response = agent.new_session(request).await?;
+    let _response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // This test validates that commands with input specifications
     // have proper hint text
@@ -165,12 +190,16 @@ pub async fn test_command_input_hint<A: Agent + ?Sized>(agent: &A) -> crate::Res
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// Commands can accept input arguments
-pub async fn test_command_with_input<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_command_with_input(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command with input argument");
 
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.new_session(new_request).await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Send a command with input (e.g., /web query)
@@ -180,7 +209,11 @@ pub async fn test_command_with_input<A: Agent + ?Sized>(agent: &A) -> crate::Res
     let prompt_request = PromptRequest::new(session_id, prompt_content);
 
     // Agent should process the command with input (or reject if not available)
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(response) => {
@@ -203,12 +236,16 @@ pub async fn test_command_with_input<A: Agent + ?Sized>(agent: &A) -> crate::Res
 ///
 /// Per ACP spec: https://agentclientprotocol.com/protocol/slash-commands
 /// Commands may be accompanied by other content types in the same prompt array
-pub async fn test_command_with_mixed_content<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_command_with_mixed_content(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing command with mixed content types");
 
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.new_session(new_request).await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Send a command with additional text
@@ -220,7 +257,11 @@ pub async fn test_command_with_mixed_content<A: Agent + ?Sized>(agent: &A) -> cr
     let prompt_request = PromptRequest::new(session_id, prompt_content);
 
     // Agent should process the mixed content (or reject if not available)
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(response) => {
@@ -412,127 +453,113 @@ mod tests {
 
     // --- Async tests using mock agent ---
 
-    use agent_client_protocol::{
-        Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
-        ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
-        LoadSessionResponse, NewSessionResponse, PromptResponse, SetSessionModeRequest,
-        SetSessionModeResponse, StopReason,
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{
+        InitializeRequest, InitializeResponse, NewSessionResponse, ProtocolVersion, PromptResponse,
+        StopReason,
     };
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent for slash command tests
+    /// Mock agent for slash command tests.
+    ///
+    /// Slash commands are advertised via `available_commands_update`
+    /// session-update notifications and invoked through plain text prompts —
+    /// the mock just needs to make `initialize`, `new_session`, and
+    /// `prompt` succeed so the production helpers can exercise the
+    /// underlying transport. The non-asserting helpers (`Ok(_) | Err(_)`
+    /// both treat as success) ride along.
     struct SlashCmdMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for SlashCmdMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for SlashCmdMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(
-                agent_client_protocol::ProtocolVersion::V1,
-            ))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(ProtocolVersion::V1)) })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
+        fn new_session<'a>(
+            &'a self,
             _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("slash-cmd-test-session"))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("slash-cmd-test-session")) })
         }
 
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
     #[tokio::test]
     async fn test_command_structure_validation_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_command_structure_validation(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_command_structure_validation(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_advertise_commands_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_advertise_commands(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_advertise_commands(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_run_command_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_run_command(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(mock, |fx| async move { test_run_command(&fx).await })
+                .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_command_field_validation_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_command_field_validation(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_command_field_validation(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_command_input_hint_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_command_input_hint(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_command_input_hint(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_command_with_input_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_command_with_input(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_command_with_input(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_command_with_mixed_content_mock() {
-        let agent = SlashCmdMockAgent;
-        let result = test_command_with_mixed_content(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(SlashCmdMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_command_with_mixed_content(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 }
