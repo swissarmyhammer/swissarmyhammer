@@ -50,8 +50,17 @@ import type { FieldDef } from "@/types/kanban";
 // PerspectiveTabBar component that owns the rename state.
 // ---------------------------------------------------------------------------
 
-/** Subscriber callback invoked when a "start rename" signal is broadcast. */
-type StartRenameCallback = () => void;
+/**
+ * Subscriber callback invoked when a "start rename" signal is broadcast.
+ *
+ * Receives an optional explicit perspective id. When `id` is undefined the
+ * subscriber falls back to the active perspective — this is the path taken
+ * by the global command palette's `ui.entity.startRename`, which has no
+ * specific tab in mind. When `id` is supplied it targets that perspective
+ * directly — this is the path taken by per-tab Enter, where the focused tab
+ * (active or inactive) is the explicit rename target.
+ */
+type StartRenameCallback = (id?: string) => void;
 
 /** Module-level subscriber set broadcasting rename signals to all mounted PerspectiveTabBar instances. */
 const startRenameCallbacks = new Set<StartRenameCallback>();
@@ -74,10 +83,15 @@ export function onStartRename(cb: StartRenameCallback): () => void {
 /**
  * Trigger all registered "start rename" callbacks.
  *
- * Intended to be called from AppShell's global command handler (or tests).
+ * Pass an explicit `id` to start renaming a specific perspective (the
+ * focused-tab path). Omit `id` to fall back to the active perspective (the
+ * command-palette path).
+ *
+ * Intended to be called from AppShell's global command handler, the
+ * focused-tab scope command, or tests.
  */
-export function triggerStartRename(): void {
-  for (const cb of startRenameCallbacks) cb();
+export function triggerStartRename(id?: string): void {
+  for (const cb of startRenameCallbacks) cb(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,9 +165,19 @@ function usePerspectiveTabBar() {
   );
 
   // Subscribe to the module-level start-rename signal so the command palette
-  // (via AppShell's global command) can trigger inline rename mode.
+  // (via AppShell's global command) AND per-tab Enter (via the scope-pinned
+  // `ui.entity.startRename` on each `<ScopedPerspectiveTab>`) can trigger
+  // inline rename mode.
+  //
+  // When the broadcaster supplies an explicit `id` (per-tab path) we honor
+  // it — that is the focused tab, active or not. When no id is supplied
+  // (command-palette path) we fall back to the active perspective.
   useEffect(() => {
-    return onStartRename(() => {
+    return onStartRename((id) => {
+      if (id) {
+        startRename(id);
+        return;
+      }
       if (activePerspective) {
         startRename(activePerspective.id);
       }
@@ -325,17 +349,6 @@ interface ScopedPerspectiveTabProps {
 }
 
 /**
- * Frozen empty-array reference used by inactive perspective tabs so the
- * `useMemo` dependency in `ScopedPerspectiveTab` has a stable identity when
- * `isActive === false`. Without this, every inactive-tab render would mint a
- * fresh `[]` and re-trigger the downstream `CommandScopeProvider`'s scope
- * memo, evicting the per-scope command map for no behavioural reason.
- */
-const EMPTY_PERSPECTIVE_SCOPE_COMMANDS: readonly CommandDef[] = Object.freeze(
-  [],
-);
-
-/**
  * Wraps a single perspective tab in its CommandScopeProvider.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
@@ -346,16 +359,20 @@ const EMPTY_PERSPECTIVE_SCOPE_COMMANDS: readonly CommandDef[] = Object.freeze(
  * surrounding `ui:perspective-bar` zone so beam-search picks them up as
  * sibling navigation targets.
  *
- * Active-tab-only rename binding: when this tab is the active perspective,
- * the wrapping `CommandScopeProvider` carries a `ui.entity.startRename`
- * `CommandDef` whose `keys` block (Enter for cua / vim / emacs) is picked up
- * by `extractScopeBindings` when this tab is the spatial focus. That binding
- * shadows the global `nav.drillIn: Enter` for the perspective scope only,
- * matching the YAML `scope: "entity:perspective"` filter on the same id in
- * `swissarmyhammer-commands/builtin/commands/ui.yaml`. Inactive tabs receive
- * no command, so Enter on a focused inactive tab falls through to the global
- * drill-in (a no-op for a leaf scope) — keystroke renaming therefore only
- * fires when the focused tab and the active perspective coincide.
+ * Per-tab rename binding: every perspective tab — active or inactive —
+ * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
+ * (Enter for cua / vim / emacs) is picked up by `extractScopeBindings`
+ * when this tab is the spatial focus. That binding shadows the global
+ * `nav.drillIn: Enter` for the perspective scope only, matching the YAML
+ * `scope: "entity:perspective"` filter on the same id in
+ * `swissarmyhammer-commands/builtin/commands/ui.yaml`. The execute path:
+ *
+ *   - On the active tab: trigger rename on the active perspective.
+ *   - On an inactive tab: dispatch `perspective.set` to activate the tab,
+ *     then trigger rename targeted at this tab's id. The broadcaster
+ *     accepts an explicit id so the rename is independent of the
+ *     async UI-state propagation that would otherwise leave the
+ *     subscriber's `activePerspective` snapshot stale.
  */
 function ScopedPerspectiveTab({
   perspective,
@@ -368,24 +385,30 @@ function ScopedPerspectiveTab({
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
   const isActive = activePerspectiveId === perspective.id;
+  const dispatchPerspectiveSet = useDispatchCommand("perspective.set");
   const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
-    if (!isActive) return EMPTY_PERSPECTIVE_SCOPE_COMMANDS;
-    // The execute path delegates to the same module-level broadcaster that
-    // the AppShell global `ui.entity.startRename` command uses. The
-    // broadcaster's `if (activePerspective) startRename(activePerspective.id)`
-    // guard keeps the no-active-perspective branch a no-op without us
-    // duplicating the check at the call site.
     return [
       {
         id: "ui.entity.startRename",
         name: "Rename Perspective",
         keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
-        execute: () => {
-          triggerStartRename();
+        execute: async () => {
+          if (!isActive) {
+            // Activate the focused tab before mounting the rename editor —
+            // the user's mental model is "Enter edits the name of the tab
+            // I am on", which implies the tab also becomes active.
+            await dispatchPerspectiveSet({
+              args: { perspective_id: perspective.id },
+            });
+          }
+          // Pass the explicit id so the rename targets this tab regardless
+          // of whether the activate dispatch's UI-state event has reached
+          // the subscriber yet.
+          triggerStartRename(perspective.id);
         },
       },
     ];
-  }, [isActive]);
+  }, [isActive, perspective.id, dispatchPerspectiveSet]);
   return (
     <CommandScopeProvider
       moniker={moniker("perspective", perspective.id)}
