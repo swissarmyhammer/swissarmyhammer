@@ -1,14 +1,22 @@
+import { useMemo } from "react";
 import { icons, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
-import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
+import {
+  CommandScopeProvider,
+  useDispatchCommand,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import { cn } from "@/lib/utils";
+import { FocusScope } from "@/components/focus-scope";
+import { FocusZone } from "@/components/focus-zone";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { ViewDef } from "@/types/kanban";
 
 /** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
@@ -43,7 +51,12 @@ export function LeftNav() {
   if (views.length === 0) return null;
 
   return (
-    <nav className="flex flex-col items-center gap-1 py-2 px-1 border-r bg-muted/30 w-10 shrink-0">
+    <FocusZone
+      moniker={asSegment("ui:left-nav")}
+      showFocusBar={false}
+      role="navigation"
+      className="flex flex-col items-center gap-1 py-2 pl-3 pr-1 border-r bg-muted/30 w-10 shrink-0"
+    >
       {views.map((view) => (
         <ScopedViewButton
           key={view.id}
@@ -51,7 +64,7 @@ export function LeftNav() {
           isActive={activeView?.id === view.id}
         />
       ))}
-    </nav>
+    </FocusZone>
   );
 }
 
@@ -73,9 +86,28 @@ interface ScopedViewButtonProps {
  * `view:{id}` moniker to resolve their scope.
  */
 function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
+  const dispatch = useDispatchCommand("view.set");
+  const activateCommands = useMemo<readonly CommandDef[]>(
+    () => [
+      {
+        id: "view.activate",
+        name: `Activate ${view.name}`,
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        execute: () => {
+          dispatch({ args: { view_id: view.id } }).catch(console.error);
+        },
+      },
+    ],
+    [dispatch, view.id, view.name],
+  );
   return (
-    <CommandScopeProvider moniker={moniker("view", view.id)}>
-      <ViewButton view={view} isActive={isActive} />
+    <CommandScopeProvider
+      moniker={moniker("view", view.id)}
+      commands={activateCommands}
+    >
+      <FocusScope moniker={asSegment(`view:${view.id}`)}>
+        <ViewButton view={view} isActive={isActive} />
+      </FocusScope>
     </CommandScopeProvider>
   );
 }

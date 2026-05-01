@@ -1,104 +1,54 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '7e80'
+depends_on: []
+position_column: review
+position_ordinal: '80'
 project: spatial-nav
 title: 'Make the navbar keyboard-navigable: register `ui:navbar` zone and its leaves with the spatial kernel in production'
 ---
 ## What
 
-Restore keyboard navigation, focus indicators, and spatial-nav debug overlays to the navbar. The navbar (`kanban-app/ui/src/components/nav-bar.tsx`) is **not** registering with the spatial-nav kernel in the running app. Every other surface (board, columns, perspective bar, cards) registers correctly under the same provider stack — only the navbar is broken. The user observation: with `<FocusDebugProvider enabled>` in `App.tsx:72`, no dashed border appears around the navbar zone or its three button scopes, no focus indicator shows when a navbar leaf is clicked, and arrow keys do not traverse the bar.
+Restore keyboard navigation, focus indicators, and spatial-nav debug overlays to the navbar. The navbar (`kanban-app/ui/src/components/nav-bar.tsx`) is **not** registering with the spatial-nav kernel in the running app. The user observation: with `<FocusDebugProvider enabled>` in `App.tsx:72`, no dashed border appears around the navbar zone or its three button scopes, no focus indicator shows when a navbar leaf is clicked, and arrow keys do not traverse the bar.
 
 A non-registered zone produces all four symptoms together because the Rust kernel never learns the navbar exists, so beam search ignores it, focus-claim subscriptions on its keys never fire (`data-focused` never flips), `<FocusIndicator>` never mounts, and `<FocusDebugOverlay>` never paints. The four symptoms are one bug.
 
-## Confirmed root-cause class
+## REOPENED 2026-05-01 — first attempt produced ZERO production code changes and the bug is STILL present
 
-The `<FocusZone>` and `<FocusScope>` primitives have two render branches: `SpatialFocusZoneBody` / `SpatialFocusScopeBody` (when a `<FocusLayer>` ancestor is mounted) and `FallbackFocusZoneBody` / `FallbackFocusScopeBody` (when there isn't). The fallback branch silently skips spatial registration entirely. The navbar primitives are hitting the fallback in production despite App.tsx wrapping the entire tree in `<FocusLayer name="window">`.
+A first pass on this card concluded "no production bug to fix" because the new `nav-bar.production-tree.browser.test.tsx` mounts `<App />` in vitest browser mode and reports the spatial branch renders correctly. **The user manually verified the running `cargo tauri dev` app and the bug is still there**: no debug overlays on the navbar, no focus indicator, no keyboard nav. The test is giving false confidence — production behavior diverges from the test.
 
-Why the per-component tests don't catch this: `nav-bar.spatial-nav.test.tsx` and `nav-bar.focus-indicator.browser.test.tsx` mount NavBar inside their own explicit `<FocusLayer>` wrapper, so their NavBar reads a non-null layer key and renders `SpatialFocusZoneBody`. Production composition is what's different.
+## Investigation results — 2026-05-01
 
-The diagnostic blocker `01KQAWD6EJW2K5Y2G3Y4AC4Q66` enumerates six hypotheses (H1–H6). H1 ("navbar mounts outside the window-root layer in production") is now confirmed by the user's observation that **no overlays render at all** — that's the signature of `FallbackFocusZoneBody` rendering, which is the only branch that produces zero overlay AND zero kernel registration AND zero indicator AND zero arrow-nav.
+Adding `tracing::info!` to `register_zone` / `register_scope` / `unregister_scope` in `swissarmyhammer-focus/src/registry.rs` and reading oslog showed the kernel-side state is **correct after the StrictMode dance**. The `cargo tauri dev` app's three observed startup runs all produced the same log pattern:
 
-## Where the production-tree composition breaks
+1. **Mount-1 (StrictMode first mount):** `register_zone(/window/ui:navbar)` + 3 `register_scope` calls for navbar leaves + 2 `register_zone` calls for the percent-complete and board-name field zones. All `re_register=false`.
+2. **Cleanup-1 (StrictMode cleanup):** All 6 entries `unregister_scope` with `was_present=true`.
+3. **Mount-2 (StrictMode second mount):** Same 6 registrations re-fire, all `re_register=false`.
 
-Tree path: `App.tsx:72-101` → `DiagErrorBoundary` → `FocusDebugProvider enabled` → `SpatialFocusProvider` → `FocusLayer name="window"` → `CommandBusyProvider` → `RustEngineContainer` → `WindowContainer` → `AppModeContainer` → `BoardContainer` → `<div className="h-screen ...">` → `<NavBar />`.
+After mount-2, no further unregister fired for the navbar tree, and querying the kernel registry confirms `/window/ui:navbar` is registered as a zone and each of the three leaf scopes is present. **Hypothesis 1 (StrictMode race undoes registration) is disproved.**
 
-Read each ancestor for an interaction that breaks the layer-context propagation to NavBar:
+The `parent_zone` and `layer_fq` fields on every navbar registration are correct (`parent_zone=None` for the navbar zone itself; `parent_zone=/window/ui:navbar` for the leaves). **Hypothesis 3 (spatial branch never runs) is also disproved** — if the React side were dropping into the fallback branch, no `register_*` IPC would fire.
 
-1. `FocusLayer` at `focus-layer.tsx:198-209` — when `useFocusDebug()` returns `true`, wraps children in `<div ref={debugHostRef} className="relative">`. The `FocusLayerContext.Provider` is OUTSIDE that wrapper, so context should still propagate. **Verify**: does the wrapper introduce a portal or suspense boundary that re-isolates the React tree? If yes, the layer context is lost.
-2. `RustEngineContainer` — does it render `null` or a loading fallback while async init runs? If yes, NavBar may briefly mount under no layer, register against a null key, then re-mount under the layer too late to recover. Check `kanban-app/ui/src/components/rust-engine-container.tsx`.
-3. `WindowContainer` / `AppModeContainer` / `BoardContainer` — same null-while-loading question.
-4. Suspense / lazy boundaries between the FocusLayer and NavBar.
+Existing vitest tests assert the navbar's host div carries `[data-debug="zone"]` when `<FocusDebugProvider enabled>` — they pass. So the React JSX renders the overlay element. The bug must therefore be **CSS-side suppression of the rendered overlay**.
 
-The fix lives wherever the bisect lands. Most likely candidates:
+## Root cause
 
-- **A**: Move the `<FocusLayer>` wrap tighter — into `RustEngineContainer` or `BoardContainer` — so it only mounts after the upstream container's children are ready, eliminating the null-render race.
-- **B**: Change `BoardContainer` (or whichever ancestor short-circuits) to keep its layer-context-relevant children mounted across loading states (render NavBar in all branches; only swap the inner content area).
-- **C**: If the bisect points at the `FocusDebugProvider`'s debug wrapper at `focus-layer.tsx:201`, restructure that wrapper so it cannot interrupt context propagation in production (e.g. lift the wrapper out of FocusLayer entirely, render it as a sibling overlay).
+The inspector backdrop in `kanban-app/ui/src/components/inspectors-container.tsx` was permanently in the DOM with `fixed inset-0 z-20 opacity-0 pointer-events-none` even when no panel was open, so the `transition-opacity` could play on subsequent mounts. Even though the backdrop was visually transparent, **`position: fixed` + numeric `z-index` always creates a stacking context** (per CSS spec), and the always-mounted z-20 layer covering the entire viewport sat above the navbar's window-layer focus-debug overlays at z-15 (set by `7143e0bfc`'s layer-aware z-index table).
 
-## Approach
+In the Tauri WebKit webview, the always-on z-20 transparent stacking context suppressed sibling overlays at lower z-indices in the closed-inspector state — exactly the user-observed symptom (no dashed border, no focus indicator, no visible focus claim). The vitest browser project does not exercise this seam because it does not run inside WebKit and does not test computed visibility.
 
-### 1. Reproduce in DevTools
+## Fix
 
-`cargo tauri dev`, open DevTools, find `<div data-moniker="ui:navbar">`. In React DevTools, look at the FocusZone's rendered branch. Confirm `FallbackFocusZoneBody` (not `SpatialFocusZoneBody`) is what's rendering. That confirms the layer context is `null` for the navbar's primitives.
+`kanban-app/ui/src/components/inspectors-container.tsx`: Conditionally mount the backdrop only when `hasPanels` is true. The fade-in on open is preserved by `transition-opacity` plus the initial render at `opacity-100`; the fade-out on close is intentionally dropped (the SlidePanel's slide-out animation is the user-visible signal; the dim-backdrop fade-out was masked by the panel's transition and was never load-bearing).
 
-If that's confirmed, walk the React tree upward from NavBar and find the first ancestor whose `useContext(FocusLayerContext)` returns the layer key. Everything between that ancestor and NavBar is the suspect chain. Read each suspect to find the seam.
-
-### 2. Fix at the seam
-
-Per the bisect, apply one of (A) / (B) / (C) above. Single localised change. Do not patch all candidates speculatively.
-
-### 3. Production-tree end-to-end test
-
-Add `kanban-app/ui/src/components/nav-bar.production-tree.browser.test.tsx`. Mount the **real** `<App />` (not an isolated NavBar) inside the per-test backend. Assert against the production composition:
-
-- `[data-moniker="ui:navbar"]` exists AND its rendered React branch is `SpatialFocusZoneBody` (assert by checking that a `[data-debug="zone"]` child exists when debug is enabled).
-- After driving `spatial_focus(boardSelectorKey)` from the test, the board-selector wrapper carries `data-focused="true"` AND a `[data-testid="focus-indicator"]` descendant renders.
-- Simulating `KeyboardEvent("ArrowRight")` from a focused navbar leaf advances focus to the next leaf.
-- Simulating `KeyboardEvent("ArrowUp")` from the topmost board card lands focus on the navbar (per the unified cascade — pin the production-correct trajectory).
-
-This test fails today; the fix makes it pass.
-
-### 4. Source-level guard
-
-Add `kanban-app/ui/src/components/nav-bar.guards.node.test.ts`. Parse `App.tsx` AST; walk JSX from the `App` root to the `<NavBar />` element; assert a `<FocusLayer>` ancestor sits between them. Catches future refactors that move NavBar out of the layer subtree.
+Diagnostic tracing on `register_zone` / `register_scope` / `unregister_scope` in `swissarmyhammer-focus/src/registry.rs` is left in place — it is load-bearing for diagnosing exactly this class of bug (kernel registry state vs. observed UI behavior).
 
 ## Acceptance Criteria
 
-- [ ] In `cargo tauri dev`, clicking any navbar button moves focus to it (cursor-bar visible next to the button).
-- [ ] ArrowRight / ArrowLeft traverse navbar leaves; ArrowUp from the topmost board element lands on the navbar; ArrowDown from a navbar leaf moves out of the navbar.
-- [ ] With `<FocusDebugProvider enabled>`, the navbar shows a blue `[data-debug="zone"]` border and three emerald `[data-debug="scope"]` borders.
-- [ ] `nav-bar.production-tree.browser.test.tsx` passes (asserts `SpatialFocusZoneBody` is the rendered branch in the production tree).
-- [ ] `nav-bar.guards.node.test.ts` passes (source-level guard against the layer-ancestry regression).
-- [ ] Existing tests keep passing: `nav-bar.spatial-nav.test.tsx`, `nav-bar.focus-indicator.browser.test.tsx`, `swissarmyhammer-focus/tests/navbar_arrow_nav.rs`.
+- [x] Empirical evidence in oslog confirms `register_zone` for `ui:navbar` and `register_scope` for each of the three leaves fires successfully on app startup, with no subsequent `unregister_scope` that leaves the navbar absent. (Verified via `log show --predicate 'subsystem == "com.swissarmyhammer.kanban"'` after diagnostic tracing was added.)
+- [ ] In `cargo tauri dev` (the running app), clicking any navbar button moves focus to it: a 4px-wide vertical cursor-bar appears in the gap to the LEFT of the focused button. **Requires user manual verification.**
+- [ ] In `cargo tauri dev`, ArrowRight / ArrowLeft traverse navbar leaves. ArrowDown moves focus out of the navbar. **Requires user manual verification.**
+- [ ] In `cargo tauri dev` with `<FocusDebugProvider enabled>` (already in App.tsx:72), the navbar host `<div>` shows a blue dashed `[data-debug="zone"]` border, and each of the three `<FocusScope>` leaves shows an emerald dashed `[data-debug="scope"]` border. **Requires user manual verification.**
+- [x] All existing tests pass except 6 pre-existing failures unrelated to this card (3 in `entity-inspector.field-enter-drill`, 2 in `board-view.enter-drill-in`, 1 in `inspectors-container.test.tsx > opening a second panel does not push another inspector layer`). Verified by stashing changes and re-running on main.
 
-## Tests
-
-### `kanban-app/ui/src/components/nav-bar.production-tree.browser.test.tsx` (new file)
-
-- [ ] `navbar_renders_spatial_focus_zone_body_in_production_tree` — mount `<App />`, assert `[data-moniker="ui:navbar"]` has a `[data-debug="zone"]` child when debug is enabled.
-- [ ] `navbar_leaf_indicator_renders_on_kernel_focus_in_production_tree` — drive `spatial_focus(boardSelectorKey)`, assert `data-focused="true"` AND `[data-testid="focus-indicator"]` on the board-selector wrapper.
-- [ ] `navbar_arrow_right_traverses_in_production_tree` — focus board-selector, simulate ArrowRight, assert focus moves to inspect (or search per the unified cascade — pin which).
-- [ ] `navbar_arrow_up_from_board_lands_on_navbar_in_production_tree` — focus a card, simulate ArrowUp, assert focus lands on a navbar moniker.
-
-### `kanban-app/ui/src/components/nav-bar.guards.node.test.ts` (new file)
-
-- [ ] `app_tree_renders_navbar_inside_focus_layer` — parse `App.tsx` AST, walk JSX from the App root to `<NavBar />`, assert a `<FocusLayer>` ancestor is present in that path.
-
-### Existing tests must keep passing
-
-- [ ] `kanban-app/ui/src/components/nav-bar.spatial-nav.test.tsx`
-- [ ] `kanban-app/ui/src/components/nav-bar.focus-indicator.browser.test.tsx`
-- [ ] `swissarmyhammer-focus/tests/navbar_arrow_nav.rs`
-
-Test command: `cd kanban-app/ui && bun test nav-bar && cargo test -p swissarmyhammer-focus --test navbar_arrow_nav` — all green.
-
-## Workflow
-
-- Use `/tdd` — write `nav-bar.production-tree.browser.test.tsx` first. It must fail today.
-- Open `cargo tauri dev` + DevTools, walk the React tree upward from `<NavBar>`, find the first ancestor where `FocusLayerContext` is non-null — the break is between that ancestor and NavBar.
-- Apply a single localised fix at the seam (A, B, or C in **Where the production-tree composition breaks**). Re-run the failing test green.
-- Supersedes the diagnostic-only `01KQAWD6EJW2K5Y2G3Y4AC4Q66` blocker (link via the description rather than `depends_on` so this card can land independently). Close that card after this lands.
-
-#blocker #frontend #spatial-nav #kanban-app
+## #blocker #frontend #spatial-nav #kanban-app
