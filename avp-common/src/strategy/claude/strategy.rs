@@ -418,22 +418,54 @@ impl ClaudeCodeHookStrategy {
         if hook_type != HookType::Stop {
             return;
         }
-        // Only clean up when the stop was allowed (no block)
         if chain_output.validator_block.is_some() || !chain_output.continue_execution {
             return;
         }
 
+        self.record_allowed_stop_baseline(session_id);
+        self.clear_allowed_stop_sidecars(session_id);
+        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
+    }
+
+    /// Snapshot the currently-changed paths into `last_stop_shas` for
+    /// `session_id`.
+    ///
+    /// `record_stop_baseline` replaces `last_stop_shas`, empties
+    /// `pending`/`changed`, and saves in one shot — no separate `clear()`
+    /// call (which would delete the YAML and wipe the baseline). The
+    /// baseline lets the next Stop validator run skip files that haven't
+    /// been touched since this allowed Stop, avoiding the cumulative-diff
+    /// re-validation loop.
+    fn record_allowed_stop_baseline(&self, session_id: &str) {
         let turn_state = self.context.turn_state();
-        if let Err(e) = turn_state.clear(session_id) {
-            tracing::warn!("Failed to clear turn state on allowed Stop: {}", e);
+        let changed_paths = match turn_state.load(session_id) {
+            Ok(state) => state.changed,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load turn state for baseline on allowed Stop: {}",
+                    e
+                );
+                Vec::new()
+            }
+        };
+        if let Err(e) = turn_state.record_stop_baseline(session_id, &changed_paths) {
+            tracing::warn!("Failed to record allowed-Stop SHA baseline: {}", e);
         }
+    }
+
+    /// Clear sidecar diff and pre-content directories for `session_id`.
+    ///
+    /// The baseline write in [`record_allowed_stop_baseline`] is the
+    /// canonical "Stop is over" signal; the sidecars are derived data
+    /// that must not survive into the next turn.
+    fn clear_allowed_stop_sidecars(&self, session_id: &str) {
+        let turn_state = self.context.turn_state();
         if let Err(e) = turn_state.clear_diffs(session_id) {
             tracing::warn!("Failed to clear diffs on allowed Stop: {}", e);
         }
         if let Err(e) = turn_state.clear_pre_content(session_id) {
             tracing::warn!("Failed to clear pre-content on allowed Stop: {}", e);
         }
-        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
     }
 
     fn block_stop(base: HookOutput, reason: String) -> (HookOutput, i32) {
@@ -1009,6 +1041,89 @@ mod tests {
             json_stop_reason, json_reason,
             "JSON `stopReason` mirrors `reason`"
         );
+    }
+
+    /// On an allowed Stop with two changed files, both files' SHA-256s
+    /// must be written into `last_stop_shas` before the rest of the state
+    /// is cleared. This is the baseline that the next Stop's validator
+    /// run will diff against.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_allowed_stop_records_baseline_for_changed_files() {
+        let (temp, strategy) = create_test_strategy();
+        let session_id = "baseline-records";
+        let turn_state = strategy.context.turn_state();
+
+        // Two real files in the temp dir
+        let path_a = temp.path().join("alpha.rs");
+        let path_b = temp.path().join("beta.rs");
+        std::fs::write(&path_a, b"alpha contents").unwrap();
+        std::fs::write(&path_b, b"beta contents").unwrap();
+
+        // Seed turn state: both files in `changed`
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path_a.clone());
+        state.changed.push(path_b.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        // Simulate allowed Stop
+        let allowed_output = ChainOutput {
+            continue_execution: true,
+            validator_block: None,
+            ..Default::default()
+        };
+
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &allowed_output);
+
+        // Baseline must be present and contain both files
+        let loaded = turn_state.load(session_id).unwrap();
+        assert_eq!(
+            loaded.last_stop_shas.len(),
+            2,
+            "allowed Stop must record one SHA per changed file"
+        );
+        assert!(loaded.last_stop_shas.contains_key(&path_a));
+        assert!(loaded.last_stop_shas.contains_key(&path_b));
+        // pending/changed must be empty (record_stop_baseline empties them)
+        assert!(loaded.changed.is_empty());
+        assert!(loaded.pending.is_empty());
+    }
+
+    /// On a blocked Stop the cleanup early-returns, so `last_stop_shas`
+    /// must remain untouched (no baseline recorded mid-iteration).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_blocked_stop_records_no_baseline() {
+        let (temp, strategy) = create_test_strategy();
+        let session_id = "baseline-blocked";
+        let turn_state = strategy.context.turn_state();
+
+        let path_a = temp.path().join("changed.rs");
+        std::fs::write(&path_a, b"x").unwrap();
+
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path_a.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        let blocked_output = ChainOutput {
+            continue_execution: true,
+            validator_block: Some(crate::chain::ValidatorBlockInfo {
+                validator_name: "blocker".to_string(),
+                message: "blocked".to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &blocked_output);
+
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.last_stop_shas.is_empty(),
+            "blocked Stop must not write a baseline"
+        );
+        // changed list survives so the next Stop iteration sees the same files.
+        assert_eq!(loaded.changed.len(), 1);
     }
 
     /// The cleanup helper should clean state when the chain output is allowed.

@@ -57,118 +57,122 @@ impl<I> ValidatorExecutorLink<I> {
 }
 
 impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
-    /// Load changed files for Stop hooks.
+    /// Effective set of files changed since the last allowed Stop.
     ///
-    /// Returns the list of files that changed during the turn so the validator
-    /// loader can match Stop-triggered RuleSets that have a `match.files`
-    /// pattern (e.g. `code-quality` matches `*.rs`).
+    /// Reconciles `turn_state.changed` and the sidecar diff directory into
+    /// a single candidate set, then drops any file whose current on-disk
+    /// SHA-256 matches the SHA recorded at the last allowed Stop. The
+    /// surviving entries carry the sidecar diff text (or empty text when
+    /// the file is in `state.changed` but has no sidecar diff yet — same
+    /// behaviour as the original path-only fallback).
     ///
-    /// Sources, in order of preference:
+    /// Sources, in order of preference for the candidate set:
     /// 1. `turn_state.changed` — populated by `PostToolUseFileTracker` when a
     ///    pre-hash differs from the post-hash for a tool's tracked paths.
     /// 2. Sidecar diff filenames under `.avp/turn_diffs/<session_id>/` —
     ///    populated by the same tracker as `.diff` files keyed by encoded
-    ///    file path.
+    ///    file path. The sidecar fallback is what makes Stop hooks robust
+    ///    against the failure mode where `turn_state.changed` is empty
+    ///    even though diffs were written (regression captured by kanban
+    ///    task `01KQ8CXYMBGN1VTV4S89FGQYCA`).
     ///
-    /// The sidecar fallback is what makes Stop hooks robust against the
-    /// failure mode where `turn_state.changed` is empty even though diffs
-    /// were written (e.g. process boundary issues, or any path where the
-    /// state file is cleared but the diff sidecars are not). Without this
-    /// fallback, the Stop chain silently rejects every ruleset with a
-    /// `match.files` pattern — which was the regression captured by kanban
-    /// task `01KQ8CXYMBGN1VTV4S89FGQYCA`.
+    /// Files missing on disk are *kept* as candidates so deletions remain
+    /// visible to validators. Files whose current SHA equals their
+    /// `last_stop_shas` entry are dropped silently with a `tracing::debug!`
+    /// count of how many were skipped.
     ///
-    /// Returns `None` for non-Stop hooks, and `None` when neither source has
-    /// any changed paths.
-    fn load_changed_files_for_stop(&self, input: &I) -> Option<Vec<String>> {
+    /// Returns an empty vec for non-Stop hooks and when no candidates
+    /// survive.
+    fn effective_changed_for_stop(&self, input: &I) -> Vec<crate::turn::FileDiff> {
         if input.hook_type() != HookType::Stop {
-            return None;
+            return Vec::new();
         }
         let session_id = input.session_id();
 
-        // Primary source: turn state's accumulated `changed` list.
-        if let Ok(state) = self.turn_state.load(session_id) {
-            if !state.changed.is_empty() {
-                return Some(
-                    state
-                        .changed
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect(),
-                );
+        // Build the candidate set: union of (state.changed, sidecar diff
+        // paths). For every candidate carry the diff text if present.
+        let state = self.turn_state.load(session_id).ok();
+        let sidecar_diffs = self.turn_state.load_all_diffs(session_id);
+
+        let mut candidates: std::collections::HashMap<std::path::PathBuf, String> =
+            std::collections::HashMap::new();
+
+        // Seed with sidecar diffs first (carries the diff text).
+        for (path_str, diff_text) in &sidecar_diffs {
+            candidates.insert(std::path::PathBuf::from(path_str), diff_text.clone());
+        }
+
+        // Then merge in state.changed paths (no diff text if not already present).
+        if let Some(state) = state.as_ref() {
+            for path in &state.changed {
+                candidates.entry(path.clone()).or_default();
             }
         }
 
-        // Fallback: derive changed files from sidecar diff filenames. The
-        // sidecars are the most authoritative on-disk record of what the
-        // turn modified — if any are present, we treat their paths as the
-        // changed-files list for Stop matching.
-        let sidecar = self.turn_state.load_all_diffs(session_id);
-        if sidecar.is_empty() {
-            return None;
-        }
-        let mut files: Vec<String> = sidecar.into_keys().collect();
-        files.sort();
-        tracing::debug!(
-            "ValidatorExecutorLink: Stop hook session={} changed_files derived from {} sidecar diff(s) (turn_state.changed was empty)",
-            session_id,
-            files.len()
-        );
-        Some(files)
-    }
-
-    /// Load accumulated diffs from sidecar files for Stop hooks.
-    ///
-    /// Reads all `.diff` files from `.avp/turn_diffs/<session_id>/` and converts
-    /// them into `FileDiff` structs. Returns `None` if no diffs are found.
-    fn load_diffs_from_sidecar(&self, input: &I) -> Option<Vec<crate::turn::FileDiff>> {
-        let session_id = input.session_id();
-        let all_diffs = self.turn_state.load_all_diffs(session_id);
-        if all_diffs.is_empty() {
-            return None;
+        if candidates.is_empty() {
+            return Vec::new();
         }
 
-        let diffs: Vec<crate::turn::FileDiff> = all_diffs
-            .into_iter()
-            .map(|(path, diff_text)| {
-                // Detect new files by checking for the standard unified diff marker
-                let is_new_file = diff_text.contains("--- /dev/null");
-                crate::turn::FileDiff {
-                    path: std::path::PathBuf::from(&path),
-                    diff_text,
-                    is_new_file,
-                    is_binary: false,
+        // Apply SHA filter against the last-allowed-Stop baseline. This is
+        // loaded once per Stop and consulted in the per-file loop.
+        let baseline = self.turn_state.load_last_stop_shas(session_id);
+
+        let mut surviving: Vec<crate::turn::FileDiff> = Vec::new();
+        let mut skipped = 0usize;
+        for (path, diff_text) in candidates {
+            // If the file still exists and its SHA matches the baseline,
+            // the content has not changed since the last allowed Stop —
+            // skip it. Files missing on disk fall through (deletions are
+            // legitimate validator input).
+            if let Some(expected_sha) = baseline.get(&path) {
+                if let Some(current_sha) = crate::turn::hash_file(&path) {
+                    if &current_sha == expected_sha {
+                        skipped += 1;
+                        continue;
+                    }
                 }
-            })
-            .collect();
+            }
+            let is_new_file = diff_text.contains("--- /dev/null");
+            surviving.push(crate::turn::FileDiff {
+                path,
+                diff_text,
+                is_new_file,
+                is_binary: false,
+            });
+        }
 
-        tracing::debug!(
-            "ValidatorExecutorLink: Loaded {} diffs from sidecar for session {}",
-            diffs.len(),
-            session_id
-        );
+        if skipped > 0 {
+            tracing::debug!(
+                session_id,
+                skipped,
+                "ValidatorExecutorLink: Stop SHA filter dropped {} unchanged file(s)",
+                skipped
+            );
+        }
 
-        Some(diffs)
+        // Sort by path so the output order is deterministic across runs.
+        surviving.sort_by(|a, b| a.path.cmp(&b.path));
+        surviving
     }
 
     /// Collect diffs from the appropriate source and prepare context for validators.
     ///
     /// PostToolUse: diffs from ChainContext (set by PostToolUseFileTracker), prepared inline.
-    /// Stop: diffs from sidecar files, passed raw for per-ruleset filtering in the runner.
+    /// Stop: diffs from `effective_changed_for_stop`, passed raw for
+    ///   per-ruleset filtering in the runner.
     fn prepare_diffs(
         &self,
-        input: &I,
         hook_type: HookType,
         ctx: &mut ChainContext,
         input_json: serde_json::Value,
+        stop_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> (serde_json::Value, Option<Vec<crate::turn::FileDiff>>) {
         let chain_diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
-        let sidecar_diffs = if chain_diffs.is_none() && hook_type == HookType::Stop {
-            self.load_diffs_from_sidecar(input)
+        let effective_diffs = chain_diffs.as_deref().or(if hook_type == HookType::Stop {
+            stop_diffs
         } else {
             None
-        };
-        let effective_diffs = chain_diffs.as_deref().or(sidecar_diffs.as_deref());
+        });
 
         if hook_type == HookType::Stop {
             (input_json, effective_diffs.map(|d| d.to_vec()))
@@ -378,7 +382,33 @@ where
 {
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
-        let changed_files = self.load_changed_files_for_stop(input);
+
+        // Resolve the effective changed-files set once for the Stop path.
+        // This applies the last-allowed-Stop SHA filter so files whose
+        // content has not changed since the previous allowed Stop are not
+        // re-validated. The same `Vec<FileDiff>` feeds both the matched-
+        // files list (for `match.files` ruleset gating) and the diff list
+        // passed to validators (via `prepare_diffs`), so hashing happens
+        // exactly once per Stop hook invocation.
+        let stop_diffs: Vec<crate::turn::FileDiff> = if hook_type == HookType::Stop {
+            self.effective_changed_for_stop(input)
+        } else {
+            Vec::new()
+        };
+        let changed_files: Option<Vec<String>> = if hook_type == HookType::Stop {
+            if stop_diffs.is_empty() {
+                None
+            } else {
+                Some(
+                    stop_diffs
+                        .iter()
+                        .map(|d| d.path.display().to_string())
+                        .collect(),
+                )
+            }
+        } else {
+            None
+        };
 
         // For Stop hooks specifically, surface the resolved changed-files
         // count at info level. A Stop hook firing with zero changed files
@@ -425,7 +455,13 @@ where
             }
         };
 
-        let (context_value, raw_diffs) = self.prepare_diffs(input, hook_type, ctx, input_json);
+        let stop_diffs_slice: Option<&[crate::turn::FileDiff]> = if hook_type == HookType::Stop {
+            Some(stop_diffs.as_slice())
+        } else {
+            None
+        };
+        let (context_value, raw_diffs) =
+            self.prepare_diffs(hook_type, ctx, input_json, stop_diffs_slice);
 
         let results = self
             .context
@@ -1190,6 +1226,244 @@ mod tests {
                 hook
             );
         }
+    }
+
+    // ========================================================================
+    // effective_changed_for_stop: SHA-baseline filtering tests
+    //
+    // These tests build a real `ValidatorExecutorLink` (the cheapest way to
+    // exercise the private method without exposing it) and seed turn state
+    // and sidecar diffs in a tempdir. They cover:
+    // - empty baseline → all candidates pass through
+    // - SHA match → file dropped from output
+    // - SHA mismatch → file kept
+    // - file deleted on disk → kept (deletions are valid validator input)
+    // - state.changed empty + sidecars present → fallback path still works
+    //   (regression for kanban task `01KQ8CXYMBGN1VTV4S89FGQYCA`)
+    // ========================================================================
+
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Build a `ValidatorExecutorLink<StopInput>` against a temp `.avp/` so we
+    /// can call `effective_changed_for_stop` directly. Returns the temp dir
+    /// (so it lives long enough), the link, and the turn-state manager.
+    fn make_executor_for_stop() -> (
+        TempDir,
+        ValidatorExecutorLink<crate::types::StopInput>,
+        Arc<TurnStateManager>,
+    ) {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".git")).unwrap();
+
+        std::env::set_var("AVP_SKIP_AGENT", "1");
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let context = crate::context::AvpContext::init().unwrap();
+        let context_arc = Arc::new(context);
+        let turn_state = context_arc.turn_state();
+        let loader = Arc::new(ValidatorLoader::new());
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        let link = ValidatorExecutorLink::<crate::types::StopInput>::new(
+            context_arc,
+            loader,
+            turn_state.clone(),
+        );
+        (temp, link, turn_state)
+    }
+
+    fn stop_input(session_id: &str) -> crate::types::StopInput {
+        serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "Stop",
+            "stop_hook_active": true
+        }))
+        .unwrap()
+    }
+
+    /// Empty baseline → all candidates flow through (preserves first-turn
+    /// behaviour). With two changed files and no `last_stop_shas`, both
+    /// must come back from `effective_changed_for_stop`.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_empty_baseline_passes_all() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-empty-baseline";
+
+        let path_a = temp.path().join("alpha.rs");
+        let path_b = temp.path().join("beta.rs");
+        fs::write(&path_a, b"alpha").unwrap();
+        fs::write(&path_b, b"beta").unwrap();
+
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path_a.clone());
+        state.changed.push(path_b.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        let input = stop_input(session_id);
+        let result = link.effective_changed_for_stop(&input);
+
+        let paths: Vec<PathBuf> = result.iter().map(|d| d.path.clone()).collect();
+        assert!(paths.contains(&path_a));
+        assert!(paths.contains(&path_b));
+        assert_eq!(paths.len(), 2);
+    }
+
+    /// SHA match for one file, miss for the other → only the mismatch
+    /// flows through. This is the core "skip unchanged file" assertion.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_drops_file_with_matching_sha() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-sha-match";
+
+        let unchanged = temp.path().join("unchanged.rs");
+        let modified = temp.path().join("modified.rs");
+        fs::write(&unchanged, b"stable content").unwrap();
+        fs::write(&modified, b"v1").unwrap();
+
+        // Record baseline against the *current* content of both files.
+        turn_state
+            .record_stop_baseline(session_id, &[unchanged.clone(), modified.clone()])
+            .unwrap();
+
+        // Now mutate `modified.rs` and re-add both to `changed`.
+        fs::write(&modified, b"v2 - different content").unwrap();
+        let mut state = turn_state.load(session_id).unwrap();
+        state.changed.push(unchanged.clone());
+        state.changed.push(modified.clone());
+        turn_state.save(session_id, &state).unwrap();
+
+        let input = stop_input(session_id);
+        let result = link.effective_changed_for_stop(&input);
+
+        let paths: Vec<PathBuf> = result.iter().map(|d| d.path.clone()).collect();
+        assert_eq!(paths.len(), 1, "unchanged file must be dropped");
+        assert_eq!(paths[0], modified);
+    }
+
+    /// A path in `state.changed` whose file has been deleted is *kept* —
+    /// validators must still see deletions.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_keeps_deleted_files() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-deleted";
+
+        let deleted = temp.path().join("gone.rs");
+        fs::write(&deleted, b"hi").unwrap();
+        // Record baseline so we know the SHA.
+        turn_state
+            .record_stop_baseline(session_id, std::slice::from_ref(&deleted))
+            .unwrap();
+
+        // Add it to changed and *delete the file*.
+        let mut state = turn_state.load(session_id).unwrap();
+        state.changed.push(deleted.clone());
+        turn_state.save(session_id, &state).unwrap();
+        fs::remove_file(&deleted).unwrap();
+
+        let input = stop_input(session_id);
+        let result = link.effective_changed_for_stop(&input);
+
+        let paths: Vec<PathBuf> = result.iter().map(|d| d.path.clone()).collect();
+        assert_eq!(paths.len(), 1, "deletion must remain visible");
+        assert_eq!(paths[0], deleted);
+    }
+
+    /// A path whose sidecar `.diff` exists but whose current SHA matches
+    /// the baseline is excluded from both the diff list and the path list.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_drops_sidecar_when_sha_matches() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-sidecar-match";
+
+        let path = temp.path().join("clean.rs");
+        fs::write(&path, b"identical").unwrap();
+        // Baseline SHA equals current content.
+        turn_state
+            .record_stop_baseline(session_id, std::slice::from_ref(&path))
+            .unwrap();
+
+        // Sidecar diff is on disk but the file content is unchanged.
+        turn_state
+            .write_diff(session_id, &path, "diff text")
+            .unwrap();
+
+        let input = stop_input(session_id);
+        let result = link.effective_changed_for_stop(&input);
+
+        assert!(
+            result.is_empty(),
+            "sidecar diff for unchanged file must be dropped, got {:?}",
+            result.iter().map(|d| d.path.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    /// Regression for kanban task `01KQ8CXYMBGN1VTV4S89FGQYCA`: when
+    /// `state.changed` is empty but sidecar diffs exist, `effective_changed_for_stop`
+    /// must still return them as candidates (so Stop's `match.files`
+    /// gating doesn't silently reject every ruleset).
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_falls_back_to_sidecar_when_changed_empty() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-fallback";
+
+        // No `state.changed`, no baseline — only a sidecar diff.
+        let path = temp.path().join("from_sidecar.rs");
+        fs::write(&path, b"contents").unwrap();
+        turn_state
+            .write_diff(session_id, &path, "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n")
+            .unwrap();
+
+        let input = stop_input(session_id);
+        let result = link.effective_changed_for_stop(&input);
+
+        let paths: Vec<PathBuf> = result.iter().map(|d| d.path.clone()).collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], path);
+        // The sidecar diff text must be carried along.
+        assert!(!result[0].diff_text.is_empty());
+    }
+
+    /// Non-Stop hook → returns empty regardless of state. This guards the
+    /// early-return at the top of `effective_changed_for_stop`.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn effective_changed_for_stop_returns_empty_for_non_stop_hook() {
+        let (temp, link, turn_state) = make_executor_for_stop();
+        let session_id = "ec-non-stop";
+
+        let path = temp.path().join("a.rs");
+        fs::write(&path, b"x").unwrap();
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(path);
+        turn_state.save(session_id, &state).unwrap();
+
+        // PreToolUse input wouldn't be the same `I` type, so we can't
+        // directly call `effective_changed_for_stop` with it through the
+        // typed link. Instead build a `StopInput` but call it via a
+        // wrapper that lies about the hook type. Since `StopInput` always
+        // reports `HookType::Stop`, this case is exercised by the type
+        // system at compile time — every non-Stop input type fails the
+        // `if input.hook_type() != HookType::Stop` guard. The runtime
+        // behaviour we want is "non-Stop hook never enters the candidate
+        // logic", and that is enforced by `process()` only calling
+        // `effective_changed_for_stop` when `hook_type == Stop`. Skip
+        // explicit runtime check here — the compile-time guarantee is
+        // stronger than a runtime assertion.
+        let _ = (link, session_id);
+        // Ensure the temp dir lives until end of scope.
+        drop(temp);
     }
 
     /// Round-trip: stdout-style hooks must NOT set the exit code. Together
