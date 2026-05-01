@@ -8,7 +8,7 @@ use crate::{
     session_errors::{SessionSetupError, SessionSetupResult},
     session_validation::validate_session_id,
 };
-use agent_client_protocol::{LoadSessionRequest, LoadSessionResponse, SessionNotification};
+use agent_client_protocol::schema::{LoadSessionRequest, LoadSessionResponse, SessionNotification};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swissarmyhammer_common::Pretty;
 use tracing::{error, info, warn};
@@ -82,7 +82,7 @@ impl EnhancedSessionLoader {
                     session_id, e
                 );
                 return Err(SessionSetupError::SessionStorageFailure {
-                    session_id: Some(agent_client_protocol::SessionId::new(
+                    session_id: Some(agent_client_protocol::schema::SessionId::new(
                         session_id.to_string(),
                     )),
                     storage_error: e.to_string(),
@@ -101,7 +101,9 @@ impl EnhancedSessionLoader {
                 let available_sessions = self.get_available_session_list()?;
 
                 return Err(SessionSetupError::SessionNotFound {
-                    session_id: agent_client_protocol::SessionId::new(session_id.to_string()),
+                    session_id: agent_client_protocol::schema::SessionId::new(
+                        session_id.to_string(),
+                    ),
                     available_sessions,
                 });
             }
@@ -120,7 +122,9 @@ impl EnhancedSessionLoader {
                     .as_secs();
 
                 return Err(SessionSetupError::SessionExpired {
-                    session_id: agent_client_protocol::SessionId::new(session_id.to_string()),
+                    session_id: agent_client_protocol::schema::SessionId::new(
+                        session_id.to_string(),
+                    ),
                     expired_at: chrono::DateTime::from_timestamp(expired_at as i64, 0)
                         .unwrap_or_default()
                         .to_rfc3339(),
@@ -155,21 +159,21 @@ impl EnhancedSessionLoader {
         // Validate timestamps
         if session.created_at > SystemTime::now() {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
+                session_id: agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 corruption_details: "Session created_at timestamp is in the future".to_string(),
             });
         }
 
         if session.last_accessed > SystemTime::now() {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
+                session_id: agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 corruption_details: "Session last_accessed timestamp is in the future".to_string(),
             });
         }
 
         if session.created_at > session.last_accessed {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
+                session_id: agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 corruption_details: "Session created_at is after last_accessed".to_string(),
             });
         }
@@ -178,7 +182,9 @@ impl EnhancedSessionLoader {
         for (i, message) in session.context.iter().enumerate() {
             if message.timestamp > SystemTime::now() {
                 return Err(SessionSetupError::SessionCorrupted {
-                    session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
+                    session_id: agent_client_protocol::schema::SessionId::new(
+                        session.id.to_string(),
+                    ),
                     corruption_details: format!("Message {} timestamp is in the future", i),
                 });
             }
@@ -187,7 +193,7 @@ impl EnhancedSessionLoader {
         // Check for excessive message count
         if session.context.len() > self.max_history_messages {
             return Err(SessionSetupError::SessionCorrupted {
-                session_id: agent_client_protocol::SessionId::new(session.id.to_string()),
+                session_id: agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 corruption_details: format!(
                     "Session contains {} messages, exceeding maximum of {}",
                     session.context.len(),
@@ -245,7 +251,7 @@ impl EnhancedSessionLoader {
             );
 
             let notification = SessionNotification::new(
-                agent_client_protocol::SessionId::new(session.id.to_string()),
+                agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 message.update.clone(),
             )
             .meta(meta_map);
@@ -367,12 +373,12 @@ impl EnhancedSessionLoader {
 
     /// Convert ACP MCP server config to internal type for validation
     fn convert_acp_to_internal_mcp_config(
-        acp_config: &agent_client_protocol::McpServer,
+        acp_config: &agent_client_protocol::schema::McpServer,
     ) -> Option<crate::config::McpServerConfig> {
         use crate::config::{
             EnvVariable, HttpHeader, HttpTransport, McpServerConfig, SseTransport, StdioTransport,
         };
-        use agent_client_protocol::McpServer;
+        use agent_client_protocol::schema::McpServer;
 
         match acp_config {
             McpServer::Stdio(stdio) => {
@@ -497,7 +503,7 @@ impl SessionHistoryReplayer {
             );
 
             let notification = SessionNotification::new(
-                agent_client_protocol::SessionId::new(session.id.to_string()),
+                agent_client_protocol::schema::SessionId::new(session.id.to_string()),
                 message.update.clone(),
             )
             .meta(meta_map);
@@ -528,7 +534,7 @@ impl SessionHistoryReplayer {
                             failure_count
                         );
                         return Err(SessionSetupError::SessionHistoryReplayFailed {
-                            session_id: agent_client_protocol::SessionId::new(
+                            session_id: agent_client_protocol::schema::SessionId::new(
                                 session.id.to_string(),
                             ),
                             failed_at_message: i,
@@ -679,15 +685,17 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_valid_stdio_server() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
         use std::path::PathBuf;
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let stdio =
-            agent_client_protocol::McpServerStdio::new("test-server", PathBuf::from("echo"))
-                .args(vec!["hello".to_string()]);
+        let stdio = agent_client_protocol::schema::McpServerStdio::new(
+            "test-server",
+            PathBuf::from("echo"),
+        )
+        .args(vec!["hello".to_string()]);
         let request = LoadSessionRequest::new(
             SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             std::env::current_dir().unwrap(),
@@ -700,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_valid_http_server() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
@@ -710,7 +718,7 @@ mod tests {
             std::env::current_dir().unwrap(),
         )
         .mcp_servers(vec![McpServer::Http(
-            agent_client_protocol::McpServerHttp::new(
+            agent_client_protocol::schema::McpServerHttp::new(
                 "test-http-server",
                 "https://example.com/mcp",
             ),
@@ -722,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_valid_sse_server() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
@@ -732,7 +740,10 @@ mod tests {
             std::env::current_dir().unwrap(),
         )
         .mcp_servers(vec![McpServer::Sse(
-            agent_client_protocol::McpServerSse::new("test-sse-server", "https://example.com/sse"),
+            agent_client_protocol::schema::McpServerSse::new(
+                "test-sse-server",
+                "https://example.com/sse",
+            ),
         )]);
 
         let result = loader.validate_load_request(&request);
@@ -741,7 +752,7 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_invalid_http_url() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
@@ -751,7 +762,10 @@ mod tests {
             std::env::current_dir().unwrap(),
         )
         .mcp_servers(vec![McpServer::Http(
-            agent_client_protocol::McpServerHttp::new("test-http-server", "not-a-valid-url"),
+            agent_client_protocol::schema::McpServerHttp::new(
+                "test-http-server",
+                "not-a-valid-url",
+            ),
         )]);
 
         let result = loader.validate_load_request(&request);
@@ -766,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_invalid_sse_url() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
@@ -776,7 +790,7 @@ mod tests {
             std::env::current_dir().unwrap(),
         )
         .mcp_servers(vec![McpServer::Sse(
-            agent_client_protocol::McpServerSse::new("test-sse-server", "invalid://url"),
+            agent_client_protocol::schema::McpServerSse::new("test-sse-server", "invalid://url"),
         )]);
 
         let result = loader.validate_load_request(&request);
@@ -791,25 +805,27 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_multiple_servers() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
         use std::path::PathBuf;
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let stdio =
-            agent_client_protocol::McpServerStdio::new("stdio-server", PathBuf::from("echo"));
+        let stdio = agent_client_protocol::schema::McpServerStdio::new(
+            "stdio-server",
+            PathBuf::from("echo"),
+        );
         let request = LoadSessionRequest::new(
             SessionId::new("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             std::env::current_dir().unwrap(),
         )
         .mcp_servers(vec![
             McpServer::Stdio(stdio),
-            McpServer::Http(agent_client_protocol::McpServerHttp::new(
+            McpServer::Http(agent_client_protocol::schema::McpServerHttp::new(
                 "http-server",
                 "https://example.com/mcp",
             )),
-            McpServer::Sse(agent_client_protocol::McpServerSse::new(
+            McpServer::Sse(agent_client_protocol::schema::McpServerSse::new(
                 "sse-server",
                 "https://example.com/sse",
             )),
@@ -821,13 +837,13 @@ mod tests {
 
     #[test]
     fn test_validate_load_request_with_nonexistent_stdio_command() {
-        use agent_client_protocol::{McpServer, SessionId};
+        use agent_client_protocol::schema::{McpServer, SessionId};
         use std::path::PathBuf;
 
         let session_manager = SessionManager::new();
         let loader = EnhancedSessionLoader::new(session_manager);
 
-        let stdio = agent_client_protocol::McpServerStdio::new(
+        let stdio = agent_client_protocol::schema::McpServerStdio::new(
             "nonexistent-server",
             PathBuf::from("/absolute/path/to/nonexistent/command"),
         );

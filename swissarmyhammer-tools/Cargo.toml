@@ -118,7 +118,6 @@ tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
 byte-unit = { workspace = true }
 owo-colors = { workspace = true }
-agent-client-protocol = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

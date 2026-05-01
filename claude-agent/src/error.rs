@@ -468,21 +468,25 @@ mod tests {
         );
         assert_eq!(acp_error.message, "Protocol error: invalid protocol");
 
-        // Test ToolExecution error conversion
+        // Test ToolExecution error conversion. ACP 0.11 maps -32000 to
+        // `ErrorCode::AuthRequired` (the JSON-RPC server-error range is repurposed
+        // for the ACP "auth required" code), so any AgentError variant whose
+        // ToJsonRpcError code is -32000 surfaces as `AuthRequired` after the
+        // From<i32> conversion inside Error::new.
         let agent_error = AgentError::ToolExecution("command failed".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
         assert_eq!(
             acp_error.code,
-            agent_client_protocol::ErrorCode::Other(-32000)
+            agent_client_protocol::ErrorCode::AuthRequired
         );
         assert_eq!(acp_error.message, "Tool execution error: command failed");
 
-        // Test Session error conversion
+        // Test Session error conversion (also -32000 → AuthRequired in ACP 0.11).
         let agent_error = AgentError::Session("session expired".to_string());
         let acp_error: agent_client_protocol::Error = agent_error.into();
         assert_eq!(
             acp_error.code,
-            agent_client_protocol::ErrorCode::Other(-32000)
+            agent_client_protocol::ErrorCode::AuthRequired
         );
         assert_eq!(acp_error.message, "Session error: session expired");
 
@@ -512,5 +516,58 @@ mod tests {
             agent_client_protocol::ErrorCode::InternalError
         );
         assert_eq!(acp_error.message, "Internal error: unexpected error");
+    }
+
+    #[test]
+    fn test_acp_error_data_is_none_for_agent_error() {
+        // The AgentError variants currently rely on the default `to_error_data`
+        // implementation, which returns None. The ACP 0.11 `Error` struct exposes
+        // `data: Option<serde_json::Value>` and our `From<AgentError>` impl only
+        // calls `.data(...)` when the trait method returns `Some`, so the
+        // resulting Error's data field must remain None.
+        let cases = [
+            AgentError::Process("p".to_string()),
+            AgentError::Protocol("p".to_string()),
+            AgentError::Session("s".to_string()),
+            AgentError::ToolExecution("t".to_string()),
+            AgentError::Config("c".to_string()),
+            AgentError::PermissionDenied("d".to_string()),
+            AgentError::InvalidRequest("ir".to_string()),
+            AgentError::MethodNotFound("mn".to_string()),
+            AgentError::Internal("i".to_string()),
+        ];
+        for agent_error in cases {
+            let acp_error: agent_client_protocol::Error = agent_error.into();
+            assert!(
+                acp_error.data.is_none(),
+                "AgentError without custom to_error_data must produce ACP Error with data=None, got {:?}",
+                acp_error.data
+            );
+        }
+    }
+
+    #[test]
+    fn test_acp_error_code_round_trips_through_i32() {
+        // The ACP 0.11 `Error::new(code: i32, message: ..)` constructor relies on
+        // `From<i32> for ErrorCode` to recover the strongly-typed `ErrorCode` from
+        // the JSON-RPC integer. This test locks in the round-trip for every
+        // numeric code our `ToJsonRpcError` mapping produces, and documents that
+        // -32000 (used by several of our error variants) is reused by ACP 0.11
+        // for the `AuthRequired` code rather than falling through to `Other`.
+        let pairs = [
+            (-32600, agent_client_protocol::ErrorCode::InvalidRequest),
+            (-32601, agent_client_protocol::ErrorCode::MethodNotFound),
+            (-32602, agent_client_protocol::ErrorCode::InvalidParams),
+            (-32603, agent_client_protocol::ErrorCode::InternalError),
+            (-32000, agent_client_protocol::ErrorCode::AuthRequired),
+        ];
+        for (code, expected) in pairs {
+            let err = agent_client_protocol::Error::new(code, "msg");
+            assert_eq!(
+                err.code, expected,
+                "Error::new({}, ..) should produce {:?}",
+                code, expected
+            );
+        }
     }
 }

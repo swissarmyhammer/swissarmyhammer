@@ -3,8 +3,11 @@
 //! This module provides the `ValidatorRunner` which executes validators against
 //! hook events by calling an Agent via the Agent Client Protocol (ACP).
 //!
-//! The agent is obtained from `AvpContext`, which handles lazy creation of
-//! ClaudeAgent in production or injection of PlaybackAgent for testing.
+//! The agent is obtained from `AvpContext`, which armistices the connection
+//! lifecycle and hands the runner a [`ConnectionTo<Agent>`] handle. Production
+//! production runs against `ClaudeAgent` (or `LlamaAgent`); tests wire a
+//! [`PlaybackAgent`] (or one of the inline mocks) to the same connection
+//! shape.
 //!
 //! Validator partials can come from any of the standard validator directories:
 //! - builtin/validators/_partials/
@@ -14,6 +17,25 @@
 //! This follows the same unified pattern as prompts and rules, using
 //! [`ValidatorPartialAdapter`] which is a type alias for
 //! `LibraryPartialAdapter<ValidatorLoader>`.
+//!
+//! ## ACP 0.11
+//!
+//! In ACP 0.10 the runner held an `Arc<dyn Agent + Send + Sync>` and dispatched
+//! through the `Agent` trait. ACP 0.11 removed the trait — `Agent` is now a
+//! unit [`Role`] marker — and replaced the dispatch surface with the typed
+//! builder/handler runtime exposed via [`ConnectionTo<Agent>`]. The runner now
+//! stores a clonable [`ConnectionTo<Agent>`] and issues each ACP request via
+//! `connection.send_request(req).block_task().await`. Test mocks
+//! ([`SessionRecordingAgent`], [`MaxTokensAgent`], [`SlowAgent`]) carry their
+//! per-method behaviour as inherent `async fn`s implementing a project-local
+//! [`MockAgent`] trait, and a [`MockAgentAdapter`] wraps each mock as a
+//! [`ConnectTo<Client>`] middleware so it can be driven through a
+//! `Client.builder().connect_with(...)` topology — mirroring the 0.11 SDK
+//! pattern used by `claude-agent` (B8/B9), `llama-agent` (C9/C10), and
+//! [`agent_client_protocol_extras::PlaybackAgent`].
+//!
+//! [`Role`]: agent_client_protocol::Role
+//! [`PlaybackAgent`]: agent_client_protocol_extras::PlaybackAgent
 //!
 //! ## Parallel Execution
 //!
@@ -26,7 +48,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use agent_client_protocol::{Agent, SessionNotification};
+use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::{Agent, ConnectionTo};
 use futures::stream::{FuturesUnordered, StreamExt};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_templating::HashMapPartialLoader;
@@ -395,6 +418,91 @@ impl Default for ConcurrencyLimiter {
     }
 }
 
+/// Drive a single-shot prompt turn against an ACP 0.11 agent connection.
+///
+/// Mirrors the legacy `claude_agent::execute_prompt_with_agent(&Agent, …)`
+/// helper, but routes the three ACP requests (`initialize` → `new_session` →
+/// `prompt`) through the typed [`ConnectionTo<Agent>`] handle instead of
+/// direct trait dispatch.
+///
+/// # Lifecycle
+/// 1. Send `InitializeRequest` to negotiate protocol version.
+/// 2. Send `NewSessionRequest` with the current working directory.
+/// 3. Spawn a per-session notification collector so streaming
+///    `session/update` content is captured concurrently with the prompt.
+/// 4. Send `PromptRequest` and wait for the typed response.
+/// 5. Wait briefly for trailing notifications and return the assembled
+///    [`claude_agent::CollectedResponse`].
+///
+/// # Errors
+/// Returns [`claude_agent::AgentError::Internal`] (carrying the underlying
+/// ACP error message) if any of the three round-trips fail. Notification
+/// transport errors are swallowed inside the collector — they do not abort
+/// the turn.
+async fn execute_prompt_via_connection(
+    agent: &ConnectionTo<Agent>,
+    notifications: broadcast::Receiver<SessionNotification>,
+    prompt: impl Into<String>,
+) -> Result<claude_agent::CollectedResponse, claude_agent::AgentError> {
+    use agent_client_protocol::schema::{
+        ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, TextContent,
+    };
+
+    let prompt_text = prompt.into();
+
+    // 1. initialize
+    agent
+        .send_request(InitializeRequest::new(1.into()))
+        .block_task()
+        .await
+        .map_err(|e| {
+            claude_agent::AgentError::Internal(format!("Failed to initialize agent: {}", e))
+        })?;
+
+    // 2. new_session
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
+    let session_response = agent
+        .send_request(NewSessionRequest::new(cwd))
+        .block_task()
+        .await
+        .map_err(|e| {
+            claude_agent::AgentError::Internal(format!("Failed to create session: {}", e))
+        })?;
+    let session_id = session_response.session_id;
+
+    // 3. spawn notification collector before prompt() so streaming content is
+    //    captured as it arrives.
+    let (collector, collected_text, notification_count, _matched_count) =
+        claude_agent::spawn_notification_collector(notifications, session_id.clone());
+
+    // 4. prompt
+    let prompt_request = PromptRequest::new(
+        session_id,
+        vec![ContentBlock::Text(TextContent::new(prompt_text))],
+    );
+    let prompt_response = agent
+        .send_request(prompt_request)
+        .block_task()
+        .await
+        .map_err(|e| {
+            claude_agent::AgentError::Internal(format!("Failed to execute prompt: {}", e))
+        })?;
+
+    // 5. drain trailing notifications and assemble the collected response.
+    let content = claude_agent::collect_response_content(
+        collector,
+        collected_text,
+        notification_count,
+        &prompt_response,
+    )
+    .await;
+
+    Ok(claude_agent::CollectedResponse {
+        content,
+        stop_reason: prompt_response.stop_reason,
+    })
+}
+
 /// Handle a validator execution response, creating the appropriate result.
 ///
 /// This is a shared helper used by both parallel (`ValidatorTask`) and
@@ -486,10 +594,10 @@ fn create_render_error(validator: &Validator, error: &str) -> ExecutedValidator 
 /// * `session_id` - The fresh session to issue the prompt on
 /// * `rule_prompt` - The rendered rule prompt body
 fn build_rule_prompt_request(
-    session_id: agent_client_protocol::SessionId,
+    session_id: agent_client_protocol::schema::SessionId,
     rule_prompt: String,
-) -> agent_client_protocol::PromptRequest {
-    use agent_client_protocol::{ContentBlock, PromptRequest, TextContent};
+) -> agent_client_protocol::schema::PromptRequest {
+    use agent_client_protocol::schema::{ContentBlock, PromptRequest, TextContent};
 
     let mut meta = serde_json::Map::new();
     meta.insert(
@@ -571,7 +679,7 @@ response. partial response: {partial}",
 fn build_rule_outcome_from_response(
     rule: &crate::validator::Rule,
     ruleset: &RuleSet,
-    response: Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+    response: Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>,
     content: String,
 ) -> RuleOutcome {
     match response {
@@ -581,7 +689,7 @@ fn build_rule_outcome_from_response(
             // than trying to parse a truncated, half-finished response.
             if matches!(
                 prompt_response.stop_reason,
-                agent_client_protocol::StopReason::MaxTokens
+                agent_client_protocol::schema::StopReason::MaxTokens
             ) {
                 tracing::error!(
                     "RuleSet '{}' rule '{}' hit max_tokens cap ({}); failing rule",
@@ -677,8 +785,17 @@ struct ValidatorTask {
     prompt_library: Arc<PromptLibrary>,
     /// Partial templates for Liquid includes.
     partials: HashMapPartialLoader,
-    /// ACP agent for prompt execution.
-    agent: Arc<dyn Agent + Send + Sync>,
+    /// ACP connection to the agent for prompt execution.
+    ///
+    /// In ACP 0.10 this was an `Arc<dyn Agent + Send + Sync>` because `Agent`
+    /// was a trait. ACP 0.11 replaced the trait with a [`Role`] marker plus the
+    /// typed builder/handler runtime: outbound calls to the agent now flow over
+    /// a [`ConnectionTo<Agent>`] handle obtained from
+    /// `Client.builder().connect_with(...)`. The handle is `Clone`, so per-task
+    /// fan-out uses `.clone()` rather than `Arc::clone`.
+    ///
+    /// [`Role`]: agent_client_protocol::Role
+    agent: ConnectionTo<Agent>,
     /// Notification sender for streaming responses.
     notifications_tx: broadcast::Sender<SessionNotification>,
 }
@@ -699,8 +816,7 @@ impl ValidatorTask {
         };
 
         let notifications = self.notifications_tx.subscribe();
-        let response =
-            claude_agent::execute_prompt_with_agent(&*self.agent, notifications, prompt_text).await;
+        let response = execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
 
         let (result, is_rate_limit) = handle_execution_response(&self.validator, response);
 
@@ -755,18 +871,32 @@ impl ValidatorTask {
 ///
 /// # Usage
 ///
-/// Get the agent from `AvpContext` and create a runner:
+/// Get the agent connection from `AvpContext` and create a runner:
 /// ```ignore
-/// let (agent, notifications) = context.agent().await?;
-/// let runner = ValidatorRunner::new(agent, notifications)?;
+/// let (connection, notifier) = context.agent().await?;
+/// let runner = ValidatorRunner::new(connection, notifier)?;
 /// ```
+///
+/// `connection` is a [`ConnectionTo<Agent>`]; `notifier` is the per-session
+/// [`claude_agent::NotificationSender`] that the runner subscribes to for
+/// streaming response content.
 pub struct ValidatorRunner {
     /// Prompt library containing the .validator prompt
     prompt_library: Arc<PromptLibrary>,
     /// Validator partials for template rendering
     partials: HashMapPartialLoader,
-    /// Agent for executing prompts
-    agent: Arc<dyn Agent + Send + Sync>,
+    /// ACP connection to the agent for executing prompts.
+    ///
+    /// In ACP 0.10 this was an `Arc<dyn Agent + Send + Sync>` because `Agent`
+    /// was a trait. ACP 0.11 replaced the trait with a [`Role`] marker plus the
+    /// typed builder/handler runtime: outbound calls to the agent flow over a
+    /// [`ConnectionTo<Agent>`] handle that the caller obtains by running
+    /// `Client.builder().connect_with(transport, |conn| ...)` and handing the
+    /// `conn` (or a clone) to the runner. The handle is `Clone`, so per-task
+    /// fan-out uses `.clone()` rather than `Arc::clone`.
+    ///
+    /// [`Role`]: agent_client_protocol::Role
+    agent: ConnectionTo<Agent>,
     /// Notification sender with per-session channels
     notifier: Arc<claude_agent::NotificationSender>,
     /// Concurrency limiter for parallel execution
@@ -815,7 +945,7 @@ impl ValidatorRunner {
     /// Each RuleSet session subscribes to its own channel - no cross-session
     /// notification bleed.
     pub fn new(
-        agent: Arc<dyn Agent + Send + Sync>,
+        agent: ConnectionTo<Agent>,
         notifier: Arc<claude_agent::NotificationSender>,
     ) -> Result<Self, AvpError> {
         let prompt_library = Self::load_prompt_library()?;
@@ -980,8 +1110,7 @@ impl ValidatorRunner {
         };
 
         let notifications = self.notifier.sender().subscribe();
-        let response =
-            claude_agent::execute_prompt_with_agent(&*self.agent, notifications, prompt_text).await;
+        let response = execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
 
         handle_execution_response(validator, response)
     }
@@ -1063,7 +1192,7 @@ impl ValidatorRunner {
             concurrency: Arc::clone(&self.concurrency),
             prompt_library: Arc::clone(&self.prompt_library),
             partials: self.partials.clone(),
-            agent: Arc::clone(&self.agent),
+            agent: self.agent.clone(),
             notifications_tx: self.notifier.sender(),
         }
     }
@@ -1157,9 +1286,13 @@ impl ValidatorRunner {
         // agent-level handshake (capabilities, version negotiation) and is
         // independent of session lifecycles, so it does not need to be
         // repeated per rule.
-        use agent_client_protocol::InitializeRequest;
+        //
+        // ACP 0.11: outbound requests flow over `ConnectionTo<Agent>` rather
+        // than direct trait calls. `send_request(req).block_task().await`
+        // drives the JSON-RPC round-trip and yields the typed response.
+        use agent_client_protocol::schema::InitializeRequest;
         let init_request = InitializeRequest::new(1.into());
-        if let Err(e) = self.agent.initialize(init_request).await {
+        if let Err(e) = self.agent.send_request(init_request).block_task().await {
             tracing::error!(
                 "Failed to initialize agent for RuleSet '{}': {}",
                 ruleset.name(),
@@ -1375,11 +1508,18 @@ impl ValidatorRunner {
         &self,
         rule: &crate::validator::Rule,
         ruleset: &RuleSet,
-    ) -> Result<agent_client_protocol::SessionId, RuleOutcome> {
-        use agent_client_protocol::NewSessionRequest;
+    ) -> Result<agent_client_protocol::schema::SessionId, RuleOutcome> {
+        use agent_client_protocol::schema::NewSessionRequest;
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
-        match self.agent.new_session(NewSessionRequest::new(cwd)).await {
+        // ACP 0.11: dispatch via the typed `ConnectionTo<Agent>` handle
+        // instead of direct trait dispatch.
+        match self
+            .agent
+            .send_request(NewSessionRequest::new(cwd))
+            .block_task()
+            .await
+        {
             Ok(resp) => {
                 let session_id = resp.session_id;
                 tracing::debug!(
@@ -1435,9 +1575,9 @@ impl ValidatorRunner {
         ruleset: &RuleSet,
         context: &serde_json::Value,
         changed_files: Option<&[String]>,
-        session_id: agent_client_protocol::SessionId,
+        session_id: agent_client_protocol::schema::SessionId,
     ) -> (
-        Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error>,
+        Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>,
         String,
     ) {
         // Build the self-contained rule prompt. `hook_context` carries the
@@ -1456,7 +1596,8 @@ impl ValidatorRunner {
         let (rule_collector, rule_text, _, _) =
             claude_agent::spawn_notification_collector(rule_notifications, session_id);
 
-        let response = self.agent.prompt(rule_request).await;
+        // ACP 0.11: dispatch via the typed `ConnectionTo<Agent>` handle.
+        let response = self.agent.send_request(rule_request).block_task().await;
 
         // prompt() returned - collector has already received all content
         rule_collector.abort();
@@ -1554,7 +1695,7 @@ impl ValidatorRunner {
         Self {
             prompt_library: Arc::clone(&self.prompt_library),
             partials: self.partials.clone(),
-            agent: Arc::clone(&self.agent),
+            agent: self.agent.clone(),
             notifier: Arc::clone(&self.notifier),
             concurrency: Arc::clone(&self.concurrency),
             rule_concurrency: Arc::clone(&self.rule_concurrency),
@@ -1948,9 +2089,325 @@ mod tests {
     // ValidatorRunner Unit Tests with PlaybackAgent
     // =========================================================================
 
+    use agent_client_protocol::schema::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
+        LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+        SetSessionModeRequest, SetSessionModeResponse,
+    };
+    use agent_client_protocol::{Channel, Client, ConnectTo};
     use agent_client_protocol_extras::PlaybackAgent;
+    use futures::future::BoxFuture;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// Trait that test mock agents implement so a single
+    /// [`MockAgentAdapter`] can route incoming `ClientRequest` enum variants
+    /// onto the right handler. ACP 0.11 removed the `agent_client_protocol::Agent`
+    /// trait, so this is a project-local replacement scoped to the test module.
+    ///
+    /// Default implementations cover the common "no-op" case: `initialize`
+    /// returns a stock `InitializeResponse`, `authenticate` returns a stock
+    /// `AuthenticateResponse`, and the rest report
+    /// [`agent_client_protocol::Error::method_not_found`]. Mocks override only
+    /// the methods they actually exercise (`new_session` + `prompt` for the
+    /// existing tests).
+    ///
+    /// The `BoxFuture` return shape matches the SDK's typed handler signature
+    /// in `Agent.builder().on_receive_request(...)`, which lets the adapter
+    /// forward without per-mock specialisation.
+    trait MockAgent: Send + Sync {
+        fn initialize<'a>(
+            &'a self,
+            _request: InitializeRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(1.into())) })
+        }
+
+        fn authenticate<'a>(
+            &'a self,
+            _request: AuthenticateRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<AuthenticateResponse>> {
+            Box::pin(async move { Ok(AuthenticateResponse::new()) })
+        }
+
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
+        }
+
+        fn load_session<'a>(
+            &'a self,
+            _request: LoadSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<LoadSessionResponse>> {
+            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
+        }
+
+        fn set_session_mode<'a>(
+            &'a self,
+            _request: SetSessionModeRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<SetSessionModeResponse>> {
+            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
+        }
+
+        fn prompt<'a>(
+            &'a self,
+            _request: PromptRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
+        }
+
+        fn cancel<'a>(
+            &'a self,
+            _notification: CancelNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn ext_method<'a>(
+            &'a self,
+            _request: ExtRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<ExtResponse>> {
+            Box::pin(async move { Err(agent_client_protocol::Error::method_not_found()) })
+        }
+
+        fn ext_notification<'a>(
+            &'a self,
+            _notification: ExtNotification,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<()>> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    /// `ConnectTo<Client>` adapter that drives a [`MockAgent`] as an ACP
+    /// 0.11 server.
+    ///
+    /// Spins up an `Agent.builder()` whose `on_receive_request` /
+    /// `on_receive_notification` handlers demultiplex the incoming
+    /// `ClientRequest` / `ClientNotification` enums onto the mock's per-method
+    /// hooks. The builder runs in server-only mode (`connect_to`) so its main
+    /// loop terminates exactly when the wired client transport closes — no
+    /// shutdown signal needed.
+    struct MockAgentAdapter<M: MockAgent + 'static>(Arc<M>);
+
+    impl<M: MockAgent + 'static> ConnectTo<Client> for MockAgentAdapter<M> {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
+        ) -> agent_client_protocol::Result<()> {
+            let mock = Arc::clone(&self.0);
+            let mock_for_notifications = Arc::clone(&self.0);
+
+            agent_client_protocol::Agent
+                .builder()
+                .name("mock-agent")
+                .on_receive_request(
+                    {
+                        let mock = Arc::clone(&mock);
+                        async move |req: agent_client_protocol::ClientRequest, responder, cx| {
+                            dispatch_mock_request(&mock, req, responder, &cx)
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_notification(
+                    async move |notif: agent_client_protocol::ClientNotification, _cx| {
+                        dispatch_mock_notification(&mock_for_notifications, notif).await;
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    /// Demultiplex an incoming `ClientRequest` onto the mock's per-method
+    /// handlers. Mirrors `dispatch_client_request` in the production agents
+    /// (see `llama-agent/src/acp/server.rs`).
+    ///
+    /// Each per-method dispatch is offloaded to `cx.spawn` so the SDK's event
+    /// loop can keep dispatching new incoming requests while a slow handler
+    /// (e.g. `SlowAgent::prompt`) is awaiting. Without the spawn, two
+    /// concurrent prompts on the same connection would serialise — which the
+    /// `test_execute_ruleset_runs_rules_in_parallel` regression test
+    /// explicitly forbids.
+    fn dispatch_mock_request<M: MockAgent + 'static>(
+        mock: &Arc<M>,
+        request: agent_client_protocol::ClientRequest,
+        responder: agent_client_protocol::Responder<serde_json::Value>,
+        cx: &ConnectionTo<Client>,
+    ) -> agent_client_protocol::Result<()> {
+        use agent_client_protocol::ClientRequest as Req;
+
+        let mock = Arc::clone(mock);
+        cx.spawn(async move {
+            match request {
+                Req::InitializeRequest(req) => responder
+                    .cast()
+                    .respond_with_result(mock.initialize(req).await),
+                Req::AuthenticateRequest(req) => responder
+                    .cast()
+                    .respond_with_result(mock.authenticate(req).await),
+                Req::NewSessionRequest(req) => responder
+                    .cast()
+                    .respond_with_result(mock.new_session(req).await),
+                Req::LoadSessionRequest(req) => responder
+                    .cast()
+                    .respond_with_result(mock.load_session(req).await),
+                Req::SetSessionModeRequest(req) => responder
+                    .cast()
+                    .respond_with_result(mock.set_session_mode(req).await),
+                Req::PromptRequest(req) => {
+                    responder.cast().respond_with_result(mock.prompt(req).await)
+                }
+                Req::ExtMethodRequest(req) => {
+                    let result = mock.ext_method(req).await.and_then(|ext_response| {
+                        serde_json::from_str::<serde_json::Value>(ext_response.0.get())
+                            .map_err(|_| agent_client_protocol::Error::internal_error())
+                    });
+                    responder.respond_with_result(result)
+                }
+                // ClientRequest is `#[non_exhaustive]` and may grow new
+                // variants; surface anything we don't model as
+                // method-not-found rather than silently ignoring it, matching
+                // the dispatch in the production agents (see
+                // `llama-agent/src/acp/server.rs`).
+                _ => responder
+                    .cast::<serde_json::Value>()
+                    .respond_with_error(agent_client_protocol::Error::method_not_found()),
+            }
+        })
+    }
+
+    /// Demultiplex an incoming `ClientNotification` onto the mock. Errors are
+    /// logged inside the per-variant handler and never propagated.
+    async fn dispatch_mock_notification<M: MockAgent + ?Sized>(
+        mock: &Arc<M>,
+        notification: agent_client_protocol::ClientNotification,
+    ) {
+        use agent_client_protocol::ClientNotification as Notif;
+
+        match notification {
+            Notif::CancelNotification(n) => {
+                let _ = mock.cancel(n).await;
+            }
+            Notif::ExtNotification(n) => {
+                let _ = mock.ext_notification(n).await;
+            }
+            _ => {}
+        }
+    }
+
+    /// Wire a [`MockAgent`] up to a fresh `Client` and run `body` against the
+    /// resulting `ConnectionTo<Agent>` handle. Returns whatever `body` returns.
+    ///
+    /// This is the ACP 0.11 replacement for the 0.10 pattern of constructing
+    /// an `Arc<dyn Agent>` directly. Tests pass an `Arc<M>` where `M:
+    /// MockAgent`; the helper:
+    ///
+    /// 1. Builds a `Channel::duplex()` pair of in-process transports.
+    /// 2. Spawns the mock as an Agent server on one end via
+    ///    [`MockAgentAdapter`].
+    /// 3. Runs `Client.builder().connect_with(...)` on the other end and
+    ///    invokes `body` with the resulting [`ConnectionTo<Agent>`].
+    /// 4. Forwards every incoming `SessionNotification` to the per-session
+    ///    [`claude_agent::NotificationSender`] so the validator runner's
+    ///    notification subscribers see streaming content.
+    async fn run_with_mock_agent<M, F, Fut, R>(
+        mock: Arc<M>,
+        notifier: Arc<claude_agent::NotificationSender>,
+        body: F,
+    ) -> R
+    where
+        M: MockAgent + 'static,
+        F: FnOnce(ConnectionTo<Agent>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        // In-process transport pair: channel_a goes to the agent, channel_b to
+        // the client.
+        let (channel_a, channel_b) = Channel::duplex();
+
+        // Background task: drive the mock agent on channel_a. The task keeps
+        // running until either side of the duplex channel closes; we abort it
+        // on completion of the client side as a defensive measure.
+        let agent_task = tokio::spawn(async move {
+            let _ = MockAgentAdapter(mock).connect_to(channel_a).await;
+        });
+
+        let result = run_client_against(channel_b, notifier, "mock-test-client", body).await;
+
+        // The client side has finished and dropped channel_b; the agent's
+        // dispatch loop will observe the rx close and wind down. Abort
+        // explicitly so we don't keep the task pending on its main_fn even if
+        // the SDK's `connect_to(pending())` would wait on the foreground.
+        agent_task.abort();
+        let _ = agent_task.await;
+        result
+    }
+
+    /// `PlaybackAgent` already implements `ConnectTo<Client>`; this is just a
+    /// thin convenience that wires it up the same way as a [`MockAgent`].
+    /// Returns whatever `body` returns.
+    async fn run_with_playback_agent<F, Fut, R>(
+        agent: PlaybackAgent,
+        notifier: Arc<claude_agent::NotificationSender>,
+        body: F,
+    ) -> R
+    where
+        F: FnOnce(ConnectionTo<Agent>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let (channel_a, channel_b) = Channel::duplex();
+
+        let agent_task = tokio::spawn(async move {
+            let _ = agent.connect_to(channel_a).await;
+        });
+
+        let result = run_client_against(channel_b, notifier, "playback-test-client", body).await;
+
+        agent_task.abort();
+        let _ = agent_task.await;
+        result
+    }
+
+    /// Shared client-side wiring used by `run_with_mock_agent` and
+    /// `run_with_playback_agent`. Stands up `Client.builder().connect_with(...)`
+    /// against `transport`, forwards every incoming `SessionNotification` to
+    /// `notifier`, and runs `body` inside the closure with the resulting
+    /// `ConnectionTo<Agent>`.
+    async fn run_client_against<F, Fut, R>(
+        transport: Channel,
+        notifier: Arc<claude_agent::NotificationSender>,
+        name: &'static str,
+        body: F,
+    ) -> R
+    where
+        F: FnOnce(ConnectionTo<Agent>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let notifier_for_handler = Arc::clone(&notifier);
+        Client
+            .builder()
+            .name(name)
+            .on_receive_notification(
+                async move |notif: SessionNotification, _cx| {
+                    let _ = notifier_for_handler.send_update(notif).await;
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .connect_with(transport, async move |conn: ConnectionTo<Agent>| {
+                Ok(body(conn).await)
+            })
+            .await
+            .expect("client connect_with failed")
+    }
 
     /// Create a test fixture directory with a playback file.
     fn create_playback_fixture(response_json: &str) -> (TempDir, PathBuf) {
@@ -2006,164 +2463,140 @@ mod tests {
     async fn test_validator_runner_new() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier);
-        assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body);
+            assert!(runner.is_ok(), "ValidatorRunner::new should succeed");
 
-        let runner = runner.unwrap();
-        assert!(
-            runner.current_concurrency() >= MIN_CONCURRENCY,
-            "Concurrency should be at least MIN_CONCURRENCY"
-        );
-        assert!(
-            runner.current_concurrency() <= MAX_CONCURRENCY,
-            "Concurrency should be at most MAX_CONCURRENCY"
-        );
+            let runner = runner.unwrap();
+            assert!(
+                runner.current_concurrency() >= MIN_CONCURRENCY,
+                "Concurrency should be at least MIN_CONCURRENCY"
+            );
+            assert!(
+                runner.current_concurrency() <= MAX_CONCURRENCY,
+                "Concurrency should be at most MAX_CONCURRENCY"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_validator_runner_current_concurrency() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
 
-        // current_concurrency should return a valid value
-        let concurrency = runner.current_concurrency();
-        assert!(concurrency >= MIN_CONCURRENCY);
-        assert!(concurrency <= MAX_CONCURRENCY);
+            // current_concurrency should return a valid value
+            let concurrency = runner.current_concurrency();
+            assert!(concurrency >= MIN_CONCURRENCY);
+            assert!(concurrency <= MAX_CONCURRENCY);
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_validator_runner_execute_validator_pass() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
-        let validator = create_test_validator();
-        let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let validator = create_test_validator();
+            let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 
-        let (result, is_rate_limited) = runner
-            .execute_validator(&validator, HookType::PreToolUse, &context, None)
-            .await;
+            let (result, is_rate_limited) = runner
+                .execute_validator(&validator, HookType::PreToolUse, &context, None)
+                .await;
 
-        assert!(!is_rate_limited, "Should not be rate limited");
-        assert_eq!(result.name, "test-validator");
+            assert!(!is_rate_limited, "Should not be rate limited");
+            assert_eq!(result.name, "test-validator");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_validator_runner_execute_validators_empty() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
-        let context = serde_json::json!({"tool_name": "Write"});
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        // Empty validators list should return empty results
-        let validators: Vec<&Validator> = vec![];
-        let results = runner
-            .execute_validators(&validators, HookType::PreToolUse, &context, None)
-            .await;
+            // Empty validators list should return empty results
+            let validators: Vec<&Validator> = vec![];
+            let results = runner
+                .execute_validators(&validators, HookType::PreToolUse, &context, None)
+                .await;
 
-        assert!(
-            results.is_empty(),
-            "Empty input should produce empty output"
-        );
+            assert!(
+                results.is_empty(),
+                "Empty input should produce empty output"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_validator_runner_execute_validator_with_changed_files() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_PASS);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
-        let validator = create_test_validator();
-        let context = serde_json::json!({"session_id": "test"});
-        let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let validator = create_test_validator();
+            let context = serde_json::json!({"session_id": "test"});
+            let changed_files = vec!["src/lib.rs".to_string(), "src/main.rs".to_string()];
 
-        let (result, is_rate_limited) = runner
-            .execute_validator(&validator, HookType::Stop, &context, Some(&changed_files))
-            .await;
+            let (result, is_rate_limited) = runner
+                .execute_validator(&validator, HookType::Stop, &context, Some(&changed_files))
+                .await;
 
-        assert!(!is_rate_limited);
-        assert_eq!(result.name, "test-validator");
+            assert!(!is_rate_limited);
+            assert_eq!(result.name, "test-validator");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_validator_runner_execute_validator_fail() {
         let (_temp, fixture_path) = create_playback_fixture(PLAYBACK_FAIL);
         let agent = PlaybackAgent::new(fixture_path, "test");
-        let rx = agent.subscribe_notifications();
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
-        let notifier2 = Arc::clone(&notifier);
-        tokio::spawn(async move {
-            let mut rx = rx;
-            while let Ok(n) = rx.recv().await {
-                let _ = notifier2.send_update(n).await;
-            }
-        });
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(Arc::new(agent), notifier).unwrap();
-        let validator = create_test_validator();
-        let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
+        run_with_playback_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let validator = create_test_validator();
+            let context = serde_json::json!({"tool_name": "Write", "file_path": "test.ts"});
 
-        let (result, is_rate_limited) = runner
-            .execute_validator(&validator, HookType::PreToolUse, &context, None)
-            .await;
+            let (result, is_rate_limited) = runner
+                .execute_validator(&validator, HookType::PreToolUse, &context, None)
+                .await;
 
-        assert!(!is_rate_limited, "Should not be rate limited");
-        assert_eq!(result.name, "test-validator");
+            assert!(!is_rate_limited, "Should not be rate limited");
+            assert_eq!(result.name, "test-validator");
+        })
+        .await;
     }
 
     // =========================================================================
@@ -2179,6 +2612,11 @@ mod tests {
     /// Used by [`test_execute_ruleset_uses_fresh_session_per_rule`] to verify
     /// that each rule in a RuleSet gets its own session and therefore cannot
     /// see prior rules' conversation history.
+    ///
+    /// ACP 0.11: this used to `impl Agent` (the trait) directly. The trait was
+    /// removed in 0.11; the per-method bodies now live as inherent `async fn`s
+    /// and are exposed to the SDK via [`MockAgent`] + [`MockAgentAdapter`]. The
+    /// behaviour is unchanged.
     struct SessionRecordingAgent {
         next_session: std::sync::atomic::AtomicUsize,
         prompt_session_ids: std::sync::Mutex<Vec<String>>,
@@ -2195,81 +2633,57 @@ mod tests {
         fn recorded_session_ids(&self) -> Vec<String> {
             self.prompt_session_ids.lock().unwrap().clone()
         }
-    }
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for SessionRecordingAgent {
-        async fn initialize(
-            &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
-        }
-
-        async fn authenticate(
-            &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
-        }
-
+        /// Mint a fresh `test-session-N` id, recording the bump.
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let session_id = agent_client_protocol::SessionId::new(format!("test-session-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
+            let session_id =
+                agent_client_protocol::schema::SessionId::new(format!("test-session-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
-        async fn load_session(
-            &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
+        /// Capture the prompt's session id and return a `EndTurn` response.
         async fn prompt(
             &self,
-            request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             self.prompt_session_ids
                 .lock()
                 .unwrap()
                 .push(request.session_id.0.to_string());
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::EndTurn,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::EndTurn,
             ))
         }
+    }
 
-        async fn cancel(
-            &self,
-            _notification: agent_client_protocol::CancelNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+    impl MockAgent for SessionRecordingAgent {
+        fn new_session<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>,
+        > {
+            Box::pin(async move { SessionRecordingAgent::new_session(self, request).await })
         }
 
-        async fn ext_method(
-            &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: agent_client_protocol::ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        fn prompt<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse>,
+        > {
+            Box::pin(async move { SessionRecordingAgent::prompt(self, request).await })
         }
     }
 
@@ -2322,44 +2736,48 @@ mod tests {
     #[tokio::test]
     async fn test_execute_ruleset_uses_fresh_session_per_rule() {
         let recording_agent = Arc::new(SessionRecordingAgent::new());
-        let agent: Arc<dyn Agent + Send + Sync> = recording_agent.clone();
+        let recording_agent_for_assert = Arc::clone(&recording_agent);
 
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(agent, notifier).unwrap();
-        let ruleset = create_ruleset_with_n_rules(&["rule-a", "rule-b", "rule-c"]);
-        let context = serde_json::json!({"tool_name": "Write"});
+        run_with_mock_agent(recording_agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let ruleset = create_ruleset_with_n_rules(&["rule-a", "rule-b", "rule-c"]);
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        let (executed, is_rate_limited) = runner
-            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-            .await;
+            let (executed, is_rate_limited) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
 
-        assert!(!is_rate_limited, "Should not be rate limited");
-        assert_eq!(
-            executed.rule_results.len(),
-            3,
-            "Each rule should produce a result"
-        );
+            assert!(!is_rate_limited, "Should not be rate limited");
+            assert_eq!(
+                executed.rule_results.len(),
+                3,
+                "Each rule should produce a result"
+            );
 
-        let session_ids = recording_agent.recorded_session_ids();
-        assert_eq!(
-            session_ids.len(),
-            3,
-            "agent.prompt() should be called once per rule (no init prompt)"
-        );
+            let session_ids = recording_agent_for_assert.recorded_session_ids();
+            assert_eq!(
+                session_ids.len(),
+                3,
+                "agent.prompt() should be called once per rule (no init prompt)"
+            );
 
-        // The critical regression assertion: every rule must see a distinct
-        // session_id. If any two rules share a session_id, prompt-bleed is
-        // possible because the second rule would see the first rule's
-        // conversation history.
-        let unique: std::collections::HashSet<&String> = session_ids.iter().collect();
-        assert_eq!(
-            unique.len(),
-            session_ids.len(),
-            "Each rule must run in its own session_id, but observed: {:?}",
-            session_ids
-        );
+            // The critical regression assertion: every rule must see a distinct
+            // session_id. If any two rules share a session_id, prompt-bleed is
+            // possible because the second rule would see the first rule's
+            // conversation history.
+            let unique: std::collections::HashSet<&String> = session_ids.iter().collect();
+            assert_eq!(
+                unique.len(),
+                session_ids.len(),
+                "Each rule must run in its own session_id, but observed: {:?}",
+                session_ids
+            );
+        })
+        .await;
     }
 
     // =========================================================================
@@ -2376,7 +2794,7 @@ mod tests {
     /// silently, runaway generations would no longer be capped.
     #[test]
     fn test_build_rule_prompt_request_sets_max_tokens_meta() {
-        let session_id = agent_client_protocol::SessionId::new("test-session");
+        let session_id = agent_client_protocol::schema::SessionId::new("test-session");
         let request = build_rule_prompt_request(session_id.clone(), "rule body".to_string());
 
         // session_id is propagated unchanged
@@ -2458,8 +2876,8 @@ mod tests {
             source: ValidatorSource::Project,
             base_path: PathBuf::from("/tmp/test-ruleset"),
         };
-        let response = Ok(agent_client_protocol::PromptResponse::new(
-            agent_client_protocol::StopReason::MaxTokens,
+        let response = Ok(agent_client_protocol::schema::PromptResponse::new(
+            agent_client_protocol::schema::StopReason::MaxTokens,
         ));
         let partial = "<think>I was thinking about validators</think> partial output...";
 
@@ -2512,6 +2930,7 @@ mod tests {
     /// helper directly; this one drives the same path through the public API
     /// to catch wiring regressions (e.g. someone adding a new code path that
     /// bypasses `build_rule_outcome_from_response`).
+    /// ACP 0.11: behaviour preserved from the previous `impl Agent` form.
     struct MaxTokensAgent {
         next_session: std::sync::atomic::AtomicUsize,
     }
@@ -2522,80 +2941,53 @@ mod tests {
                 next_session: std::sync::atomic::AtomicUsize::new(0),
             }
         }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for MaxTokensAgent {
-        async fn initialize(
-            &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
-        }
-
-        async fn authenticate(
-            &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
-        }
 
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let session_id =
-                agent_client_protocol::SessionId::new(format!("max-tokens-sess-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
-        }
-
-        async fn load_session(
-            &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
+                agent_client_protocol::schema::SessionId::new(format!("max-tokens-sess-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
         async fn prompt(
             &self,
-            _request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            _request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             // The runaway-generation case: agent stopped because it hit the
             // per-rule max_tokens cap before producing a verdict.
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::MaxTokens,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::MaxTokens,
             ))
         }
+    }
 
-        async fn cancel(
-            &self,
-            _notification: agent_client_protocol::CancelNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+    impl MockAgent for MaxTokensAgent {
+        fn new_session<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>,
+        > {
+            Box::pin(async move { MaxTokensAgent::new_session(self, request).await })
         }
 
-        async fn ext_method(
-            &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: agent_client_protocol::ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        fn prompt<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse>,
+        > {
+            Box::pin(async move { MaxTokensAgent::prompt(self, request).await })
         }
     }
 
@@ -2608,47 +3000,51 @@ mod tests {
     /// silently bypasses the `MaxTokens → failure` mapping.
     #[tokio::test]
     async fn test_execute_ruleset_max_tokens_fails_loudly() {
-        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(MaxTokensAgent::new());
+        let agent = Arc::new(MaxTokensAgent::new());
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(agent, notifier).unwrap();
-        let ruleset = create_ruleset_with_n_rules(&["naming-consistency"]);
-        let context = serde_json::json!({"tool_name": "Write"});
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let ruleset = create_ruleset_with_n_rules(&["naming-consistency"]);
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        let (executed, is_rate_limited) = runner
-            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-            .await;
+            let (executed, is_rate_limited) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
 
-        // MaxTokens is a rule-level failure, not a transport-level rate limit
-        assert!(
-            !is_rate_limited,
-            "MaxTokens must not be reported as a rate limit (it's a runaway generation, not throttling)"
-        );
-        assert_eq!(
-            executed.rule_results.len(),
-            1,
-            "rule must produce exactly one result"
-        );
+            // MaxTokens is a rule-level failure, not a transport-level rate limit
+            assert!(
+                !is_rate_limited,
+                "MaxTokens must not be reported as a rate limit (it's a runaway generation, not throttling)"
+            );
+            assert_eq!(
+                executed.rule_results.len(),
+                1,
+                "rule must produce exactly one result"
+            );
 
-        let result = &executed.rule_results[0];
-        assert_eq!(result.rule_name, "naming-consistency");
-        assert!(
-            !result.passed(),
-            "MaxTokens must produce a failed verdict, not a silent pass"
-        );
-        let message = result.message();
-        assert!(
-            message.contains(&RULE_GENERATION_MAX_TOKENS.to_string()),
-            "failure message must reference the cap value ({}), got: {}",
-            RULE_GENERATION_MAX_TOKENS,
-            message
-        );
-        assert!(
-            message.contains("naming-consistency"),
-            "failure message must reference the rule name, got: {}",
-            message
-        );
+            let result = &executed.rule_results[0];
+            assert_eq!(result.rule_name, "naming-consistency");
+            assert!(
+                !result.passed(),
+                "MaxTokens must produce a failed verdict, not a silent pass"
+            );
+            let message = result.message();
+            assert!(
+                message.contains(&RULE_GENERATION_MAX_TOKENS.to_string()),
+                "failure message must reference the cap value ({}), got: {}",
+                RULE_GENERATION_MAX_TOKENS,
+                message
+            );
+            assert!(
+                message.contains("naming-consistency"),
+                "failure message must reference the rule name, got: {}",
+                message
+            );
+        })
+        .await;
     }
 
     // =========================================================================
@@ -2868,6 +3264,7 @@ mod tests {
     /// Test agent that sleeps inside `prompt()` for a configurable duration
     /// before returning a passing response. Used to drive the per-rule
     /// wall-clock timeout path.
+    /// ACP 0.11: behaviour preserved from the previous `impl Agent` form.
     struct SlowAgent {
         next_session: std::sync::atomic::AtomicUsize,
         sleep_ms: u64,
@@ -2880,78 +3277,52 @@ mod tests {
                 sleep_ms,
             }
         }
-    }
-
-    #[async_trait::async_trait(?Send)]
-    impl Agent for SlowAgent {
-        async fn initialize(
-            &self,
-            _request: agent_client_protocol::InitializeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::InitializeResponse> {
-            Ok(agent_client_protocol::InitializeResponse::new(1.into()))
-        }
-
-        async fn authenticate(
-            &self,
-            _request: agent_client_protocol::AuthenticateRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::AuthenticateResponse> {
-            Ok(agent_client_protocol::AuthenticateResponse::new())
-        }
 
         async fn new_session(
             &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::NewSessionResponse> {
+            _request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>
+        {
             let n = self
                 .next_session
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let session_id = agent_client_protocol::SessionId::new(format!("slow-sess-{}", n));
-            Ok(agent_client_protocol::NewSessionResponse::new(session_id))
-        }
-
-        async fn load_session(
-            &self,
-            _request: agent_client_protocol::LoadSessionRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: agent_client_protocol::SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::SetSessionModeResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
+            let session_id =
+                agent_client_protocol::schema::SessionId::new(format!("slow-sess-{}", n));
+            Ok(agent_client_protocol::schema::NewSessionResponse::new(
+                session_id,
+            ))
         }
 
         async fn prompt(
             &self,
-            _request: agent_client_protocol::PromptRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            _request: agent_client_protocol::schema::PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse> {
             tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
-            Ok(agent_client_protocol::PromptResponse::new(
-                agent_client_protocol::StopReason::EndTurn,
+            Ok(agent_client_protocol::schema::PromptResponse::new(
+                agent_client_protocol::schema::StopReason::EndTurn,
             ))
         }
+    }
 
-        async fn cancel(
-            &self,
-            _notification: agent_client_protocol::CancelNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+    impl MockAgent for SlowAgent {
+        fn new_session<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::NewSessionRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::NewSessionResponse>,
+        > {
+            Box::pin(async move { SlowAgent::new_session(self, request).await })
         }
 
-        async fn ext_method(
-            &self,
-            _request: agent_client_protocol::ExtRequest,
-        ) -> agent_client_protocol::Result<agent_client_protocol::ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: agent_client_protocol::ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        fn prompt<'a>(
+            &'a self,
+            request: agent_client_protocol::schema::PromptRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            agent_client_protocol::Result<agent_client_protocol::schema::PromptResponse>,
+        > {
+            Box::pin(async move { SlowAgent::prompt(self, request).await })
         }
     }
 
@@ -2999,43 +3370,47 @@ mod tests {
     #[tokio::test]
     async fn test_execute_ruleset_rule_timeout_passes_with_warning() {
         // Agent sleeps for 5s; rule timeout is 1s. The timeout path must fire.
-        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(5_000));
+        let agent = Arc::new(SlowAgent::new(5_000));
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
+        let notifier_body = Arc::clone(&notifier);
 
-        let runner = ValidatorRunner::new(agent, notifier).unwrap();
-        let ruleset = create_ruleset_with_timeout(&["slow-rule"], 1);
-        let context = serde_json::json!({"tool_name": "Write"});
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            let ruleset = create_ruleset_with_timeout(&["slow-rule"], 1);
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        let start = std::time::Instant::now();
-        let (executed, is_rate_limited) = runner
-            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-            .await;
-        let elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            let (executed, is_rate_limited) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
+            let elapsed = start.elapsed();
 
-        // The timeout must actually have fired — the call must return well
-        // before the agent's 5s sleep would have finished.
-        assert!(
-            elapsed.as_secs() < 4,
-            "execute_ruleset must return when the rule times out, not block on the agent (elapsed: {:?})",
-            elapsed,
-        );
+            // The timeout must actually have fired — the call must return well
+            // before the agent's 5s sleep would have finished.
+            assert!(
+                elapsed.as_secs() < 4,
+                "execute_ruleset must return when the rule times out, not block on the agent (elapsed: {:?})",
+                elapsed,
+            );
 
-        assert!(!is_rate_limited, "wall-clock timeout is not a rate limit");
-        assert_eq!(executed.rule_results.len(), 1);
+            assert!(!is_rate_limited, "wall-clock timeout is not a rate limit");
+            assert_eq!(executed.rule_results.len(), 1);
 
-        let result = &executed.rule_results[0];
-        assert_eq!(result.rule_name, "slow-rule");
-        assert!(
-            result.passed(),
-            "timed-out rule must produce a passing-with-warning result so the hook is not blocked"
-        );
-        let message = result.message();
-        assert!(
-            message.contains("timeout") || message.contains("did not complete"),
-            "timeout message should mention the timeout, got: {}",
-            message,
-        );
+            let result = &executed.rule_results[0];
+            assert_eq!(result.rule_name, "slow-rule");
+            assert!(
+                result.passed(),
+                "timed-out rule must produce a passing-with-warning result so the hook is not blocked"
+            );
+            let message = result.message();
+            assert!(
+                message.contains("timeout") || message.contains("did not complete"),
+                "timeout message should mention the timeout, got: {}",
+                message,
+            );
+        })
+        .await;
     }
 
     /// Multiple rules whose individual prompt sleeps would, in series, take
@@ -3044,34 +3419,38 @@ mod tests {
     /// total wall time should be well under the 600ms serial sum.
     #[tokio::test]
     async fn test_execute_ruleset_runs_rules_in_parallel() {
-        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let agent = Arc::new(SlowAgent::new(200));
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
+        let notifier_body = Arc::clone(&notifier);
 
-        // Force a non-trivial in-flight cap so the test does not depend on the
-        // host's CPU count: 3 in-flight slots is enough to run all 3 rules
-        // concurrently.
-        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
-        runner.rule_concurrency = Arc::new(Semaphore::new(3));
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            // Force a non-trivial in-flight cap so the test does not depend on the
+            // host's CPU count: 3 in-flight slots is enough to run all 3 rules
+            // concurrently.
+            let mut runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            runner.rule_concurrency = Arc::new(Semaphore::new(3));
 
-        let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
-        let context = serde_json::json!({"tool_name": "Write"});
+            let ruleset = create_ruleset_with_timeout(&["a", "b", "c"], 30);
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        let start = std::time::Instant::now();
-        let (executed, _is_rate_limited) = runner
-            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-            .await;
-        let elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            let (executed, _is_rate_limited) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
+            let elapsed = start.elapsed();
 
-        assert_eq!(executed.rule_results.len(), 3);
-        // 3 sequential rules at 200ms each would take ~600ms. With parallel
-        // execution we expect well under 600ms — give plenty of headroom for
-        // CI noise but still fail loudly if the loop went serial.
-        assert!(
-            elapsed.as_millis() < 500,
-            "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
-            elapsed,
-        );
+            assert_eq!(executed.rule_results.len(), 3);
+            // 3 sequential rules at 200ms each would take ~600ms. With parallel
+            // execution we expect well under 600ms — give plenty of headroom for
+            // CI noise but still fail loudly if the loop went serial.
+            assert!(
+                elapsed.as_millis() < 500,
+                "rules must run in parallel (3x200ms in series = ~600ms), got {:?}",
+                elapsed,
+            );
+        })
+        .await;
     }
 
     /// The in-flight cap must serialize work when there are more rules than
@@ -3080,29 +3459,33 @@ mod tests {
     /// than letting all four run at once.
     #[tokio::test]
     async fn test_execute_ruleset_in_flight_cap_throttles() {
-        let agent: Arc<dyn Agent + Send + Sync> = Arc::new(SlowAgent::new(200));
+        let agent = Arc::new(SlowAgent::new(200));
         let (notifier, _) = claude_agent::NotificationSender::new(64);
         let notifier = Arc::new(notifier);
+        let notifier_body = Arc::clone(&notifier);
 
-        let mut runner = ValidatorRunner::new(agent, notifier).unwrap();
-        runner.rule_concurrency = Arc::new(Semaphore::new(1));
+        run_with_mock_agent(agent, notifier, move |conn| async move {
+            let mut runner = ValidatorRunner::new(conn, notifier_body).unwrap();
+            runner.rule_concurrency = Arc::new(Semaphore::new(1));
 
-        let ruleset = create_ruleset_with_timeout(&["a", "b", "c", "d"], 30);
-        let context = serde_json::json!({"tool_name": "Write"});
+            let ruleset = create_ruleset_with_timeout(&["a", "b", "c", "d"], 30);
+            let context = serde_json::json!({"tool_name": "Write"});
 
-        let start = std::time::Instant::now();
-        let (executed, _) = runner
-            .execute_ruleset(&ruleset, HookType::Stop, &context, None)
-            .await;
-        let elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            let (executed, _) = runner
+                .execute_ruleset(&ruleset, HookType::Stop, &context, None)
+                .await;
+            let elapsed = start.elapsed();
 
-        assert_eq!(executed.rule_results.len(), 4);
-        // With cap=1 we expect serial execution: ~4×200ms = 800ms minimum.
-        assert!(
-            elapsed.as_millis() >= 700,
-            "in-flight cap=1 must serialize work; expected >=700ms but got {:?}",
-            elapsed,
-        );
+            assert_eq!(executed.rule_results.len(), 4);
+            // With cap=1 we expect serial execution: ~4×200ms = 800ms minimum.
+            assert!(
+                elapsed.as_millis() >= 700,
+                "in-flight cap=1 must serialize work; expected >=700ms but got {:?}",
+                elapsed,
+            );
+        })
+        .await;
     }
 
     /// `resolve_rule_in_flight_cap` must default to [`RULE_DEFAULT_PARALLELISM`]

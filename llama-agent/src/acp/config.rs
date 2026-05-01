@@ -42,7 +42,7 @@ pub struct AcpConfig {
     /// Defines the modes that can be used with this agent.
     /// If empty and supports_modes is true, no modes will be returned.
     #[serde(skip, default)]
-    pub available_modes: Vec<agent_client_protocol::SessionMode>,
+    pub available_modes: Vec<agent_client_protocol::schema::SessionMode>,
 
     /// Default mode ID
     ///
@@ -54,8 +54,14 @@ pub struct AcpConfig {
     ///
     /// These servers will be automatically added to every new session,
     /// in addition to any servers specified in the NewSessionRequest.
+    ///
+    /// Under ACP 0.11, [`agent_client_protocol::schema::McpServer`] is a
+    /// `#[non_exhaustive]` enum (`Http`/`Sse`/`Stdio` variants) rather than
+    /// a struct. Construction sites live outside this module; this field
+    /// only stores and forwards values, so the variant change is transparent
+    /// here.
     #[serde(skip, default)]
-    pub default_mcp_servers: Vec<agent_client_protocol::McpServer>,
+    pub default_mcp_servers: Vec<agent_client_protocol::schema::McpServer>,
 
     /// Pre-resolved system prompts for each mode (mode ID → rendered instructions).
     ///
@@ -141,8 +147,9 @@ impl AcpConfig {
 
                         system_prompts.insert(id.clone(), system_prompt);
 
-                        let mode_id = agent_client_protocol::SessionModeId::new(id);
-                        agent_client_protocol::SessionMode::new(mode_id, name).description(desc)
+                        let mode_id = agent_client_protocol::schema::SessionModeId::new(id);
+                        agent_client_protocol::schema::SessionMode::new(mode_id, name)
+                            .description(desc)
                     })
                     .collect();
 

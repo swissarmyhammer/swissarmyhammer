@@ -15,12 +15,14 @@ use rmcp::{
 };
 // Note: serde_json::json removed as unused
 
+/// Arguments accepted by the `echo` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct EchoToolArgs {
     /// The message to echo back
     pub message: String,
 }
 
+/// Arguments accepted by the `echo_prompt` prompt.
 #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct EchoPromptArgs {
     /// The message to include in the echo prompt
@@ -37,6 +39,8 @@ pub struct EchoService {
 
 #[tool_router]
 impl EchoService {
+    /// Construct a new `EchoService` with the tool and prompt routers populated
+    /// from the macro-generated static methods.
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -72,7 +76,6 @@ impl EchoService {
     async fn echo_prompt(
         &self,
         Parameters(args): Parameters<EchoPromptArgs>,
-        _ctx: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         let messages = vec![
             PromptMessage::new_text(
@@ -90,9 +93,12 @@ impl EchoService {
     }
 }
 
-#[tool_handler]
-#[prompt_handler]
+#[tool_handler(router = self.tool_router)]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for EchoService {
+    /// Return the static server info advertised during MCP initialization,
+    /// including the supported protocol version, declared capabilities
+    /// (prompts + tools), and a short instructions string.
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
@@ -107,6 +113,9 @@ impl ServerHandler for EchoService {
         )
     }
 
+    /// Handle the MCP `initialize` request. Logs the originating HTTP request
+    /// (when the transport carries one) and returns the same `ServerInfo`
+    /// produced by [`Self::get_info`].
     async fn initialize(
         &self,
         _request: InitializeRequestParams,
@@ -155,17 +164,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo_prompt() {
-        // Simplified test without complex RequestContext
         let service = EchoService::new();
-        let _args = EchoPromptArgs {
+        let args = EchoPromptArgs {
             message: "Test message".to_string(),
         };
 
-        // Test the prompt router directly
-        let router = EchoService::prompt_router();
-        assert!(router.has_route("echo_prompt"));
+        let result = service.echo_prompt(Parameters(args)).await.unwrap();
 
-        // Verify service creation works
-        let _service_clone = service.clone();
+        assert_eq!(
+            result.description.as_deref(),
+            Some("Echo prompt for testing MCP functionality")
+        );
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.messages[0].role, PromptMessageRole::User);
+        assert_eq!(result.messages[1].role, PromptMessageRole::Assistant);
+        let PromptMessageContent::Text { text: user_text } = &result.messages[0].content else {
+            panic!("expected text content for user message");
+        };
+        assert_eq!(user_text, "Please echo this message: Test message");
+        let PromptMessageContent::Text {
+            text: assistant_text,
+        } = &result.messages[1].content
+        else {
+            panic!("expected text content for assistant message");
+        };
+        assert_eq!(assistant_text, "Echo: Test message");
     }
 }

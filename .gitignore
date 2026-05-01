@@ -79,6 +79,14 @@ doc/book
 # ACP transcript recordings
 .acp/
 
+# Stray fixture output at workspace root.
+# `agent-client-protocol-extras::get_fixture_path_for()` resolves to the
+# per-crate `<crate>/.fixtures/` layout (acp-conformance,
+# agent-client-protocol-extras, avp-common — all intentionally tracked). The
+# workspace-root `.fixtures/` directory should never appear in a clean tree;
+# this ignore line keeps any historical/accidental drop quiet.
+/.fixtures/
+
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
 
@@ -135,14 +143,11 @@ ane-embedding/convert/output/
 # SAH runtime state
 **/.sah/
 
-# AVP runtime state
-.avp/
 
 # Shell tool runtime state
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
-.avp/log
 
 # Per-crate skill/agent deploy artifacts produced by `<cli> init`.
 # code-context-cli and kanban-cli commit their deploy as the install baseline;

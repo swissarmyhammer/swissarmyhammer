@@ -32,7 +32,27 @@
 //! (claude-agent, llama-agent), not this utility wrapper.
 //!
 //! For applications that need session persistence and history replay, use the
-//! underlying agent implementations directly via `agent_client_protocol::Agent`.
+//! underlying agent implementations directly via the typed
+//! `ConnectionTo<agent_client_protocol::Agent>` handle obtained by running
+//! [`AcpAgentHandle::agent`] through `agent_client_protocol::Client::builder().connect_with(...)`.
+//!
+//! # ACP 0.11 redesign
+//!
+//! In ACP 0.10 the inner backend was an `Arc<dyn Agent + Send + Sync>` —
+//! `Agent` was a trait the SDK invoked via dynamic dispatch. ACP 0.11
+//! replaces that with a unit Role marker (`agent_client_protocol::Agent`)
+//! and a typed builder/handler runtime. Backends are constructed by
+//! registering handlers on `Agent.builder()` and yielding a
+//! [`DynConnectTo<Client>`] component that callers compose with their own
+//! middleware before running `Client::builder().connect_with(...)`.
+//!
+//! [`AcpAgentHandle::agent`] therefore stores a [`DynConnectTo<Client>`]
+//! (the inner agent component, pre-wrapped with [`TracingAgent`] for
+//! unified logging). [`execute_prompt`] consumes that component to spin up
+//! its own `Client::builder().connect_with(...)` task, then issues
+//! `initialize → new_session → set_session_mode → prompt` against the
+//! resulting [`ConnectionTo<Agent>`] handle and collects streamed content
+//! from [`AcpAgentHandle::notification_rx`].
 //!
 //! # Example
 //!
@@ -44,14 +64,17 @@
 //! let mcp = McpServerConfig::from_port(8080);
 //!
 //! let mut handle = create_agent(&config, Some(mcp)).await?;
-//! let response = execute_prompt(&mut handle, None, "Hello!".to_string()).await?;
+//! let response = execute_prompt(&mut handle, None, None, "Hello!".to_string()).await?;
 //! println!("{}", response.content);
 //! ```
 
-use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionModeId,
-    SessionNotification, SessionUpdate, SetSessionModeRequest, StopReason, TextContent,
+use agent_client_protocol::schema::{
+    self, ClientCapabilities, ClientNotification, ClientRequest, ContentBlock,
+    FileSystemCapabilities, InitializeRequest, NewSessionRequest, PromptRequest, PromptResponse,
+    SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    StopReason, TextContent,
 };
+use agent_client_protocol::{Agent, Client, ConnectionTo, DynConnectTo, Responder};
 use agent_client_protocol_extras::{trace_notifications, TracingAgent};
 use llama_agent::types::AgentAPI;
 use std::sync::Arc;
@@ -233,11 +256,35 @@ impl McpServerConfig {
     }
 }
 
-/// Wrapper around an ACP agent with notification receiver
+/// Wrapper around an ACP agent component with its notification receiver.
+///
+/// In ACP 0.11 the agent is no longer accessed via a `dyn Agent` trait
+/// object. Instead, [`agent`](Self::agent) is a [`DynConnectTo<Client>`] —
+/// the inner agent component (an `Agent.builder()` registration wrapped
+/// with [`TracingAgent`]) that callers consume via
+/// `agent_client_protocol::Client::builder().connect_with(...)` to obtain
+/// a typed [`ConnectionTo<Agent>`] handle for issuing requests. Consumers
+/// such as `avp-common` may compose additional `ConnectTo<Client>`
+/// middleware (e.g. `RecordingAgent`) on top before connecting.
+///
+/// [`notification_rx`](Self::notification_rx) carries the broadcast
+/// channel fed by the underlying backend (`claude_agent::ClaudeAgent` or
+/// `llama_agent::AcpServer`) when its inherent `prompt`/`new_session`
+/// methods stream `SessionNotification`s. The `Agent.builder()` inside
+/// this crate also bridges that broadcast onto the JSON-RPC
+/// `cx.send_notification` channel so consumers that prefer to capture
+/// notifications via `Client.builder().on_receive_notification(...)` can
+/// do so without needing access to this receiver.
 pub struct AcpAgentHandle {
-    /// The ACP agent
-    pub agent: Arc<dyn Agent + Send + Sync>,
-    /// Notification receiver for streaming content
+    /// The inner agent component as a [`DynConnectTo<Client>`].
+    ///
+    /// Callers that just want to run a prompt should pass the whole handle
+    /// to [`execute_prompt`]. Callers that need to compose their own
+    /// middleware can move `agent` out of the handle and feed it into
+    /// `Client::builder().connect_with(agent, ...)` after wrapping with
+    /// whatever `ConnectTo<Client>` middleware they want.
+    pub agent: DynConnectTo<Client>,
+    /// Notification receiver for streaming content from the inner backend.
     pub notification_rx: broadcast::Receiver<SessionNotification>,
 }
 
@@ -254,9 +301,9 @@ pub struct CreateAgentOptions {
 
 /// Create an ACP agent based on model configuration
 ///
-/// Returns an AcpAgentHandle containing the agent and notification receiver.
-/// The agent is wrapped with TracingAgent for unified logging, and notifications
-/// are traced through trace_notifications.
+/// Returns an AcpAgentHandle containing the inner agent component (as a
+/// `DynConnectTo<Client>`, pre-wrapped with `TracingAgent`) and a
+/// broadcast notification receiver.
 ///
 /// # Arguments
 /// * `config` - Model configuration specifying which agent type to create
@@ -282,15 +329,14 @@ pub async fn create_agent_with_options(
     mcp_config: Option<McpServerConfig>,
     options: CreateAgentOptions,
 ) -> AcpResult<AcpAgentHandle> {
-    let (agent_name, handle) = match config.executor_type() {
+    match config.executor_type() {
         ModelExecutorType::ClaudeCode => {
-            let handle = create_claude_agent(
+            create_claude_agent(
                 mcp_config,
                 options.ephemeral,
                 options.tools_override.clone(),
             )
-            .await?;
-            ("Claude", handle)
+            .await
         }
         ModelExecutorType::LlamaAgent => {
             let llama_config = match config.executor() {
@@ -301,26 +347,289 @@ pub async fn create_agent_with_options(
                     ))
                 }
             };
-            let handle = create_llama_agent(llama_config, mcp_config).await?;
-            ("Llama", handle)
+            create_llama_agent(llama_config, mcp_config).await
         }
-        ModelExecutorType::LlamaEmbedding | ModelExecutorType::AneEmbedding => {
-            return Err(AcpError::ConfigurationError(
-                "Embedding models cannot be used as agents".to_string(),
-            ))
-        }
-    };
+        ModelExecutorType::LlamaEmbedding | ModelExecutorType::AneEmbedding => Err(
+            AcpError::ConfigurationError("Embedding models cannot be used as agents".to_string()),
+        ),
+    }
+}
 
-    // Wrap agent with TracingAgent for unified logging
-    let traced_agent = TracingAgent::new(handle.agent, agent_name);
+/// Wrap a `claude_agent::ClaudeAgent` into a `DynConnectTo<Client>`
+/// component for ACP 0.11.
+///
+/// In 0.11 backends are not implemented as `impl Agent for ...` types.
+/// Instead, you build a `ConnectTo<Client>` value by registering typed
+/// handlers on `agent_client_protocol::Agent.builder()`. This helper
+/// performs that wiring uniformly:
+///
+/// - The `on_receive_request` handler demultiplexes every incoming
+///   `ClientRequest` enum variant onto the matching inherent method on
+///   the inner backend.
+/// - The `on_receive_notification` handler demultiplexes incoming
+///   `ClientNotification` variants onto the matching inherent method.
+/// - A `with_spawned` task forwards `SessionNotification`s emitted via
+///   the backend's internal broadcast sender onto the connection's
+///   typed `cx.send_notification` channel, so consumers that subscribe
+///   via `Client.builder().on_receive_notification(...)` see them.
+///
+/// The result is wrapped with [`TracingAgent`] for unified per-backend
+/// logging, type-erased into [`DynConnectTo<Client>`], and returned
+/// alongside the broadcast receiver fed into `notification_rx` on the
+/// returned [`AcpAgentHandle`].
+fn wrap_claude_into_handle(
+    agent: claude_agent::ClaudeAgent,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+) -> AcpAgentHandle {
+    let agent = Arc::new(agent);
+    let bridge_rx = notification_rx.resubscribe();
 
-    // Wrap notification receiver with tracing
-    let traced_rx = trace_notifications(agent_name.to_string(), handle.notification_rx);
+    let builder = Agent
+        .builder()
+        .name("claude-agent")
+        .on_receive_request(
+            {
+                let agent = Arc::clone(&agent);
+                async move |req: ClientRequest, responder: Responder<serde_json::Value>, _cx| {
+                    dispatch_claude_request(&agent, req, responder).await
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_notification(
+            {
+                let agent = Arc::clone(&agent);
+                async move |notif: ClientNotification, _cx| {
+                    dispatch_claude_notification(&agent, notif).await;
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .with_spawned(move |cx: ConnectionTo<Client>| async move {
+            forward_session_notifications(bridge_rx, cx).await
+        });
 
-    Ok(AcpAgentHandle {
-        agent: Arc::new(traced_agent),
+    let traced = TracingAgent::new(builder, "Claude");
+    let traced_rx = trace_notifications("Claude".to_string(), notification_rx);
+
+    AcpAgentHandle {
+        agent: DynConnectTo::new(traced),
         notification_rx: traced_rx,
-    })
+    }
+}
+
+/// Mirror of [`wrap_claude_into_handle`] for `llama_agent::AcpServer`.
+fn wrap_llama_into_handle(
+    agent: llama_agent::AcpServer,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+) -> AcpAgentHandle {
+    let agent = Arc::new(agent);
+    let bridge_rx = notification_rx.resubscribe();
+
+    let builder = Agent
+        .builder()
+        .name("llama-agent")
+        .on_receive_request(
+            {
+                let agent = Arc::clone(&agent);
+                async move |req: ClientRequest, responder: Responder<serde_json::Value>, _cx| {
+                    dispatch_llama_request(&agent, req, responder).await
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_notification(
+            {
+                let agent = Arc::clone(&agent);
+                async move |notif: ClientNotification, _cx| {
+                    dispatch_llama_notification(&agent, notif).await;
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .with_spawned(move |cx: ConnectionTo<Client>| async move {
+            forward_session_notifications(bridge_rx, cx).await
+        });
+
+    let traced = TracingAgent::new(builder, "Llama");
+    let traced_rx = trace_notifications("Llama".to_string(), notification_rx);
+
+    AcpAgentHandle {
+        agent: DynConnectTo::new(traced),
+        notification_rx: traced_rx,
+    }
+}
+
+/// Forward `SessionNotification`s from the backend's broadcast channel onto
+/// the connection's typed notification channel so JSON-RPC clients see them.
+///
+/// Exits cleanly when the broadcast channel closes (all senders dropped) or
+/// when `cx.send_notification` errors (write side of transport torn down).
+async fn forward_session_notifications(
+    mut rx: broadcast::Receiver<SessionNotification>,
+    cx: ConnectionTo<Client>,
+) -> Result<(), agent_client_protocol::Error> {
+    loop {
+        match rx.recv().await {
+            Ok(notification) => {
+                if let Err(e) = cx.send_notification(notification) {
+                    tracing::debug!(error = %e, "Failed to forward session/update; bridge stopping");
+                    return Ok(());
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "Notification bridge lagged");
+            }
+        }
+    }
+}
+
+/// Demultiplex an incoming `ClientRequest` onto `ClaudeAgent`'s inherent
+/// methods. Mirrors the per-method handler registration that
+/// `start_with_streams` would otherwise wire up.
+async fn dispatch_claude_request(
+    agent: &Arc<claude_agent::ClaudeAgent>,
+    request: ClientRequest,
+    responder: Responder<serde_json::Value>,
+) -> Result<(), agent_client_protocol::Error> {
+    match request {
+        ClientRequest::InitializeRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.initialize(req).await),
+        ClientRequest::AuthenticateRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.authenticate(req).await),
+        ClientRequest::NewSessionRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.new_session(req).await),
+        ClientRequest::LoadSessionRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.load_session(req).await),
+        ClientRequest::SetSessionModeRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.set_session_mode(req).await),
+        ClientRequest::PromptRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.prompt(req).await),
+        ClientRequest::ExtMethodRequest(req) => {
+            let result = agent.ext_method(req).await.and_then(|ext_response| {
+                serde_json::from_str::<serde_json::Value>(ext_response.0.get())
+                    .map_err(|_| agent_client_protocol::Error::internal_error())
+            });
+            responder.respond_with_result(result)
+        }
+        other => {
+            tracing::warn!(
+                "Unsupported ClientRequest variant for claude-agent: {}",
+                other.method()
+            );
+            responder
+                .cast::<serde_json::Value>()
+                .respond_with_error(agent_client_protocol::Error::method_not_found())
+        }
+    }
+}
+
+/// Demultiplex an incoming `ClientNotification` onto `ClaudeAgent`'s
+/// inherent methods. Notifications are fire-and-forget; per-variant
+/// errors are logged but not surfaced (returning Err here would tear the
+/// connection down).
+async fn dispatch_claude_notification(
+    agent: &Arc<claude_agent::ClaudeAgent>,
+    notification: ClientNotification,
+) {
+    match notification {
+        ClientNotification::CancelNotification(n) => {
+            if let Err(e) = agent.cancel(n).await {
+                tracing::error!("cancel notification handler failed: {}", e);
+            }
+        }
+        ClientNotification::ExtNotification(n) => {
+            if let Err(e) = agent.ext_notification(n).await {
+                tracing::error!("ext notification handler failed: {}", e);
+            }
+        }
+        other => {
+            tracing::debug!(
+                "Ignoring unsupported ClientNotification variant: {}",
+                other.method()
+            );
+        }
+    }
+}
+
+/// Demultiplex an incoming `ClientRequest` onto `AcpServer`'s inherent
+/// methods.
+async fn dispatch_llama_request(
+    agent: &Arc<llama_agent::AcpServer>,
+    request: ClientRequest,
+    responder: Responder<serde_json::Value>,
+) -> Result<(), agent_client_protocol::Error> {
+    match request {
+        ClientRequest::InitializeRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.initialize(req).await),
+        ClientRequest::AuthenticateRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.authenticate(req).await),
+        ClientRequest::NewSessionRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.new_session(req).await),
+        ClientRequest::LoadSessionRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.load_session(req).await),
+        ClientRequest::SetSessionModeRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.set_session_mode(req).await),
+        ClientRequest::PromptRequest(req) => responder
+            .cast()
+            .respond_with_result(agent.prompt(req).await),
+        ClientRequest::ExtMethodRequest(req) => {
+            let result = agent.ext_method(req).await.and_then(|ext_response| {
+                serde_json::from_str::<serde_json::Value>(ext_response.0.get())
+                    .map_err(|_| agent_client_protocol::Error::internal_error())
+            });
+            responder.respond_with_result(result)
+        }
+        other => {
+            tracing::warn!(
+                "Unsupported ClientRequest variant for llama-agent: {}",
+                other.method()
+            );
+            responder
+                .cast::<serde_json::Value>()
+                .respond_with_error(agent_client_protocol::Error::method_not_found())
+        }
+    }
+}
+
+/// Demultiplex an incoming `ClientNotification` onto `AcpServer`'s
+/// inherent methods.
+async fn dispatch_llama_notification(
+    agent: &Arc<llama_agent::AcpServer>,
+    notification: ClientNotification,
+) {
+    match notification {
+        ClientNotification::CancelNotification(n) => {
+            if let Err(e) = agent.cancel(n).await {
+                tracing::error!("cancel notification handler failed: {}", e);
+            }
+        }
+        ClientNotification::ExtNotification(n) => {
+            if let Err(e) = agent.ext_notification(n).await {
+                tracing::error!("ext notification handler failed: {}", e);
+            }
+        }
+        other => {
+            tracing::debug!(
+                "Ignoring unsupported ClientNotification variant: {}",
+                other.method()
+            );
+        }
+    }
 }
 
 /// Create a Claude ACP agent
@@ -370,10 +679,7 @@ async fn create_claude_agent(
                 AcpError::InitializationError(format!("Failed to create Claude agent: {}", e))
             })?;
 
-    Ok(AcpAgentHandle {
-        agent: Arc::new(agent),
-        notification_rx,
-    })
+    Ok(wrap_claude_into_handle(agent, notification_rx))
 }
 
 /// Convert swissarmyhammer model source to llama-agent model source
@@ -454,23 +760,20 @@ fn build_llama_mcp_servers(
 /// Convert llama-agent MCP servers to ACP format
 fn convert_mcp_servers_to_acp(
     mcp_servers: &[llama_agent::types::MCPServerConfig],
-) -> Vec<agent_client_protocol::McpServer> {
+) -> Vec<schema::McpServer> {
     mcp_servers
         .iter()
         .map(|server| match server {
-            llama_agent::types::MCPServerConfig::Http(http_config) => {
-                agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp::new(
-                    http_config.name.clone(),
-                    http_config.url.clone(),
-                ))
-            }
+            llama_agent::types::MCPServerConfig::Http(http_config) => schema::McpServer::Http(
+                schema::McpServerHttp::new(http_config.name.clone(), http_config.url.clone()),
+            ),
             llama_agent::types::MCPServerConfig::InProcess(process_config) => {
-                let mut stdio_server = agent_client_protocol::McpServerStdio::new(
+                let mut stdio_server = schema::McpServerStdio::new(
                     process_config.name.clone(),
                     &process_config.command,
                 );
                 stdio_server.args = process_config.args.clone();
-                agent_client_protocol::McpServer::Stdio(stdio_server)
+                schema::McpServer::Stdio(stdio_server)
             }
         })
         .collect()
@@ -510,23 +813,26 @@ async fn create_llama_agent(
         ..Default::default()
     };
 
-    // Create the ACP server (which implements Agent trait)
+    // Create the ACP server (its inherent methods serve as the per-method
+    // handlers wired into `Agent.builder()` by `wrap_llama_into_handle`).
     let (acp_server, notification_rx) =
         llama_agent::AcpServer::new(Arc::new(agent_server), acp_config);
 
-    Ok(AcpAgentHandle {
-        agent: Arc::new(acp_server),
-        notification_rx,
-    })
+    Ok(wrap_llama_into_handle(acp_server, notification_rx))
 }
 
 /// Execute a prompt using an ACP agent
 ///
-/// This creates a new session, optionally sets a mode, sends the prompt,
-/// collects streamed content from notifications, and returns the response.
+/// Consumes the agent component on `handle` to spin up its own
+/// `Client::builder().connect_with(...)` task, then drives the request
+/// sequence `initialize → new_session → set_session_mode → prompt`
+/// against the resulting [`ConnectionTo<Agent>`]. Streamed content is
+/// captured concurrently via `handle.notification_rx`.
 ///
-/// Note: This function uses a dedicated current-thread runtime because the ACP
-/// Agent trait methods return non-Send futures.
+/// After this call returns, `handle.agent` has been replaced with a
+/// fresh-but-empty placeholder; the handle is single-shot. The caller
+/// should drop the handle (or call `create_agent` again) to issue
+/// another prompt.
 ///
 /// # Arguments
 /// * `handle` - The agent handle from `create_agent`
@@ -545,12 +851,37 @@ pub async fn execute_prompt(
     mode: Option<String>,
     user_prompt: String,
 ) -> AcpResult<AgentResponse> {
-    // Clone what we need to move into the blocking task
-    let agent = Arc::clone(&handle.agent);
+    // Take the agent component out of the handle. `connect_with` consumes
+    // its `ConnectTo<Client>` argument, so we have to move it. Replace it
+    // with a placeholder so the handle remains valid (its other field —
+    // `notification_rx` — is still usable for diagnostics).
+    let agent = std::mem::replace(&mut handle.agent, DynConnectTo::new(NoopAgent));
     let notification_rx = handle.notification_rx.resubscribe();
 
-    // Run the agent interaction in a spawn_blocking task with its own runtime
-    // because ACP Agent trait methods return non-Send futures
+    execute_prompt_with_agent(agent, notification_rx, system_prompt, mode, user_prompt).await
+}
+
+/// Drive a single-shot ACP turn against the supplied agent component.
+///
+/// Spins up `agent_client_protocol::Client::builder().connect_with(agent, main_fn)`
+/// where `main_fn` issues the standard request sequence and returns the
+/// assembled [`AgentResponse`]. Notifications flowing through the
+/// connection are forwarded to handlers by the SDK, while the broadcast
+/// receiver supplied here continues to receive copies for streaming
+/// content collection.
+async fn execute_prompt_with_agent(
+    agent: DynConnectTo<Client>,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    system_prompt: Option<String>,
+    mode: Option<String>,
+    user_prompt: String,
+) -> AcpResult<AgentResponse> {
+    // Run the connection in a current-thread tokio runtime on a blocking
+    // thread. The SDK's `connect_with` future drives a `LocalSet`-style
+    // dispatch loop that may produce `!Send` futures from per-handler
+    // closures; staying on a single-thread runtime keeps Send/Sync
+    // requirements relaxed and matches the pattern the legacy ACP 0.10
+    // implementation used.
     let result = tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -560,7 +891,7 @@ pub async fn execute_prompt(
             })?;
 
         rt.block_on(async move {
-            execute_prompt_impl(agent, notification_rx, system_prompt, mode, user_prompt).await
+            run_prompt_connection(agent, notification_rx, system_prompt, mode, user_prompt).await
         })
     })
     .await
@@ -569,13 +900,187 @@ pub async fn execute_prompt(
     Ok(result)
 }
 
+/// Run the `Client.builder().connect_with(...)` connection and drive the
+/// full prompt turn inside its `main_fn` closure. Returns the assembled
+/// [`AgentResponse`].
+async fn run_prompt_connection(
+    agent: DynConnectTo<Client>,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    system_prompt: Option<String>,
+    mode: Option<String>,
+    user_prompt: String,
+) -> AcpResult<AgentResponse> {
+    let local_set = tokio::task::LocalSet::new();
+    let cancel_token = CancellationToken::new();
+    let cancel_for_main = cancel_token.clone();
+
+    let result: AcpResult<AgentResponse> = local_set
+        .run_until(async move {
+            // Stand up a `ConnectionTo<Agent>` peer by running the inner
+            // agent component as the server side of a freshly-built
+            // Client connection. The main_fn body is where we issue
+            // typed requests and assemble the final response.
+            let connect_result = Client
+                .builder()
+                .name("swissarmyhammer-agent")
+                .connect_with(agent, async move |cx: ConnectionTo<Agent>| {
+                    let response = drive_prompt_turn(
+                        &cx,
+                        notification_rx,
+                        cancel_for_main,
+                        system_prompt,
+                        mode,
+                        user_prompt,
+                    )
+                    .await?;
+                    Ok::<AgentResponse, agent_client_protocol::Error>(response)
+                })
+                .await;
+
+            match connect_result {
+                Ok(response) => Ok(response),
+                Err(e) => Err(AcpError::PromptError(format!(
+                    "ACP connection failed: {:?}",
+                    e
+                ))),
+            }
+        })
+        .await;
+
+    cancel_token.cancel();
+    result
+}
+
+/// Issue the `initialize → new_session → set_session_mode → prompt`
+/// sequence over `cx` and return the assembled response. Concurrent with
+/// `prompt`, a notification collector drains streamed content from the
+/// broadcast channel.
+async fn drive_prompt_turn(
+    cx: &ConnectionTo<Agent>,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    cancel_token: CancellationToken,
+    system_prompt: Option<String>,
+    mode: Option<String>,
+    user_prompt: String,
+) -> Result<AgentResponse, agent_client_protocol::Error> {
+    initialize_connection(cx).await.map_err(into_acp_error)?;
+    let session_id = create_session_via_connection(cx, system_prompt)
+        .await
+        .map_err(into_acp_error)?;
+    set_session_mode_via_connection(cx, &session_id, mode)
+        .await
+        .map_err(into_acp_error)?;
+
+    // Spawn the per-session collector before issuing the prompt so it
+    // captures streamed updates as they arrive.
+    let collector = spawn_collector_task(notification_rx, session_id.clone(), cancel_token.clone());
+
+    let prompt_request = PromptRequest::new(
+        session_id,
+        vec![ContentBlock::Text(TextContent::new(user_prompt))],
+    );
+    let prompt_response_result = cx
+        .send_request(prompt_request)
+        .block_task()
+        .await
+        .map_err(|e| {
+            agent_client_protocol::Error::internal_error()
+                .data(serde_json::json!({"error": format!("prompt failed: {}", e)}))
+        });
+
+    let collector_result = await_collector(collector, &cancel_token).await;
+    let (response_text, messages_lost) = collector_result;
+
+    let prompt_response = prompt_response_result?;
+    Ok(build_agent_response(
+        prompt_response,
+        response_text,
+        messages_lost,
+    ))
+}
+
+/// Convert an `AcpError` into an `agent_client_protocol::Error` carrying
+/// the original message in its `data` payload. Used to bubble setup
+/// failures out of the `connect_with` main_fn closure.
+fn into_acp_error(err: AcpError) -> agent_client_protocol::Error {
+    agent_client_protocol::Error::internal_error()
+        .data(serde_json::json!({"error": err.to_string()}))
+}
+
+/// Issue an `initialize` request advertising the same client
+/// capabilities the legacy 0.10 helper used: read-only filesystem,
+/// terminal disabled.
+async fn initialize_connection(cx: &ConnectionTo<Agent>) -> AcpResult<()> {
+    let init_request = InitializeRequest::new(1.into()).client_capabilities(
+        ClientCapabilities::new()
+            .fs(FileSystemCapabilities::new()
+                .read_text_file(false)
+                .write_text_file(false))
+            .terminal(false),
+    );
+
+    let init_response = cx
+        .send_request(init_request)
+        .block_task()
+        .await
+        .map_err(|e| AcpError::InitializationError(format!("{:?}", e)))?;
+
+    if let Some(ref info) = init_response.agent_info {
+        tracing::debug!("Agent initialized: {}", Pretty(&info.name));
+    }
+
+    Ok(())
+}
+
+/// Create a new ACP session, optionally attaching a system prompt as
+/// session metadata under the `system_prompt` key.
+async fn create_session_via_connection(
+    cx: &ConnectionTo<Agent>,
+    system_prompt: Option<String>,
+) -> AcpResult<SessionId> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut session_request = NewSessionRequest::new(cwd);
+
+    if let Some(sys_prompt) = system_prompt {
+        let mut meta = serde_json::Map::new();
+        meta.insert("system_prompt".to_string(), serde_json::json!(sys_prompt));
+        session_request = session_request.meta(meta);
+    }
+
+    let session_response = cx
+        .send_request(session_request)
+        .block_task()
+        .await
+        .map_err(|e| AcpError::SessionError(format!("{:?}", e)))?;
+
+    tracing::debug!("Session created: {}", session_response.session_id);
+    Ok(session_response.session_id)
+}
+
+/// Set the mode on `session_id` if a `mode` value is provided.
+async fn set_session_mode_via_connection(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    mode: Option<String>,
+) -> AcpResult<()> {
+    if let Some(mode_id) = mode {
+        let mode_id = SessionModeId::new(mode_id);
+        let request = SetSessionModeRequest::new(session_id.clone(), mode_id.clone());
+        cx.send_request(request).block_task().await.map_err(|e| {
+            AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
+        })?;
+        tracing::debug!("Session mode set to: {}", mode_id);
+    }
+    Ok(())
+}
+
 /// Extract text content from an agent notification if it matches our session.
 ///
 /// Returns Some(text) if the notification is an AgentMessageChunk containing text
 /// for the specified session, None otherwise.
 fn extract_text_from_notification<'a>(
     notification: &'a SessionNotification,
-    session_id: &agent_client_protocol::SessionId,
+    session_id: &SessionId,
 ) -> Option<&'a str> {
     // Check if notification is for our session
     if notification.session_id != *session_id {
@@ -614,116 +1119,80 @@ fn extract_response_from_metadata(metadata: &Option<serde_json::Value>) -> Strin
         .unwrap_or_default()
 }
 
-/// Initialize an ACP agent with standard client capabilities
-async fn initialize_agent(agent: &Arc<dyn Agent + Send + Sync>) -> AcpResult<()> {
-    let init_request = InitializeRequest::new(agent_client_protocol::ProtocolVersion::V1)
-        .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapabilities::new()
-                    .read_text_file(false)
-                    .write_text_file(false))
-                .terminal(false),
-        );
-
-    let init_response = agent
-        .initialize(init_request)
-        .await
-        .map_err(|e| AcpError::InitializationError(format!("{:?}", e)))?;
-
-    if let Some(ref info) = init_response.agent_info {
-        tracing::debug!("Agent initialized: {}", Pretty(&info.name));
-    }
-
-    Ok(())
-}
-
-/// Create a new ACP session with optional system prompt
-async fn create_session(
-    agent: &Arc<dyn Agent + Send + Sync>,
-    system_prompt: Option<String>,
-) -> AcpResult<agent_client_protocol::SessionId> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let mut session_request = NewSessionRequest::new(cwd);
-
-    if let Some(sys_prompt) = system_prompt {
-        let mut meta = serde_json::Map::new();
-        meta.insert("system_prompt".to_string(), serde_json::json!(sys_prompt));
-        session_request = session_request.meta(meta);
-    }
-
-    let session_response = agent
-        .new_session(session_request)
-        .await
-        .map_err(|e| AcpError::SessionError(format!("{:?}", e)))?;
-
-    tracing::debug!("Session created: {}", session_response.session_id);
-    Ok(session_response.session_id)
-}
-
-/// Set session mode if provided
-async fn set_session_mode(
-    agent: &Arc<dyn Agent + Send + Sync>,
-    session_id: &agent_client_protocol::SessionId,
-    mode: Option<String>,
-) -> AcpResult<()> {
-    if let Some(mode_id) = mode {
-        let mode_id = SessionModeId::new(mode_id);
-        let set_mode_request = SetSessionModeRequest::new(session_id.clone(), mode_id.clone());
-        agent
-            .set_session_mode(set_mode_request)
-            .await
-            .map_err(|e| {
-                AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
-            })?;
-        tracing::debug!("Session mode set to: {}", mode_id);
-    }
-    Ok(())
-}
-
-/// Spawn a local task to collect notifications for a session
-fn spawn_notification_collector(
-    local_set: &tokio::task::LocalSet,
-    mut notification_rx: broadcast::Receiver<SessionNotification>,
-    session_id: agent_client_protocol::SessionId,
+/// Spawn a `LocalSet`-friendly task that drains the per-session
+/// broadcast receiver into a `String` while watching for cancellation.
+fn spawn_collector_task(
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    session_id: SessionId,
     cancel_token: CancellationToken,
 ) -> tokio::task::JoinHandle<(String, u64)> {
-    local_set.spawn_local(async move {
-        let mut text = String::new();
-        let mut messages_lost = 0u64;
+    tokio::task::spawn_local(notification_collector(
+        notification_rx,
+        session_id,
+        cancel_token,
+    ))
+}
 
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => {
-                    tracing::debug!("Collector received cancellation signal");
-                    break;
-                }
-                result = notification_rx.recv() => {
-                    match result {
-                        Ok(notification) => {
-                            if let Some(chunk) = extract_text_from_notification(&notification, &session_id) {
-                                text.push_str(chunk);
-                            }
+/// Body of the per-session notification collector.
+async fn notification_collector(
+    mut notification_rx: broadcast::Receiver<SessionNotification>,
+    session_id: SessionId,
+    cancel_token: CancellationToken,
+) -> (String, u64) {
+    let mut text = String::new();
+    let mut messages_lost = 0u64;
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                tracing::debug!("Collector received cancellation signal");
+                break;
+            }
+            result = notification_rx.recv() => {
+                match result {
+                    Ok(notification) => {
+                        if let Some(chunk) = extract_text_from_notification(&notification, &session_id) {
+                            text.push_str(chunk);
                         }
-                        Err(broadcast::error::RecvError::Lagged(count)) => {
-                            messages_lost += count;
-                            tracing::warn!(
-                                messages_lost = count,
-                                total_lost = messages_lost,
-                                "Notification receiver lagged, some content may be lost"
-                            );
-                            continue;
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            tracing::debug!("Notification channel closed");
-                            break;
-                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        messages_lost += count;
+                        tracing::warn!(
+                            messages_lost = count,
+                            total_lost = messages_lost,
+                            "Notification receiver lagged, some content may be lost"
+                        );
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::debug!("Notification channel closed");
+                        break;
                     }
                 }
             }
         }
+    }
 
-        (text, messages_lost)
-    })
+    (text, messages_lost)
+}
+
+/// Spawn a notification collector against a caller-supplied `LocalSet`.
+///
+/// Test-only helper that lets the unit tests run their assertions inside
+/// `local_set.run_until(...)` without going through the full
+/// `connect_with` plumbing.
+#[cfg(test)]
+fn spawn_notification_collector(
+    local_set: &tokio::task::LocalSet,
+    notification_rx: broadcast::Receiver<SessionNotification>,
+    session_id: SessionId,
+    cancel_token: CancellationToken,
+) -> tokio::task::JoinHandle<(String, u64)> {
+    local_set.spawn_local(notification_collector(
+        notification_rx,
+        session_id,
+        cancel_token,
+    ))
 }
 
 /// Wait for the notification collector to finish with timeout
@@ -753,7 +1222,7 @@ async fn await_collector(
 
 /// Build the final AgentResponse from prompt result and collected text
 fn build_agent_response(
-    prompt_result: agent_client_protocol::PromptResponse,
+    prompt_result: PromptResponse,
     response_text: String,
     messages_lost: u64,
 ) -> AgentResponse {
@@ -785,47 +1254,25 @@ fn build_agent_response(
     }
 }
 
-/// Implementation of execute_prompt that runs on a single-threaded runtime
-async fn execute_prompt_impl(
-    agent: Arc<dyn Agent + Send + Sync>,
-    notification_rx: broadcast::Receiver<SessionNotification>,
-    system_prompt: Option<String>,
-    mode: Option<String>,
-    user_prompt: String,
-) -> AcpResult<AgentResponse> {
-    initialize_agent(&agent).await?;
-    let session_id = create_session(&agent, system_prompt).await?;
-    set_session_mode(&agent, &session_id, mode).await?;
+/// Inert placeholder used to back-fill `AcpAgentHandle::agent` after
+/// [`execute_prompt`] consumes the real component.
+///
+/// Implements `ConnectTo<Client>` by failing on first use — calling code
+/// should never reach the connection layer because the handle is
+/// effectively single-shot once `execute_prompt` has been invoked.
+struct NoopAgent;
 
-    let prompt_content = vec![ContentBlock::Text(TextContent::new(user_prompt))];
-    let cancel_token = CancellationToken::new();
-    let local_set = tokio::task::LocalSet::new();
-
-    let collector_handle = spawn_notification_collector(
-        &local_set,
-        notification_rx,
-        session_id.clone(),
-        cancel_token.clone(),
-    );
-
-    let (prompt_result, collector_result) = local_set
-        .run_until(async {
-            let prompt_response = agent
-                .prompt(PromptRequest::new(session_id.clone(), prompt_content))
-                .await
-                .map_err(|e| AcpError::PromptError(format!("{:?}", e)))?;
-
-            let collector_result = await_collector(collector_handle, &cancel_token).await;
-            Ok::<_, AcpError>((prompt_response, collector_result))
-        })
-        .await?;
-
-    let (response_text, messages_lost) = collector_result;
-    Ok(build_agent_response(
-        prompt_result,
-        response_text,
-        messages_lost,
-    ))
+impl agent_client_protocol::ConnectTo<Client> for NoopAgent {
+    async fn connect_to(
+        self,
+        _client: impl agent_client_protocol::ConnectTo<
+            <Client as agent_client_protocol::Role>::Counterpart,
+        >,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error().data(serde_json::json!({
+            "error": "AcpAgentHandle::agent has been consumed by execute_prompt; create a fresh handle"
+        })))
+    }
 }
 
 #[cfg(test)]
@@ -1011,7 +1458,7 @@ mod tests {
 
     #[test]
     fn test_build_agent_response_success() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::EndTurn);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn);
         let response = build_agent_response(prompt_result, "Hello".to_string(), 0);
         assert!(response.is_success());
         assert_eq!(response.content, "Hello");
@@ -1019,14 +1466,14 @@ mod tests {
 
     #[test]
     fn test_build_agent_response_partial_max_tokens() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::MaxTokens);
+        let prompt_result = PromptResponse::new(StopReason::MaxTokens);
         let response = build_agent_response(prompt_result, "Partial".to_string(), 0);
         assert!(matches!(response.response_type, AgentResponseType::Partial));
     }
 
     #[test]
     fn test_build_agent_response_error_refusal() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::Refusal);
+        let prompt_result = PromptResponse::new(StopReason::Refusal);
         let response = build_agent_response(prompt_result, "Refused".to_string(), 0);
         assert!(response.is_error());
     }
@@ -1038,8 +1485,7 @@ mod tests {
             "claude_response".to_string(),
             serde_json::json!("From metadata"),
         );
-        let prompt_result =
-            agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn).meta(meta);
         let response = build_agent_response(prompt_result, "".to_string(), 0);
         assert_eq!(response.content, "From metadata");
     }
@@ -1272,7 +1718,7 @@ mod tests {
 
         assert_eq!(acp_servers.len(), 1);
         match &acp_servers[0] {
-            agent_client_protocol::McpServer::Http(http) => {
+            schema::McpServer::Http(http) => {
                 assert_eq!(http.name, "test-http");
                 assert_eq!(http.url, "http://localhost:8080/mcp");
             }
@@ -1294,7 +1740,7 @@ mod tests {
 
         assert_eq!(acp_servers.len(), 1);
         match &acp_servers[0] {
-            agent_client_protocol::McpServer::Stdio(stdio) => {
+            schema::McpServer::Stdio(stdio) => {
                 assert_eq!(stdio.name, "test-stdio");
                 assert_eq!(stdio.args, vec!["hello".to_string(), "world".to_string()]);
             }
@@ -1330,14 +1776,8 @@ mod tests {
         ];
         let acp_servers = convert_mcp_servers_to_acp(&servers);
         assert_eq!(acp_servers.len(), 2);
-        assert!(matches!(
-            &acp_servers[0],
-            agent_client_protocol::McpServer::Http(_)
-        ));
-        assert!(matches!(
-            &acp_servers[1],
-            agent_client_protocol::McpServer::Stdio(_)
-        ));
+        assert!(matches!(&acp_servers[0], schema::McpServer::Http(_)));
+        assert!(matches!(&acp_servers[1], schema::McpServer::Stdio(_)));
     }
 
     // ========================================================================
@@ -1345,21 +1785,18 @@ mod tests {
     // ========================================================================
 
     /// Helper to create a text notification for a given session
-    fn make_text_notification(
-        session_id: &agent_client_protocol::SessionId,
-        text: &str,
-    ) -> SessionNotification {
+    fn make_text_notification(session_id: &SessionId, text: &str) -> SessionNotification {
         SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Text(TextContent::new(text)),
-            )),
+            SessionUpdate::AgentMessageChunk(schema::ContentChunk::new(ContentBlock::Text(
+                TextContent::new(text),
+            ))),
         )
     }
 
     #[test]
     fn test_extract_text_from_notification_matching_session() {
-        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let session_id = SessionId::new("test-session".to_string());
         let notification = make_text_notification(&session_id, "Hello, world!");
 
         let result = extract_text_from_notification(&notification, &session_id);
@@ -1368,8 +1805,8 @@ mod tests {
 
     #[test]
     fn test_extract_text_from_notification_wrong_session() {
-        let session_id = agent_client_protocol::SessionId::new("session-1".to_string());
-        let other_session = agent_client_protocol::SessionId::new("session-2".to_string());
+        let session_id = SessionId::new("session-1".to_string());
+        let other_session = SessionId::new("session-2".to_string());
         let notification = make_text_notification(&other_session, "Hello");
 
         let result = extract_text_from_notification(&notification, &session_id);
@@ -1378,15 +1815,12 @@ mod tests {
 
     #[test]
     fn test_extract_text_from_notification_non_text_content() {
-        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let session_id = SessionId::new("test-session".to_string());
         // Use Image content block as a non-Text variant
-        let image =
-            agent_client_protocol::ImageContent::new("data".to_string(), "image/png".to_string());
+        let image = schema::ImageContent::new("data".to_string(), "image/png".to_string());
         let notification = SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
-                ContentBlock::Image(image),
-            )),
+            SessionUpdate::AgentMessageChunk(schema::ContentChunk::new(ContentBlock::Image(image))),
         );
 
         let result = extract_text_from_notification(&notification, &session_id);
@@ -1395,10 +1829,10 @@ mod tests {
 
     #[test]
     fn test_extract_text_from_notification_non_chunk_update() {
-        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let session_id = SessionId::new("test-session".to_string());
         // Use ToolCall update as a non-AgentMessageChunk variant
-        let tool_call = agent_client_protocol::ToolCall::new(
-            agent_client_protocol::ToolCallId::new("tc-1".to_string()),
+        let tool_call = schema::ToolCall::new(
+            schema::ToolCallId::new("tc-1".to_string()),
             "test-tool".to_string(),
         );
         let notification =
@@ -1414,7 +1848,7 @@ mod tests {
 
     #[test]
     fn test_build_agent_response_cancelled() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::Cancelled);
+        let prompt_result = PromptResponse::new(StopReason::Cancelled);
         let response = build_agent_response(prompt_result, "Cancelled content".to_string(), 0);
         assert!(response.is_error());
         assert_eq!(response.content, "Cancelled content");
@@ -1422,14 +1856,14 @@ mod tests {
 
     #[test]
     fn test_build_agent_response_max_turn_requests() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::MaxTurnRequests);
+        let prompt_result = PromptResponse::new(StopReason::MaxTurnRequests);
         let response = build_agent_response(prompt_result, "Turn limit".to_string(), 0);
         assert!(matches!(response.response_type, AgentResponseType::Partial));
     }
 
     #[test]
     fn test_build_agent_response_with_messages_lost() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::EndTurn);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn);
         let response = build_agent_response(prompt_result, "Some content".to_string(), 5);
         // Even with messages lost, response is still built based on stop reason
         assert!(response.is_success());
@@ -1440,8 +1874,7 @@ mod tests {
     fn test_build_agent_response_with_metadata() {
         let mut meta = serde_json::Map::new();
         meta.insert("key".to_string(), serde_json::json!("value"));
-        let prompt_result =
-            agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn).meta(meta);
         let response = build_agent_response(prompt_result, "Content".to_string(), 0);
         assert!(response.metadata.is_some());
         let metadata = response.metadata.unwrap();
@@ -1455,15 +1888,14 @@ mod tests {
             "llama_response".to_string(),
             serde_json::json!("From llama metadata"),
         );
-        let prompt_result =
-            agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn).meta(meta);
         let response = build_agent_response(prompt_result, "".to_string(), 0);
         assert_eq!(response.content, "From llama metadata");
     }
 
     #[test]
     fn test_build_agent_response_no_metadata_empty_text() {
-        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::EndTurn);
+        let prompt_result = PromptResponse::new(StopReason::EndTurn);
         let response = build_agent_response(prompt_result, "".to_string(), 0);
         assert_eq!(response.content, "");
     }
@@ -1622,7 +2054,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_notification_collector_receives_text() {
         let (tx, rx) = broadcast::channel::<SessionNotification>(16);
-        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let session_id = SessionId::new("test-session".to_string());
         let cancel_token = CancellationToken::new();
         let local_set = tokio::task::LocalSet::new();
 
@@ -1653,8 +2085,8 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_notification_collector_ignores_other_sessions() {
         let (tx, rx) = broadcast::channel::<SessionNotification>(16);
-        let session_id = agent_client_protocol::SessionId::new("my-session".to_string());
-        let other_session = agent_client_protocol::SessionId::new("other-session".to_string());
+        let session_id = SessionId::new("my-session".to_string());
+        let other_session = SessionId::new("other-session".to_string());
         let cancel_token = CancellationToken::new();
         let local_set = tokio::task::LocalSet::new();
 
@@ -1681,7 +2113,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_notification_collector_channel_closed() {
         let (tx, rx) = broadcast::channel::<SessionNotification>(16);
-        let session_id = agent_client_protocol::SessionId::new("test".to_string());
+        let session_id = SessionId::new("test".to_string());
         let cancel_token = CancellationToken::new();
         let local_set = tokio::task::LocalSet::new();
 
@@ -1703,7 +2135,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_notification_collector_ignores_non_text_updates() {
         let (tx, rx) = broadcast::channel::<SessionNotification>(16);
-        let session_id = agent_client_protocol::SessionId::new("test".to_string());
+        let session_id = SessionId::new("test".to_string());
         let cancel_token = CancellationToken::new();
         let local_set = tokio::task::LocalSet::new();
 
@@ -1715,8 +2147,8 @@ mod tests {
         local_set
             .run_until(async move {
                 // Send non-chunk update (ToolCall, not AgentMessageChunk)
-                let tool_call = agent_client_protocol::ToolCall::new(
-                    agent_client_protocol::ToolCallId::new("tc-1".to_string()),
+                let tool_call = schema::ToolCall::new(
+                    schema::ToolCallId::new("tc-1".to_string()),
                     "test-tool".to_string(),
                 );
                 tx.send(SessionNotification::new(

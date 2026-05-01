@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use agent_client_protocol::SessionNotification;
+use agent_client_protocol::schema::SessionNotification;
 use tokio::sync::broadcast;
 
 /// Default buffer size for per-session notification channels.

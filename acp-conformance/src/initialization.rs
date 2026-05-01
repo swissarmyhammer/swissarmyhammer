@@ -27,10 +27,10 @@
 //!    - clientInfo / agentInfo recommended but optional
 //!    - Must include name, version if present
 
-use agent_client_protocol::{
-    Agent, ClientCapabilities, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
+use agent_client_protocol::schema::{
+    ClientCapabilities, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
 };
-use agent_client_protocol_extras::recording::RecordedSession;
+use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from initialization fixture verification
@@ -42,15 +42,32 @@ pub struct InitializationStats {
     pub has_agent_capabilities: bool,
 }
 
+/// Send an `InitializeRequest` over the wrapper's connection and surface SDK
+/// errors as `crate::Error::Agent`.
+///
+/// Centralised so every scenario helper below issues the request the same
+/// way and so that ACP-side errors keep their `Error` discriminant intact
+/// when bubbled up.
+async fn send_initialize(
+    agent: &dyn AgentWithFixture,
+    request: InitializeRequest,
+) -> crate::Result<agent_client_protocol::schema::InitializeResponse> {
+    Ok(agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?)
+}
+
 /// Test basic initialization with minimal capabilities
-pub async fn test_minimal_initialization<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_minimal_initialization(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing minimal initialization");
 
     // Create minimal request
     let request = InitializeRequest::new(ProtocolVersion::V1);
 
     // Send initialize request
-    let response = agent.initialize(request).await?;
+    let response = send_initialize(agent, request).await?;
 
     // Validate response has required fields
     validate_protocol_version(&response.protocol_version, ProtocolVersion::V1)?;
@@ -62,8 +79,8 @@ pub async fn test_minimal_initialization<A: Agent + ?Sized>(agent: &A) -> crate:
 }
 
 /// Test initialization with full client capabilities
-pub async fn test_full_capabilities_initialization<A: Agent + ?Sized>(
-    agent: &A,
+pub async fn test_full_capabilities_initialization(
+    agent: &dyn AgentWithFixture,
 ) -> crate::Result<()> {
     tracing::info!("Testing initialization with full client capabilities");
 
@@ -77,7 +94,7 @@ pub async fn test_full_capabilities_initialization<A: Agent + ?Sized>(
     let request = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client_caps);
 
     // Send initialize request
-    let response = agent.initialize(request).await?;
+    let response = send_initialize(agent, request).await?;
 
     // Validate protocol version
     validate_protocol_version(&response.protocol_version, ProtocolVersion::V1)?;
@@ -89,14 +106,14 @@ pub async fn test_full_capabilities_initialization<A: Agent + ?Sized>(
 }
 
 /// Test that agent handles missing optional fields gracefully
-pub async fn test_minimal_client_capabilities<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_minimal_client_capabilities(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing with minimal client capabilities (none declared)");
 
     // Create request with no client capabilities
     let request = InitializeRequest::new(ProtocolVersion::V1);
 
     // Send initialize request
-    let _response = agent.initialize(request).await?;
+    let _response = send_initialize(agent, request).await?;
 
     // Agent should not assume any client capabilities
     // This test just verifies the agent doesn't crash or error
@@ -107,12 +124,12 @@ pub async fn test_minimal_client_capabilities<A: Agent + ?Sized>(agent: &A) -> c
 }
 
 /// Test protocol version negotiation
-pub async fn test_protocol_version_negotiation<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_protocol_version_negotiation(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing protocol version negotiation");
 
     // Test with V1
     let request = InitializeRequest::new(ProtocolVersion::V1);
-    let response = agent.initialize(request).await?;
+    let response = send_initialize(agent, request).await?;
 
     validate_protocol_version(&response.protocol_version, ProtocolVersion::V1)?;
 
@@ -122,16 +139,16 @@ pub async fn test_protocol_version_negotiation<A: Agent + ?Sized>(agent: &A) -> 
 }
 
 /// Test that initialize can be called multiple times (idempotent)
-pub async fn test_initialize_idempotent<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_initialize_idempotent(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing initialize idempotency");
 
     let request = InitializeRequest::new(ProtocolVersion::V1);
 
     // First initialize
-    let response1 = agent.initialize(request.clone()).await?;
+    let response1 = send_initialize(agent, request.clone()).await?;
 
     // Second initialize - should work the same way
-    let response2 = agent.initialize(request).await?;
+    let response2 = send_initialize(agent, request).await?;
 
     // Responses should be consistent
     if response1.protocol_version != response2.protocol_version {
@@ -146,15 +163,15 @@ pub async fn test_initialize_idempotent<A: Agent + ?Sized>(agent: &A) -> crate::
 }
 
 /// Test initialization with client info
-pub async fn test_with_client_info<A: Agent + ?Sized>(agent: &A) -> crate::Result<()> {
+pub async fn test_with_client_info(agent: &dyn AgentWithFixture) -> crate::Result<()> {
     tracing::info!("Testing initialization with client info");
 
-    let client_info = agent_client_protocol::Implementation::new("test-client", "1.0.0")
+    let client_info = agent_client_protocol::schema::Implementation::new("test-client", "1.0.0")
         .title("Test Client for Conformance");
 
     let request = InitializeRequest::new(ProtocolVersion::V1).client_info(client_info);
 
-    let response = agent.initialize(request).await?;
+    let response = send_initialize(agent, request).await?;
 
     // Agent should accept client info without error
     validate_protocol_version(&response.protocol_version, ProtocolVersion::V1)?;
@@ -180,14 +197,16 @@ fn validate_protocol_version(
 }
 
 fn validate_agent_capabilities_present(
-    caps: &agent_client_protocol::AgentCapabilities,
+    caps: &agent_client_protocol::schema::AgentCapabilities,
 ) -> crate::Result<()> {
     // Agent capabilities are always present (required struct)
     tracing::debug!("Agent capabilities: {}", Pretty(caps));
     Ok(())
 }
 
-fn validate_auth_methods(methods: &[agent_client_protocol::AuthMethod]) -> crate::Result<()> {
+fn validate_auth_methods(
+    methods: &[agent_client_protocol::schema::AuthMethod],
+) -> crate::Result<()> {
     // Auth methods must be present (may be empty)
     if methods.is_empty() {
         tracing::info!("Agent declares no authentication methods");
@@ -200,7 +219,9 @@ fn validate_auth_methods(methods: &[agent_client_protocol::AuthMethod]) -> crate
     Ok(())
 }
 
-fn validate_agent_info(info: &Option<agent_client_protocol::Implementation>) -> crate::Result<()> {
+fn validate_agent_info(
+    info: &Option<agent_client_protocol::schema::Implementation>,
+) -> crate::Result<()> {
     // Agent info is recommended
     if let Some(ref info) = info {
         tracing::info!("Agent info: {} version {}", info.name, info.version);
@@ -224,7 +245,7 @@ fn validate_agent_info(info: &Option<agent_client_protocol::Implementation>) -> 
     Ok(())
 }
 
-fn log_agent_capabilities(caps: &agent_client_protocol::AgentCapabilities) {
+fn log_agent_capabilities(caps: &agent_client_protocol::schema::AgentCapabilities) {
     tracing::info!("Agent capabilities:");
 
     // Check capabilities
@@ -260,7 +281,7 @@ fn log_agent_capabilities(caps: &agent_client_protocol::AgentCapabilities) {
 
 /// Validate initialization response structure
 pub fn validate_initialization_response(
-    response: &agent_client_protocol::InitializeResponse,
+    response: &agent_client_protocol::schema::InitializeResponse,
 ) -> crate::Result<()> {
     // Protocol version is required
     tracing::debug!("Protocol version: {}", Pretty(&response.protocol_version));
@@ -373,78 +394,47 @@ pub fn verify_initialization_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::{
-        AgentCapabilities, AuthenticateRequest, AuthenticateResponse, CancelNotification,
-        ExtNotification, ExtRequest, ExtResponse, Implementation, InitializeResponse,
-        LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-        PromptRequest, PromptResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{
+        AgentCapabilities, Implementation, InitializeResponse, NewSessionRequest,
+        NewSessionResponse, PromptRequest, PromptResponse, StopReason,
     };
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent for initialization tests
+    /// Mock agent for initialization tests.
+    ///
+    /// Returns a stock initialize response that includes agent_info so the
+    /// `validate_agent_info` branches in [`test_minimal_initialization`] are
+    /// exercised. `new_session` and `prompt` are not strictly required for
+    /// initialization scenarios, but providing impls makes the mock reusable
+    /// across the suite without surprising method-not-found failures.
     struct InitMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for InitMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for InitMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            let mut resp = InitializeResponse::new(ProtocolVersion::V1);
-            resp.agent_info = Some(Implementation::new("test-agent", "0.1.0"));
-            Ok(resp)
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move {
+                let mut resp = InitializeResponse::new(ProtocolVersion::V1);
+                resp.agent_info = Some(Implementation::new("test-agent", "0.1.0"));
+                Ok(resp)
+            })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
-        }
-
-        async fn new_session(
-            &self,
+        fn new_session<'a>(
+            &'a self,
             _request: NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("init-test-session"))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("init-test-session")) })
         }
 
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
@@ -480,44 +470,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_minimal_initialization_mock() {
-        let agent = InitMockAgent;
-        let result = test_minimal_initialization(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_minimal_initialization(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_full_capabilities_initialization_mock() {
-        let agent = InitMockAgent;
-        let result = test_full_capabilities_initialization(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_full_capabilities_initialization(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_minimal_client_capabilities_mock() {
-        let agent = InitMockAgent;
-        let result = test_minimal_client_capabilities(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_minimal_client_capabilities(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_protocol_version_negotiation_mock() {
-        let agent = InitMockAgent;
-        let result = test_protocol_version_negotiation(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_protocol_version_negotiation(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_initialize_idempotent_mock() {
-        let agent = InitMockAgent;
-        let result = test_initialize_idempotent(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_initialize_idempotent(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_with_client_info_mock() {
-        let agent = InitMockAgent;
-        let result = test_with_client_info(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(InitMockAgent);
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_with_client_info(&fx).await },
+            )
+            .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[test]

@@ -13,7 +13,7 @@
 // =============================================================================
 
 mod command_serialization {
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::{
         AvailableCommand, AvailableCommandInput, UnstructuredCommandInput,
     };
 
@@ -111,7 +111,7 @@ mod command_serialization {
 // =============================================================================
 
 mod filesystem_serialization {
-    use agent_client_protocol::{
+    use agent_client_protocol::schema::{
         ReadTextFileRequest, ReadTextFileResponse, SessionId, WriteTextFileRequest,
         WriteTextFileResponse,
     };
@@ -258,7 +258,7 @@ mod filesystem_serialization {
 // =============================================================================
 
 mod plan_serialization {
-    use agent_client_protocol::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
 
     #[test]
     fn test_plan_entry_basic_serialization() {
@@ -448,6 +448,79 @@ mod plan_serialization {
         assert!(
             !json_string.contains("\"_content\""),
             "Should not contain snake_case field patterns like _content"
+        );
+    }
+}
+
+// =============================================================================
+// Fixture wire-format compatibility
+// =============================================================================
+//
+// The task acceptance criteria call out: "Verify `.fixtures/{llama,claude}/*.json`
+// still deserialize." The schema crate jumped between minor versions and the
+// `RecordedSession` shape was rebuilt for ACP 0.11; this module replays every
+// recorded fixture under `acp-conformance/.fixtures/` through
+// `serde_json::from_str::<RecordedSession>` to confirm the on-disk wire format
+// has not shifted underneath us.
+
+mod fixture_replay {
+    use agent_client_protocol_extras::recording::RecordedSession;
+    use std::path::PathBuf;
+
+    /// Walk `dir` (one level deep, files only) and `serde_json::from_str` every
+    /// `.json` file as a [`RecordedSession`]. Returns a list of
+    /// `(filename, error_message)` pairs for any that fail to deserialise.
+    fn replay_fixtures(dir: PathBuf) -> Vec<(String, String)> {
+        let mut failures = Vec::new();
+        if !dir.exists() {
+            return failures;
+        }
+        for entry in std::fs::read_dir(&dir).expect("read fixtures dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path).expect("read fixture file");
+            if let Err(e) = serde_json::from_str::<RecordedSession>(&contents) {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                failures.push((name, e.to_string()));
+            }
+        }
+        failures
+    }
+
+    /// Locate the conformance crate's local `.fixtures/<agent_type>` directory.
+    ///
+    /// `CARGO_MANIFEST_DIR` is set to the conformance crate root during
+    /// `cargo test`, which lets us point at the per-crate fixtures directory
+    /// regardless of where the workspace root resolves.
+    fn local_fixture_dir(agent_type: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".fixtures")
+            .join(agent_type)
+    }
+
+    #[test]
+    fn claude_fixtures_round_trip() {
+        let failures = replay_fixtures(local_fixture_dir("claude"));
+        assert!(
+            failures.is_empty(),
+            "Some claude fixtures failed to deserialise as RecordedSession: {:#?}",
+            failures
+        );
+    }
+
+    #[test]
+    fn llama_fixtures_round_trip() {
+        let failures = replay_fixtures(local_fixture_dir("llama"));
+        assert!(
+            failures.is_empty(),
+            "Some llama fixtures failed to deserialise as RecordedSession: {:#?}",
+            failures
         );
     }
 }

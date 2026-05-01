@@ -4,8 +4,8 @@ description: Execute the next task from the kanban board. Use when the user says
 license: MIT OR Apache-2.0
 compatibility: Requires the `kanban` MCP tool for all board, column, and task operations.
 metadata:
-  author: swissarmyhammer
   version: 0.12.11
+  author: swissarmyhammer
 ---
 
 {% include "_partials/review-column" %}

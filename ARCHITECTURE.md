@@ -428,7 +428,7 @@ Tools that handle multiple verbs on the same noun (like the kanban tool handling
 
 ### Agent Architecture
 
-The workspace has a dual-agent architecture: agents can run via the Claude CLI (cloud) or via local LLM inference (llama.cpp). Both backends implement the ACP (Agent Communication Protocol) `Agent` trait, making them interchangeable.
+The workspace has a dual-agent architecture: agents can run via the Claude CLI (cloud) or via local LLM inference (llama.cpp). Both backends speak ACP (Agent Communication Protocol) 0.11 — they construct an `agent_client_protocol::Agent` via its builder, register typed handlers for incoming requests and notifications, and connect to a transport with `connect_with(...)`. This makes the two backends interchangeable from a consumer's perspective: each one is a process that talks ACP over JSON-RPC 2.0 / stdio.
 
 ```
 swissarmyhammer-agent (facade)
@@ -443,7 +443,7 @@ swissarmyhammer-agent (facade)
                       chat template engine
 ```
 
-Consumers call `create_agent(ModelConfig)` and receive an `AcpAgentHandle` wrapping `Arc<dyn Agent>`. They never touch the underlying implementation. `ModelConfig` determines the backend — the `executor_type` field selects `ClaudeCode` or `LlamaAgent`.
+Consumers call `create_agent(ModelConfig)` and receive an `AcpAgentHandle` that carries an in-process ACP client plus a `SessionNotification` broadcast receiver. They never touch the underlying implementation. `ModelConfig` determines the backend — the `executor_type` field selects `ClaudeCode` or `LlamaAgent`.
 
 ### ACP (Agent Communication Protocol)
 
@@ -454,7 +454,7 @@ ACP is the protocol that makes agents interoperable with editors (Zed, JetBrains
 - **Capabilities** — filesystem access, terminal execution, plans, slash commands
 - **Permissions** — configurable policies (AlwaysAsk, AutoApproveReads, RuleBased)
 
-The `llama-agent` crate contains the most complete ACP implementation, serving as a full protocol handler over JSON-RPC 2.0 / stdio. The `acp-conformance` crate provides a protocol conformance test suite that validates any `Agent` implementation against the ACP spec.
+The `llama-agent` crate contains the most complete ACP implementation, serving as a full protocol handler over JSON-RPC 2.0 / stdio. It builds its server via `agent_client_protocol::Agent.builder().on_receive_request(...).on_receive_notification(...).connect_with(transport, bridge)` — a single typed handler keyed on `ClientRequest` covers every ACP method (`initialize`, `authenticate`, `session/*`, plus extension channels), and the SDK demuxes by method name. The `acp-conformance` crate provides a protocol conformance test suite that validates any ACP backend against the spec.
 
 ### Subagent Metadata (not LLM inference)
 
@@ -483,14 +483,14 @@ The iteration counter persists across `set ralph` calls so a skill cannot reset 
 
 ### Patterns
 
-- **Dual-Backend, Single Trait**: Cloud and local LLM agents are interchangeable behind `Arc<dyn Agent>`. Consumers never know which backend runs.
-- **ACP as Protocol**: Agent interop uses the Agent Communication Protocol, not ad-hoc APIs. The conformance test suite validates any new backend.
+- **Dual-Backend, Single Protocol**: Cloud and local LLM agents are interchangeable because both speak ACP. Consumers go through `swissarmyhammer-agent::create_agent` and never know which backend runs.
+- **ACP as Protocol**: Agent interop uses the Agent Communication Protocol, not ad-hoc APIs. In ACP 0.11, backends are built by registering handlers on `Agent.builder()` and wiring them to a transport with `connect_with(...)` — there is no `impl Agent for MyBackend` trait to implement. The conformance test suite validates any new backend.
 - **Metadata, Not Inference**: The subagent system provides persona/instructions to the host agent. It does not spawn LLM processes.
 - **Platform-Aware Embedding**: The embedding facade selects the best backend (ANE on Apple Silicon, llama.cpp elsewhere) automatically.
 
 ### Practices
 
-1. **New agent backends must implement `Agent` from `agent-client-protocol`.** Don't create separate interfaces.
+1. **New agent backends must build their server via `agent_client_protocol::Agent.builder()`.** In ACP 0.11 `Agent` is a unit struct, not a trait — register typed handlers with `.on_receive_request(...)` and `.on_receive_notification(...)`, then call `.connect_with(transport, bridge)` to run the dispatch loop. Don't create separate interfaces and don't try to `impl Agent for ...` (that pattern is the 0.10 contract and no longer exists).
 2. **New agent backends must pass `acp-conformance`.** The conformance suite is the contract, not individual test cases.
 3. **The `TextEmbedder` trait is sealed.** Only workspace crates can implement it. Don't expose it for external implementation.
 4. **Ralph's iteration counter is a safety cap, not a feature.** Skills should `clear ralph` when done, not rely on hitting the ceiling.

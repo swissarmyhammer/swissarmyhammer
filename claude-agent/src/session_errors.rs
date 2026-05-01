@@ -4,7 +4,7 @@
 //! for session setup operations including session/new and session/load.
 
 use crate::error::ToJsonRpcError;
-use agent_client_protocol::SessionId;
+use agent_client_protocol::schema::SessionId;
 use serde_json::Value;
 use std::path::PathBuf;
 use thiserror::Error;

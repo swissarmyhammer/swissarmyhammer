@@ -106,8 +106,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_path_security() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory for server config
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -122,12 +120,12 @@ mod acp_read_file_tests {
             .expect("Failed to create server");
 
         // Initialize with fs capability
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new().fs(
+                agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(false),
             ),
@@ -140,7 +138,7 @@ mod acp_read_file_tests {
 
         // Create a session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
+            agent_client_protocol::schema::NewSessionRequest::new(temp_dir.path().to_path_buf());
         let session_response = server
             .new_session(new_session_request)
             .await
@@ -148,17 +146,20 @@ mod acp_read_file_tests {
         let session_id = session_response.session_id;
 
         // Try to read file outside allowed paths
-        let read_request = agent_client_protocol::ReadTextFileRequest::new(
+        let read_request = agent_client_protocol::schema::ReadTextFileRequest::new(
             session_id.clone(),
             blocked_file.to_string_lossy().to_string(),
         );
 
         let request_json =
             serde_json::to_value(&read_request).expect("Failed to serialize request");
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/read_text_file", Arc::from(raw_value));
+        let raw_value =
+            agent_client_protocol::schema::RawValue::from_string(request_json.to_string())
+                .expect("Failed to create RawValue");
+        let ext_request = agent_client_protocol::schema::ExtRequest::new(
+            "fs/read_text_file",
+            Arc::from(raw_value),
+        );
 
         // Call should fail due to path security
         let result = server.ext_method(ext_request).await;
@@ -172,8 +173,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_not_found() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let nonexistent_file = temp_dir.path().join("nonexistent.txt");
@@ -184,12 +183,12 @@ mod acp_read_file_tests {
             .expect("Failed to create server");
 
         // Initialize with fs capability
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new().fs(
+                agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(false),
             ),
@@ -202,7 +201,7 @@ mod acp_read_file_tests {
 
         // Create a session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
+            agent_client_protocol::schema::NewSessionRequest::new(temp_dir.path().to_path_buf());
         let session_response = server
             .new_session(new_session_request)
             .await
@@ -210,17 +209,20 @@ mod acp_read_file_tests {
         let session_id = session_response.session_id;
 
         // Try to read nonexistent file
-        let read_request = agent_client_protocol::ReadTextFileRequest::new(
+        let read_request = agent_client_protocol::schema::ReadTextFileRequest::new(
             session_id.clone(),
             nonexistent_file.to_string_lossy().to_string(),
         );
 
         let request_json =
             serde_json::to_value(&read_request).expect("Failed to serialize request");
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/read_text_file", Arc::from(raw_value));
+        let raw_value =
+            agent_client_protocol::schema::RawValue::from_string(request_json.to_string())
+                .expect("Failed to create RawValue");
+        let ext_request = agent_client_protocol::schema::ExtRequest::new(
+            "fs/read_text_file",
+            Arc::from(raw_value),
+        );
 
         // Call should fail - file doesn't exist
         let result = server.ext_method(ext_request).await;
@@ -234,8 +236,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_relative_path() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -245,12 +245,12 @@ mod acp_read_file_tests {
             .expect("Failed to create server");
 
         // Initialize with fs capability
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new().fs(
+                agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(false),
             ),
@@ -263,7 +263,7 @@ mod acp_read_file_tests {
 
         // Create a session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
+            agent_client_protocol::schema::NewSessionRequest::new(temp_dir.path().to_path_buf());
         let session_response = server
             .new_session(new_session_request)
             .await
@@ -271,17 +271,20 @@ mod acp_read_file_tests {
         let session_id = session_response.session_id;
 
         // Try to read file with relative path
-        let read_request = agent_client_protocol::ReadTextFileRequest::new(
+        let read_request = agent_client_protocol::schema::ReadTextFileRequest::new(
             session_id.clone(),
             "relative/path/test.txt".to_string(),
         );
 
         let request_json =
             serde_json::to_value(&read_request).expect("Failed to serialize request");
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/read_text_file", Arc::from(raw_value));
+        let raw_value =
+            agent_client_protocol::schema::RawValue::from_string(request_json.to_string())
+                .expect("Failed to create RawValue");
+        let ext_request = agent_client_protocol::schema::ExtRequest::new(
+            "fs/read_text_file",
+            Arc::from(raw_value),
+        );
 
         // Call should fail - relative paths not allowed
         let result = server.ext_method(ext_request).await;
@@ -295,8 +298,6 @@ mod acp_read_file_tests {
     #[tokio::test]
     #[serial]
     async fn test_read_text_file_size_limit() {
-        use agent_client_protocol::Agent;
-
         // Create temp directory and large test file
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let large_file = temp_dir.path().join("large.txt");
@@ -311,12 +312,12 @@ mod acp_read_file_tests {
             .expect("Failed to create server");
 
         // Initialize with fs capability
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new().fs(
-                agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new().fs(
+                agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(false),
             ),
@@ -329,7 +330,7 @@ mod acp_read_file_tests {
 
         // Create a session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(temp_dir.path().to_path_buf());
+            agent_client_protocol::schema::NewSessionRequest::new(temp_dir.path().to_path_buf());
         let session_response = server
             .new_session(new_session_request)
             .await
@@ -337,17 +338,20 @@ mod acp_read_file_tests {
         let session_id = session_response.session_id;
 
         // Try to read large file
-        let read_request = agent_client_protocol::ReadTextFileRequest::new(
+        let read_request = agent_client_protocol::schema::ReadTextFileRequest::new(
             session_id.clone(),
             large_file.to_string_lossy().to_string(),
         );
 
         let request_json =
             serde_json::to_value(&read_request).expect("Failed to serialize request");
-        let raw_value = agent_client_protocol::RawValue::from_string(request_json.to_string())
-            .expect("Failed to create RawValue");
-        let ext_request =
-            agent_client_protocol::ExtRequest::new("fs/read_text_file", Arc::from(raw_value));
+        let raw_value =
+            agent_client_protocol::schema::RawValue::from_string(request_json.to_string())
+                .expect("Failed to create RawValue");
+        let ext_request = agent_client_protocol::schema::ExtRequest::new(
+            "fs/read_text_file",
+            Arc::from(raw_value),
+        );
 
         // Call should fail due to file size limit
         let result = server.ext_method(ext_request).await;

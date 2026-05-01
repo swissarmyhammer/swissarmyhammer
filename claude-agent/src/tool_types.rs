@@ -63,7 +63,7 @@ pub enum ToolCallContent {
     /// Standard content blocks like text, images, or resources
     Content {
         /// The actual content block
-        content: agent_client_protocol::ContentBlock,
+        content: agent_client_protocol::schema::ContentBlock,
     },
     /// File modifications shown as diffs
     Diff {
@@ -361,10 +361,10 @@ impl ToolCallReport {
         }));
     }
 
-    /// Convert to agent_client_protocol::ToolCall for session notifications
-    pub fn to_acp_tool_call(&self) -> agent_client_protocol::ToolCall {
-        let mut call = agent_client_protocol::ToolCall::new(
-            agent_client_protocol::ToolCallId::new(self.tool_call_id.clone()),
+    /// Convert to agent_client_protocol::schema::ToolCall for session notifications
+    pub fn to_acp_tool_call(&self) -> agent_client_protocol::schema::ToolCall {
+        let mut call = agent_client_protocol::schema::ToolCall::new(
+            agent_client_protocol::schema::ToolCallId::new(self.tool_call_id.clone()),
             self.title.clone(),
         )
         .kind(self.kind.to_acp_kind())
@@ -391,7 +391,7 @@ impl ToolCallReport {
         call
     }
 
-    /// Convert to agent_client_protocol::ToolCallUpdate for status updates
+    /// Convert to agent_client_protocol::schema::ToolCallUpdate for status updates
     ///
     /// This method implements ACP-compliant partial updates by only including
     /// fields that have changed since the last update was sent. This optimizes
@@ -408,8 +408,8 @@ impl ToolCallReport {
     pub fn to_acp_tool_call_update_with_context(
         &self,
         include_context_fields: bool,
-    ) -> agent_client_protocol::ToolCallUpdate {
-        let mut fields = agent_client_protocol::ToolCallUpdateFields::new();
+    ) -> agent_client_protocol::schema::ToolCallUpdate {
+        let mut fields = agent_client_protocol::schema::ToolCallUpdateFields::new();
 
         if let Some(prev) = &self.previous_state {
             // ACP partial update: only include fields that have changed since last update
@@ -483,60 +483,60 @@ impl ToolCallReport {
             }
         }
 
-        agent_client_protocol::ToolCallUpdate::new(
-            agent_client_protocol::ToolCallId::new(self.tool_call_id.clone()),
+        agent_client_protocol::schema::ToolCallUpdate::new(
+            agent_client_protocol::schema::ToolCallId::new(self.tool_call_id.clone()),
             fields,
         )
     }
 
-    /// Convert to agent_client_protocol::ToolCallUpdate with default behavior
+    /// Convert to agent_client_protocol::schema::ToolCallUpdate with default behavior
     ///
     /// This is a convenience method that calls `to_acp_tool_call_update_with_context(false)`
     /// for standard partial updates.
-    pub fn to_acp_tool_call_update(&self) -> agent_client_protocol::ToolCallUpdate {
+    pub fn to_acp_tool_call_update(&self) -> agent_client_protocol::schema::ToolCallUpdate {
         self.to_acp_tool_call_update_with_context(false)
     }
 }
 
 impl ToolKind {
-    /// Convert to agent_client_protocol::ToolKind
-    pub fn to_acp_kind(&self) -> agent_client_protocol::ToolKind {
+    /// Convert to agent_client_protocol::schema::ToolKind
+    pub fn to_acp_kind(&self) -> agent_client_protocol::schema::ToolKind {
         match self {
-            ToolKind::Read => agent_client_protocol::ToolKind::Read,
-            ToolKind::Edit => agent_client_protocol::ToolKind::Edit,
-            ToolKind::Delete => agent_client_protocol::ToolKind::Delete,
-            ToolKind::Move => agent_client_protocol::ToolKind::Move,
-            ToolKind::Search => agent_client_protocol::ToolKind::Search,
-            ToolKind::Execute => agent_client_protocol::ToolKind::Execute,
-            ToolKind::Think => agent_client_protocol::ToolKind::Think,
-            ToolKind::Fetch => agent_client_protocol::ToolKind::Fetch,
-            ToolKind::Other => agent_client_protocol::ToolKind::Other,
+            ToolKind::Read => agent_client_protocol::schema::ToolKind::Read,
+            ToolKind::Edit => agent_client_protocol::schema::ToolKind::Edit,
+            ToolKind::Delete => agent_client_protocol::schema::ToolKind::Delete,
+            ToolKind::Move => agent_client_protocol::schema::ToolKind::Move,
+            ToolKind::Search => agent_client_protocol::schema::ToolKind::Search,
+            ToolKind::Execute => agent_client_protocol::schema::ToolKind::Execute,
+            ToolKind::Think => agent_client_protocol::schema::ToolKind::Think,
+            ToolKind::Fetch => agent_client_protocol::schema::ToolKind::Fetch,
+            ToolKind::Other => agent_client_protocol::schema::ToolKind::Other,
         }
     }
 }
 
 impl ToolCallStatus {
-    /// Convert to agent_client_protocol::ToolCallStatus
-    pub fn to_acp_status(&self) -> agent_client_protocol::ToolCallStatus {
+    /// Convert to agent_client_protocol::schema::ToolCallStatus
+    pub fn to_acp_status(&self) -> agent_client_protocol::schema::ToolCallStatus {
         match self {
-            ToolCallStatus::Pending => agent_client_protocol::ToolCallStatus::Pending,
-            ToolCallStatus::InProgress => agent_client_protocol::ToolCallStatus::InProgress,
-            ToolCallStatus::Completed => agent_client_protocol::ToolCallStatus::Completed,
-            ToolCallStatus::Failed => agent_client_protocol::ToolCallStatus::Failed,
+            ToolCallStatus::Pending => agent_client_protocol::schema::ToolCallStatus::Pending,
+            ToolCallStatus::InProgress => agent_client_protocol::schema::ToolCallStatus::InProgress,
+            ToolCallStatus::Completed => agent_client_protocol::schema::ToolCallStatus::Completed,
+            ToolCallStatus::Failed => agent_client_protocol::schema::ToolCallStatus::Failed,
             // ACP doesn't have Cancelled status, map to Failed
-            ToolCallStatus::Cancelled => agent_client_protocol::ToolCallStatus::Failed,
+            ToolCallStatus::Cancelled => agent_client_protocol::schema::ToolCallStatus::Failed,
         }
     }
 }
 
 impl ToolCallContent {
-    /// Convert to agent_client_protocol::ToolCallContent
-    pub fn to_acp_content(&self) -> agent_client_protocol::ToolCallContent {
+    /// Convert to agent_client_protocol::schema::ToolCallContent
+    pub fn to_acp_content(&self) -> agent_client_protocol::schema::ToolCallContent {
         match self {
             ToolCallContent::Content { content } => {
                 // ToolCallContent::Content is a tuple variant wrapping a Content struct
                 let content_block = content.clone();
-                agent_client_protocol::ToolCallContent::from(content_block)
+                agent_client_protocol::schema::ToolCallContent::from(content_block)
             }
             ToolCallContent::Diff {
                 path,
@@ -544,27 +544,28 @@ impl ToolCallContent {
                 new_text,
             } => {
                 // ToolCallContent::Diff is a tuple variant wrapping a Diff struct
-                let mut diff = agent_client_protocol::Diff::new(path.clone(), new_text.clone());
+                let mut diff =
+                    agent_client_protocol::schema::Diff::new(path.clone(), new_text.clone());
                 if let Some(ref old) = old_text {
                     diff = diff.old_text(old.clone());
                 }
-                agent_client_protocol::ToolCallContent::Diff(diff)
+                agent_client_protocol::schema::ToolCallContent::Diff(diff)
             }
             ToolCallContent::Terminal { terminal_id } => {
                 // ToolCallContent::Terminal is a tuple variant wrapping a Terminal struct
-                let terminal = agent_client_protocol::Terminal::new(
-                    agent_client_protocol::TerminalId::new(terminal_id.clone()),
+                let terminal = agent_client_protocol::schema::Terminal::new(
+                    agent_client_protocol::schema::TerminalId::new(terminal_id.clone()),
                 );
-                agent_client_protocol::ToolCallContent::Terminal(terminal)
+                agent_client_protocol::schema::ToolCallContent::Terminal(terminal)
             }
         }
     }
 }
 
 impl ToolCallLocation {
-    /// Convert to agent_client_protocol::ToolCallLocation
-    pub fn to_acp_location(&self) -> agent_client_protocol::ToolCallLocation {
-        let mut location = agent_client_protocol::ToolCallLocation::new(self.path.clone());
+    /// Convert to agent_client_protocol::schema::ToolCallLocation
+    pub fn to_acp_location(&self) -> agent_client_protocol::schema::ToolCallLocation {
+        let mut location = agent_client_protocol::schema::ToolCallLocation::new(self.path.clone());
         if let Some(line) = self.line {
             location = location.line(line as u32);
         }
@@ -783,8 +784,8 @@ mod tests {
     #[test]
     fn test_tool_call_content_serialization_content_variant() {
         let content = ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("Test content"),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("Test content"),
             ),
         };
 
@@ -847,7 +848,7 @@ mod tests {
         let content: ToolCallContent = serde_json::from_value(json).expect("Should deserialize");
         match content {
             ToolCallContent::Content { content } => {
-                if let agent_client_protocol::ContentBlock::Text(text) = content {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = content {
                     assert_eq!(text.text, "Deserialized content");
                 } else {
                     panic!("Expected text content");
@@ -900,15 +901,16 @@ mod tests {
     #[test]
     fn test_tool_call_content_to_acp_content_variant() {
         let content = ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("ACP test"),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("ACP test"),
             ),
         };
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Content(acp_content) => {
-                if let agent_client_protocol::ContentBlock::Text(text) = acp_content.content {
+            agent_client_protocol::schema::ToolCallContent::Content(acp_content) => {
+                if let agent_client_protocol::schema::ContentBlock::Text(text) = acp_content.content
+                {
                     assert_eq!(text.text, "ACP test");
                 } else {
                     panic!("Expected text content");
@@ -928,7 +930,7 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Diff(diff) => {
+            agent_client_protocol::schema::ToolCallContent::Diff(diff) => {
                 assert_eq!(diff.path.to_string_lossy(), "/workspace/config.json");
                 assert_eq!(diff.old_text.unwrap(), r#"{"debug": false}"#);
                 assert_eq!(diff.new_text, r#"{"debug": true}"#);
@@ -946,7 +948,7 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Terminal(terminal) => {
+            agent_client_protocol::schema::ToolCallContent::Terminal(terminal) => {
                 assert_eq!(terminal.terminal_id.0.as_ref(), "term_unique_id_123");
             }
             _ => panic!("Expected Terminal variant"),
@@ -963,8 +965,8 @@ mod tests {
         );
 
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("Starting operation"),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("Starting operation"),
             ),
         });
 
@@ -984,17 +986,17 @@ mod tests {
         assert_eq!(acp_call.content.len(), 3);
 
         match &acp_call.content[0] {
-            agent_client_protocol::ToolCallContent::Content(..) => {}
+            agent_client_protocol::schema::ToolCallContent::Content(..) => {}
             _ => panic!("First content should be Content variant"),
         }
 
         match &acp_call.content[1] {
-            agent_client_protocol::ToolCallContent::Diff(..) => {}
+            agent_client_protocol::schema::ToolCallContent::Diff(..) => {}
             _ => panic!("Second content should be Diff variant"),
         }
 
         match &acp_call.content[2] {
-            agent_client_protocol::ToolCallContent::Terminal(..) => {}
+            agent_client_protocol::schema::ToolCallContent::Terminal(..) => {}
             _ => panic!("Third content should be Terminal variant"),
         }
     }
@@ -1016,7 +1018,7 @@ mod tests {
 
         let acp_content = content.to_acp_content();
         match acp_content {
-            agent_client_protocol::ToolCallContent::Diff(diff) => {
+            agent_client_protocol::schema::ToolCallContent::Diff(diff) => {
                 assert!(diff.old_text.unwrap().contains('\n'));
                 assert!(diff.new_text.contains('\n'));
             }
@@ -1106,7 +1108,7 @@ mod tests {
         assert!(update.fields.status.is_some());
         assert_eq!(
             update.fields.status.unwrap(),
-            agent_client_protocol::ToolCallStatus::InProgress
+            agent_client_protocol::schema::ToolCallStatus::InProgress
         );
 
         // All other fields should be None (omitted in serialization)
@@ -1133,8 +1135,8 @@ mod tests {
 
         // Now add content
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("Progress update"),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("Progress update"),
             ),
         });
 
@@ -1169,8 +1171,8 @@ mod tests {
         // Change multiple fields
         report.update_status(ToolCallStatus::Completed);
         report.add_content(ToolCallContent::Content {
-            content: agent_client_protocol::ContentBlock::Text(
-                agent_client_protocol::TextContent::new("Done"),
+            content: agent_client_protocol::schema::ContentBlock::Text(
+                agent_client_protocol::schema::TextContent::new("Done"),
             ),
         });
         report.set_raw_output(serde_json::json!({"result": "success"}));
@@ -1346,7 +1348,7 @@ mod tests {
         assert!(update.fields.status.is_some());
         assert_eq!(
             update.fields.status.unwrap(),
-            agent_client_protocol::ToolCallStatus::Completed
+            agent_client_protocol::schema::ToolCallStatus::Completed
         );
     }
 }

@@ -11,7 +11,7 @@
 //! [`LibraryPartialAdapter`] pattern shared with prompts and rules. Use
 //! `{% include 'partial-name' %}` to include partials from the `_partials/` directory.
 
-use agent_client_protocol::StopReason;
+use agent_client_protocol::schema::StopReason;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_templating::{HashMapPartialLoader, PartialLoader, Template};
 

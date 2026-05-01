@@ -251,12 +251,15 @@ async fn recording_directory_is_populated_unconditionally() {
 
     // Drive a real round-trip so the wrapper has at least one call to record.
     // Going through the chain mirrors how production reaches the runner and
-    // gives the notification bridge time to forward playback notifications.
+    // gives the JSON-RPC connection time to flush playback notifications.
+    //
+    // In ACP 0.11 `PlaybackAgent` is `ConnectTo<Client>` and is passed
+    // directly to `with_agent`; notifications flow through the connection
+    // itself, captured by the `on_receive_notification` handler installed
+    // during arm.
     {
         let agent = PlaybackAgent::new(recording_fixture_path("rule_clean_pass.json"), "claude");
-        let notifications = agent.subscribe_notifications();
-        let agent_arc: Arc<dyn agent_client_protocol::Agent + Send + Sync> = Arc::new(agent);
-        let ctx = AvpContext::with_agent(agent_arc, notifications).expect("with_agent");
+        let ctx = AvpContext::with_agent(agent).expect("with_agent");
 
         let session_id = "rec-session";
         let turn_state =

@@ -6,7 +6,7 @@
 
 use crate::agent_file_operations::{ReadTextFileParams, ReadTextFileResponse, WriteTextFileParams};
 use crate::constants::sizes;
-use agent_client_protocol::{SessionId, WriteTextFileResponse};
+use agent_client_protocol::schema::{SessionId, WriteTextFileResponse};
 use swissarmyhammer_common::Pretty;
 
 impl crate::agent::ClaudeAgent {

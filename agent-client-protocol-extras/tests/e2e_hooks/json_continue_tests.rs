@@ -12,11 +12,9 @@
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 //!   → Cancel → cancel channel receives session ID
 
-use agent_client_protocol::Agent;
 use tokio::sync::broadcast;
 
 use crate::helpers;
-use std::sync::Arc;
 
 /// UserPromptSubmit with continue:false should cancel the prompt.
 #[tokio::test]
@@ -27,12 +25,10 @@ async fn user_prompt_submit_continue_false_cancels() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(
         result.is_err(),
@@ -55,7 +51,7 @@ async fn pre_tool_use_continue_false_cancels() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -89,7 +85,7 @@ async fn post_tool_use_continue_false_cancels() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PostToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -124,7 +120,7 @@ async fn post_tool_use_failure_continue_false_cancels() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("PostToolUseFailure", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -159,7 +155,7 @@ async fn stop_continue_false_ignored() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Stop", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
     let response = helpers::run_prompt(&agent, &session_id, "Run a bash command").await;
@@ -186,7 +182,7 @@ async fn session_start_continue_false_ignored() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("SessionStart", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     // SessionStart fires inside new_session — Cancel should be silently ignored
     let _session_id = helpers::init_session(&agent).await;
@@ -207,7 +203,7 @@ async fn notification_continue_false_cancels() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Notification", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
