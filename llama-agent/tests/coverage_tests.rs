@@ -632,7 +632,7 @@ fn test_buffered_streaming_parser_reset() {
 
 #[test]
 fn test_acp_to_llama_messages_text() {
-    use agent_client_protocol::ContentBlock;
+    use agent_client_protocol::schema::ContentBlock;
     let content = vec![ContentBlock::from("Hello, world!")];
     let messages = acp_to_llama_messages(content).unwrap();
     assert_eq!(messages.len(), 1);
@@ -649,7 +649,7 @@ fn test_acp_to_llama_messages_empty() {
 
 #[test]
 fn test_acp_to_llama_messages_multiple_text() {
-    use agent_client_protocol::ContentBlock;
+    use agent_client_protocol::schema::ContentBlock;
     let content = vec![ContentBlock::from("First"), ContentBlock::from("Second")];
     let messages = acp_to_llama_messages(content).unwrap();
     assert_eq!(messages.len(), 2);
@@ -659,7 +659,7 @@ fn test_acp_to_llama_messages_multiple_text() {
 
 #[test]
 fn test_acp_to_llama_session_id_valid() {
-    use agent_client_protocol::SessionId as AcpSessionId;
+    use agent_client_protocol::schema::SessionId as AcpSessionId;
     let llama_id = SessionId::new();
     let acp_id = AcpSessionId::new(llama_id.to_string());
     let result = acp_to_llama_session_id(acp_id);
@@ -668,7 +668,7 @@ fn test_acp_to_llama_session_id_valid() {
 
 #[test]
 fn test_acp_to_llama_session_id_invalid() {
-    use agent_client_protocol::SessionId as AcpSessionId;
+    use agent_client_protocol::schema::SessionId as AcpSessionId;
     let acp_id = AcpSessionId::new("not-a-valid-ulid");
     let result = acp_to_llama_session_id(acp_id);
     assert!(result.is_err());
@@ -780,7 +780,7 @@ fn test_tool_result_to_acp_update_error() {
 
 #[test]
 fn test_infer_tool_kind_read() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("fs_read"), ToolKind::Read);
     assert_eq!(infer_tool_kind("get_file"), ToolKind::Read);
     assert_eq!(infer_tool_kind("list_files"), ToolKind::Read);
@@ -792,7 +792,7 @@ fn test_infer_tool_kind_read() {
 
 #[test]
 fn test_infer_tool_kind_edit() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("fs_write"), ToolKind::Edit);
     assert_eq!(infer_tool_kind("create_file"), ToolKind::Edit);
     assert_eq!(infer_tool_kind("update_record"), ToolKind::Edit);
@@ -802,14 +802,14 @@ fn test_infer_tool_kind_edit() {
 
 #[test]
 fn test_infer_tool_kind_delete() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("delete_file"), ToolKind::Delete);
     assert_eq!(infer_tool_kind("remove_item"), ToolKind::Delete);
 }
 
 #[test]
 fn test_infer_tool_kind_execute() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("execute_command"), ToolKind::Execute);
     assert_eq!(infer_tool_kind("shell"), ToolKind::Execute);
     assert_eq!(infer_tool_kind("terminal"), ToolKind::Execute);
@@ -819,7 +819,7 @@ fn test_infer_tool_kind_execute() {
 
 #[test]
 fn test_infer_tool_kind_think() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("think"), ToolKind::Think);
     assert_eq!(infer_tool_kind("plan_work"), ToolKind::Think);
     assert_eq!(infer_tool_kind("reason_about"), ToolKind::Think);
@@ -828,7 +828,7 @@ fn test_infer_tool_kind_think() {
 
 #[test]
 fn test_infer_tool_kind_search() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("search_files"), ToolKind::Search);
     assert_eq!(infer_tool_kind("grep_code"), ToolKind::Search);
     assert_eq!(infer_tool_kind("find_symbol"), ToolKind::Search);
@@ -836,14 +836,14 @@ fn test_infer_tool_kind_search() {
 
 #[test]
 fn test_infer_tool_kind_move() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("move_file"), ToolKind::Move);
     assert_eq!(infer_tool_kind("rename_item"), ToolKind::Move);
 }
 
 #[test]
 fn test_infer_tool_kind_fetch() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("http_get"), ToolKind::Fetch);
     assert_eq!(infer_tool_kind("web_request"), ToolKind::Fetch);
     assert_eq!(infer_tool_kind("url_open"), ToolKind::Fetch);
@@ -851,14 +851,14 @@ fn test_infer_tool_kind_fetch() {
 
 #[test]
 fn test_infer_tool_kind_other() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("some_custom_tool"), ToolKind::Other);
     assert_eq!(infer_tool_kind("misc_operation"), ToolKind::Other);
 }
 
 #[test]
 fn test_infer_tool_kind_rm_as_word() {
-    use agent_client_protocol::ToolKind;
+    use agent_client_protocol::schema::ToolKind;
     assert_eq!(infer_tool_kind("fs_rm"), ToolKind::Delete);
     // "rm" inside another word should NOT match delete
     // (but "mv" contains "mv" and matches Move)
@@ -1183,7 +1183,7 @@ fn test_validation_error_multiple_to_json_rpc() {
 fn test_llama_chunk_to_acp_notification() {
     use llama_agent::acp::translation::llama_chunk_to_acp_notification;
 
-    let session_id = agent_client_protocol::SessionId::new("test-session-id");
+    let session_id = agent_client_protocol::schema::SessionId::new("test-session-id");
     let chunk = StreamChunk {
         text: "Hello, world!".to_string(),
         is_complete: false,

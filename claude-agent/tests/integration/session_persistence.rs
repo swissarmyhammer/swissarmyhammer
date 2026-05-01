@@ -82,10 +82,10 @@ fn test_session_loaded_from_disk_after_restart() {
     assert_eq!(session.context.len(), 2, "Messages should be preserved");
 
     // Verify message content
-    if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
         &session.context[0].update
     {
-        if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
             assert_eq!(text.text, "Hello");
         } else {
             panic!("Expected text content");
@@ -182,11 +182,11 @@ fn test_session_with_client_capabilities_persisted() {
     let (manager, _temp_dir) = create_test_session_manager();
     let cwd = std::env::current_dir().unwrap();
 
-    let fs_cap = agent_client_protocol::FileSystemCapabilities::new()
+    let fs_cap = agent_client_protocol::schema::FileSystemCapabilities::new()
         .read_text_file(true)
         .write_text_file(true);
 
-    let capabilities = agent_client_protocol::ClientCapabilities::new()
+    let capabilities = agent_client_protocol::schema::ClientCapabilities::new()
         .fs(fs_cap)
         .terminal(true);
 
@@ -272,11 +272,11 @@ fn test_session_available_commands_persisted() {
     let session_id = manager.create_session(cwd, None).unwrap();
 
     let commands = vec![
-        agent_client_protocol::AvailableCommand::new(
+        agent_client_protocol::schema::AvailableCommand::new(
             "create_plan".to_string(),
             "Create an execution plan".to_string(),
         ),
-        agent_client_protocol::AvailableCommand::new(
+        agent_client_protocol::schema::AvailableCommand::new(
             "research_codebase".to_string(),
             "Research the codebase".to_string(),
         ),
@@ -376,26 +376,26 @@ fn test_multiple_sessions_persisted_independently() {
     assert_eq!(session3.context.len(), 1);
 
     // Verify each session has its own distinct message
-    if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
         &session1.context[0].update
     {
-        if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
             assert_eq!(text.text, "Session 1");
         }
     }
 
-    if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
         &session2.context[0].update
     {
-        if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
             assert_eq!(text.text, "Session 2");
         }
     }
 
-    if let agent_client_protocol::SessionUpdate::UserMessageChunk(chunk) =
+    if let agent_client_protocol::schema::SessionUpdate::UserMessageChunk(chunk) =
         &session3.context[0].update
     {
-        if let agent_client_protocol::ContentBlock::Text(text) = &chunk.content {
+        if let agent_client_protocol::schema::ContentBlock::Text(text) = &chunk.content {
             assert_eq!(text.text, "Session 3");
         }
     }

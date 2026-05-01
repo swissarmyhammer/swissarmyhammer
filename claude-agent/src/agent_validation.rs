@@ -1,8 +1,9 @@
 //! Agent validation logic for protocol and capability validation
 
-use agent_client_protocol::{
-    ClientCapabilities, Error, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
+use agent_client_protocol::schema::{
+    ClientCapabilities, FileSystemCapabilities, InitializeRequest, ProtocolVersion,
 };
+use agent_client_protocol::Error;
 
 impl crate::agent::ClaudeAgent {
     /// Supported protocol versions by this agent

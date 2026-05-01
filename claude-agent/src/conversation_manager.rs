@@ -25,7 +25,7 @@ use crate::{
     session::{Session, SessionId},
     tools::{InternalToolRequest, ToolCallHandler, ToolCallResult},
 };
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     ContentBlock, PromptResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
 use serde::{Deserialize, Serialize};
@@ -413,9 +413,10 @@ impl ConversationManager {
                     // Send streaming update
                     let text_content = TextContent::new(chunk.content.clone());
                     let content_block = ContentBlock::Text(text_content);
-                    let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+                    let content_chunk =
+                        agent_client_protocol::schema::ContentChunk::new(content_block);
                     let notification = SessionNotification::new(
-                        agent_client_protocol::SessionId::new(session_id.to_string()),
+                        agent_client_protocol::schema::SessionId::new(session_id.to_string()),
                         SessionUpdate::AgentMessageChunk(content_chunk),
                     );
 
@@ -603,7 +604,7 @@ impl ConversationManager {
                 let tool_handler = self.tool_handler.write().await;
                 tool_handler
                     .handle_tool_request(
-                        &agent_client_protocol::SessionId::new(session_id.to_string()),
+                        &agent_client_protocol::schema::SessionId::new(session_id.to_string()),
                         internal_request,
                     )
                     .await

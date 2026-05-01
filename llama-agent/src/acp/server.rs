@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::agent::AgentServer;
 use crate::types::ids::SessionId as LlamaSessionId;
 use crate::types::AgentAPI;
-use agent_client_protocol::{ExtResponse, SessionId as AcpSessionId, SessionNotification};
+use agent_client_protocol::schema::{ExtResponse, SessionId as AcpSessionId, SessionNotification};
 use futures::StreamExt;
 use swissarmyhammer_common::Pretty;
 use tokio::sync::{broadcast, RwLock};
@@ -32,7 +32,7 @@ pub struct AcpServer {
     notification_tx: broadcast::Sender<SessionNotification>,
 
     /// Client capabilities from initialize request for capability gating
-    client_capabilities: Arc<RwLock<Option<agent_client_protocol::ClientCapabilities>>>,
+    client_capabilities: Arc<RwLock<Option<agent_client_protocol::schema::ClientCapabilities>>>,
 
     /// ACP server configuration
     config: AcpConfig,
@@ -56,7 +56,7 @@ impl AcpServer {
         config: AcpConfig,
     ) -> (
         Self,
-        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
     ) {
         let (notification_tx, notification_rx) = broadcast::channel(1000);
 
@@ -134,7 +134,8 @@ impl AcpServer {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let config = AcpConfig::default();
     ///     let agent_server = Arc::new(AgentServer::new(/* ... */).await?);
-    ///     let acp_server = Arc::new(AcpServer::new(agent_server, config));
+    ///     let (acp_server, _notification_rx) = AcpServer::new(agent_server, config);
+    ///     let acp_server = Arc::new(acp_server);
     ///
     ///     // Start server with stdio transport
     ///     Arc::clone(&acp_server).start_stdio().await?;
@@ -154,20 +155,20 @@ impl AcpServer {
     /// the capabilities advertised in the initialize response.
     fn validate_mcp_transports(
         &self,
-        mcp_servers: &[agent_client_protocol::McpServer],
+        mcp_servers: &[agent_client_protocol::schema::McpServer],
     ) -> Result<(), agent_client_protocol::Error> {
         for server in mcp_servers {
             match server {
-                agent_client_protocol::McpServer::Stdio(_) => {
+                agent_client_protocol::schema::McpServer::Stdio(_) => {
                     // stdio is always supported (baseline requirement)
                     continue;
                 }
-                agent_client_protocol::McpServer::Http(_) => {
+                agent_client_protocol::schema::McpServer::Http(_) => {
                     // For now, http is advertised as true in initialize, so allow
                     // TODO: Make this configurable when we add mcp_capabilities to AcpCapabilities
                     tracing::debug!("HTTP MCP server accepted");
                 }
-                agent_client_protocol::McpServer::Sse(_) => {
+                agent_client_protocol::schema::McpServer::Sse(_) => {
                     // SSE is advertised as false, so reject
                     tracing::error!("SSE MCP server requested but sse capability not advertised");
                     return Err(agent_client_protocol::Error::invalid_params());
@@ -211,39 +212,45 @@ impl AcpServer {
     /// tool calls have been made and executed.
     fn map_finish_reason_to_stop_reason(
         finish_reason: &crate::types::FinishReason,
-    ) -> agent_client_protocol::StopReason {
+    ) -> agent_client_protocol::schema::StopReason {
         match finish_reason {
             crate::types::FinishReason::Stopped(reason) => match reason.as_str() {
-                "Maximum tokens reached" => agent_client_protocol::StopReason::MaxTokens,
-                "Error: Request cancelled" => agent_client_protocol::StopReason::Cancelled,
-                _ => agent_client_protocol::StopReason::EndTurn,
+                "Maximum tokens reached" => agent_client_protocol::schema::StopReason::MaxTokens,
+                "Error: Request cancelled" => agent_client_protocol::schema::StopReason::Cancelled,
+                _ => agent_client_protocol::schema::StopReason::EndTurn,
             },
         }
     }
 
     /// Start the ACP server with custom streams (stdio or other).
     ///
-    /// This method handles JSON-RPC requests and notifications concurrently.
+    /// Wires the supplied reader/writer to the ACP 0.11 builder/handler runtime.
+    /// Each ACP method (`initialize`, `authenticate`, `session/new`, `session/load`,
+    /// `session/set_mode`, `session/prompt`, `session/cancel`, plus the extension
+    /// channel) is registered as a typed handler on `Agent.builder()` and
+    /// delegates to the inherent method of the same name on `AcpServer`.
     ///
-    /// # Concurrency Model
-    /// - Request handler processes incoming JSON-RPC requests line-by-line
-    /// - Notification handler forwards session updates to the client
-    /// - Both run concurrently via `tokio::join!`
-    /// - When reader closes, request handler signals notification handler to stop
+    /// # Concurrency model
+    /// The SDK owns the dispatch loop. The closure passed to `connect_with`
+    /// (the "bridge") forwards `SessionNotification`s from the internal
+    /// broadcast channel to the connected client via `cx.send_notification`.
     ///
-    /// # Shutdown Coordination
-    /// A broadcast channel coordinates graceful shutdown between handlers:
-    /// 1. Request handler processes requests until reader closes (client disconnects)
-    /// 2. Request handler sends shutdown signal via broadcast channel
-    /// 3. Notification handler receives shutdown signal in tokio::select! loop
-    /// 4. Notification handler stops gracefully, both handlers complete
+    /// Connection liveness is tracked through a [`tokio_util::sync::CancellationToken`]
+    /// owned by this call. The reader stream wired into the SDK is wrapped so
+    /// that when it returns EOF (clean client disconnect), the token is
+    /// cancelled. The bridge races `rx.recv()` against `token.cancelled()` and
+    /// returns `Ok(())` on cancel, which lets `connect_with` shut the
+    /// connection down cleanly.
     ///
-    /// The broadcast channel (vs. oneshot) allows the notification handler to
-    /// continue processing notifications while monitoring for shutdown.
+    /// Without this coordination the bridge would block forever on
+    /// `rx.recv()` after a clean transport close, because the broadcast
+    /// channel's senders are owned by `AcpServer` (which outlives the
+    /// connection) and `cx.send_notification` only errors after the SDK has
+    /// already torn down its outgoing actor.
     ///
     /// # Arguments
-    /// * `reader` - Async reader for incoming JSON-RPC requests (typically stdin)
-    /// * `writer` - Async writer for responses and notifications (typically stdout)
+    /// * `reader` - Async reader for incoming JSON-RPC messages (typically stdin)
+    /// * `writer` - Async writer for outgoing JSON-RPC messages (typically stdout)
     pub async fn start_with_streams<R, W>(
         self: Arc<Self>,
         reader: R,
@@ -253,362 +260,98 @@ impl AcpServer {
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        use tokio::io::{AsyncBufReadExt, BufReader};
+        tracing::info!("Starting ACP server with stdio streams (SDK 0.11 builder)");
 
-        tracing::info!("Starting ACP server with stdio streams");
+        // Cancellation token used to wake the notification bridge when the
+        // transport's reader hits EOF. The transport's incoming stream is
+        // wrapped so EOF triggers `connection_closed.cancel()`, and the bridge
+        // exits its `rx.recv()` loop the moment the token fires.
+        let connection_closed = tokio_util::sync::CancellationToken::new();
 
-        // Create shared writer for both responses and notifications
-        let writer = Arc::new(tokio::sync::Mutex::new(writer));
+        let transport = build_lines_transport(reader, writer, connection_closed.clone());
 
-        // Create shutdown channel to coordinate between request and notification handlers
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let server = Arc::clone(&self);
 
-        // Subscribe to notification channel
-        let mut notification_rx = self.notification_tx.subscribe();
-
-        // Clone references for handlers
-        let server_for_requests = Arc::clone(&self);
-        let writer_for_notifications = Arc::clone(&writer);
-
-        // Handle incoming requests
-        let request_handler = async move {
-            let mut lines = BufReader::new(reader).lines();
-
-            while let Some(line) = lines.next_line().await.map_err(|e| {
-                tracing::error!("Failed to read line: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })? {
-                if line.trim().is_empty() {
-                    continue;
-                }
-
-                tracing::debug!("Received JSON-RPC request: {}", line);
-
-                // Parse and handle the request
-                if let Err(e) = Self::handle_request(
-                    Arc::clone(&server_for_requests),
-                    Arc::clone(&writer),
-                    line,
-                )
-                .await
+        agent_client_protocol::Agent
+            .builder()
+            .name("llama-agent")
+            // A single handler keyed on `ClientRequest` covers every ACP request
+            // (initialize, authenticate, session/*, plus extension methods). The
+            // SDK demuxes by method name into the right enum variant, and we
+            // delegate to the matching inherent method on `AcpServer`.
+            .on_receive_request(
                 {
-                    tracing::error!("Failed to handle request: {}", e);
-                }
-            }
-
-            tracing::info!("Request handler completed (reader closed)");
-            let _ = shutdown_tx.send(());
-            Ok::<(), agent_client_protocol::Error>(())
-        };
-
-        // Handle outgoing notifications
-        let notification_handler = async move {
-            tracing::info!("Notification handler started");
-            loop {
-                tokio::select! {
-                    notification_result = notification_rx.recv() => {
-                        match notification_result {
-                            Ok(notification) => {
-                                tracing::debug!("Sending session/update notification");
-                                if let Err(e) = Self::send_notification(
-                                    Arc::clone(&writer_for_notifications),
-                                    notification,
-                                )
-                                .await
-                                {
-                                    tracing::error!("Failed to send notification: {}", e);
-                                    break;
+                    let server = Arc::clone(&server);
+                    async move |req: agent_client_protocol::ClientRequest, responder, _cx| {
+                        AcpServer::dispatch_client_request(&server, req, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            // `ClientNotification` covers `session/cancel` and extension notifications.
+            .on_receive_notification(
+                {
+                    let server = Arc::clone(&server);
+                    async move |notif: agent_client_protocol::ClientNotification, _cx| {
+                        AcpServer::dispatch_client_notification(&server, notif).await;
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .connect_with(transport, async move |cx| {
+                // Bridge: forward broadcast `SessionNotification`s to the client.
+                //
+                // The bridge exits cleanly when any of the following happens:
+                // - `connection_closed` is cancelled (reader EOF — see
+                //   `build_lines_transport`).
+                // - The broadcast channel reports `Closed` (all senders dropped).
+                // - `cx.send_notification` errors (write side of the transport
+                //   has shut down).
+                //
+                // Any of these returning `Ok(())` from the bridge causes
+                // `run_until` inside `connect_with` to drop the background
+                // dispatch loop and return — i.e. `start_with_streams`
+                // completes.
+                let mut rx = self.notification_tx.subscribe();
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = connection_closed.cancelled() => {
+                            tracing::info!(
+                                "Transport closed (reader EOF); shutting down notification bridge"
+                            );
+                            return Ok(());
+                        }
+                        recv_result = rx.recv() => {
+                            match recv_result {
+                                Ok(notification) => {
+                                    if let Err(e) = cx.send_notification(notification) {
+                                        tracing::error!(
+                                            "Failed to forward session/update: {}",
+                                            e
+                                        );
+                                        return Err(e);
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                #[derive(serde::Serialize, Debug)]
-                                struct ChannelError { error: String }
-                                tracing::warn!("Notification channel error: {}", Pretty(&ChannelError { error: e.to_string() }));
-                                break;
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    tracing::info!(
+                                        "Session notification channel closed; shutting down connection"
+                                    );
+                                    return Ok(());
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                    tracing::warn!(
+                                        "Notification bridge lagged; skipped {} updates",
+                                        skipped
+                                    );
+                                }
                             }
                         }
                     }
-                    _ = shutdown_rx.recv() => {
-                        tracing::info!("Notification handler received shutdown signal");
-                        break;
-                    }
                 }
-            }
-            tracing::info!("Notification handler stopped");
-        };
-
-        // Run both handlers concurrently
-        let (request_result, _) = tokio::join!(request_handler, notification_handler);
-
-        request_result
-    }
-
-    /// Handle a single JSON-RPC request
-    async fn handle_request<W>(
-        server: Arc<Self>,
-        writer: Arc<tokio::sync::Mutex<W>>,
-        line: String,
-    ) -> Result<(), agent_client_protocol::Error>
-    where
-        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
-    {
-        use agent_client_protocol::Agent as _;
-
-        // Parse JSON-RPC request
-        let request: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
-            tracing::error!("Failed to parse JSON-RPC request: {}", e);
-            agent_client_protocol::Error::parse_error()
-        })?;
-
-        let method = request
-            .get("method")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                tracing::error!("Missing method in request");
-                agent_client_protocol::Error::invalid_request()
-            })?;
-
-        let id = request.get("id").cloned();
-        let params = request
-            .get("params")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-
-        let is_notification = id.is_none();
-
-        tracing::info!(
-            "Handling {}: method={}, id={:?}",
-            if is_notification {
-                "notification"
-            } else {
-                "request"
-            },
-            method,
-            id
-        );
-
-        // Route to appropriate agent method
-        let response_result: Result<serde_json::Value, agent_client_protocol::Error> = match method
-        {
-            "initialize" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .initialize(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse initialize params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "authenticate" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .authenticate(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse authenticate params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "session/new" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .new_session(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse session/new params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "session/load" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .load_session(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse session/load params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "session/set-mode" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .set_session_mode(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse session/set-mode params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "session/prompt" => match serde_json::from_value(params) {
-                Ok(req) => server
-                    .prompt(req)
-                    .await
-                    .map(|r| serde_json::to_value(r).unwrap()),
-                Err(e) => {
-                    tracing::error!("Failed to parse session/prompt params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            "session/cancel" => match serde_json::from_value(params) {
-                Ok(req) => server.cancel(req).await.map(|_| serde_json::Value::Null),
-                Err(e) => {
-                    tracing::error!("Failed to parse session/cancel params: {}", e);
-                    Err(agent_client_protocol::Error::invalid_params())
-                }
-            },
-            // Handle extension methods through ext_method
-            _ => {
-                let params_raw = agent_client_protocol::RawValue::from_string(params.to_string())
-                    .map_err(|_| {
-                    tracing::error!("Failed to convert params to RawValue");
-                    agent_client_protocol::Error::invalid_params()
-                })?;
-
-                let ext_request = agent_client_protocol::ExtRequest::new(
-                    method.to_string(),
-                    Arc::from(params_raw),
-                );
-                server
-                    .ext_method(ext_request)
-                    .await
-                    .map(|ext_response| {
-                        // Parse the ExtResponse (tuple struct) back to serde_json::Value
-                        serde_json::from_str(ext_response.0.get()).unwrap_or_else(|_| {
-                            serde_json::Value::String(ext_response.0.get().to_string())
-                        })
-                    })
-                    .map_err(|e| {
-                        tracing::error!("Extension method {} failed: {}", method, e);
-                        agent_client_protocol::Error::internal_error()
-                    })
-            }
-        };
-
-        // Only send response for requests (not notifications)
-        if is_notification {
-            match response_result {
-                Ok(_) => tracing::info!("Notification {} processed successfully", method),
-                Err(e) => tracing::error!("Notification {} failed: {}", method, e),
-            }
-            return Ok(());
-        }
-
-        // Build response
-        let response = match response_result {
-            Ok(result) => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": result
-                })
-            }
-            Err(e) => {
-                tracing::error!("Method {} failed: {}", method, e);
-                let json_rpc_error = e.to_json_rpc_error();
-                let mut error_obj = serde_json::json!({
-                    "code": json_rpc_error.code,
-                    "message": json_rpc_error.message
-                });
-
-                // Add data field if present
-                if let Some(data) = json_rpc_error.data {
-                    error_obj["data"] = data;
-                }
-
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": error_obj
-                })
-            }
-        };
-
-        Self::send_response(writer, response).await
-    }
-
-    /// Send a JSON-RPC response
-    async fn send_response<W>(
-        writer: Arc<tokio::sync::Mutex<W>>,
-        response: serde_json::Value,
-    ) -> Result<(), agent_client_protocol::Error>
-    where
-        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
-    {
-        use tokio::io::AsyncWriteExt;
-
-        let response_line = format!(
-            "{}\n",
-            serde_json::to_string(&response).map_err(|e| {
-                tracing::error!("Failed to serialize response: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })?
-        );
-
-        tracing::info!("Sending JSON-RPC response: {} bytes", response_line.len());
-
-        let mut writer_guard = writer.lock().await;
-        writer_guard
-            .write_all(response_line.as_bytes())
+            })
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to write response: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })?;
-        writer_guard.flush().await.map_err(|e| {
-            tracing::error!("Failed to flush response: {}", e);
-            agent_client_protocol::Error::internal_error()
-        })?;
-
-        tracing::info!("JSON-RPC response sent successfully");
-        Ok(())
-    }
-
-    /// Send a session/update notification
-    async fn send_notification<W>(
-        writer: Arc<tokio::sync::Mutex<W>>,
-        notification: SessionNotification,
-    ) -> Result<(), agent_client_protocol::Error>
-    where
-        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
-    {
-        use tokio::io::AsyncWriteExt;
-
-        #[derive(serde::Serialize)]
-        struct JsonRpcNotification {
-            jsonrpc: &'static str,
-            method: &'static str,
-            params: SessionNotification,
-        }
-
-        let msg = JsonRpcNotification {
-            jsonrpc: "2.0",
-            method: "session/update",
-            params: notification,
-        };
-
-        let notification_line = format!(
-            "{}\n",
-            serde_json::to_string(&msg).map_err(|e| {
-                tracing::error!("Failed to serialize notification: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })?
-        );
-
-        let mut writer_guard = writer.lock().await;
-        writer_guard
-            .write_all(notification_line.as_bytes())
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to write notification: {}", e);
-                agent_client_protocol::Error::internal_error()
-            })?;
-        writer_guard.flush().await.map_err(|e| {
-            tracing::error!("Failed to flush notification: {}", e);
-            agent_client_protocol::Error::internal_error()
-        })?;
-
-        Ok(())
     }
 
     /// Get a session by ACP session ID
@@ -703,7 +446,7 @@ impl AcpServer {
     /// - The plan data is malformed
     fn send_plan_notification_from_result(
         &self,
-        acp_session_id: &agent_client_protocol::SessionId,
+        acp_session_id: &agent_client_protocol::schema::SessionId,
         tool_result: &crate::types::ToolResult,
     ) -> Result<(), agent_client_protocol::Error> {
         // Extract _plan from tool result
@@ -735,9 +478,9 @@ impl AcpServer {
         let plan = super::plan::plan_data_to_acp_plan(&plan_data);
 
         // Create and broadcast Plan notification
-        let plan_notification = agent_client_protocol::SessionNotification::new(
+        let plan_notification = agent_client_protocol::schema::SessionNotification::new(
             acp_session_id.clone(),
-            agent_client_protocol::SessionUpdate::Plan(plan),
+            agent_client_protocol::schema::SessionUpdate::Plan(plan),
         );
 
         self.broadcast_notification(plan_notification);
@@ -769,13 +512,13 @@ impl AcpServer {
     /// * `mode_id` - The new mode ID that is now active
     async fn send_current_mode_update(
         &self,
-        session_id: &agent_client_protocol::SessionId,
-        mode_id: agent_client_protocol::SessionModeId,
+        session_id: &agent_client_protocol::schema::SessionId,
+        mode_id: agent_client_protocol::schema::SessionModeId,
     ) {
-        let update = agent_client_protocol::CurrentModeUpdate::new(mode_id.clone());
-        let notification = agent_client_protocol::SessionNotification::new(
+        let update = agent_client_protocol::schema::CurrentModeUpdate::new(mode_id.clone());
+        let notification = agent_client_protocol::schema::SessionNotification::new(
             session_id.clone(),
-            agent_client_protocol::SessionUpdate::CurrentModeUpdate(update),
+            agent_client_protocol::schema::SessionUpdate::CurrentModeUpdate(update),
         );
 
         self.broadcast_notification(notification);
@@ -802,8 +545,9 @@ impl AcpServer {
     /// session exists and returns success.
     pub async fn load_session(
         &self,
-        req: agent_client_protocol::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::LoadSessionResponse, agent_client_protocol::Error> {
+        req: agent_client_protocol::schema::LoadSessionRequest,
+    ) -> Result<agent_client_protocol::schema::LoadSessionResponse, agent_client_protocol::Error>
+    {
         tracing::info!("Loading session {}", req.session_id.0);
 
         // Try to get ACP session from memory, or reconstruct it from llama session
@@ -872,21 +616,22 @@ impl AcpServer {
 
         // Stream ALL historical messages via session/update notifications
         for message in &llama_session.messages {
-            let text_content = agent_client_protocol::TextContent::new(message.content.clone());
-            let content_block = agent_client_protocol::ContentBlock::Text(text_content);
-            let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
+            let text_content =
+                agent_client_protocol::schema::TextContent::new(message.content.clone());
+            let content_block = agent_client_protocol::schema::ContentBlock::Text(text_content);
+            let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
 
             let update = match message.role {
                 crate::types::MessageRole::User => {
-                    agent_client_protocol::SessionUpdate::UserMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::UserMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::Assistant => {
-                    agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::Tool => {
                     // For tool messages, we need to send them as agent message chunks
                     // since SessionUpdate doesn't have a direct ToolResult variant for historical messages
-                    agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk)
+                    agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk)
                 }
                 crate::types::MessageRole::System => {
                     // Skip system messages in session history
@@ -904,7 +649,7 @@ impl AcpServer {
             llama_session.messages.len()
         );
 
-        Ok(agent_client_protocol::LoadSessionResponse::new())
+        Ok(agent_client_protocol::schema::LoadSessionResponse::new())
     }
 
     /// Get a session by ACP session ID
@@ -932,10 +677,11 @@ impl AcpServer {
     }
 
     /// Supported ACP protocol versions (V0 and V1)
-    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::ProtocolVersion] = &[
-        agent_client_protocol::ProtocolVersion::V0,
-        agent_client_protocol::ProtocolVersion::V1,
-    ];
+    const SUPPORTED_PROTOCOL_VERSIONS: &'static [agent_client_protocol::schema::ProtocolVersion] =
+        &[
+            agent_client_protocol::schema::ProtocolVersion::V0,
+            agent_client_protocol::schema::ProtocolVersion::V1,
+        ];
 
     /// Negotiate protocol version according to ACP specification
     ///
@@ -948,8 +694,8 @@ impl AcpServer {
     /// # Returns
     /// The negotiated protocol version to use for the session
     fn negotiate_protocol_version(
-        client_requested_version: &agent_client_protocol::ProtocolVersion,
-    ) -> agent_client_protocol::ProtocolVersion {
+        client_requested_version: &agent_client_protocol::schema::ProtocolVersion,
+    ) -> agent_client_protocol::schema::ProtocolVersion {
         // If client's requested version is supported, use it
         if Self::SUPPORTED_PROTOCOL_VERSIONS.contains(client_requested_version) {
             client_requested_version.clone()
@@ -958,7 +704,7 @@ impl AcpServer {
             Self::SUPPORTED_PROTOCOL_VERSIONS
                 .iter()
                 .max()
-                .unwrap_or(&agent_client_protocol::ProtocolVersion::V1)
+                .unwrap_or(&agent_client_protocol::schema::ProtocolVersion::V1)
                 .clone()
         }
     }
@@ -976,8 +722,8 @@ impl AcpServer {
     fn build_session_mode_state_with_current(
         &self,
         current_mode: &str,
-    ) -> Option<agent_client_protocol::SessionModeState> {
-        use agent_client_protocol::{SessionModeId, SessionModeState};
+    ) -> Option<agent_client_protocol::schema::SessionModeState> {
+        use agent_client_protocol::schema::{SessionModeId, SessionModeState};
 
         if self.config.available_modes.is_empty() {
             return None;
@@ -990,13 +736,15 @@ impl AcpServer {
     }
 }
 
-// Implement the Agent trait for AcpServer to handle ACP protocol methods
-#[async_trait::async_trait(?Send)]
-impl agent_client_protocol::Agent for AcpServer {
-    async fn initialize(
+// ACP protocol entry-points used by the SDK 0.11 builder/handler layer.
+// Each method matches a JSON-RPC request handler registered on
+// `Agent.builder().on_receive_request(...)` in `start_with_streams`.
+impl AcpServer {
+    pub async fn initialize(
         &self,
-        request: agent_client_protocol::InitializeRequest,
-    ) -> Result<agent_client_protocol::InitializeResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::InitializeRequest,
+    ) -> Result<agent_client_protocol::schema::InitializeResponse, agent_client_protocol::Error>
+    {
         tracing::trace!(
             "Processing initialize request with protocol version {}",
             Pretty(&request.protocol_version)
@@ -1030,7 +778,7 @@ impl agent_client_protocol::Agent for AcpServer {
         // Build agent capabilities from config
         // Only advertise capabilities we actually support
         // Currently llama-agent only supports text content (see translation.rs)
-        let prompt_caps = agent_client_protocol::PromptCapabilities::new()
+        let prompt_caps = agent_client_protocol::schema::PromptCapabilities::new()
             .audio(false)
             .embedded_context(false)
             .image(false)
@@ -1040,11 +788,11 @@ impl agent_client_protocol::Agent for AcpServer {
                 map
             });
 
-        let mcp_caps = agent_client_protocol::McpCapabilities::new()
+        let mcp_caps = agent_client_protocol::schema::McpCapabilities::new()
             .http(true)
             .sse(false);
 
-        let agent_capabilities = agent_client_protocol::AgentCapabilities::new()
+        let agent_capabilities = agent_client_protocol::schema::AgentCapabilities::new()
             .load_session(self.config.capabilities.supports_session_loading)
             .prompt_capabilities(prompt_caps)
             .mcp_capabilities(mcp_caps)
@@ -1067,23 +815,26 @@ impl agent_client_protocol::Agent for AcpServer {
             });
 
         // Build Implementation using builder pattern
-        let agent_info =
-            agent_client_protocol::Implementation::new("llama-agent", env!("CARGO_PKG_VERSION"))
-                .title(format!("LLaMA Agent v{}", env!("CARGO_PKG_VERSION")));
+        let agent_info = agent_client_protocol::schema::Implementation::new(
+            "llama-agent",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .title(format!("LLaMA Agent v{}", env!("CARGO_PKG_VERSION")));
 
         // Return InitializeResponse with agent capabilities using builder pattern
         Ok(
-            agent_client_protocol::InitializeResponse::new(negotiated_version)
+            agent_client_protocol::schema::InitializeResponse::new(negotiated_version)
                 .agent_capabilities(agent_capabilities)
                 .auth_methods(vec![])
                 .agent_info(agent_info),
         )
     }
 
-    async fn authenticate(
+    pub async fn authenticate(
         &self,
-        request: agent_client_protocol::AuthenticateRequest,
-    ) -> Result<agent_client_protocol::AuthenticateResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::AuthenticateRequest,
+    ) -> Result<agent_client_protocol::schema::AuthenticateResponse, agent_client_protocol::Error>
+    {
         // AUTHENTICATION ARCHITECTURE DECISION:
         // llama-agent declares NO authentication methods in initialize().
         // According to ACP spec, clients should not call authenticate when no methods are declared.
@@ -1096,10 +847,11 @@ impl agent_client_protocol::Agent for AcpServer {
         Err(agent_client_protocol::Error::method_not_found())
     }
 
-    async fn new_session(
+    pub async fn new_session(
         &self,
-        request: agent_client_protocol::NewSessionRequest,
-    ) -> Result<agent_client_protocol::NewSessionResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::NewSessionRequest,
+    ) -> Result<agent_client_protocol::schema::NewSessionResponse, agent_client_protocol::Error>
+    {
         tracing::info!(
             "Creating new ACP session with cwd: {:?}, mcp_servers: {}",
             request.cwd,
@@ -1253,7 +1005,7 @@ impl agent_client_protocol::Agent for AcpServer {
             None
         };
 
-        let mut response = agent_client_protocol::NewSessionResponse::new(session_id);
+        let mut response = agent_client_protocol::schema::NewSessionResponse::new(session_id);
         if let Some(mode_state) = modes {
             response = response.modes(mode_state);
         }
@@ -1261,18 +1013,11 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(response)
     }
 
-    async fn load_session(
+    pub async fn set_session_mode(
         &self,
-        request: agent_client_protocol::LoadSessionRequest,
-    ) -> Result<agent_client_protocol::LoadSessionResponse, agent_client_protocol::Error> {
-        // Delegate to the existing load_session method
-        self.load_session(request).await
-    }
-
-    async fn set_session_mode(
-        &self,
-        request: agent_client_protocol::SetSessionModeRequest,
-    ) -> Result<agent_client_protocol::SetSessionModeResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::SetSessionModeRequest,
+    ) -> Result<agent_client_protocol::schema::SetSessionModeResponse, agent_client_protocol::Error>
+    {
         // Parse mode ID from request
         let mode_id = &request.mode_id;
         let session_id = &request.session_id;
@@ -1347,7 +1092,7 @@ impl agent_client_protocol::Agent for AcpServer {
         self.send_current_mode_update(session_id, mode_id.clone())
             .await;
 
-        let mut response = agent_client_protocol::SetSessionModeResponse::new();
+        let mut response = agent_client_protocol::schema::SetSessionModeResponse::new();
 
         // Add metadata to indicate mode was successfully set
         let mut meta = serde_json::Map::new();
@@ -1361,10 +1106,10 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(response)
     }
 
-    async fn prompt(
+    pub async fn prompt(
         &self,
-        request: agent_client_protocol::PromptRequest,
-    ) -> Result<agent_client_protocol::PromptResponse, agent_client_protocol::Error> {
+        request: agent_client_protocol::schema::PromptRequest,
+    ) -> Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error> {
         tracing::info!("Processing prompt for session {}", request.session_id.0);
 
         // Get ACP session
@@ -1420,7 +1165,7 @@ impl agent_client_protocol::Agent for AcpServer {
         // Agentic loop: Continue generating until no more tool calls are produced
         let mut total_tokens = 0usize;
         let mut total_tool_calls = 0usize;
-        let mut final_stop_reason = agent_client_protocol::StopReason::EndTurn;
+        let mut final_stop_reason = agent_client_protocol::schema::StopReason::EndTurn;
         let mut all_generated_text = String::new();
 
         loop {
@@ -1568,17 +1313,18 @@ impl agent_client_protocol::Agent for AcpServer {
                 tracing::info!("Processing tool call: {} (id: {})", tool_name, tool_call_id);
 
                 // Send initial ToolCall notification with pending status (per ACP spec)
-                let initial_tool_call = agent_client_protocol::ToolCall::new(
-                    agent_client_protocol::ToolCallId::new(tool_call_id.to_string()),
+                let initial_tool_call = agent_client_protocol::schema::ToolCall::new(
+                    agent_client_protocol::schema::ToolCallId::new(tool_call_id.to_string()),
                     &tool_name,
                 )
-                .status(agent_client_protocol::ToolCallStatus::Pending)
+                .status(agent_client_protocol::schema::ToolCallStatus::Pending)
                 .raw_input(tool_call.arguments.clone());
 
-                let tool_call_notification = agent_client_protocol::SessionNotification::new(
-                    request.session_id.clone(),
-                    agent_client_protocol::SessionUpdate::ToolCall(initial_tool_call),
-                );
+                let tool_call_notification =
+                    agent_client_protocol::schema::SessionNotification::new(
+                        request.session_id.clone(),
+                        agent_client_protocol::schema::SessionUpdate::ToolCall(initial_tool_call),
+                    );
                 self.broadcast_notification(tool_call_notification);
 
                 // Handle tool call with permission checking and execution
@@ -1598,9 +1344,9 @@ impl agent_client_protocol::Agent for AcpServer {
 
                         // Convert tool result to ACP ToolCallUpdate and broadcast
                         let update = super::translation::tool_result_to_acp_update(result.clone());
-                        let notification = agent_client_protocol::SessionNotification::new(
+                        let notification = agent_client_protocol::schema::SessionNotification::new(
                             request.session_id.clone(),
-                            agent_client_protocol::SessionUpdate::ToolCallUpdate(update),
+                            agent_client_protocol::schema::SessionUpdate::ToolCallUpdate(update),
                         );
                         self.broadcast_notification(notification);
 
@@ -1642,17 +1388,18 @@ impl agent_client_protocol::Agent for AcpServer {
                     Err(e) => {
                         tracing::error!("Tool call execution failed: {}", e);
                         // Convert tool call error to ACP notification
-                        let error_notification = agent_client_protocol::SessionNotification::new(
-                            request.session_id.clone(),
-                            agent_client_protocol::SessionUpdate::AgentMessageChunk(
-                                agent_client_protocol::ContentChunk::new(
-                                    agent_client_protocol::ContentBlock::from(format!(
-                                        "Tool call failed: {}",
-                                        e
-                                    )),
+                        let error_notification =
+                            agent_client_protocol::schema::SessionNotification::new(
+                                request.session_id.clone(),
+                                agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(
+                                    agent_client_protocol::schema::ContentChunk::new(
+                                        agent_client_protocol::schema::ContentBlock::from(format!(
+                                            "Tool call failed: {}",
+                                            e
+                                        )),
+                                    ),
                                 ),
-                            ),
-                        );
+                            );
                         self.broadcast_notification(error_notification);
                         // Continue with other tool calls even if one fails
                     }
@@ -1663,9 +1410,9 @@ impl agent_client_protocol::Agent for AcpServer {
             // Note: EOS/EndTurn with no tool calls is already handled above (tool_calls.is_empty() check)
             // If we reach here, tool calls existed, so we need to continue unless hitting a hard limit
             match final_stop_reason {
-                agent_client_protocol::StopReason::MaxTokens
-                | agent_client_protocol::StopReason::Cancelled
-                | agent_client_protocol::StopReason::Refusal => {
+                agent_client_protocol::schema::StopReason::MaxTokens
+                | agent_client_protocol::schema::StopReason::Cancelled
+                | agent_client_protocol::schema::StopReason::Refusal => {
                     tracing::info!(
                         "Stopping agentic loop after executing {} tool calls (hard limit: {})",
                         tool_calls_count,
@@ -1712,12 +1459,12 @@ impl agent_client_protocol::Agent for AcpServer {
         self.clear_mcp_session_context(&acp_session.llama_session_id)
             .await;
 
-        Ok(agent_client_protocol::PromptResponse::new(final_stop_reason).meta(meta))
+        Ok(agent_client_protocol::schema::PromptResponse::new(final_stop_reason).meta(meta))
     }
 
-    async fn cancel(
+    pub async fn cancel(
         &self,
-        request: agent_client_protocol::CancelNotification,
+        request: agent_client_protocol::schema::CancelNotification,
     ) -> Result<(), agent_client_protocol::Error> {
         let session_id = &request.session_id;
         tracing::info!("Processing cancellation for session: {}", session_id.0);
@@ -1750,9 +1497,9 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(())
     }
 
-    async fn ext_method(
+    pub async fn ext_method(
         &self,
-        request: agent_client_protocol::ExtRequest,
+        request: agent_client_protocol::schema::ExtRequest,
     ) -> Result<ExtResponse, agent_client_protocol::Error> {
         tracing::info!("Extension method called: {}", request.method);
 
@@ -1788,7 +1535,7 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
 
                 // Parse request
-                let fs_req: agent_client_protocol::ReadTextFileRequest =
+                let fs_req: agent_client_protocol::schema::ReadTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/read_text_file params: {}", e);
                         agent_client_protocol::Error::invalid_params()
@@ -1839,7 +1586,7 @@ impl agent_client_protocol::Agent for AcpServer {
                 }
 
                 // Parse request
-                let fs_req: agent_client_protocol::WriteTextFileRequest =
+                let fs_req: agent_client_protocol::schema::WriteTextFileRequest =
                     serde_json::from_value(params_value).map_err(|e| {
                         tracing::error!("Failed to parse fs/write_text_file params: {}", e);
                         agent_client_protocol::Error::invalid_params()
@@ -2144,8 +1891,8 @@ impl agent_client_protocol::Agent for AcpServer {
             agent_client_protocol::Error::internal_error()
         })?;
 
-        let raw_value =
-            agent_client_protocol::RawValue::from_string(response_json_str).map_err(|e| {
+        let raw_value = agent_client_protocol::schema::RawValue::from_string(response_json_str)
+            .map_err(|e| {
                 tracing::error!("Failed to create RawValue from response: {}", e);
                 agent_client_protocol::Error::internal_error()
             })?;
@@ -2153,9 +1900,9 @@ impl agent_client_protocol::Agent for AcpServer {
         Ok(ExtResponse::new(Arc::from(raw_value)))
     }
 
-    async fn ext_notification(
+    pub async fn ext_notification(
         &self,
-        notification: agent_client_protocol::ExtNotification,
+        notification: agent_client_protocol::schema::ExtNotification,
     ) -> Result<(), agent_client_protocol::Error> {
         tracing::debug!("Extension notification {} received", notification.method);
         // Extension notifications are ignored for now
@@ -2209,12 +1956,189 @@ fn filesystem_error_to_protocol_error(
     }
 }
 
-use agent_client_protocol_extras::AgentWithFixture;
+impl AcpServer {
+    /// Demultiplex an incoming `ClientRequest` enum variant onto the inherent
+    /// method that handles it, then deliver the typed response back through
+    /// the SDK-supplied `Responder`.
+    ///
+    /// The SDK gives us `Responder<serde_json::Value>` because `ClientRequest`
+    /// is registered with `Response = serde_json::Value`. We cast the responder
+    /// to the variant's typed response (`InitializeResponse`, `PromptResponse`,
+    /// etc.) so each delegate just hands its `Result<T, Error>` to
+    /// `respond_with_result` and the SDK handles serialization.
+    async fn dispatch_client_request(
+        server: &Arc<Self>,
+        request: agent_client_protocol::ClientRequest,
+        responder: agent_client_protocol::Responder<serde_json::Value>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        use agent_client_protocol::ClientRequest as Req;
 
-impl AgentWithFixture for AcpServer {
-    fn agent_type(&self) -> &'static str {
+        match request {
+            Req::InitializeRequest(req) => {
+                let result = server.initialize(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::AuthenticateRequest(req) => {
+                let result = server.authenticate(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::NewSessionRequest(req) => {
+                let result = server.new_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::LoadSessionRequest(req) => {
+                let result = server.load_session(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::SetSessionModeRequest(req) => {
+                let result = server.set_session_mode(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::PromptRequest(req) => {
+                let result = server.prompt(req).await;
+                responder.cast().respond_with_result(result)
+            }
+            Req::ExtMethodRequest(req) => {
+                // ExtResponse wraps an opaque `Arc<RawValue>`; the SDK expects
+                // a `serde_json::Value` for `ClientRequest::Response`, so we
+                // parse the raw JSON back and forward it. Parse failures are
+                // surfaced as internal errors rather than being silently
+                // dropped.
+                let result = server.ext_method(req).await.and_then(|ext_response| {
+                    serde_json::from_str::<serde_json::Value>(ext_response.0.get()).map_err(|e| {
+                        tracing::error!("Failed to parse ExtResponse JSON: {}", e);
+                        agent_client_protocol::Error::internal_error()
+                    })
+                });
+                responder.respond_with_result(result)
+            }
+            // ClientRequest is `#[non_exhaustive]` and may grow new variants
+            // (e.g. unstable list/fork/resume/close). Surface any we don't
+            // model as method-not-found rather than silently ignoring them.
+            other => {
+                tracing::warn!(
+                    "Received unsupported ClientRequest variant: {}",
+                    other.method()
+                );
+                responder
+                    .cast::<serde_json::Value>()
+                    .respond_with_error(agent_client_protocol::Error::method_not_found())
+            }
+        }
+    }
+
+    /// Demultiplex an incoming `ClientNotification` enum variant onto the
+    /// inherent notification handler. Notifications are fire-and-forget; any
+    /// per-variant error is logged inside the delegate but never returned to
+    /// the SDK (which would tear down the connection).
+    async fn dispatch_client_notification(
+        server: &Arc<Self>,
+        notification: agent_client_protocol::ClientNotification,
+    ) {
+        use agent_client_protocol::ClientNotification as Notif;
+
+        match notification {
+            Notif::CancelNotification(n) => {
+                if let Err(e) = server.cancel(n).await {
+                    tracing::error!("cancel notification handler failed: {}", e);
+                }
+            }
+            Notif::ExtNotification(n) => {
+                if let Err(e) = server.ext_notification(n).await {
+                    tracing::error!("ext notification handler failed: {}", e);
+                }
+            }
+            other => {
+                tracing::debug!(
+                    "Ignoring unsupported ClientNotification variant: {}",
+                    other.method()
+                );
+            }
+        }
+    }
+
+    /// Static agent identifier used in fixtures and logs.
+    ///
+    /// In ACP 0.10 this implemented `agent_client_protocol_extras::AgentWithFixture`.
+    /// That trait was removed when extras was reshaped for ACP 0.11; the inherent
+    /// method preserves the value so existing fixture / playback paths can still
+    /// query the agent type.
+    pub fn agent_type(&self) -> &'static str {
         "llama"
     }
+}
+
+/// Wrap a tokio `AsyncRead`/`AsyncWrite` pair into the SDK's `Lines` transport.
+///
+/// The SDK 0.11 `Builder::connect_with` accepts any `ConnectTo<Counterpart>`. The
+/// most convenient transport for newline-delimited JSON-RPC over byte streams is
+/// `agent_client_protocol::Lines`, which takes a `futures::Stream<Item =
+/// io::Result<String>>` for incoming lines and a `futures::Sink<String, Error =
+/// io::Error>` for outgoing lines.
+///
+/// Both adapters are built with `futures::stream::unfold` / `futures::sink::unfold`
+/// so we don't need the `tokio_util::compat` glue or extra crate features.
+///
+/// # Connection liveness
+/// The incoming stream cancels `connection_closed` when the reader returns
+/// EOF or an I/O error. The notification bridge in `start_with_streams`
+/// races on this token so it can stop forwarding broadcasts as soon as the
+/// transport is gone, instead of blocking forever on `broadcast::Receiver::recv`.
+///
+/// # Errors
+/// The returned transport surfaces underlying I/O errors through the stream/sink
+/// `io::Error` channel, which the SDK's dispatch loop maps onto the connection's
+/// shutdown path.
+fn build_lines_transport<R, W>(
+    reader: R,
+    writer: W,
+    connection_closed: tokio_util::sync::CancellationToken,
+) -> agent_client_protocol::Lines<
+    impl futures::Sink<String, Error = std::io::Error> + Send + 'static,
+    impl futures::Stream<Item = std::io::Result<String>> + Send + 'static,
+>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // Incoming: yield each line as `io::Result<String>`. Empty lines are passed
+    // through; the SDK's parser ignores blank input.
+    //
+    // When the reader returns `Ok(None)` (EOF) or an `Err`, signal
+    // `connection_closed` so the notification bridge in `start_with_streams`
+    // wakes up and exits. The SDK's incoming protocol actor terminates cleanly
+    // either way; the cancellation token is what releases the bridge from its
+    // broadcast `recv()` await.
+    let incoming = futures::stream::unfold(
+        (BufReader::new(reader).lines(), connection_closed),
+        |(mut lines, connection_closed)| async move {
+            match lines.next_line().await {
+                Ok(Some(line)) => Some((Ok(line), (lines, connection_closed))),
+                Ok(None) => {
+                    connection_closed.cancel();
+                    None
+                }
+                Err(e) => {
+                    connection_closed.cancel();
+                    Some((Err(e), (lines, connection_closed)))
+                }
+            }
+        },
+    );
+
+    // Outgoing: append `\n` to each line and write it to the underlying writer,
+    // flushing after every message so clients see responses immediately.
+    let outgoing = futures::sink::unfold(writer, |mut writer, line: String| async move {
+        let mut bytes = line.into_bytes();
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await?;
+        writer.flush().await?;
+        Ok::<_, std::io::Error>(writer)
+    });
+
+    agent_client_protocol::Lines::new(outgoing, incoming)
 }
 
 /// Extract the optional caller-supplied `max_tokens` cap from a
@@ -2319,25 +2243,24 @@ mod tests {
     async fn test_initialize() {
         let server = Arc::new(create_test_server().await);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(
-            agent_client_protocol::ClientCapabilities::new()
-                .fs(agent_client_protocol::FileSystemCapabilities::new()
+            agent_client_protocol::schema::ClientCapabilities::new()
+                .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
                     .read_text_file(true)
                     .write_text_file(true))
                 .terminal(true),
         );
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(result.is_ok(), "Initialize should succeed");
 
         let response = result.unwrap();
         assert_eq!(
             response.protocol_version,
-            agent_client_protocol::ProtocolVersion::V1,
+            agent_client_protocol::schema::ProtocolVersion::V1,
             "Agent should respond with V1 protocol version"
         );
     }
@@ -2349,9 +2272,8 @@ mod tests {
 
         // Create a new session request
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
 
-        use agent_client_protocol::Agent;
         let result = server.new_session(new_session_request).await;
         assert!(result.is_ok(), "New session should succeed");
 
@@ -2394,12 +2316,11 @@ mod tests {
     async fn test_capability_advertisement() {
         let server = Arc::new(create_test_server().await);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(result.is_ok(), "Initialize should succeed");
 
@@ -2597,12 +2518,11 @@ mod tests {
         let (acp_server, _notification_rx) = AcpServer::new(agent_server, custom_acp_config);
         let server = Arc::new(acp_server);
 
-        let request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let result = server.initialize(request).await;
         assert!(
             result.is_ok(),
@@ -2650,20 +2570,18 @@ mod tests {
         let server = Arc::new(create_test_server().await);
 
         // Create initialize request with specific capabilities
-        let fs_caps = agent_client_protocol::FileSystemCapabilities::new()
+        let fs_caps = agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(false);
 
-        let client_caps = agent_client_protocol::ClientCapabilities::new()
+        let client_caps = agent_client_protocol::schema::ClientCapabilities::new()
             .fs(fs_caps)
             .terminal(true);
 
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
         .client_capabilities(client_caps.clone());
-
-        use agent_client_protocol::Agent;
 
         // Initialize server
         let init_result = server.initialize(init_request).await;
@@ -2683,7 +2601,7 @@ mod tests {
 
         // Create a new session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_result = server.new_session(new_session_request).await;
         assert!(session_result.is_ok(), "New session should succeed");
         let session_response = session_result.unwrap();
@@ -2897,7 +2815,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_nonexistent_session() {
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let server = create_test_server().await;
 
@@ -2908,77 +2826,15 @@ mod tests {
         assert!(result.is_none(), "Nonexistent session should return None");
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_parsing_valid_request() {
-        let server = Arc::new(create_test_server().await);
-
-        // Use a Vec as the writer to capture output
-        let writer_buf: Vec<u8> = Vec::new();
-
-        // Create a valid InitializeRequest and serialize it to see the correct JSON format
-        let init_req = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
-        );
-        let params_json = serde_json::to_value(&init_req).unwrap();
-
-        // Build the full JSON-RPC request
-        let json_rpc_request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": params_json
-        });
-        let request = serde_json::to_string(&json_rpc_request).unwrap();
-
-        let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-        let result = AcpServer::handle_request(server, Arc::clone(&writer), request).await;
-
-        // Verify request was handled successfully (no I/O errors)
-        if let Err(ref e) = result {
-            panic!(
-                "Valid JSON-RPC request should be processed but got error: {:?}",
-                e
-            );
-        }
-        assert!(result.is_ok());
-
-        // Verify a response was written
-        let response_buf = writer.lock().await;
-        assert!(
-            !response_buf.is_empty(),
-            "Response should be written to writer"
-        );
-
-        // Verify the response is valid JSON
-        let response_str = String::from_utf8(response_buf.clone()).unwrap();
-        let response_json: serde_json::Value = serde_json::from_str(response_str.trim()).unwrap();
-
-        // Verify it's a valid JSON-RPC response
-        assert_eq!(response_json["jsonrpc"], "2.0");
-        assert_eq!(response_json["id"], 1);
-        assert!(response_json.get("result").is_some() || response_json.get("error").is_some());
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_parsing_invalid_json() {
-        use tokio::io::DuplexStream;
-
-        let server = Arc::new(create_test_server().await);
-        let (_client_reader, server_writer): (DuplexStream, DuplexStream) = tokio::io::duplex(4096);
-
-        // Send invalid JSON
-        let invalid_request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize""#; // Missing closing braces
-
-        let writer = Arc::new(tokio::sync::Mutex::new(server_writer));
-        let result = AcpServer::handle_request(server, writer, invalid_request.to_string()).await;
-
-        // Verify parse error is returned
-        assert!(result.is_err(), "Invalid JSON should return parse error");
-        let error = result.unwrap_err();
-        assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
-    }
+    // JSON-RPC parsing/dispatch tests removed when start_with_streams was
+    // rewired onto Agent.builder()/connect_with: that wire-format behaviour
+    // (parse errors, missing method, notification vs request, unknown method,
+    // ext routing, error response shape) is now owned by the SDK runtime
+    // itself and is not exercised through any AcpServer API. The
+    // per-method semantics (initialize capability advertisement, session
+    // mode handling, prompt behaviour, ext_method routing) are still covered
+    // by the typed-method tests below that call the inherent methods
+    // directly.
 
     async fn create_test_server_with_modes() -> AcpServer {
         use crate::types::{
@@ -3037,13 +2893,19 @@ mod tests {
         // Create config with modes
         let config = AcpConfig {
             available_modes: vec![
-                agent_client_protocol::SessionMode::new("general-purpose", "General Purpose")
-                    .description("General-purpose agent"),
-                agent_client_protocol::SessionMode::new("statusline-setup", "Statusline Setup")
-                    .description("Configure status line"),
-                agent_client_protocol::SessionMode::new("Explore", "Explore")
+                agent_client_protocol::schema::SessionMode::new(
+                    "general-purpose",
+                    "General Purpose",
+                )
+                .description("General-purpose agent"),
+                agent_client_protocol::schema::SessionMode::new(
+                    "statusline-setup",
+                    "Statusline Setup",
+                )
+                .description("Configure status line"),
+                agent_client_protocol::schema::SessionMode::new("Explore", "Explore")
                     .description("Explore codebases"),
-                agent_client_protocol::SessionMode::new("Plan", "Plan")
+                agent_client_protocol::schema::SessionMode::new("Plan", "Plan")
                     .description("Plan implementations"),
             ],
             default_mode_id: "general-purpose".to_string(),
@@ -3060,17 +2922,16 @@ mod tests {
         let server = Arc::new(create_test_server_with_modes().await);
 
         // Initialize with client capabilities
-        let init_request = agent_client_protocol::InitializeRequest::new(
-            agent_client_protocol::ProtocolVersion::V1,
+        let init_request = agent_client_protocol::schema::InitializeRequest::new(
+            agent_client_protocol::schema::ProtocolVersion::V1,
         )
-        .client_capabilities(agent_client_protocol::ClientCapabilities::new());
+        .client_capabilities(agent_client_protocol::schema::ClientCapabilities::new());
 
-        use agent_client_protocol::Agent;
         let _init_result = server.initialize(init_request).await;
 
         // Create a new session
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_result = server.new_session(new_session_request).await;
         assert!(session_result.is_ok(), "New session should succeed");
         let session_response = session_result.unwrap();
@@ -3143,18 +3004,16 @@ mod tests {
     async fn test_set_session_mode_changes_mode() {
         let server = Arc::new(create_test_server().await);
 
-        use agent_client_protocol::Agent;
-
         // Create a session first
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_response = server.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
         // Change mode to "Explore"
-        let mode_id = agent_client_protocol::SessionModeId::new("Explore");
+        let mode_id = agent_client_protocol::schema::SessionModeId::new("Explore");
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(session_id.clone(), mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(session_id.clone(), mode_id);
 
         let result = server.set_session_mode(set_mode_request).await;
         assert!(result.is_ok(), "Setting session mode should succeed");
@@ -3181,13 +3040,11 @@ mod tests {
     async fn test_set_session_mode_with_invalid_session() {
         let server = Arc::new(create_test_server().await);
 
-        use agent_client_protocol::Agent;
-
         // Try to set mode on non-existent session
-        let fake_session_id = agent_client_protocol::SessionId::new("nonexistent");
-        let mode_id = agent_client_protocol::SessionModeId::new("Plan");
+        let fake_session_id = agent_client_protocol::schema::SessionId::new("nonexistent");
+        let mode_id = agent_client_protocol::schema::SessionModeId::new("Plan");
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(fake_session_id, mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(fake_session_id, mode_id);
 
         let result = server.set_session_mode(set_mode_request).await;
         assert!(result.is_err(), "Should fail with invalid session");
@@ -3200,7 +3057,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_build_session_mode_state() {
-        use agent_client_protocol::{SessionMode, SessionModeId, SessionModeState};
+        use agent_client_protocol::schema::{SessionMode, SessionModeId, SessionModeState};
 
         // Build test mode state
         let available_modes = vec![
@@ -3226,229 +3083,30 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_parsing_missing_method() {
-        use tokio::io::DuplexStream;
-
-        let server = Arc::new(create_test_server().await);
-        let (_client_reader, server_writer): (DuplexStream, DuplexStream) = tokio::io::duplex(4096);
-
-        // Send request without method field
-        let request = r#"{"jsonrpc":"2.0","id":1,"params":{}}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(server_writer));
-        let result = AcpServer::handle_request(server, writer, request.to_string()).await;
-
-        // Verify invalid request error is returned
-        assert!(
-            result.is_err(),
-            "Request without method should return error"
-        );
-        let error = result.unwrap_err();
-        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidRequest);
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_notification_vs_request() {
-        let server = Arc::new(create_test_server().await);
-        let writer_buf: Vec<u8> = Vec::new();
-
-        // Test notification (no id field) - session/cancel is a notification method
-        let notification =
-            r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"session_id":"test-session"}}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-        let result = AcpServer::handle_request(
-            Arc::clone(&server),
-            Arc::clone(&writer),
-            notification.to_string(),
-        )
-        .await;
-
-        // Notifications should be processed without sending error responses
-        // Even if the method fails, handle_request returns Ok for notifications
-        assert!(
-            result.is_ok(),
-            "Notification should be handled without error response"
-        );
-
-        // Verify no response was written (notifications don't get responses)
-        let response_buf = writer.lock().await;
-        assert!(
-            response_buf.is_empty(),
-            "Notifications should not produce responses"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_with_null_params() {
-        let server = Arc::new(create_test_server().await);
-        let writer_buf: Vec<u8> = Vec::new();
-
-        // Send request with null params
-        // This tests that JSON-RPC parsing succeeds even when params is null
-        // The method params deserialization will fail, but that's expected
-        let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":null}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-        let result =
-            AcpServer::handle_request(server, Arc::clone(&writer), request.to_string()).await;
-
-        // JSON-RPC parsing succeeds, but params deserialization fails
-        // This causes handle_request to write an error response
-        assert!(
-            result.is_ok(),
-            "JSON-RPC request should be parsed: {:?}",
-            result.err()
-        );
-
-        // Verify an error response was written for invalid params
-        let response_buf = writer.lock().await;
-        assert!(!response_buf.is_empty(), "Error response should be written");
-
-        let response_str = String::from_utf8(response_buf.clone()).unwrap();
-        let response_json: serde_json::Value = serde_json::from_str(response_str.trim()).unwrap();
-        assert_eq!(response_json["jsonrpc"], "2.0");
-        assert_eq!(response_json["id"], 1);
-        assert!(
-            response_json.get("error").is_some(),
-            "Response should contain error for invalid params"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_with_missing_params() {
-        let server = Arc::new(create_test_server().await);
-        let writer_buf: Vec<u8> = Vec::new();
-
-        // Send request without params field (defaults to null in JSON-RPC)
-        let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-        let result =
-            AcpServer::handle_request(server, Arc::clone(&writer), request.to_string()).await;
-
-        // JSON-RPC parsing succeeds (params defaults to null)
-        assert!(
-            result.is_ok(),
-            "JSON-RPC request should be parsed: {:?}",
-            result.err()
-        );
-
-        // Verify an error response was written
-        let response_buf = writer.lock().await;
-        assert!(!response_buf.is_empty(), "Error response should be written");
-
-        let response_str = String::from_utf8(response_buf.clone()).unwrap();
-        let response_json: serde_json::Value = serde_json::from_str(response_str.trim()).unwrap();
-        assert_eq!(response_json["jsonrpc"], "2.0");
-        assert_eq!(response_json["id"], 1);
-        assert!(
-            response_json.get("error").is_some(),
-            "Response should contain error"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_unknown_method() {
-        use tokio::io::DuplexStream;
-
-        let server = Arc::new(create_test_server().await);
-        let (_client_reader, server_writer): (DuplexStream, DuplexStream) = tokio::io::duplex(4096);
-
-        // Send request with unknown method - should be routed to ext_method
-        let request = r#"{"jsonrpc":"2.0","id":1,"method":"unknown/method","params":{}}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(server_writer));
-        let result = AcpServer::handle_request(server, writer, request.to_string()).await;
-
-        // Unknown methods are routed to ext_method which should handle them
-        // ext_method returns method_not_found error, but handle_request should succeed
-        assert!(
-            result.is_ok(),
-            "Unknown method should be routed to ext_method"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_request_with_invalid_params_type() {
-        let server = Arc::new(create_test_server().await);
-        let writer_buf: Vec<u8> = Vec::new();
-
-        // Send initialize request with params as array instead of object
-        let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":[]}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-        let result =
-            AcpServer::handle_request(server, Arc::clone(&writer), request.to_string()).await;
-
-        // JSON-RPC parsing succeeds, but params deserialization fails
-        assert!(
-            result.is_ok(),
-            "JSON-RPC request should be parsed: {:?}",
-            result.err()
-        );
-
-        // Verify an error response was written
-        let response_buf = writer.lock().await;
-        assert!(!response_buf.is_empty(), "Error response should be written");
-
-        let response_str = String::from_utf8(response_buf.clone()).unwrap();
-        let response_json: serde_json::Value = serde_json::from_str(response_str.trim()).unwrap();
-        assert_eq!(response_json["jsonrpc"], "2.0");
-        assert_eq!(response_json["id"], 1);
-        assert!(
-            response_json.get("error").is_some(),
-            "Response should contain error"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_extension_method_routing() {
-        use tokio::io::DuplexStream;
-
-        let server = Arc::new(create_test_server().await);
-        let (_client_reader, server_writer): (DuplexStream, DuplexStream) = tokio::io::duplex(4096);
-
-        // Send request for an extension method (filesystem operation)
-        let request = r#"{"jsonrpc":"2.0","id":1,"method":"fs/read_text_file","params":{"session_id":"test-session","path":"/test/path"}}"#;
-
-        let writer = Arc::new(tokio::sync::Mutex::new(server_writer));
-        let result = AcpServer::handle_request(server, writer, request.to_string()).await;
-
-        // Extension methods should be routed through ext_method
-        // The request should parse successfully even if the method fails
-        assert!(
-            result.is_ok(),
-            "Extension method should be routed correctly"
-        );
-    }
+    // The legacy test_json_rpc_* dispatch tests (missing method, notification
+    // vs request, null/missing/invalid params, unknown method, ext routing)
+    // were deleted when the manual JSON-RPC dispatcher was replaced with
+    // Agent.builder(). Wire-format behaviour for these cases is now owned by
+    // the SDK runtime and is exercised by its own test suite. Per-method
+    // semantics (initialize, set_session_mode, etc.) continue to be covered
+    // by the typed-method tests below.
 
     #[tokio::test]
     #[serial]
     async fn test_set_session_mode() {
-        use agent_client_protocol::Agent;
-
         let server = Arc::new(create_test_server().await);
 
         // Create a new session first
         let new_session_request =
-            agent_client_protocol::NewSessionRequest::new(std::env::current_dir().unwrap());
+            agent_client_protocol::schema::NewSessionRequest::new(std::env::current_dir().unwrap());
         let session_response = server.new_session(new_session_request).await.unwrap();
         let session_id = session_response.session_id;
 
         // Create a set_session_mode request with a test mode
         let mode_id_str = "test-mode";
-        let mode_id = agent_client_protocol::SessionModeId::new(mode_id_str);
+        let mode_id = agent_client_protocol::schema::SessionModeId::new(mode_id_str);
         let set_mode_request =
-            agent_client_protocol::SetSessionModeRequest::new(session_id.clone(), mode_id);
+            agent_client_protocol::schema::SetSessionModeRequest::new(session_id.clone(), mode_id);
 
         // Call set_session_mode
         let result = server.set_session_mode(set_mode_request).await;
@@ -3482,249 +3140,11 @@ mod tests {
         );
     }
 
-    /// Comprehensive test for JSON-RPC 2.0 error response format and codes
-    ///
-    /// This test verifies that all error responses follow the JSON-RPC 2.0 specification:
-    /// - Error responses have the correct structure (jsonrpc, id, error)
-    /// - Error objects have required fields (code, message)
-    /// - Error codes match the JSON-RPC 2.0 specification
-    /// - Error responses do not contain a "result" field
-    #[tokio::test]
-    #[serial]
-    async fn test_json_rpc_error_response_format_and_codes() {
-        let server = Arc::new(create_test_server().await);
-
-        // Test case 1: Parse Error (-32700)
-        {
-            let writer_buf: Vec<u8> = Vec::new();
-            let invalid_json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize""#; // Missing closing braces
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                invalid_json.to_string(),
-            )
-            .await;
-
-            // Parse errors return an error from handle_request
-            assert!(result.is_err(), "Parse error should be returned");
-            let error = result.unwrap_err();
-
-            // Verify error code
-            assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
-
-            // Verify error message is present and non-empty
-            assert!(
-                !error.message.is_empty(),
-                "Error message should not be empty"
-            );
-        }
-
-        // Test case 2: Invalid Request (-32600)
-        {
-            let writer_buf: Vec<u8> = Vec::new();
-            let request = r#"{"jsonrpc":"2.0","id":2,"params":{}}"#; // Missing method
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                request.to_string(),
-            )
-            .await;
-
-            assert!(result.is_err(), "Missing method should return error");
-            let error = result.unwrap_err();
-
-            assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidRequest);
-            assert!(
-                !error.message.is_empty(),
-                "Error message should not be empty"
-            );
-        }
-
-        // Test case 3: Method Not Found - handled via extension method routing
-        // NOTE: Currently returns -32603 (Internal error) due to error conversion bug at server.rs:373
-        // Should return -32601 (Method not found) per JSON-RPC 2.0 spec
-        {
-            let writer_buf: Vec<u8> = Vec::new();
-            let request = r#"{"jsonrpc":"2.0","id":3,"method":"nonexistent/method","params":{}}"#;
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                request.to_string(),
-            )
-            .await;
-
-            // Unknown methods are routed to ext_method which writes an error response
-            assert!(result.is_ok(), "Unknown method routing should succeed");
-
-            let response_buf = writer.lock().await;
-            let response_str = String::from_utf8(response_buf.clone()).unwrap();
-            let response_json: serde_json::Value =
-                serde_json::from_str(response_str.trim()).unwrap();
-
-            // Verify error response structure
-            assert_eq!(response_json["jsonrpc"], "2.0");
-            assert_eq!(response_json["id"], 3);
-            assert!(
-                response_json.get("error").is_some(),
-                "Should have error field"
-            );
-            assert!(
-                response_json.get("result").is_none(),
-                "Should not have result field"
-            );
-
-            let error = &response_json["error"];
-            assert!(error.get("code").is_some(), "Error should have code field");
-            assert!(
-                error.get("message").is_some(),
-                "Error should have message field"
-            );
-
-            let code = error["code"].as_i64().unwrap();
-            // TODO: Fix error conversion at server.rs:373 to preserve -32601
-            assert_eq!(
-                code, -32603,
-                "Currently returns -32603 due to error conversion bug"
-            );
-        }
-
-        // Test case 4: Invalid Params (-32602) - null params for method that requires params
-        {
-            let writer_buf: Vec<u8> = Vec::new();
-            let request = r#"{"jsonrpc":"2.0","id":4,"method":"initialize","params":null}"#;
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                request.to_string(),
-            )
-            .await;
-
-            // Request parses, but params deserialization fails, so handle_request returns an error
-            // or writes an error response
-            if result.is_err() {
-                let error = result.unwrap_err();
-                assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
-            } else {
-                let response_buf = writer.lock().await;
-                let response_str = String::from_utf8(response_buf.clone()).unwrap();
-                let response_json: serde_json::Value =
-                    serde_json::from_str(response_str.trim()).unwrap();
-
-                assert!(
-                    response_json.get("error").is_some(),
-                    "Should have error field"
-                );
-                let error = &response_json["error"];
-                let code = error["code"].as_i64().unwrap();
-                assert_eq!(code, -32602, "Invalid params should have code -32602");
-            }
-        }
-
-        // Test case 5: Verify error structure consistency across all error types
-        {
-            let writer_buf: Vec<u8> = Vec::new();
-            let request = r#"{"jsonrpc":"2.0","id":5,"method":"initialize","params":[]}"#; // Array instead of object
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                request.to_string(),
-            )
-            .await;
-
-            // Verify error structure
-            if result.is_err() {
-                let error = result.unwrap_err();
-
-                // Verify error has required fields
-                // Error code exists (ErrorCode enum)
-                assert!(
-                    !error.message.is_empty(),
-                    "Error message should not be empty"
-                );
-
-                // Error code is valid ErrorCode enum
-            } else {
-                let response_buf = writer.lock().await;
-                let response_str = String::from_utf8(response_buf.clone()).unwrap();
-                let response_json: serde_json::Value =
-                    serde_json::from_str(response_str.trim()).unwrap();
-
-                // Verify JSON-RPC response structure
-                assert_eq!(
-                    response_json["jsonrpc"], "2.0",
-                    "Must have jsonrpc field with value '2.0'"
-                );
-                assert_eq!(response_json["id"], 5, "Must have matching id");
-                assert!(
-                    response_json.get("error").is_some(),
-                    "Must have error field"
-                );
-                assert!(
-                    response_json.get("result").is_none(),
-                    "Must not have result field on error"
-                );
-
-                // Verify error object structure
-                let error = &response_json["error"];
-                assert!(error.is_object(), "Error must be an object");
-                assert!(error.get("code").is_some(), "Error must have code field");
-                assert!(
-                    error.get("message").is_some(),
-                    "Error must have message field"
-                );
-
-                // Verify code is an integer
-                let code = error["code"].as_i64();
-                assert!(code.is_some(), "Error code must be an integer");
-                assert!(
-                    code.unwrap() <= -32000,
-                    "Error code must be in reserved range"
-                );
-
-                // Verify message is a string
-                let message = error["message"].as_str();
-                assert!(message.is_some(), "Error message must be a string");
-                assert!(
-                    !message.unwrap().is_empty(),
-                    "Error message must not be empty"
-                );
-            }
-        }
-
-        // Test case 6: Verify parse error with null id
-        {
-            let invalid_json = r#"invalid json"#;
-            let writer_buf: Vec<u8> = Vec::new();
-            let writer = Arc::new(tokio::sync::Mutex::new(writer_buf));
-
-            let result = AcpServer::handle_request(
-                Arc::clone(&server),
-                Arc::clone(&writer),
-                invalid_json.to_string(),
-            )
-            .await;
-
-            // Parse errors should return an error
-            assert!(result.is_err(), "Parse error should be returned");
-            let error = result.unwrap_err();
-
-            // Verify parse error code
-            assert_eq!(error.code, agent_client_protocol::ErrorCode::ParseError);
-
-            // Per JSON-RPC 2.0 spec, parse error responses should have null id
-            // (this is validated by the agent_client_protocol library)
-        }
-    }
+    // test_json_rpc_error_response_format_and_codes (parse error / invalid
+    // request / method not found / invalid params / response-shape audit)
+    // was deleted with the rest of the dispatch suite when handle_request
+    // went away. The SDK 0.11 runtime owns wire-format responses; their
+    // shape is verified in the SDK's own test suite.
 
     // --- set_session_system_prompt tests ---
 

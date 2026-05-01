@@ -3,7 +3,7 @@
 //! This module provides helper functions for creating and working with
 //! ToolCallHandler in tests.
 
-use agent_client_protocol::{SessionId, SessionNotification};
+use agent_client_protocol::schema::{SessionId, SessionNotification};
 use claude_agent::agent::NotificationSender;
 use claude_agent::tools::ToolCallHandler;
 use tokio::sync::broadcast;

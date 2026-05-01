@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQ367HE0Z8ZSXY90CTT8QYGG
-position_column: todo
-position_ordinal: ff8280
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9a80
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: bulk schema-type import migration'
 ---

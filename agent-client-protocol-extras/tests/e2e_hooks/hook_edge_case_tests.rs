@@ -8,7 +8,6 @@
 //! - SessionStart matcher filtering by source
 //! - Unexpected exit codes on notification-pipeline events
 
-use agent_client_protocol::{Agent, LoadSessionRequest};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -31,16 +30,11 @@ async fn prompt_evaluator_allows_on_ok_true() {
             }]
         }
     }"#;
-    let agent = helpers::build_hookable_agent_with_evaluator(
-        Arc::new(playback),
-        config_json,
-        Arc::new(evaluator),
-    );
+    let agent =
+        helpers::build_hookable_agent_with_evaluator(playback, config_json, Arc::new(evaluator));
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "test"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "test").await;
 
     assert!(
         result.is_ok(),
@@ -61,16 +55,11 @@ async fn prompt_evaluator_blocks_on_ok_false() {
             }]
         }
     }"#;
-    let agent = helpers::build_hookable_agent_with_evaluator(
-        Arc::new(playback),
-        config_json,
-        Arc::new(evaluator),
-    );
+    let agent =
+        helpers::build_hookable_agent_with_evaluator(playback, config_json, Arc::new(evaluator));
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "test"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "test").await;
 
     assert!(result.is_err(), "Prompt evaluator ok=false should block");
     let err = result.unwrap_err();
@@ -93,16 +82,11 @@ async fn agent_evaluator_passes_is_agent_flag() {
             }]
         }
     }"#;
-    let agent = helpers::build_hookable_agent_with_evaluator(
-        Arc::new(playback),
-        config_json,
-        Arc::new(evaluator),
-    );
+    let agent =
+        helpers::build_hookable_agent_with_evaluator(playback, config_json, Arc::new(evaluator));
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "test"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "test").await;
 
     assert!(
         result.is_ok(),
@@ -132,7 +116,7 @@ async fn multiple_command_hooks_both_fire() {
         script1.to_str().unwrap(),
         script2.to_str().unwrap(),
     );
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
     let _ = helpers::run_prompt(&agent, &session_id, "hello").await;
@@ -160,12 +144,10 @@ async fn multiple_hooks_block_takes_precedence() {
         script1.to_str().unwrap(),
         script2.to_str().unwrap(),
     );
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(result.is_err(), "Block should take precedence over Allow");
     let err = result.unwrap_err();
@@ -198,12 +180,10 @@ async fn malformed_json_output_treated_as_allow() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(
         result.is_ok(),
@@ -219,12 +199,10 @@ async fn nonexistent_command_treated_as_allow() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("UserPromptSubmit", "/nonexistent/path/to/hook", None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(
         result.is_ok(),
@@ -247,7 +225,7 @@ async fn session_start_matcher_filters_by_source() {
     let playback = helpers::load_playback_agent("session_with_load.json");
     let config_json =
         helpers::hook_config_json("SessionStart", script.to_str().unwrap(), Some("^startup$"));
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     // new_session → SessionStart(source="startup") → matches "^startup$" → fires
     let _session_id = helpers::init_session(&agent).await;
@@ -261,13 +239,7 @@ async fn session_start_matcher_filters_by_source() {
     helpers::clear_stdin_capture(tmp.path(), "hook.sh");
 
     // load_session → SessionStart(source="resume") → does NOT match "^startup$"
-    let _ = agent
-        .load_session(LoadSessionRequest::new(
-            "hook-test-session",
-            "/tmp/test-hooks",
-        ))
-        .await
-        .unwrap();
+    let _ = helpers::resume_session(&agent, "hook-test-session").await;
 
     let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
     assert!(
@@ -288,7 +260,7 @@ async fn unexpected_exit_code_treated_as_allow_on_pre_tool_use() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -345,7 +317,7 @@ async fn new_event_hooks_registered_but_not_triggered_by_prompt() {
         let config = helpers::hook_config_json(event_name, script.to_str().unwrap(), None);
         let playback = helpers::load_playback_agent("tool_call_session.json");
         // Config is accepted — hooks are registered (not skipped)
-        let agent = helpers::build_hookable_agent(Arc::new(playback), &config);
+        let agent = helpers::build_hookable_agent(playback, &config);
         let session_id = helpers::init_session(&agent).await;
         // Prompt succeeds — these hooks are registered but no ACP event triggers them
         let _response = helpers::run_prompt(&agent, &session_id, "test").await;
@@ -385,7 +357,7 @@ async fn mixed_supported_and_forward_compat_config() {
     );
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config);
+    let agent = helpers::build_hookable_agent(playback, &config);
     let session_id = helpers::init_session(&agent).await;
     let _response = helpers::run_prompt(&agent, &session_id, "test").await;
 

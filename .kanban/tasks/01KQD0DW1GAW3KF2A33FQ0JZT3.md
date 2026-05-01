@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQ367HE0Z8ZSXY90CTT8QYGG
-position_column: todo
-position_ordinal: ff8180
+position_column: done
+position_ordinal: ffffffffffffffffffffffff9980
 project: acp-upgrade
 title: 'ACP 0.11: claude-agent: bulk schema-type import migration'
 ---

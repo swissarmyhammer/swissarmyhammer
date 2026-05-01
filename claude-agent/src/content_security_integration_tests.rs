@@ -1,7 +1,7 @@
 use crate::base64_processor::Base64Processor;
 use crate::content_block_processor::ContentBlockProcessor;
 use crate::content_security_validator::ContentSecurityValidator;
-use agent_client_protocol::{ContentBlock, ImageContent, ResourceLink, TextContent};
+use agent_client_protocol::schema::{ContentBlock, ImageContent, ResourceLink, TextContent};
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -20,7 +20,7 @@ mod tests {
     }
 
     fn audio(mime_type: &str, data: &str) -> ContentBlock {
-        ContentBlock::Audio(agent_client_protocol::AudioContent::new(
+        ContentBlock::Audio(agent_client_protocol::schema::AudioContent::new(
             data.to_string(),
             mime_type.to_string(),
         ))

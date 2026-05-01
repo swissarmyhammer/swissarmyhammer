@@ -22,10 +22,10 @@
 //!    - Plans can evolve during execution
 //!    - Agent MAY add, remove, or modify plan entries as it discovers new requirements
 
-use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, PromptRequest, ProtocolVersion, TextContent,
+use agent_client_protocol::schema::{
+    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion, TextContent,
 };
-use agent_client_protocol_extras::recording::RecordedSession;
+use agent_client_protocol_extras::{recording::RecordedSession, AgentWithFixture};
 use swissarmyhammer_common::Pretty;
 
 /// Statistics from plan fixture verification
@@ -43,19 +43,27 @@ pub struct PlanStats {
 ///
 /// Per spec: Agents SHOULD report execution plans via session/update notifications
 /// with sessionUpdate="plan"
-pub async fn test_agent_sends_plan_notifications<A: Agent + ?Sized>(
-    agent: &A,
+pub async fn test_agent_sends_plan_notifications(
+    agent: &dyn AgentWithFixture,
 ) -> crate::Result<()> {
     tracing::info!("Testing agent sends plan notifications");
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.initialize(init_request).await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    let new_session_request = agent_client_protocol::NewSessionRequest::new(cwd);
-    let new_session_response = agent.new_session(new_session_request).await?;
+    let new_session_request = NewSessionRequest::new(cwd);
+    let new_session_response = agent
+        .connection()
+        .send_request(new_session_request)
+        .block_task()
+        .await?;
     let session_id = new_session_response.session_id;
 
     // Ask agent to use create-plan tool which should trigger plan notifications
@@ -69,7 +77,11 @@ pub async fn test_agent_sends_plan_notifications<A: Agent + ?Sized>(
     let prompt_request = PromptRequest::new(session_id, vec![content_block]);
 
     // Send prompt - agent should create plan and send notifications
-    let result = agent.prompt(prompt_request).await;
+    let result = agent
+        .connection()
+        .send_request(prompt_request)
+        .block_task()
+        .await;
 
     match result {
         Ok(response) => {
@@ -492,84 +504,52 @@ mod tests {
 
     // --- Async tests using mock agent ---
 
-    use agent_client_protocol::{
-        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
-        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-        NewSessionResponse, PromptResponse, SetSessionModeRequest, SetSessionModeResponse,
-        StopReason,
+    use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
+    use agent_client_protocol::schema::{
+        InitializeResponse, NewSessionResponse, PromptResponse, StopReason,
     };
+    use futures::future::BoxFuture;
+    use std::sync::Arc;
 
-    /// Mock agent for plan tests
+    /// Mock agent for plan tests.
+    ///
+    /// Plan flow is purely notification-driven on the agent → client side;
+    /// the mock just needs the request side (initialize / new_session /
+    /// prompt) to terminate cleanly so the production helpers can record a
+    /// fixture without going off the happy path.
     struct PlanMockAgent;
 
-    #[async_trait::async_trait(?Send)]
-    impl Agent for PlanMockAgent {
-        async fn initialize(
-            &self,
+    impl MockAgent for PlanMockAgent {
+        fn initialize<'a>(
+            &'a self,
             _request: InitializeRequest,
-        ) -> agent_client_protocol::Result<InitializeResponse> {
-            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
+            Box::pin(async move { Ok(InitializeResponse::new(ProtocolVersion::V1)) })
         }
 
-        async fn authenticate(
-            &self,
-            _request: AuthenticateRequest,
-        ) -> agent_client_protocol::Result<AuthenticateResponse> {
-            Ok(AuthenticateResponse::new())
+        fn new_session<'a>(
+            &'a self,
+            _request: NewSessionRequest,
+        ) -> BoxFuture<'a, agent_client_protocol::Result<NewSessionResponse>> {
+            Box::pin(async move { Ok(NewSessionResponse::new("plan-test-session")) })
         }
 
-        async fn new_session(
-            &self,
-            _request: agent_client_protocol::NewSessionRequest,
-        ) -> agent_client_protocol::Result<NewSessionResponse> {
-            Ok(NewSessionResponse::new("plan-test-session"))
-        }
-
-        async fn prompt(
-            &self,
+        fn prompt<'a>(
+            &'a self,
             _request: PromptRequest,
-        ) -> agent_client_protocol::Result<PromptResponse> {
-            Ok(PromptResponse::new(StopReason::EndTurn))
-        }
-
-        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
-            Ok(())
-        }
-
-        async fn load_session(
-            &self,
-            _request: LoadSessionRequest,
-        ) -> agent_client_protocol::Result<LoadSessionResponse> {
-            Ok(LoadSessionResponse::new())
-        }
-
-        async fn set_session_mode(
-            &self,
-            _request: SetSessionModeRequest,
-        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
-            Ok(SetSessionModeResponse::new())
-        }
-
-        async fn ext_method(
-            &self,
-            _request: ExtRequest,
-        ) -> agent_client_protocol::Result<ExtResponse> {
-            Err(agent_client_protocol::Error::method_not_found())
-        }
-
-        async fn ext_notification(
-            &self,
-            _notification: ExtNotification,
-        ) -> agent_client_protocol::Result<()> {
-            Ok(())
+        ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
+            Box::pin(async move { Ok(PromptResponse::new(StopReason::EndTurn)) })
         }
     }
 
     #[tokio::test]
     async fn test_agent_sends_plan_notifications_mock() {
-        let agent = PlanMockAgent;
-        let result = test_agent_sends_plan_notifications(&agent).await;
-        assert!(result.is_ok());
+        let mock = Arc::new(PlanMockAgent);
+        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
+            test_agent_sends_plan_notifications(&fx).await
+        })
+        .await;
+        assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[test]

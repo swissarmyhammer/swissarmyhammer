@@ -3,7 +3,7 @@ use crate::constants::sizes;
 use crate::error::ToJsonRpcError;
 use crate::size_validator::{SizeValidationError, SizeValidator};
 use crate::url_validation;
-use agent_client_protocol::ContentBlock;
+use agent_client_protocol::schema::ContentBlock;
 use base64;
 use regex::Regex;
 use serde_json::{json, Value};
@@ -587,7 +587,7 @@ impl ContentSecurityValidator {
     /// Validate text content security
     pub fn validate_text_security(
         &self,
-        text_content: &agent_client_protocol::TextContent,
+        text_content: &agent_client_protocol::schema::TextContent,
     ) -> Result<(), ContentSecurityError> {
         if self.policy.enable_content_sanitization {
             self.validate_text_content_safety(&text_content.text)?;
@@ -622,9 +622,9 @@ impl ContentSecurityValidator {
     /// - Content type consistency validation (if format validation is enabled and MIME type is not application/octet-stream)
     pub fn validate_resource_content(
         &self,
-        resource_content: &agent_client_protocol::EmbeddedResource,
+        resource_content: &agent_client_protocol::schema::EmbeddedResource,
     ) -> Result<(), ContentSecurityError> {
-        use agent_client_protocol::EmbeddedResourceResource;
+        use agent_client_protocol::schema::EmbeddedResourceResource;
 
         match &resource_content.resource {
             EmbeddedResourceResource::TextResourceContents(text_resource) => {
@@ -856,7 +856,7 @@ impl ContentSecurityValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::TextContent;
+    use agent_client_protocol::schema::TextContent;
 
     fn create_test_validator() -> ContentSecurityValidator {
         ContentSecurityValidator::moderate().unwrap()
@@ -1082,13 +1082,13 @@ mod tests {
 
     #[test]
     fn test_validate_resource_content_with_uri() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let validator = create_test_validator();
 
         let text_resource =
             TextResourceContents::new("Sample text content", "https://example.com/data.json");
-        let embedded = agent_client_protocol::EmbeddedResource::new(
+        let embedded = agent_client_protocol::schema::EmbeddedResource::new(
             EmbeddedResourceResource::TextResourceContents(text_resource),
         );
         let content = ContentBlock::Resource(embedded);
@@ -1099,13 +1099,13 @@ mod tests {
 
     #[test]
     fn test_validate_resource_content_with_invalid_uri() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let validator = create_test_validator();
 
         let text_resource =
             TextResourceContents::new("Sample text content", "http://localhost/secret");
-        let embedded = agent_client_protocol::EmbeddedResource::new(
+        let embedded = agent_client_protocol::schema::EmbeddedResource::new(
             EmbeddedResourceResource::TextResourceContents(text_resource),
         );
         let content = ContentBlock::Resource(embedded);
@@ -1117,13 +1117,13 @@ mod tests {
 
     #[test]
     fn test_validate_resource_content_with_blob() {
-        use agent_client_protocol::{BlobResourceContents, EmbeddedResourceResource};
+        use agent_client_protocol::schema::{BlobResourceContents, EmbeddedResourceResource};
 
         let validator = create_test_validator();
 
         let blob_resource =
             BlobResourceContents::new("SGVsbG8gV29ybGQ=", "").mime_type("text/plain");
-        let embedded = agent_client_protocol::EmbeddedResource::new(
+        let embedded = agent_client_protocol::schema::EmbeddedResource::new(
             EmbeddedResourceResource::BlobResourceContents(blob_resource),
         );
         let content = ContentBlock::Resource(embedded);

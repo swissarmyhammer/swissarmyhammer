@@ -2,7 +2,9 @@
 //!
 //! This module defines session state management for ACP sessions.
 
-use agent_client_protocol::{AvailableCommand, ClientCapabilities, SessionId as AcpSessionId};
+use agent_client_protocol::schema::{
+    AvailableCommand, ClientCapabilities, SessionId as AcpSessionId,
+};
 use std::time::SystemTime;
 
 use crate::types::ids::SessionId as LlamaSessionId;

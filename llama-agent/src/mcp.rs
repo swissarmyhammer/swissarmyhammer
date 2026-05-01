@@ -204,7 +204,7 @@ impl UnifiedMCPClient {
     }
 
     /// Set session context for MCP notification forwarding
-    pub async fn set_session(&self, session_id: agent_client_protocol::SessionId) {
+    pub async fn set_session(&self, session_id: agent_client_protocol::schema::SessionId) {
         self.handler.set_session(session_id).await;
     }
 
@@ -447,7 +447,7 @@ pub trait MCPClient: Send + Sync {
     async fn shutdown_all(&self) -> Result<(), MCPError>;
 
     /// Set session context for MCP notification forwarding
-    async fn set_session(&self, session_id: agent_client_protocol::SessionId);
+    async fn set_session(&self, session_id: agent_client_protocol::schema::SessionId);
 
     /// Clear session context after tool calls
     async fn clear_session(&self);
@@ -487,7 +487,7 @@ impl MCPClient for UnifiedMCPClient {
         self.shutdown_all().await
     }
 
-    async fn set_session(&self, session_id: agent_client_protocol::SessionId) {
+    async fn set_session(&self, session_id: agent_client_protocol::schema::SessionId) {
         self.set_session(session_id).await
     }
 
@@ -666,7 +666,7 @@ impl MCPClient for NoOpMCPClient {
         Ok(())
     }
 
-    async fn set_session(&self, _session_id: agent_client_protocol::SessionId) {
+    async fn set_session(&self, _session_id: agent_client_protocol::schema::SessionId) {
         // No-op
     }
 

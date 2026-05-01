@@ -4,7 +4,6 @@
 //! that wraps the ClaudeAgent to provide JSON-RPC communication over custom streams.
 
 use crate::{agent::ClaudeAgent, config::AgentConfig, error::AgentError};
-use agent_client_protocol::Agent;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -31,14 +30,14 @@ use tracing::{error, info, warn};
 struct JsonRpcNotification {
     jsonrpc: &'static str,
     method: &'static str,
-    params: agent_client_protocol::SessionNotification,
+    params: agent_client_protocol::schema::SessionNotification,
 }
 
 /// The main ACP server that handles JSON-RPC communication
 pub struct ClaudeAgentServer {
     agent: Arc<ClaudeAgent>,
     notification_receiver:
-        Mutex<Option<broadcast::Receiver<agent_client_protocol::SessionNotification>>>,
+        Mutex<Option<broadcast::Receiver<agent_client_protocol::schema::SessionNotification>>>,
 }
 
 impl ClaudeAgentServer {
@@ -281,12 +280,13 @@ impl ClaudeAgentServer {
             }
             // Handle extension methods through ext_method
             _ => {
-                let params_raw = agent_client_protocol::RawValue::from_string(params.to_string())
-                    .map_err(|_| {
-                    AgentError::Protocol("Failed to convert params to RawValue".to_string())
-                })?;
+                let params_raw =
+                    agent_client_protocol::schema::RawValue::from_string(params.to_string())
+                        .map_err(|_| {
+                            AgentError::Protocol("Failed to convert params to RawValue".to_string())
+                        })?;
 
-                let ext_request = agent_client_protocol::ExtRequest::new(
+                let ext_request = agent_client_protocol::schema::ExtRequest::new(
                     method.to_string(),
                     Arc::from(params_raw),
                 );
@@ -372,7 +372,7 @@ impl ClaudeAgentServer {
     /// camelCase serialization via serde attributes, ensuring ACP specification compliance.
     async fn send_notification<W>(
         writer: Arc<tokio::sync::Mutex<W>>,
-        notification: agent_client_protocol::SessionNotification,
+        notification: agent_client_protocol::schema::SessionNotification,
     ) -> crate::Result<()>
     where
         W: AsyncWrite + Unpin + Send + 'static,
@@ -643,7 +643,7 @@ mod tests {
     /// to serialize field names according to the ACP specification (camelCase, not snake_case).
     #[tokio::test]
     async fn test_protocol_type_serialization() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ContentBlock, SessionId, SessionNotification, SessionUpdate, TextContent,
         };
 
@@ -652,7 +652,7 @@ mod tests {
         meta_map.insert("test".to_string(), serde_json::json!(true));
         let notification = SessionNotification::new(
             SessionId::new("test123".to_string()),
-            SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("test thought")),
             )),
         )
@@ -675,7 +675,7 @@ mod tests {
     /// including proper field naming (sessionId, not session_id) and the _meta prefix for metadata.
     #[tokio::test]
     async fn test_session_notification_uses_camel_case() {
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             ContentBlock, SessionId, SessionNotification, SessionUpdate, TextContent,
         };
 
@@ -684,7 +684,7 @@ mod tests {
         meta_map.insert("test".to_string(), serde_json::json!(true));
         let notification = SessionNotification::new(
             SessionId::new("test123".to_string()),
-            SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("test thought")),
             )),
         )

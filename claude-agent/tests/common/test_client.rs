@@ -1,27 +1,45 @@
-//! Minimal Client implementation for testing tool execution
+//! Minimal Client peer implementation for testing tool execution.
 //!
-//! This module provides a TestClient that implements the ACP Client trait,
-//! allowing tests to verify tool completion notifications without requiring
-//! external dependencies or the actual Claude CLI.
+//! This module provides a [`TestClient`] that mirrors the `AgentRequest` surface
+//! a real ACP client would handle (filesystem reads/writes, session
+//! notifications, permission prompts). It maintains an in-memory filesystem and
+//! exposes inherent `async` methods matching each request type, letting tests
+//! drive client-side behaviour directly without an actual transport.
+//!
+//! # ACP 0.11
+//!
+//! In ACP 0.10 this struct implemented the `Client` trait. ACP 0.11 removed
+//! that trait — `agent_client_protocol::Client` is now a unit [`Role`] marker —
+//! and replaced trait dispatch with the typed builder/handler runtime. The
+//! inherent methods on `TestClient` are equivalent to the bodies that would
+//! live inside `Client.builder().on_receive_request_from(Agent, ...)` callbacks
+//! in a fully wired connection. Tests that need a real peer connection can
+//! call those methods from within a `Client.builder()` closure.
+//!
+//! [`Role`]: agent_client_protocol::Role
 
-use agent_client_protocol::{
-    Client, Error as AcpError, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
+use agent_client_protocol::Error as AcpError;
+use agent_client_protocol::schema::{
+    ReadTextFileRequest, ReadTextFileResponse, RequestPermissionRequest, RequestPermissionResponse,
+    SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
 };
-use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-/// Minimal Client implementation for testing tool execution
+/// Minimal client-side handler for tool execution tests.
 ///
-/// This client maintains an in-memory filesystem and implements the ACP Client trait,
-/// allowing tools to actually execute and complete in tests without external dependencies.
+/// `TestClient` keeps an in-memory filesystem and provides inherent async
+/// methods matching every request the agent can send back to the client. Tests
+/// can call those methods directly to simulate client behaviour, or wrap them
+/// in a `Client.builder().on_receive_request_from(Agent, ...)` callback when a
+/// real `ConnectionTo` peer is required.
 ///
 /// # Thread Safety
 ///
-/// TestClient uses Arc<RwLock<>> for the file storage, making it safe to share
-/// across async tasks while allowing concurrent reads and exclusive writes.
+/// `TestClient` uses `Arc<RwLock<>>` for the file storage, making it safe to
+/// share across async tasks while allowing concurrent reads and exclusive
+/// writes.
 ///
 /// # Example
 ///
@@ -31,7 +49,8 @@ use std::sync::{Arc, RwLock};
 /// let client = TestClient::new();
 /// client.add_file("/test/example.txt", "Hello, world!");
 ///
-/// // Use with ClaudeAgent...
+/// // Drive the inherent methods directly, or wire them up inside a
+/// // `Client.builder().on_receive_request_from(Agent, ...)` callback.
 /// ```
 #[derive(Clone)]
 pub struct TestClient {
@@ -105,12 +124,13 @@ impl Default for TestClient {
     }
 }
 
-#[async_trait(?Send)]
-impl Client for TestClient {
-    /// Read text file from in-memory filesystem
+impl TestClient {
+    /// Read a text file from the in-memory filesystem.
     ///
-    /// Supports line/limit parameters for partial reads.
-    async fn read_text_file(
+    /// Supports the optional `line` (1-indexed) and `limit` parameters of
+    /// [`ReadTextFileRequest`] for partial reads. Returns
+    /// [`AcpError::invalid_params`] if the path does not exist.
+    pub async fn read_text_file(
         &self,
         request: ReadTextFileRequest,
     ) -> Result<ReadTextFileResponse, AcpError> {
@@ -141,10 +161,10 @@ impl Client for TestClient {
         Ok(ReadTextFileResponse::new(result_lines))
     }
 
-    /// Write text file to in-memory filesystem
+    /// Write a text file to the in-memory filesystem.
     ///
     /// Creates or overwrites the file at the specified path.
-    async fn write_text_file(
+    pub async fn write_text_file(
         &self,
         request: WriteTextFileRequest,
     ) -> Result<WriteTextFileResponse, AcpError> {
@@ -157,11 +177,11 @@ impl Client for TestClient {
         Ok(WriteTextFileResponse::new())
     }
 
-    /// Handle session notifications
+    /// Handle session notifications.
     ///
-    /// Test client ignores notifications since we're only interested
-    /// in verifying they're sent, not processing them.
-    async fn session_notification(
+    /// `TestClient` ignores notifications since the existing tests only verify
+    /// that they're sent, not that they're processed.
+    pub async fn session_notification(
         &self,
         _notification: SessionNotification,
     ) -> Result<(), AcpError> {
@@ -169,15 +189,15 @@ impl Client for TestClient {
         Ok(())
     }
 
-    /// Handle permission requests
+    /// Handle permission requests.
     ///
-    /// Test client auto-approves all permissions for simplified testing.
-    async fn request_permission(
+    /// `TestClient` auto-approves every permission to keep tests deterministic.
+    pub async fn request_permission(
         &self,
         _request: RequestPermissionRequest,
     ) -> Result<RequestPermissionResponse, AcpError> {
         // Auto-approve all permissions in tests
-        use agent_client_protocol::{
+        use agent_client_protocol::schema::{
             PermissionOptionId, RequestPermissionOutcome, SelectedPermissionOutcome,
         };
         let selected = SelectedPermissionOutcome::new(PermissionOptionId::new("allow"));
@@ -190,7 +210,7 @@ impl Client for TestClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::SessionId;
+    use agent_client_protocol::schema::SessionId;
 
     fn test_session_id() -> SessionId {
         SessionId::new("test-session")
@@ -275,12 +295,12 @@ mod tests {
     async fn test_session_notification_succeeds() {
         let client = TestClient::new();
 
-        let text_content = agent_client_protocol::TextContent::new("test".to_string());
-        let content_block = agent_client_protocol::ContentBlock::Text(text_content);
-        let content_chunk = agent_client_protocol::ContentChunk::new(content_block);
-        let notification = agent_client_protocol::SessionNotification::new(
+        let text_content = agent_client_protocol::schema::TextContent::new("test".to_string());
+        let content_block = agent_client_protocol::schema::ContentBlock::Text(text_content);
+        let content_chunk = agent_client_protocol::schema::ContentChunk::new(content_block);
+        let notification = agent_client_protocol::schema::SessionNotification::new(
             test_session_id(),
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk),
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk),
         );
 
         let result = client.session_notification(notification).await;
@@ -291,10 +311,10 @@ mod tests {
     async fn test_request_permission_auto_approves() {
         let client = TestClient::new();
 
-        let fields =
-            agent_client_protocol::ToolCallUpdateFields::new().title("test-tool".to_string());
-        let tool_call_update = agent_client_protocol::ToolCallUpdate::new(
-            agent_client_protocol::ToolCallId::new("tool-1"),
+        let fields = agent_client_protocol::schema::ToolCallUpdateFields::new()
+            .title("test-tool".to_string());
+        let tool_call_update = agent_client_protocol::schema::ToolCallUpdate::new(
+            agent_client_protocol::schema::ToolCallId::new("tool-1"),
             fields,
         );
 
@@ -302,7 +322,7 @@ mod tests {
 
         let response = client.request_permission(request).await.unwrap();
         match response.outcome {
-            agent_client_protocol::RequestPermissionOutcome::Selected(selected) => {
+            agent_client_protocol::schema::RequestPermissionOutcome::Selected(selected) => {
                 assert_eq!(selected.option_id.0.as_ref(), "allow");
             }
             _ => panic!("Expected Selected outcome with 'allow'"),

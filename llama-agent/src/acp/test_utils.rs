@@ -12,7 +12,7 @@ pub async fn create_acp_server(
 ) -> Result<
     (
         AcpServer,
-        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -56,7 +56,7 @@ pub async fn create_acp_server_with_config(
 ) -> Result<
     (
         AcpServer,
-        tokio::sync::broadcast::Receiver<agent_client_protocol::SessionNotification>,
+        tokio::sync::broadcast::Receiver<agent_client_protocol::schema::SessionNotification>,
     ),
     Box<dyn std::error::Error>,
 > {

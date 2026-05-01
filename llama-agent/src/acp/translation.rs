@@ -5,7 +5,7 @@
 
 use crate::types::ids::SessionId as LlamaSessionId;
 use crate::types::{AgentAPI, Message, MessageRole, ToolCall, ToolDefinition, ToolResult};
-use agent_client_protocol::{ContentBlock, SessionId as AcpSessionId};
+use agent_client_protocol::schema::{ContentBlock, SessionId as AcpSessionId};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -27,7 +27,7 @@ use super::session::AcpSessionState;
 ///
 /// # Examples
 /// ```text
-/// use agent_client_protocol::ContentBlock;
+/// use agent_client_protocol::schema::ContentBlock;
 /// use llama_agent::acp::translation::acp_to_llama_messages;
 ///
 /// let content = vec![ContentBlock::from("Hello, world!")];
@@ -78,7 +78,11 @@ pub fn acp_to_llama_messages(content: Vec<ContentBlock>) -> Result<Vec<Message>,
                     "Embedded resource content not yet supported".to_string(),
                 ));
             }
-            // Handle any future ContentBlock variants
+            // ContentBlock is `#[non_exhaustive]`. All currently-known variants
+            // (Text, Image, Audio, ResourceLink, Resource) are handled explicitly
+            // above; this arm exists only to satisfy the compiler for future
+            // ACP additions and surfaces them as `UnsupportedContent` rather
+            // than silently mishandling them.
             _ => {
                 return Err(TranslationError::UnsupportedContent(
                     "Unknown content type not yet supported".to_string(),
@@ -477,7 +481,7 @@ impl ToJsonRpcError for agent_client_protocol::Error {
 ///
 /// # Examples
 /// ```text
-/// use agent_client_protocol::SessionId as AcpSessionId;
+/// use agent_client_protocol::schema::SessionId as AcpSessionId;
 /// use llama_agent::acp::translation::acp_to_llama_session_id;
 /// use std::sync::Arc;
 ///
@@ -563,11 +567,11 @@ pub fn llama_to_acp_content(messages: Vec<Message>) -> Vec<ContentBlock> {
 /// * `chunk` - The StreamChunk from llama-agent to translate
 ///
 /// # Returns
-/// * `agent_client_protocol::SessionNotification` - Notification with the chunk content
+/// * `agent_client_protocol::schema::SessionNotification` - Notification with the chunk content
 ///
 /// # Examples
 /// ```text
-/// use agent_client_protocol::SessionId;
+/// use agent_client_protocol::schema::SessionId;
 /// use llama_agent::acp::translation::llama_chunk_to_acp_notification;
 /// use llama_agent::types::StreamChunk;
 ///
@@ -581,10 +585,12 @@ pub fn llama_to_acp_content(messages: Vec<Message>) -> Vec<ContentBlock> {
 /// let notification = llama_chunk_to_acp_notification(session_id, chunk);
 /// ```
 pub fn llama_chunk_to_acp_notification(
-    session_id: agent_client_protocol::SessionId,
+    session_id: agent_client_protocol::schema::SessionId,
     chunk: crate::types::StreamChunk,
-) -> agent_client_protocol::SessionNotification {
-    use agent_client_protocol::{ContentBlock, ContentChunk, SessionNotification, SessionUpdate};
+) -> agent_client_protocol::schema::SessionNotification {
+    use agent_client_protocol::schema::{
+        ContentBlock, ContentChunk, SessionNotification, SessionUpdate,
+    };
 
     // Convert the text chunk to a ContentBlock
     let content_block = ContentBlock::from(chunk.text);
@@ -713,7 +719,7 @@ pub fn tool_definitions_to_acp_format(tool_defs: &[ToolDefinition]) -> serde_jso
 /// * `tool_def` - Optional ToolDefinition containing metadata about the tool
 ///
 /// # Returns
-/// * `agent_client_protocol::ToolCall` - ACP ToolCall ready to send to client
+/// * `agent_client_protocol::schema::ToolCall` - ACP ToolCall ready to send to client
 ///
 /// # Tool Kind Inference
 /// The function attempts to infer the appropriate `ToolKind` from the tool name:
@@ -752,8 +758,8 @@ pub fn tool_definitions_to_acp_format(tool_defs: &[ToolDefinition]) -> serde_jso
 pub fn tool_call_to_acp(
     tool_call: ToolCall,
     tool_def: Option<&ToolDefinition>,
-) -> agent_client_protocol::ToolCall {
-    use agent_client_protocol::{ToolCall as AcpToolCall, ToolCallId as AcpToolCallId};
+) -> agent_client_protocol::schema::ToolCall {
+    use agent_client_protocol::schema::{ToolCall as AcpToolCall, ToolCallId as AcpToolCallId};
 
     // Convert tool call ID
     let tool_call_id = AcpToolCallId::new(tool_call.id.to_string());
@@ -795,7 +801,7 @@ pub fn tool_call_to_acp(
 /// * `tool_name` - The name of the tool to classify
 ///
 /// # Returns
-/// * `agent_client_protocol::ToolKind` - The inferred kind
+/// * `agent_client_protocol::schema::ToolKind` - The inferred kind
 ///
 /// # Classification Rules
 /// The function uses keyword matching (case-insensitive):
@@ -812,7 +818,7 @@ pub fn tool_call_to_acp(
 /// # Examples
 /// ```
 /// use llama_agent::acp::translation::infer_tool_kind;
-/// use agent_client_protocol::ToolKind;
+/// use agent_client_protocol::schema::ToolKind;
 ///
 /// assert_eq!(infer_tool_kind("fs_read"), ToolKind::Read);
 /// assert_eq!(infer_tool_kind("fs_write"), ToolKind::Edit);
@@ -821,8 +827,8 @@ pub fn tool_call_to_acp(
 /// assert_eq!(infer_tool_kind("web"), ToolKind::Fetch);
 /// assert_eq!(infer_tool_kind("some_tool"), ToolKind::Other);
 /// ```
-pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
-    use agent_client_protocol::ToolKind;
+pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::schema::ToolKind {
+    use agent_client_protocol::schema::ToolKind;
 
     let name_lower = tool_name.to_lowercase();
 
@@ -912,7 +918,7 @@ pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
 /// * `tool_result` - The ToolResult from llama-agent containing execution outcome
 ///
 /// # Returns
-/// * `agent_client_protocol::ToolCallUpdate` - Update with tool execution status and results
+/// * `agent_client_protocol::schema::ToolCallUpdate` - Update with tool execution status and results
 ///
 /// # Status Mapping
 /// - If `tool_result.error` is `None`: Status is `Completed` with result in `raw_output`
@@ -943,8 +949,10 @@ pub fn infer_tool_kind(tool_name: &str) -> agent_client_protocol::ToolKind {
 /// // update.fields.status == Some(ToolCallStatus::Failed)
 /// // update.fields.content contains error message
 /// ```
-pub fn tool_result_to_acp_update(tool_result: ToolResult) -> agent_client_protocol::ToolCallUpdate {
-    use agent_client_protocol::{
+pub fn tool_result_to_acp_update(
+    tool_result: ToolResult,
+) -> agent_client_protocol::schema::ToolCallUpdate {
+    use agent_client_protocol::schema::{
         ContentBlock, ToolCallContent, ToolCallId as AcpToolCallId, ToolCallStatus, ToolCallUpdate,
         ToolCallUpdateFields,
     };
@@ -1628,7 +1636,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_text_content() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
         let chunk = StreamChunk {
@@ -1645,9 +1653,9 @@ mod tests {
 
         // Verify it's an AgentMessageChunk update
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
-                    agent_client_protocol::ContentBlock::Text(text) => {
+                    agent_client_protocol::schema::ContentBlock::Text(text) => {
                         assert_eq!(text.text, "Hello from llama!");
                     }
                     _ => panic!("Expected text content block"),
@@ -1660,7 +1668,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_empty_text() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
         let chunk = StreamChunk {
@@ -1677,9 +1685,9 @@ mod tests {
 
         // Verify it's an AgentMessageChunk update with empty text
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
-                    agent_client_protocol::ContentBlock::Text(text) => {
+                    agent_client_protocol::schema::ContentBlock::Text(text) => {
                         assert_eq!(text.text, "");
                     }
                     _ => panic!("Expected text content block"),
@@ -1692,7 +1700,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_complete_chunk() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
         let chunk = StreamChunk {
@@ -1711,9 +1719,9 @@ mod tests {
         assert_eq!(notification.session_id, session_id);
 
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
-                    agent_client_protocol::ContentBlock::Text(text) => {
+                    agent_client_protocol::schema::ContentBlock::Text(text) => {
                         assert_eq!(text.text, "Final message.");
                     }
                     _ => panic!("Expected text content block"),
@@ -1726,7 +1734,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_multiline_text() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
         let chunk = StreamChunk {
@@ -1741,9 +1749,9 @@ mod tests {
         assert_eq!(notification.session_id, session_id);
 
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
-                    agent_client_protocol::ContentBlock::Text(text) => {
+                    agent_client_protocol::schema::ContentBlock::Text(text) => {
                         assert_eq!(text.text, "Line 1\nLine 2\nLine 3");
                     }
                     _ => panic!("Expected text content block"),
@@ -1756,7 +1764,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_different_session_ids() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::SessionId;
+        use agent_client_protocol::schema::SessionId;
 
         let session_id_1 = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
         let session_id_2 = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y8");
@@ -1786,7 +1794,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_with_tool_call_text() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::{ContentBlock, SessionId};
+        use agent_client_protocol::schema::{ContentBlock, SessionId};
 
         // Tool calls appear as text in the stream during generation
         // They are extracted and parsed AFTER streaming completes
@@ -1803,7 +1811,7 @@ mod tests {
         // Verify it's still treated as text content
         assert_eq!(notification.session_id, session_id);
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
                     ContentBlock::Text(text) => {
                         assert_eq!(text.text, "<tool_call>fs_read</tool_call>");
@@ -1818,7 +1826,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_partial_tool_call_text() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::{ContentBlock, SessionId};
+        use agent_client_protocol::schema::{ContentBlock, SessionId};
 
         // During streaming, tool calls arrive as partial text chunks
         let session_id = SessionId::new("01HX5ZRQK9X8G2V7N3P4M5W6Y7");
@@ -1834,7 +1842,7 @@ mod tests {
         // Partial tool call syntax is still just text
         assert_eq!(notification.session_id, session_id);
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
                     ContentBlock::Text(text) => {
                         assert_eq!(text.text, "<tool_call>");
@@ -1849,7 +1857,7 @@ mod tests {
     #[test]
     fn test_llama_chunk_to_acp_notification_does_not_parse_tool_calls() {
         use crate::types::StreamChunk;
-        use agent_client_protocol::{ContentBlock, SessionId};
+        use agent_client_protocol::schema::{ContentBlock, SessionId};
 
         // Verify that llama_chunk_to_acp_notification does NOT attempt to parse
         // or extract tool calls - that's done separately after streaming completes
@@ -1867,7 +1875,7 @@ mod tests {
 
         // Should be sent as-is as text, not parsed into a tool call notification
         match notification.update {
-            agent_client_protocol::SessionUpdate::AgentMessageChunk(content_chunk) => {
+            agent_client_protocol::schema::SessionUpdate::AgentMessageChunk(content_chunk) => {
                 match &content_chunk.content {
                     ContentBlock::Text(text) => {
                         // The entire tool call XML/JSON is preserved as text
@@ -2399,7 +2407,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_read_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("fs_read"), ToolKind::Read);
         assert_eq!(infer_tool_kind("get_file"), ToolKind::Read);
@@ -2413,7 +2421,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_edit_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("fs_write"), ToolKind::Edit);
         assert_eq!(infer_tool_kind("create_file"), ToolKind::Edit);
@@ -2424,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_delete_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("fs_delete"), ToolKind::Delete);
         assert_eq!(infer_tool_kind("delete_file"), ToolKind::Delete);
@@ -2435,7 +2443,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_move_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("move_file"), ToolKind::Move);
         assert_eq!(infer_tool_kind("rename_file"), ToolKind::Move);
@@ -2444,7 +2452,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_search_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("search_files"), ToolKind::Search);
         assert_eq!(infer_tool_kind("grep_files"), ToolKind::Search);
@@ -2453,7 +2461,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_execute_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("shell"), ToolKind::Execute);
         assert_eq!(infer_tool_kind("execute_command"), ToolKind::Execute);
@@ -2464,7 +2472,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_fetch_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("http_get"), ToolKind::Fetch);
         assert_eq!(infer_tool_kind("web"), ToolKind::Fetch);
@@ -2473,7 +2481,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_think_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("think"), ToolKind::Think);
         assert_eq!(infer_tool_kind("plan_task"), ToolKind::Think);
@@ -2483,7 +2491,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_other_operations() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("unknown_tool"), ToolKind::Other);
         assert_eq!(infer_tool_kind("custom_operation"), ToolKind::Other);
@@ -2492,7 +2500,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_case_insensitive() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("FS_READ"), ToolKind::Read);
         assert_eq!(infer_tool_kind("Shell_Execute"), ToolKind::Execute);
@@ -2501,7 +2509,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_mcp_style_names() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         assert_eq!(infer_tool_kind("mcp__files"), ToolKind::Other);
         assert_eq!(infer_tool_kind("mcp__shell_execute"), ToolKind::Execute);
@@ -2510,7 +2518,7 @@ mod tests {
 
     #[test]
     fn test_infer_tool_kind_rm_word_boundary() {
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         // "rm" as a complete word should be Delete
         assert_eq!(infer_tool_kind("rm"), ToolKind::Delete);
@@ -2527,7 +2535,7 @@ mod tests {
     #[test]
     fn test_tool_call_to_acp_basic() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         let tool_call = ToolCall {
             id: ToolCallId::new(),
@@ -2559,7 +2567,7 @@ mod tests {
     #[test]
     fn test_tool_call_to_acp_with_definition() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         let tool_call = ToolCall {
             id: ToolCallId::new(),
@@ -2597,7 +2605,7 @@ mod tests {
     #[test]
     fn test_tool_call_to_acp_different_kinds() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolKind;
+        use agent_client_protocol::schema::ToolKind;
 
         let test_cases = vec![
             ("fs_read", ToolKind::Read),
@@ -2673,7 +2681,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_success() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolCallStatus;
+        use agent_client_protocol::schema::ToolCallStatus;
 
         let tool_call_id = ToolCallId::new();
         let tool_call_id_str = tool_call_id.to_string();
@@ -2705,7 +2713,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_failure() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::{ContentBlock, ToolCallContent, ToolCallStatus};
+        use agent_client_protocol::schema::{ContentBlock, ToolCallContent, ToolCallStatus};
 
         let tool_call_id = ToolCallId::new();
         let tool_call_id_str = tool_call_id.to_string();
@@ -2746,7 +2754,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_success_with_null_result() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolCallStatus;
+        use agent_client_protocol::schema::ToolCallStatus;
 
         let tool_result = ToolResult {
             call_id: ToolCallId::new(),
@@ -2765,7 +2773,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_complex_result() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::ToolCallStatus;
+        use agent_client_protocol::schema::ToolCallStatus;
 
         let complex_result = serde_json::json!({
             "files": ["file1.txt", "file2.txt"],
@@ -2791,7 +2799,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_multiline_error() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::{ContentBlock, ToolCallContent, ToolCallStatus};
+        use agent_client_protocol::schema::{ContentBlock, ToolCallContent, ToolCallStatus};
 
         let error_msg =
             "Error: Failed to execute command\nReason: Permission denied\nPath: /etc/shadow";
@@ -2823,7 +2831,7 @@ mod tests {
     #[test]
     fn test_tool_result_to_acp_update_empty_error_message() {
         use crate::types::ids::ToolCallId;
-        use agent_client_protocol::{ContentBlock, ToolCallContent, ToolCallStatus};
+        use agent_client_protocol::schema::{ContentBlock, ToolCallContent, ToolCallStatus};
 
         let tool_result = ToolResult {
             call_id: ToolCallId::new(),

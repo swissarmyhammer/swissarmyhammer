@@ -1,11 +1,9 @@
 //! Cross-cutting tests: timeout, unexpected exit codes, matchers,
 //! precedence, stdin JSON shape, and notification pipeline.
 
-use agent_client_protocol::Agent;
 use tokio::sync::broadcast;
 
 use crate::helpers;
-use std::sync::Arc;
 
 /// Maximum time to wait for an async channel message in notification tests.
 const CHANNEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -19,12 +17,10 @@ async fn unexpected_exit_code_allows() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     // Exit code 1 → Allow → prompt should succeed
     assert!(
@@ -56,7 +52,7 @@ async fn matcher_filters_by_tool_name() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), Some("Bash"));
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -99,7 +95,7 @@ async fn notification_matcher_filters_by_update_type() {
         script.to_str().unwrap(),
         Some("agent_message"),
     );
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -138,12 +134,10 @@ async fn timeout_blocks() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json_with_timeout("UserPromptSubmit", script.to_str().unwrap(), 1);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(result.is_err(), "Timeout hook should block the prompt");
     let err = result.unwrap_err();
@@ -174,12 +168,10 @@ async fn precedence_block_wins_over_context() {
         context_script.to_str().unwrap(),
         block_script.to_str().unwrap(),
     );
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(
         result.is_err(),
@@ -201,12 +193,10 @@ async fn stdin_json_shape_user_prompt_submit() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let _ = agent
-        .prompt(helpers::make_prompt_request(session_id, "test prompt text"))
-        .await;
+    let _ = helpers::try_run_prompt(&agent, &session_id, "test prompt text").await;
 
     let captured = helpers::read_stdin_capture(tmp.path(), "hook.sh");
     assert!(captured.is_some(), "UserPromptSubmit hook should run");
@@ -234,7 +224,7 @@ async fn stdin_json_shape_pre_tool_use() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -264,7 +254,7 @@ async fn notification_pipeline_delivers_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Notification", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 

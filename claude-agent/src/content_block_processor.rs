@@ -3,7 +3,7 @@ use crate::content_security_validator::{ContentSecurityError, ContentSecurityVal
 use crate::error::ToJsonRpcError;
 use crate::size_validator::{SizeValidationError, SizeValidator};
 use crate::url_validation;
-use agent_client_protocol::{ContentBlock, TextContent};
+use agent_client_protocol::schema::{ContentBlock, TextContent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -512,7 +512,7 @@ impl ContentBlockProcessor {
                 })
             }
             ContentBlock::Resource(resource_content) => {
-                use agent_client_protocol::EmbeddedResourceResource;
+                use agent_client_protocol::schema::EmbeddedResourceResource;
 
                 let mut metadata = HashMap::new();
 
@@ -718,9 +718,9 @@ impl ContentBlockProcessor {
     /// Validate resource structure
     fn validate_resource_structure(
         &self,
-        resource_content: &agent_client_protocol::EmbeddedResource,
+        resource_content: &agent_client_protocol::schema::EmbeddedResource,
     ) -> Result<(), ContentBlockProcessorError> {
-        use agent_client_protocol::EmbeddedResourceResource;
+        use agent_client_protocol::schema::EmbeddedResourceResource;
 
         match &resource_content.resource {
             EmbeddedResourceResource::TextResourceContents(text_resource) => {
@@ -1021,7 +1021,9 @@ pub struct ContentProcessingSummary {
 mod tests {
     use super::*;
     use crate::constants::sizes;
-    use agent_client_protocol::{AudioContent, EmbeddedResource, ImageContent, ResourceLink};
+    use agent_client_protocol::schema::{
+        AudioContent, EmbeddedResource, ImageContent, ResourceLink,
+    };
 
     fn create_test_processor() -> ContentBlockProcessor {
         let mut supported_capabilities = HashMap::new();
@@ -1171,7 +1173,7 @@ mod tests {
 
     #[test]
     fn test_process_text_resource_with_uri_and_mime() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let processor = create_test_processor();
 
@@ -1212,7 +1214,7 @@ mod tests {
 
     #[test]
     fn test_process_text_resource_without_uri() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let processor = create_test_processor();
 
@@ -1241,7 +1243,7 @@ mod tests {
 
     #[test]
     fn test_process_text_resource_without_mime() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let processor = create_test_processor();
 
@@ -1266,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_process_blob_resource_with_mime() {
-        use agent_client_protocol::{BlobResourceContents, EmbeddedResourceResource};
+        use agent_client_protocol::schema::{BlobResourceContents, EmbeddedResourceResource};
 
         let processor = create_test_processor();
 
@@ -1309,7 +1311,7 @@ mod tests {
 
     #[test]
     fn test_process_blob_resource_without_mime() {
-        use agent_client_protocol::{BlobResourceContents, EmbeddedResourceResource};
+        use agent_client_protocol::schema::{BlobResourceContents, EmbeddedResourceResource};
 
         let processor = create_test_processor();
 
@@ -1333,7 +1335,7 @@ mod tests {
 
     #[test]
     fn test_process_blob_resource_invalid_base64() {
-        use agent_client_protocol::{BlobResourceContents, EmbeddedResourceResource};
+        use agent_client_protocol::schema::{BlobResourceContents, EmbeddedResourceResource};
 
         let processor = create_test_processor();
 
@@ -1486,7 +1488,7 @@ mod tests {
 
     #[test]
     fn test_validate_resource_structure_with_text() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let processor = create_test_processor();
 
@@ -1503,7 +1505,7 @@ mod tests {
 
     #[test]
     fn test_validate_resource_structure_with_blob() {
-        use agent_client_protocol::{BlobResourceContents, EmbeddedResourceResource};
+        use agent_client_protocol::schema::{BlobResourceContents, EmbeddedResourceResource};
 
         let processor = create_test_processor();
 
@@ -1520,7 +1522,7 @@ mod tests {
 
     #[test]
     fn test_validate_resource_structure_empty() {
-        use agent_client_protocol::{EmbeddedResourceResource, TextResourceContents};
+        use agent_client_protocol::schema::{EmbeddedResourceResource, TextResourceContents};
 
         let processor = create_test_processor();
 

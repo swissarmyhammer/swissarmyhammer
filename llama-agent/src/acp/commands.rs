@@ -1,5 +1,7 @@
 use crate::mcp::MCPClient;
-use agent_client_protocol::{AvailableCommand, AvailableCommandInput, UnstructuredCommandInput};
+use agent_client_protocol::schema::{
+    AvailableCommand, AvailableCommandInput, UnstructuredCommandInput,
+};
 use std::sync::Arc;
 use swissarmyhammer_common::is_prompt_visible;
 use swissarmyhammer_skills::SkillLibrary;
@@ -247,7 +249,7 @@ mod tests {
             Ok(())
         }
 
-        async fn set_session(&self, _session_id: agent_client_protocol::SessionId) {
+        async fn set_session(&self, _session_id: agent_client_protocol::schema::SessionId) {
             // No-op for mock
         }
 

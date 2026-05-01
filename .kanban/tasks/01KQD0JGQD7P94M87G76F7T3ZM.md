@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQD0EA8Q367A70AWY8MMZ79D
-position_column: todo
-position_ordinal: ff9080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffa180
 project: acp-upgrade
 title: 'ACP 0.11: llama-agent: session types (types/sessions + acp/session)'
 ---

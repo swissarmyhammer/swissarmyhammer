@@ -18,7 +18,9 @@
 //! - `priority`: High/Medium/Low (always Medium for kanban tasks)
 //! - `meta`: Additional metadata
 
-use agent_client_protocol::{Plan, PlanEntry as AcpPlanEntry, PlanEntryPriority, PlanEntryStatus};
+use agent_client_protocol::schema::{
+    Plan, PlanEntry as AcpPlanEntry, PlanEntryPriority, PlanEntryStatus,
+};
 use serde_json::Value;
 
 /// Convert plan data from kanban MCP tool response to ACP plan format

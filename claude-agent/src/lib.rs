@@ -75,8 +75,8 @@ pub use plan::{
 pub use server::ClaudeAgentServer;
 pub use tools::{ToolCallHandler, ToolCallResult, ToolPermissions};
 
-use agent_client_protocol::{
-    Agent, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
+use agent_client_protocol::schema::{
+    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
     SessionUpdate, StopReason, TextContent,
 };
 use std::path::PathBuf;
@@ -93,8 +93,8 @@ const NOTIFICATION_COLLECTION_DELAY_MS: u64 = 500;
 /// Collected response from executing a prompt via streaming.
 ///
 /// This collects the streamed content from SessionNotifications into a single response.
-/// Note: This is different from `agent_client_protocol::CollectedResponse` which only
-/// contains the stop_reason - the actual content arrives via streaming notifications.
+/// The stop_reason comes from the prompt response, while the actual content arrives via
+/// streaming notifications.
 #[derive(Debug, Clone)]
 pub struct CollectedResponse {
     /// The collected text content from streaming notifications
@@ -175,12 +175,18 @@ pub async fn execute_prompt(
     execute_prompt_with_agent(agent, notifications, prompt).await
 }
 
-/// Execute a prompt with any Agent implementation.
+/// Execute a prompt against a [`ClaudeAgent`] and collect the streamed
+/// response.
 ///
-/// This is a lower-level function that works with any type implementing the Agent trait,
-/// making it suitable for use with PlaybackAgent in tests.
-pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
-    agent: &A,
+/// In ACP 0.10 this function was generic over an `Agent` trait so callers could
+/// inject a `PlaybackAgent` for tests. ACP 0.11 removed the `Agent` trait —
+/// `agent_client_protocol::Agent` is now a unit Role marker, and the inherent
+/// methods on [`ClaudeAgent`] (`initialize`, `new_session`, `prompt`) are the
+/// only thing this helper needs to drive a turn. Test-time injection of a
+/// recorded session is now handled by wiring [`agent_client_protocol_extras::PlaybackAgent`]
+/// to a real `ConnectionTo` peer rather than by parameterising this helper.
+pub async fn execute_prompt_with_agent(
+    agent: &ClaudeAgent,
     notifications: broadcast::Receiver<SessionNotification>,
     prompt: impl Into<String>,
 ) -> Result<CollectedResponse> {
@@ -213,7 +219,7 @@ pub async fn execute_prompt_with_agent<A: Agent + ?Sized>(
 }
 
 /// Initialize the agent (required by ACP protocol).
-async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
+async fn initialize_agent(agent: &ClaudeAgent) -> Result<()> {
     let init_request = InitializeRequest::new(1.into());
     agent
         .initialize(init_request)
@@ -223,7 +229,9 @@ async fn initialize_agent<A: Agent + ?Sized>(agent: &A) -> Result<()> {
 }
 
 /// Create a new session with the agent.
-async fn create_session<A: Agent + ?Sized>(agent: &A) -> Result<agent_client_protocol::SessionId> {
+async fn create_session(
+    agent: &ClaudeAgent,
+) -> Result<agent_client_protocol::schema::SessionId> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
     let session_request = NewSessionRequest::new(cwd);
     let session_response = agent
@@ -235,7 +243,7 @@ async fn create_session<A: Agent + ?Sized>(agent: &A) -> Result<agent_client_pro
 
 /// Build a prompt request for the given session and text.
 fn build_prompt_request(
-    session_id: &agent_client_protocol::SessionId,
+    session_id: &agent_client_protocol::schema::SessionId,
     prompt_text: String,
 ) -> PromptRequest {
     PromptRequest::new(
@@ -247,7 +255,7 @@ fn build_prompt_request(
 /// Extract text content from a notification if it matches our session.
 async fn process_notification(
     notification: &SessionNotification,
-    session_id: &agent_client_protocol::SessionId,
+    session_id: &agent_client_protocol::schema::SessionId,
     collected_text: &tokio::sync::Mutex<String>,
     matched_count: &std::sync::atomic::AtomicUsize,
 ) {
@@ -274,7 +282,7 @@ async fn process_notification(
 /// Spawn a task to collect text from session notifications.
 pub fn spawn_notification_collector(
     mut notifications: broadcast::Receiver<SessionNotification>,
-    session_id: agent_client_protocol::SessionId,
+    session_id: agent_client_protocol::schema::SessionId,
 ) -> (
     tokio::task::JoinHandle<()>,
     Arc<tokio::sync::Mutex<String>>,
@@ -319,7 +327,7 @@ pub async fn collect_response_content(
     collector: tokio::task::JoinHandle<()>,
     collected_text: Arc<tokio::sync::Mutex<String>>,
     notification_count: Arc<std::sync::atomic::AtomicUsize>,
-    prompt_response: &agent_client_protocol::PromptResponse,
+    prompt_response: &agent_client_protocol::schema::PromptResponse,
 ) -> String {
     tokio::time::sleep(std::time::Duration::from_millis(
         NOTIFICATION_COLLECTION_DELAY_MS,

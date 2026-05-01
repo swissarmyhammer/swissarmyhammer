@@ -50,8 +50,8 @@ pub fn tool_permissions_with(
 }
 
 /// Create test session ID with ACP-compliant format
-pub fn session_id(id: &str) -> agent_client_protocol::SessionId {
-    agent_client_protocol::SessionId::new(id)
+pub fn session_id(id: &str) -> agent_client_protocol::schema::SessionId {
+    agent_client_protocol::schema::SessionId::new(id)
 }
 
 #[cfg(test)]

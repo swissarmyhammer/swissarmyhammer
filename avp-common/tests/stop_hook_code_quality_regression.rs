@@ -469,16 +469,53 @@ async fn stop_hook_falls_back_to_sidecar_diffs_when_turn_state_changed_is_empty(
     // The fallback resolved `["src/sample_avp_test.rs"]` from the sidecar,
     // the ruleset matched, and the runner produced a `code-quality:probe`
     // result that the chain link surfaced.
-    let block = chain_output.validator_block.as_ref().expect(
+    //
+    // Like Test 1, we don't assert pass/fail of the runner — under ACP 0.11
+    // the playback fixture's "passed" verdict is now delivered reliably (no
+    // bridge race), so a passed verdict produces NO `validator_block`. The
+    // strongest signal that the dispatch path reached the runner is either:
+    //   1. the chain output carries a `validator_block` whose name is
+    //      `code-quality:probe` (block fired), OR
+    //   2. the recording captured a `prompt` method call (the runner ran
+    //      and the rule prompt reached the playback agent).
+    // Either path proves the sidecar fallback resolved a non-empty
+    // changed-files list and the chain dispatched the matching ruleset —
+    // the regression this test pins down.
+    let runner_was_reached = chain_output
+        .validator_block
+        .as_ref()
+        .is_some_and(|block| block.validator_name == "code-quality:probe");
+
+    drop(chain_output);
+    let recordings_dir = temp.path().join(".avp").join("recordings");
+    let mut any_prompt_call = false;
+    for _ in 0..20 {
+        if let Ok(entries) = std::fs::read_dir(&recordings_dir) {
+            let recordings: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect();
+            if recordings.iter().any(|path| {
+                std::fs::read_to_string(path)
+                    .map(|content| content.contains("\"method\": \"prompt\""))
+                    .unwrap_or(false)
+            }) {
+                any_prompt_call = true;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        runner_was_reached || any_prompt_call,
         "Sidecar fallback must reach the runner for `code-quality:probe`. \
-         Empty validator_block means the chain rejected the ruleset before \
-         dispatch — the regression. Expected the fallback path in \
-         `load_changed_files_for_stop` to derive the changed-files list \
-         from sidecar diffs.",
-    );
-    assert_eq!(
-        block.validator_name, "code-quality:probe",
-        "validator_block should mention the dispatched rule by qualified name",
+         Empty validator_block AND no recording with a `prompt` method call \
+         under {} means the chain rejected the ruleset before dispatch — the \
+         regression. Expected the fallback path in `load_changed_files_for_stop` \
+         to derive the changed-files list from sidecar diffs.",
+        recordings_dir.display(),
     );
 }
 

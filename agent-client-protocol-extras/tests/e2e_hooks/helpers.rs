@@ -1,13 +1,14 @@
 //! Shared test infrastructure for e2e hook tests.
 
-use agent_client_protocol::{
-    ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PromptRequest,
-    ProtocolVersion, SessionId, SessionNotification, SessionUpdate, TextContent, ToolCall,
-    ToolCallUpdate, ToolCallUpdateFields,
+use agent_client_protocol::schema::{
+    ContentBlock, ContentChunk, PromptRequest, PromptResponse, SessionId, SessionNotification,
+    SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields,
 };
+use agent_client_protocol::Result as AcpResult;
 use agent_client_protocol_extras::{
     hookable_agent_from_config, HookCommandContext, HookConfig, HookEvaluator, HookEventKind,
-    HookableAgent, PlaybackAgent,
+    HookableAgent, PlaybackAgent, SessionSource,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -86,6 +87,10 @@ pub(crate) fn load_playback_agent(fixture_name: &str) -> PlaybackAgent {
 
 /// Write a shell script that captures stdin, prints `stderr_msg` to stderr,
 /// and exits with `exit_code`.
+///
+/// `stderr_msg` is escaped for single-quoted POSIX shell context using the
+/// `'\''` trick, so callers can pass arbitrary content (including quotes
+/// and shell metacharacters) without command-injection risk.
 pub(crate) fn write_exit_script(
     dir: &Path,
     name: &str,
@@ -97,7 +102,7 @@ pub(crate) fn write_exit_script(
     let content = format!(
         "#!/bin/sh\ncat > '{}'\necho '{}' >&2\nexit {}\n",
         capture_path.display(),
-        stderr_msg,
+        stderr_msg.replace('\'', "'\\''"),
         exit_code,
     );
     std::fs::write(&script_path, content).expect("Failed to write hook script");
@@ -190,25 +195,20 @@ fn make_executable(path: &Path) {
 
 /// Build a JSON string configuring a single command hook for the given event.
 pub(crate) fn hook_config_json(event_name: &str, command: &str, matcher: Option<&str>) -> String {
-    let matcher_field = match matcher {
-        Some(m) => format!(r#""matcher": "{m}","#),
-        None => String::new(),
-    };
-    format!(
-        r#"{{
-            "hooks": {{
-                "{event_name}": [
-                    {{
-                        {matcher_field}
-                        "hooks": [
-                            {{ "type": "command", "command": "{cmd}" }}
-                        ]
-                    }}
-                ]
-            }}
-        }}"#,
-        cmd = command.replace('\\', "\\\\").replace('"', "\\\""),
-    )
+    let mut group = serde_json::Map::new();
+    if let Some(m) = matcher {
+        group.insert("matcher".to_string(), serde_json::Value::String(m.into()));
+    }
+    group.insert(
+        "hooks".to_string(),
+        serde_json::json!([{ "type": "command", "command": command }]),
+    );
+    let value = serde_json::json!({
+        "hooks": {
+            event_name: [serde_json::Value::Object(group)]
+        }
+    });
+    serde_json::to_string(&value).expect("hook config serialization failed")
 }
 
 /// Build a JSON string configuring a single command hook with a custom timeout.
@@ -217,20 +217,18 @@ pub(crate) fn hook_config_json_with_timeout(
     command: &str,
     timeout_secs: u64,
 ) -> String {
-    format!(
-        r#"{{
-            "hooks": {{
-                "{event_name}": [
-                    {{
-                        "hooks": [
-                            {{ "type": "command", "command": "{cmd}", "timeout": {timeout_secs} }}
-                        ]
-                    }}
-                ]
-            }}
-        }}"#,
-        cmd = command.replace('\\', "\\\\").replace('"', "\\\""),
-    )
+    let value = serde_json::json!({
+        "hooks": {
+            event_name: [{
+                "hooks": [{
+                    "type": "command",
+                    "command": command,
+                    "timeout": timeout_secs,
+                }]
+            }]
+        }
+    });
+    serde_json::to_string(&value).expect("hook config serialization failed")
 }
 
 /// Build a JSON string configuring two command hooks for the given event.
@@ -239,29 +237,24 @@ pub(crate) fn hook_config_two_hooks_json(
     command1: &str,
     command2: &str,
 ) -> String {
-    format!(
-        r#"{{
-            "hooks": {{
-                "{event_name}": [
-                    {{
-                        "hooks": [
-                            {{ "type": "command", "command": "{cmd1}" }},
-                            {{ "type": "command", "command": "{cmd2}" }}
-                        ]
-                    }}
+    let value = serde_json::json!({
+        "hooks": {
+            event_name: [{
+                "hooks": [
+                    { "type": "command", "command": command1 },
+                    { "type": "command", "command": command2 },
                 ]
-            }}
-        }}"#,
-        cmd1 = command1.replace('\\', "\\\\").replace('"', "\\\""),
-        cmd2 = command2.replace('\\', "\\\\").replace('"', "\\\""),
-    )
+            }]
+        }
+    });
+    serde_json::to_string(&value).expect("hook config serialization failed")
 }
 
 /// Parse a JSON hook config and build a [`HookableAgent`] wrapping `inner`.
 pub(crate) fn build_hookable_agent(
-    inner: Arc<dyn agent_client_protocol::Agent + Send + Sync>,
+    inner: PlaybackAgent,
     config_json: &str,
-) -> HookableAgent {
+) -> HookableAgent<PlaybackAgent> {
     let config: HookConfig =
         serde_json::from_str(config_json).expect("Failed to parse hook config JSON");
     hookable_agent_from_config(inner, &config, None).expect("Failed to build HookableAgent")
@@ -271,19 +264,46 @@ pub(crate) fn build_hookable_agent(
 // Agent lifecycle helpers
 // ---------------------------------------------------------------------------
 
-/// Initialize the agent and create a new session, returning the session ID.
-pub(crate) async fn init_session(agent: &dyn agent_client_protocol::Agent) -> SessionId {
-    let _init_resp = agent
-        .initialize(InitializeRequest::new(ProtocolVersion::V1))
-        .await
-        .expect("initialize failed");
+/// Synthetic session id used by every test in this suite.
+///
+/// In 0.10 each test issued a real `new_session` JSON-RPC call and received a
+/// fresh id. The 0.11 helper API ([`HookableAgent::track_session_start`])
+/// just records (session_id, cwd) so that hooks can later see them; the id
+/// itself is opaque. Hardcoding it here keeps the helper layer simple and
+/// makes the value match the `"test-session"` literal used by the
+/// notification-pipeline helpers below.
+pub(crate) const TEST_SESSION_ID: &str = "test-session";
 
-    let session_resp = agent
-        .new_session(NewSessionRequest::new(PathBuf::from("/tmp/test-hooks")))
-        .await
-        .expect("new_session failed");
+/// Register the test session with the agent and fire `SessionStart` hooks
+/// (with `source = Startup`).
+///
+/// This is the 0.11 replacement for the old `agent.initialize(...)` +
+/// `agent.new_session(...)` pair: there is no actual JSON-RPC round trip,
+/// because [`HookableAgent`] no longer implements the `Agent` trait. The
+/// helper just plumbs the session id and cwd into the agent's
+/// `session_cwd` map and dispatches `SessionStart` hooks.
+pub(crate) async fn init_session<A>(agent: &HookableAgent<A>) -> SessionId {
+    agent
+        .track_session_start(
+            TEST_SESSION_ID.to_string(),
+            SessionSource::Startup,
+            PathBuf::from("/tmp/test-hooks"),
+        )
+        .await;
+    SessionId::new(TEST_SESSION_ID)
+}
 
-    session_resp.session_id
+/// Record a *resumed* session — used by tests that want to assert
+/// `SessionStart` matchers behave differently for `source = "resume"`.
+pub(crate) async fn resume_session<A>(agent: &HookableAgent<A>, session_id: &str) -> SessionId {
+    agent
+        .track_session_start(
+            session_id.to_string(),
+            SessionSource::Resume,
+            PathBuf::from("/tmp/test-hooks"),
+        )
+        .await;
+    SessionId::new(session_id)
 }
 
 /// Build a [`PromptRequest`] with a single text content block.
@@ -291,14 +311,34 @@ pub(crate) fn make_prompt_request(session_id: SessionId, text: &str) -> PromptRe
     PromptRequest::new(session_id, vec![ContentBlock::Text(TextContent::new(text))])
 }
 
-/// Send a prompt and unwrap the response.
-pub(crate) async fn run_prompt(
-    agent: &dyn agent_client_protocol::Agent,
+/// Drive the full pre-prompt → inner → post-prompt sequence and return the
+/// resulting [`PromptResponse`].
+///
+/// The "inner" step is a synthetic no-op that returns
+/// `PromptResponse::new(EndTurn)` — the test suite asserts on hook
+/// decisions, not on inner-agent behaviour. Mirrors the inline
+/// `run_prompt_turn` helper in `hookable_agent.rs` tests.
+pub(crate) async fn try_run_prompt<A>(
+    agent: &HookableAgent<A>,
     session_id: &SessionId,
     text: &str,
-) -> agent_client_protocol::PromptResponse {
-    agent
-        .prompt(make_prompt_request(session_id.clone(), text))
+) -> AcpResult<PromptResponse> {
+    let request = make_prompt_request(session_id.clone(), text);
+    let session_id_str = request.session_id.to_string();
+    let request = agent.run_user_prompt_submit(request).await?;
+    let _ = request; // inner is a no-op in this helper
+    let response = PromptResponse::new(StopReason::EndTurn);
+    Ok(agent.run_stop(session_id_str, response).await)
+}
+
+/// Like [`try_run_prompt`] but unwraps the result. Used by tests that
+/// expect a `PromptResponse` (e.g. Stop-hook assertions).
+pub(crate) async fn run_prompt<A>(
+    agent: &HookableAgent<A>,
+    session_id: &SessionId,
+    text: &str,
+) -> PromptResponse {
+    try_run_prompt(agent, session_id, text)
         .await
         .expect("prompt failed")
 }
@@ -325,7 +365,7 @@ pub(crate) async fn send_tool_completed_notifications(
 
     let update = ToolCallUpdate::new(
         "call-1",
-        ToolCallUpdateFields::new().status(agent_client_protocol::ToolCallStatus::Completed),
+        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
     );
     let _ = tx.send(SessionNotification::new(
         SessionId::new(session_id),
@@ -349,7 +389,7 @@ pub(crate) async fn send_tool_failed_notifications(
 
     let update = ToolCallUpdate::new(
         "call-1",
-        ToolCallUpdateFields::new().status(agent_client_protocol::ToolCallStatus::Failed),
+        ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
     );
     let _ = tx.send(SessionNotification::new(
         SessionId::new(session_id),
@@ -394,6 +434,14 @@ pub(crate) async fn send_named_tool_notification(
 // ---------------------------------------------------------------------------
 
 /// Build a HookCommandContext with typical test values for AVP validation.
+///
+/// `avp_schema_tests.rs` is the only consumer; that module is currently
+/// disabled while `avp-common` is unbuildable under ACP 0.11 (it depends
+/// on `claude-agent` and `llama-agent`, which sibling tasks haven't yet
+/// migrated). Once the sibling tasks land, re-enable that module and this
+/// helper will be reached again — keep it here so the migration path is
+/// a one-line `mod avp_schema_tests;` add in `main.rs`.
+#[allow(dead_code)]
 pub(crate) fn avp_test_context() -> HookCommandContext {
     HookCommandContext {
         transcript_path: "/tmp/test-transcript.jsonl".to_string(),
@@ -491,10 +539,10 @@ impl HookEvaluator for MockEvaluator {
 
 /// Like [`build_hookable_agent`] but passes an evaluator for prompt/agent hooks.
 pub(crate) fn build_hookable_agent_with_evaluator(
-    inner: Arc<dyn agent_client_protocol::Agent + Send + Sync>,
+    inner: PlaybackAgent,
     config_json: &str,
     evaluator: Arc<dyn HookEvaluator>,
-) -> HookableAgent {
+) -> HookableAgent<PlaybackAgent> {
     let config: HookConfig =
         serde_json::from_str(config_json).expect("Failed to parse hook config JSON");
     hookable_agent_from_config(inner, &config, Some(evaluator))

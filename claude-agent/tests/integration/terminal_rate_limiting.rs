@@ -20,17 +20,18 @@ fn create_test_session_manager() -> claude_agent::session::SessionManager {
     claude_agent::session::SessionManager::new().with_storage_path(Some(tmp))
 }
 
-fn create_client_capabilities_with_terminal() -> agent_client_protocol::ClientCapabilities {
-    agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapabilities::new()
+fn create_client_capabilities_with_terminal() -> agent_client_protocol::schema::ClientCapabilities {
+    agent_client_protocol::schema::ClientCapabilities::new()
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(true)
 }
 
-fn create_client_capabilities_without_terminal() -> agent_client_protocol::ClientCapabilities {
-    agent_client_protocol::ClientCapabilities::new()
-        .fs(agent_client_protocol::FileSystemCapabilities::new()
+fn create_client_capabilities_without_terminal() -> agent_client_protocol::schema::ClientCapabilities
+{
+    agent_client_protocol::schema::ClientCapabilities::new()
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new()
             .read_text_file(true)
             .write_text_file(true))
         .terminal(false)

@@ -142,18 +142,22 @@ pub fn fixtures_dir() -> PathBuf {
 /// This creates a context that uses a pre-recorded fixture file for agent
 /// responses, enabling reproducible tests without actual LLM calls.
 ///
+/// In ACP 0.11, [`AvpContext::with_agent`] takes any `ConnectTo<Client>`
+/// component directly — no `Arc<dyn Agent>` wrapping and no separate
+/// notification receiver, since notifications flow through the JSON-RPC
+/// connection itself.
+///
 /// # Arguments
 /// * `temp` - The temporary directory to use as the working directory
 /// * `fixture_name` - The name of the fixture file (e.g., "validator_pass.json")
 pub fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpContext {
     let fixture_path = fixtures_dir().join(fixture_name);
     let agent = PlaybackAgent::new(fixture_path, "claude");
-    let notification_rx = agent.subscribe_notifications();
 
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
 
-    let context = AvpContext::with_agent(Arc::new(agent), notification_rx)
+    let context = AvpContext::with_agent(agent)
         .expect("Should create context with playback agent");
 
     std::env::set_current_dir(&original_dir).unwrap();
@@ -624,6 +628,10 @@ pub fn recording_fixture_path(name: &str) -> PathBuf {
 /// `AvpContext::with_agent` looks for the git root from cwd, so this switches
 /// to the temp dir while constructing the context, then restores cwd so the
 /// helper does not leak directory changes into other tests.
+///
+/// In ACP 0.11 `PlaybackAgent` is itself a `ConnectTo<Client>` component, so
+/// it is passed directly to [`AvpContext::with_agent`]. Notifications flow
+/// through the JSON-RPC connection rather than a separate broadcast receiver.
 pub fn create_playback_context(fixture: &Path) -> (TempDir, AvpContext) {
     let temp = TempDir::new().expect("tempdir");
     fs::create_dir_all(temp.path().join(".git")).expect("create .git");
@@ -632,10 +640,7 @@ pub fn create_playback_context(fixture: &Path) -> (TempDir, AvpContext) {
     std::env::set_current_dir(temp.path()).expect("chdir to temp");
 
     let agent = PlaybackAgent::new(fixture.to_path_buf(), "claude");
-    let notifications = agent.subscribe_notifications();
-    let agent_arc: Arc<dyn agent_client_protocol::Agent + Send + Sync> = Arc::new(agent);
-
-    let ctx = AvpContext::with_agent(agent_arc, notifications).expect("with_agent");
+    let ctx = AvpContext::with_agent(agent).expect("with_agent");
 
     std::env::set_current_dir(original_cwd).expect("restore cwd");
 

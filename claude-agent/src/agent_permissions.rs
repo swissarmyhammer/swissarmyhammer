@@ -1,6 +1,6 @@
 //! Permission-related types for Agent Client Protocol
 
-use agent_client_protocol::SessionId;
+use agent_client_protocol::schema::SessionId;
 
 /// ACP tool call information for permission requests
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

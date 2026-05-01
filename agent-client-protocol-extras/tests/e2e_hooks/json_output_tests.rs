@@ -9,11 +9,9 @@
 //! Hooks that fire from the notification pipeline (`intercept_notifications`):
 //!   PreToolUse, PostToolUse, PostToolUseFailure, Notification
 
-use agent_client_protocol::Agent;
 use tokio::sync::broadcast;
 
 use crate::helpers;
-use std::sync::Arc;
 
 /// UserPromptSubmit with JSON decision:block should Block the prompt.
 #[tokio::test]
@@ -24,12 +22,10 @@ async fn user_prompt_submit_json_block() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("UserPromptSubmit", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
-    let result = agent
-        .prompt(helpers::make_prompt_request(session_id, "hello"))
-        .await;
+    let result = helpers::try_run_prompt(&agent, &session_id, "hello").await;
 
     assert!(
         result.is_err(),
@@ -53,7 +49,7 @@ async fn pre_tool_use_json_block_runs_hook() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PreToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -84,7 +80,7 @@ async fn post_tool_use_json_block_becomes_context() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("PostToolUse", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -112,7 +108,7 @@ async fn post_tool_use_failure_json_block_becomes_context() {
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json =
         helpers::hook_config_json("PostToolUseFailure", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
@@ -138,7 +134,7 @@ async fn stop_json_block_becomes_should_continue() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Stop", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let session_id = helpers::init_session(&agent).await;
     let response = helpers::run_prompt(&agent, &session_id, "Run a bash command").await;
@@ -164,7 +160,7 @@ async fn session_start_json_block_allows_silently() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("SessionStart", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     // SessionStart is not blockable — session should still be created
     let _session_id = helpers::init_session(&agent).await;
@@ -187,7 +183,7 @@ async fn notification_json_block_allows_silently() {
 
     let playback = helpers::load_playback_agent("tool_call_session.json");
     let config_json = helpers::hook_config_json("Notification", script.to_str().unwrap(), None);
-    let agent = helpers::build_hookable_agent(Arc::new(playback), &config_json);
+    let agent = helpers::build_hookable_agent(playback, &config_json);
 
     let _session_id = helpers::init_session(&agent).await;
 
