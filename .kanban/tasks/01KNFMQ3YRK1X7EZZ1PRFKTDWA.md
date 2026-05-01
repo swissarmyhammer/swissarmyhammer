@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffad80
+position_ordinal: ffffffffffffffffffffffffffca80
 title: 'BLOCKER: invokeFocusChange is undefined — runtime ReferenceError on window focus'
 ---
 **File**: kanban-app/ui/src/lib/entity-focus-context.tsx (useEffect near end of EntityFocusProvider)\n\n**What**: `invokeFocusChange(focusedMonikerRef.current, registryRef)` is called in the window focus handler, but `invokeFocusChange` is never defined, imported, or declared anywhere in the codebase. This will throw a `ReferenceError` every time the browser window gains focus (Alt-Tab back, click from another window).\n\n**Why**: The window focus handler re-dispatches the scope chain to the backend so the backend knows which window is active. Without this working, the backend has stale scope chain data after window switches, which may cause commands to target the wrong board/entity.\n\n**Suggestion**: Either define the function (it should invoke `dispatch_command` with the scope chain built from the registry, similar to what `setFocus` does) or call `setFocus(focusedMonikerRef.current)` directly which already handles the scope chain dispatch.\n\n**Subtasks**:\n- [ ] Define `invokeFocusChange` or replace the call with existing `setFocus` logic\n- [ ] Add a test that window focus dispatches scope chain to backend\n- [ ] Verify fix by running `vitest` on entity-focus-context.test.tsx #review-finding

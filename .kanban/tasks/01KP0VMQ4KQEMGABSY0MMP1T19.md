@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc480
+position_ordinal: ffffffffffffffffffffffffffffffab80
 project: kanban-mcp
 title: 'sah-cli: add build.rs, retire generate_docs.rs binary'
 ---

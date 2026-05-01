@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc580
+position_ordinal: ffffffffffffffffffffffffffffffad80
 project: kanban-mcp
 title: 'shelltool-cli: add tests/ directory with integration tests'
 ---

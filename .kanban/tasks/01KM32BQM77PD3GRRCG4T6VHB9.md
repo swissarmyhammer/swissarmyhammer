@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM32B3GRRPSW685JTMQAMPF3
 position_column: done
-position_ordinal: fffffffffe80
+position_ordinal: ffffffffffcf80
 title: Wire view switching through command dispatch and palette
 ---
 ## What

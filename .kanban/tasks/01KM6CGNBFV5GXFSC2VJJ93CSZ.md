@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM6CG7TB07A3B38DW6P3WXKE
 position_column: done
-position_ordinal: ffffffffffcf80
+position_ordinal: ffffffffffff9d80
 title: Add EntityDef commands to TypeScript types and schema context
 ---
 ## What

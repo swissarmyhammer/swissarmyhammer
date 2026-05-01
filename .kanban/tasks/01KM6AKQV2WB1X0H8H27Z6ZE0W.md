@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM6AK9FH267W0VAES4MRF7M6
 position_column: done
-position_ordinal: ffffffffffcc80
+position_ordinal: ffffffffffff9980
 title: 'Add #[operation] macro to ArchiveTask + create UnarchiveTask and ListArchived operations'
 ---
 ## What

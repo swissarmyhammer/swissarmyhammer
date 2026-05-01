@@ -6,7 +6,7 @@ depends_on:
 - 01KM0C1FK7M3D8QM6YQBH259RX
 - 01KM0C20RZ2K8F3S498TT1V0MV
 position_column: done
-position_ordinal: fffffffff380
+position_ordinal: ffffffffffb880
 title: Wire frontend drag start to OS drag + @dnd-kit hybrid
 ---
 ## What

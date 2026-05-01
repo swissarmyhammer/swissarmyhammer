@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff9080
+position_ordinal: ffffffffffffffffffffff8580
 title: 'Test tool_registry: CLI integration, validation, and disabled-tool filtering'
 ---
 File: swissarmyhammer-tools/src/mcp/tool_registry.rs (65.7%, 107 uncovered lines)

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff9e80
+position_ordinal: ffffffffffffffffffffffffffffd980
 title: Add test for shelltool-cli cli::InstallTarget Display impl
 ---
 shelltool-cli/src/cli.rs:21-27

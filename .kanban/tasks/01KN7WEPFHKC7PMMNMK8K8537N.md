@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffab80
+position_ordinal: ffffffffffffffffffffffbc80
 title: Fix PerspectiveTabBar context menu — use backend command system, not custom React menu
 ---
 ## What

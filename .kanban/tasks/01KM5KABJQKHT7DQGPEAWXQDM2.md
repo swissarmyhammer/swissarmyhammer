@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM5JYX09RBFTQFD2T715FAEW
 position_column: done
-position_ordinal: 7f80
+position_ordinal: '8480'
 title: Consolidate TagPill into MentionPill as unified pill component
 ---
 ## What

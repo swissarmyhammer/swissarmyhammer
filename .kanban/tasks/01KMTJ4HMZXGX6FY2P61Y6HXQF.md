@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMTJ1M18XKCE1GBG4EJEEYAH
 position_column: done
-position_ordinal: ffffffffffffffc380
+position_ordinal: ffffffffffffffff9d80
 title: Guard global undo/redo when CM6 editor is active
 ---
 ## What

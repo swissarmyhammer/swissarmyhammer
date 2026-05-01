@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffb80
+position_ordinal: ffffffffffffffd180
 title: claimPredicates useMemo in EntityInspector has missing dependency on isInspectorField
 ---
 **Severity: Low** (Correctness / stale closure)

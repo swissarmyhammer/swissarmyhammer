@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMWS2PV9EVCK6J7NXVMRJAZG
 position_column: done
-position_ordinal: ffffffffffffffe880
+position_ordinal: ffffffffffffffffcc80
 title: Implement entity.paste command
 ---
 ## What

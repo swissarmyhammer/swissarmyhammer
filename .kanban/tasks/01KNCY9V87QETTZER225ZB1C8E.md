@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe380
+position_ordinal: ffffffffffffffffffffffffbb80
 title: 'WARNING: .avp/.gitignore is stale -- references turn_state.yaml but code now uses turn_state/ directory'
 ---
 .avp/.gitignore:8-9

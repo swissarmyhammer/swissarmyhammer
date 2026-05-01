@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff9980
+position_ordinal: ffffffffffffe780
 title: useInspectorNav hook — field cursor and mode management
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffff680
+position_ordinal: ffffffffffffffffffffd380
 title: 'Test git repository: error paths and utility functions'
 ---
 File: swissarmyhammer-git/src/repository.rs (48.8%, 43 uncovered lines)

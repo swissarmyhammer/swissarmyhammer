@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKWF8YVWQ4XNC24DV8YCK650
 position_column: done
-position_ordinal: ffffffffc380
+position_ordinal: ffffffffd880
 title: Cross-board task transfer and copy operations
 ---
 ## What

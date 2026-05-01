@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8180
+position_ordinal: fffffffffffffffffffffffff780
 title: 'Coverage: lsp_worker.rs — index_single_file and loop error-handling branches'
 ---
 swissarmyhammer-code-context/src/lsp_worker.rs

@@ -520,7 +520,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
@@ -541,7 +540,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();
@@ -572,7 +570,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();
@@ -596,7 +593,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();
@@ -677,7 +673,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
 
@@ -893,7 +888,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();
@@ -926,7 +920,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();
@@ -957,7 +950,6 @@ mod tests {
             mention_display_field: None,
             mention_slug_field: None,
             search_display_field: None,
-            commands: vec![],
             sections: vec![],
         };
         let mut fields = HashMap::new();

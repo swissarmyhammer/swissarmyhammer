@@ -37,6 +37,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Mocks — Tauri APIs must be mocked before importing presenters.
@@ -253,46 +256,50 @@ function renderAppLayout() {
   document.body.appendChild(mount);
 
   const ui = (
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/wide">
-              <DragSessionProvider>
-                {/*
-                 * Mirrors App.tsx line-for-line so the test catches any
-                 * regression in the outer app shell's classes. See App.tsx:62.
-                 */}
-                <div
-                  data-testid="app-root"
-                  className="h-screen bg-background text-foreground flex flex-col overflow-hidden"
-                  style={{ height: "600px" }}
-                >
-                  <NavBar />
-                  <ViewsContainer>
-                    <PerspectivesContainer>
-                      <div
-                        data-testid="perspective-content"
-                        className="flex-1 min-w-0 overflow-hidden flex flex-col"
-                      >
-                        {/* Stand-in for BoardView's wide column strip. */}
-                        <div
-                          data-testid="board-scroll"
-                          className="flex flex-1 min-h-0 min-w-0 overflow-x-auto pl-2"
-                        >
-                          <WideContentProbe />
-                        </div>
-                      </div>
-                    </PerspectivesContainer>
-                  </ViewsContainer>
-                  <ModeIndicator />
-                </div>
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/wide">
+                  <DragSessionProvider>
+                    {/*
+                     * Mirrors App.tsx line-for-line so the test catches any
+                     * regression in the outer app shell's classes. See App.tsx:62.
+                     */}
+                    <div
+                      data-testid="app-root"
+                      className="h-screen bg-background text-foreground flex flex-col overflow-hidden"
+                      style={{ height: "600px" }}
+                    >
+                      <NavBar />
+                      <ViewsContainer>
+                        <PerspectivesContainer>
+                          <div
+                            data-testid="perspective-content"
+                            className="flex-1 min-w-0 overflow-hidden flex flex-col"
+                          >
+                            {/* Stand-in for BoardView's wide column strip. */}
+                            <div
+                              data-testid="board-scroll"
+                              className="flex flex-1 min-h-0 min-w-0 overflow-x-auto pl-2"
+                            >
+                              <WideContentProbe />
+                            </div>
+                          </div>
+                        </PerspectivesContainer>
+                      </ViewsContainer>
+                      <ModeIndicator />
+                    </div>
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 
   const result = render(ui, { container: mount });
@@ -477,29 +484,33 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
 
     try {
       render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide-columns">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={boardFixture} tasks={[]} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide-columns">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={boardFixture} tasks={[]} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
@@ -508,12 +519,14 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
       );
       const expectedMinPx = 24 * rootFontSize;
 
-      // Every column FocusScope carries data-moniker="column:<id>" — select
-      // by the stable moniker attribute rather than by Tailwind class names.
-      // Exclude "column:<id>.name" (the header's inner FocusScope for the
-      // name field, used by keyboard navigation).
+      // Every column FocusZone carries data-segment="column:<id>" — select
+      // by the stable segment attribute rather than by Tailwind class names.
+      // The synthetic `column:<id>.name` wrapper has been collapsed into the
+      // inner `<Field>` zone (which carries `field:column:<id>.name`), so a
+      // bare `column:` prefix selector is exact — no `.name`-style
+      // exclusion needed.
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]',
       );
       expect(columnEls.length).toBe(6);
       for (const el of columnEls) {
@@ -579,24 +592,28 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
 
     try {
       render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/class">
-                  <DragSessionProvider>
-                    <BoardView board={boardFixture} tasks={[]} />
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/class">
+                      <DragSessionProvider>
+                        <BoardView board={boardFixture} tasks={[]} />
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
       const columnEls = host.querySelectorAll<HTMLElement>(
-        '[data-moniker^="column:"]:not([data-moniker*="."])',
+        '[data-segment^="column:"]:not([data-segment*="."])',
       );
       expect(columnEls.length).toBe(2);
       for (const el of columnEls) {

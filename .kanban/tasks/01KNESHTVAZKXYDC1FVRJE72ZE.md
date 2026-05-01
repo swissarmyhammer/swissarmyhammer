@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffdf80
+position_ordinal: ffffffffffffffffffffffffae80
 title: 'LSP-T2C: get_diagnostics op'
 ---
 ## What

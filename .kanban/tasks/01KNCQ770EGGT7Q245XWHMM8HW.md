@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNC7R0H7DXWBDFZ7CZDVDN3E
 position_column: done
-position_ordinal: ffffffffffffffffffff8f80
+position_ordinal: ffffffffffffffffffffffffff9580
 title: 'Drag-drop: resolve source and target boards from scope chain'
 ---
 ## What

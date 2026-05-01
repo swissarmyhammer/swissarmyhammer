@@ -2,7 +2,7 @@
 depends_on:
 - 01KKP5XB7XW4SYF8DE2W1T1FVZ
 position_column: done
-position_ordinal: '9e80'
+position_ordinal: a280
 title: Add search icon button to NavBar
 ---
 ## What

@@ -212,6 +212,25 @@ export function useEntityStore(): EntityStoreContextValue {
 /**
  * Subscribe to a single field value. Re-renders only when this specific
  * field changes — not when other fields on the same entity change.
+ *
+ * Architecture contract — event-driven grid:
+ * Grid navigation (arrow keys, cell clicks, focus changes that don't touch
+ * entity data) must NEVER trigger a backend data-fetch. Field cells
+ * subscribe to their value through this hook and redraw from the store
+ * whenever the backend emits `entity-field-changed` (see the entity event
+ * handlers in `rust-engine-container.tsx` — `handleEntityFieldChanged`
+ * and friends are module-level functions, not class methods). Navigation dispatches
+ * `ui.setFocus` only — no `list_entities`, `get_entity`, `get_board_data`,
+ * or `perspective.list`. The regression test
+ * `grid-view.nav-is-eventdriven.test.tsx` enforces this invariant.
+ *
+ * Consequences:
+ * - Grids scale to thousands of rows at arrow-key speed because cells
+ *   redraw locally without a round-trip.
+ * - The nav-bar progress bar never relights on pure navigation.
+ * - Adding any `useEffect` whose deps transitively include
+ *   `focusedScope`/`focusedMoniker` and issues an IPC is a regression —
+ *   capture `dispatch` in a `useRef` and stabilize the effect's deps instead.
  */
 export function useFieldValue(
   entityType: string,

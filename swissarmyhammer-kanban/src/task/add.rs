@@ -1,10 +1,11 @@
 //! AddTask command
 
 use crate::context::KanbanContext;
+use crate::entity::position;
 use crate::error::{KanbanError, Result};
 use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, Ordinal, TaskId};
+use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -110,52 +111,16 @@ impl AddTask {
         self
     }
 
-    /// Resolve the target column, falling back to the first board column.
-    async fn resolve_column(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<String> {
-        match &self.column {
-            Some(col) => Ok(col.clone()),
-            None => {
-                let columns = ectx.list("column").await?;
-                let first = columns
-                    .iter()
-                    .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                    .ok_or_else(|| KanbanError::parse("board has no columns — cannot add task"))?;
-                Ok(first.id.to_string())
-            }
-        }
-    }
-
-    /// Resolve the ordinal, falling back to appending at the end of the column.
-    async fn resolve_ordinal(
-        &self,
-        ectx: &swissarmyhammer_entity::EntityContext,
-        column: &str,
-    ) -> Result<String> {
-        match &self.ordinal {
-            Some(ord) => Ok(ord.clone()),
-            None => {
-                let tasks = ectx.list("task").await?;
-                let last_ordinal = tasks
-                    .iter()
-                    .filter(|t| t.get_str("position_column").unwrap_or("") == column)
-                    .filter_map(|t| t.get_str("position_ordinal").map(Ordinal::from_string))
-                    .max();
-                Ok(match last_ordinal {
-                    Some(last) => Ordinal::after(&last).as_str().to_string(),
-                    None => Ordinal::first().as_str().to_string(),
-                })
-            }
-        }
-    }
-
     /// Build the task entity from this command's fields.
     ///
-    /// Resolves position (column + ordinal), applies all user-set fields,
-    /// and parses any ISO 8601 date inputs. The resulting entity is not yet
+    /// Resolves position (column + ordinal) via [`position::resolve_column`]
+    /// and [`position::resolve_ordinal`], applies all user-set fields, and
+    /// parses any ISO 8601 date inputs. The resulting entity is not yet
     /// persisted — the caller owns the write.
     async fn build_entity(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<Entity> {
-        let column = self.resolve_column(ectx).await?;
-        let ordinal = self.resolve_ordinal(ectx, &column).await?;
+        let column = position::resolve_column(ectx, self.column.as_deref(), "task").await?;
+        let ordinal =
+            position::resolve_ordinal(ectx, "task", &column, self.ordinal.as_deref()).await?;
 
         let task_id = TaskId::new();
         let mut entity = Entity::new("task", task_id.as_str());

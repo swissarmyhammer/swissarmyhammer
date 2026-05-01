@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffef80
+position_ordinal: ffffffffffb180
 title: Add ToolFilter to ToolRegistry with YAML-backed persistence
 ---
 ## What

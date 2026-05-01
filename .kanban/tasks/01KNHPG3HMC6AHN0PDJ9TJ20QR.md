@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff8680
+position_ordinal: ffffffffffffffffffffffffff8280
 title: 'Coverage: daemon.rs health_check + restart_with_backoff edge cases'
 ---
 ## What

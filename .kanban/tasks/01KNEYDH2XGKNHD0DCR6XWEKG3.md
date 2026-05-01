@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffde80
+position_ordinal: ffffffffffffffffffff9680
 title: Wire EntityFilterContext into VirtualTagStrategy::matches signature
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMTJ02YMZ071QJ6VWYTZ0X4C
 position_column: done
-position_ordinal: ffffffffffffffbb80
+position_ordinal: ffffffffffffffff8f80
 title: Wrap undoable commands in transactions + set EntityContext extension
 ---
 ## What

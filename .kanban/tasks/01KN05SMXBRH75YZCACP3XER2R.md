@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8780
+position_ordinal: ffffffffffffffffeb80
 title: Move palette_open/palette_mode to per-window state — palette opens in both windows
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffff880
+position_ordinal: ffffffffffffffffffffffffea80
 title: 'Coverage: get_implementations tree-sitter fallback in ops/get_implementations.rs'
 ---
 crates/code-context/src/ops/get_implementations.rs

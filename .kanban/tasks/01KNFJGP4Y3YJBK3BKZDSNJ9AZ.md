@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffaa80
+position_ordinal: ffffffffffffffffffffffffffc580
 title: 'Group computation utility: compute group buckets from tasks + groupField'
 ---
 ## What

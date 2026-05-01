@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffc480
+position_ordinal: ffffffffda80
 title: Inject package version into skill template context
 ---
 ## What

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { DateTime } from "luxon";
 import { formatRelativeMagnitude } from "@/lib/format-date";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 import { DisplayText, type DisplayProps } from "./text-display";
 
 /**
@@ -221,7 +222,14 @@ export function statusDateTooltipOverride(value: unknown): string | null {
  */
 export function StatusDateDisplay({ value, mode }: DisplayProps) {
   const parsed = parseStatusDateValue(value);
-  if (!parsed) return null;
+  if (!parsed) {
+    // Unparseable values render an empty wrapper in compact mode so the
+    // row honors the fixed `ROW_HEIGHT` virtualizer contract; full mode
+    // collapses away as before.
+    return mode === "compact" ? (
+      <CompactCellWrapper>{null}</CompactCellWrapper>
+    ) : null;
+  }
 
   const descriptor = KIND_DESCRIPTORS[parsed.kind];
   const timestampDate = parseDateOrDatetime(parsed.timestamp);

@@ -3,7 +3,14 @@
  *
  * Owns:
  * - ViewsProvider (view list and active view state)
- * - CommandScopeProvider with dynamic `view.switch:{id}` commands
+ * - CommandScopeProvider with one `view.switch:{id}` client-side command
+ *   per known view — each dispatches the canonical `view.set` command
+ *   with `view_id` pre-filled in `args`. The `view.switch:{id}` id is a
+ *   stable per-view identifier for scope-chain bookkeeping and React key
+ *   purposes; it is NOT a command id the backend recognises. The dynamic
+ *   palette entries that surface "Switch to <ViewName>" rows come from
+ *   `swissarmyhammer_kanban::scope_commands::emit_view_switch` and already
+ *   emit `view.set` directly.
  * - LeftNav sidebar presenter
  * - Flex layout wrapping LeftNav + children
  *
@@ -30,19 +37,27 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Generates view.switch command definitions from the views registry and
- * wraps children in a CommandScopeProvider + flex layout with LeftNav.
+ * Generates per-view command definitions and wraps children in a
+ * CommandScopeProvider + flex layout with LeftNav.
+ *
+ * Each registered command uses a per-view id (`view.switch:{id}`) as its
+ * scope-map key so multiple views coexist in the same scope; the execute
+ * handler dispatches the canonical `view.set` command with `view_id` in
+ * `args`. The `view.switch:{id}` id is NOT sent to the backend — it is
+ * purely a client-side identifier for the scope map / React key. The old
+ * dispatcher-side rewrite from `view.switch:*` to `view.set` was retired
+ * in 01KPZMXXEXKVE3RNPA4XJP0105.
  */
 function ViewsCommandScope({ children }: { children: ReactNode }) {
   const { views } = useViews();
-  const dispatch = useDispatchCommand();
+  const dispatch = useDispatchCommand("view.set");
 
   const viewCommands: CommandDef[] = useMemo(() => {
     return views.map((view) => ({
       id: `view.switch:${view.id}`,
       name: `View: ${view.name}`,
       execute: () => {
-        dispatch(`view.switch:${view.id}`).catch(console.error);
+        dispatch({ args: { view_id: view.id } }).catch(console.error);
       },
     }));
   }, [views, dispatch]);

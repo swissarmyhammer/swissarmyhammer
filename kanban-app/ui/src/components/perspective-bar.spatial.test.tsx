@@ -1,0 +1,552 @@
+/**
+ * Browser-mode test for the perspective bar's spatial-nav behaviour.
+ *
+ * Source of truth for acceptance of card `01KPZS32YN7CRNM0TH7GR28M86`. The
+ * bar wraps its row in a `<FocusZone moniker="ui:perspective-bar">` and each
+ * tab in a `<FocusScope moniker="perspective_tab:{id}">` leaf. This file
+ * exercises the click → `spatial_focus` → `focus-changed` → React state →
+ * `<FocusIndicator>` chain end-to-end so a regression in any link surfaces
+ * here.
+ *
+ * Mock pattern matches `grid-view.nav-is-eventdriven.test.tsx`:
+ *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
+ *   - `mockListen` records every `listen("focus-changed", cb)` callback so
+ *     `fireFocusChanged(key)` can drive the React tree as if the Rust
+ *     kernel had emitted a `focus-changed` event.
+ *
+ * Runs under `kanban-app/ui/vite.config.ts`'s browser project (real Chromium
+ * via Playwright) — every `*.test.tsx` outside `*.node.test.tsx` lands here.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+// ---------------------------------------------------------------------------
+// Tauri API mocks — must come before component imports.
+// ---------------------------------------------------------------------------
+
+type ListenCallback = (event: { payload: unknown }) => void;
+
+const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
+  const listeners = new Map<string, ListenCallback[]>();
+  const mockInvoke = vi.fn(
+    async (_cmd: string, _args?: unknown): Promise<unknown> => undefined,
+  );
+  const mockListen = vi.fn(
+    (eventName: string, cb: ListenCallback): Promise<() => void> => {
+      const cbs = listeners.get(eventName) ?? [];
+      cbs.push(cb);
+      listeners.set(eventName, cbs);
+      return Promise.resolve(() => {
+        const arr = listeners.get(eventName);
+        if (arr) {
+          const idx = arr.indexOf(cb);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+      });
+    },
+  );
+  return { mockInvoke, mockListen, listeners };
+});
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...a: unknown[]) => mockInvoke(...(a as [string, unknown?])),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
+}));
+
+// ---------------------------------------------------------------------------
+// Perspective + view + UI mocks — match the shape used by the existing
+// perspective-tab-bar tests so the bar mounts without surprise.
+// ---------------------------------------------------------------------------
+
+/** Mutable mock perspective shape — the test toggles which tabs are present. */
+type MockPerspective = {
+  id: string;
+  name: string;
+  view: string;
+  filter?: string;
+  group?: string;
+};
+
+let mockPerspectivesValue = {
+  perspectives: [] as MockPerspective[],
+  activePerspective: null as MockPerspective | null,
+  setActivePerspectiveId: vi.fn(),
+  refresh: vi.fn(() => Promise.resolve()),
+};
+
+vi.mock("@/lib/perspective-context", () => ({
+  usePerspectives: () => mockPerspectivesValue,
+}));
+
+let mockViewsValue = {
+  views: [{ id: "board-1", name: "Board", kind: "board", icon: "kanban" }],
+  activeView: { id: "board-1", name: "Board", kind: "board", icon: "kanban" },
+  setActiveViewId: vi.fn(),
+  refresh: vi.fn(() => Promise.resolve()),
+};
+
+vi.mock("@/lib/views-context", () => ({
+  useViews: () => mockViewsValue,
+}));
+
+vi.mock("@/lib/context-menu", () => ({
+  useContextMenu: () => vi.fn(),
+}));
+
+vi.mock("@/lib/entity-store-context", () => ({
+  useEntityStore: () => ({ getEntities: () => [] }),
+}));
+
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => ({ virtualTagMeta: [] }),
+}));
+
+vi.mock("@/lib/schema-context", () => ({
+  useSchema: () => ({
+    getSchema: () => ({ entity: { name: "task", fields: [] }, fields: [] }),
+    getFieldDef: () => undefined,
+    mentionableTypes: [],
+    loading: false,
+  }),
+}));
+
+vi.mock("@/lib/ui-state-context", () => ({
+  useUIState: () => ({
+    keymap_mode: "cua",
+    scope_chain: [],
+    open_boards: [],
+    has_clipboard: false,
+    clipboard_entity_type: null,
+    windows: {},
+    recent_boards: [],
+  }),
+  useUIStateLoading: () => ({
+    state: {
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      has_clipboard: false,
+      clipboard_entity_type: null,
+      windows: {},
+      recent_boards: [],
+    },
+    loading: false,
+  }),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports — after mocks
+// ---------------------------------------------------------------------------
+
+import { PerspectiveTabBar } from "./perspective-tab-bar";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import {
+  asSegment,
+  type FocusChangedPayload,
+  type FullyQualifiedMoniker,
+  type WindowLabel
+} from "@/types/spatial";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Wait for register effects scheduled in `useEffect` to flush. */
+async function flushSetup() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+/**
+ * Drive a `focus-changed` event into the React tree as if the Rust kernel
+ * had emitted one for the current window.
+ *
+ * The provider's listener decides which side of the swap fires — we always
+ * pass both `prev_fq` and `next_fq` to mimic the kernel's payload shape.
+ * Wrapping the dispatch in `act()` flushes the React state updates so the
+ * caller can assert against post-update DOM in the next tick.
+ */
+async function fireFocusChanged({
+  prev_fq = null,
+  next_fq = null,
+}: {
+  prev_fq?: FullyQualifiedMoniker | null;
+  next_fq?: FullyQualifiedMoniker | null;
+}) {
+  const payload: FocusChangedPayload = {
+    window_label: "main" as WindowLabel,
+    prev_fq,
+    next_fq,
+    next_segment: null,
+  };
+  const handlers = listeners.get("focus-changed") ?? [];
+  await act(async () => {
+    for (const handler of handlers) handler({ payload });
+    await Promise.resolve();
+  });
+}
+
+/** Render the bar wrapped in the production-shaped spatial-nav stack. */
+function renderBar(): ReturnType<typeof render> {
+  return render(
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={100}>
+          <PerspectiveTabBar />
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
+  );
+}
+
+/** Helper: wrap arbitrary children in the same provider stack as `renderBar`. */
+function withSpatialStack(children: ReactNode) {
+  return (
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
+  );
+}
+
+/** Collect every `spatial_register_zone` invocation argument bag. */
+function registerZoneArgs(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_register_zone")
+    .map((c) => c[1] as Record<string, unknown>);
+}
+
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_register_scope")
+    .map((c) => c[1] as Record<string, unknown>);
+}
+
+/** Collect every `spatial_focus` call's args, in order. */
+function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_focus")
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+}
+
+/** Collect every `spatial_unregister_scope` call's args, in order. */
+function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_unregister_scope")
+    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+}
+
+/** True when the moniker matches one of the two accepted bar-zone monikers. */
+function isBarMoniker(m: unknown): boolean {
+  return m === "ui:perspective-bar" || m === "ui:perspective.bar";
+}
+
+/** True when the moniker matches `^perspective_tab:.+$`. */
+function isTabMoniker(m: unknown): boolean {
+  return typeof m === "string" && /^perspective_tab:.+$/.test(m);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("PerspectiveTabBar — browser spatial behaviour", () => {
+  beforeEach(() => {
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    listeners.clear();
+    mockPerspectivesValue = {
+      perspectives: [
+        { id: "p1", name: "Sprint", view: "board" },
+        { id: "p2", name: "Backlog", view: "board" },
+      ],
+      activePerspective: { id: "p1", name: "Sprint", view: "board" },
+      setActivePerspectiveId: vi.fn(),
+      refresh: vi.fn(() => Promise.resolve()),
+    };
+    mockViewsValue = {
+      views: [{ id: "board-1", name: "Board", kind: "board", icon: "kanban" }],
+      activeView: {
+        id: "board-1",
+        name: "Board",
+        kind: "board",
+        icon: "kanban",
+      },
+      setActiveViewId: vi.fn(),
+      refresh: vi.fn(() => Promise.resolve()),
+    };
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers a ui:perspective-bar zone (test #1)", async () => {
+    const { unmount } = renderBar();
+    await flushSetup();
+
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment));
+    expect(barZone).toBeTruthy();
+    expect(typeof barZone!.fq).toBe("string");
+    expect(barZone!.layerFq).toBeTruthy();
+    expect(barZone!.parentZone).toBeNull();
+
+    unmount();
+  });
+
+  it("registers a perspective_tab:{id} scope per visible tab (test #2)", async () => {
+    const { unmount } = renderBar();
+    await flushSetup();
+
+    const tabScopes = registerScopeArgs().filter((a) =>
+      isTabMoniker(a.segment),
+    );
+    const monikers = tabScopes.map((a) => a.segment as string).sort();
+    expect(monikers).toEqual(["perspective_tab:p1", "perspective_tab:p2"]);
+
+    // Each tab's parentZone is the bar zone's key — the leaves are siblings
+    // inside the bar so beam-search picks them up as horizontal neighbors.
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    for (const tab of tabScopes) {
+      expect(tab.parentZone).toBe(barZone.fq);
+      expect(tab.layerFq).toBe(barZone.layerFq);
+    }
+
+    unmount();
+  });
+
+  it("clicking a tab dispatches exactly one spatial_focus for THAT tab's key (test #3)", async () => {
+    const { container, unmount } = renderBar();
+    await flushSetup();
+
+    // Capture the bar's key plus the p1 tab's key from the registration calls.
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
+    )!;
+
+    // Reset invoke before the click so we measure only the click's IPC.
+    mockInvoke.mockClear();
+
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
+    ) as HTMLElement | null;
+    expect(tabNode).not.toBeNull();
+
+    fireEvent.click(tabNode!);
+
+    const focusCalls = spatialFocusCalls();
+    expect(focusCalls).toHaveLength(1);
+    expect(focusCalls[0].fq).toBe(p1Tab.fq);
+    // The bar zone key must NOT also receive a focus call — the leaf
+    // stops propagation so the click does not bubble to the wrapping zone.
+    expect(focusCalls.find((c) => c.fq === barZone.fq)).toBeUndefined();
+
+    unmount();
+  });
+
+  it("focus claim mounts the FocusIndicator inside the focused tab (test #4)", async () => {
+    const { container, queryByTestId, unmount } = renderBar();
+    await flushSetup();
+
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
+    )!;
+
+    // No indicator before the focus claim.
+    expect(queryByTestId("focus-indicator")).toBeNull();
+
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
+
+    // After the claim flips, the indicator renders inside the matching tab.
+    await waitFor(() => {
+      expect(queryByTestId("focus-indicator")).not.toBeNull();
+    });
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
+    ) as HTMLElement;
+    const indicator = queryByTestId("focus-indicator")!;
+    // The indicator's host must be the focused tab — not a sibling.
+    expect(tabNode.contains(indicator)).toBe(true);
+    expect(tabNode.getAttribute("data-focused")).not.toBeNull();
+
+    unmount();
+  });
+
+  it("focus claim on the bar zone flips data-focused but renders no indicator (test #5)", async () => {
+    // Container zones use `showFocusBar={false}` so the visible bar around
+    // the entire row would be visual noise. The data-focused attribute
+    // still flips so e2e selectors and debugging tooling can observe the
+    // claim, but no `<FocusIndicator>` mounts.
+    const { container, queryByTestId, unmount } = renderBar();
+    await flushSetup();
+
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const barNode = container.querySelector(
+      `[data-segment='${barZone.segment as string}']`,
+    ) as HTMLElement;
+    expect(barNode).not.toBeNull();
+    expect(barNode.getAttribute("data-focused")).toBeNull();
+
+    await fireFocusChanged({ next_fq: barZone.fq as FullyQualifiedMoniker });
+
+    await waitFor(() => {
+      expect(barNode.getAttribute("data-focused")).not.toBeNull();
+    });
+    expect(queryByTestId("focus-indicator")).toBeNull();
+
+    unmount();
+  });
+
+  // ---------------------------------------------------------------------
+  // Tests #6 (keystrokes → navigate) and #7 (Enter → drill-in) are exercised
+  // by the global keymap pipeline rather than by the bar itself: the bar
+  // must NOT attach a `keydown` DOM listener (enforced by
+  // `perspective-spatial-nav.guards.node.test.ts`). ArrowLeft / ArrowRight
+  // and Enter are bound at `<AppShell>` to the `nav.left` / `nav.right` /
+  // `nav.drillIn` commands, which dispatch `spatial_navigate` /
+  // `spatial_drill_in` for the currently-focused [`FullyQualifiedMoniker`]. The
+  // app-shell side of that contract is covered in `app-shell.test.tsx`
+  // (`nav.drillIn invokes spatial_drill_in for the focused FullyQualifiedMoniker on
+  // Enter`); the bar side of the contract is "do nothing", which the
+  // source-level guards already enforce.
+  // ---------------------------------------------------------------------
+
+  it("each tab unregisters via spatial_unregister_scope on unmount (test #8)", async () => {
+    const { unmount } = renderBar();
+    await flushSetup();
+
+    const tabScopes = registerScopeArgs().filter((a) =>
+      isTabMoniker(a.segment),
+    );
+    expect(tabScopes.length).toBeGreaterThanOrEqual(2);
+    const tabKeys = tabScopes.map((a) => a.fq as FullyQualifiedMoniker);
+
+    mockInvoke.mockClear();
+    unmount();
+
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
+    for (const k of tabKeys) {
+      expect(unregisterKeys).toContain(k);
+    }
+  });
+
+  it("emits no legacy entity_focus_* / claim_when_* / broadcast_nav_* IPCs (test #9)", async () => {
+    const { container, unmount } = renderBar();
+    await flushSetup();
+
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
+    ) as HTMLElement | null;
+    expect(tabNode).not.toBeNull();
+    fireEvent.click(tabNode!);
+
+    const banned = /^(entity_focus_|claim_when_|broadcast_nav_)/;
+    const offenders = mockInvoke.mock.calls
+      .map((c) => c[0])
+      .filter((cmd) => typeof cmd === "string" && banned.test(cmd));
+    expect(offenders).toEqual([]);
+
+    unmount();
+  });
+
+  it("falls back to a plain div when no SpatialFocusProvider wraps the bar", () => {
+    // Outside the spatial-nav stack, the conditional zone short-circuits so
+    // the existing narrow-provider tests (perspective-tab-bar.test.tsx) keep
+    // their layout assertions stable. There must be no `data-moniker` on
+    // the bar or any tab.
+    const { container } = render(
+      <TooltipProvider delayDuration={100}>
+        <PerspectiveTabBar />
+      </TooltipProvider>,
+    );
+    expect(
+      container.querySelector("[data-segment='ui:perspective-bar']"),
+    ).toBeNull();
+    expect(
+      container.querySelector("[data-segment^='perspective_tab:']"),
+    ).toBeNull();
+  });
+
+  it("only the focused tab's FocusIndicator is mounted at any time", async () => {
+    // Belt-and-suspenders for #4: when focus moves between tabs, the
+    // indicator must follow — exactly one indicator at a time, anchored to
+    // the focused tab. This exercises both the `next_fq` and `prev_fq`
+    // sides of the focus-changed payload.
+    const { container, queryByTestId, unmount } = withSpatialStackRendered();
+    await flushSetup();
+
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
+    )!;
+    const p2Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p2",
+    )!;
+
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
+    await waitFor(() => {
+      const indicator = queryByTestId("focus-indicator");
+      expect(indicator).not.toBeNull();
+      const p1 = container.querySelector(
+        "[data-segment='perspective_tab:p1']",
+      );
+      expect(p1!.contains(indicator!)).toBe(true);
+    });
+
+    // Move the claim from p1 → p2.
+    await fireFocusChanged({
+      prev_fq: p1Tab.fq as FullyQualifiedMoniker,
+      next_fq: p2Tab.fq as FullyQualifiedMoniker,
+    });
+    await waitFor(() => {
+      const indicators = container.querySelectorAll(
+        "[data-testid='focus-indicator']",
+      );
+      expect(indicators.length).toBe(1);
+      const p2 = container.querySelector(
+        "[data-segment='perspective_tab:p2']",
+      );
+      expect(p2!.contains(indicators[0])).toBe(true);
+    });
+
+    unmount();
+  });
+});
+
+/**
+ * Render `<PerspectiveTabBar>` inside the spatial-nav stack.
+ *
+ * Local helper so the multi-step belt-and-suspenders test does not duplicate
+ * the wrapper-render boilerplate. Co-located with the test file rather than
+ * exported because the wrapper depends on file-scoped mocks that are not
+ * stable across files.
+ */
+function withSpatialStackRendered() {
+  return render(withSpatialStack(<PerspectiveTabBar />));
+}

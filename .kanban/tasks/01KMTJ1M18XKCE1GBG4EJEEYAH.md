@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMTJ0RPCMGC0TYASH3861JGZ
 position_column: done
-position_ordinal: ffffffffffffffc180
+position_ordinal: ffffffffffffffff9980
 title: 'Frontend: remove UndoStack entirely, dispatch to backend'
 ---
 ## What

@@ -7,18 +7,20 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_commands::{
-    builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
-};
+use swissarmyhammer_commands::{Command, CommandContext, CommandError, CommandsRegistry, UIState};
 use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::clipboard::{
     ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,
 };
 use swissarmyhammer_kanban::commands::register_commands;
+use swissarmyhammer_kanban::defaults::builtin_view_definitions;
+use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources, ViewInfo};
+use swissarmyhammer_kanban::test_support::composed_builtin_yaml_sources;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
 use swissarmyhammer_store::{StoreContext, StoreHandle};
+use swissarmyhammer_views::{ViewKind, ViewsContext};
 use tempfile::TempDir;
 
 // ===========================================================================
@@ -53,7 +55,7 @@ impl TestEngine {
             .expect("board init failed");
 
         let kanban = Arc::new(kanban);
-        let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+        let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
         let commands = register_commands();
         let ui_state = Arc::new(UIState::new());
         let clipboard = Arc::new(InMemoryClipboard::new());
@@ -204,6 +206,24 @@ impl TestEngine {
     ) -> swissarmyhammer_commands::Result<Value> {
         self.dispatch(cmd_id, scope, target, HashMap::new()).await
     }
+
+    /// Create a task via the unified `entity.add` command with
+    /// `entity_type: task` and an optional column override. This is the
+    /// single production creation path — tests that need a fixture task
+    /// must use this helper so any regression in the `entity.add` pipeline
+    /// is caught by setup, not by dispatch tests further down.
+    async fn add_task(
+        &self,
+        column: Option<&str>,
+        extra_args: HashMap<String, Value>,
+    ) -> swissarmyhammer_commands::Result<Value> {
+        let mut args = extra_args;
+        args.insert("entity_type".to_string(), json!("task"));
+        if let Some(c) = column {
+            args.insert("column".to_string(), json!(c));
+        }
+        self.dispatch("entity.add", &[], None, args).await
+    }
 }
 
 // ===========================================================================
@@ -215,9 +235,9 @@ async fn task_add_creates_task() {
     let engine = TestEngine::new().await;
 
     let result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
 
     // Should return a JSON object with a task id
     assert!(result.get("id").is_some(), "result should contain task id");
@@ -237,10 +257,7 @@ async fn task_move_to_column() {
     let engine = TestEngine::new().await;
 
     // Add a task in todo
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .unwrap();
+    let add_result = engine.add_task(Some("todo"), HashMap::new()).await.unwrap();
     let task_id = add_result["id"].as_str().unwrap();
 
     // Move to doing via args
@@ -341,10 +358,7 @@ async fn entity_update_field() {
     let engine = TestEngine::new().await;
 
     // Add a task
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .unwrap();
+    let add_result = engine.add_task(Some("todo"), HashMap::new()).await.unwrap();
     let task_id = add_result["id"].as_str().unwrap();
 
     // Update the title via entity.update_field
@@ -372,15 +386,24 @@ async fn entity_update_field() {
 // Availability tests
 // ===========================================================================
 
+/// The legacy `task.add` command is retired — creation flows through
+/// dynamic `entity.add:task`. This regression guard proves the registry
+/// no longer exposes `task.add` so a future refactor can't silently
+/// re-introduce the duplicate "New Task" palette item (and its slug-id
+/// collision on repeated creates) by re-registering the command.
 #[tokio::test]
-async fn task_add_unavailable_without_column() {
+async fn task_add_retired_registry_rejects_it() {
     let engine = TestEngine::new().await;
 
-    let result = engine.dispatch_simple("task.add", &[], None).await;
+    let result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await;
 
+    let err = result.expect_err("task.add must be rejected — use entity.add:task");
+    let msg = err.to_string();
     assert!(
-        result.is_err(),
-        "task.add should fail without column in scope"
+        msg.contains("unknown command: task.add"),
+        "expected `unknown command: task.add`, got: {msg}"
     );
 }
 
@@ -598,7 +621,7 @@ async fn full_session_add_move_update() {
 
     // 1. Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
         .expect("add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
@@ -663,9 +686,9 @@ async fn add_tasks(engine: &TestEngine, titles: &[&str]) -> Vec<String> {
         let mut args = HashMap::new();
         args.insert("title".into(), json!(title));
         let result = engine
-            .dispatch("task.add", &["column:todo"], None, args)
+            .add_task(Some("todo"), args)
             .await
-            .expect("task.add should succeed");
+            .expect("entity.add:task should succeed");
         let id = result["id"].as_str().unwrap().to_string();
 
         // Set distinct ordinals using Ordinal::after chain so tasks have a
@@ -904,7 +927,7 @@ async fn reorder_move_to_middle() {
 /// commit.
 #[tokio::test]
 async fn task_move_is_undoable_in_registry() {
-    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
     let cmd_def = registry.get("task.move");
     assert!(
         cmd_def.is_some(),
@@ -913,6 +936,380 @@ async fn task_move_is_undoable_in_registry() {
     assert!(
         cmd_def.unwrap().undoable,
         "task.move must be marked undoable so the write-through cache emits entity-field-changed events on commit"
+    );
+}
+
+/// `entity.add` must be declared in the YAML registry.
+///
+/// The dynamic `entity.add:{type}` palette / context-menu command is rewritten
+/// by `kanban-app::rewrite_dynamic_prefix` to the canonical command id
+/// `entity.add`. `dispatch_command_internal` then calls `lookup_undoable` which
+/// requires a registry entry — without it, every runtime dispatch of
+/// `entity.add:task` / `entity.add:tag` / `entity.add:project` fails with
+/// `"Unknown command: entity.add"`. This test is the regression guard for that
+/// class of bug.
+///
+/// The canonical `entity.add` is `visible: false` — the palette entries come
+/// from the dynamic `entity.add:{type}` synthesised by `emit_dynamic_commands`,
+/// not from the static registry.
+#[tokio::test]
+async fn entity_add_is_registered_undoable_and_hidden() {
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
+    let cmd_def = registry
+        .get("entity.add")
+        .expect("entity.add must exist in the YAML registry — the dynamic entity.add:{type} dispatch rewrites to this canonical id");
+
+    assert!(
+        cmd_def.undoable,
+        "entity.add must be marked undoable — creation goes through the undo stack"
+    );
+    assert!(
+        !cmd_def.visible,
+        "entity.add must be visible: false — palette entries are synthesised dynamically as entity.add:{{type}}"
+    );
+}
+
+/// End-to-end: dispatching `entity.add` with `entity_type: task` in the arg
+/// bag (the shape produced by `rewrite_dynamic_prefix` after stripping the
+/// `entity.add:task` prefix) must create a task entity in the lowest-order
+/// column and return its id.
+///
+/// This mirrors the production path: frontend palette/context-menu fires
+/// `entity.add:task`, `rewrite_dynamic_prefix` rewrites to `entity.add` with
+/// `entity_type: "task"` merged into args, then dispatch flows through the
+/// registry → `AddEntityCmd` → `AddEntity` operation. Prior to adding the
+/// YAML registry entry, this dispatch failed at `lookup_undoable` with
+/// "Unknown command: entity.add" before the impl was ever reached.
+#[tokio::test]
+async fn dispatch_entity_add_task_creates_task_in_lowest_order_column() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("task"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add should succeed after registry entry exists");
+
+    // Returned payload is the serialized entity
+    let task_id = result["id"].as_str().expect("entity.add must return an id");
+    assert_eq!(
+        result["position_column"], "todo",
+        "task must land in the lowest-order column when no override is given"
+    );
+
+    // Verify the task was actually persisted
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should exist on disk after dispatch");
+    assert_eq!(task.get_str("position_column"), Some("todo"));
+    assert_eq!(task.get_str("title"), Some("Untitled"));
+}
+
+/// Isolated per-entity-type dispatch guard for `task`.
+///
+/// The task-specific name `dispatch_entity_add_task_creates_task` is deliberate:
+/// one named, isolated guard per entity type so a future regression on a
+/// single type cannot hide behind a parameterised pass. Read + write through
+/// the real `AddEntity` op with the real `FieldsContext`, asserting a file on
+/// disk under `.kanban/tasks/` with the schema-default title populated.
+#[tokio::test]
+async fn dispatch_entity_add_task_creates_task() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("task"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add:task must succeed end-to-end through the registry");
+
+    let task_id = result["id"]
+        .as_str()
+        .expect("entity.add:task must return an id");
+    assert!(!task_id.is_empty(), "id must be non-empty");
+
+    // Schema defaults: title comes from title.yaml's `default:` value.
+    // A missing default here would silently poison every new task.
+    assert_eq!(
+        result["title"], "Untitled",
+        "task.title must be populated from the schema default"
+    );
+    // Task-shaped entities must get position resolution applied.
+    assert_eq!(
+        result["position_column"], "todo",
+        "task must land in lowest-order column"
+    );
+    assert!(
+        result.get("position_ordinal").is_some(),
+        "task must have a resolved position_ordinal"
+    );
+
+    // On-disk verification — dispatch is not complete until the file lands.
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task file must exist on disk after dispatch");
+    assert_eq!(task.get_str("title"), Some("Untitled"));
+    assert_eq!(task.get_str("position_column"), Some("todo"));
+}
+
+/// Isolated per-entity-type dispatch guard for `tag`.
+///
+/// Mirrors `dispatch_entity_add_task_creates_task` but for the tag entity
+/// type. Surfaces any `tag_name.yaml` default-drift as a single-named
+/// failure instead of hiding behind a parameterised pass.
+#[tokio::test]
+async fn dispatch_entity_add_tag_creates_tag() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("tag"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add:tag must succeed end-to-end through the registry");
+
+    let tag_id = result["id"]
+        .as_str()
+        .expect("entity.add:tag must return an id");
+    assert!(!tag_id.is_empty(), "id must be non-empty");
+
+    // Schema default from tag_name.yaml. If this regresses, every new tag
+    // starts life nameless — the UI creates but the user sees nothing.
+    assert_eq!(
+        result["tag_name"], "new-tag",
+        "tag.tag_name must be populated from the schema default"
+    );
+
+    // On-disk verification.
+    let tag = engine
+        .kanban
+        .read_entity_generic("tag", tag_id)
+        .await
+        .expect("tag file must exist on disk after dispatch");
+    assert_eq!(tag.get_str("tag_name"), Some("new-tag"));
+}
+
+/// Isolated per-entity-type dispatch guard for `project`.
+///
+/// Mirrors `dispatch_entity_add_task_creates_task` but for the project
+/// entity type. Catches any drift in `name.yaml`'s `default:` independently
+/// of task/tag coverage — the 2026-04 "New Project does nothing" regression
+/// looked identical from the parameterised test POV.
+#[tokio::test]
+async fn dispatch_entity_add_project_creates_project() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("project"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add:project must succeed end-to-end through the registry");
+
+    let project_id = result["id"]
+        .as_str()
+        .expect("entity.add:project must return an id");
+    assert!(!project_id.is_empty(), "id must be non-empty");
+
+    // Schema default from name.yaml.
+    assert_eq!(
+        result["name"], "New item",
+        "project.name must be populated from the schema default"
+    );
+
+    // On-disk verification.
+    let project = engine
+        .kanban
+        .read_entity_generic("project", project_id)
+        .await
+        .expect("project file must exist on disk after dispatch");
+    assert_eq!(project.get_str("name"), Some("New item"));
+}
+
+/// End-to-end: dispatching `entity.add` with `entity_type: tag` must create a
+/// tag entity populated with the schema-declared `default` for `tag_name`.
+#[tokio::test]
+async fn dispatch_entity_add_tag_creates_tag_with_defaults() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("tag"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add should succeed for tag");
+
+    assert_eq!(
+        result["tag_name"], "new-tag",
+        "tag must be created with the schema default `tag_name` value"
+    );
+    assert!(result["id"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+/// End-to-end: dispatching `entity.add` with `entity_type: project` must create
+/// a project entity populated with the schema-declared `default` for `name`.
+///
+/// Mirrors `dispatch_entity_add_tag_creates_tag_with_defaults` — this is the
+/// regression guard proving the projects grid's `+` button creates a persisted
+/// project file exactly the same way the tags grid's `+` button creates a tag.
+/// Before this test existed, `entity.add:project` went through the dynamic
+/// prefix-rewrite and canonical-`entity.add` registry entry but had no
+/// coverage — the tags grid worked, and everyone assumed the other grids did
+/// too.
+#[tokio::test]
+async fn dispatch_entity_add_project_creates_project_with_defaults() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("project"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add should succeed for project");
+
+    assert_eq!(
+        result["name"], "New item",
+        "project must be created with the schema default `name` value"
+    );
+    let project_id = result["id"]
+        .as_str()
+        .expect("entity.add must return an id for project");
+    assert!(!project_id.is_empty());
+
+    // Verify the project was actually persisted to disk under .kanban/projects/
+    let project = engine
+        .kanban
+        .read_entity_generic("project", project_id)
+        .await
+        .expect("project should exist on disk after dispatch");
+    assert_eq!(project.get_str("name"), Some("New item"));
+}
+
+/// End-to-end: explicit `column` arg in the dispatch bag must override the
+/// lowest-order auto-resolution, proving the generic-override pipeline from
+/// `CommandContext.args` → `AddEntityCmd` → `AddEntity.overrides` is wired up.
+#[tokio::test]
+async fn dispatch_entity_add_task_honors_explicit_column_override() {
+    let engine = TestEngine::new().await;
+
+    let mut args = HashMap::new();
+    args.insert("entity_type".to_string(), json!("task"));
+    args.insert("column".to_string(), json!("doing"));
+
+    let result = engine
+        .dispatch("entity.add", &[], None, args)
+        .await
+        .expect("entity.add with column override should succeed");
+
+    assert_eq!(
+        result["position_column"], "doing",
+        "explicit `column` arg must override lowest-order auto-placement"
+    );
+}
+
+/// Unified creation path: the same `entity.add` dispatch powers every UI
+/// entry point (board column (+), grid (+), palette, context menu) across
+/// every entity type (task, tag, project). This test exercises all three
+/// in one pass so the "one true creation path" invariant holds for the full
+/// set — a regression in any of them shows up as a single failing test
+/// rather than hiding behind per-type coverage.
+///
+/// For `task`, the `column` override mirrors what the board's column (+)
+/// button sends; `tag` and `project` mirror the grid (+) flows that need no
+/// per-type context.
+#[tokio::test]
+async fn dispatch_entity_add_unified_path_for_task_tag_project() {
+    let engine = TestEngine::new().await;
+
+    // Task: column (+) and board.newTask path — `column` override present.
+    let mut task_args = HashMap::new();
+    task_args.insert("entity_type".to_string(), json!("task"));
+    task_args.insert("column".to_string(), json!("doing"));
+    let task_result = engine
+        .dispatch("entity.add", &[], None, task_args)
+        .await
+        .expect("entity.add:task (column-override path) must succeed");
+    assert_eq!(
+        task_result["position_column"], "doing",
+        "task created via the unified path must honour the column override",
+    );
+    assert_eq!(
+        task_result["title"], "Untitled",
+        "task gets the schema-default title — the UI passes no title override",
+    );
+
+    // Tag: tags-grid (+) path.
+    let mut tag_args = HashMap::new();
+    tag_args.insert("entity_type".to_string(), json!("tag"));
+    let tag_result = engine
+        .dispatch("entity.add", &[], None, tag_args)
+        .await
+        .expect("entity.add:tag must succeed");
+    assert_eq!(
+        tag_result["tag_name"], "new-tag",
+        "tag must land with the schema-declared `tag_name` default",
+    );
+
+    // Project: projects-grid (+) path. Before the Projects view was
+    // registered end-to-end, this dispatch succeeded in isolation but the
+    // user could never trigger it from the UI.
+    let mut project_args = HashMap::new();
+    project_args.insert("entity_type".to_string(), json!("project"));
+    let project_result = engine
+        .dispatch("entity.add", &[], None, project_args)
+        .await
+        .expect("entity.add:project must succeed");
+    assert_eq!(
+        project_result["name"], "New item",
+        "project must land with the schema-declared `name` default",
+    );
+
+    // Persistence round-trip for all three — the dispatch isn't enough,
+    // the entity must actually live on disk once the command returns.
+    for (entity_type, result) in [
+        ("task", &task_result),
+        ("tag", &tag_result),
+        ("project", &project_result),
+    ] {
+        let id = result["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("entity.add:{entity_type} must return an id in result"));
+        engine
+            .kanban
+            .read_entity_generic(entity_type, id)
+            .await
+            .unwrap_or_else(|e| {
+                panic!("{entity_type} {id} should be persisted after entity.add: {e}")
+            });
+    }
+}
+
+/// `entity.add` without an `entity_type` arg must be unavailable — the impl
+/// returns `false` from `available()` so dispatch refuses to execute. This
+/// mirrors the "you need a view with entity_type in scope" invariant on the
+/// palette side at the command-impl level.
+#[tokio::test]
+async fn dispatch_entity_add_unavailable_without_entity_type_arg() {
+    let engine = TestEngine::new().await;
+
+    let result = engine
+        .dispatch("entity.add", &[], None, HashMap::new())
+        .await;
+
+    assert!(
+        result.is_err(),
+        "entity.add must fail when entity_type is missing from args"
     );
 }
 
@@ -1021,7 +1418,12 @@ async fn reorder_move_third_before_second_then_back() {
 }
 
 // ===========================================================================
-// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
+// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — task delete via cross-cutting entity.delete
+//
+// Originally covered the retired `task.delete` command. After the duplicate
+// context-menu cleanup, task deletion dispatches through the cross-cutting
+// `entity.delete` (target-driven) whose `"task"` match arm dispatches the
+// same `DeleteTask` op. This test pins the dispatch path end-to-end.
 // ===========================================================================
 
 #[tokio::test]
@@ -1030,9 +1432,9 @@ async fn task_delete_removes_task() {
 
     // Add a task
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Verify the task exists
@@ -1045,11 +1447,12 @@ async fn task_delete_removes_task() {
         "task should exist after add"
     );
 
-    // Dispatch task.delete through the command harness
+    // Dispatch entity.delete with the task moniker as target.
+    let target = format!("task:{}", task_id);
     engine
-        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple("entity.delete", &[], Some(&target))
         .await
-        .expect("task.delete should succeed");
+        .expect("entity.delete should succeed for task target");
 
     // Verify the task is gone
     assert!(
@@ -1075,9 +1478,9 @@ async fn drag_complete_same_board_moves_task() {
 
     // Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Start a drag session — board path derived from scope chain's store: moniker
@@ -1149,9 +1552,9 @@ async fn drag_complete_cross_board_returns_transfer_params() {
 
     // Add a task in todo
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .add_task(Some("todo"), HashMap::new())
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
     // Start a drag session — source board path from scope chain store: moniker
@@ -1240,14 +1643,16 @@ async fn entity_copy_copies_task_to_clipboard() {
     let mut args = HashMap::new();
     args.insert("title".to_string(), json!("Clipboard test task"));
     let add_result = engine
-        .dispatch("task.add", &["column:todo"], None, args)
+        .add_task(Some("todo"), args)
         .await
-        .expect("task.add should succeed");
+        .expect("entity.add:task should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Dispatch entity.copy with task in scope
+    // Dispatch entity.copy with task as target (cross-cutting command:
+    // params: [{name: moniker, from: target}])
+    let target = format!("task:{}", task_id);
     let result = engine
-        .dispatch_simple("entity.copy", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple("entity.copy", &[], Some(&target))
         .await
         .expect("entity.copy should succeed");
 
@@ -1527,6 +1932,171 @@ async fn task_move_produces_store_event_via_flush_all() {
         events
             .iter()
             .map(|e| format!("{}({})", e.event_name(), e.payload()))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ===========================================================================
+// Cross-cutting: `list_commands_for_scope` emits `entity.add:{type}` for every
+// `kind: grid` builtin view (section-5 regression guard).
+//
+// Iterates the REAL builtin view registry (not a hand-constructed list) and
+// asserts — for every view whose `kind == grid` and whose `entity_type` is
+// present — that `commands_for_scope` returns `entity.add:{entity_type}` in
+// BOTH the palette path (`context_menu_only = false`) and the context-menu
+// path (`context_menu_only = true`). Catches new grid views shipping without
+// an `entity_type`, YAML drift that silently drops the type, or changes to
+// `commands_for_scope` / `dedupe_by_id` / `check_available` that filter out
+// the dynamic emission.
+// ===========================================================================
+
+/// Load the real builtin view registry (same path production uses) and
+/// project the loaded `ViewDef`s onto the `ViewInfo` shape `gather_views`
+/// assembles. Skips local views — we test the builtin invariant only.
+fn load_builtin_view_infos() -> Vec<ViewInfo> {
+    let builtin = builtin_view_definitions();
+    let temp = TempDir::new().expect("tempdir");
+    let vctx = ViewsContext::from_yaml_sources(temp.path().to_path_buf(), &builtin)
+        .expect("builtin views must parse");
+    vctx.all_views()
+        .iter()
+        .map(|v| ViewInfo {
+            id: v.id.clone(),
+            name: v.name.clone(),
+            entity_type: v.entity_type.clone(),
+        })
+        .collect()
+}
+
+/// Same loader as `load_builtin_view_infos` but also returns each view's
+/// declared `kind` so tests can filter to `kind: grid` only.
+fn load_builtin_views_with_kind() -> Vec<(ViewInfo, ViewKind)> {
+    let builtin = builtin_view_definitions();
+    let temp = TempDir::new().expect("tempdir");
+    let vctx = ViewsContext::from_yaml_sources(temp.path().to_path_buf(), &builtin)
+        .expect("builtin views must parse");
+    vctx.all_views()
+        .iter()
+        .map(|v| {
+            (
+                ViewInfo {
+                    id: v.id.clone(),
+                    name: v.name.clone(),
+                    entity_type: v.entity_type.clone(),
+                },
+                v.kind.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Every builtin grid view that declares an `entity_type` must surface
+/// `entity.add:{entity_type}` through `commands_for_scope`, in both the
+/// palette (`context_menu_only = false`) and the context menu
+/// (`context_menu_only = true`).
+///
+/// This is the regression guard the task calls out as MANDATORY in
+/// section 5 — a new grid view shipped without `entity_type`, or any
+/// future change that silently drops the `entity.add:*` emission, fails
+/// this test as a single named failure.
+#[tokio::test]
+async fn list_commands_for_scope_emits_entity_add_for_every_grid_view() {
+    let engine = TestEngine::new().await;
+    let registry = CommandsRegistry::from_yaml_sources(&composed_builtin_yaml_sources());
+    let fields = engine.kanban.entity_context().await.unwrap();
+    let views_with_kind = load_builtin_views_with_kind();
+    let views: Vec<ViewInfo> = views_with_kind.iter().map(|(v, _)| v.clone()).collect();
+
+    // Filter to kind: grid views that declare an entity_type. The task's
+    // requirement is explicitly scoped to grids — the board view is
+    // separately guarded above. If this list is ever empty the test fails
+    // fast to prevent a "0 of 0 passed" vacuous green.
+    let grids: Vec<&ViewInfo> = views_with_kind
+        .iter()
+        .filter(|(_, kind)| *kind == ViewKind::Grid)
+        .filter(|(v, _)| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
+        .map(|(v, _)| v)
+        .collect();
+    assert!(
+        !grids.is_empty(),
+        "expected at least one builtin grid view with entity_type; got none. \
+         Loaded views: {:?}",
+        views
+            .iter()
+            .map(|v| (&v.name, &v.entity_type))
+            .collect::<Vec<_>>()
+    );
+
+    for view in grids {
+        let entity_type = view.entity_type.as_deref().unwrap();
+        let expected_id = format!("entity.add:{entity_type}");
+        let scope = vec![format!("view:{}", view.id), "board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: views.clone(),
+            ..Default::default()
+        };
+
+        // Palette path
+        let palette = commands_for_scope(
+            &scope,
+            &registry,
+            &engine.commands,
+            Some(fields.fields()),
+            &engine.ui_state,
+            false,
+            Some(&dynamic),
+        );
+        let palette_add = palette.iter().find(|c| c.id == expected_id);
+        assert!(
+            palette_add.is_some_and(|c| c.available),
+            "palette (context_menu_only=false) must surface {expected_id} for grid view '{}' \
+             (id={}); got command ids: {:?}",
+            view.name,
+            view.id,
+            palette.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+
+        // Context menu path
+        let ctx_menu = commands_for_scope(
+            &scope,
+            &registry,
+            &engine.commands,
+            Some(fields.fields()),
+            &engine.ui_state,
+            true,
+            Some(&dynamic),
+        );
+        let ctx_add = ctx_menu.iter().find(|c| c.id == expected_id);
+        assert!(
+            ctx_add.is_some_and(|c| c.available && c.context_menu),
+            "context menu (context_menu_only=true) must surface {expected_id} for grid view \
+             '{}' (id={}); got command ids: {:?}",
+            view.name,
+            view.id,
+            ctx_menu.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Reference: the helper that production's `kanban-app::gather_views`
+/// projects on is `ViewDef` → `ViewInfo`. If the field set ever drifts
+/// (e.g. `entity_type` is renamed), `load_builtin_view_infos` will fail
+/// to compile — which is the signal the projection needs to be fixed in
+/// lockstep with `gather_views`.
+#[test]
+fn load_builtin_view_infos_projects_entity_type() {
+    let views = load_builtin_view_infos();
+    let with_type: Vec<&ViewInfo> = views
+        .iter()
+        .filter(|v| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
+        .collect();
+    assert!(
+        with_type.len() >= 3,
+        "expected at least 3 builtin views to declare entity_type; got {}: {:?}",
+        with_type.len(),
+        with_type
+            .iter()
+            .map(|v| (&v.name, &v.entity_type))
             .collect::<Vec<_>>()
     );
 }

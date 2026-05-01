@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffd980
+position_ordinal: ffffffffffffffaf80
 title: Replace FocusHighlight with FocusScope in inspector field rows
 ---
 ## What

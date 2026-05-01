@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: todo
-position_ordinal: dd80
+position_ordinal: '9380'
 title: 'Remove or fix the 10 #[ignore]d tests in the workspace'
 ---
 `cargo nextest run --workspace` reports 15 skipped tests. 5 are filtered deliberately by the `default-filter` in `.config/nextest.toml` (the `qwen_embedding` / `unixcoder_` HF-model integration tests, run via `--profile embedding-models`) — those are acceptable. The remaining 10 are `#[ignore]`d in-source and must be fixed or deleted per the test-skill rule "a skipped test is either broken (fix it) or dead (delete it)".

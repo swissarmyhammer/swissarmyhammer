@@ -12,12 +12,13 @@ import {
 import { VirtualTagDisplay } from "@/components/fields/displays/virtual-tag-display";
 
 /**
- * Adapter that narrows FieldDisplayProps (fieldDef, entityType, entityId, value)
- * down to VirtualTagDisplayProps (value only). Virtual tags use a static color
- * map rather than entity lookups, so the extra props are unused.
+ * Adapter that narrows FieldDisplayProps (field, entity, value, mode) down to
+ * VirtualTagDisplayProps (value, mode). Virtual tags use a static color map
+ * rather than entity lookups, so the extra props are unused — but `mode` is
+ * forwarded so the display can apply the compact-mode height contract.
  */
-function VirtualBadgeListAdapter({ value }: FieldDisplayProps) {
-  return <VirtualTagDisplay value={value} />;
+function VirtualBadgeListAdapter({ value, mode }: FieldDisplayProps) {
+  return <VirtualTagDisplay value={value} mode={mode} />;
 }
 
 registerDisplay("virtual-badge-list", VirtualBadgeListAdapter);

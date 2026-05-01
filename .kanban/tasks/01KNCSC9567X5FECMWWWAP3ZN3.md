@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffffc80
+position_ordinal: fffffffffffffffffffffffff080
 title: 'Entity store: patch field in place instead of replacing entity on field-changed'
 ---
 ## What

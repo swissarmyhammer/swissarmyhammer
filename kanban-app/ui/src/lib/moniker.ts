@@ -40,6 +40,52 @@ export function parseMoniker(m: string): {
 }
 
 /**
+ * Build a grid-cell moniker: `"grid_cell:{row}:{colKey}"`.
+ *
+ * Identifies a single cell in a grid view by its zero-based row index and
+ * column key (the field name). The `grid_cell:` namespace prefix keeps cell
+ * monikers separate from entity monikers so the focus chain can distinguish
+ * "focus is on a grid cell" from "focus is on the underlying entity".
+ *
+ * @param row - Zero-based row index in the grid.
+ * @param colKey - Column key (typically the field name).
+ */
+export function gridCellMoniker(row: number, colKey: string): string {
+  return `grid_cell:${row}:${colKey}`;
+}
+
+/**
+ * Parse a grid-cell moniker `"grid_cell:{row}:{colKey}"` into its components.
+ *
+ * Returns `null` when the moniker is not a grid-cell moniker or is malformed.
+ * Callers use the `null` return to short-circuit `data-cell-cursor`
+ * derivation when focus is outside the grid (e.g. on `ui:navbar`, an entity
+ * moniker, or `null`).
+ *
+ * @param m - The moniker string to parse.
+ */
+export function parseGridCellMoniker(
+  m: string,
+): { row: number; colKey: string } | null {
+  // Accept either a bare segment (`grid_cell:R:K`) or a fully-qualified
+  // moniker (`/window/.../grid_cell:R:K`). Under the FQM identity model
+  // the focused moniker is the full path; the trailing segment after the
+  // final `/` is the spatial-segment we parse against.
+  const lastSlash = m.lastIndexOf("/");
+  const segment = lastSlash >= 0 ? m.slice(lastSlash + 1) : m;
+  if (!segment.startsWith("grid_cell:")) return null;
+  const rest = segment.slice("grid_cell:".length);
+  const idx = rest.indexOf(":");
+  if (idx === -1) return null;
+  const rowStr = rest.slice(0, idx);
+  const colKey = rest.slice(idx + 1);
+  if (rowStr.length === 0 || colKey.length === 0) return null;
+  const row = Number(rowStr);
+  if (!Number.isInteger(row) || row < 0) return null;
+  return { row, colKey };
+}
+
+/**
  * Parse a field-level moniker "field:entityType:entityId.field" into its components.
  * Throws if the moniker doesn't start with "field:" or has no field portion.
  */

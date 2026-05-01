@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4NEVT8AVMVWX4WTHJG15FJ
 position_column: done
-position_ordinal: ffffffffffffffffffa980
+position_ordinal: ffffffffffffffffffffffb880
 title: 6. Perspective tab bar + default perspective
 ---
 ## What

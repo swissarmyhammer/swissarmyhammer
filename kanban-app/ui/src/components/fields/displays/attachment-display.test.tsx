@@ -37,6 +37,7 @@ import {
 } from "./attachment-display";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { asSegment } from "@/types/spatial";
 
 /** Wraps component in providers needed by hooks (useDispatchCommand, useFileDrop). */
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -300,7 +301,7 @@ describe("AttachmentItem", () => {
     const FocusScope = (await import("@/components/focus-scope")).FocusScope;
     const { container } = render(
       <Wrapper>
-        <FocusScope moniker="task:01ABC" commands={[]}>
+        <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
           <AttachmentItem attachment={imageAttachment} />
         </FocusScope>
       </Wrapper>,
@@ -349,6 +350,27 @@ describe("AttachmentDisplay", () => {
     expect(screen.getByText("-")).toBeTruthy();
   });
 
+  it("renders the configured placeholder in compact mode when value is empty", () => {
+    // Mirrors the AvatarDisplay/BadgeDisplay/BadgeListDisplay convention:
+    // when the field declares a YAML `placeholder`, the empty-state span
+    // surfaces it instead of the legacy `-` fallback.
+    const fieldWithPlaceholder = {
+      id: "f-attach",
+      name: "attachment",
+      type: { kind: "attachment" },
+      placeholder: "Drop file",
+    } as unknown as import("@/types/kanban").FieldDef;
+    render(
+      <AttachmentDisplay
+        field={fieldWithPlaceholder}
+        value={null}
+        mode="compact"
+      />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.getByText("Drop file")).toBeTruthy();
+  });
+
   it("shows dashed border when empty", () => {
     const { container } = render(
       <AttachmentDisplay value={null} mode="full" />,
@@ -392,6 +414,24 @@ describe("AttachmentListDisplay", () => {
       wrapper: Wrapper,
     });
     expect(screen.getByText("Drop files here")).toBeTruthy();
+  });
+
+  it("renders the configured placeholder in compact mode when value is empty", () => {
+    const fieldWithPlaceholder = {
+      id: "f-attach-list",
+      name: "attachments",
+      type: { kind: "attachment-list" },
+      placeholder: "Drop files",
+    } as unknown as import("@/types/kanban").FieldDef;
+    render(
+      <AttachmentListDisplay
+        field={fieldWithPlaceholder}
+        value={[]}
+        mode="compact"
+      />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.getByText("Drop files")).toBeTruthy();
   });
 
   it("renders dash in compact mode for empty", () => {

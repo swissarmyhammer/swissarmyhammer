@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffff8480
+position_ordinal: ffffffffffffffffe880
 title: 'Centralize windowLabel: window moniker at root of scope chain'
 ---
 ## What

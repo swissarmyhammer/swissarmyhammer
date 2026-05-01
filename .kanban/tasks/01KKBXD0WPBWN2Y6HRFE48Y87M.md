@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: f280
+position_ordinal: f980
 title: Rewire init.rs to use InitRegistry
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNHCC6VZW17D66ED224GS1A5
 position_column: done
-position_ordinal: ffffffffffffffffffffe180
+position_ordinal: ffffffffffffffffffffffffffff9080
 title: 'Frontend: single code path for entity-field-changed — patch from changes array only'
 ---
 ## What

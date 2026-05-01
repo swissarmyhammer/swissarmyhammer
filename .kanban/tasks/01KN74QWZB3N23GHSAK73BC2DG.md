@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffffe80
+position_ordinal: ffffffffffffffffffffe380
 title: Set _meta['anthropic/alwaysLoad'] on all sah MCP tools
 ---
 ## What

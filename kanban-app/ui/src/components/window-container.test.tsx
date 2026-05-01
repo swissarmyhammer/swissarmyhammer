@@ -91,6 +91,32 @@ import {
   useWindowLoading,
   useBoardData,
 } from "./window-container";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import {
+  asSegment
+} from "@/types/spatial";
+
+/** Identity-stable layer name for the test window root, matches App.tsx. */
+const WINDOW_LAYER_NAME = asSegment("window");
+
+/**
+ * Wrap children in the spatial-focus + window-root layer providers that
+ * `WindowContainer` (via `AppShell -> useEnclosingLayerFq`) requires.
+ *
+ * `WindowContainer` mounts `AppShell`, which calls `useEnclosingLayerFq()` to
+ * thread the window-root layer key into the palette's portal-out
+ * `<FocusLayer>`. The hook throws outside any `<FocusLayer>`, so every
+ * `render(...)` in this file must sit under this wrapping — mirroring
+ * `App.tsx`'s production setup.
+ */
+function withSpatialFocus(node: React.ReactElement): React.ReactElement {
+  return (
+    <SpatialFocusProvider>
+      <FocusLayer name={WINDOW_LAYER_NAME}>{node}</FocusLayer>
+    </SpatialFocusProvider>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -169,11 +195,13 @@ describe("WindowContainer", () => {
   it("renders children", async () => {
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <span data-testid="child">hello</span>
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <span data-testid="child">hello</span>
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -183,11 +211,13 @@ describe("WindowContainer", () => {
   it("provides activeBoardPath context (initially none)", async () => {
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <ActiveBoardPathProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <ActiveBoardPathProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -197,11 +227,13 @@ describe("WindowContainer", () => {
   it("provides openBoards context (initially empty)", async () => {
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <OpenBoardsProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <OpenBoardsProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -211,11 +243,13 @@ describe("WindowContainer", () => {
   it("registers board-opened window listener on mount", async () => {
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <div>child</div>
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <div>child</div>
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -228,11 +262,13 @@ describe("WindowContainer", () => {
   it("registers board-changed global listener on mount", async () => {
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <div>child</div>
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <div>child</div>
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -282,11 +318,13 @@ describe("WindowContainer", () => {
 
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <ActiveBoardPathProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <ActiveBoardPathProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -341,11 +379,13 @@ describe("WindowContainer", () => {
 
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <OpenBoardsProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <OpenBoardsProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -398,12 +438,14 @@ describe("WindowContainer", () => {
 
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <ActiveBoardPathProbe />
-            <SwitchBoardProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <ActiveBoardPathProbe />
+              <SwitchBoardProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 
@@ -478,12 +520,14 @@ describe("WindowContainer", () => {
 
     await act(async () => {
       render(
-        <RustEngineContainer>
-          <WindowContainer>
-            <LoadingProbe />
-            <SwitchBoardProbe />
-          </WindowContainer>
-        </RustEngineContainer>,
+        withSpatialFocus(
+          <RustEngineContainer>
+            <WindowContainer>
+              <LoadingProbe />
+              <SwitchBoardProbe />
+            </WindowContainer>
+          </RustEngineContainer>,
+        ),
       );
     });
 

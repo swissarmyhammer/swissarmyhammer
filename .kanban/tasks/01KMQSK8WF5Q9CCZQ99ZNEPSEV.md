@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffe480
+position_ordinal: ffffffffffffffba80
 title: UseInspectorNavReturn interface missing pill navigation properties (TS build broken)
 ---
 **Severity: High / Correctness**

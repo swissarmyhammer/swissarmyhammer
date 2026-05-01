@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc680
+position_ordinal: ffffffffffffffffffffffffffffffaf80
 project: task-card-fields
 title: Fix progress bar rendering 0 despite correct computed data in entity store
 ---

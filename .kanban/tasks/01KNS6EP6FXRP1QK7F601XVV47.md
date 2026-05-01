@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa280
+position_ordinal: ffffffffffffffffffffffffffffe280
 title: 'Bug: Filter formula bar does not save on vim insert→normal (Escape)'
 ---
 ## What

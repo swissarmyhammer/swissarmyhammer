@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffbc80
+position_ordinal: ffffffffffffffffffffffffffe880
 project: null
 title: Implement file watcher for incremental indexing
 ---

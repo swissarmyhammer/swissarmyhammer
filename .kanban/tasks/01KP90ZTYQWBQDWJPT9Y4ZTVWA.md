@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd880
+position_ordinal: ffffffffffffffffffffffffffffffd080
 title: Perspective mutations must emit events so filter changes apply live
 ---
 ## What

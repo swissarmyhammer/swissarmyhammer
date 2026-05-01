@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNS1Y49EX2CZJQ38WGM23954
 position_column: done
-position_ordinal: ffffffffffffffffffff9580
+position_ordinal: ffffffffffffffffffffffffffa080
 project: code-context-cli
 title: Create code-context builtin skill and implement skill command
 ---

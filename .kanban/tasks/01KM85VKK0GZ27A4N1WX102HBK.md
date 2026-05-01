@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM85VAEJM77M03VP1P444AS1
 position_column: done
-position_ordinal: ffffffffffda80
+position_ordinal: ffffffffffffa980
 title: Migrate recent_boards into UIState
 ---
 ## What

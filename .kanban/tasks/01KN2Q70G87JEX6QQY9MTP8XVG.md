@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN2Q6HQN1PYDEQ6XYEMCQSSP
 position_column: done
-position_ordinal: ffffffffffffffffae80
+position_ordinal: ffffffffffffffffff9e80
 title: 'PERSP-6: MCP schema verification and integration test'
 ---
 ## What

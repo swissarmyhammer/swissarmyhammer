@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff9b80
+position_ordinal: ffffffffffffffffffffff9b80
 title: 'Test prompts: PromptLibrary rendering, search, and management'
 ---
 File: swissarmyhammer-prompts/src/prompts.rs (43.2%, 192 uncovered lines)

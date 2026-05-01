@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffdf80
+position_ordinal: ffffffffffffffffc480
 title: Add ClipboardState to UIState
 ---
 ## What

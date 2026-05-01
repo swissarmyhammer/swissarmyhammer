@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
 position_column: done
-position_ordinal: ffffffffffffffffffe180
+position_ordinal: ffffffffffffffffffffffffb580
 title: 'LSP-SKILL: Update lsp skill for live ops awareness'
 ---
 ## What

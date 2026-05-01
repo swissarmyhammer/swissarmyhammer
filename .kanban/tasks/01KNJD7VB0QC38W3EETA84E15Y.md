@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNJD76746DTJ540A5SHGRCF0
 position_column: done
-position_ordinal: ffffffffffffffffffffff8680
+position_ordinal: ffffffffffffffffffffffffffffb680
 position_swimlane: null
 title: 'FILTER-1: Wire filter-expr validation into SetFilterCmd'
 ---

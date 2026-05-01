@@ -10,14 +10,20 @@ use crate::utils::hash::content_hash;
 pub struct JsonParserPlugin;
 
 impl SemanticParserPlugin for JsonParserPlugin {
+    /// Stable plugin identifier used in registry lookups and entity provenance.
     fn id(&self) -> &str {
         "json"
     }
 
+    /// File extensions this plugin claims; the registry dispatches on these.
     fn extensions(&self) -> &[&str] {
         &[".json"]
     }
 
+    /// Walk `content` and emit one entity per top-level key of the root object.
+    ///
+    /// Returns an empty vector for non-object roots (arrays, scalars, or empty
+    /// input). `file_path` is used only to build entity IDs.
     fn extract_entities(&self, content: &str, file_path: &str) -> Vec<SemanticEntity> {
         // Only extract top-level properties from JSON objects.
         // We scan the source text directly to get accurate line positions,

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffda80
+position_ordinal: ffffffffffffffffffffffffffffffd380
 title: Match filter entity predicates ($project, @actor, ^task) on id OR slug with a single canonical Rust slugify
 ---
 ## What

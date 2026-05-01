@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: cc80
+position_ordinal: d380
 title: Add impl_empty_initializable! macro and wire into McpTool
 ---
 ## What

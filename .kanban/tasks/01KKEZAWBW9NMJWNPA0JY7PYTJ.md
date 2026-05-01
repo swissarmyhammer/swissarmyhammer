@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: dd80
+position_ordinal: e480
 title: Add icon field to LSP YAML specs and expose extension-based registry query
 ---
 ## What

@@ -61,22 +61,51 @@ describe("ProgressDisplay", () => {
     expect(container.textContent).toContain("14/14");
   });
 
-  it("returns null when total is 0", () => {
+  /**
+   * In compact mode, every display must emit a fixed-height
+   * CompactCellWrapper (even for empty/invalid values) so the row
+   * honors the `DataTable` virtualizer's `ROW_HEIGHT` contract. The
+   * empty branch wraps a muted dash with no progress bar.
+   */
+  function expectEmptyCompactWrapper(container: HTMLElement) {
+    const wrapper = container.querySelector("[data-compact-cell='true']");
+    expect(wrapper).toBeTruthy();
+    expect(wrapper!.querySelector('[role="progressbar"]')).toBeNull();
+    expect(wrapper!.textContent).toBe("-");
+  }
+
+  it("renders an empty wrapper when total is 0 (compact)", () => {
     const { container } = render(
       <ProgressDisplay
         {...makeProps({ completed: 0, total: 0, percent: 0 })}
       />,
     );
-    expect(container.innerHTML).toBe("");
+    expectEmptyCompactWrapper(container);
   });
 
-  it("returns null for null value", () => {
+  it("renders an empty wrapper for null value (compact)", () => {
     const { container } = render(<ProgressDisplay {...makeProps(null)} />);
+    expectEmptyCompactWrapper(container);
+  });
+
+  it("renders an empty wrapper for non-object value (compact)", () => {
+    const { container } = render(<ProgressDisplay {...makeProps(42)} />);
+    expectEmptyCompactWrapper(container);
+  });
+
+  it("returns null in full mode for invalid values (no wrapper, row collapses)", () => {
+    const { container } = render(
+      <ProgressDisplay {...makeProps(null, "full")} />,
+    );
     expect(container.innerHTML).toBe("");
   });
 
-  it("returns null for non-object value", () => {
-    const { container } = render(<ProgressDisplay {...makeProps(42)} />);
+  it("returns null in full mode when total is 0 (no wrapper, row collapses)", () => {
+    const { container } = render(
+      <ProgressDisplay
+        {...makeProps({ completed: 0, total: 0, percent: 0 }, "full")}
+      />,
+    );
     expect(container.innerHTML).toBe("");
   });
 

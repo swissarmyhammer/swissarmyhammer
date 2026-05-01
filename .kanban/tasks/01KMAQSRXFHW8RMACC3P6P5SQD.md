@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMAQS9WS28VTKJZ4TWDRJG89
 position_column: done
-position_ordinal: ffffffffffff9a80
+position_ordinal: ffffffffffffe880
 title: EntityInspector visual focus ring and field indexing
 ---
 ## What

@@ -5,7 +5,7 @@ depends_on:
 - 01KM621VQF672VCZ26S8DG350S
 - 01KM624X14YB50494X8506YA5E
 position_column: done
-position_ordinal: ffffffffffb380
+position_ordinal: fffffffffffd80
 title: 'Test: board counts and MCP operations exclude archived entities'
 ---
 ## What

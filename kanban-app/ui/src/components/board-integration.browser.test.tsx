@@ -122,6 +122,9 @@ import { PerspectiveProvider } from "@/lib/perspective-context";
 import { PerspectiveContainer } from "@/components/perspective-container";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test state — populated by beforeAll from real .kanban data
@@ -211,31 +214,35 @@ function renderIntegrationBoard() {
   const tasks = testTasks.map(taskToEntity);
 
   return render(
-    <FileDropProvider>
-      <EntityFocusProvider>
-        <SchemaProvider>
-          <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
-            <TooltipProvider>
-              <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
-                <FieldUpdateProvider>
-                  <UIStateProvider>
-                    <ViewsProvider>
-                      <PerspectiveProvider>
-                        <PerspectiveContainer>
-                          <DragSessionProvider>
-                            <BoardView board={board} tasks={tasks} />
-                          </DragSessionProvider>
-                        </PerspectiveContainer>
-                      </PerspectiveProvider>
-                    </ViewsProvider>
-                  </UIStateProvider>
-                </FieldUpdateProvider>
-              </ActiveBoardPathProvider>
-            </TooltipProvider>
-          </EntityStoreProvider>
-        </SchemaProvider>
-      </EntityFocusProvider>
-    </FileDropProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <FileDropProvider>
+          <EntityFocusProvider>
+            <SchemaProvider>
+              <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
+                <TooltipProvider>
+                  <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
+                    <FieldUpdateProvider>
+                      <UIStateProvider>
+                        <ViewsProvider>
+                          <PerspectiveProvider>
+                            <PerspectiveContainer>
+                              <DragSessionProvider>
+                                <BoardView board={board} tasks={tasks} />
+                              </DragSessionProvider>
+                            </PerspectiveContainer>
+                          </PerspectiveProvider>
+                        </ViewsProvider>
+                      </UIStateProvider>
+                    </FieldUpdateProvider>
+                  </ActiveBoardPathProvider>
+                </TooltipProvider>
+              </EntityStoreProvider>
+            </SchemaProvider>
+          </EntityFocusProvider>
+        </FileDropProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -525,10 +532,13 @@ describe("Board integration — real .kanban data", () => {
       ).items;
       const doThisNext = items.find((i) => i.cmd === "task.doThisNext");
       expect(doThisNext).toBeTruthy();
-      // Scope chain should contain the task moniker
-      expect(doThisNext!.scope_chain.some((s) => s.startsWith("task:"))).toBe(
-        true,
-      );
+      // Scope chain should contain a path whose trailing segment is the
+      // task entity moniker. Under the FQM model the scope chain entries
+      // are fully-qualified paths (`/window/.../task:<id>`), so we
+      // match on the trailing segment rather than the start.
+      expect(
+        doThisNext!.scope_chain.some((s) => /(?:^|\/)task:/.test(s)),
+      ).toBe(true);
 
       // No task.move should have been dispatched (old workaround gone)
       const moveCall = mockInvoke.mock.calls.find(

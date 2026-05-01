@@ -61,14 +61,12 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: mockMentionableTypes,
     loading: false,
   }),
   useSchemaOptional: () => ({
     getSchema: () => undefined,
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
   }),
 }));
 
@@ -175,7 +173,7 @@ describe("BadgeDisplay", () => {
     );
     await flush();
 
-    const scope = container.querySelector("[data-moniker='column:col-doing']");
+    const scope = container.querySelector("[data-segment='column:col-doing']");
     expect(scope).toBeTruthy();
   });
 

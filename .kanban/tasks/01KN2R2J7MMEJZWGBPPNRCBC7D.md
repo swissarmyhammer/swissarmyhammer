@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffc080
+position_ordinal: ffffffffffffffff9680
 title: Fix ShellExecuteTool to use scope-aware settings path (#37)
 ---
 ## What

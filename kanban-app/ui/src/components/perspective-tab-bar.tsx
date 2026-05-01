@@ -6,12 +6,17 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
-import { useDispatchCommand, CommandScopeProvider } from "@/lib/command-scope";
+import {
+  useDispatchCommand,
+  CommandScopeProvider,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import {
@@ -33,6 +38,11 @@ import { TextEditor } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
+import { FocusScope } from "@/components/focus-scope";
+import { FocusZone } from "@/components/focus-zone";
+import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -40,8 +50,17 @@ import type { FieldDef } from "@/types/kanban";
 // PerspectiveTabBar component that owns the rename state.
 // ---------------------------------------------------------------------------
 
-/** Subscriber callback invoked when a "start rename" signal is broadcast. */
-type StartRenameCallback = () => void;
+/**
+ * Subscriber callback invoked when a "start rename" signal is broadcast.
+ *
+ * Receives an optional explicit perspective id. When `id` is undefined the
+ * subscriber falls back to the active perspective — this is the path taken
+ * by the global command palette's `ui.entity.startRename`, which has no
+ * specific tab in mind. When `id` is supplied it targets that perspective
+ * directly — this is the path taken by per-tab Enter, where the focused tab
+ * (active or inactive) is the explicit rename target.
+ */
+type StartRenameCallback = (id?: string) => void;
 
 /** Module-level subscriber set broadcasting rename signals to all mounted PerspectiveTabBar instances. */
 const startRenameCallbacks = new Set<StartRenameCallback>();
@@ -50,7 +69,7 @@ const startRenameCallbacks = new Set<StartRenameCallback>();
  * Subscribe to "start rename" signals.
  *
  * Called by `usePerspectiveTabBar` to enter rename mode when the command
- * palette (or any other source) dispatches `ui.perspective.startRename`.
+ * palette (or any other source) dispatches `ui.entity.startRename`.
  *
  * @returns An unsubscribe function.
  */
@@ -64,10 +83,15 @@ export function onStartRename(cb: StartRenameCallback): () => void {
 /**
  * Trigger all registered "start rename" callbacks.
  *
- * Intended to be called from AppShell's global command handler (or tests).
+ * Pass an explicit `id` to start renaming a specific perspective (the
+ * focused-tab path). Omit `id` to fall back to the active perspective (the
+ * command-palette path).
+ *
+ * Intended to be called from AppShell's global command handler, the
+ * focused-tab scope command, or tests.
  */
-export function triggerStartRename(): void {
-  for (const cb of startRenameCallbacks) cb();
+export function triggerStartRename(id?: string): void {
+  for (const cb of startRenameCallbacks) cb(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,9 +165,19 @@ function usePerspectiveTabBar() {
   );
 
   // Subscribe to the module-level start-rename signal so the command palette
-  // (via AppShell's global command) can trigger inline rename mode.
+  // (via AppShell's global command) AND per-tab Enter (via the scope-pinned
+  // `ui.entity.startRename` on each `<ScopedPerspectiveTab>`) can trigger
+  // inline rename mode.
+  //
+  // When the broadcaster supplies an explicit `id` (per-tab path) we honor
+  // it — that is the focused tab, active or not. When no id is supplied
+  // (command-palette path) we fall back to the active perspective.
   useEffect(() => {
-    return onStartRename(() => {
+    return onStartRename((id) => {
+      if (id) {
+        startRename(id);
+        return;
+      }
       if (activePerspective) {
         startRename(activePerspective.id);
       }
@@ -197,9 +231,20 @@ export function PerspectiveTabBar() {
   if (!activeView) return null;
 
   return (
-    <div className="flex items-center border-b bg-muted/20 px-1 h-8 shrink-0">
-      {/* Left: scrollable perspective tabs + add button */}
-      <div className="flex items-center gap-0.5 overflow-x-auto shrink-0 max-w-[60%]">
+    <PerspectiveBarSpatialZone>
+      {/*
+        Left: scrollable perspective tabs + add button.
+
+        `pl-2` and `gap-2` are load-bearing — each tab is a `<FocusScope>`
+        leaf and `<FocusIndicator>` paints an absolutely-positioned bar at
+        `-left-2` (8px) of its host. The inner `overflow-x-auto` clips
+        anything that overflows horizontally, so without `pl-2` the
+        leftmost tab's indicator is clipped (and without `gap-2` the
+        indicator on tabs 2..N would overlap the previous tab). Same
+        pattern as the board's column strip — see `BoardDndWrapper` in
+        `board-view.tsx` for the analogous `overflow-x-auto pl-2`.
+      */}
+      <div className="flex items-center gap-2 overflow-x-auto shrink-0 max-w-[60%] pl-2">
         {filteredPerspectives.map((p) => (
           <ScopedPerspectiveTab
             key={p.id}
@@ -227,7 +272,51 @@ export function PerspectiveTabBar() {
           perspectiveId={activePerspective.id}
         />
       )}
-    </div>
+    </PerspectiveBarSpatialZone>
+  );
+}
+
+/** Layout className shared by the spatial-zone wrapper and its plain-div fallback. */
+const PERSPECTIVE_BAR_LAYOUT =
+  "flex items-center border-b bg-muted/20 px-1 h-8 shrink-0";
+
+/**
+ * Wrap the perspective tab bar in a `<FocusZone moniker={asSegment("ui:perspective-bar")}>`
+ * when the surrounding tree mounts the spatial-nav stack.
+ *
+ * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
+ * ancestor is present. That contract is correct for the production tree
+ * (`App.tsx` always mounts the providers) but would force every
+ * `PerspectiveTabBar` unit test that doesn't care about spatial nav to
+ * set up the providers. Conditionally rendering the zone when both context
+ * lookups succeed keeps the strict contract intact for direct
+ * `<FocusZone>` usage while letting the existing test suite keep its narrow
+ * provider tree.
+ *
+ * The zone (or plain div fallback) carries the same layout class so the
+ * `h-8 shrink-0` chain stays intact whether or not the spatial-nav stack is
+ * present.
+ */
+function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <div className={PERSPECTIVE_BAR_LAYOUT}>{children}</div>;
+  }
+  return (
+    <FocusZone
+      moniker={asSegment("ui:perspective-bar")}
+      // The bar is viewport-spanning chrome (full window width × 32px high) —
+      // a focus indicator running across its entire row would be visual
+      // noise. The bar's job in the spatial graph is to be the parent zone
+      // for its tab leaves; the leaves themselves render the visible bar
+      // when claimed. `data-focused` still flips on the wrapper for e2e
+      // selectors / debugging.
+      showFocusBar={false}
+      className={PERSPECTIVE_BAR_LAYOUT}
+    >
+      {children}
+    </FocusZone>
   );
 }
 
@@ -263,6 +352,27 @@ interface ScopedPerspectiveTabProps {
  * Wraps a single perspective tab in its CommandScopeProvider.
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
+ *
+ * The tab's render also goes through `<PerspectiveTabFocusable>`, which adds a
+ * `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>` leaf when the
+ * spatial-nav stack is mounted. That makes each tab a peer leaf in the
+ * surrounding `ui:perspective-bar` zone so beam-search picks them up as
+ * sibling navigation targets.
+ *
+ * Per-tab rename binding: every perspective tab — active or inactive —
+ * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
+ * (Enter for cua / vim / emacs) is picked up by `extractScopeBindings`
+ * when this tab is the spatial focus. That binding shadows the global
+ * `nav.drillIn: Enter` for the perspective scope only, matching the YAML
+ * `scope: "entity:perspective"` filter on the same id in
+ * `swissarmyhammer-commands/builtin/commands/ui.yaml`. The execute path:
+ *
+ *   - On the active tab: trigger rename on the active perspective.
+ *   - On an inactive tab: dispatch `perspective.set` to activate the tab,
+ *     then trigger rename targeted at this tab's id. The broadcaster
+ *     accepts an explicit id so the rename is independent of the
+ *     async UI-state propagation that would otherwise leave the
+ *     subscriber's `activePerspective` snapshot stale.
  */
 function ScopedPerspectiveTab({
   perspective,
@@ -274,25 +384,79 @@ function ScopedPerspectiveTab({
   onRenameCancel,
   onFilterFocus,
 }: ScopedPerspectiveTabProps) {
+  const isActive = activePerspectiveId === perspective.id;
+  const dispatchPerspectiveSet = useDispatchCommand("perspective.set");
+  const startRenameCommands = useMemo<readonly CommandDef[]>(() => {
+    return [
+      {
+        id: "ui.entity.startRename",
+        name: "Rename Perspective",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        execute: async () => {
+          if (!isActive) {
+            // Activate the focused tab before mounting the rename editor —
+            // the user's mental model is "Enter edits the name of the tab
+            // I am on", which implies the tab also becomes active.
+            await dispatchPerspectiveSet({
+              args: { perspective_id: perspective.id },
+            });
+          }
+          // Pass the explicit id so the rename targets this tab regardless
+          // of whether the activate dispatch's UI-state event has reached
+          // the subscriber yet.
+          triggerStartRename(perspective.id);
+        },
+      },
+    ];
+  }, [isActive, perspective.id, dispatchPerspectiveSet]);
   return (
     <CommandScopeProvider
-      commands={[]}
       moniker={moniker("perspective", perspective.id)}
+      commands={startRenameCommands}
     >
-      <PerspectiveTab
-        id={perspective.id}
-        name={perspective.name}
-        filter={perspective.filter}
-        group={perspective.group}
-        isActive={activePerspectiveId === perspective.id}
-        isRenaming={renamingId === perspective.id}
-        onSelect={onSelect}
-        onDoubleClick={onDoubleClick}
-        onRenameCommit={onRenameCommit}
-        onRenameCancel={onRenameCancel}
-        onFilterFocus={onFilterFocus}
-      />
+      <PerspectiveTabFocusable id={perspective.id}>
+        <PerspectiveTab
+          id={perspective.id}
+          name={perspective.name}
+          filter={perspective.filter}
+          group={perspective.group}
+          isActive={isActive}
+          isRenaming={renamingId === perspective.id}
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          onRenameCommit={onRenameCommit}
+          onRenameCancel={onRenameCancel}
+          onFilterFocus={onFilterFocus}
+        />
+      </PerspectiveTabFocusable>
     </CommandScopeProvider>
+  );
+}
+
+/**
+ * Wrap a perspective tab in `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>`
+ * when the spatial-nav stack is mounted; otherwise fall through.
+ *
+ * Same conditional pattern as `PerspectiveBarSpatialZone` and
+ * `ViewSpatialZone` — the strict primitive contract is preserved for
+ * production while keeping the test surface narrow.
+ */
+function PerspectiveTabFocusable({
+  id,
+  children,
+}: {
+  id: string;
+  children: ReactNode;
+}) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusScope moniker={asSegment(`perspective_tab:${id}`)}>
+      {children}
+    </FocusScope>
   );
 }
 
@@ -659,7 +823,10 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
   function FilterFormulaBar({ filter, perspectiveId }, ref) {
     const editorRef = useRef<FilterEditorHandle>(null);
 
-    // Forward the inner editor handle so parents can call focus() / setValue().
+    // Forward the inner editor handle so parents can call focus(), setValue(),
+    // or getValue() (the last is used by reconciliation logic, not by the tab
+    // bar itself — but the handle shape must stay aligned with TextEditorHandle
+    // so the type remains substitutable through the ref chain).
     useImperativeHandle(
       ref,
       () => ({
@@ -668,6 +835,9 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
         },
         setValue(text: string) {
           editorRef.current?.setValue(text);
+        },
+        getValue() {
+          return editorRef.current?.getValue() ?? "";
         },
       }),
       [],

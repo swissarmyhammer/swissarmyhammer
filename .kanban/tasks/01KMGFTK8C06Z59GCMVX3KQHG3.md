@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGFT3FY71766HMMVBTQ8DEB
 position_column: done
-position_ordinal: ffffffffffffaf80
+position_ordinal: ffffffffffffff8180
 title: Visual focus highlight on board cursor position
 ---
 ## What

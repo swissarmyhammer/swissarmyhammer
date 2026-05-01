@@ -11,8 +11,10 @@
  * Two modes:
  * - Single mode (`entityType` + `id`): one FocusScope + one TextViewer.
  * - List mode (`items`): a flex-wrap container with one FocusScope +
- *   TextViewer per item. Per-pill focus monikers and claim predicates
- *   preserve keyboard navigation (nav.left/nav.right between pills).
+ *   TextViewer per item. Each pill is its own leaf in the spatial-nav
+ *   graph; within-list keyboard navigation (nav.left/nav.right) is
+ *   driven by the spatial beam search rule 1 (in-zone candidates) when
+ *   the pills sit inside a parent zone such as an inspector field row.
  *
  * Unknown entities fall back to `${prefix}${rawValue}` — the CM6 widget
  * pipeline renders these as muted raw-slug marks automatically.
@@ -20,18 +22,18 @@
 
 import { useMemo } from "react";
 import type { Extension } from "@codemirror/state";
-import { FocusScope, useParentFocusScope } from "@/components/focus-scope";
+import { FocusScope } from "@/components/focus-scope";
+import { Inspectable } from "@/components/inspectable";
 import { TextViewer } from "@/components/text-viewer";
 import { useEntityStore } from "@/lib/entity-store-context";
+import { asSegment } from "@/types/spatial";
 import { useSchema, type MentionableType } from "@/lib/schema-context";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
 import { buildMentionMetaMap } from "@/hooks/use-mention-extensions";
 import type { MentionMeta } from "@/lib/mention-meta";
 import { moniker as buildMoniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -53,23 +55,34 @@ export interface MentionViewProps {
   /** Optional className passed through to each TextViewer. */
   className?: string;
   /**
-   * Predicates the FocusScope uses to claim focus on nav commands.
-   * Single mode only — list mode generates per-item predicates automatically.
-   */
-  claimWhen?: ClaimPredicate[];
-  /**
    * Override the FocusScope moniker (single mode only). When provided,
    * it replaces the default `${entityType}:${id}` moniker — use this to
    * make a pill uniquely focusable in a specific context.
    */
   focusMoniker?: string;
-  /** When false, suppresses the focus bar on click (still participates in commands). */
+  /**
+   * When false, suppresses the visible focus bar on the pill (still
+   * participates in commands and registers in the spatial graph). Each
+   * pill defaults to `<FocusScope>`'s default of `true`, i.e. the pill
+   * advertises focus when clicked or navigated to.
+   *
+   * Pass `false` only when an enclosing primitive already supplies the
+   * visual cue for the pill's region (and the per-pill bar would be
+   * redundant noise). Both compact and full modes honour this prop the
+   * same way — there is no implicit per-mode override.
+   */
   showFocusBar?: boolean;
   /** Extra commands (e.g. task.untag) added to the context menu. */
   extraCommands?: CommandDef[];
   /**
-   * Rendering mode — `"full"` enables keyboard navigation between list items.
-   * Defaults to `"full"` in list mode.
+   * Rendering mode — informational only at this layer. Spatial-nav
+   * keyboard navigation between pills is driven by the Rust beam-search
+   * graph (rule 1 in-zone candidates) regardless of this prop, and the
+   * focus bar is no longer gated on mode (see `showFocusBar` above).
+   *
+   * Retained on the props surface so callers can still thread their
+   * mode through (`badge-list-display` does), and so future
+   * mode-specific tweaks at this layer have a place to land.
    */
   mode?: "full" | "compact";
 }
@@ -213,16 +226,15 @@ function buildScopedExtensions(
 /**
  * Props for the inner single-mention renderer used by both modes.
  *
- * In list mode the parent `MentionView` builds per-item claim predicates
- * and focus monikers and passes them down; in single mode the caller's
- * props are forwarded directly.
+ * In list mode the parent `MentionView` mints a per-item moniker and
+ * passes it down so each pill is its own leaf in the spatial graph; in
+ * single mode the caller's props are forwarded directly.
  */
 interface SingleMentionProps {
   resolved: ResolvedMention;
   extensions: Extension[];
   className?: string;
   scopeMoniker: string;
-  claimWhen?: ClaimPredicate[];
   showFocusBar?: boolean;
   extraCommands?: CommandDef[];
 }
@@ -233,66 +245,32 @@ function SingleMention({
   extensions,
   className,
   scopeMoniker,
-  claimWhen,
   showFocusBar,
   extraCommands,
 }: SingleMentionProps) {
-  const commands = useEntityCommands(
-    resolved.entityType,
-    resolved.monikerId,
-    resolved.entity,
-    extraCommands,
-  );
-
   const doc = `${resolved.prefix}${resolved.slug}`;
 
   return (
-    <FocusScope
-      moniker={scopeMoniker}
-      commands={commands}
-      className="inline mention-pill-focus"
-      claimWhen={claimWhen}
-      showFocusBar={showFocusBar}
-    >
-      <TextViewer text={doc} extensions={extensions} className={className} />
-    </FocusScope>
+    // A mention pill represents a real entity reference (`task:<id>`,
+    // `tag:<id>`, etc.). Double-clicking the pill opens the inspector
+    // for that entity, matching the contract on `<EntityCard>` and
+    // `<ColumnView>`. The `<Inspectable>` wrapper owns inspector
+    // dispatch; the spatial primitive `<FocusScope>` stays
+    // pure-spatial. The architectural guard
+    // (`focus-architecture.guards.node.test.ts`, Guards B + C)
+    // enforces every entity-prefixed wrapper has an `<Inspectable>`
+    // ancestor.
+    <Inspectable moniker={asSegment(scopeMoniker)}>
+      <FocusScope
+        moniker={asSegment(scopeMoniker)}
+        commands={extraCommands}
+        className="inline"
+        showFocusBar={showFocusBar}
+      >
+        <TextViewer text={doc} extensions={extensions} className={className} />
+      </FocusScope>
+    </Inspectable>
   );
-}
-
-/**
- * Build per-item claim predicates so nav.left / nav.right moves focus
- * between sibling pills. The first pill also claims nav.right when the
- * parent field is focused (entering the list), matching BadgeListDisplay
- * behavior.
- */
-function buildListClaimPredicates(
-  pillMonikers: string[],
-  parentMoniker: string | null,
-): ClaimPredicate[][] {
-  return pillMonikers.map((_, i) => {
-    const predicates: ClaimPredicate[] = [];
-    // nav.right: claim when the previous sibling (or parent) is focused
-    if (i === 0 && parentMoniker) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === parentMoniker,
-      });
-    }
-    if (i > 0) {
-      predicates.push({
-        command: "nav.right",
-        when: (f) => f === pillMonikers[i - 1],
-      });
-    }
-    // nav.left: claim when the next sibling is focused
-    if (i < pillMonikers.length - 1) {
-      predicates.push({
-        command: "nav.left",
-        when: (f) => f === pillMonikers[i + 1],
-      });
-    }
-    return predicates;
-  });
 }
 
 /**
@@ -359,7 +337,6 @@ function MentionViewSingle({
       extensions={extensions}
       className={props.className}
       scopeMoniker={scopeMoniker}
-      claimWhen={props.claimWhen}
       showFocusBar={props.showFocusBar}
       extraCommands={props.extraCommands}
     />
@@ -371,17 +348,21 @@ function MentionViewList({
   resolved,
   extensions,
   pillMonikers,
-  listClaimPredicates,
-  mode,
   props,
 }: {
   resolved: ResolvedMention[];
   extensions: Extension[];
   pillMonikers: string[];
-  listClaimPredicates: ClaimPredicate[][] | null;
-  mode: "compact" | "full";
   props: MentionViewProps;
 }) {
+  // Pass `props.showFocusBar` through unchanged for both compact and full
+  // modes. An earlier revision hard-suppressed the focus bar in compact
+  // mode here, but that broke the contract that every leaf in the spatial
+  // graph (including a card-body pill) is a focusable item with a visible
+  // indicator. Callers that genuinely need suppression — e.g. a context
+  // where a parent zone already provides the visual cue — pass
+  // `showFocusBar={false}` explicitly. `<FocusScope>`'s default of `true`
+  // covers the common case without per-call-site boilerplate.
   return (
     <div className="flex flex-wrap gap-1.5">
       {resolved.map((r, i) => (
@@ -391,8 +372,7 @@ function MentionViewList({
           extensions={extensions}
           className={props.className}
           scopeMoniker={pillMonikers[i]}
-          claimWhen={listClaimPredicates?.[i]}
-          showFocusBar={mode === "full" ? props.showFocusBar : false}
+          showFocusBar={props.showFocusBar}
           extraCommands={props.extraCommands}
         />
       ))}
@@ -402,10 +382,8 @@ function MentionViewList({
 
 export function MentionView(props: MentionViewProps) {
   const { getEntities } = useEntityStore();
-  const parentMoniker = useParentFocusScope();
 
   const isListMode = props.items !== undefined;
-  const mode = props.mode ?? "full";
 
   const resolved = useResolvedMentions(props, isListMode);
 
@@ -417,14 +395,6 @@ export function MentionView(props: MentionViewProps) {
   const pillMonikers = useMemo(
     () => resolved.map((r) => buildMoniker(r.entityType, r.monikerId)),
     [resolved],
-  );
-
-  const listClaimPredicates = useMemo(
-    () =>
-      isListMode && mode === "full"
-        ? buildListClaimPredicates(pillMonikers, parentMoniker)
-        : null,
-    [isListMode, mode, pillMonikers, parentMoniker],
   );
 
   if (resolved.length === 0) return null;
@@ -445,8 +415,6 @@ export function MentionView(props: MentionViewProps) {
       resolved={resolved}
       extensions={extensions}
       pillMonikers={pillMonikers}
-      listClaimPredicates={listClaimPredicates}
-      mode={mode}
       props={props}
     />
   );

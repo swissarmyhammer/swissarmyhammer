@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNVSHYPEXZTXFZPEB8W5NPJP
 position_column: done
-position_ordinal: ffffffffffffffffffffffad80
+position_ordinal: fffffffffffffffffffffffffffff780
 project: expr-filter
 title: 'autocomplete: wire $project mention prefix for filter editor'
 ---

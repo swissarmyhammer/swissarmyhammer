@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffdc80
+position_ordinal: ffffffffff8b80
 title: '[WARNING] PLANNING_GUIDE.md partial replaces a slightly different "What" description line'
 ---
 ## What

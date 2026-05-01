@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffff480
+position_ordinal: ffffffffffffffffd980
 title: CopyTag, CutTag, PasteTag kernel operations
 ---
 ## What

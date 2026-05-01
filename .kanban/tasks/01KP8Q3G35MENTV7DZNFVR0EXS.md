@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffde80
+position_ordinal: ffffffffffffffffffffffffffffffd880
 title: Fix column width bounds — raise to 24em–48em and stop cards overflowing columns
 ---
 ## What

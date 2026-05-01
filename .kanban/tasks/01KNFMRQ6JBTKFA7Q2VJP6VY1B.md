@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffba80
+position_ordinal: ffffffffffffffffffffffffffe480
 title: 'WARNING: MultiSelectEditor accesses field.type properties with unsafe casts'
 ---
 **File**: kanban-app/ui/src/components/fields/editors/multi-select-editor.tsx\n\n**What**: Two lines access `field.type` with unsafe patterns:\n1. `const targetEntityType = field.type.entity as string | undefined;` — accesses the `entity` property of FieldType via index signature\n2. `const commitDisplayNames = !!(field.type as Record<string, unknown>).commit_display_names;` — explicit `as Record<string, unknown>` cast\n\nThe JS/TS review guidelines explicitly prohibit `as Record<string, unknown>` casts on field types: \"If you need a property from `field.type` (like `options`, `entity`, `derive`), it should be surfaced as a top-level field property or handled by the backend's `effective_*()` methods.\"\n\n**Why**: These properties should be surfaced as top-level FieldDef properties by the schema loader so the frontend doesn't need to reach into `field.type` with casts.\n\n**Suggestion**: Add `target_entity_type` and `commit_display_names` as top-level properties on FieldDef, populated by the backend schema loader from the field type config.\n\n**Subtasks**:\n- [ ] Add target_entity_type and commit_display_names to FieldDef and backend schema response\n- [ ] Update MultiSelectEditor to read from top-level properties\n- [ ] Verify fix by running tests #review-finding

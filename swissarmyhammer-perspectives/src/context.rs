@@ -114,13 +114,7 @@ impl PerspectiveContext {
         }
 
         // Update in-memory cache.
-        if let Some(&idx) = self.id_index.get(&perspective.id) {
-            self.perspectives[idx] = perspective.clone();
-        } else {
-            let idx = self.perspectives.len();
-            self.perspectives.push(perspective.clone());
-            self.id_index.insert(perspective.id.clone(), idx);
-        }
+        self.cache_upsert(perspective.clone());
 
         // Broadcast the change event. Compute the field-level diff so
         // consumers know which fields actually changed.
@@ -226,14 +220,7 @@ impl PerspectiveContext {
         };
 
         // Update in-memory cache.
-        let deleted = self.perspectives.swap_remove(idx);
-        self.id_index.remove(&deleted.id);
-
-        // Fix the index of the element that was swapped into `idx`
-        if idx < self.perspectives.len() {
-            let moved = &self.perspectives[idx];
-            self.id_index.insert(moved.id.clone(), idx);
-        }
+        let deleted = self.cache_remove_at(idx);
 
         // Broadcast the deletion event.
         let _ = self
@@ -274,11 +261,89 @@ impl PerspectiveContext {
         &self.root
     }
 
+    /// Refresh a single perspective's in-memory entry from disk.
+    ///
+    /// Used by post-undo / post-redo reconciliation after the store layer
+    /// has rewritten the on-disk YAML without going through [`write`](Self::write).
+    /// Mirrors the `EntityContext::sync_entity_cache_from_disk` contract
+    /// at the entity layer:
+    ///
+    /// - If the file exists and parses, replace the cached entry and emit
+    ///   [`PerspectiveEvent::PerspectiveChanged`] so downstream subscribers
+    ///   (Tauri bridge, frontend refresh) react. The `changed_fields` list
+    ///   is left empty to signal "unspecified — full refresh may be needed"
+    ///   because the pre-undo state in memory may have already been
+    ///   overwritten by the disk rewrite, so a meaningful field diff is
+    ///   not reliably computable here.
+    /// - If the file is absent (undo of a create, redo of a delete), evict
+    ///   the cached entry and emit [`PerspectiveEvent::PerspectiveDeleted`].
+    /// - If the file is absent and the cache also has no entry, this is a
+    ///   no-op — nothing to reconcile and no event is emitted.
+    ///
+    /// Parse failures on an existing file return an error. In-memory cache
+    /// state is not mutated when parsing fails.
+    pub async fn reload_from_disk(&mut self, id: &str) -> Result<()> {
+        let path = self.perspective_path(id);
+        if path.exists() {
+            let content = fs::read_to_string(&path).await?;
+            let perspective: Perspective = serde_yaml_ng::from_str(&content)?;
+            self.cache_upsert(perspective.clone());
+            let _ = self
+                .event_sender
+                .send(PerspectiveEvent::PerspectiveChanged {
+                    id: perspective.id,
+                    // Empty list signals "unspecified — consumers should
+                    // treat this as a full refresh."
+                    changed_fields: Vec::new(),
+                    is_create: false,
+                });
+        } else if let Some(&idx) = self.id_index.get(id) {
+            let _deleted = self.cache_remove_at(idx);
+            let _ = self
+                .event_sender
+                .send(PerspectiveEvent::PerspectiveDeleted { id: id.to_string() });
+        }
+        Ok(())
+    }
+
     // --- Internal ---
 
     /// Path to a perspective's YAML file.
     fn perspective_path(&self, id: &str) -> PathBuf {
         self.root.join(format!("{id}.yaml"))
+    }
+
+    /// Insert or replace a perspective in the in-memory cache.
+    ///
+    /// When the id is already known, overwrites the existing slot. When it
+    /// is new, appends and records the index. Shared by [`write`](Self::write)
+    /// and [`reload_from_disk`](Self::reload_from_disk) to keep the replace /
+    /// append logic in one place.
+    fn cache_upsert(&mut self, perspective: Perspective) {
+        if let Some(&idx) = self.id_index.get(&perspective.id) {
+            self.perspectives[idx] = perspective;
+        } else {
+            let idx = self.perspectives.len();
+            self.id_index.insert(perspective.id.clone(), idx);
+            self.perspectives.push(perspective);
+        }
+    }
+
+    /// Remove the perspective at the given in-cache index, returning the
+    /// removed value.
+    ///
+    /// Uses `swap_remove` for O(1) removal and fixes up the id-index of the
+    /// element that was swapped into the vacated slot. Shared by
+    /// [`delete`](Self::delete) and [`reload_from_disk`](Self::reload_from_disk)
+    /// to keep the swap-remove index-fixup logic in one place.
+    fn cache_remove_at(&mut self, idx: usize) -> Perspective {
+        let removed = self.perspectives.swap_remove(idx);
+        self.id_index.remove(&removed.id);
+        if idx < self.perspectives.len() {
+            let moved = &self.perspectives[idx];
+            self.id_index.insert(moved.id.clone(), idx);
+        }
+        removed
     }
 
     /// Load all YAML files from the root directory into memory.
@@ -1275,5 +1340,281 @@ mod tests {
             }
             other => panic!("expected PerspectiveChanged, got {other:?}"),
         }
+    }
+
+    // =========================================================================
+    // reload_from_disk tests — post-undo/redo cache reconciliation
+    // =========================================================================
+
+    /// After an external rewrite of a perspective's YAML (simulating what
+    /// `PerspectiveStore::undo_erased` does during an undo), `reload_from_disk`
+    /// must:
+    ///   1. Replace the in-memory cache entry with the on-disk state.
+    ///   2. Emit a `PerspectiveChanged` event so downstream subscribers
+    ///      (e.g. the Tauri bridge) can forward a refresh to the frontend.
+    #[tokio::test]
+    async fn reload_from_disk_syncs_cache_and_emits_event_on_file_change() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let mut ctx = PerspectiveContext::open(&dir).await.unwrap();
+
+        // Seed the cache with a perspective that has no group set.
+        let mut seeded = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint");
+        seeded.group = None;
+        ctx.write(&seeded).await.unwrap();
+
+        // Rewrite the YAML on disk directly — bypasses write() so the cache
+        // is now stale. This simulates what undo does when it reverses a
+        // previously-persisted state.
+        let mut rewritten = seeded.clone();
+        rewritten.group = Some("status".to_string());
+        let yaml = serde_yaml_ng::to_string(&rewritten).unwrap();
+        fs::write(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml"), yaml.as_bytes())
+            .await
+            .unwrap();
+
+        // Cache still shows the stale state.
+        assert_eq!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").unwrap().group,
+            None,
+            "cache must be stale before reload"
+        );
+
+        let mut rx = ctx.subscribe();
+
+        // Reload — cache must pick up the on-disk state.
+        ctx.reload_from_disk("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap()
+                .group
+                .as_deref(),
+            Some("status"),
+            "cache must be refreshed to match disk after reload"
+        );
+
+        // Event must have fired with is_create=false.
+        let evt = rx.try_recv().expect("reload must emit an event");
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(
+                    !is_create,
+                    "reload is never a create — the file already existed"
+                );
+                assert!(
+                    changed_fields.is_empty(),
+                    "reload emits empty changed_fields as the full-refresh marker"
+                );
+            }
+            other => panic!("expected PerspectiveChanged, got {other:?}"),
+        }
+    }
+
+    /// When the YAML file is deleted externally (simulating what
+    /// `PerspectiveStore::undo_erased` does when undoing a create),
+    /// `reload_from_disk` must:
+    ///   1. Evict the in-memory cache entry.
+    ///   2. Emit a `PerspectiveDeleted` event.
+    #[tokio::test]
+    async fn reload_from_disk_evicts_cache_and_emits_deleted_on_file_absence() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let mut ctx = PerspectiveContext::open(&dir).await.unwrap();
+
+        // Seed a perspective.
+        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Ghost"))
+            .await
+            .unwrap();
+        assert!(ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_some());
+
+        // Remove the file behind the cache's back.
+        fs::remove_file(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml"))
+            .await
+            .unwrap();
+
+        let mut rx = ctx.subscribe();
+
+        ctx.reload_from_disk("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap();
+
+        assert!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_none(),
+            "cache entry must be evicted after reload when file is gone"
+        );
+
+        let evt = rx.try_recv().expect("reload must emit an event");
+        match evt {
+            PerspectiveEvent::PerspectiveDeleted { id } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+            }
+            other => panic!("expected PerspectiveDeleted, got {other:?}"),
+        }
+    }
+
+    /// Undo-of-delete reconciliation: delete a perspective (cache + disk
+    /// gone), then simulate the store-level undo by rewriting the YAML back
+    /// to disk. `reload_from_disk` must see the reappearing file, re-insert
+    /// the perspective into the cache, and fire `PerspectiveChanged` with
+    /// `is_create: false` so the Tauri bridge can translate it into an
+    /// `entity-field-changed` signal for the frontend refetch.
+    ///
+    /// This is the mirror image of
+    /// `reload_from_disk_evicts_cache_and_emits_deleted_on_file_absence`:
+    /// the delete branch and the undo-of-delete branch use the same method,
+    /// so both directions must be pinned. Without this coverage, a future
+    /// edit that skips the file-exists branch (e.g. returning early for any
+    /// id not already in `id_index`) would silently break delete-undo while
+    /// leaving the more-exercised field-edit-undo paths green.
+    #[tokio::test]
+    async fn reload_from_disk_reinserts_previously_deleted_perspective() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let mut ctx = PerspectiveContext::open(&dir).await.unwrap();
+
+        // Create a perspective with a distinguishing field value so the
+        // post-undo cache state is easy to assert against.
+        let mut seeded = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint");
+        seeded.group = Some("status".to_string());
+        seeded.filter = Some("#bug".to_string());
+        ctx.write(&seeded).await.unwrap();
+
+        // Delete — this removes the cache entry AND deletes the file. Mirrors
+        // the path `perspective.delete` takes through `PerspectiveContext`.
+        ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        assert!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_none(),
+            "cache must be empty after delete"
+        );
+        assert!(
+            !dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists(),
+            "file must be gone after delete"
+        );
+
+        // Subscribe AFTER the delete so the post-reload event is the first
+        // thing the receiver sees — no drained noise from create/delete.
+        let mut rx = ctx.subscribe();
+
+        // Rewrite the YAML back to disk (simulating what
+        // `PerspectiveStore::undo_erased` does when undoing a delete).
+        let yaml = serde_yaml_ng::to_string(&seeded).unwrap();
+        fs::write(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml"), yaml.as_bytes())
+            .await
+            .unwrap();
+
+        // Reload — cache must re-insert the perspective and emit an event.
+        ctx.reload_from_disk("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap();
+
+        let restored = ctx
+            .get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .expect("cache must contain the re-inserted perspective after reload");
+        assert_eq!(restored.name, "Sprint");
+        assert_eq!(restored.group.as_deref(), Some("status"));
+        assert_eq!(restored.filter.as_deref(), Some("#bug"));
+
+        // A `PerspectiveChanged` event must have fired with `is_create: false`.
+        // `is_create: true` would be wrong here — the perspective already had
+        // an id on disk before the reload; the create-emit path is reserved
+        // for truly new entities. A `PerspectiveDeleted` event would also be
+        // wrong — the file reappeared, so the post-undo state is "present."
+        let evt = rx
+            .try_recv()
+            .expect("reload must emit an event when the file reappears");
+        match evt {
+            PerspectiveEvent::PerspectiveChanged {
+                id,
+                changed_fields,
+                is_create,
+            } => {
+                assert_eq!(id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+                assert!(
+                    !is_create,
+                    "reload must emit is_create=false; the frontend treats post-undo events as refetch signals, not creates"
+                );
+                assert!(
+                    changed_fields.is_empty(),
+                    "reload emits empty changed_fields as the full-refresh marker"
+                );
+            }
+            other => panic!("expected PerspectiveChanged from reload, got {other:?}"),
+        }
+    }
+
+    /// When both the cache and disk have no entry for the id, `reload_from_disk`
+    /// is a no-op: no cache mutation, no event emitted. Prevents spurious
+    /// deleted events for ids that were never present.
+    #[tokio::test]
+    async fn reload_from_disk_is_noop_when_file_and_cache_both_absent() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let mut ctx = PerspectiveContext::open(&dir).await.unwrap();
+
+        let mut rx = ctx.subscribe();
+
+        // id is unknown to both cache and disk — must be a no-op.
+        ctx.reload_from_disk("01ZZZZZZZZZZZZZZZZZZZZZZZZ")
+            .await
+            .unwrap();
+
+        assert!(
+            rx.try_recv().is_err(),
+            "reload must not emit an event when there is nothing to reconcile"
+        );
+        assert!(ctx.all().is_empty(), "cache must remain empty");
+    }
+
+    /// End-to-end undo reconciliation: write a perspective, mutate it, then
+    /// roll back on disk via the store's undo path and call `reload_from_disk`.
+    /// The cache must see the pre-mutation state afterwards.
+    #[tokio::test]
+    async fn reload_from_disk_reflects_store_undo() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle, sc) = setup_with_undo(&dir).await;
+
+        // Write the initial state.
+        let mut p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint");
+        p.group = None;
+        ctx.write(&p).await.unwrap();
+
+        // Mutate — add a group.
+        p.group = Some("status".to_string());
+        ctx.write(&p).await.unwrap();
+
+        // Confirm the cache reflects the mutation.
+        assert_eq!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap()
+                .group
+                .as_deref(),
+            Some("status"),
+            "cache must reflect the second write before undo"
+        );
+
+        // Undo via the store layer — this rewrites the YAML to the pre-mutation
+        // state but does not touch the in-memory cache.
+        sc.undo().await.unwrap();
+
+        // Cache is now stale: it still has group=Some("status") while disk
+        // has group=None. reload_from_disk should fix the cache.
+        ctx.reload_from_disk("01AAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").unwrap().group,
+            None,
+            "cache must reflect the post-undo on-disk state after reload"
+        );
     }
 }

@@ -40,6 +40,7 @@ members = [
     "swissarmyhammer-doctor",
     "swissarmyhammer-treesitter",
     "swissarmyhammer-leader-election",
+    "swissarmyhammer-focus",
     "swissarmyhammer-kanban",
     "swissarmyhammer-lsp",
     "swissarmyhammer-code-context",
@@ -261,6 +262,7 @@ swissarmyhammer-entity = { path = "swissarmyhammer-entity" }
 swissarmyhammer-entity-search = { path = "swissarmyhammer-entity-search" }
 swissarmyhammer-fields = { path = "swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "swissarmyhammer-filter-expr" }
+swissarmyhammer-focus = { path = "swissarmyhammer-focus" }
 swissarmyhammer-git = { path = "swissarmyhammer-git" }
 swissarmyhammer-js = { path = "swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "swissarmyhammer-kanban" }

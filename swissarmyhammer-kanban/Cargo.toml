@@ -23,6 +23,7 @@ open = "5"
 
 # Local workspace dependencies
 swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-views = { workspace = true }
@@ -35,10 +36,22 @@ swissarmyhammer-filter-expr = { workspace = true }
 include_dir = { workspace = true }
 fractional_index = "2.0.2"
 
+[features]
+# Exposes test-only helpers (e.g. `test_support::composed_builtin_yaml_sources`)
+# to integration tests and downstream crates. Enabled automatically for this
+# crate's own tests via the dev-dependency below. No extra dependencies.
+test-support = []
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+# Enable our own `test-support` feature so integration tests under `tests/`
+# can import `swissarmyhammer_kanban::test_support::*` helpers without the
+# individual test file needing a feature gate.
+swissarmyhammer-kanban = { path = ".", features = ["test-support"] }
+# Serialize tests that mutate process-wide env vars (e.g. XDG_CONFIG_HOME).
+serial_test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 
 [[bench]]

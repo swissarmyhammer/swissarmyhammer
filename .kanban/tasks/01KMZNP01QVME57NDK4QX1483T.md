@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffffffffffffd80
+position_ordinal: ffffffffffffffffe280
 title: Generate dynamic view and board switch commands from runtime data
 ---
 ## What

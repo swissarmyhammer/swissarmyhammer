@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffba80
+position_ordinal: ffffffffffffffffffb580
 title: Open attachments via double-click and right-click context menu
 ---
 ## What

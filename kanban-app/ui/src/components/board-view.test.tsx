@@ -9,6 +9,9 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
+import { FocusLayer } from "./focus-layer";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { asSegment } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -90,22 +93,26 @@ const tasks: Entity[] = [
 
 function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
   const result = render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              <DragSessionProvider>
-                <BoardView
-                  board={overrides?.board ?? board}
-                  tasks={overrides?.tasks ?? tasks}
-                />
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/board">
+                  <DragSessionProvider>
+                    <BoardView
+                      board={overrides?.board ?? board}
+                      tasks={overrides?.tasks ?? tasks}
+                    />
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
   return result;
 }
@@ -196,29 +203,33 @@ describe("BoardView scrollContainer layout", () => {
 
     try {
       const { container } = render(
-        <EntityFocusProvider>
-          <SchemaProvider>
-            <EntityStoreProvider entities={{}}>
-              <TooltipProvider>
-                <ActiveBoardPathProvider value="/test/wide">
-                  <DragSessionProvider>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: "1 1 0%",
-                        minHeight: 0,
-                        minWidth: 0,
-                      }}
-                    >
-                      <BoardView board={wideBoard} tasks={manyTasks} />
-                    </div>
-                  </DragSessionProvider>
-                </ActiveBoardPathProvider>
-              </TooltipProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <SchemaProvider>
+                <EntityStoreProvider entities={{}}>
+                  <TooltipProvider>
+                    <ActiveBoardPathProvider value="/test/wide">
+                      <DragSessionProvider>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            flex: "1 1 0%",
+                            minHeight: 0,
+                            minWidth: 0,
+                          }}
+                        >
+                          <BoardView board={wideBoard} tasks={manyTasks} />
+                        </div>
+                      </DragSessionProvider>
+                    </ActiveBoardPathProvider>
+                  </TooltipProvider>
+                </EntityStoreProvider>
+              </SchemaProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
         { container: host },
       );
 
@@ -269,7 +280,7 @@ describe("BoardView add task", () => {
     expect(buttons[0].getAttribute("aria-label")).toMatch(/todo/i);
   });
 
-  it("shows toast error when task.add dispatch fails", async () => {
+  it("shows toast error when entity.add:task dispatch fails", async () => {
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === "dispatch_command") {
         return Promise.reject(new Error("Column not found"));
@@ -286,5 +297,40 @@ describe("BoardView add task", () => {
         expect.stringContaining("Column not found"),
       );
     });
+  });
+
+  it("routes the column (+) button through the unified entity.add:task command", async () => {
+    // Regression guard for the "one true creation path" refactor: the board
+    // column (+) button must NOT dispatch the legacy `task.add` — it must go
+    // through `entity.add:task` with a `column` arg, the same path the grid
+    // (+) and the palette use. This keeps creation logic in one place
+    // (AddEntity on the Rust side) across every UI entry point.
+    const invokeMock = invoke as ReturnType<typeof vi.fn>;
+    invokeMock.mockClear();
+    renderBoard();
+
+    const btn = screen.getByRole("button", { name: /add task/i });
+    fireEvent.click(btn);
+
+    const findDispatchByCmd = (cmd: string) =>
+      invokeMock.mock.calls.find(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as { cmd?: string } | undefined)?.cmd === cmd,
+      );
+
+    await waitFor(() => {
+      const call = findDispatchByCmd("entity.add:task");
+      expect(call).toBeTruthy();
+      const payload = call?.[1] as
+        | { cmd?: string; args?: Record<string, unknown> }
+        | undefined;
+      // The `column` override must be forwarded so the new task lands in the
+      // column the user clicked, not the default lowest-order column.
+      expect(payload?.args).toMatchObject({ column: "col-todo" });
+    });
+
+    // The legacy task.add dispatch must NOT fire from the column (+) button.
+    expect(findDispatchByCmd("task.add")).toBeUndefined();
   });
 });

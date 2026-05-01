@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffea80
+position_ordinal: ffffffffffffffffce80
 title: ClipboardProvider trait + system clipboard integration
 ---
 ## What

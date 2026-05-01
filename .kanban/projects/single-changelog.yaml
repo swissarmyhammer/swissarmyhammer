@@ -1,0 +1,3 @@
+color: 3b82f6
+description: Unified storage with diff and undo. Collapse the workspace's three parallel changelog/undo systems (entity dual-writer, views whole-doc snapshots, store text patches) onto a single `swissarmyhammer-store::ChangelogEntry` writer per file, a single `undo_stack.yaml`, and a single replay-on-read projection for field-level history. Delete orphan undo/log code (entity::undo_stack module, kanban append_*_log family, operations::write_log no-op trait method) and orphaned on-disk data (.kanban/activity, .kanban/swimlanes, .kanban/views.jsonl).
+name: Single Changelog

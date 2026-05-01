@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffff9f80
+position_ordinal: fffffffffffffff480
 title: EntityCard Info button calls inspectEntity() directly instead of dispatching entity.inspect command
 ---
 **File:** `kanban-app/ui/src/components/entity-card.tsx`, lines 138-148\n\n**Anti-pattern:** The Info button (i icon) in EntityCard calls `inspectEntity(entityMoniker)` directly via the `useInspect()` hook, bypassing the command scope chain. The `entity.inspect` command is already registered in the FocusScope's commands (via `useEntityCommands`), but the click handler ignores it.\n\n**Current code:**\n```tsx\n<button onClick={(e) => {\n  e.stopPropagation();\n  inspectEntity(entityMoniker);\n}}>\n```\n\n**Correct pattern:** Should resolve and dispatch the `entity.inspect` command through the scope chain, like `focus-scope.tsx` does for double-click:\n```tsx\nconst cmd = resolveCommand(scope, \"entity.inspect\");\nif (cmd) dispatchCommand(cmd);\n```\n\nOr use `useExecuteCommand()` to resolve through the chain.\n\n**Severity:** Warning. Works correctly today because the direct call and the command handler do the same thing, but it means the Info button is invisible to command logging, menu sync, and any middleware that intercepts command dispatch.\n\n**Scope chain impact:** Commands dispatched through the scope chain get logged via `log_command` in Rust. The direct `inspectEntity()` call skips this entirely. #review-finding

@@ -16,6 +16,25 @@ use crate::event::ChangeEvent;
 use crate::id::{StoredItemId, UndoEntryId};
 use crate::stack::UndoStack;
 
+/// The concrete target an undo or redo touched.
+///
+/// Returned from [`StoreContext::undo`] / [`StoreContext::redo`] so callers
+/// that maintain caches parallel to the on-disk store (e.g. the entity-layer
+/// cache) can synchronize the single affected item without re-scanning the
+/// whole store.
+///
+/// `store_name` is the underlying store's human-readable name (e.g.
+/// `"task"`, `"tag"`) as returned by [`ErasedStore::store_name`].
+/// `item_id` is the identifier of the item whose changelog was rewound /
+/// replayed.
+#[derive(Debug, Clone)]
+pub struct UndoOutcome {
+    /// Name of the store that owned the entry (e.g. `"task"`, `"tag"`).
+    pub store_name: String,
+    /// Identifier of the item whose state was reversed or reapplied.
+    pub item_id: StoredItemId,
+}
+
 /// Central coordinator for multiple file-backed stores.
 ///
 /// Manages a shared undo/redo stack and dispatches operations to the
@@ -69,7 +88,11 @@ impl StoreContext {
     /// the undo to it. Updates the stack pointer and persists.
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the undo operation.
-    pub async fn undo(&self) -> Result<()> {
+    ///
+    /// Returns an [`UndoOutcome`] identifying the store and item whose
+    /// on-disk state was reversed, so the caller can reconcile any
+    /// higher-level caches it maintains over those files.
+    pub async fn undo(&self) -> Result<UndoOutcome> {
         let (target_id, item_id) = {
             let stack = self.stack.read().await;
             let entry = stack
@@ -92,11 +115,12 @@ impl StoreContext {
         };
         // Lock released here
 
-        if let Some(store) = store {
-            store.undo_erased(&target_id, &item_id).await?;
-        } else {
+        let Some(store) = store else {
             return Err(StoreError::NoProvider(target_id.to_string()));
-        }
+        };
+
+        store.undo_erased(&target_id, &item_id).await?;
+        let store_name = store.store_name().to_string();
 
         let mut stack = self.stack.write().await;
         stack.record_undo();
@@ -104,7 +128,10 @@ impl StoreContext {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
 
-        Ok(())
+        Ok(UndoOutcome {
+            store_name,
+            item_id,
+        })
     }
 
     /// Redo the most recently undone operation.
@@ -113,7 +140,11 @@ impl StoreContext {
     /// the redo to it. Updates the stack pointer and persists.
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the redo operation.
-    pub async fn redo(&self) -> Result<()> {
+    ///
+    /// Returns an [`UndoOutcome`] identifying the store and item whose
+    /// on-disk state was reapplied, so the caller can reconcile any
+    /// higher-level caches it maintains over those files.
+    pub async fn redo(&self) -> Result<UndoOutcome> {
         let (target_id, item_id) = {
             let stack = self.stack.read().await;
             let entry = stack
@@ -136,11 +167,12 @@ impl StoreContext {
         };
         // Lock released here
 
-        if let Some(store) = store {
-            store.redo_erased(&target_id, &item_id).await?;
-        } else {
+        let Some(store) = store else {
             return Err(StoreError::NoProvider(target_id.to_string()));
-        }
+        };
+
+        store.redo_erased(&target_id, &item_id).await?;
+        let store_name = store.store_name().to_string();
 
         let mut stack = self.stack.write().await;
         stack.record_redo();
@@ -148,7 +180,10 @@ impl StoreContext {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
 
-        Ok(())
+        Ok(UndoOutcome {
+            store_name,
+            item_id,
+        })
     }
 
     /// Whether there is an operation that can be undone.
@@ -159,6 +194,17 @@ impl StoreContext {
     /// Whether there is an operation that can be redone.
     pub async fn can_redo(&self) -> bool {
         self.stack.read().await.can_redo()
+    }
+
+    /// Number of entries currently available to undo.
+    ///
+    /// Equivalent to counting how many successful `undo()` calls could be
+    /// performed right now without error. Exposed primarily for tests that
+    /// need a cheap read-only probe of stack depth — driving real
+    /// `undo`/`redo` round-trips to measure depth is correct but fragile
+    /// (if any probed `redo` fails the stack is left inconsistent).
+    pub async fn undo_depth(&self) -> usize {
+        self.stack.read().await.pointer()
     }
 
     /// Flush changes from all registered stores and aggregate events.

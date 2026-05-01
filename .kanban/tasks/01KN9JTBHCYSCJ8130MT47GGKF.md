@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffff80
+position_ordinal: fffffffffffffffffffffffff680
 title: Replace native `title` tooltip on perspective + button with shadcn Tooltip
 ---
 ## What

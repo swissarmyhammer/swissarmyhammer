@@ -117,6 +117,9 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -145,7 +148,7 @@ let currentEntity: Entity = makeEntity();
 
 function renderCard(ui: React.ReactElement) {
   return render(
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0}>
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
           <EntityFocusProvider>
@@ -279,7 +282,7 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
-    const card = container.querySelector("[data-moniker='task:task-1']")!;
+    const card = container.querySelector("[data-segment='task:task-1']")!;
     await act(async () => {
       fireEvent.contextMenu(card);
       // Flush the promise chain (list_commands_for_scope → show_context_menu)
@@ -318,62 +321,92 @@ describe("EntityCard", () => {
   });
 
   describe("field icon tooltips", () => {
-    it("wraps the icon for a described field in a tooltip trigger labelled by the description", async () => {
+    // After card 01KQAWV9C5F8Y3AA0KDDHHRRN1, card fields render through
+    // `<Field withIcon />` (matching the inspector path). The icon badge is
+    // `<FieldIconBadge>` rendered *inside* the field's `<FocusZone>` — its
+    // outer span carries `data-slot="tooltip-trigger"` (set by Radix's
+    // `<TooltipTrigger asChild>`) and the description text lives in the
+    // separately-mounted `<TooltipContent>` rather than as `aria-label` on
+    // the trigger span. Tests below are restated in terms of the new
+    // shared shape.
+    it("renders an icon badge whose tooltip body is the field's static description", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The tags field has icon + description "Task tags" — the icon span
-      // should be the trigger element and carry aria-label="Task tags".
-      const trigger = container.querySelector(
-        'span[aria-label="Task tags"]',
+      // The tags field has icon=tag and description="Task tags" — the
+      // `<FieldIconBadge>` trigger lives inside the field zone wrapper, and
+      // hovering it must surface the description text via Radix's
+      // `<TooltipContent>`. Pins the static-description path
+      // (`field.description` → tooltip body) inside `resolveFieldIconAndTip`.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.tags"]',
+      ) as HTMLElement | null;
+      expect(fieldZone).toBeTruthy();
+      const trigger = fieldZone!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
       ) as HTMLElement | null;
       expect(trigger).toBeTruthy();
-      // Radix wires the trigger role/data-slot through asChild.
-      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+
+      await act(async () => {
+        fireEvent.pointerEnter(trigger!);
+        fireEvent.focus(trigger!);
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Radix renders tooltip content into a portal off the document body.
+      const allText = document.body.textContent ?? "";
+      expect(
+        allText.includes("Task tags"),
+        `tooltip body should include the field description "Task tags". document text: ${allText}`,
+      ).toBe(true);
     });
 
-    it("falls back to a humanized field name when the field has no description", async () => {
+    it("falls back to the humanized field name when the field has no description (e.g. progress)", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The progress field has an icon but no description — the tooltip
-      // label should be the humanized field name ("progress").
-      const trigger = container.querySelector(
-        'span[aria-label="progress"]',
+      // The progress field has icon=clock but no `description` — the
+      // tooltip body must fall back to the humanized field name
+      // (`field.name.replace(/_/g, " ")` → "progress"). Pins the fallback
+      // branch in `resolveFieldIconAndTip`.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.progress"]',
+      ) as HTMLElement | null;
+      expect(fieldZone).toBeTruthy();
+      const trigger = fieldZone!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
       ) as HTMLElement | null;
       expect(trigger).toBeTruthy();
-      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+
+      await act(async () => {
+        fireEvent.pointerEnter(trigger!);
+        fireEvent.focus(trigger!);
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      const allText = document.body.textContent ?? "";
+      expect(
+        allText.includes("progress"),
+        `tooltip body should include the humanized field name "progress". document text: ${allText}`,
+      ).toBe(true);
     });
 
-    it("does not render a tooltip wrapper for fields without an icon", async () => {
+    it("does not render an icon badge for fields without an icon", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The title field has no icon in the schema — no tooltip trigger
-      // labelled "title" should exist.
-      expect(container.querySelector('span[aria-label="title"]')).toBeNull();
-    });
-
-    it("CardFieldIcon renders icon wrapper with h-4 and items-center for line-height alignment", async () => {
-      // The tags field has icon + description "Task tags". The icon wrapper
-      // span should use h-4 (matching text-xs's 16px line-height) and
-      // items-center to vertically center the 12px icon, rather than a
-      // fragile mt-0.5 offset.
-      currentEntity = makeEntity();
-      const { container } = await renderWithProvider(
-        <EntityCard entity={currentEntity} />,
-      );
-      const trigger = container.querySelector(
-        'span[aria-label="Task tags"]',
+      // The title field has no icon — its field zone must not contain a
+      // tooltip-trigger badge.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.title"]',
       ) as HTMLElement | null;
-      expect(trigger).toBeTruthy();
-      expect(trigger!.className).toContain("h-4");
-      expect(trigger!.className).toContain("items-center");
-      // The old mt-0.5 hack should be gone
-      expect(trigger!.className).not.toContain("mt-0.5");
+      expect(fieldZone).toBeTruthy();
+      expect(
+        fieldZone!.querySelector('span[data-slot="tooltip-trigger"]'),
+      ).toBeNull();
     });
   });
 
@@ -607,6 +640,124 @@ describe("EntityCard", () => {
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();
+    });
+  });
+
+  /**
+   * Tests that mount the card inside the full spatial-focus stack so the
+   * underlying `<FocusScope>` primitive registers with the Rust-side
+   * spatial graph via the mocked `invoke`.
+   *
+   * The card body is a `<FocusScope>` (leaf), NOT a `<FocusZone>`. This
+   * is what enables the unified cascade's iter-0 / iter-1 trajectory:
+   * pressing right on a card in column A runs iter 0 against in-column
+   * card peers, and when no peer satisfies the beam test the cascade
+   * escalates to iter 1 — the card's parent column zone — and lands on
+   * the neighbouring column zone (which the React adapter drills back
+   * into). See the docstring on `<EntityCard>`.
+   */
+  describe("spatial registration as a FocusScope", () => {
+    /** Render with the full spatial-focus + focus-layer stack. */
+    function renderCardWithSpatial(ui: React.ReactElement) {
+      return render(
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <SpatialFocusProvider>
+                      <FocusLayer name={asSegment("window")}>{ui}</FocusLayer>
+                    </SpatialFocusProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>,
+      );
+    }
+
+    async function renderWithSpatial(ui: React.ReactElement) {
+      const result = renderCardWithSpatial(ui);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      return result;
+    }
+
+    it("registers the card body as a FocusScope (leaf) with the entity moniker", async () => {
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const scopeCalls = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_scope")
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(scopeCalls.find((a) => a.segment === "task:task-1")).toBeTruthy();
+    });
+
+    it("does not register the card root as a FocusZone — the card is a leaf, not a zone", async () => {
+      // Cards must register as leaves so the unified cascade's iter-0 /
+      // iter-1 trajectory works as the user expects: iter 0 finds
+      // in-column card peers; iter 1 escalates to the card's parent
+      // column zone and lands on the neighbouring column zone. If the
+      // card ever flips back to being a zone, iter 0 would consider
+      // sibling zones only and trap focus in the column. See the
+      // docstring on `<EntityCard>` and the kernel test
+      // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const zoneCalls = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_zone")
+        .map((c) => c[1] as Record<string, unknown>);
+      expect(
+        zoneCalls.find((a) => a.segment === "task:task-1"),
+      ).toBeUndefined();
+    });
+
+    it("the card scope's parent_zone follows the enclosing FocusZone (null when none, here the layer root)", async () => {
+      // The card is a leaf (`<FocusScope>`) — it does NOT push a
+      // `FocusZoneContext.Provider`. Its own `parentZone` is whatever
+      // `useParentZoneFq()` returns at the call site. In this isolated
+      // harness there is no surrounding `<FocusZone>`, so the card's
+      // parent zone is null. In production the card is wrapped by a
+      // `column:` `<FocusZone>` and that zone's spatial key flows
+      // through here — pinning the column-as-parent contract that the
+      // unified cascade's iter-1 escalation relies on (iter 1 reads the
+      // card's `parentZone` to find the neighbouring column zone for
+      // cross-column nav).
+      currentEntity = makeEntity();
+      await renderWithSpatial(<EntityCard entity={currentEntity} />);
+      const cardScope = mockInvoke.mock.calls
+        .filter((c) => c[0] === "spatial_register_scope")
+        .map((c) => c[1] as Record<string, unknown>)
+        .find((a) => a.segment === "task:task-1");
+      expect(cardScope).toBeTruthy();
+      expect(cardScope!.parentZone).toBeNull();
+      // Anchored to the window layer the FocusLayer wrapper provides.
+      expect(cardScope!.layerFq).toBeTruthy();
+    });
+
+    it("clicking the card body invokes spatial_focus and does not dispatch ui.inspect directly", async () => {
+      currentEntity = makeEntity();
+      const { container } = await renderWithSpatial(
+        <EntityCard entity={currentEntity} />,
+      );
+      mockInvoke.mockClear();
+      const card = container.querySelector("[data-segment='task:task-1']")!;
+      fireEvent.click(card);
+      // The primitive's click handler routes through `spatial_focus`.
+      const focusCall = mockInvoke.mock.calls.find(
+        (c) => c[0] === "spatial_focus",
+      );
+      expect(focusCall).toBeTruthy();
+      // Inspect is now a separate Space-bound command at app level —
+      // a bare card click must not dispatch ui.inspect.
+      const inspectCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+      );
+      expect(inspectCall).toBeUndefined();
     });
   });
 });

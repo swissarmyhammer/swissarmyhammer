@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM621VQF672VCZ26S8DG350S
 position_column: done
-position_ordinal: ffffffffffb280
+position_ordinal: fffffffffffb80
 title: 'Test: undo/redo cycle for archive and unarchive operations'
 ---
 ## What

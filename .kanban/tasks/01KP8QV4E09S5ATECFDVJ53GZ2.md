@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffd880
+position_ordinal: ffffffffffffffffffffffffffffffcf80
 title: Unify Rust ordinal placement — DoThisNextCmd uses MoveTask.with_before(), delete duplicated drag command logic
 ---
 ## What

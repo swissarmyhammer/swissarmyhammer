@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffff8a80
+position_ordinal: ffffffffffffd880
 title: Rename FieldPlaceholderEditor to TextEditor
 ---
 ## What

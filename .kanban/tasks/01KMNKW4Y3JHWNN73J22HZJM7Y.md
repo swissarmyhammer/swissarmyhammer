@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMNKVP34WXDENDCKES86JKXC
 position_column: done
-position_ordinal: ffffffffffffca80
+position_ordinal: ffffffffffffffa080
 title: Create DropZone React component + tests
 ---
 ## What

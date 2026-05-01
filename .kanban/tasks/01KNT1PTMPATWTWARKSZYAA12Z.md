@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNT1PDFJHP3SAYVQKFFK39GW
 position_column: done
-position_ordinal: ffffffffffffffffffffffe080
+position_ordinal: ffffffffffffffffffffffffffffffdb80
 project: null
 title: Implement incremental invalidation for symbol tracking
 ---

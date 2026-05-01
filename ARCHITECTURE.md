@@ -24,6 +24,8 @@ Crates are organized in dependency tiers. A crate may only depend on crates in t
 
 **The key structural constraint**: Application libraries have no knowledge of Tauri, React, or any specific CLI framework. They are pure domain libraries. The Tauri app and CLI tools are thin wiring layers over the engines.
 
+**Spatial focus engine — `swissarmyhammer-focus`**: The headless spatial-navigation kernel lives at Tier 0. It owns the focus state machine, the registry of focusable scopes, and the pluggable extension traits (`NavStrategy`, `FocusEventSink`) — but knows nothing about kanban tasks, columns, or boards. Its surface is intentionally generic: a pair of distinct branded newtypes — `FullyQualifiedMoniker` (a path through the focus hierarchy that uniquely identifies a scope) and `SegmentMoniker` (a single hierarchy step appended into a parent's path) — plus abstract `Rect`s and `WindowLabel`s. The path-monikers identity model (see kanban task `01KQD6064G1C1RAXDFPJVT1F46` for rationale) is what eliminates the duplicate-registration ambiguity that flat string monikers used to surface as "nav crosses layers". Its only workspace dependency is `swissarmyhammer-common` (for `define_id!`). Adapters in `kanban-app/src/commands.rs` translate Tauri window events into focus-engine calls and emit `FocusChangedEvent`s back to React; the kanban-specific helper `resolve_focused_column` is the small piece of focus code that *does* know about kanban and stays in `swissarmyhammer-kanban`. This split is what lets the same focus engine drive any future tier-4 application without dragging kanban semantics in.
+
 ### Virtual File System and Content Stacking
 
 The `VirtualFileSystem` (`swissarmyhammer-directory`) is a foundational abstraction. It stacks three directory layers with precedence:
@@ -650,7 +652,7 @@ useDispatchCommand("task.add")
     boardPath: "/path/to/.kanban"
   })
   │
-  ├── Prefix rewrite (view.switch:* → ui.view.set)
+  ├── Prefix rewrite (view.switch:* → view.set)
   ├── Look up CommandDef + Command impl
   ├── Build CommandContext with extensions
   ├── Check available(), execute()
@@ -672,16 +674,20 @@ Command execution
   │
   React event listeners
   │
-  ├── Structural types (column, swimlane) → full refresh
-  ├── Entity types (task, tag) → re-fetch via get_entity
-  └── EntityStoreProvider diffs by field → re-render only changed fields
+  ├── Structural types (column, swimlane) → full refresh via list_entities
+  ├── entity-created → upsert from payload fields (fallback to get_entity if empty)
+  ├── entity-field-changed → patch field(s) in place from payload {field, value} pairs
+  ├── entity-removed → remove by id from store
+  └── EntityStoreProvider diffs by field → notify only subscribers whose field changed
 ```
 
-Events are **signals to re-fetch**, not data carriers. The backend is always the source of truth.
+For entity-level events (`entity-created`, `entity-field-changed`, `entity-removed`), the payload **is** the data — the handlers in `rust-engine-container.tsx` (`handleEntityCreated`, `handleEntityFieldChanged`, `handleEntityRemoved`) patch the entity store in place without re-fetching. Field cells subscribe via `useFieldValue(entityType, id, fieldName)` and redraw locally when `FieldSubscriptions.diff` notifies their specific `entityType:id:fieldName` key. The backend `EntityCache` remains the source of truth — the frontend store is a replicated projection kept in sync by the event stream, not a cache that needs refreshing on every change. Structural changes (columns, swimlanes) are the exception and still trigger a full `list_entities` refresh. The grid-nav regression test (`kanban-app/ui/src/components/grid-view.nav-is-eventdriven.test.tsx`) enforces that pure navigation never triggers a data-fetch IPC.
 
 ##### Field-Level Subscriptions
 
 The `EntityStoreProvider` holds all entities keyed by type. The `FieldSubscriptions` class manages per-field subscriptions via `useSyncExternalStore`. When entities change, it diffs old vs new by field value (deep equality), notifying only subscribers whose specific field changed. A task card whose `title` changes does not re-render if only `ordinal` was updated.
+
+The same `Map<key, Set<cb>>` pattern is applied to focus via `FocusStore`, keyed by moniker; see `kanban-app/ui/src/lib/entity-focus-context.tsx`. A single arrow-key press in the grid wakes exactly the two FocusScopes whose focus state flipped (losing cell + gaining cell) rather than all ~12k cells.
 
 ##### CodeMirror 6 as the Editor
 
@@ -702,7 +708,7 @@ When a new editing context needs different behavior, add a prop to `TextEditor` 
 
 - **Single Dispatch Path**: ALL state mutations route through `dispatch_command`. This gives every mutation undo/redo, event emission, UIState persistence, and audit logging for free.
 - **Container / View Separation**: Containers own state and scope. Views take props and render. Never mix the two roles in one component.
-- **Events as Signals**: Backend events trigger re-fetch, not state push. The frontend never trusts event payloads as authoritative data.
+- **Events Carry Data for Entity Changes**: `entity-created` / `entity-field-changed` / `entity-removed` payloads are patched into the frontend store in place — no re-fetch. Structural events (column/swimlane adds or removes) still trigger a `list_entities` refresh. The backend `EntityCache` remains authoritative; the frontend store is a replicated projection kept in sync by the event stream.
 - **Scope Chain = Situational Awareness**: Commands know where they're invoked via the moniker chain. The same command behaves differently based on context.
 - **SHA-256 Deduplication in Watcher**: Content hashing distinguishes external changes from the app's own writes, preventing event feedback loops.
 
@@ -716,7 +722,7 @@ When a new editing context needs different behavior, add a prop to `TextEditor` 
 6. **No module-level dispatch functions.** Trace to the owning component and use the hook there.
 7. **Container components own scope boundaries.** One file per container, wraps children only, no presentation logic.
 8. **Views are pure presenters.** They receive data via props or context and dispatch commands via hooks. They never manage state or own scope providers.
-9. **Events trigger re-fetch, not state push.** Always re-read from the backend.
+9. **Entity events patch the store in place; structural events re-fetch.** Handlers in `rust-engine-container.tsx` apply `entity-field-changed` payloads directly to the store — no `get_entity` round-trip. Grid navigation never triggers a data-fetch IPC (enforced by `grid-view.nav-is-eventdriven.test.tsx`). Structural changes (column/swimlane adds or removes) still trigger a `list_entities` refresh.
 10. **CodeMirror 6 is the only text editor.** Don't introduce alternative editor components.
 11. **TDD for new containers and commands.** Write tests first (RED), implement (GREEN), refactor. Every container gets a `.test.tsx` file.
 12. **`console.warn` for frontend instrumentation.** Check OS unified log, never ask the user to look at the browser console.

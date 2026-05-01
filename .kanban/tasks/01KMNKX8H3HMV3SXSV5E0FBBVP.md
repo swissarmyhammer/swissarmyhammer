@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMNKWQMBQ78QRAKWYXQP83M8
 position_column: done
-position_ordinal: ffffffffffffcc80
+position_ordinal: ffffffffffffffa280
 title: Simplify BoardView drop handler — zones provide placement directly
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KM14V2VKA9J6JBA15QF1JASG
 position_column: done
-position_ordinal: fffffffff080
+position_ordinal: ffffffffffb280
 title: Wire tool config loading into MCP server startup
 ---
 ## What

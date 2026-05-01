@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbb80
+position_ordinal: ffffffffffffffffffffffffffffff8f80
 title: Context menu commands must dispatch through useDispatchCommand, not bypass it
 ---
 ## What

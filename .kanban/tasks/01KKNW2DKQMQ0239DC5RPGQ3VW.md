@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: '8780'
+position_ordinal: 8b80
 title: Move cosine_similarity into model-embedding crate
 ---
 ## What

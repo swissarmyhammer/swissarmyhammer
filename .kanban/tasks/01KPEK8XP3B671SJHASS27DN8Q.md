@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: d980
+position_ordinal: '8e80'
 title: 'Remove or stabilize 2 #[ignore]''d treesitter watcher timing tests'
 ---
 What: swissarmyhammer-treesitter/src/watcher.rs ignores two tests at lines 586 and 685 with justification "filesystem watcher timing is inherently platform-dependent and can be flaky on CI". Per the test discipline, this is not acceptable — either make them deterministic or delete them.

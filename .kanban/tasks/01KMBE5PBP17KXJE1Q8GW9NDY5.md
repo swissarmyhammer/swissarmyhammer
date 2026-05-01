@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
 position_column: done
-position_ordinal: ffffffffffff8480
+position_ordinal: ffffffffffffd280
 title: 'Field: date field type'
 ---
 ## What

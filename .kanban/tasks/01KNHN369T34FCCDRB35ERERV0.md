@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffff8380
+position_ordinal: ffffffffffffffffffffffffffffb180
 title: Display virtual tags in task card header below regular tags
 ---
 ## What

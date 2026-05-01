@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNZ40VH9PJ3M9TEFPGFJJRM1
 position_column: done
-position_ordinal: ffffffffffffffffffffffbc80
+position_ordinal: ffffffffffffffffffffffffffffff9280
 project: pill-via-cm6
 title: 'MentionWidget: replace slug text with clipped display name'
 ---

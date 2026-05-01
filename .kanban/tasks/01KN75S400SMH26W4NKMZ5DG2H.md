@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff9180
+position_ordinal: ffffffffffffffffffffff8780
 title: 'Test file tools: edit, glob, grep, read, write edge cases'
 ---
 Multiple files in swissarmyhammer-tools/src/mcp/tools/files/:

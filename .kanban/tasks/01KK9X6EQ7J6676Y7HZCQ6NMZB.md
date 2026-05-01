@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: a080
+position_ordinal: a580
 title: 'CODE-CONTEXT-CHUNKS: Persist tree-sitter chunks to database'
 ---
 ## Problem

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: e480
+position_ordinal: eb80
 title: Extract ClaudeLocalScope as Initializable component
 ---
 ## What

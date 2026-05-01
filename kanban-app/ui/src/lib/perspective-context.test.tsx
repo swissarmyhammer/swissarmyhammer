@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,6 +68,8 @@ import { PerspectiveProvider, usePerspectives } from "./perspective-context";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
+  FocusedScopeContext,
+  type CommandScope,
 } from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 
@@ -173,7 +175,7 @@ describe("PerspectiveProvider", () => {
     expect(result.current.activePerspective?.name).toBe("Second");
   });
 
-  it("setActivePerspectiveId dispatches ui.perspective.set to backend", async () => {
+  it("setActivePerspectiveId dispatches perspective.set to backend", async () => {
     mockInvoke.mockResolvedValue({
       result: { perspectives: [], count: 0 },
       undoable: false,
@@ -193,7 +195,7 @@ describe("PerspectiveProvider", () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "ui.perspective.set",
+      cmd: "perspective.set",
       args: { perspective_id: "p1" },
       scopeChain: ["window:main"],
       boardPath: "/tmp/test/.kanban",
@@ -223,7 +225,11 @@ describe("PerspectiveProvider", () => {
     expect(result.current.perspectives).toHaveLength(1);
   });
 
-  it("applies entity-field-changed event in place preserving identity for other perspectives", async () => {
+  it("refetches perspective.list on entity-field-changed for a perspective", async () => {
+    // The backend bridge emits `entity-field-changed` without usable field
+    // values (every value is `Null` — the wire format is a signal, not a
+    // patch). The listener responds by calling `perspective.list`, which
+    // returns the freshest state from the canonical YAML.
     const initial = [
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
@@ -235,41 +241,19 @@ describe("PerspectiveProvider", () => {
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
+    expect(result.current.perspectives).toHaveLength(2);
 
-    const p1Before = result.current.perspectives.find((p) => p.id === "p1");
-    const p2Before = result.current.perspectives.find((p) => p.id === "p2");
-    expect(p1Before).toBeTruthy();
-    expect(p2Before).toBeTruthy();
-
-    // Field change for p1 — must update p1 in place and leave p2 identity stable.
-    await act(async () => {
-      listenCallbacks["entity-field-changed"]?.({
-        payload: {
-          entity_type: "perspective",
-          id: "p1",
-          fields: { name: "Updated" },
-        },
-      });
-      await new Promise((r) => setTimeout(r, 0));
-    });
-
-    const p1After = result.current.perspectives.find((p) => p.id === "p1");
-    const p2After = result.current.perspectives.find((p) => p.id === "p2");
-    expect(p1After?.name).toBe("Updated");
-    // CRITICAL invariant — unchanged perspective keeps its object identity.
-    expect(p2After).toBe(p2Before);
-    // Changed perspective gets a new object (immutable update).
-    expect(p1After).not.toBe(p1Before);
-  });
-
-  it("does not refetch perspective.list on entity-field-changed", async () => {
+    // Next `perspective.list` call returns p1 with an updated name —
+    // simulating a field edit that was just written to disk.
+    const updated = [
+      { ...makePerspective("p1", "Updated"), filter: "#bug" } as PerspectiveDef,
+      makePerspective("p2", "Second"),
+    ];
     mockInvoke.mockResolvedValue({
-      result: { perspectives: [makePerspective("p1", "First")], count: 1 },
+      result: { perspectives: updated, count: 2 },
       undoable: false,
     });
 
-    const { result } = renderHook(() => usePerspectives(), { wrapper });
-    await act(async () => {});
     const initialInvokeCount = mockInvoke.mock.calls.length;
 
     await act(async () => {
@@ -277,29 +261,40 @@ describe("PerspectiveProvider", () => {
         payload: {
           entity_type: "perspective",
           id: "p1",
-          fields: { filter: "#bug" },
         },
       });
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    // No new perspective.list call — the field delta is applied locally.
-    const listCalls = mockInvoke.mock.calls.filter(
+    // The listener triggered a refetch, so `perspective.list` was invoked
+    // once more than before the event.
+    const listCallsAfter = mockInvoke.mock.calls.filter(
       (call) =>
         call[0] === "dispatch_command" &&
         (call[1] as { cmd: string })?.cmd === "perspective.list",
-    );
-    const initialListCalls = mockInvoke.mock.calls
+    ).length;
+    const listCallsBefore = mockInvoke.mock.calls
       .slice(0, initialInvokeCount)
       .filter(
         (call) =>
           call[0] === "dispatch_command" &&
           (call[1] as { cmd: string })?.cmd === "perspective.list",
-      );
-    expect(listCalls.length).toBe(initialListCalls.length);
+      ).length;
+    expect(listCallsAfter).toBe(listCallsBefore + 1);
 
-    // Verify the filter field was applied.
-    expect(result.current.perspectives[0].filter).toBe("#bug");
+    // And the fresh state is reflected in the hook's perspectives.
+    expect(result.current.perspectives.find((p) => p.id === "p1")?.name).toBe(
+      "Updated",
+    );
+    expect(
+      (
+        result.current.perspectives.find((p) => p.id === "p1") as
+          | {
+              filter?: unknown;
+            }
+          | undefined
+      )?.filter,
+    ).toBe("#bug");
   });
 
   it("refreshes on entity-created event for perspective type", async () => {
@@ -411,5 +406,396 @@ describe("PerspectiveProvider", () => {
     expect(() => renderHook(() => usePerspectives())).toThrow(
       "usePerspectives must be used within PerspectiveProvider",
     );
+  });
+
+  // -----------------------------------------------------------------------
+  // useAutoSelectActivePerspective: enforce "always a selected perspective"
+  // -----------------------------------------------------------------------
+
+  /** Collect every `perspective.set` dispatch recorded by the mock. */
+  function perspectiveSetCalls() {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === "perspective.set",
+    );
+  }
+
+  it("auto-selects the first matching perspective when UIState active id is empty", async () => {
+    // UIState active_perspective_id empty; one board perspective exists.
+    const ps = [makePerspective("p1", "Sprint")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+
+    // Wait for effects + the dispatch to settle.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.set",
+      args: { perspective_id: "p1" },
+    });
+  });
+
+  it("auto-selects the first matching perspective when active id names a deleted perspective", async () => {
+    // UIState points at "gone"; the list no longer contains it.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "gone" } },
+    };
+
+    const ps = [makePerspective("p1", "Survivor")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.set",
+      args: { perspective_id: "p1" },
+    });
+  });
+
+  it("auto-selects the first matching perspective when active id is for a different view kind", async () => {
+    // UIState active points at a grid perspective; the current view is board.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "g1" } },
+    };
+
+    const ps = [
+      { ...makePerspective("g1", "Grid Only"), view: "grid" },
+      makePerspective("b1", "Board One"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const calls = perspectiveSetCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0][1]).toMatchObject({
+      cmd: "perspective.set",
+      args: { perspective_id: "b1" },
+    });
+  });
+
+  it("does NOT auto-select when the active id is already a valid matching perspective", async () => {
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "p2" } },
+    };
+
+    const ps = [
+      makePerspective("p1", "First"),
+      makePerspective("p2", "Second"),
+    ];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Auto-selection must not fire when the stored id is already valid.
+    expect(perspectiveSetCalls().length).toBe(0);
+  });
+
+  it("does NOT auto-select when no perspectives exist for the view kind (let auto-create handle it)", async () => {
+    // No perspectives at all — useAutoCreateDefaultPerspective should fire
+    // instead; useAutoSelectActivePerspective must bail out.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // No perspective.set — only perspective.save would be dispatched by
+    // the sibling hook (not asserted here; covered elsewhere).
+    expect(perspectiveSetCalls().length).toBe(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Post-undo refresh behavior
+  // -----------------------------------------------------------------------
+  //
+  // The Tauri bridge (kanban-app/src/watcher.rs::process_perspective_event)
+  // translates a backend `PerspectiveEvent::PerspectiveChanged` into an
+  // `entity-field-changed` Tauri event. After the kanban-local `app.undo`
+  // wrapper calls `PerspectiveContext::reload_from_disk`, the bridge emits
+  // that event WITHOUT a `fields` key (the backend's wire shape uses
+  // `changes` and the empty `changed_fields` list signals "full refresh").
+  //
+  // The frontend listener's contract is: "no `fields` → full refetch". That
+  // refetch is the last step in the undo chain that makes the UI actually
+  // show the reverted group/filter/sort. These tests pin that behavior so
+  // any future optimization of the field-delta fast path doesn't
+  // accidentally drop the undo refresh.
+  it("refetches perspective.list on entity-field-changed without fields (post-undo shape)", async () => {
+    // Start with a grouped perspective — simulates the state immediately
+    // after `perspective.group` succeeded but before the user invokes Undo.
+    const before = [
+      { ...makePerspective("p1", "Sprint"), group: "status" },
+    ] as PerspectiveDef[];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: before, count: 1 },
+      undoable: false,
+    });
+
+    const { result } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {});
+    expect((result.current.perspectives[0] as { group?: unknown }).group).toBe(
+      "status",
+    );
+
+    // After undo, the backend has rewritten the YAML back to group=None.
+    // Prime the next perspective.list response to reflect that state.
+    const after = [makePerspective("p1", "Sprint")] as PerspectiveDef[];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: after, count: 1 },
+      undoable: false,
+    });
+
+    // Fire the entity-field-changed event with no `fields` key — the exact
+    // shape the bridge emits after reload_from_disk with changed_fields=[].
+    // The listener must detect the missing fields and trigger a refresh().
+    await act(async () => {
+      listenCallbacks["entity-field-changed"]?.({
+        payload: {
+          entity_type: "perspective",
+          id: "p1",
+          // no fields / no changes — simulating the post-undo wire shape
+        },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // The refetch must have happened — `group` is now undefined.
+    expect(
+      (result.current.perspectives[0] as { group?: unknown }).group,
+    ).toBeUndefined();
+  });
+
+  it("refetches on entity-removed (post-undo-of-create shape)", async () => {
+    // Start with one perspective — simulates "just created".
+    const before = [makePerspective("p1", "Ephemeral")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: before, count: 1 },
+      undoable: false,
+    });
+
+    const { result } = renderHook(() => usePerspectives(), { wrapper });
+    await act(async () => {});
+    expect(result.current.perspectives).toHaveLength(1);
+
+    // Undo the create — the backend deletes the file and `reload_from_disk`
+    // emits `PerspectiveDeleted`, which the bridge maps to `entity-removed`.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    await act(async () => {
+      listenCallbacks["entity-removed"]?.({
+        payload: { entity_type: "perspective", id: "p1" },
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(result.current.perspectives).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Focus-scope regression: perspective.list must NOT refetch on focus
+  // -----------------------------------------------------------------------
+  //
+  // `useDispatchCommand` memoizes its returned callback with `effectiveScope =
+  // focusedScope ?? treeScope` in its dep array. Every grid keystroke fires
+  // `ui.setFocus`, which rotates `FocusedScopeContext` and therefore the
+  // `dispatch` identity. If `PerspectiveProvider`'s hooks close over
+  // `dispatch` in `useCallback`/`useEffect` deps, a new `dispatch` identity
+  // triggers a full `perspective.list` refetch — and churns the companion
+  // auto-create / auto-select effects as well.
+  //
+  // Perspectives are a per-view concern, not per-focused-element. They should
+  // only refetch on mount (once per view kind) and in response to backend
+  // events (`entity-created` / `entity-field-changed` / `entity-removed` for
+  // perspectives, and `board-changed`).
+  //
+  // The fix is a `dispatchRef` pattern in `perspective-context.tsx`: hooks
+  // read `dispatchRef.current` instead of closing over `dispatch`, and their
+  // dep arrays no longer mention `dispatch`. These tests pin that behavior.
+
+  /** Count how many times `dispatch_command` was invoked with a given cmd id. */
+  function invokeCallsFor(cmd: string): number {
+    return mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd?: string })?.cmd === cmd,
+    ).length;
+  }
+
+  /**
+   * Module-scoped setter captured during render so individual tests can
+   * toggle the focused scope value from outside React. Matches how
+   * EntityFocusProvider flips `FocusedScopeContext` on every `ui.setFocus`.
+   */
+  let setFocusedScopeExternal: ((next: CommandScope | null) => void) | null =
+    null;
+
+  /**
+   * Wrapper that exposes a toggleable `FocusedScopeContext` value. Calling
+   * `setFocusedScopeExternal` from a test simulates an entity focus change.
+   */
+  function FocusToggleWrapper({ children }: { children: ReactNode }) {
+    const [focused, setFocused] = useState<CommandScope | null>(null);
+    setFocusedScopeExternal = setFocused;
+    return (
+      <CommandScopeProvider commands={[]} moniker="window:main">
+        <ActiveBoardPathProvider value="/tmp/test/.kanban">
+          <FocusedScopeContext.Provider value={focused}>
+            <PerspectiveProvider>{children}</PerspectiveProvider>
+          </FocusedScopeContext.Provider>
+        </ActiveBoardPathProvider>
+      </CommandScopeProvider>
+    );
+  }
+
+  /**
+   * Build a synthetic focused scope with a fresh moniker so each toggle
+   * changes identity — matching how EntityFocusProvider produces a new
+   * `focusedScope` object whenever focus moves.
+   */
+  function makeFocusedScope(moniker: string): CommandScope {
+    return { commands: new Map(), parent: null, moniker };
+  }
+
+  it("does not refetch perspective.list when focused scope changes", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [makePerspective("p1", "Sprint")], count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+
+    // Let mount-time fetch + auto-select settle.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const listCallsBefore = invokeCallsFor("perspective.list");
+    expect(listCallsBefore).toBe(1);
+
+    // Simulate a sequence of focus changes — exactly what arrow-key navigation
+    // produces in production: each `ui.setFocus` rotates FocusedScopeContext.
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t3"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // No extra `perspective.list` dispatches — refetch is reserved for
+    // backend events, not focus changes.
+    expect(invokeCallsFor("perspective.list")).toBe(listCallsBefore);
+  });
+
+  it("does not re-run auto-create effect when focused scope changes", async () => {
+    // Empty perspective list on mount triggers auto-create exactly once.
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const saveCallsBefore = invokeCallsFor("perspective.save");
+    // Auto-create fires once on mount when no perspectives exist for the kind.
+    expect(saveCallsBefore).toBe(1);
+
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Focus changes must not re-enter the auto-create effect — the per-kind
+    // ref guard already prevents a second save, but we also want to be sure
+    // the effect body itself does not run.
+    expect(invokeCallsFor("perspective.save")).toBe(saveCallsBefore);
+  });
+
+  it("does not re-run auto-select effect when focused scope changes", async () => {
+    // Stale active id forces auto-select to run once on mount.
+    mockUIState = {
+      ...mockUIState,
+      windows: { main: { active_perspective_id: "gone" } },
+    };
+
+    const ps = [makePerspective("p1", "Survivor")];
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
+
+    renderHook(() => usePerspectives(), { wrapper: FocusToggleWrapper });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const setCallsBefore = invokeCallsFor("perspective.set");
+    expect(setCallsBefore).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await act(async () => {
+      setFocusedScopeExternal?.(makeFocusedScope("task:t2"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Focus changes must not redispatch `perspective.set`. The stored id is
+    // unchanged, the view kind is unchanged, and the perspectives list is
+    // unchanged — there is nothing to reconcile.
+    expect(invokeCallsFor("perspective.set")).toBe(setCallsBefore);
   });
 });

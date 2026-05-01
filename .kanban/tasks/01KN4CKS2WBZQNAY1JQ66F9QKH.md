@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4CKKB9JHVD5RXTE4DKK7CJ
 position_column: done
-position_ordinal: ffffffffffffffffbc80
+position_ordinal: ffffffffffffffffffb980
 title: 'EXTRACT-6: Full workspace test verification'
 ---
 ## What

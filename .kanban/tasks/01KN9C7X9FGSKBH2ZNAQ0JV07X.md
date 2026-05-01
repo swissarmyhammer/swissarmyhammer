@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN9C5394341SWFR5E65YZV4W
 position_column: done
-position_ordinal: ffffffffffffffffffc880
+position_ordinal: fffffffffffffffffffffff880
 title: Push active perspective into UIState scope chain for command palette visibility
 ---
 ## What

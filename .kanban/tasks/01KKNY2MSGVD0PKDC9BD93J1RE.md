@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: '9080'
+position_ordinal: '9480'
 title: Rename kanban-app binary from "kanban" to "kanban-app"
 ---
 ## What

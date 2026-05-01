@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: fffffc80
+position_ordinal: ffffff8480
 title: 'heb/header.rs: EventHeader has public fields — permanent API commitment with no getters'
 ---
 heb/src/header.rs:48-65

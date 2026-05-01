@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMNKX8H3HMV3SXSV5E0FBBVP
 position_column: done
-position_ordinal: ffffffffffffcd80
+position_ordinal: ffffffffffffffa380
 title: End-to-end drag reorder tests — vitest + Rust integration
 ---
 ## What

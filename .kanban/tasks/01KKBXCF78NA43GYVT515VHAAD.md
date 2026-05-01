@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: f080
+position_ordinal: f780
 title: Extract AgentDeployment as Initializable component
 ---
 ## What

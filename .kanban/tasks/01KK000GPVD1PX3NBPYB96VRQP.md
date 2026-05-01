@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffff8d80
+position_ordinal: ffff9480
 title: In-memory entity cache with content hashing
 ---
 Add an in-memory cache layer to `swissarmyhammer-entity` so all reads come from memory and writes update cache + disk atomically.

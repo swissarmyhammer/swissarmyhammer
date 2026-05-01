@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffff8280
+position_ordinal: ffffffffffd480
 title: close_board should not remove window entries — window state is independent of board
 ---
 ## What

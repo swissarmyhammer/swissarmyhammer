@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4NEVT8AVMVWX4WTHJG15FJ
 position_column: done
-position_ordinal: ffffffffffffffffffac80
+position_ordinal: ffffffffffffffffffffffbe80
 title: 7. Perspective filter/sort/group evaluation + view integration
 ---
 ## What

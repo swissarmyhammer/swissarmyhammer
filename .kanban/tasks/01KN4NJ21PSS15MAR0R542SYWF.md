@@ -5,7 +5,7 @@ depends_on:
 - 01KN4NGQY7NMEZ0HGDN10RVMWH
 - 01KN4NG67RE9YSA4J3Q25YM98R
 position_column: done
-position_ordinal: ffffffffffffffffffae80
+position_ordinal: ffffffffffffffffffffffc380
 title: 9. Perspective sort commands + scope chain wiring
 ---
 ## What

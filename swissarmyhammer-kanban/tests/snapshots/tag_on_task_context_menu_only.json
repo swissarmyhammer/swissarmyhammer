@@ -1,0 +1,95 @@
+{
+  "command_count": 7,
+  "commands": [
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag",
+      "id": "task.untag",
+      "keys": {
+        "cua": "Delete",
+        "vim": "x"
+      },
+      "menu_name": null,
+      "name": "Remove Tag",
+      "target": null
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx1",
+      "id": "entity.copy",
+      "keys": {
+        "cua": "Mod+C",
+        "vim": "y"
+      },
+      "menu_name": null,
+      "name": "Copy Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx1",
+      "id": "entity.cut",
+      "keys": {
+        "cua": "Mod+X",
+        "vim": "x"
+      },
+      "menu_name": null,
+      "name": "Cut Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.archive",
+      "keys": {
+        "vim": "dd"
+      },
+      "menu_name": null,
+      "name": "Archive Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx2",
+      "id": "entity.delete",
+      "keys": {
+        "cua": "Mod+Backspace"
+      },
+      "menu_name": null,
+      "name": "Delete Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "tag:ctx3",
+      "id": "ui.inspect",
+      "keys": null,
+      "menu_name": null,
+      "name": "Inspect Tag",
+      "target": "tag:TAG"
+    },
+    {
+      "available": true,
+      "context_menu": true,
+      "group": "task",
+      "id": "task.doThisNext",
+      "keys": null,
+      "menu_name": null,
+      "name": "Do This Next",
+      "target": null
+    }
+  ],
+  "context_menu_only": true,
+  "scope": [
+    "tag:TAG",
+    "task:TASK",
+    "column:todo",
+    "board:BOARD_ID_STABLE"
+  ]
+}

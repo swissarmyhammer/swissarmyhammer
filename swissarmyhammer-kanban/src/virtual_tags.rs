@@ -19,8 +19,8 @@ pub struct TerminalColumnId(pub String);
 
 /// A command declared by a virtual tag strategy.
 ///
-/// Mirrors the EntityCommand structure used by entity YAML schemas.
-/// Commands appear in the context menu when the user right-clicks
+/// Carries the same shape as `CommandDef` so virtual-tag commands surface in
+/// the context menu alongside registry commands when the user right-clicks
 /// the virtual tag pill.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtualTagCommand {

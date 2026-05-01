@@ -82,6 +82,23 @@ pub struct CommandDef {
     pub undoable: bool,
     #[serde(default)]
     pub context_menu: bool,
+    /// Priority bucket for context-menu placement. Commands with the same
+    /// `context_menu_group` render contiguously; a separator is inserted
+    /// between groups. Lower values render first. Omit for "uncategorised"
+    /// (sorts after all explicit groups).
+    ///
+    /// Intentionally independent of [`MenuPlacement::group`]: the native
+    /// menu bar and the right-click context menu are two separate surfaces
+    /// with different grouping needs (e.g. Cut/Copy/Paste share a native
+    /// Edit-menu group, but context menus add Delete/Archive and Inspect
+    /// buckets that have no native-menu placement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_menu_group: Option<u32>,
+    /// Sort order within the same [`Self::context_menu_group`]. Omit for
+    /// default (0). Ties within the same group are broken by command id
+    /// to keep emission deterministic regardless of YAML load order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_menu_order: Option<u32>,
     /// Optional native menu bar placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub menu: Option<MenuPlacement>,
@@ -114,10 +131,10 @@ mod tests {
     #[test]
     fn command_def_yaml_round_trip() {
         let def = CommandDef {
-            id: "task.add".into(),
-            name: "New Task".into(),
+            id: "foo.add".into(),
+            name: "New Foo".into(),
             menu_name: None,
-            scope: Some("entity:column".into()),
+            scope: Some("entity:widget".into()),
             visible: true,
             keys: Some(KeysDef {
                 vim: Some("a".into()),
@@ -125,18 +142,24 @@ mod tests {
                 emacs: None,
             }),
             params: vec![ParamDef {
-                name: "column".into(),
+                name: "widget".into(),
                 from: ParamSource::ScopeChain,
-                entity_type: Some("column".into()),
+                entity_type: Some("widget".into()),
                 default: None,
             }],
             undoable: true,
-            context_menu: false,
+            context_menu: true,
+            context_menu_group: Some(1),
+            context_menu_order: Some(2),
             menu: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(def, parsed);
+        // The new context-menu fields must survive a full YAML round trip so
+        // downstream `commands/` overrides can opt into them.
+        assert_eq!(parsed.context_menu_group, Some(1));
+        assert_eq!(parsed.context_menu_order, Some(2));
     }
 
     #[test]
@@ -154,15 +177,17 @@ name: Quit
         assert!(def.params.is_empty());
         assert!(!def.undoable);
         assert!(!def.context_menu);
+        assert!(def.context_menu_group.is_none());
+        assert!(def.context_menu_order.is_none());
         assert!(def.menu.is_none());
     }
 
     #[test]
     fn command_def_with_all_fields() {
         let yaml = r#"
-id: task.untag
-name: Remove Tag
-scope: "entity:tag"
+id: foo.remove
+name: Remove Foo
+scope: "entity:widget"
 visible: true
 undoable: true
 context_menu: true
@@ -170,16 +195,16 @@ keys:
   vim: "x"
   cua: "Delete"
 params:
-  - name: tag
+  - name: widget
     from: scope_chain
-    entity_type: tag
-  - name: task
+    entity_type: widget
+  - name: gadget
     from: scope_chain
-    entity_type: task
+    entity_type: gadget
 "#;
         let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
-        assert_eq!(def.id, "task.untag");
-        assert_eq!(def.scope.as_deref(), Some("entity:tag"));
+        assert_eq!(def.id, "foo.remove");
+        assert_eq!(def.scope.as_deref(), Some("entity:widget"));
         assert!(def.undoable);
         assert!(def.context_menu);
         assert_eq!(def.params.len(), 2);
@@ -190,8 +215,8 @@ params:
     #[test]
     fn command_def_with_menu_placement() {
         let yaml = r#"
-id: file.newBoard
-name: New Board
+id: foo.create
+name: New Foo
 menu:
   path: [File]
   group: 0
@@ -225,14 +250,14 @@ menu:
     #[test]
     fn command_invocation_construction() {
         let inv = CommandInvocation {
-            cmd: "task.move".into(),
-            scope_chain: Some(vec!["task:01ABC".into(), "column:todo".into()]),
-            target: Some("column:doing".into()),
+            cmd: "foo.move".into(),
+            scope_chain: Some(vec!["widget:01ABC".into(), "gadget:42".into()]),
+            target: Some("gadget:99".into()),
             args: Some(HashMap::from([("drop_index".into(), serde_json::json!(2))])),
         };
-        assert_eq!(inv.cmd, "task.move");
+        assert_eq!(inv.cmd, "foo.move");
         assert_eq!(inv.scope_chain.as_ref().unwrap().len(), 2);
-        assert_eq!(inv.target.as_deref(), Some("column:doing"));
+        assert_eq!(inv.target.as_deref(), Some("gadget:99"));
         assert_eq!(inv.args.as_ref().unwrap()["drop_index"], 2);
     }
 
@@ -253,12 +278,12 @@ menu:
     #[test]
     fn command_def_with_menu_name_deserializes() {
         let yaml = r#"
-id: board.switch
+id: foo.switch
 name: "Switch to {{entity.display_name}}"
 menu_name: "{{entity.display_name}} ({{entity.context.display_name}})"
 "#;
         let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
-        assert_eq!(def.id, "board.switch");
+        assert_eq!(def.id, "foo.switch");
         assert_eq!(def.name, "Switch to {{entity.display_name}}");
         assert_eq!(
             def.menu_name.as_deref(),

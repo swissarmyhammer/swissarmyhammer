@@ -12,6 +12,16 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
+// `EntityFocusProvider` now imports the optional spatial-focus actions
+// hook, which pulls in `spatial-focus-context.tsx`, which uses
+// `@tauri-apps/api/event`. That module re-exports `transformCallback`
+// from `core` — so when `core` is mocked with just `invoke`, the real
+// `event` module fails to import. Mock `event` here too so this test
+// stays self-contained and never reaches the real Tauri runtime.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 // Import after mocks
 import { StoreContainer } from "./store-container";
 
@@ -68,7 +78,7 @@ describe("StoreContainer", () => {
     expect(screen.getByTestId("child").textContent).toBe("hello");
   });
 
-  it("does not render a wrapping container div (renderContainer=false)", () => {
+  it("renders no DOM wrapper — CommandScopeProvider is context-only", () => {
     const { container } = render(
       <EntityFocusProvider>
         <StoreContainer path="/board">
@@ -77,8 +87,9 @@ describe("StoreContainer", () => {
       </EntityFocusProvider>,
     );
 
-    // FocusScope with renderContainer=false should not add a FocusHighlight wrapper
-    // The child should be directly inside the provider, not wrapped in a focus-highlight div
-    expect(container.querySelector("[data-moniker]")).toBeNull();
+    // StoreContainer is a pure context provider (CommandScopeProvider): it
+    // contributes a moniker to the scope chain but emits no DOM of its own,
+    // so no element should carry a `data-moniker` attribute.
+    expect(container.querySelector("[data-segment]")).toBeNull();
   });
 });

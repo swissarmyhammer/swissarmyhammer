@@ -270,6 +270,37 @@ impl Command for SetActiveViewCmd {
         let view_id = ctx.require_arg_str("view_id")?;
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_active_view(window_label, view_id);
+
+        // Keep the backend scope_chain consistent with the newly active view.
+        //
+        // The command palette and right-click menu both read `scope_chain` from
+        // UIState to ask the backend which commands are available. Dynamic
+        // commands like `entity.add:{type}` fan out from the `view:{id}` moniker
+        // in that chain. If we only update `active_view` here without touching
+        // `scope_chain`, the palette keeps emitting commands for whichever view
+        // happened to be in scope last (commonly the board the user launched
+        // from) even after they switch to a different view — so "New Tag" and
+        // "New Project" never appear on their respective grids.
+        //
+        // Rewrite every `view:*` element in the current chain to point at the
+        // new active view. When the user later focuses a FocusScope inside the
+        // new view, `ui.setFocus` will rebuild the full chain from scratch —
+        // this bridge makes the palette work in the interim.
+        let mut chain = ui.scope_chain();
+        let mut mutated = false;
+        for moniker in &mut chain {
+            if moniker.starts_with("view:") {
+                let new_moniker = format!("view:{view_id}");
+                if *moniker != new_moniker {
+                    *moniker = new_moniker;
+                    mutated = true;
+                }
+            }
+        }
+        if mutated {
+            ui.set_scope_chain(chain);
+        }
+
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -311,6 +342,73 @@ mod tests {
     fn first_inspectable_returns_none_for_only_field_monikers() {
         let scope = vec!["field:task:abc.title".to_string()];
         assert!(first_inspectable(&scope).is_none());
+    }
+
+    /// When the active view changes, the `view:{id}` moniker in the current
+    /// scope_chain must be rewritten to point at the new view. This is the
+    /// regression guard for the user-visible bug where switching from the
+    /// Board to the Tags/Projects grid left the backend scope_chain pointing
+    /// at the Board's view id, so the command palette kept offering
+    /// "New Task" instead of "New Tag" / "New Project".
+    #[tokio::test]
+    async fn set_active_view_rewrites_view_moniker_in_scope_chain() {
+        let ui = Arc::new(UIState::new());
+        // Simulate the user having focused a task card on the board, which
+        // landed this chain in UIState via a prior ui.setFocus dispatch.
+        ui.set_scope_chain(vec![
+            "task:01ABC".to_string(),
+            "column:todo".to_string(),
+            "board:board".to_string(),
+            "view:01JMVIEW0000000000BOARD0".to_string(),
+            "window:main".to_string(),
+            "engine".to_string(),
+        ]);
+
+        let mut args = HashMap::new();
+        args.insert(
+            "view_id".to_string(),
+            serde_json::json!("01JMVIEW0000000000TGGRD0"),
+        );
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
+
+        SetActiveViewCmd.execute(&ctx).await.unwrap();
+
+        let chain = ui.scope_chain();
+        assert!(
+            chain.contains(&"view:01JMVIEW0000000000TGGRD0".to_string()),
+            "scope_chain must now reference the NEW active view, got: {chain:?}"
+        );
+        assert!(
+            !chain.contains(&"view:01JMVIEW0000000000BOARD0".to_string()),
+            "scope_chain must not still reference the OLD view, got: {chain:?}"
+        );
+    }
+
+    /// If no `view:*` moniker is in the current scope_chain, changing the
+    /// active view must not synthesise one — the scope_chain stays untouched
+    /// and the next ui.setFocus rebuild populates it. This guards against
+    /// spurious scope changes when the user hasn't focused anything yet.
+    #[tokio::test]
+    async fn set_active_view_leaves_scope_chain_alone_when_no_view_moniker() {
+        let ui = Arc::new(UIState::new());
+        ui.set_scope_chain(vec!["window:main".to_string(), "engine".to_string()]);
+
+        let mut args = HashMap::new();
+        args.insert(
+            "view_id".to_string(),
+            serde_json::json!("01JMVIEW0000000000TGGRD0"),
+        );
+        let ctx = CommandContext::new("view.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(Arc::clone(&ui));
+
+        SetActiveViewCmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(
+            ui.scope_chain(),
+            vec!["window:main".to_string(), "engine".to_string()],
+            "scope_chain must be untouched when it has no view:* moniker"
+        );
     }
 
     #[tokio::test]
@@ -366,7 +464,7 @@ mod tests {
         // not be available — it has nothing to rename.
         let ui = Arc::new(UIState::new());
         let ctx = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:main".to_string()],
             None,
             HashMap::new(),
@@ -397,7 +495,7 @@ mod tests {
         ui.set_active_perspective("main", "p1");
 
         let ctx_secondary = CommandContext::new(
-            "ui.perspective.startRename",
+            "ui.entity.startRename",
             vec!["window:secondary".to_string()],
             None,
             HashMap::new(),

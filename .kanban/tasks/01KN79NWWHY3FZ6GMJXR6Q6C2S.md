@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN79G8KWH8B0K3SB2CS1EPH1
 position_column: done
-position_ordinal: ffffffffffffffffffa580
+position_ordinal: ffffffffffffffffffffffaf80
 title: 3. PerspectiveProvider must follow ViewsProvider pattern — consistent frontend store architecture
 ---
 ## What

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffb080
+position_ordinal: ffffffb780
 title: 'warning: no migration path for users upgrading from ~/.swissarmyhammer to XDG paths'
 ---
 `swissarmyhammer-directory/src/directory.rs` — `from_user_home` is deprecated but no migration code exists.\n\nUsers upgrading from the old `.swissarmyhammer` layout will silently lose all their user-level config. `from_user_home` is marked `#[deprecated]` and all callers have been switched to `xdg_data()` / `xdg_config()`, but there is no code that:\n1. Detects the old path (`~/.swissarmyhammer/`) at startup\n2. Migrates it to the new XDG location\n3. Warns the user that existing config was not found at the new location\n\nThe silent loss of user prompts, validators, and agents is a data-loss risk for existing users.\n\nSuggestion: Add a one-shot migration function called at application startup that checks `~/.swissarmyhammer/` (and any other old dot-dirs), warns the user, and optionally copies them to the new XDG paths. At minimum add a log warning if the old path exists but the new one is empty. #review-finding

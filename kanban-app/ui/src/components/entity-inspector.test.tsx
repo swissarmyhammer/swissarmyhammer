@@ -1,5 +1,29 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+
+// Hoisted mocks: capture invoke and listen so the kernel simulator can drive
+// `focus-changed` events through the production spatial-focus bridge.
+type ListenCallback = (event: { payload: unknown }) => void;
+const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
+  const listeners = new Map<string, ListenCallback[]>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockInvoke = vi.fn(async (..._args: any[]): Promise<unknown> => undefined);
+  const mockListen = vi.fn(
+    (eventName: string, cb: ListenCallback): Promise<() => void> => {
+      const cbs = listeners.get(eventName) ?? [];
+      cbs.push(cb);
+      listeners.set(eventName, cbs);
+      return Promise.resolve(() => {
+        const arr = listeners.get(eventName);
+        if (arr) {
+          const idx = arr.indexOf(cb);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+      });
+    },
+  );
+  return { mockInvoke, mockListen, listeners };
+});
 
 // Schema with sections matching the new YAML definitions
 const TASK_SCHEMA = {
@@ -154,16 +178,17 @@ const SCHEMAS: Record<string, unknown> = {
   actor: ACTOR_SCHEMA,
 };
 
+// Fallback handler for non-spatial IPCs. The kernel simulator routes
+// spatial_* commands through itself; everything else falls through to here.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((...args: any[]) => {
-  if (args[0] === "list_entity_types")
-    return Promise.resolve(["task", "tag", "actor"]);
-  if (args[0] === "get_entity_schema") {
-    const entityType = args[1]?.entityType as string;
-    return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
+const fallbackInvoke = async (cmd: string, args?: any): Promise<unknown> => {
+  if (cmd === "list_entity_types") return ["task", "tag", "actor"];
+  if (cmd === "get_entity_schema") {
+    const entityType = args?.entityType as string;
+    return SCHEMAS[entityType] ?? TASK_SCHEMA;
   }
-  if (args[0] === "get_ui_state")
-    return Promise.resolve({
+  if (cmd === "get_ui_state")
+    return {
       palette_open: false,
       palette_mode: "command",
       keymap_mode: "cua",
@@ -171,11 +196,10 @@ const mockInvoke = vi.fn((...args: any[]) => {
       open_boards: [],
       windows: {},
       recent_boards: [],
-    });
-  if (args[0] === "update_entity_field")
-    return Promise.resolve({ id: "test-id" });
-  return Promise.resolve("ok");
-});
+    };
+  if (cmd === "update_entity_field") return { id: "test-id" };
+  return "ok";
+};
 
 vi.mock("@tauri-apps/api/core", async () => {
   // Preserve the real exports (SERIALIZE_TO_IPC_FN, Resource, Channel, …)
@@ -196,7 +220,7 @@ vi.mock("@tauri-apps/api/event", async () => {
   );
   return {
     ...actual,
-    listen: vi.fn(() => Promise.resolve(() => {})),
+    listen: (...a: Parameters<typeof mockListen>) => mockListen(...a),
   };
 });
 // `window-container.tsx` calls `getCurrentWindow()` at module-load time;
@@ -219,19 +243,33 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
-import { InspectorFocusBridge } from "./inspector-focus-bridge";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
-import {
-  EntityFocusProvider,
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandScopeProvider } from "@/lib/command-scope";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import {
+  asSegment
+} from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
+import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
+
+beforeEach(() => {
+  // Reset captured listeners and install a fresh kernel simulator wired
+  // to the hoisted `mockInvoke` / `mockListen`. The simulator routes
+  // every spatial-nav IPC through the in-process cascade and emits
+  // synthetic `focus-changed` events so the entity-focus-context bridge
+  // updates the React store on `setFocus(fq)`.
+  listeners.clear();
+  mockInvoke.mockReset();
+  mockListen.mockClear();
+  installKernelSimulator(mockInvoke, listeners, fallbackInvoke);
+});
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
   return {
@@ -242,40 +280,27 @@ function makeEntity(fields: Record<string, unknown> = {}): Entity {
   };
 }
 
-/**
- * Helper that exposes `broadcastNavCommand` via a hidden button. Rendered
- * inside the EntityFocusProvider tree so tests can synthesise keyboard
- * navigation without importing the command plumbing.
- */
-function NavBroadcastButton({ commandId }: { commandId: string }) {
-  const { broadcastNavCommand } = useEntityFocus();
-  return (
-    <button
-      data-testid={`nav-broadcast-${commandId}`}
-      onClick={() => broadcastNavCommand(commandId)}
-    />
-  );
-}
-
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   const result = render(
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>
-                <CommandScopeProvider commands={[]}>
-                  <EntityInspector entity={entity} />
-                  <NavBroadcastButton commandId="nav.down" />
-                  <NavBroadcastButton commandId="nav.up" />
-                </CommandScopeProvider>
-              </UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <CommandScopeProvider commands={[]}>
+                      <EntityInspector entity={entity} />
+                    </CommandScopeProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
   // Wait for async schema load
   await act(async () => {
@@ -284,26 +309,52 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   return result;
 }
 
-async function renderViaInspectorBridge(
+/**
+ * Render `EntityInspector` inside the production spatial-focus stack
+ * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`).
+ *
+ * Without this wrapper, `<FocusScope>` falls through to its no-spatial-context
+ * branch and renders a plain `<div>` instead of a `<FocusZone>` primitive.
+ * The two paths share a contract — children render as direct layout children
+ * of the scope's root element — but they exercise different code: the
+ * primitive path goes through `<FocusZone>`'s ResizeObserver/click wiring and
+ * forwards the consumer's `className` onto the same div that owns
+ * `data-moniker`/`data-focused`. This helper pins the production DOM shape so
+ * a future refactor of the primitive can't silently break the inspector's
+ * icon-and-content row layout.
+ *
+ * Use this helper for tests that depend on the production DOM shape produced
+ * by `<FocusScope>`. Other tests that only need the inspector's
+ * data-binding behaviour can keep using `renderInspector`.
+ */
+async function renderInspectorWithSpatial(
   entity: Entity,
   tagEntities: Entity[] = [],
 ) {
   const result = render(
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>
-                <InspectorFocusBridge entity={entity} />
-              </UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider
+              entities={{ task: [entity], tag: tagEntities }}
+            >
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <CommandScopeProvider commands={[]}>
+                      <EntityInspector entity={entity} />
+                    </CommandScopeProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
-  // Wait for async schema load
+  // Wait for async schema load and spatial register effects.
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -442,21 +493,34 @@ describe("EntityInspector", () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "B", tags: [] }),
     );
-    // First navigable field (title, in header) should be focused
+    // First navigable field (title, in header) should be focused. After
+    // card `01KQ5QB6F4MTD35GBTARJH4JEW` the row's outer `<div>` is plain;
+    // the moniker-bearing FocusZone (driven by Field) lives inside it.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+    const titleFocusZone = titleRow!.querySelector(
+      "[data-segment='field:task:test-id.title']",
+    );
+    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
     // Second field should not be focused
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-    expect(tagsRow!.getAttribute("data-focused")).toBeNull();
+    const tagsFocusZone = tagsRow!.querySelector(
+      "[data-segment='field:task:test-id.tags']",
+    );
+    expect(tagsFocusZone!.getAttribute("data-focused")).toBeNull();
   });
 
   it("clicking a field syncs the inspector nav cursor to that field", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "Click me", tags: [] }),
     );
-    // Initially first field (title) is focused
+    // Initially first field (title) is focused. After card
+    // `01KQ5QB6F4MTD35GBTARJH4JEW` the focus-bearing element is the
+    // Field's FocusZone (a descendant of the row), not the row itself.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+    const titleFocusZone = titleRow!.querySelector(
+      "[data-segment='field:task:test-id.title']",
+    );
+    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
     // Click on the body field's display wrapper (the div that Field
     // renders with `cursor-text min-h-[1.25rem]` around its Display).
@@ -473,17 +537,23 @@ describe("EntityInspector", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
+    const bodyFocusZone = bodyRow!.querySelector(
+      "[data-segment='field:task:test-id.body']",
+    );
     // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
-    expect(bodyRow!.getAttribute("data-focused")).toBe("true");
+    expect(bodyFocusZone!.getAttribute("data-focused")).toBe("true");
     // Title should no longer be focused
-    expect(titleRow!.getAttribute("data-focused")).toBeNull();
+    expect(titleFocusZone!.getAttribute("data-focused")).toBeNull();
   });
 
   it("only one field has data-focused at a time", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "B", tags: [], assignees: [] }),
     );
-    const focused = container.querySelectorAll("[data-focused]");
+    // Filter to field-zone monikers so we don't count nested pill scopes.
+    const focused = Array.from(
+      container.querySelectorAll("[data-focused]"),
+    ).filter((el) => el.getAttribute("data-segment")?.startsWith("field:"));
     expect(focused.length).toBe(1);
   });
 
@@ -538,8 +608,15 @@ describe("EntityInspector", () => {
       ).toBeTruthy();
     });
 
-    it("ArrowDown from title skips the hidden progress row", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("hidden progress row is absent so spatial nav has nothing to skip", async () => {
+      // After the spatial-nav migration, ArrowDown navigation between field
+      // rows is driven by beam-search rule 2 in the Rust spatial graph. In
+      // this test environment we don't mount the Rust IPC stack, so we
+      // exercise the surface visible to the React tree: the hidden row is
+      // not rendered at all, so there is no zone for the navigator to land
+      // on. The navigator's "skip" behaviour is therefore implicit — only
+      // the visible rows are navigable.
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -551,25 +628,31 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-segment='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
-      // ArrowDown from title — progress is hidden, so the next navigable row
-      // is `tags` (the remaining header field).
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-      expect(titleRow!.getAttribute("data-focused")).toBeNull();
+      // The hidden progress row is not rendered, so it never registers as
+      // a zone in the spatial graph.
       expect(
         container.querySelector('[data-testid="field-row-progress"]'),
       ).toBeNull();
+      // The remaining navigable rows (title, tags, body) all render as zones.
+      expect(
+        container.querySelector('[data-testid="field-row-tags"]'),
+      ).toBeTruthy();
+      expect(
+        container.querySelector('[data-testid="field-row-body"]'),
+      ).toBeTruthy();
     });
 
-    it("ArrowDown from title lands on the progress row when it is visible", async () => {
-      const { container, getByTestId } = await renderInspector(
+    it("visible progress row renders alongside other field-row zones", async () => {
+      // When `progress` has a positive `total`, the progress row is rendered
+      // and registers as its own field-row zone — beam-search rule 2 picks
+      // it up as a navigable target. Verify the row is present alongside
+      // its sibling field-row zones.
+      const { container } = await renderInspector(
         makeEntity({
           title: "T",
           body: "B",
@@ -581,60 +664,29 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-segment='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
-      // Header order is title → tags → progress, so ArrowDown from title
-      // lands on tags first.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-      expect(tagsRow!.getAttribute("data-focused")).toBe("true");
-
-      // Second ArrowDown should now land on the visible progress row.
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
+      // Header order is title → tags → progress; all three rows render.
+      expect(
+        container.querySelector('[data-testid="field-row-tags"]'),
+      ).toBeTruthy();
       const progressRow = container.querySelector(
         '[data-testid="field-row-progress"]',
       );
       expect(progressRow).toBeTruthy();
-      expect(progressRow!.getAttribute("data-focused")).toBe("true");
+      expect(progressRow!.querySelector('[role="progressbar"]')).toBeTruthy();
     });
   });
 
-  it("tag pill in inspector has entity moniker as ancestor scope when using InspectorFocusBridge", async () => {
-    const tags = [
-      {
-        entity_type: "tag",
-        id: "tag-ui",
-        moniker: "tag:tag-ui",
-        fields: { tag_name: "ui", color: "1d76db", description: "UI" },
-      },
-    ];
-    const { container } = await renderViaInspectorBridge(
-      makeEntity({ body: "Fix #ui bug" }),
-      tags,
-    );
-
-    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-    expect(bodyRow).toBeTruthy();
-    // The entity FocusScope wraps the inspector — verify data-moniker="task:test-id" is present
-    const entityScope = container.querySelector(
-      '[data-moniker="task:test-id"]',
-    );
-    expect(
-      entityScope,
-      "Entity FocusScope with task:test-id moniker should exist",
-    ).toBeTruthy();
-    // The body row (containing the tag pill) should be inside the entity scope
-    expect(
-      entityScope!.contains(bodyRow),
-      "body row (with tag pill) should be inside the entity scope",
-    ).toBe(true);
-  });
+  // Test "tag pill in inspector has entity moniker as ancestor scope when
+  // using InspectorFocusBridge" deleted in card 01KQCTJY1QZ710A05SE975GHNR.
+  // The entity FocusScope wrap that this test asserted on is gone — the
+  // inspector no longer wraps `<EntityInspector>` in a `<FocusScope
+  // moniker={entityMoniker}>`. Field zones (and the pill leaves inside
+  // them) register at the inspector layer root with `parentZone === null`.
 
   describe("iconOverride", () => {
     // Task schema with a status_date field that has a display with iconOverride.
@@ -1012,57 +1064,37 @@ describe("EntityInspector", () => {
     };
 
     async function renderWithSectionedSchema(entity: Entity) {
-      // Swap the mock to return the sectioned schema for this block. The
-      // `any` cast matches the original mockInvoke's signature, which infers
-      // a return-type union from its declaration site — our sectioned schema
-      // shape isn't part of that union by construction, so we widen here.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockInvoke.mockImplementation(((...args: any[]) => {
-        if (args[0] === "list_entity_types")
-          return Promise.resolve(["task", "tag", "actor"]);
-        if (args[0] === "get_entity_schema")
-          return Promise.resolve(SECTIONED_TASK_SCHEMA);
-        if (args[0] === "get_ui_state")
-          return Promise.resolve({
-            palette_open: false,
-            palette_mode: "command",
-            keymap_mode: "cua",
-            scope_chain: [],
-            open_boards: [],
-            windows: {},
-            recent_boards: [],
-          });
-        if (args[0] === "update_entity_field")
-          return Promise.resolve({ id: "test-id" });
-        return Promise.resolve("ok");
+      // Reset the kernel simulator with a fallback that returns the
+      // sectioned-schema shape for `get_entity_schema`. The simulator
+      // routes spatial-nav IPCs through itself; everything else falls
+      // through to this handler.
+      mockInvoke.mockReset();
+      installKernelSimulator(
+        mockInvoke,
+        listeners,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) as any);
+        async (cmd: string, _args?: any) => {
+          if (cmd === "list_entity_types") return ["task", "tag", "actor"];
+          if (cmd === "get_entity_schema") return SECTIONED_TASK_SCHEMA;
+          if (cmd === "get_ui_state")
+            return {
+              palette_open: false,
+              palette_mode: "command",
+              keymap_mode: "cua",
+              scope_chain: [],
+              open_boards: [],
+              windows: {},
+              recent_boards: [],
+            };
+          if (cmd === "update_entity_field") return { id: "test-id" };
+          return "ok";
+        },
+      );
       const result = await renderInspector(entity);
-      // Restore the default mock after render so subsequent tests are unaffected.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockInvoke.mockImplementation(((...args: any[]) => {
-        if (args[0] === "list_entity_types")
-          return Promise.resolve(["task", "tag", "actor"]);
-        if (args[0] === "get_entity_schema") {
-          const entityType = (args[1] as Record<string, unknown>)
-            ?.entityType as string;
-          return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
-        }
-        if (args[0] === "get_ui_state")
-          return Promise.resolve({
-            palette_open: false,
-            palette_mode: "command",
-            keymap_mode: "cua",
-            scope_chain: [],
-            open_boards: [],
-            windows: {},
-            recent_boards: [],
-          });
-        if (args[0] === "update_entity_field")
-          return Promise.resolve({ id: "test-id" });
-        return Promise.resolve("ok");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) as any);
+      // Restore the default kernel simulator after render so subsequent
+      // tests in this file see the per-entity schema fallback again.
+      mockInvoke.mockReset();
+      installKernelSimulator(mockInvoke, listeners, fallbackInvoke);
       return result;
     }
 
@@ -1122,8 +1154,13 @@ describe("EntityInspector", () => {
       expect(dividers.length).toBe(2);
     });
 
-    it("ArrowDown from the last body field focuses the first dates field", async () => {
-      const { container, getByTestId } = await renderWithSectionedSchema(
+    it("dates section's field rows render as zones alongside body and header rows", async () => {
+      // After the spatial-nav migration, cross-section ArrowDown navigation
+      // is driven by beam-search rule 2 in the Rust spatial graph. In this
+      // test environment we don't mount the Rust IPC stack, so we verify
+      // the structural surface: every navigable row across header, body,
+      // and dates renders so the navigator has zones to land on.
+      const { container } = await renderWithSectionedSchema(
         makeEntity({
           title: "T",
           body: "B",
@@ -1132,27 +1169,141 @@ describe("EntityInspector", () => {
         }),
       );
 
-      // Navigable order is title (header) → body (body) → due (dates) → scheduled (dates).
-      // From the default first-focus on `title`, two ArrowDowns should land on `due`.
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      expect(titleRow!.getAttribute("data-focused")).toBe("true");
+      const titleFocusZone = titleRow!.querySelector(
+        "[data-segment='field:task:test-id.title']",
+      );
+      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
 
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
+      // All four navigable rows render and live in the right sections.
+      const headerSection = container.querySelector(
+        '[data-testid="inspector-section-header"]',
+      );
+      const bodySection = container.querySelector(
+        '[data-testid="inspector-section-body"]',
+      );
+      const datesSection = container.querySelector(
+        '[data-testid="inspector-section-dates"]',
+      );
+      expect(
+        headerSection!.querySelector('[data-testid="field-row-title"]'),
+      ).toBeTruthy();
+      expect(
+        bodySection!.querySelector('[data-testid="field-row-body"]'),
+      ).toBeTruthy();
+      expect(
+        datesSection!.querySelector('[data-testid="field-row-due"]'),
+      ).toBeTruthy();
+      expect(
+        datesSection!.querySelector('[data-testid="field-row-scheduled"]'),
+      ).toBeTruthy();
+    });
+  });
+
+  describe("field rows as zones", () => {
+    it("each field row contains a FocusZone with the entity's field moniker", async () => {
+      // After card `01KQ5QB6F4MTD35GBTARJH4JEW`, `<Field>` itself
+      // registers as a `<FocusZone>` keyed by
+      // `field:<entityType>:<entityId>.<fieldName>` — the inspector row
+      // no longer wraps the field in its own outer FocusZone. The row's
+      // outer `<div>` carries the `data-testid` and the icon-and-content
+      // layout; the moniker-bearing FocusZone lives inside it (around
+      // the field's display content). Verify the moniker shape per row.
+      const { container } = await renderInspector(
+        makeEntity({ title: "T", body: "B", tags: [] }),
+      );
+
+      const titleRow = container.querySelector(
+        '[data-testid="field-row-title"]',
+      );
+      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
       const bodyRow = container.querySelector('[data-testid="field-row-body"]');
-      expect(bodyRow!.getAttribute("data-focused")).toBe("true");
 
-      await act(async () => {
-        getByTestId("nav-broadcast-nav.down").click();
-        await new Promise((r) => setTimeout(r, 0));
-      });
-      const dueRow = container.querySelector('[data-testid="field-row-due"]');
-      expect(dueRow).toBeTruthy();
-      expect(dueRow!.getAttribute("data-focused")).toBe("true");
+      // Field monikers follow the `field:<entityType>:<entityId>.<fieldName>`
+      // convention from `lib/moniker.ts`. The exact entity type / id come
+      // from `makeEntity()` (task, test-id). The element bearing the
+      // moniker is a descendant of the row (the Field's FocusZone div).
+      expect(
+        titleRow!.querySelector("[data-segment='field:task:test-id.title']"),
+      ).toBeTruthy();
+      expect(
+        tagsRow!.querySelector("[data-segment='field:task:test-id.tags']"),
+      ).toBeTruthy();
+      expect(
+        bodyRow!.querySelector("[data-segment='field:task:test-id.body']"),
+      ).toBeTruthy();
+    });
+
+    it("field row outer element has flex row layout classes (icon + content stay horizontal)", async () => {
+      // Regression guard: the icon | content layout inside the field row
+      // must not collapse to a vertical stack. After card
+      // `01KQ9ZJHRXCY8Z5YT6RF4SG6EK`, the icon and the content live
+      // *inside* the field's `<FocusZone>` (so a click on the icon
+      // bubbles to the zone's spatial-focus handler and the focus bar
+      // paints to the LEFT of the icon). The flex-row container is now
+      // a child of the zone wrapper; the outer `data-testid` div is a
+      // plain pass-through whose only job is to make the row queryable.
+      //
+      // CRITICAL: this test must mount inside the spatial-focus provider
+      // stack (`<SpatialFocusProvider>` + `<FocusLayer>`). Without it,
+      // `<FocusZone>` short-circuits to its no-spatial-context fallback
+      // (a plain `<div>`) instead of mounting the spatial primitive, so
+      // any regression that manifests only against the primitive path
+      // would slip past.
+      const { container } = await renderInspectorWithSpatial(
+        makeEntity({ title: "T", body: "B", tags: ["bug"] }),
+      );
+
+      const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
+      expect(tagsRow).toBeTruthy();
+
+      // The icon span and the content div must share a single flex-row
+      // ancestor — inside the field zone, which itself sits inside the
+      // testid'd outer div. Walk up from the icon span until we hit a
+      // flex container; verify the content div is also a descendant of
+      // the same container, and that the container is row-direction
+      // (no `flex-col`).
+      const iconSpan = tagsRow!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
+      ) as HTMLElement | null;
+      expect(iconSpan).toBeTruthy();
+
+      let flexAncestor: HTMLElement | null = iconSpan!.parentElement;
+      while (
+        flexAncestor &&
+        !flexAncestor.className.split(/\s+/).includes("flex")
+      ) {
+        flexAncestor = flexAncestor.parentElement;
+      }
+      expect(
+        flexAncestor,
+        "icon span has no flex ancestor inside the field row",
+      ).toBeTruthy();
+      expect(flexAncestor!.className).toContain("flex");
+      expect(flexAncestor!.className).toContain("items-start");
+      expect(flexAncestor!.className).toContain("gap-2");
+      // Critical: the flex container must NOT be a column.
+      expect(flexAncestor!.className).not.toContain("flex-col");
+      // The flex container lives inside the field zone (data-moniker
+      // marker), not at the outer testid wrapper.
+      const fieldZone = tagsRow!.querySelector(
+        '[data-segment="field:task:test-id.tags"]',
+      );
+      expect(
+        fieldZone!.contains(flexAncestor),
+        "flex row must live inside the field zone so the icon and content share the zone's containing block",
+      ).toBe(true);
+      // The content's `flex-1 min-w-0` div is a sibling of the icon span
+      // inside that flex container.
+      const contentDiv = flexAncestor!.querySelector(
+        ":scope > .flex-1.min-w-0",
+      );
+      expect(
+        contentDiv,
+        "content div is not a sibling of the icon span in the flex row",
+      ).toBeTruthy();
     });
   });
 });

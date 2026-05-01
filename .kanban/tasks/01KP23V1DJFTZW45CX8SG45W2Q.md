@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffbe80
+position_ordinal: ffffffffffffffffffffffffffffff9b80
 title: Hide progress field row in inspector when total is 0
 ---
 ## What

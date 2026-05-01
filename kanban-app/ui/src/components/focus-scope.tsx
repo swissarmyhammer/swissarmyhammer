@@ -1,237 +1,542 @@
+/**
+ * `<FocusScope>` — the leaf primitive in the spatial-nav graph and the
+ * entity-aware focus point most call sites use.
+ *
+ * `<FocusScope>` is a **pure spatial primitive**. It does NOT know about
+ * inspectable entities and does NOT dispatch `ui.inspect`. Inspector
+ * dispatch lives in `<Inspectable>` — see `inspectable.tsx`.
+ *
+ * # Path-monikers identity model
+ *
+ * After card `01KQD6064G1C1RAXDFPJVT1F46` the spatial graph uses one
+ * identifier shape per primitive: `FullyQualifiedMoniker`. The FQM is
+ * the spatial key — there is no separate UUID. The scope reads its
+ * parent FQM from `FullyQualifiedMonikerContext`, composes its own
+ * FQM as `<parentFq>/<segment>`, and registers with the kernel via
+ * `spatial_register_scope(fq, segment, rect, layerFq, parentZone,
+ * overrides)`. There is no `crypto.randomUUID()` on the React side.
+ *
+ * Three peers, not four: the spatial-nav kernel exposes `<FocusLayer>`
+ * (modal boundary), `<FocusZone>` (navigable container), and
+ * `<FocusScope>` (leaf). This component is the leaf:
+ *
+ *   - Composes its FQM via `useFullyQualifiedMoniker()` + the consumer's
+ *     `moniker` segment, then registers with Rust via
+ *     `spatial_register_scope`.
+ *   - Subscribes to per-FQM focus claims through `useFocusClaim` so its
+ *     `data-focused` attribute and the visible `<FocusIndicator>` flip
+ *     when this FQM becomes focused.
+ *   - Handles click → `spatial_focus(fq)`, with editable surfaces (inputs,
+ *     contenteditable) spared so caret placement is not stolen.
+ *   - Right-click → `setFocus(fq)` + native context menu via
+ *     `useContextMenu`.
+ *   - Pushes a `CommandScopeContext.Provider` so descendants participate
+ *     in command resolution and the context-menu chain.
+ *   - Pushes a `FocusScopeContext.Provider` so descendants discover their
+ *     nearest enclosing scope without walking the command-scope chain.
+ *   - Registers with the entity-focus scope registry so `useFocusedScope`
+ *     and the dispatcher can compute scope chains.
+ *   - Optional `navOverride` per-direction directives forwarded into the
+ *     Rust-side registry.
+ *   - `scrollIntoView` when the entity-focus store reports this scope as
+ *     directly focused — preserves the legacy "follow the focus bar"
+ *     scroll behavior.
+ *
+ * For containers (board, column, grid, perspective, view, nav-bar,
+ * toolbar group), use `<FocusZone>` directly. For modal boundaries
+ * (window root, inspector, dialog), use `<FocusLayer>` directly.
+ */
+
 import {
-  createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
+  useState,
+  type HTMLAttributes,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   CommandScopeContext,
-  useDispatchCommand,
+  EMPTY_COMMANDS,
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
 import {
-  useEntityFocus,
-  type ClaimPredicate,
+  useEntityScopeRegistration,
+  useOptionalFocusActions,
+  useOptionalIsDirectFocus,
 } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
-import { FocusHighlight } from "@/components/ui/focus-highlight";
+import {
+  useFocusClaim,
+  useSpatialFocusActions,
+} from "@/lib/spatial-focus-context";
+import { cn } from "@/lib/utils";
+import { useFocusDebug } from "@/lib/focus-debug-context";
+import {
+  FullyQualifiedMonikerContext,
+  useOptionalFullyQualifiedMoniker,
+} from "@/components/fully-qualified-moniker-context";
+import { useEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useParentZoneFq } from "@/components/focus-zone";
+import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
+import { FocusIndicator } from "@/components/focus-indicator";
+import {
+  FocusScopeContext,
+  useParentFocusScope,
+} from "@/components/focus-scope-context";
+import { useTrackRectOnAncestorScroll } from "@/components/use-track-rect-on-ancestor-scroll";
+import {
+  asPixels,
+  composeFq,
+  type FocusOverrides,
+  type FullyQualifiedMoniker,
+  type SegmentMoniker,
+} from "@/types/spatial";
 
-/**
- * React context that carries the moniker of the nearest ancestor FocusScope.
- * Used by useParentFocusScope() to let children discover their enclosing scope
- * without walking the command scope chain.
- */
-const FocusScopeContext = createContext<string | null>(null);
+// `FocusScopeContext` is shared with `<FocusZone>` via `./focus-scope-context`.
+// Both push the nearest entity moniker so descendants resolve without walking
+// the command-scope chain.
 
-/** Own props for FocusScope; HTML attributes (className, style, data-*) pass through. */
-type FocusScopeOwnProps = {
-  /** The moniker ("type:id") for the entity this scope represents. */
-  moniker: string;
-  /** Commands to register in this scope. */
-  commands: CommandDef[];
+/** Own props for `<FocusScope>`; standard HTML attributes (className, style, data-*) pass through. */
+export interface FocusScopeOwnProps {
+  /**
+   * Relative `SegmentMoniker` for the scope this represents — e.g.
+   * `"task:01ABC"`, `"toolbar.button:new"`. The scope's full FQM is
+   * composed by appending this segment to the parent FQM read from
+   * `FullyQualifiedMonikerContext`.
+   */
+  moniker: SegmentMoniker;
+  /**
+   * Per-direction navigation overrides forwarded into the Rust-side
+   * registry. Missing keys mean "fall through to beam search"; an
+   * explicit `null` blocks navigation in that direction; an FQM value
+   * redirects.
+   */
+  navOverride?: FocusOverrides;
+  /**
+   * Commands to register in this scope. Optional — defaults to the shared
+   * `EMPTY_COMMANDS` constant from command-scope.
+   */
+  commands?: readonly CommandDef[];
   children: ReactNode;
   /**
-   * Predicates that let this scope claim focus when a nav command is broadcast.
-   * Callers must memoize this array (e.g. with useMemo) to avoid unnecessary
-   * effect re-runs on every render.
+   * When false, suppresses both the visible `<FocusIndicator>` and the
+   * entity-focus-driven `scrollIntoView` effect. Defaults to true.
    */
-  claimWhen?: ClaimPredicate[];
-  /** When false, suppresses the data-focused attribute (hides the focus bar).
-   *  The scope still participates in focus/commands — only the visual indicator is hidden. */
   showFocusBar?: boolean;
-  /** When false, suppresses click/right-click/double-click event handling.
-   *  Independent of showFocusBar — a scope can handle events without showing the focus bar.
-   *  Defaults to true. */
+  /**
+   * When false, suppresses click / right-click / double-click event
+   * handling. Independent of `showFocusBar`. Defaults to true.
+   */
   handleEvents?: boolean;
-  /** When false, omits the wrapping FocusHighlight div — children render directly.
-   *  Use for table rows where a wrapping div breaks HTML structure.
-   *  The scope, moniker registration, and context still work; the caller
-   *  must attach onContextMenu etc. to their own element. */
+  /**
+   * When false, omits the wrapping primitive — children render directly
+   * under the CommandScopeContext + FocusScopeContext providers.
+   *
+   * Use for table rows where a wrapping div breaks HTML structure.
+   */
   renderContainer?: boolean;
-};
-
-type FocusScopeProps = FocusScopeOwnProps &
-  Omit<React.HTMLAttributes<HTMLElement>, keyof FocusScopeOwnProps>;
+  /** Optional ref to the rendered `<div>` element. */
+  ref?: Ref<HTMLDivElement>;
+}
 
 /**
- * Combines CommandScopeProvider + entity focus + context menu into one wrapper.
+ * Full props for `<FocusScope>` — `FocusScopeOwnProps` + passthrough HTML attrs.
  *
- * - Wraps children in a CommandScopeProvider with the given commands
- * - Sets entity focus on click (but not when clicking inputs/textareas)
- * - Shows native context menu on right-click using commands from the scope chain
- * - Adds data-moniker and data-focused attributes for CSS targeting
- * - Registers/deregisters the scope in the EntityFocus scope registry
+ * `onClick` is intentionally omitted from the passthrough: the primitive owns
+ * the click handler so it can call `spatial_focus`.
+ */
+export type FocusScopeProps = FocusScopeOwnProps &
+  Omit<HTMLAttributes<HTMLDivElement>, keyof FocusScopeOwnProps | "onClick">;
+
+/**
+ * Mounts a leaf focus scope in the Rust-side spatial graph and layers
+ * the entity-focus / command-scope / context-menu chrome on top.
+ *
+ * The FQM is composed deterministically from the parent FQM context plus
+ * the consumer's `moniker` segment — no UUID minting. A ResizeObserver
+ * attached to the root element keeps the Rust-side rect in sync. The
+ * component re-renders only when its own focus claim flips.
  */
 export function FocusScope({
-  moniker,
-  commands,
+  moniker: segment,
+  navOverride,
+  commands = EMPTY_COMMANDS,
   children,
-  claimWhen,
   showFocusBar = true,
   handleEvents = true,
   renderContainer = true,
+  ref: externalRef,
   ...rest
 }: FocusScopeProps) {
-  const {
-    focusedMoniker,
-    setFocus,
-    registerScope,
-    unregisterScope,
-    registerClaimPredicates,
-    unregisterClaimPredicates,
-  } = useEntityFocus();
+  // Compose this scope's FQM from the ancestor FQM + the segment.
+  const parentFq = useOptionalFullyQualifiedMoniker();
+  const fq = useMemo<FullyQualifiedMoniker | null>(() => {
+    if (parentFq === null) return null;
+    return composeFq(parentFq, segment);
+  }, [parentFq, segment]);
 
-  // Build the scope ourselves so we can register it
+  const focusKey = fq ?? segment;
+
+  // Selective subscription: this scope re-renders only when *its own*
+  // focus slot flips — not on every focus move elsewhere in the tree.
+  const isFocused = useOptionalIsDirectFocus(focusKey);
+
+  // Build the scope ourselves so we can register it in the entity-focus
+  // registry. Same shape as CommandScopeProvider produces, but we control
+  // the lifecycle so the registry stays in lockstep.
   const parent = useContext(CommandScopeContext);
   const scope = useMemo<CommandScope>(() => {
     const map = new Map<string, CommandDef>();
     for (const cmd of commands) {
       map.set(cmd.id, cmd);
     }
-    return { commands: map, parent, moniker };
-  }, [commands, parent, moniker]);
+    return { commands: map, parent, moniker: segment };
+  }, [commands, parent, segment]);
 
-  const isDirectFocus = showFocusBar && focusedMoniker === moniker;
+  const isDirectFocus = showFocusBar && isFocused;
 
-  // Register/deregister scope in the EntityFocus registry
-  useEffect(() => {
-    registerScope(moniker, scope);
-    return () => unregisterScope(moniker);
-  }, [moniker, scope, registerScope, unregisterScope]);
+  // Register the scope in the entity-focus registry.
+  useEntityScopeRegistration(focusKey, scope);
 
-  // Register/deregister claim predicates when claimWhen is provided
-  useEffect(() => {
-    if (claimWhen && claimWhen.length > 0) {
-      registerClaimPredicates(moniker, claimWhen);
-      return () => unregisterClaimPredicates(moniker);
-    }
-  }, [moniker, claimWhen, registerClaimPredicates, unregisterClaimPredicates]);
+  const hasSpatialContext = fq !== null;
 
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      // When handleEvents is false, don't claim focus on click — let the
-      // event propagate to the parent FocusScope (e.g. grid cell, card).
-      if (!handleEvents) return;
-
-      // Don't change entity focus when clicking inputs/textareas/selects
-      const target = e.target as HTMLElement;
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      // Don't change if the target is inside a contenteditable
-      if (target.closest("[contenteditable]")) return;
-
-      e.stopPropagation();
-      setFocus(moniker);
-    },
-    [moniker, setFocus, handleEvents],
-  );
-
-  // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)
-  // so we have access to the scope object for registry
   return (
-    <FocusScopeContext.Provider value={moniker}>
+    <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
-        {renderContainer ? (
-          <FocusScopeInner
-            moniker={moniker}
-            isDirectFocus={isDirectFocus}
+        {!renderContainer ? (
+          children
+        ) : hasSpatialContext ? (
+          <SpatialFocusScopeBody
+            fq={fq}
+            segment={segment}
+            navOverride={navOverride}
             showFocusBar={showFocusBar}
+            isDirectFocus={isDirectFocus}
             handleEvents={handleEvents}
-            onClick={handleClick}
+            ref={externalRef}
             {...rest}
           >
             {children}
-          </FocusScopeInner>
+          </SpatialFocusScopeBody>
         ) : (
-          children
+          <FallbackFocusScopeBody
+            segment={segment}
+            isDirectFocus={isDirectFocus}
+            handleEvents={handleEvents}
+            ref={externalRef}
+            {...rest}
+          >
+            {children}
+          </FallbackFocusScopeBody>
         )}
       </CommandScopeContext.Provider>
     </FocusScopeContext.Provider>
   );
 }
 
-/** Props for the inner focus-scope wrapper rendered inside CommandScopeContext. */
-interface FocusScopeInnerProps extends Omit<
-  React.HTMLAttributes<HTMLElement>,
+// ---------------------------------------------------------------------------
+// Body — spatial-context branch
+// ---------------------------------------------------------------------------
+
+/** Props for the spatial-context body. */
+interface SpatialFocusScopeBodyProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
   "onClick" | "children"
 > {
-  moniker: string;
-  isDirectFocus: boolean;
-  /** When false, hides the focus bar visual indicator. */
+  fq: FullyQualifiedMoniker;
+  segment: SegmentMoniker;
+  navOverride?: FocusOverrides;
   showFocusBar: boolean;
-  /** When false, suppresses click/right-click/double-click event handling. */
+  isDirectFocus: boolean;
   handleEvents: boolean;
-  onClick: React.MouseEventHandler<HTMLElement>;
   children: ReactNode;
+  ref?: Ref<HTMLDivElement>;
 }
 
-/** Inner component rendered inside CommandScopeContext so useContextMenu sees the scope. */
-function FocusScopeInner({
-  moniker,
-  isDirectFocus,
+/**
+ * Body branch when a `<FocusLayer>` ancestor IS present.
+ *
+ * Registers with the Rust-side spatial registry via
+ * `spatial_register_scope(fq, segment, ...)`, subscribes to per-FQM
+ * focus claims, and renders a single `<div>` that carries the
+ * consumer's className plus the `data-moniker` / `data-focused`
+ * debugging attributes.
+ */
+function SpatialFocusScopeBody({
+  fq,
+  segment,
+  navOverride,
   showFocusBar,
+  isDirectFocus,
   handleEvents,
-  onClick,
   children,
+  ref: externalRef,
   ...htmlProps
-}: FocusScopeInnerProps) {
+}: SpatialFocusScopeBodyProps) {
   const contextMenuHandler = useContextMenu();
-  const dispatch = useDispatchCommand("ui.inspect");
-  const { setFocus } = useEntityFocus();
+  const focusActions = useOptionalFocusActions();
+  const setFocus = focusActions?.setFocus;
+
+  const layerFq = useEnclosingLayerFq();
+  const parentZone = useParentZoneFq();
+
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const setRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      ref.current = node;
+      if (typeof externalRef === "function") {
+        externalRef(node);
+      } else if (externalRef) {
+        (externalRef as React.MutableRefObject<HTMLDivElement | null>).current =
+          node;
+      }
+    },
+    [externalRef],
+  );
+
+  const [focused, setFocused] = useState(false);
+  useFocusClaim(fq, setFocused);
+
+  const {
+    registerScope: registerSpatialScope,
+    unregisterScope,
+    updateRect,
+    focus,
+  } = useSpatialFocusActions();
+
+  // ---------------------------------------------------------------------
+  // navOverride contract
+  // ---------------------------------------------------------------------
+  // `navOverride` is read from a ref and snapshotted into the Rust-side
+  // registry **only when the registration effect runs**. Mid-life changes
+  // are intentionally ignored.
+  const navOverrideRef = useRef<FocusOverrides | undefined>(navOverride);
+  navOverrideRef.current = navOverride;
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+
+    const overrides: FocusOverrides = navOverrideRef.current ?? {};
+    const initialRect = node.getBoundingClientRect();
+    registerSpatialScope(
+      fq,
+      segment,
+      {
+        x: asPixels(initialRect.x),
+        y: asPixels(initialRect.y),
+        width: asPixels(initialRect.width),
+        height: asPixels(initialRect.height),
+      },
+      layerFq,
+      parentZone,
+      overrides,
+    ).catch((err) => console.error("[FocusScope] register failed", err));
+
+    const observer = new ResizeObserver(() => {
+      const node = ref.current;
+      if (!node) return;
+      const r = node.getBoundingClientRect();
+      updateRect(fq, {
+        x: asPixels(r.x),
+        y: asPixels(r.y),
+        width: asPixels(r.width),
+        height: asPixels(r.height),
+      }).catch((err) => console.error("[FocusScope] updateRect failed", err));
+    });
+    observer.observe(node);
+
+    return () => {
+      observer.disconnect();
+      unregisterScope(fq).catch((err) =>
+        console.error("[FocusScope] unregister failed", err),
+      );
+    };
+  }, [
+    fq,
+    segment,
+    layerFq,
+    parentZone,
+    registerSpatialScope,
+    unregisterScope,
+    updateRect,
+  ]);
+
+  useTrackRectOnAncestorScroll(ref, fq, updateRect);
+
+  useEffect(() => {
+    if (isDirectFocus && ref.current?.scrollIntoView) {
+      ref.current.scrollIntoView({ block: "nearest" });
+    }
+  }, [isDirectFocus]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      // When handleEvents is false, let the event propagate to the parent
-      // entity scope (e.g. EntityRow).
       if (!handleEvents) return;
-
       e.preventDefault();
       e.stopPropagation();
-      setFocus(moniker);
+      if (setFocus) setFocus(fq);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler, handleEvents],
+    [fq, setFocus, contextMenuHandler, handleEvents],
   );
 
-  const handleDoubleClick = useCallback(
+  const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // When handleEvents is false, let the event propagate to the parent
-      // entity scope (e.g. EntityRow).
-      if (!handleEvents) return;
-
-      // Skip if target is an interactive element
       const target = e.target as HTMLElement;
       const tag = target.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (target.closest("[contenteditable]")) return;
-
       e.stopPropagation();
-      dispatch({ target: moniker }).catch(console.error);
+      focus(fq).catch((err) => console.error("[FocusScope] focus failed", err));
     },
-    [dispatch, moniker, handleEvents],
+    [focus, fq],
   );
+
+  const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
+  const mergedClassName = cn(consumerClassName, "relative");
+
+  const debugEnabled = useFocusDebug();
 
   return (
-    <FocusHighlight
-      focused={isDirectFocus}
-      data-moniker={moniker}
-      onClick={onClick}
-      onDoubleClick={handleDoubleClick}
-      onContextMenu={handleContextMenu}
-      {...htmlProps}
-    >
-      {children}
-    </FocusHighlight>
+    <FullyQualifiedMonikerContext.Provider value={fq}>
+      <div
+        ref={setRef}
+        data-moniker={fq}
+        data-segment={segment}
+        data-focused={focused || undefined}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        {...restWithoutClassName}
+        className={mergedClassName}
+      >
+        {showFocusBar && <FocusIndicator focused={focused} />}
+        {debugEnabled && (
+          <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
+        )}
+        {children}
+      </div>
+    </FullyQualifiedMonikerContext.Provider>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Body — no-spatial-context fallback
+// ---------------------------------------------------------------------------
+
+interface FallbackFocusScopeBodyProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "onClick" | "children"
+> {
+  segment: SegmentMoniker;
+  isDirectFocus: boolean;
+  handleEvents: boolean;
+  children: ReactNode;
+  ref?: Ref<HTMLDivElement>;
 }
 
 /**
- * Returns the moniker of the nearest ancestor FocusScope, or null.
- * Uses React context so it skips CommandScopeProviders that aren't FocusScopes.
+ * Body branch for tests that mount a `<FocusScope>` outside the spatial
+ * provider stack (no `<SpatialFocusProvider>` / no `<FocusLayer>`).
  */
-export function useParentFocusScope(): string | null {
-  return useContext(FocusScopeContext);
+function FallbackFocusScopeBody({
+  segment,
+  isDirectFocus,
+  handleEvents,
+  children,
+  ref: externalRef,
+  ...htmlProps
+}: FallbackFocusScopeBodyProps) {
+  const contextMenuHandler = useContextMenu();
+  const focusActions = useOptionalFocusActions();
+  const setFocus = focusActions?.setFocus;
+
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const setRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      ref.current = node;
+      if (typeof externalRef === "function") {
+        externalRef(node);
+      } else if (externalRef) {
+        (externalRef as React.MutableRefObject<HTMLDivElement | null>).current =
+          node;
+      }
+    },
+    [externalRef],
+  );
+
+  useEffect(() => {
+    if (isDirectFocus && ref.current?.scrollIntoView) {
+      ref.current.scrollIntoView({ block: "nearest" });
+    }
+  }, [isDirectFocus]);
+
+  // No spatial ancestor → no parent FQM available, so this fallback can't
+  // compose a fully-qualified moniker for `setFocus`. Tests that mount
+  // a single primitive without `<SpatialFocusProvider>` only exercise
+  // render output, not focus mutations, so skipping the dispatch is the
+  // right behavior. Production code never enters this branch.
+  const parentFq = useOptionalFullyQualifiedMoniker();
+  const fallbackFq = useMemo(
+    () => (parentFq === null ? null : composeFq(parentFq, segment)),
+    [parentFq, segment],
+  );
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!handleEvents) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
+      contextMenuHandler(e);
+    },
+    [fallbackFq, setFocus, contextMenuHandler, handleEvents],
+  );
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!handleEvents) return;
+      const target = e.target as HTMLElement;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (target.closest("[contenteditable]")) return;
+      e.stopPropagation();
+      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
+    },
+    [fallbackFq, setFocus, handleEvents],
+  );
+
+  const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
+  const mergedClassName = cn(consumerClassName, "relative");
+
+  const debugEnabled = useFocusDebug();
+
+  return (
+    <div
+      ref={setRef}
+      data-moniker={segment}
+      data-segment={segment}
+      data-focused={isDirectFocus || undefined}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
+      {...restWithoutClassName}
+      className={mergedClassName}
+    >
+      {debugEnabled && (
+        <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
+      )}
+      {children}
+    </div>
+  );
 }
+
+// `useParentFocusScope` is exported as a re-export so existing import
+// paths (`@/components/focus-scope`) keep resolving.
+export { useParentFocusScope };

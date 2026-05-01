@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffac80
+position_ordinal: fffffffffffffc80
 title: Add TextEditor component smoke tests to catch render crashes
 ---
 ## What

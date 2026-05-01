@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffc080
+position_ordinal: ffffffffffffffffffffffffffffffa180
 project: kanban-mcp
 title: 'shelltool-cli: add commands/skill.rs, move serve/doctor/registry into commands/'
 ---

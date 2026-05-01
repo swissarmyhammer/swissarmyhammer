@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQCDYS8CFHVK5BR517MER4
 position_column: done
-position_ordinal: ffffffffff8680
+position_ordinal: ffffffffffdb80
 title: 'CLI subcommand: `sah merge {jsonl,yaml,md} %O %A %B`'
 ---
 ## What

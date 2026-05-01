@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffff8280
+position_ordinal: ffffffffffffffffffffe980
 title: 'Test unified_server: server startup, HTTP/stdio modes, and logging'
 ---
 File: swissarmyhammer-tools/src/mcp/unified_server.rs (56.4%, 95 uncovered lines)

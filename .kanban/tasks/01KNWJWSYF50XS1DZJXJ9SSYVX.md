@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffffffa080
+position_ordinal: ffffffffffffffffffffffffffffdd80
 title: Add tests for shelltool-cli doctor error-path branches
 ---
 shelltool-cli/src/doctor.rs:64-71, 105-114, 128

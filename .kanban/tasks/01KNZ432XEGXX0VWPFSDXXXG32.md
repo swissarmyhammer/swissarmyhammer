@@ -2,7 +2,7 @@
 assignees:
 - wballard
 position_column: done
-position_ordinal: ffffffffffffffffffffffb980
+position_ordinal: ffffffffffffffffffffffffffffff8980
 project: pill-via-cm6
 title: 'TextViewer component: read-only CM6 mount'
 ---

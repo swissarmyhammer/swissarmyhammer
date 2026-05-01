@@ -9,11 +9,6 @@ card_fields:
   - assignees
   - progress
 commands:
-  - id: board.newCard
-    name: New Card
-    keys:
-      vim: ":card new"
-      cua: Mod+N
   - id: board.collapseAll
     name: Collapse Lanes
   - id: board.expandAll

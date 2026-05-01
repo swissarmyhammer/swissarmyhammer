@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { MentionView, type MentionItem } from "@/components/mention-view";
 import type { CommandDef } from "@/lib/command-scope";
+import { CompactCellWrapper } from "./compact-cell-wrapper";
 import type { DisplayProps } from "./text-display";
 
 /**
@@ -76,6 +77,14 @@ function useTagUntagCommands(
   }, [targetEntityType, isComputedSlug, entityId]);
 }
 
+/** Props for {@link EmptyBadgeList}. */
+interface EmptyBadgeListProps {
+  /** Display mode — drives the styling and fallback text. */
+  mode: "compact" | "full";
+  /** Optional YAML-configured placeholder; falls back to mode-specific defaults. */
+  placeholder?: string;
+}
+
 /**
  * Empty-state rendering — compact grid cells vs. full inspector rows.
  *
@@ -85,13 +94,7 @@ function useTagUntagCommands(
  * placeholder, preserve the original `-` / `None` fallback so fields
  * that haven't opted in render identically to before.
  */
-function EmptyBadgeList({
-  mode,
-  placeholder,
-}: {
-  mode: "compact" | "full";
-  placeholder?: string;
-}) {
+function EmptyBadgeList({ mode, placeholder }: EmptyBadgeListProps) {
   if (mode === "compact") {
     return (
       <span className="text-muted-foreground/50">{placeholder ?? "-"}</span>
@@ -126,10 +129,23 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
     entity.id,
   );
 
-  if (values.length === 0)
-    return <EmptyBadgeList mode={mode} placeholder={field.placeholder} />;
+  if (values.length === 0) {
+    const empty = (
+      <EmptyBadgeList mode={mode} placeholder={field.placeholder} />
+    );
+    return mode === "compact" ? (
+      <CompactCellWrapper>{empty}</CompactCellWrapper>
+    ) : (
+      empty
+    );
+  }
 
-  return (
+  const pills = (
     <MentionView items={items} mode={mode} extraCommands={extraCommands} />
+  );
+  return mode === "compact" ? (
+    <CompactCellWrapper>{pills}</CompactCellWrapper>
+  ) : (
+    pills
   );
 }

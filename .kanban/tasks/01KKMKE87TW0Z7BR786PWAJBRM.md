@@ -3,7 +3,7 @@ depends_on:
 - 01KKMKDE3KJ28Y6CJ83FH14E7Z
 - 01KKMKDT0BVW106TARYSXP7CAP
 position_column: done
-position_ordinal: '8980'
+position_ordinal: 8d80
 title: Implement EntitySearchIndex with hybrid fuzzy→semantic fallback
 ---
 ## What

@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNFFGHZJPP17RX608S1WZ2XX
 position_column: done
-position_ordinal: ffffffffffffffffffffb080
+position_ordinal: ffffffffffffffffffffffffffd080
 title: 'scope_commands: read entity-scoped commands from entity defs instead of registry'
 ---
 ## What

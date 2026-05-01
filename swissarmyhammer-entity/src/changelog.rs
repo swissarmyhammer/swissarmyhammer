@@ -336,6 +336,9 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
         match serde_json::from_str::<ChangeEntry>(line) {
             Ok(entry) => entries.push(entry),
             Err(e) => {
+                if is_store_changelog_line(line) {
+                    continue;
+                }
                 warn!(
                     path = %path.display(),
                     line_number = i + 1,
@@ -347,6 +350,17 @@ pub async fn read_changelog(path: &Path) -> Result<Vec<ChangeEntry>> {
     }
 
     Ok(entries)
+}
+
+/// True if `line` looks like a `swissarmyhammer-store::ChangelogEntry`
+/// (the patch-based undo/redo log) rather than a `ChangeEntry`. Both writers
+/// share the same per-entity `.jsonl` file, so the entity reader has to step
+/// over the store reader's records without flagging them as corruption.
+fn is_store_changelog_line(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| v.get("forward_patch").cloned())
+        .is_some()
 }
 
 /// Read all change entries, falling back to a secondary path if the primary does not exist.
@@ -787,6 +801,34 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].op, "create");
         assert_eq!(entries[1].op, "create");
+    }
+
+    #[tokio::test]
+    async fn read_changelog_silently_skips_store_layer_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.jsonl");
+
+        let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Hello".into()),
+                },
+            )],
+        );
+        let valid_line = serde_json::to_string(&entry).unwrap();
+        let store_line = r#"{"id":"01XYZ","timestamp":"2026-04-26T14:10:41.843975Z","op":"update","item_id":"01ABC","forward_patch":"--- a\n+++ b\n","reverse_patch":"--- b\n+++ a\n","transaction_id":null}"#;
+
+        let content = format!("{}\n{}\n{}\n", valid_line, store_line, valid_line);
+        fs::write(&log_path, content).await.unwrap();
+
+        let entries = read_changelog(&log_path).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(is_store_changelog_line(store_line));
+        assert!(!is_store_changelog_line(&valid_line));
     }
 
     #[test]

@@ -85,7 +85,6 @@ vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
     getSchema: () => ({ entity: { name: "task", fields: [] }, fields: [] }),
     getFieldDef: () => undefined,
-    getEntityCommands: () => [],
     mentionableTypes: [],
     loading: false,
   }),
@@ -308,7 +307,7 @@ describe("PerspectiveTabBar", () => {
     // active — so before triggering rename, we expect exactly one editor.
     expect(container.querySelectorAll(".cm-editor").length).toBe(1);
 
-    // Dispatching ui.perspective.startRename (via triggerStartRename — the
+    // Dispatching ui.entity.startRename (via triggerStartRename — the
     // same code path the AppShell global command handler calls) should put
     // the active tab into rename mode.
     act(() => {
@@ -698,6 +697,115 @@ describe("PerspectiveTabBar", () => {
       );
       expect(formulaBar).toBeTruthy();
       expect(formulaBar?.className).toContain("cursor-text");
+    });
+  });
+
+  // =========================================================================
+  // Rect regression — first-paint kernel-stored rects must be non-zero
+  // =========================================================================
+  //
+  // Source-of-truth assertion for kanban card `01KQ9Z56M556DQHYMA502B9FKB`'s
+  // rect-regression criterion: none of the perspective tabs' kernel-stored
+  // rects may be zero-sized at first paint, including the active tab whose
+  // box is wider due to inline `<FilterFocusButton>` + `<GroupPopoverButton>`
+  // chrome.
+  //
+  // Beam search picks candidates by their rect center / left-edge ordering;
+  // a zero-sized rect from a tab leaf would either tie with siblings (making
+  // the picks non-deterministic) or fail the in-beam filter outright (making
+  // the next tab unreachable). Both manifestations were on the user's
+  // candidate-cause list — pin first-paint non-zero rects so a future
+  // measurement-timing regression surfaces immediately.
+  //
+  // Mounts the bar inside the production-shaped spatial-nav stack so each
+  // tab's `<FocusScope>` registers itself with the kernel via
+  // `spatial_register_scope`. The recorded `rect` argument is the rect
+  // snapshotted by `<FocusScope>`'s mount effect via
+  // `node.getBoundingClientRect()` — the kernel's source-of-truth at first
+  // paint.
+  // =========================================================================
+
+  describe("rect regression — first paint", () => {
+    it("kernel-stored rects of all perspective tabs are non-zero on first paint", async () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [
+          { id: "p1", name: "Sprint", view: "board" },
+          { id: "p2", name: "Backlog", view: "board" },
+          { id: "p3", name: "Archive", view: "board" },
+        ],
+        // p2 is active — its leaf is widened by the inline
+        // `<FilterFocusButton>` + `<GroupPopoverButton>` chrome that only
+        // the active tab renders. The regression guard must hold for the
+        // wider leaf as well as the flanking ones.
+        activePerspective: { id: "p2", name: "Backlog", view: "board" },
+      };
+
+      // Lazy-import to avoid pulling the spatial-nav stack into the simpler
+      // tests above (and to keep this rect-regression block self-contained).
+      const { FocusLayer } = await import("./focus-layer");
+      const { SpatialFocusProvider } = await import(
+        "@/lib/spatial-focus-context"
+      );
+      const { asSegment } = await import("@/types/spatial");
+
+      const { unmount } = render(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
+      );
+
+      // Flush the register effects scheduled by `<FocusScope>` on mount.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Collect the rect for each perspective tab leaf from the
+      // `spatial_register_scope` invocation argument bag.
+      type RectArg = {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+      const tabRects = new Map<string, RectArg>();
+      for (const call of mockInvoke.mock.calls) {
+        if (call[0] !== "spatial_register_scope") continue;
+        const args = call[1] as { segment: string; rect: RectArg };
+        if (typeof args?.segment !== "string") continue;
+        if (!args.segment.startsWith("perspective_tab:")) continue;
+        tabRects.set(args.segment, args.rect);
+      }
+
+      expect(
+        tabRects.size,
+        "all three perspective tabs must register a rect with the kernel",
+      ).toBe(3);
+      expect(tabRects.has("perspective_tab:p1")).toBe(true);
+      expect(tabRects.has("perspective_tab:p2")).toBe(true);
+      expect(tabRects.has("perspective_tab:p3")).toBe(true);
+
+      // Every tab's rect must be non-zero in both dimensions. A leaf with
+      // a zero-width or zero-height rect is invisible to beam search.
+      for (const [moniker, rect] of tabRects) {
+        expect(
+          rect.width,
+          `${moniker} rect.width must be > 0 at first paint (got ${rect.width})`,
+        ).toBeGreaterThan(0);
+        expect(
+          rect.height,
+          `${moniker} rect.height must be > 0 at first paint (got ${rect.height})`,
+        ).toBeGreaterThan(0);
+      }
+
+      unmount();
     });
   });
 });

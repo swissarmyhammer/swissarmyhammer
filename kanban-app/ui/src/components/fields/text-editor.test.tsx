@@ -57,11 +57,7 @@ describe("TextEditor smoke tests", () => {
     expect(() =>
       render(
         <Wrapper>
-          <TextEditor
-            value=""
-            placeholder="Type here..."
-            onChange={() => {}}
-          />
+          <TextEditor value="" placeholder="Type here..." onChange={() => {}} />
         </Wrapper>,
       ),
     ).not.toThrow();

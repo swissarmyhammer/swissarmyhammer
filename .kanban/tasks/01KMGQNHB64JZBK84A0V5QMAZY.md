@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KMGQCDYS8CFHVK5BR517MER4
 position_column: done
-position_ordinal: ffffffffff8780
+position_ordinal: ffffffffffdc80
 title: 'YAML merge strategy: three-way field merge with newest-wins from JSONL'
 ---
 ## What

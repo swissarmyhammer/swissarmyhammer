@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKYR690S88SENAN2HVB6X5BJ
 position_column: done
-position_ordinal: ffffffffec80
+position_ordinal: ffffffffffab80
 title: Ensure window_boards board paths are auto-opened on startup
 ---
 ## What

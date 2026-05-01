@@ -6,7 +6,7 @@ depends_on:
 - 01KP65XNZTM9FF4Z5DTE967PBX
 - 01KP65Z6KDT9DCV02QXYRPG1TF
 position_column: done
-position_ordinal: ffffffffffffffffffffffd380
+position_ordinal: ffffffffffffffffffffffffffffffc780
 title: 'entity-cache 4/4: kanban-app watcher collapses to a bridge; delete path-hash cache, flush_and_emit, enrich_computed_fields'
 ---
 #entity-cache

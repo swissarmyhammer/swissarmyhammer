@@ -101,67 +101,12 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
-/// Gather view info from an optional board handle for dynamic commands.
-fn gather_views(
-    handle: Option<&BoardHandle>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
-    use swissarmyhammer_kanban::scope_commands::ViewInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Some(views_lock) = handle.ctx.views() else {
-        return vec![];
-    };
-    let Ok(vc) = views_lock.try_read() else {
-        return vec![];
-    };
-    vc.all_views()
-        .iter()
-        .map(|v| ViewInfo {
-            id: v.id.clone(),
-            name: v.name.clone(),
-        })
-        .collect()
-}
-
-/// Gather open board info from UIState for dynamic commands.
-async fn gather_boards(
-    ui_state: &swissarmyhammer_commands::UIState,
-    boards: &tokio::sync::RwLock<
-        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>,
-    >,
-) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
-    use swissarmyhammer_kanban::scope_commands::BoardInfo;
-    let open_paths = ui_state.open_boards();
-    let boards_lock = boards.read().await;
-    let mut result = Vec::new();
-    for path in &open_paths {
-        let p = std::path::Path::new(path);
-        let dir_name = p
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("Board")
-            .to_string();
-        let entity_name = match boards_lock.get(p) {
-            Some(handle) => board_display_name(handle)
-                .await
-                .unwrap_or_else(|| dir_name.clone()),
-            None => dir_name.clone(),
-        };
-        let context_name = boards_lock
-            .get(p)
-            .map(|h| h.ctx.name().to_string())
-            .unwrap_or_else(|| dir_name.clone());
-        result.push(BoardInfo {
-            path: path.clone(),
-            name: dir_name,
-            entity_name,
-            context_name,
-        });
-    }
-    result
-}
-
 /// Gather window info from Tauri for dynamic commands.
+///
+/// Stays in the GUI crate because live window titles, visibility, and focus
+/// state only exist on the Tauri runtime. The headless `DynamicSources`
+/// builder in `swissarmyhammer_kanban::dynamic_sources` takes the result of
+/// this function as a caller-supplied input; tests fabricate the list.
 fn gather_windows(
     app: &tauri::AppHandle,
 ) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
@@ -178,49 +123,6 @@ fn gather_windows(
                 title,
                 focused: w.is_focused().unwrap_or(false),
             })
-        })
-        .collect()
-}
-
-/// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
-fn resolve_active_view_kind(
-    handle: Option<&BoardHandle>,
-    ui_state: &swissarmyhammer_commands::UIState,
-) -> Option<String> {
-    let handle = handle?;
-    let active_id = ui_state.active_view_id("main");
-    if active_id.is_empty() {
-        return None;
-    }
-    let views_lock = handle.ctx.views()?;
-    let vc = views_lock.try_read().ok()?;
-    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
-    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
-}
-
-/// Gather perspective info from an optional board handle for dynamic commands.
-///
-/// When `view_kind` is provided, only perspectives matching that view kind are
-/// returned. This prevents duplicate "Default" entries across view kinds.
-async fn gather_perspectives(
-    handle: Option<&BoardHandle>,
-    view_kind: Option<&str>,
-) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
-    use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
-    let Some(handle) = handle else { return vec![] };
-    let Ok(pctx) = handle.ctx.perspective_context().await else {
-        return vec![];
-    };
-    let Ok(pc) = pctx.try_read() else {
-        return vec![];
-    };
-    pc.all()
-        .iter()
-        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
-        .map(|p| PerspectiveInfo {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            view: p.view.clone(),
         })
         .collect()
 }
@@ -1306,20 +1208,38 @@ fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
 }
 
 /// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
+///
+/// The two remaining dynamic prefixes:
+///
+///   * `board.switch:{path}` — rewrites to `file.switchBoard` with `path`
+///     lifted into args and additionally propagated as the effective board
+///     path so downstream multi-window targeting switches boards in lockstep
+///     with the command.
+///   * `entity.add:{type}` — rewrites to the canonical `entity.add` with
+///     `entity_type` moved into the arg bag; `AddEntityCmd` reads
+///     `entity_type` from args and forwards every other arg as a field
+///     override, so adding a new entity type needs zero Rust changes here.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the emit_* helpers in
+/// `swissarmyhammer_kanban::scope_commands` now produce `view.set` /
+/// `perspective.set` rows directly with the view / perspective id
+/// pre-filled in `args`, so no rewrite hop is needed.
 fn match_dynamic_prefix(
     cmd: &str,
 ) -> Result<Option<(&'static str, &'static str, String, bool)>, String> {
-    if let Some(suffix) = cmd.strip_prefix("view.switch:") {
-        Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
-    } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
+    if let Some(suffix) = cmd.strip_prefix("board.switch:") {
         if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
             return Err(format!("Invalid board path in command: {:?}", suffix));
         }
         Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
-    } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
+    } else if let Some(suffix) = cmd.strip_prefix("entity.add:") {
+        if suffix.is_empty() {
+            return Err(format!("Missing entity type in command: {:?}", cmd));
+        }
         Ok(Some((
-            "ui.perspective.set",
-            "perspective_id",
+            "entity.add",
+            "entity_type",
             suffix.to_string(),
             false,
         )))
@@ -1330,10 +1250,15 @@ fn match_dynamic_prefix(
 
 /// Rewrite dynamic palette command prefixes to their canonical forms.
 ///
-/// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
-/// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
-/// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
-/// `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+/// Handles `window.focus:*` (pure side-effect, returns early),
+/// `board.switch:*`, and `entity.add:*` by stripping the prefix and
+/// injecting the suffix as an arg. Preserves all input validation
+/// (ASCII-only, `MAX_COMMAND_LENGTH`-byte limit, bounded rewrite depth).
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` were retired in
+/// 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits `view.set` /
+/// `perspective.set` directly with args pre-filled, so no rewrite is
+/// needed.
 fn rewrite_dynamic_prefix(
     app: &AppHandle,
     cmd: &str,
@@ -1436,10 +1361,14 @@ fn apply_prefix_rewrite(
 /// It handles: command lookup, context building, execution, undo tracking,
 /// entity flush, event emission, and UIState change broadcasting.
 ///
-/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
+/// Dynamic prefix commands (`board.switch:*`, `entity.add:*`) are rewritten
 /// to their canonical command IDs via a single-pass loop. The rewrite is
 /// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
 /// recursion from malformed command chains like `board.switch:board.switch:…`.
+///
+/// `view.switch:{id}` and `perspective.goto:{id}` used to travel this path
+/// and were retired in 01KPZMXXEXKVE3RNPA4XJP0105 — the palette now emits
+/// `view.set` / `perspective.set` directly with args pre-filled.
 ///
 /// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
 /// returns early without entering the standard result-processing pipeline.
@@ -1463,8 +1392,11 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    // Rewrite dynamic prefixes (view.switch:*, board.switch:*, perspective.goto:*)
-    // to canonical commands with merged args. Also validates command ID.
+    // Rewrite the remaining dynamic prefixes (`window.focus:*`,
+    // `board.switch:*`, `entity.add:*`) to canonical commands with merged
+    // args. Also validates command ID. `view.switch:*` /
+    // `perspective.goto:*` are emitted as `view.set` / `perspective.set`
+    // directly (see 01KPZMXXEXKVE3RNPA4XJP0105) so no rewrite hop applies.
     let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
     if let Some(result) = rw.early_return {
         return Ok(result);
@@ -1897,13 +1829,57 @@ async fn perform_cross_board_drag_transfer(
 /// `UIStateChange` result envelope or mutated board open/close state (which
 /// is not typed as a `UIStateChange` but still affects what the React
 /// `UIStateProvider` renders).
+///
+/// The emitted payload is a wrapper of the form
+/// `{ "kind": "<discriminator>", "state": <full UIState snapshot> }`.
+/// `kind` names which slice of UI state changed — one of the seven
+/// `UIStateChange` variants plus the two board result shapes — so the
+/// frontend can skip `setState` for events it doesn't care about (e.g.
+/// every `ui.setFocus` arrow-key fires a `scope_chain` event; the
+/// frontend owns that slice via `FocusedScopeContext` and ignores the
+/// echo). No UI-specific policy lives here — the backend just tells the
+/// truth about which change it made.
 fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
-    if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    let Some(kind) = ui_state_change_kind(result) else {
+        return;
+    };
+    let _ = app.emit(
+        "ui-state-changed",
+        serde_json::json!({ "kind": kind, "state": state.ui_state.to_json() }),
+    );
+}
+
+/// Classify a command result into a `ui-state-changed` discriminator, or
+/// `None` if the result does not trigger a UI state event.
+///
+/// Returns the `kind` string used on the wire:
+/// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
+///   `keymap_mode`, `inspector_stack`, `active_view`,
+///   `active_perspective`, `app_mode`).
+/// - `board_switch` / `board_close` for the two board result shapes,
+///   which are not typed as `UIStateChange` but still mutate what the
+///   `UIStateProvider` renders.
+fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
+    if let Ok(change) =
+        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
+    {
+        return Some(match change {
+            swissarmyhammer_commands::UIStateChange::ScopeChain(_) => "scope_chain",
+            swissarmyhammer_commands::UIStateChange::PaletteOpen(_) => "palette_open",
+            swissarmyhammer_commands::UIStateChange::KeymapMode(_) => "keymap_mode",
+            swissarmyhammer_commands::UIStateChange::InspectorStack(_) => "inspector_stack",
+            swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
+            swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
+            swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
+        });
     }
-    if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
-        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    if result.get("BoardSwitch").is_some() {
+        return Some("board_switch");
     }
+    if result.get("BoardClose").is_some() {
+        return Some("board_close");
+    }
+    None
 }
 
 /// Rebuild the native menu after commands whose effects change what items
@@ -1976,11 +1952,93 @@ async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: 
 // list_commands_for_scope — backend-driven command resolution
 // ---------------------------------------------------------------------------
 
-/// Return all available commands for the given scope chain.
+/// Build a `DynamicSources` for the current app state (views, boards,
+/// windows, perspectives).
 ///
-/// This is the single source of truth for what commands are available.
-/// The frontend calls this with a scope chain and renders the result.
-/// No command logic in the UI — just render and dispatch.
+/// This is a thin Tauri-side shim around the headless
+/// [`swissarmyhammer_kanban::dynamic_sources::build_dynamic_sources`]
+/// entry point. All assembly logic (views/boards/perspectives + active
+/// view kind) lives in the kanban crate so it can be exercised without
+/// Tauri scaffolding; this shim contributes the one input that can only
+/// come from the GUI runtime — live window titles/visibility/focus.
+async fn build_dynamic_sources(
+    app: &AppHandle,
+    state: &AppState,
+    active_handle: Option<&crate::state::BoardHandle>,
+) -> swissarmyhammer_kanban::scope_commands::DynamicSources {
+    use swissarmyhammer_kanban::dynamic_sources::{
+        build_dynamic_sources as build_headless, DynamicSourcesInputs,
+    };
+    let windows = gather_windows(app);
+    // Project the `HashMap<PathBuf, Arc<BoardHandle>>` down to
+    // `HashMap<PathBuf, Arc<KanbanContext>>` — the headless builder only
+    // needs the context, not the full handle (entity cache, bridge task,
+    // search index are irrelevant to dynamic-source assembly).
+    let boards_guard = state.boards.read().await;
+    let open_board_ctxs: std::collections::HashMap<
+        PathBuf,
+        Arc<swissarmyhammer_kanban::KanbanContext>,
+    > = boards_guard
+        .iter()
+        .map(|(path, handle)| (path.clone(), Arc::clone(&handle.ctx)))
+        .collect();
+    drop(boards_guard);
+    let active_ctx = active_handle.map(|h| h.ctx.as_ref());
+    build_headless(DynamicSourcesInputs {
+        ui_state: &state.ui_state,
+        active_ctx,
+        open_board_ctxs: &open_board_ctxs,
+        active_window_label: Some("main"),
+        windows,
+    })
+    .await
+}
+
+/// Emit `info`-level telemetry about the resolved-command list so a
+/// "no entity.add" bug is diagnosable from logs alone.
+fn log_scope_inputs(
+    scope_chain: &[String],
+    context_menu: Option<bool>,
+    dynamic: &swissarmyhammer_kanban::scope_commands::DynamicSources,
+) {
+    let views_with_entity_type = dynamic
+        .views
+        .iter()
+        .filter(|v| v.entity_type.as_deref().is_some_and(|s| !s.is_empty()))
+        .count();
+    tracing::info!(
+        scope_chain = ?scope_chain,
+        context_menu = ?context_menu,
+        views_count = dynamic.views.len(),
+        views_with_entity_type,
+        boards_count = dynamic.boards.len(),
+        windows_count = dynamic.windows.len(),
+        perspectives_count = dynamic.perspectives.len(),
+        "list_commands_for_scope"
+    );
+}
+
+fn log_scope_result(result: &[swissarmyhammer_kanban::scope_commands::ResolvedCommand]) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
+    let mut by_group: HashMap<&str, usize> = HashMap::new();
+    for cmd in result {
+        *by_group.entry(cmd.group.as_str()).or_default() += 1;
+    }
+    let entity_add_ids: Vec<&str> = result
+        .iter()
+        .filter(|c| c.id.starts_with("entity.add:"))
+        .map(|c| c.id.as_str())
+        .collect();
+    tracing::info!(
+        total = result.len(),
+        by_group = ?by_group,
+        entity_add_ids = ?entity_add_ids,
+        "list_commands_for_scope result"
+    );
+}
+
 #[tauri::command]
 pub async fn list_commands_for_scope(
     app: AppHandle,
@@ -1990,24 +2048,9 @@ pub async fn list_commands_for_scope(
 ) -> Result<Value, String> {
     let active_handle = state.active_handle().await;
     let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
-
     let registry = state.commands_registry.read().await;
-
-    let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::DynamicSources;
-        let views = gather_views(active_handle.as_deref());
-        let boards = gather_boards(&state.ui_state, &state.boards).await;
-        let windows = gather_windows(&app);
-        let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
-        let perspectives =
-            gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
-        DynamicSources {
-            views,
-            boards,
-            windows,
-            perspectives,
-        }
-    };
+    let dynamic = build_dynamic_sources(&app, &state, active_handle.as_deref()).await;
+    log_scope_inputs(&scope_chain, context_menu, &dynamic);
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope_chain,
@@ -2019,6 +2062,7 @@ pub async fn list_commands_for_scope(
         Some(&dynamic),
     );
 
+    log_scope_result(&result);
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -2084,6 +2128,578 @@ pub async fn show_context_menu(
         .map_err(|e: tauri::Error| e.to_string())?;
 
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation commands.
+//
+// These wire the headless `swissarmyhammer-focus` kernel into Tauri. Each
+// command derives a `WindowLabel` from its `tauri::Window` parameter, locks
+// the registry and per-window focus state held in `AppState`, performs its
+// kernel call, and (where the kernel returns a `FocusChangedEvent`) emits
+// `focus-changed` so the React `SpatialFocusProvider` can update its claim
+// listeners.
+//
+// These commands intentionally bypass `dispatch_command` per the rule at the
+// top of this file: they are transient UI plumbing — not business state
+// mutations. The headless kernel owns the model; these commands only forward
+// register / focus / navigate calls and surface the resulting events.
+//
+// ## Lock ordering
+//
+// Every spatial command that touches both the registry and per-window focus
+// holds the locks in the same order: **registry first, state second**. The
+// helper [`with_spatial`] enforces this so callers cannot deadlock by
+// accident. The unregister command intentionally takes both locks together
+// for the duration of the transaction so observers (focus listeners,
+// fallback computations) cannot see a half-applied unregister.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use swissarmyhammer_focus::{
+    BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope,
+    FocusZone, FullyQualifiedMoniker, LayerName, Rect, RegisterEntry, SegmentMoniker,
+    SpatialRegistry, SpatialState, WindowLabel,
+};
+
+/// Tauri event name for spatial focus changes — mirrors the listener
+/// registered in `kanban-app/ui/src/lib/spatial-focus-context.tsx`.
+const FOCUS_CHANGED_EVENT: &str = "focus-changed";
+
+/// Derive a [`WindowLabel`] newtype from a Tauri window handle.
+///
+/// `tauri::Window::label()` returns the borrowed string the user-space
+/// constructor mints (`"main"`, `"board-<ulid>"`, `"quick-capture"`, …);
+/// the kernel speaks in newtypes, so we wrap it at the boundary. Every
+/// spatial command funnels through this helper so a stray `String` cannot
+/// leak into the kernel surface.
+fn window_label_from(window: &Window) -> WindowLabel {
+    WindowLabel::from_string(window.label())
+}
+
+/// Acquire both spatial locks in canonical order and run `f` with mutable
+/// access.
+///
+/// Holding `spatial_registry` first then `spatial_state` mirrors the
+/// ordering used by [`spatial_unregister_scope`] (which is the only
+/// command that genuinely needs both at once). Centralizing the order
+/// here means every other adapter inherits it for free, and
+/// future commands cannot accidentally lock-invert.
+async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
+where
+    F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
+{
+    let mut registry = state.spatial_registry.lock().await;
+    let mut spatial_state = state.spatial_state.lock().await;
+    f(&mut registry, &mut spatial_state)
+}
+
+/// Forward a kernel-produced [`FocusChangedEvent`] to the React side.
+///
+/// Emits via the `tauri::Window` so the event reaches every webview the
+/// app has spawned. The frontend's `SpatialFocusProvider` filters its own
+/// claim registry by the `payload.next_key` lookup — windows that don't
+/// own the key receive the event silently and drop it, which matches the
+/// per-window claim-registry semantics described in the React module
+/// docs.
+fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), String> {
+    window
+        .emit(FOCUS_CHANGED_EVENT, event)
+        .map_err(|e| format!("failed to emit {FOCUS_CHANGED_EVENT}: {e}"))
+}
+
+// ── Pure inner logic, factored out of the Tauri commands so unit tests can
+// drive the same code paths against `&mut SpatialRegistry, &mut SpatialState`
+// without spinning up Tauri. The Tauri commands below are thin wrappers that
+// derive the [`WindowLabel`] from `tauri::Window`, lock the registry/state in
+// canonical order, dispatch to one of these helpers, and emit the resulting
+// `FocusChangedEvent` (when any) on the calling window.
+
+/// Register a [`FocusScope`] leaf into `registry`.
+///
+/// Pulled out of [`spatial_register_scope`] so unit tests can exercise
+/// the same body without constructing a Tauri runtime.
+#[allow(clippy::too_many_arguments)]
+fn spatial_register_scope_inner(
+    registry: &mut SpatialRegistry,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    rect: Rect,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
+) {
+    registry.register_scope(FocusScope {
+        fq,
+        segment,
+        rect,
+        layer_fq,
+        parent_zone,
+        overrides,
+    });
+}
+
+/// Register a [`FocusZone`] container into `registry`.
+///
+/// Preserves any existing `last_focused` slot so a placeholder→real-mount
+/// re-register doesn't lose drill-out memory. Mirrors `apply_batch`'s
+/// preservation logic so the single-entry path stays symmetric with the
+/// batch path.
+#[allow(clippy::too_many_arguments)]
+fn spatial_register_zone_inner(
+    registry: &mut SpatialRegistry,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    rect: Rect,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
+) {
+    let last_focused = registry.zone(&fq).and_then(|z| z.last_focused.clone());
+    registry.register_zone(FocusZone {
+        fq,
+        segment,
+        rect,
+        layer_fq,
+        parent_zone,
+        last_focused,
+        overrides,
+    });
+}
+
+/// Unregister a scope, calling `handle_unregister` BEFORE `unregister_scope`
+/// so the focus tracker can read the lost entry's metadata.
+///
+/// This ordering is the central invariant of the unregister command — the
+/// kernel cannot compute a fallback target after the entry has been
+/// removed from the registry. Returns the [`FocusChangedEvent`] (if any)
+/// the kernel produced; the caller is responsible for emitting it.
+fn spatial_unregister_scope_inner(
+    registry: &mut SpatialRegistry,
+    spatial_state: &mut SpatialState,
+    fq: &FullyQualifiedMoniker,
+) -> Option<FocusChangedEvent> {
+    let event = spatial_state.handle_unregister(registry, fq);
+    registry.unregister_scope(fq);
+    event
+}
+
+/// Apply a batch of [`RegisterEntry`] values to `registry` in one call.
+///
+/// Pulled out of [`spatial_register_batch`] so unit tests can drive the
+/// same code path against `&mut SpatialRegistry` without spinning up a
+/// Tauri runtime. The batch path is atomic at the registry boundary —
+/// `SpatialRegistry::apply_batch` validates every entry's kind-stability
+/// before mutating any scope, so a returned error guarantees the registry
+/// is unchanged. Errors are stringified at this layer because the wire
+/// boundary speaks `Result<(), String>`.
+fn spatial_register_batch_inner(
+    registry: &mut SpatialRegistry,
+    entries: Vec<RegisterEntry>,
+) -> Result<(), BatchRegisterError> {
+    registry.apply_batch(entries)
+}
+
+/// Push a layer into the registry under the given owning window.
+///
+/// `window_label` is derived from the calling `tauri::Window` in the
+/// command wrapper; the layer's owning window cannot be supplied by the
+/// React side because Tauri webviews are server-tracked, not client-known.
+fn spatial_push_layer_inner(
+    registry: &mut SpatialRegistry,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    name: LayerName,
+    parent: Option<FullyQualifiedMoniker>,
+    window_label: WindowLabel,
+) {
+    registry.push_layer(FocusLayer {
+        fq,
+        segment,
+        name,
+        parent,
+        window_label,
+        last_focused: None,
+    });
+}
+
+/// Register a `<FocusScope>` leaf with the spatial registry.
+///
+/// Mirrors [`FocusScope`] on the kernel side. `parent_zone` is `None` when
+/// the leaf sits directly under its layer root; `overrides` is empty when
+/// the leaf has no per-direction special cases. Replacing a registration
+/// with the same key is intentionally allowed (idempotent re-mount); the
+/// kernel preserves the per-key overwrite semantics described on
+/// `SpatialRegistry::register_scope`.
+///
+/// Returns `Ok(())` on success. Registration is purely structural — no
+/// `focus-changed` event is emitted.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn spatial_register_scope(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    rect: Rect,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_scope_inner(
+            registry,
+            fq,
+            segment,
+            rect,
+            layer_fq,
+            parent_zone,
+            overrides,
+        );
+    })
+    .await;
+    Ok(())
+}
+
+/// Register a `<FocusZone>` container with the spatial registry.
+///
+/// Mirrors `FocusZone` on the kernel side. `last_focused` is **not** taken
+/// from the wire — registration is the React side's "this scope just
+/// mounted" signal, and `last_focused` is server-owned drill-out memory
+/// that the navigator populates as focus moves. The kernel preserves any
+/// existing `last_focused` slot when a zone is re-registered (the
+/// placeholder/real-mount swap).
+///
+/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
+/// registration does not move focus.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn spatial_register_zone(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    rect: Rect,
+    layer_fq: FullyQualifiedMoniker,
+    parent_zone: Option<FullyQualifiedMoniker>,
+    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_zone_inner(
+            registry,
+            fq,
+            segment,
+            rect,
+            layer_fq,
+            parent_zone,
+            overrides,
+        );
+    })
+    .await;
+    Ok(())
+}
+
+/// Register a batch of [`RegisterEntry`] values in one Tauri invoke.
+///
+/// The React-side virtualizer ships a `Vec<RegisterEntry>` for off-screen
+/// rows whenever the visible window changes — twenty placeholder mounts
+/// collapse into a single IPC round-trip and a single registry lock,
+/// rather than twenty independent `spatial_register_scope` /
+/// `spatial_register_zone` calls.
+///
+/// Atomic at the registry boundary: `SpatialRegistry::apply_batch`
+/// validates every entry's kind-stability before mutating any scope,
+/// so a [`BatchRegisterError`] response guarantees no entry was applied.
+/// Zone entries that target an already-registered key preserve the
+/// existing `last_focused` slot — the placeholder→real-mount swap path
+/// must not lose drill-out memory accumulated while the placeholder
+/// was live.
+///
+/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
+/// registration does not move focus. On kind-mismatch, returns the
+/// stringified error (the wire boundary speaks `Result<(), String>`).
+#[tauri::command]
+pub async fn spatial_register_batch(
+    _window: Window,
+    state: State<'_, AppState>,
+    entries: Vec<RegisterEntry>,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_register_batch_inner(registry, entries)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Unregister a previously-registered scope.
+///
+/// **Lock ordering** is critical here: we acquire the registry lock first,
+/// then the state lock, then call `SpatialState::handle_unregister` BEFORE
+/// `SpatialRegistry::unregister_scope`. This ordering exists because
+/// `handle_unregister` must read the lost entry's metadata (its layer,
+/// parent zone, and rect) so the focus tracker can compute a fallback
+/// target — once `unregister_scope` runs, that metadata is gone.
+///
+/// Both locks are held together for the entire transaction so observers
+/// cannot see a half-applied unregister.
+///
+/// If the unregistered scope was the focused one, the resulting
+/// `FocusChangedEvent` is emitted to the React side so claim listeners
+/// release the focus visual.
+#[tauri::command]
+pub async fn spatial_unregister_scope(
+    window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_unregister_scope_inner(registry, spatial_state, &fq)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Refresh the bounding rect of a registered scope.
+///
+/// Called from the React side when ResizeObserver fires on the underlying
+/// DOM node. No-op on the kernel side if the key is unknown — a
+/// late-arriving rect for an already-unregistered scope drops silently
+/// rather than re-creating the entry.
+///
+/// No `focus-changed` event is emitted; rect updates do not move focus.
+#[tauri::command]
+pub async fn spatial_update_rect(
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    rect: Rect,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        registry.update_rect(&fq, rect);
+    })
+    .await;
+    Ok(())
+}
+
+/// Move focus to the scope at `key`.
+///
+/// Delegates to `SpatialState::focus`, which derives the owning window
+/// from the registry, looks up the moniker, and updates its per-window
+/// focus map. The kernel returns `Some(FocusChangedEvent)` when focus
+/// actually moved (key was registered, in a known window, and not
+/// already focused) and `None` otherwise. We forward only the actual
+/// transitions to the frontend so claim listeners don't see redundant
+/// events.
+#[tauri::command]
+pub async fn spatial_focus(
+    window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.focus(registry, fq)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Clear focus for the calling window.
+///
+/// Explicit-clear counterpart of [`spatial_focus`]. The React side calls this when the user
+/// (or a component-level handler) wants to drop focus altogether — for
+/// example `setFocus(null)` from `entity-focus-context.tsx`. Routing
+/// the clear through the kernel preserves the architectural invariant
+/// from card `01KQD0WK54G0FRD7SZVZASA9ST`: the React entity-focus
+/// store is a pure projection of `focus-changed` events. Without this
+/// command, `setFocus(null)` would have to mutate the React store
+/// synchronously to clear focus, which is exactly the kernel/React
+/// drift the card was filed to eliminate.
+///
+/// Delegates to [`SpatialState::clear_focus`], which removes the
+/// per-window focus slot and returns a `Some(prev) → None`
+/// [`FocusChangedEvent`] when focus was actually cleared. We forward
+/// the event so the React-side bridge writes the entity-focus store
+/// to `null` and dispatches `ui.setFocus` with an empty scope chain.
+/// When the window had no prior focus, the kernel returns `None` and
+/// no event is emitted (idempotent).
+#[tauri::command]
+pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> Result<(), String> {
+    let label = window_label_from(&window);
+    let event = with_spatial(&state, |_registry, spatial_state| {
+        spatial_state.clear_focus(&label)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Move focus relative to `key` in `direction`.
+///
+/// Uses the default [`BeamNavStrategy`] for the navigator. `key` is the
+/// currently-focused scope (the React side passes its own focused key
+/// to keep this call symmetric across windows).
+///
+/// Returns `Ok(())` whether or not focus actually moved — under the
+/// no-silent-dropout contract, the kernel always returns a moniker; if
+/// it equals the focused moniker (semantic "stay put" or torn-state
+/// echo), `navigate_with` short-circuits via the
+/// "already focused → no event" check in `SpatialState::focus` and
+/// nothing is emitted. Same outcome when the resolved moniker doesn't
+/// own any registered scope.
+#[tauri::command]
+pub async fn spatial_navigate(
+    window: Window,
+    state: State<'_, AppState>,
+    focused_fq: FullyQualifiedMoniker,
+    direction: Direction,
+) -> Result<(), String> {
+    let strategy = BeamNavStrategy::new();
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.navigate_with(registry, &strategy, focused_fq, direction)
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Push a new layer onto the registry.
+///
+/// Layers form a per-window forest: the window root has `parent = None`;
+/// inspector / dialog / palette overlays are stacked under their parent.
+/// `key` is the stable mount identifier; `name` is the layer role
+/// (`"window"`, `"inspector"`, `"dialog"`, `"palette"`); `parent` ties
+/// the layer to its stacking parent (`None` for a window root).
+///
+/// The owning window is taken from the calling `tauri::Window` — every
+/// layer in a forest path back to a root shares the same window label,
+/// and the registry uses that to bound spatial nav and fallback
+/// resolution to a single window.
+#[tauri::command]
+pub async fn spatial_push_layer(
+    window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    segment: SegmentMoniker,
+    name: LayerName,
+    parent: Option<FullyQualifiedMoniker>,
+) -> Result<(), String> {
+    let window_label = window_label_from(&window);
+    with_spatial(&state, |registry, _spatial_state| {
+        spatial_push_layer_inner(registry, fq, segment, name, parent, window_label);
+    })
+    .await;
+    Ok(())
+}
+
+/// Pop a previously-pushed layer.
+///
+/// No-op if the key is unknown. The registry does not cascade-unregister
+/// scopes whose `layer_key` matches — the React side unmounts those
+/// scopes first via `spatial_unregister_scope`, so the registry stays
+/// consistent without a GC pass.
+///
+/// No `focus-changed` event is emitted; layer pops are not focus
+/// transitions on their own.
+#[tauri::command]
+pub async fn spatial_pop_layer(
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+) -> Result<(), String> {
+    with_spatial(&state, |registry, _spatial_state| {
+        registry.remove_layer(&fq);
+    })
+    .await;
+    Ok(())
+}
+
+/// Compute the [`Moniker`] to focus when the user drills *into* the scope
+/// at `key`.
+///
+/// Pure registry query — delegates to [`SpatialRegistry::drill_in`] and
+/// returns the result verbatim. Does not mutate focus state and does not
+/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
+/// on the result. Under the no-silent-dropout contract the kernel always
+/// returns a [`Moniker`]; the React side detects "no descent happened"
+/// by comparing the result against `focused_moniker`.
+///
+/// Result equals `focused_moniker` when:
+/// - the scope is a leaf (no children to descend into) — React falls
+///   through to inline edit if the leaf has an editor;
+/// - the zone is empty (no children at all) — React falls through;
+/// - the key is unknown — torn state, kernel emits `tracing::error!`.
+///
+/// Result is a different moniker when the zone has a registered
+/// `last_focused` (preferred) or at least one child entry; the caller
+/// dispatches `setFocus` against the entity-focus store.
+///
+/// The `window` parameter is unused but kept in the signature for
+/// symmetry with the other spatial commands; lock acquisition still
+/// goes through `with_spatial` so the registry/state ordering stays
+/// uniform across the spatial command surface.
+#[tauri::command]
+pub async fn spatial_drill_in(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+) -> Result<FullyQualifiedMoniker, String> {
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_in(fq, &focused_fq)
+    })
+    .await;
+    Ok(next_fq)
+}
+
+/// Compute the [`Moniker`] to focus when the user drills *out of* the
+/// scope at `key`.
+///
+/// Pure registry query — delegates to [`SpatialRegistry::drill_out`] and
+/// returns the result verbatim. Does not mutate focus state and does not
+/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
+/// on the result. Under the no-silent-dropout contract the kernel always
+/// returns a [`Moniker`]; the React side compares the result against
+/// `focused_moniker` to detect "no zone-level drill happened" and falls
+/// through to `app.dismiss` (close the topmost modal layer).
+///
+/// Result equals `focused_moniker` when:
+/// - the scope sits at the layer root (no enclosing zone) — well-formed
+///   edge, no tracing;
+/// - the key is unknown — torn state, kernel emits `tracing::error!`;
+/// - the `parent_zone` reference points at an unregistered scope —
+///   torn state, kernel emits `tracing::error!`.
+///
+/// Result is a different moniker when the scope has a registered,
+/// resolvable `parent_zone`; the caller dispatches `setFocus` against
+/// the entity-focus store.
+///
+/// The `window` parameter is unused but kept in the signature for
+/// symmetry with the other spatial commands; lock acquisition still
+/// goes through `with_spatial` so the registry/state ordering stays
+/// uniform across the spatial command surface.
+#[tauri::command]
+pub async fn spatial_drill_out(
+    _window: Window,
+    state: State<'_, AppState>,
+    fq: FullyQualifiedMoniker,
+    focused_fq: FullyQualifiedMoniker,
+) -> Result<FullyQualifiedMoniker, String> {
+    let next_fq = with_spatial(&state, |registry, _spatial_state| {
+        registry.drill_out(fq, &focused_fq)
+    })
+    .await;
+    Ok(next_fq)
 }
 
 #[cfg(test)]
@@ -2373,6 +2989,62 @@ mod tests {
         );
     }
 
+    // ── match_dynamic_prefix tests ────────────────────────────────
+
+    use super::match_dynamic_prefix;
+
+    #[test]
+    fn match_dynamic_prefix_rewrites_entity_add_to_canonical_command() {
+        // `entity.add:task` rewrites to canonical `entity.add` with the
+        // type moved into the arg bag under `entity_type`. The dispatcher
+        // then routes to the generic `AddEntityCmd`.
+        let (new_cmd, arg_key, arg_val, updates_bp) =
+            match_dynamic_prefix("entity.add:task").unwrap().unwrap();
+        assert_eq!(new_cmd, "entity.add");
+        assert_eq!(arg_key, "entity_type");
+        assert_eq!(arg_val, "task");
+        assert!(!updates_bp);
+    }
+
+    #[test]
+    fn match_dynamic_prefix_entity_add_requires_type_suffix() {
+        // An empty suffix is a malformed command — reject it rather than
+        // dispatch to `entity.add` with `entity_type: ""` which would
+        // then fail availability checks.
+        assert!(match_dynamic_prefix("entity.add:").is_err());
+    }
+
+    #[test]
+    fn match_dynamic_prefix_passes_through_non_prefix_commands() {
+        // Non-prefix commands (like `entity.add` without a suffix) are
+        // NOT rewritten — the rewriter returns Ok(None) so the dispatcher
+        // can fall through to the registry.
+        assert!(match_dynamic_prefix("entity.add").unwrap().is_none());
+        assert!(match_dynamic_prefix("task.add").unwrap().is_none());
+    }
+
+    /// Regression guard for 01KPZMXXEXKVE3RNPA4XJP0105: the palette emits
+    /// `view.set` / `perspective.set` directly with pre-filled `args` —
+    /// there is no longer a `view.switch:*` or `perspective.goto:*` rewrite
+    /// branch. If an input string still carries one of the legacy prefixes
+    /// it must fall through to `Ok(None)` so the dispatcher surfaces it as
+    /// an unknown command rather than silently translating it.
+    #[test]
+    fn match_dynamic_prefix_no_longer_rewrites_view_switch_or_perspective_goto() {
+        assert!(
+            match_dynamic_prefix("view.switch:board-view")
+                .unwrap()
+                .is_none(),
+            "view.switch:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
+        assert!(
+            match_dynamic_prefix("perspective.goto:sprint-01")
+                .unwrap()
+                .is_none(),
+            "perspective.goto:* rewrite was retired in 01KPZMXXEXKVE3RNPA4XJP0105"
+        );
+    }
+
     #[test]
     fn filter_mention_candidates_tag_id_and_display_name_match() {
         // Tags are the control case: id == tag_name, so the emitted row
@@ -2386,6 +3058,534 @@ mod tests {
         assert_eq!(
             row.get("display_name").and_then(|v| v.as_str()),
             Some("bug")
+        );
+    }
+
+    // ── ui_state_change_kind tests ─────────────────────────────────
+    //
+    // These guard the wire-format contract for `ui-state-changed` events:
+    // every payload carries a `kind` discriminator so the frontend can skip
+    // `setState` for slices it owns (notably `scope_chain`, which echoes
+    // back from every `ui.setFocus` call and would otherwise cascade
+    // re-renders through every `useUIState()` consumer).
+
+    use super::ui_state_change_kind;
+    use swissarmyhammer_commands::UIStateChange;
+
+    #[test]
+    fn ui_state_change_kind_scope_chain() {
+        let value = serde_json::to_value(UIStateChange::ScopeChain(vec!["board:main".to_string()]))
+            .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("scope_chain"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_palette_open() {
+        let value = serde_json::to_value(UIStateChange::PaletteOpen(true)).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("palette_open"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_keymap_mode() {
+        let value = serde_json::to_value(UIStateChange::KeymapMode("vim".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("keymap_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_inspector_stack() {
+        let value =
+            serde_json::to_value(UIStateChange::InspectorStack(vec!["task:1".into()])).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_stack"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_view() {
+        let value = serde_json::to_value(UIStateChange::ActiveView("board".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_view"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_active_perspective() {
+        let value =
+            serde_json::to_value(UIStateChange::ActivePerspective("sprint-01".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("active_perspective"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_app_mode() {
+        let value = serde_json::to_value(UIStateChange::AppMode("normal".into())).unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("app_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_switch() {
+        // BoardSwitch is not typed as a UIStateChange — it's a side-effect
+        // result shape. Detected by the presence of the `BoardSwitch` key.
+        let value = serde_json::json!({
+            "BoardSwitch": {
+                "path": "/boards/my-board",
+                "window_label": "main",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_switch"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_board_close() {
+        // Same shape as BoardSwitch — detected by the `BoardClose` key.
+        let value = serde_json::json!({
+            "BoardClose": {
+                "path": "/boards/my-board",
+            }
+        });
+        assert_eq!(ui_state_change_kind(&value), Some("board_close"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_unrelated_result_is_none() {
+        // Results that are neither a UIStateChange nor a board side-effect
+        // must NOT trigger a ui-state-changed emit. Null, plain strings,
+        // and arbitrary objects all fall through to None.
+        assert_eq!(ui_state_change_kind(&serde_json::Value::Null), None);
+        assert_eq!(ui_state_change_kind(&serde_json::json!("ok")), None);
+        assert_eq!(
+            ui_state_change_kind(&serde_json::json!({ "some_other_key": 1 })),
+            None
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial-navigation command tests.
+//
+// These exercise the inner functions extracted from each `#[tauri::command]`
+// shell. We can't construct a `tauri::Window` or `State<'_, AppState>` in a
+// unit test without a Tauri runtime — so the inner helpers operate directly
+// on `&mut SpatialRegistry, &mut SpatialState`, which is exactly the
+// signature these tests want.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod spatial_command_tests {
+    use super::*;
+
+    /// Build a `Rect` at `(x, y)` with extent `(w, h)`.
+    fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        use swissarmyhammer_focus::Pixels;
+        Rect {
+            x: Pixels::new(x),
+            y: Pixels::new(y),
+            width: Pixels::new(w),
+            height: Pixels::new(h),
+        }
+    }
+
+    /// Compose an FQM by appending `child_segment` to `parent_fq` with the
+    /// `/` separator — mirrors what the React `FullyQualifiedMonikerContext`
+    /// composes on the consumer side before the IPC call.
+    fn compose_fq(parent_fq: &FullyQualifiedMoniker, child_segment: &str) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(parent_fq, &SegmentMoniker::from_string(child_segment))
+    }
+
+    /// Push a window-root layer into `registry`, returning the layer FQM
+    /// the test should pass to subsequent register calls.
+    fn push_root_layer(
+        registry: &mut SpatialRegistry,
+        window: &str,
+        layer_segment: &str,
+    ) -> FullyQualifiedMoniker {
+        let segment = SegmentMoniker::from_string(layer_segment);
+        let fq = FullyQualifiedMoniker::root(&segment);
+        spatial_push_layer_inner(
+            registry,
+            fq.clone(),
+            segment,
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string(window),
+        );
+        fq
+    }
+
+    /// Register a leaf with a deterministic FQM into `registry`. The leaf's
+    /// FQM is composed as `<layer_fq>/<segment>`. Returns the FQM and
+    /// segment for assertions.
+    fn register_leaf(
+        registry: &mut SpatialRegistry,
+        layer_fq: &FullyQualifiedMoniker,
+        segment_str: &str,
+        rect: Rect,
+    ) -> (FullyQualifiedMoniker, SegmentMoniker) {
+        let segment = SegmentMoniker::from_string(segment_str);
+        let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
+        spatial_register_scope_inner(
+            registry,
+            fq.clone(),
+            segment.clone(),
+            rect,
+            layer_fq.clone(),
+            None,
+            HashMap::new(),
+        );
+        (fq, segment)
+    }
+
+    /// `spatial_focus` invokes `SpatialState::focus` and the kernel returns
+    /// a `FocusChangedEvent` carrying the focused window, FQM, and segment.
+    /// This is the same code path the Tauri command takes before
+    /// emitting on the window — so an event from this inner call is
+    /// exactly what the React side would receive over IPC.
+    #[test]
+    fn spatial_focus_emits_focus_changed_event() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (fq, segment) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let event = state
+            .focus(&registry, fq.clone())
+            .expect("focus emits an event for a freshly registered scope");
+
+        assert_eq!(event.window_label, WindowLabel::from_string("main"));
+        assert_eq!(event.prev_fq, None);
+        assert_eq!(event.next_fq, Some(fq));
+        assert_eq!(event.next_segment, Some(segment));
+    }
+
+    /// Registering a leaf scope inserts it into the registry and the
+    /// scope is reachable via `scope()`. Mirrors the wire path
+    /// `spatial_register_scope` → `register_scope_inner` →
+    /// `SpatialRegistry::register_scope`.
+    #[test]
+    fn spatial_register_scope_round_trips() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (fq, segment) = register_leaf(
+            &mut registry,
+            &layer,
+            "ui:button",
+            rect_at(5.0, 5.0, 20.0, 30.0),
+        );
+
+        let scope = registry.scope(&fq).expect("scope was registered");
+        assert_eq!(scope.segment, segment);
+        assert_eq!(scope.layer_fq, layer);
+        assert_eq!(scope.parent_zone, None);
+    }
+
+    /// Registering a zone with the same FQM as a previous zone preserves
+    /// any existing `last_focused` slot — the kernel's placeholder/real-
+    /// mount swap requires drill-out memory to survive a re-register.
+    /// Verifies the inner helper applies the same preservation logic that
+    /// `apply_batch` uses for zones.
+    #[test]
+    fn spatial_register_zone_preserves_last_focused() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let zone_fq = compose_fq(&layer, "ui:zone");
+        let leaf_fq = compose_fq(&zone_fq, "ui:leaf");
+        spatial_register_zone_inner(
+            &mut registry,
+            zone_fq.clone(),
+            SegmentMoniker::from_string("ui:zone"),
+            rect_at(0.0, 0.0, 100.0, 100.0),
+            layer.clone(),
+            None,
+            HashMap::new(),
+        );
+
+        // Reach into the registry to set `last_focused` directly — that's
+        // what the navigator would do as focus moves through the zone.
+        // Re-register the zone and assert the slot survives.
+        {
+            // Use a fresh inserted zone with a populated last_focused via
+            // a new FocusZone — emulates the navigator's mutation.
+            registry.register_zone(FocusZone {
+                fq: zone_fq.clone(),
+                segment: SegmentMoniker::from_string("ui:zone"),
+                rect: rect_at(0.0, 0.0, 100.0, 100.0),
+                layer_fq: layer.clone(),
+                parent_zone: None,
+                last_focused: Some(leaf_fq.clone()),
+                overrides: HashMap::new(),
+            });
+        }
+
+        // Re-register through the inner helper — the real wire path.
+        spatial_register_zone_inner(
+            &mut registry,
+            zone_fq.clone(),
+            SegmentMoniker::from_string("ui:zone"),
+            rect_at(0.0, 0.0, 200.0, 200.0),
+            layer,
+            None,
+            HashMap::new(),
+        );
+
+        let zone = registry.zone(&zone_fq).expect("zone still registered");
+        assert_eq!(
+            zone.last_focused.as_ref(),
+            Some(&leaf_fq),
+            "re-register should preserve last_focused for placeholder/real-mount swap"
+        );
+    }
+
+    /// The unregister path **must** call `handle_unregister` BEFORE
+    /// `unregister_scope` so the focus tracker can read the lost entry's
+    /// metadata. We verify the ordering by registering two leaves,
+    /// focusing one, unregistering it, and asserting:
+    ///
+    /// 1. A `focus-changed` event was produced (proves
+    ///    `handle_unregister` saw the lost entry's metadata).
+    /// 2. The lost FQM is no longer in the registry (proves
+    ///    `unregister_scope` ran).
+    /// 3. The fallback target is the surviving sibling (proves the
+    ///    fallback resolver had the metadata it needed).
+    #[test]
+    fn spatial_unregister_calls_handle_unregister_before_unregister_scope() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (k1, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (k2, m2) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:02",
+            rect_at(20.0, 0.0, 10.0, 10.0),
+        );
+
+        // Focus k1, then unregister it — fallback should pick k2.
+        state.focus(&registry, k1.clone()).expect("focus k1");
+
+        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &k1)
+            .expect("unregistering the focused scope must produce a focus-changed event");
+
+        assert_eq!(event.prev_fq, Some(k1.clone()));
+        assert_eq!(event.next_fq, Some(k2.clone()));
+        assert_eq!(event.next_segment, Some(m2));
+        assert!(
+            registry.scope(&k1).is_none(),
+            "unregister_scope ran after handle_unregister"
+        );
+        assert!(
+            registry.scope(&k2).is_some(),
+            "sibling survives the unregister"
+        );
+    }
+
+    /// Unregister with no focus claim is a no-op at the focus-tracker
+    /// layer but still removes the scope from the registry.
+    /// Verifies the inner helper does not panic when there is no
+    /// focus to fall back from.
+    #[test]
+    fn spatial_unregister_unfocused_scope_is_noop_event_wise() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (fq, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &fq);
+        assert!(
+            event.is_none(),
+            "unregistering an unfocused scope produces no event"
+        );
+        assert!(
+            registry.scope(&fq).is_none(),
+            "scope is still removed from the registry"
+        );
+    }
+
+    /// `spatial_navigate(Down)` from the top leaf moves focus to the
+    /// bottom leaf in the same zone. Exercises the full kernel pipeline:
+    /// `BeamNavStrategy::next` resolves the FQM, `navigate_with` updates
+    /// the per-window slot, and `focus` emits the transition.
+    #[test]
+    fn spatial_navigate_down_moves_focus_to_below_neighbor() {
+        let mut registry = SpatialRegistry::new();
+        let mut state = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (top, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:top",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (bottom, m_bottom) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:bottom",
+            rect_at(0.0, 20.0, 10.0, 10.0),
+        );
+
+        state.focus(&registry, top.clone()).expect("focus top");
+        let strategy = BeamNavStrategy::new();
+        let event = state
+            .navigate_with(&registry, &strategy, top.clone(), Direction::Down)
+            .expect("Down from top hits bottom");
+
+        assert_eq!(event.prev_fq, Some(top));
+        assert_eq!(event.next_fq, Some(bottom));
+        assert_eq!(event.next_segment, Some(m_bottom));
+    }
+
+    /// `spatial_push_layer_inner` derives `window_label` from the calling
+    /// command (in production from `tauri::Window::label()`) and stores
+    /// the layer under that label so `root_for_window` can find it.
+    #[test]
+    fn spatial_push_layer_associates_window_label() {
+        let mut registry = SpatialRegistry::new();
+        let segment = SegmentMoniker::from_string("L1");
+        let fq = FullyQualifiedMoniker::root(&segment);
+        spatial_push_layer_inner(
+            &mut registry,
+            fq.clone(),
+            segment,
+            LayerName::from_string("window"),
+            None,
+            WindowLabel::from_string("board-abc"),
+        );
+
+        let root = registry
+            .root_for_window(&WindowLabel::from_string("board-abc"))
+            .expect("root layer registered for the window");
+        assert_eq!(root.fq, fq);
+        assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
+    }
+
+    /// `update_rect` refreshes the geometry of a registered scope.
+    /// No-op when the FQM is unknown — the kernel does not invent a new
+    /// scope from a stray rect update.
+    #[test]
+    fn spatial_update_rect_refreshes_registered_scope() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (fq, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:01",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        let new_rect = rect_at(50.0, 60.0, 70.0, 80.0);
+        registry.update_rect(&fq, new_rect);
+        let scope = registry.scope(&fq).unwrap();
+        assert_eq!(scope.rect, new_rect);
+
+        // Unknown FQM: pure no-op.
+        let ghost = FullyQualifiedMoniker::from_string("/ghost");
+        registry.update_rect(&ghost, rect_at(1.0, 2.0, 3.0, 4.0));
+        assert!(!registry.is_registered(&ghost));
+    }
+
+    /// `spatial_pop_layer` removes the layer from the registry.
+    /// Consistent with `remove_layer`: no-op when the FQM is unknown.
+    #[test]
+    fn spatial_pop_layer_removes_layer() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        assert!(registry.layer(&layer).is_some());
+
+        registry.remove_layer(&layer);
+        assert!(registry.layer(&layer).is_none());
+    }
+
+    /// `spatial_register_batch_inner` applies a vector of `RegisterEntry`
+    /// values atomically. The wire path is
+    /// `spatial_register_batch` → `spatial_register_batch_inner` →
+    /// `SpatialRegistry::apply_batch`; this test exercises the inner half
+    /// to prove the adapter forwards the call without mutating the
+    /// payload.
+    #[test]
+    fn spatial_register_batch_inner_registers_all_entries() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let z1 = compose_fq(&layer, "task:01");
+        let k1 = compose_fq(&layer, "ui:button");
+
+        let entries = vec![
+            RegisterEntry::Zone {
+                fq: z1.clone(),
+                segment: SegmentMoniker::from_string("task:01"),
+                rect: rect_at(0.0, 0.0, 10.0, 10.0),
+                layer_fq: layer.clone(),
+                parent_zone: None,
+                overrides: HashMap::new(),
+            },
+            RegisterEntry::Scope {
+                fq: k1.clone(),
+                segment: SegmentMoniker::from_string("ui:button"),
+                rect: rect_at(20.0, 0.0, 10.0, 10.0),
+                layer_fq: layer,
+                parent_zone: None,
+                overrides: HashMap::new(),
+            },
+        ];
+
+        spatial_register_batch_inner(&mut registry, entries).expect("batch apply succeeds");
+
+        assert!(registry.is_registered(&z1), "zone entry registered");
+        assert!(registry.is_registered(&k1), "leaf scope entry registered");
+    }
+
+    /// A kind-mismatch (zone entry for an FQM already registered as a
+    /// leaf scope) bubbles up as `BatchRegisterError::KindMismatch` and
+    /// leaves the registry unchanged. Verifies the inner helper does not
+    /// silently swallow the error — the Tauri command stringifies it for
+    /// the wire, so the kernel error must reach the helper boundary.
+    #[test]
+    fn spatial_register_batch_inner_returns_kind_mismatch_error() {
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (existing, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "ui:button",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+
+        // Try to re-register the same FQM as a zone — must fail kind-stability.
+        let entries = vec![RegisterEntry::Zone {
+            fq: existing.clone(),
+            segment: SegmentMoniker::from_string("ui:button"),
+            rect: rect_at(0.0, 0.0, 10.0, 10.0),
+            layer_fq: layer,
+            parent_zone: None,
+            overrides: HashMap::new(),
+        }];
+
+        let result = spatial_register_batch_inner(&mut registry, entries);
+        assert!(
+            matches!(result, Err(BatchRegisterError::KindMismatch { .. })),
+            "kind-mismatch must surface as BatchRegisterError",
+        );
+        // Registry unchanged — the original leaf scope still wins, and
+        // the zone accessor returns `None` because the kind never flipped.
+        assert!(
+            registry.scope(&existing).is_some(),
+            "original leaf entry preserved",
+        );
+        assert!(
+            registry.zone(&existing).is_none(),
+            "kind preserved on rejected batch",
         );
     }
 }

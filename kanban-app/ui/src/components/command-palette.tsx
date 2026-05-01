@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -6,14 +13,19 @@ import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import { useDispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
+import {
+  FocusedScopeContext,
+  scopeChainFromScope,
+  useDispatchCommand,
+  type CommandAtDepth,
+} from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { moniker } from "@/lib/moniker";
-import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
 import { EntityIcon } from "@/components/entity-icon";
+import { asSegment } from "@/types/spatial";
 
 /** Result shape returned by the backend `search_entities` command. */
 interface SearchResult {
@@ -64,7 +76,19 @@ export function CommandPalette({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
+  const { keymap_mode: mode } = useUIState();
+  // Scope chain is sourced from `FocusedScopeContext` — the frontend-
+  // authoritative focus tree — rather than from `useUIState().scope_chain`.
+  // The backend echoes scope_chain on every `ui.setFocus`, but the
+  // `UIStateProvider` suppresses those events to keep `useUIState()`
+  // reference-stable. Reading the chain directly from the focus context
+  // preserves the "refetch commands when focus moves while palette is
+  // open" semantic without the round-trip.
+  const focusedScope = useContext(FocusedScopeContext);
+  const scopeChain = useMemo(
+    () => scopeChainFromScope(focusedScope),
+    [focusedScope],
+  );
   const dispatch = useDispatchCommand();
 
   /** Shape returned by the backend. */
@@ -75,6 +99,16 @@ export function CommandPalette({
     context_menu: boolean;
     keys?: { vim?: string; cua?: string; emacs?: string };
     available: boolean;
+    /**
+     * Pre-filled dispatch arguments for fan-out palette rows.
+     *
+     * Dynamic emitters (e.g. per-view "Switch to X") ship the canonical
+     * command id (`view.set`) plus the distinguishing argument
+     * (`{ view_id: "..." }`) inside `args`. `executeSelectedCommand`
+     * forwards this bag to `dispatch(id, { args, target })` verbatim,
+     * so no client-side suffix parsing is needed.
+     */
+    args?: Record<string, unknown>;
   }
 
   // Fetch commands from the backend when the palette opens or scope changes.
@@ -82,7 +116,7 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     invoke<ResolvedCommand[]>("list_commands_for_scope", {
-      scopeChain: scopeChain ?? [],
+      scopeChain,
     })
       .then(setBackendCommands)
       .catch((e) => {
@@ -100,6 +134,7 @@ export function CommandPalette({
           name: cmd.name,
           target: cmd.target,
           keys: cmd.keys,
+          args: cmd.args,
         },
         depth: 0,
       })),
@@ -219,8 +254,12 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
+      // `args` is populated by dynamic-emission rows (e.g. "Switch to
+      // Board View" carries `{ view_id: "board-view" }`). Forward it
+      // verbatim so the canonical command sees its pre-filled arg bag.
       dispatch(entry.command.id, {
         target: entry.command.target,
+        args: entry.command.args,
       }).catch(console.error);
     }
   }, [filteredCommands, selectedIndex, onClose, dispatch]);
@@ -395,18 +434,34 @@ export function CommandPalette({
           ) : (
             filteredCommands.map((entry, index) => {
               const hint = keyHint(entry);
+              // Fan-out rows (e.g. multiple "view.set" entries with
+              // different `args.view_id`) share an id and target, so the
+              // React key must also depend on `args` or the list would
+              // collapse to a single row.
+              const argsKey = entry.command.args
+                ? JSON.stringify(entry.command.args)
+                : "";
               return (
                 <div
-                  key={entry.command.id + ":" + (entry.command.target ?? "")}
+                  key={
+                    entry.command.id +
+                    ":" +
+                    (entry.command.target ?? "") +
+                    ":" +
+                    argsKey
+                  }
                   role="option"
                   aria-selected={index === selectedIndex}
-                  data-testid={`command-item-${entry.command.id}`}
+                  data-testid={`command-item-${entry.command.id}${
+                    argsKey ? `:${argsKey}` : ""
+                  }`}
                   className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
                     dispatch(entry.command.id, {
                       target: entry.command.target,
+                      args: entry.command.args,
                     }).catch(console.error);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
@@ -477,12 +532,6 @@ function SearchResults({
   );
 }
 
-/**
- * Single search result row wrapped in a FocusScope.
- *
- * Extracted as a component so the `useEntityCommands` hook can be called
- * at the top level of a component (hooks cannot be called inside `.map()`).
- */
 /** Props for the SearchResultItem component. */
 interface ResultRowProps {
   result: SearchResult;
@@ -492,6 +541,15 @@ interface ResultRowProps {
   onHoverIndex: (index: number) => void;
 }
 
+/**
+ * Single search result row wrapped in a FocusScope.
+ *
+ * Extracted as a top-level component so per-row scope registration (which
+ * relies on `useEffect` inside `FocusScope`) is not called from within
+ * `.map()`. The row's click handler dispatches `entity.inspect` against
+ * the result's moniker; `useDispatchCommand` is a hook and therefore must
+ * live at the top level of this component.
+ */
 function SearchResultItem({
   result,
   index,
@@ -499,58 +557,31 @@ function SearchResultItem({
   onClose,
   onHoverIndex,
 }: ResultRowProps) {
-  const entityMoniker = moniker(result.entity_type, result.entity_id);
-  const commands = useEntityCommands(result.entity_type, result.entity_id);
-
-  return (
-    <FocusScope moniker={entityMoniker} commands={commands}>
-      <SearchResultRow
-        entityMoniker={entityMoniker}
-        result={result}
-        index={index}
-        selectedIndex={selectedIndex}
-        onClose={onClose}
-        onHoverIndex={onHoverIndex}
-      />
-    </FocusScope>
+  const entityMoniker = asSegment(
+    moniker(result.entity_type, result.entity_id),
   );
-}
-
-/** Inner row that can access the FocusScope's CommandScopeContext. */
-function SearchResultRow({
-  entityMoniker,
-  result,
-  index,
-  selectedIndex,
-  onClose,
-  onHoverIndex,
-}: {
-  entityMoniker: string;
-  result: ResultRowProps["result"];
-  index: number;
-  selectedIndex: number;
-  onClose: () => void;
-  onHoverIndex: (index: number) => void;
-}) {
   const dispatch = useDispatchCommand("entity.inspect");
+
   return (
-    <div
-      role="option"
-      aria-selected={index === selectedIndex}
-      data-testid={`search-result-${entityMoniker}`}
-      className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
-        ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-      onClick={() => {
-        onClose();
-        dispatch({ target: entityMoniker }).catch(console.error);
-      }}
-      onMouseEnter={() => onHoverIndex(index)}
-    >
-      <EntityIcon
-        entityType={result.entity_type}
-        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-      />
-      <span className="min-w-0 truncate">{result.display_name}</span>
-    </div>
+    <FocusScope moniker={entityMoniker}>
+      <div
+        role="option"
+        aria-selected={index === selectedIndex}
+        data-testid={`search-result-${entityMoniker}`}
+        className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+          ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+        onClick={() => {
+          onClose();
+          dispatch({ target: entityMoniker }).catch(console.error);
+        }}
+        onMouseEnter={() => onHoverIndex(index)}
+      >
+        <EntityIcon
+          entityType={result.entity_type}
+          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 truncate">{result.display_name}</span>
+      </div>
+    </FocusScope>
   );
 }

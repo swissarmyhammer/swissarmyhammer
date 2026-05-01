@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN4CJJPSRQNEB17E6CQFF0PH
 position_column: done
-position_ordinal: ffffffffffffffffb880
+position_ordinal: ffffffffffffffffffb280
 title: 'EXTRACT-2: Move types.rs to new crate'
 ---
 ## What

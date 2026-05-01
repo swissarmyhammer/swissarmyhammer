@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffffffffffffffe880
+position_ordinal: ffffffffffffffffffffffffc780
 title: Fix command palette dismiss targeting wrong window — empty scope chain in closePalette
 ---
 ## What

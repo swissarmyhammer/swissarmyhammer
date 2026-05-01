@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNZ3ZX03HSEYVAJFGEFTC2ZE
 position_column: done
-position_ordinal: ffffffffffffffffffffffba80
+position_ordinal: ffffffffffffffffffffffffffffff8c80
 project: pill-via-cm6
 title: Extend MentionMeta with displayName (facet refactor)
 ---

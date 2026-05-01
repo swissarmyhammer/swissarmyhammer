@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNJD7VB0QC38W3EETA84E15Y
 position_column: done
-position_ordinal: ffffffffffffffffffffff8780
+position_ordinal: ffffffffffffffffffffffffffffb780
 position_swimlane: null
 title: 'FILTER-2: Server-side filter evaluation in entity listing'
 ---

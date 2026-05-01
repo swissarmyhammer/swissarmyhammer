@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: d780
+position_ordinal: 8c80
 title: 'Remove or enable 4 #[ignore]''d undo_commands tests in swissarmyhammer-entity'
 ---
 What: swissarmyhammer-entity/src/undo_commands.rs has 4 tests marked `#[ignore = "requires StoreContext undo stack not yet on this branch"]` at lines 126, 139, 152, 178. They panic when run (`StoreContext not available`). Per the test discipline, skipped tests must be fixed or deleted.

@@ -5,11 +5,10 @@ kind: grid
 entity_type: task
 card_fields:
   - title
-  - status
   - tags
   - assignees
-  - priority
-  - due_date
+  - due
+  - position_column
 commands:
   - id: grid.edit
     name: Edit Cell
