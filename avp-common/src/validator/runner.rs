@@ -816,8 +816,7 @@ impl ValidatorTask {
         };
 
         let notifications = self.notifications_tx.subscribe();
-        let response =
-            execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
+        let response = execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
 
         let (result, is_rate_limit) = handle_execution_response(&self.validator, response);
 
@@ -1111,8 +1110,7 @@ impl ValidatorRunner {
         };
 
         let notifications = self.notifier.sender().subscribe();
-        let response =
-            execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
+        let response = execute_prompt_via_connection(&self.agent, notifications, prompt_text).await;
 
         handle_execution_response(validator, response)
     }
@@ -2262,7 +2260,9 @@ mod tests {
                 Req::SetSessionModeRequest(req) => responder
                     .cast()
                     .respond_with_result(mock.set_session_mode(req).await),
-                Req::PromptRequest(req) => responder.cast().respond_with_result(mock.prompt(req).await),
+                Req::PromptRequest(req) => {
+                    responder.cast().respond_with_result(mock.prompt(req).await)
+                }
                 Req::ExtMethodRequest(req) => {
                     let result = mock.ext_method(req).await.and_then(|ext_response| {
                         serde_json::from_str::<serde_json::Value>(ext_response.0.get())

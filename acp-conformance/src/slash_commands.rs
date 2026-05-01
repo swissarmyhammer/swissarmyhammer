@@ -455,7 +455,7 @@ mod tests {
 
     use crate::test_utils::{run_with_mock_agent_as_fixture, MockAgent};
     use agent_client_protocol::schema::{
-        InitializeRequest, InitializeResponse, NewSessionResponse, ProtocolVersion, PromptResponse,
+        InitializeRequest, InitializeResponse, NewSessionResponse, PromptResponse, ProtocolVersion,
         StopReason,
     };
     use futures::future::BoxFuture;
@@ -507,10 +507,12 @@ mod tests {
     #[tokio::test]
     async fn test_advertise_commands_mock() {
         let mock = Arc::new(SlashCmdMockAgent);
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_advertise_commands(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_advertise_commands(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 
@@ -536,20 +538,24 @@ mod tests {
     #[tokio::test]
     async fn test_command_input_hint_mock() {
         let mock = Arc::new(SlashCmdMockAgent);
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_command_input_hint(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_command_input_hint(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 
     #[tokio::test]
     async fn test_command_with_input_mock() {
         let mock = Arc::new(SlashCmdMockAgent);
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_command_with_input(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_command_with_input(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 

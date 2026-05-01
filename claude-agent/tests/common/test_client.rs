@@ -18,11 +18,11 @@
 //!
 //! [`Role`]: agent_client_protocol::Role
 
-use agent_client_protocol::Error as AcpError;
 use agent_client_protocol::schema::{
     ReadTextFileRequest, ReadTextFileResponse, RequestPermissionRequest, RequestPermissionResponse,
     SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
 };
+use agent_client_protocol::Error as AcpError;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

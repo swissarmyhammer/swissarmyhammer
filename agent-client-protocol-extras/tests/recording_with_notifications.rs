@@ -141,7 +141,9 @@ struct ChannelExposer;
 impl ConnectTo<agent_client_protocol::Agent> for ChannelExposer {
     async fn connect_to(
         self,
-        _agent: impl ConnectTo<<agent_client_protocol::Agent as agent_client_protocol::Role>::Counterpart>,
+        _agent: impl ConnectTo<
+            <agent_client_protocol::Agent as agent_client_protocol::Role>::Counterpart,
+        >,
     ) -> AcpResult<()> {
         Ok(())
     }
@@ -165,14 +167,10 @@ async fn recording_with_notifications_captures_wire_and_mcp_sources() {
     let (_session_notif_tx, session_notif_rx) =
         tokio::sync::broadcast::channel::<agent_client_protocol::schema::SessionNotification>(8);
 
-    let wrapper = RecordingAgent::with_notifications(
-        inner,
-        recording_path.clone(),
-        "test",
-        session_notif_rx,
-    )
-    .await
-    .expect("wrapper constructs");
+    let wrapper =
+        RecordingAgent::with_notifications(inner, recording_path.clone(), "test", session_notif_rx)
+            .await
+            .expect("wrapper constructs");
 
     assert_eq!(wrapper.agent_type(), "test");
 
@@ -239,8 +237,8 @@ async fn recording_with_notifications_captures_wire_and_mcp_sources() {
 
     // Read the recorded fixture and assert both notification sources made
     // it in.
-    let contents = std::fs::read_to_string(&recording_path)
-        .expect("recording file should exist after drop");
+    let contents =
+        std::fs::read_to_string(&recording_path).expect("recording file should exist after drop");
     let session: RecordedSession =
         serde_json::from_str(&contents).expect("recording deserializes as RecordedSession");
 

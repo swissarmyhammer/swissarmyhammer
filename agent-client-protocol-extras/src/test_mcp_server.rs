@@ -25,7 +25,9 @@
 //! should keep the wrapper alive for as long as they need to call the proxy
 //! URL.
 
-use model_context_protocol_extras::{start_proxy, McpNotification, McpNotificationSource, McpProxy};
+use model_context_protocol_extras::{
+    start_proxy, McpNotification, McpNotificationSource, McpProxy,
+};
 use rmcp::model::*;
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::{
@@ -309,10 +311,8 @@ pub async fn start_test_mcp_server() -> Result<String, Box<dyn std::error::Error
 /// Start a [`TestMcpServerHandler`] and return both its URL and the
 /// `JoinHandle` of the serve task. The handle lets callers tie the server's
 /// lifetime to their wrapper.
-async fn start_test_mcp_server_inner() -> Result<
-    (String, tokio::task::JoinHandle<()>),
-    Box<dyn std::error::Error + Send + Sync>,
-> {
+async fn start_test_mcp_server_inner(
+) -> Result<(String, tokio::task::JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let server = Arc::new(TestMcpServerHandler::new());
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

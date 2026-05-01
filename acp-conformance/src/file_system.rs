@@ -618,10 +618,14 @@ mod tests {
             request: InitializeRequest,
         ) -> BoxFuture<'a, agent_client_protocol::Result<InitializeResponse>> {
             Box::pin(async move {
-                self.read_enabled
-                    .store(request.client_capabilities.fs.read_text_file, Ordering::SeqCst);
-                self.write_enabled
-                    .store(request.client_capabilities.fs.write_text_file, Ordering::SeqCst);
+                self.read_enabled.store(
+                    request.client_capabilities.fs.read_text_file,
+                    Ordering::SeqCst,
+                );
+                self.write_enabled.store(
+                    request.client_capabilities.fs.write_text_file,
+                    Ordering::SeqCst,
+                );
                 Ok(InitializeResponse::new(ProtocolVersion::V1))
             })
         }

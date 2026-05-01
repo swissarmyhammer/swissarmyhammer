@@ -764,7 +764,9 @@ mod tests {
 
         let conn = wrapper.connection();
 
-        use agent_client_protocol::schema::{InitializeRequest, NewSessionRequest, ProtocolVersion};
+        use agent_client_protocol::schema::{
+            InitializeRequest, NewSessionRequest, ProtocolVersion,
+        };
 
         let init_resp = conn
             .send_request(InitializeRequest::new(ProtocolVersion::V1))

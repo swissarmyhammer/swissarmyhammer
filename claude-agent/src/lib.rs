@@ -229,9 +229,7 @@ async fn initialize_agent(agent: &ClaudeAgent) -> Result<()> {
 }
 
 /// Create a new session with the agent.
-async fn create_session(
-    agent: &ClaudeAgent,
-) -> Result<agent_client_protocol::schema::SessionId> {
+async fn create_session(agent: &ClaudeAgent) -> Result<agent_client_protocol::schema::SessionId> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
     let session_request = NewSessionRequest::new(cwd);
     let session_response = agent

@@ -2441,4 +2441,3 @@ impl ClaudeAgent {
         }
     }
 }
-

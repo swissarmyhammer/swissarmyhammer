@@ -632,9 +632,7 @@ impl Drop for RecordingState {
         };
 
         if clean && buffered == 0 {
-            tracing::debug!(
-                "RecordingState Drop: already clean, skipping redundant final flush"
-            );
+            tracing::debug!("RecordingState Drop: already clean, skipping redundant final flush");
             return;
         }
 
@@ -1551,8 +1549,7 @@ mod tests {
         // by synthesizing a RecordedCall on the FromClient + notification
         // path for this specific method.
         let state = fresh_state();
-        let cancel =
-            jsonrpc_notification("session/cancel", serde_json::json!({"sessionId": "s1"}));
+        let cancel = jsonrpc_notification("session/cancel", serde_json::json!({"sessionId": "s1"}));
         state.observe(Direction::FromClient, &cancel);
 
         let inner = state.inner.lock().unwrap();

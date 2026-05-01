@@ -146,16 +146,12 @@ async fn create_claude_agent() -> Result<Box<dyn AgentWithFixture>> {
     // fold into a recording wrapper, and register the MCP proxy as an
     // additional notification source.
     let adapter = ClaudeAgentAdapter::new(Arc::new(agent));
-    let recording = RecordingAgent::with_notifications(
-        adapter,
-        fixture_path,
-        CLAUDE_AGENT_TYPE,
-        receiver,
-    )
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(std::io::Error::other(e.to_string()))
-    })?;
+    let recording =
+        RecordingAgent::with_notifications(adapter, fixture_path, CLAUDE_AGENT_TYPE, receiver)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                Box::new(std::io::Error::other(e.to_string()))
+            })?;
     recording.add_mcp_source(mcp_server.subscribe());
 
     Ok(Box::new(recording))
@@ -210,9 +206,12 @@ async fn create_llama_agent() -> Result<Box<dyn AgentWithFixture>> {
         ]),
         ..Default::default()
     };
-    acp_config.default_mcp_servers.push(McpServer::Http(
-        McpServerHttp::new("test-mcp-server", &mcp_url),
-    ));
+    acp_config
+        .default_mcp_servers
+        .push(McpServer::Http(McpServerHttp::new(
+            "test-mcp-server",
+            &mcp_url,
+        )));
 
     let (agent, notification_rx) =
         llama_agent::acp::test_utils::create_acp_server_with_config(config, acp_config)

@@ -200,9 +200,7 @@ fn dispatch_mock_request<M: MockAgent + 'static>(
             Req::SetSessionModeRequest(req) => responder
                 .cast()
                 .respond_with_result(mock.set_session_mode(req).await),
-            Req::PromptRequest(req) => responder
-                .cast()
-                .respond_with_result(mock.prompt(req).await),
+            Req::PromptRequest(req) => responder.cast().respond_with_result(mock.prompt(req).await),
             Req::ExtMethodRequest(req) => {
                 let result = mock.ext_method(req).await.and_then(|ext_response| {
                     serde_json::from_str::<serde_json::Value>(ext_response.0.get())

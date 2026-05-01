@@ -57,7 +57,11 @@ pub async fn test_new_session_minimal(agent: &dyn AgentWithFixture) -> crate::Re
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd.clone());
 
-    let response = agent.connection().send_request(request).block_task().await?;
+    let response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // Validate session ID is present and non-empty
     if response.session_id.0.is_empty() {
@@ -81,7 +85,11 @@ pub async fn test_new_session_with_mcp(agent: &dyn AgentWithFixture) -> crate::R
     // For now, test with empty MCP servers array
     let request = NewSessionRequest::new(cwd).mcp_servers(vec![]);
 
-    let response = agent.connection().send_request(request).block_task().await?;
+    let response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // Validate session ID
     if response.session_id.0.is_empty() {
@@ -103,11 +111,19 @@ pub async fn test_session_ids_unique(agent: &dyn AgentWithFixture) -> crate::Res
 
     // Create first session
     let request1 = NewSessionRequest::new(cwd.clone());
-    let response1 = agent.connection().send_request(request1).block_task().await?;
+    let response1 = agent
+        .connection()
+        .send_request(request1)
+        .block_task()
+        .await?;
 
     // Create second session
     let request2 = NewSessionRequest::new(cwd);
-    let response2 = agent.connection().send_request(request2).block_task().await?;
+    let response2 = agent
+        .connection()
+        .send_request(request2)
+        .block_task()
+        .await?;
 
     // Verify IDs are different
     if response1.session_id == response2.session_id {
@@ -131,7 +147,11 @@ pub async fn test_load_nonexistent_session(agent: &dyn AgentWithFixture) -> crat
 
     // Initialize agent first (required by ACP protocol)
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.connection().send_request(init_request).block_task().await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Try to load a nonexistent session
     let fake_session_id = SessionId::new("01HZZZZZZZZZZZZZZZZZZZZZZ");
@@ -163,7 +183,11 @@ pub async fn test_set_session_mode(agent: &dyn AgentWithFixture) -> crate::Resul
     // First create a session
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.connection().send_request(new_request).block_task().await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Check if agent provides modes
@@ -171,7 +195,11 @@ pub async fn test_set_session_mode(agent: &dyn AgentWithFixture) -> crate::Resul
         // Agent provides modes - try to set to an available mode
         if let Some(mode) = mode_state.available_modes.first() {
             let request = SetSessionModeRequest::new(session_id, mode.id.clone());
-            let response = agent.connection().send_request(request).block_task().await?;
+            let response = agent
+                .connection()
+                .send_request(request)
+                .block_task()
+                .await?;
             tracing::info!("Set session mode response: {}", Pretty(&response));
         } else {
             tracing::warn!("Agent provides modes but available_modes is empty");
@@ -209,7 +237,11 @@ pub async fn test_new_session_includes_modes(agent: &dyn AgentWithFixture) -> cr
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let response = agent.connection().send_request(request).block_task().await?;
+    let response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // Check if modes are present (optional per spec)
     if let Some(mode_state) = response.modes {
@@ -283,7 +315,11 @@ pub async fn test_set_session_mode_to_available(agent: &dyn AgentWithFixture) ->
     // First create a session
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.connection().send_request(new_request).block_task().await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Check if modes are available
@@ -310,7 +346,11 @@ pub async fn test_set_session_mode_to_available(agent: &dyn AgentWithFixture) ->
 
         // Set the new mode
         let request = SetSessionModeRequest::new(session_id, target_mode.id.clone());
-        agent.connection().send_request(request).block_task().await?;
+        agent
+            .connection()
+            .send_request(request)
+            .block_task()
+            .await?;
 
         tracing::info!("Successfully switched to mode '{}'", target_mode.id.0);
     } else {
@@ -330,7 +370,11 @@ pub async fn test_set_invalid_session_mode(agent: &dyn AgentWithFixture) -> crat
     // First create a session
     let cwd = std::env::temp_dir();
     let new_request = NewSessionRequest::new(cwd);
-    let new_response = agent.connection().send_request(new_request).block_task().await?;
+    let new_response = agent
+        .connection()
+        .send_request(new_request)
+        .block_task()
+        .await?;
     let session_id = new_response.session_id;
 
     // Try to set an invalid mode ID
@@ -361,7 +405,11 @@ pub async fn test_mode_state_validation(agent: &dyn AgentWithFixture) -> crate::
     let cwd = std::env::temp_dir();
     let request = NewSessionRequest::new(cwd);
 
-    let response = agent.connection().send_request(request).block_task().await?;
+    let response = agent
+        .connection()
+        .send_request(request)
+        .block_task()
+        .await?;
 
     // If modes are present, validate structure comprehensively
     if let Some(mode_state) = response.modes {
@@ -454,12 +502,20 @@ pub async fn test_session_mode_independence(agent: &dyn AgentWithFixture) -> cra
 
     // Create first session
     let request1 = NewSessionRequest::new(cwd.clone());
-    let response1 = agent.connection().send_request(request1).block_task().await?;
+    let response1 = agent
+        .connection()
+        .send_request(request1)
+        .block_task()
+        .await?;
     let session_id1 = response1.session_id;
 
     // Create second session
     let request2 = NewSessionRequest::new(cwd);
-    let response2 = agent.connection().send_request(request2).block_task().await?;
+    let response2 = agent
+        .connection()
+        .send_request(request2)
+        .block_task()
+        .await?;
     let session_id2 = response2.session_id;
 
     // Both sessions should have modes if the agent supports them
@@ -475,12 +531,20 @@ pub async fn test_session_mode_independence(agent: &dyn AgentWithFixture) -> cra
 
             // Set session 1 to mode1
             let request1 = SetSessionModeRequest::new(session_id1.clone(), mode1.id.clone());
-            agent.connection().send_request(request1).block_task().await?;
+            agent
+                .connection()
+                .send_request(request1)
+                .block_task()
+                .await?;
 
             // Set session 2 to mode2 (if different)
             if mode1.id != mode2.id {
                 let request2 = SetSessionModeRequest::new(session_id2, mode2.id.clone());
-                agent.connection().send_request(request2).block_task().await?;
+                agent
+                    .connection()
+                    .send_request(request2)
+                    .block_task()
+                    .await?;
 
                 tracing::info!(
                     "Successfully set independent modes: session1='{}', session2='{}'",
@@ -711,10 +775,12 @@ mod tests {
     #[tokio::test]
     async fn test_session_ids_unique_mock() {
         let mock = Arc::new(SessionMockAgent::new());
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_session_ids_unique(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_session_ids_unique(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 
@@ -732,8 +798,11 @@ mod tests {
     async fn test_set_session_mode_mock() {
         let mock = Arc::new(SessionMockAgent::new());
         let result =
-            run_with_mock_agent_as_fixture(mock, |fx| async move { test_set_session_mode(&fx).await })
-                .await;
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_set_session_mode(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 

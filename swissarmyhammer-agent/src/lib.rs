@@ -891,14 +891,7 @@ async fn execute_prompt_with_agent(
             })?;
 
         rt.block_on(async move {
-            run_prompt_connection(
-                agent,
-                notification_rx,
-                system_prompt,
-                mode,
-                user_prompt,
-            )
-            .await
+            run_prompt_connection(agent, notification_rx, system_prompt, mode, user_prompt).await
         })
     })
     .await
@@ -980,8 +973,7 @@ async fn drive_prompt_turn(
 
     // Spawn the per-session collector before issuing the prompt so it
     // captures streamed updates as they arrive.
-    let collector =
-        spawn_collector_task(notification_rx, session_id.clone(), cancel_token.clone());
+    let collector = spawn_collector_task(notification_rx, session_id.clone(), cancel_token.clone());
 
     let prompt_request = PromptRequest::new(
         session_id,
@@ -1074,12 +1066,9 @@ async fn set_session_mode_via_connection(
     if let Some(mode_id) = mode {
         let mode_id = SessionModeId::new(mode_id);
         let request = SetSessionModeRequest::new(session_id.clone(), mode_id.clone());
-        cx.send_request(request)
-            .block_task()
-            .await
-            .map_err(|e| {
-                AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
-            })?;
+        cx.send_request(request).block_task().await.map_err(|e| {
+            AcpError::SessionError(format!("Failed to set session mode '{}': {:?}", mode_id, e))
+        })?;
         tracing::debug!("Session mode set to: {}", mode_id);
     }
     Ok(())

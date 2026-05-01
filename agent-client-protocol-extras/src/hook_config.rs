@@ -1768,8 +1768,12 @@ hooks:
         let from_yaml: HookConfig = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert_eq!(from_json.hooks.len(), from_yaml.hooks.len());
-        assert!(from_json.hooks.contains_key(&HookEventKindConfig::PreToolUse));
-        assert!(from_yaml.hooks.contains_key(&HookEventKindConfig::PreToolUse));
+        assert!(from_json
+            .hooks
+            .contains_key(&HookEventKindConfig::PreToolUse));
+        assert!(from_yaml
+            .hooks
+            .contains_key(&HookEventKindConfig::PreToolUse));
         assert!(from_json.hooks.contains_key(&HookEventKindConfig::Stop));
         assert!(from_yaml.hooks.contains_key(&HookEventKindConfig::Stop));
     }
@@ -1807,7 +1811,10 @@ hooks:
         let config: HookConfig = serde_json::from_str(json).unwrap();
         let result = config.build_registrations(None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HookConfigError::InvalidRegex(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            HookConfigError::InvalidRegex(_)
+        ));
     }
 
     #[test]
@@ -1820,7 +1827,10 @@ hooks:
         let config: HookConfig = serde_json::from_str(json).unwrap();
         let result = config.build_registrations(None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HookConfigError::MissingEvaluator));
+        assert!(matches!(
+            result.unwrap_err(),
+            HookConfigError::MissingEvaluator
+        ));
     }
 
     #[test]
@@ -1957,7 +1967,10 @@ hooks:
 
     #[test]
     fn test_prompt_response_ok_true() {
-        let response = PromptHookResponse { ok: true, reason: None };
+        let response = PromptHookResponse {
+            ok: true,
+            reason: None,
+        };
         let decision = interpret_prompt_response(&response, HookEventKind::PreToolUse);
         assert!(matches!(decision, HookDecision::Allow));
     }
@@ -2083,22 +2096,55 @@ hooks:
     #[test]
     fn test_supported_event_kinds_succeed() {
         let supported_kinds = vec![
-            (HookEventKindConfig::SessionStart, HookEventKind::SessionStart),
-            (HookEventKindConfig::UserPromptSubmit, HookEventKind::UserPromptSubmit),
+            (
+                HookEventKindConfig::SessionStart,
+                HookEventKind::SessionStart,
+            ),
+            (
+                HookEventKindConfig::UserPromptSubmit,
+                HookEventKind::UserPromptSubmit,
+            ),
             (HookEventKindConfig::PreToolUse, HookEventKind::PreToolUse),
             (HookEventKindConfig::PostToolUse, HookEventKind::PostToolUse),
-            (HookEventKindConfig::PostToolUseFailure, HookEventKind::PostToolUseFailure),
+            (
+                HookEventKindConfig::PostToolUseFailure,
+                HookEventKind::PostToolUseFailure,
+            ),
             (HookEventKindConfig::Stop, HookEventKind::Stop),
-            (HookEventKindConfig::Notification, HookEventKind::Notification),
+            (
+                HookEventKindConfig::Notification,
+                HookEventKind::Notification,
+            ),
             (HookEventKindConfig::PostCompact, HookEventKind::PostCompact),
-            (HookEventKindConfig::TeammateIdle, HookEventKind::TeammateIdle),
-            (HookEventKindConfig::TaskCompleted, HookEventKind::TaskCompleted),
+            (
+                HookEventKindConfig::TeammateIdle,
+                HookEventKind::TeammateIdle,
+            ),
+            (
+                HookEventKindConfig::TaskCompleted,
+                HookEventKind::TaskCompleted,
+            ),
             (HookEventKindConfig::Elicitation, HookEventKind::Elicitation),
-            (HookEventKindConfig::ElicitationResult, HookEventKind::ElicitationResult),
-            (HookEventKindConfig::InstructionsLoaded, HookEventKind::InstructionsLoaded),
-            (HookEventKindConfig::ConfigChange, HookEventKind::ConfigChange),
-            (HookEventKindConfig::WorktreeCreate, HookEventKind::WorktreeCreate),
-            (HookEventKindConfig::WorktreeRemove, HookEventKind::WorktreeRemove),
+            (
+                HookEventKindConfig::ElicitationResult,
+                HookEventKind::ElicitationResult,
+            ),
+            (
+                HookEventKindConfig::InstructionsLoaded,
+                HookEventKind::InstructionsLoaded,
+            ),
+            (
+                HookEventKindConfig::ConfigChange,
+                HookEventKind::ConfigChange,
+            ),
+            (
+                HookEventKindConfig::WorktreeCreate,
+                HookEventKind::WorktreeCreate,
+            ),
+            (
+                HookEventKindConfig::WorktreeRemove,
+                HookEventKind::WorktreeRemove,
+            ),
         ];
         for (config_kind, expected_kind) in &supported_kinds {
             let result: Result<HookEventKind, _> = config_kind.clone().try_into();
@@ -2134,7 +2180,9 @@ hooks:
         }"#;
         let config: HookConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.hooks.len(), 1);
-        assert!(config.hooks.contains_key(&HookEventKindConfig::PostToolUseFailure));
+        assert!(config
+            .hooks
+            .contains_key(&HookEventKindConfig::PostToolUseFailure));
     }
 
     // =====================================================================
@@ -2143,9 +2191,18 @@ hooks:
 
     #[test]
     fn test_hook_decision_value_serialization() {
-        assert_eq!(serde_json::to_string(&HookDecisionValue::Allow).unwrap(), "\"allow\"");
-        assert_eq!(serde_json::to_string(&HookDecisionValue::Block).unwrap(), "\"block\"");
-        assert_eq!(serde_json::to_string(&HookDecisionValue::Ask).unwrap(), "\"ask\"");
+        assert_eq!(
+            serde_json::to_string(&HookDecisionValue::Allow).unwrap(),
+            "\"allow\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookDecisionValue::Block).unwrap(),
+            "\"block\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookDecisionValue::Ask).unwrap(),
+            "\"ask\""
+        );
     }
 
     #[test]

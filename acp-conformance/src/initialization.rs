@@ -521,10 +521,12 @@ mod tests {
     #[tokio::test]
     async fn test_with_client_info_mock() {
         let mock = Arc::new(InitMockAgent);
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_with_client_info(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_with_client_info(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 

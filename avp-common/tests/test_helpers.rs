@@ -157,8 +157,7 @@ pub fn create_context_with_playback(temp: &TempDir, fixture_name: &str) -> AvpCo
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp.path()).unwrap();
 
-    let context = AvpContext::with_agent(agent)
-        .expect("Should create context with playback agent");
+    let context = AvpContext::with_agent(agent).expect("Should create context with playback agent");
 
     std::env::set_current_dir(&original_dir).unwrap();
     context

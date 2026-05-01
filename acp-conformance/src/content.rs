@@ -50,7 +50,11 @@ pub async fn test_text_content_support(agent: &dyn AgentWithFixture) -> crate::R
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.connection().send_request(init_request).block_task().await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -101,7 +105,11 @@ pub async fn test_image_content_with_capability(agent: &dyn AgentWithFixture) ->
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.connection().send_request(init_request).block_task().await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports image capability
     let agent_supports_image = init_response.agent_capabilities.prompt_capabilities.image;
@@ -159,7 +167,11 @@ pub async fn test_audio_content_with_capability(agent: &dyn AgentWithFixture) ->
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.connection().send_request(init_request).block_task().await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports audio capability
     let agent_supports_audio = init_response.agent_capabilities.prompt_capabilities.audio;
@@ -219,7 +231,11 @@ pub async fn test_embedded_resource_with_capability(
 
     // Initialize agent and check capabilities
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let init_response = agent.connection().send_request(init_request).block_task().await?;
+    let init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Check if agent supports embedded context capability
     let agent_supports_embedded = init_response
@@ -289,7 +305,11 @@ pub async fn test_resource_link_content(agent: &dyn AgentWithFixture) -> crate::
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.connection().send_request(init_request).block_task().await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -341,7 +361,11 @@ pub async fn test_content_validation(agent: &dyn AgentWithFixture) -> crate::Res
 
     // Initialize agent
     let init_request = InitializeRequest::new(ProtocolVersion::V1);
-    let _init_response = agent.connection().send_request(init_request).block_task().await?;
+    let _init_response = agent
+        .connection()
+        .send_request(init_request)
+        .block_task()
+        .await?;
 
     // Create a new session
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -598,10 +622,12 @@ mod tests {
     #[tokio::test]
     async fn test_content_validation_mock() {
         let mock = Arc::new(ContentMockAgent);
-        let result = run_with_mock_agent_as_fixture(mock, |fx| async move {
-            test_content_validation(&fx).await
-        })
-        .await;
+        let result =
+            run_with_mock_agent_as_fixture(
+                mock,
+                |fx| async move { test_content_validation(&fx).await },
+            )
+            .await;
         assert!(result.is_ok(), "result: {:?}", result);
     }
 

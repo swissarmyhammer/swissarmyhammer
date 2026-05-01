@@ -94,7 +94,10 @@ where
     /// Creates an internal duplex channel between us and the inner component,
     /// then runs three concurrent loops: copy-and-log client→inner, copy-and-log
     /// inner→client, and the inner component's own future.
-    async fn connect_to(self, client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>) -> AcpResult<()> {
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<<Client as agent_client_protocol::Role>::Counterpart>,
+    ) -> AcpResult<()> {
         let agent_name = self.agent_name;
 
         // Internal pipe between us and the inner agent
@@ -212,7 +215,12 @@ fn log_message(
             );
         }
         Err(err) => {
-            tracing::warn!("[{}] {}: transport error: {}", agent_name, direction.label(), err);
+            tracing::warn!(
+                "[{}] {}: transport error: {}",
+                agent_name,
+                direction.label(),
+                err
+            );
         }
     }
 }
@@ -335,9 +343,7 @@ fn log_notification(
                     .and_then(|m| m.get("content_block_index"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-                let is_stream_event = meta
-                    .and_then(|m| m.get("source"))
-                    .and_then(|v| v.as_str())
+                let is_stream_event = meta.and_then(|m| m.get("source")).and_then(|v| v.as_str())
                     == Some("stream_event");
 
                 tracing::debug!(
@@ -447,11 +453,7 @@ fn log_notification(
             false
         }
         _ => {
-            tracing::debug!(
-                "[{}] session={}, other update type",
-                agent_name,
-                session_id
-            );
+            tracing::debug!("[{}] session={}, other update type", agent_name, session_id);
             false
         }
     }

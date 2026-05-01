@@ -154,9 +154,7 @@ async fn capture_prompts(
                 if let Some(prompt) = decode_prompt(req.params.as_ref()) {
                     captured.lock().unwrap().push(prompt);
                 } else {
-                    tracing::warn!(
-                        "PromptCapturingAgent: failed to decode session/prompt params"
-                    );
+                    tracing::warn!("PromptCapturingAgent: failed to decode session/prompt params");
                 }
             }
         }
