@@ -1,14 +1,9 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info, type LucideIcon } from "lucide-react";
+import { GripVertical, Info } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import { asSegment } from "@/types/spatial";
-import {
-  Field,
-  getDisplayIconOverride,
-  getDisplayTooltipOverride,
-} from "@/components/fields/field";
-import { fieldIcon } from "@/components/fields/field-icon";
+import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
@@ -241,96 +236,35 @@ function CardField({
   onDone,
   onCancel,
 }: CardFieldProps) {
-  // Resolve the icon: prefer a value-dependent override from the display,
-  // then fall back to the static YAML icon resolved by fieldIcon().
-  const overrideFn = getDisplayIconOverride(field.display ?? "");
-  const overrideResult = overrideFn
-    ? overrideFn(entity.fields[field.name])
-    : null;
-  const resolvedIcon = overrideResult ?? fieldIcon(field);
-
-  // Resolve the tooltip: prefer a value-dependent override from the display,
-  // then fall back to the static YAML description or humanised field name.
-  const tooltipOverrideFn = getDisplayTooltipOverride(field.display ?? "");
-  const tooltipOverrideResult = tooltipOverrideFn
-    ? tooltipOverrideFn(entity.fields[field.name])
-    : null;
-
-  const hasIcon = !!resolvedIcon;
+  // Render through `<Field withIcon />` so the icon renders *inside*
+  // the field's `<FocusZone>` — matching the inspector path
+  // (`entity-inspector.tsx`'s `FieldRow`). The unified `<Field>` already
+  // implements value-dependent icon and tooltip overrides via
+  // `resolveFieldIconAndTip` (see `fields/field.tsx`), so the card no
+  // longer needs to duplicate that logic.
+  //
+  // `showFocusBar={true}` makes the field zone render a visible
+  // `<FocusIndicator>` when its `SpatialKey` becomes the focused key
+  // for the window. Without this, a click on a single-value field
+  // inside the card (title, status, plain text fields) would fire
+  // `spatial_focus` and flip `data-focused`, but no visible decoration
+  // would appear — leaving the user without feedback that they had
+  // selected the field. The card body itself owns a separate focus bar
+  // at the zone level; the per-field bar sits at the inner leaf so the
+  // user can tell which atom of the card carries focus.
   return (
-    <div className={hasIcon ? "flex items-start gap-1.5" : ""}>
-      <CardFieldIcon
-        field={field}
-        icon={resolvedIcon}
-        tooltipOverride={tooltipOverrideResult}
-      />
-      <div className="flex-1 min-w-0">
-        {/*
-         * `showFocusBar={true}` makes the field zone render a visible
-         * `<FocusIndicator>` when its `SpatialKey` becomes the focused
-         * key for the window. Without this, a click on a single-value
-         * field inside the card (title, status, plain text fields) would
-         * fire `spatial_focus` and flip `data-focused`, but no visible
-         * decoration would appear — leaving the user without feedback
-         * that they had selected the field. The card body itself owns
-         * a separate focus bar at the zone level; the per-field bar
-         * sits at the inner leaf so the user can tell which atom of the
-         * card carries focus.
-         */}
-        <Field
-          fieldDef={field}
-          entityType={entity.entity_type}
-          entityId={entity.id}
-          mode="compact"
-          editing={editing}
-          onEdit={onEdit}
-          onDone={onDone}
-          onCancel={onCancel}
-          showFocusBar
-        />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Tooltip-wrapped icon badge for a field on the card.
- *
- * Accepts a pre-resolved `icon` from the parent — this may be a
- * value-dependent override from the display's `iconOverride` registration,
- * or the static icon from the field's YAML definition. If null, nothing
- * renders.
- *
- * When a `tooltipOverride` string is provided it replaces the static YAML
- * description in the tooltip so the card shows dynamic, value-dependent text
- * (e.g. "Completed 3 days ago").
- */
-function CardFieldIcon({
-  field,
-  icon: Icon,
-  tooltipOverride,
-}: {
-  field: FieldDef;
-  icon: LucideIcon | null;
-  tooltipOverride?: string | null;
-}) {
-  if (!Icon) return null;
-  const staticTip = field.description || field.name.replace(/_/g, " ");
-  const tip = tooltipOverride ?? staticTip;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          aria-label={tip}
-          className="h-4 inline-flex items-center shrink-0 text-muted-foreground/50"
-        >
-          <Icon className="h-3 w-3" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="left" align="start">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={editing}
+      onEdit={onEdit}
+      onDone={onDone}
+      onCancel={onCancel}
+      showFocusBar
+      withIcon
+    />
   );
 }
 

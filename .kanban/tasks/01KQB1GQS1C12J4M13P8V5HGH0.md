@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: a680
+position_ordinal: '7e80'
 project: spatial-nav
 title: 'Make the navbar keyboard-navigable: register `ui:navbar` zone and its leaves with the spatial kernel in production'
 ---

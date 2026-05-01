@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: 9e8180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffe980
 project: spatial-nav
 title: Column header registers two spatial primitives for the same surface — collapse the synthetic `column:&lt;id&gt;.name` FocusScope into the inner `<Field>` zone
 ---
@@ -77,12 +77,12 @@ If the trajectory is broken in a way the user notices, file a follow-up task to 
 
 All asserted by automated tests below — no manual smoke step.
 
-- [ ] Mounting a column produces exactly ONE spatial-nav registration for the column-name surface — the `field:column:<id>.name` zone — and zero `column:<id>.name` registrations. Pinned by an explicit "no scope is registered with moniker matching `column:<id>.name`" assertion in the column registration test.
-- [ ] With debug overlays enabled, the column header shows exactly ONE dashed border around the column name (the blue zone-kind border for the Field zone), not the previous two-overlay overlap.
-- [ ] Clicking the column name still moves focus to the column-name surface and renders the focus indicator. Pinned by `focus-on-click.regression.spatial.test.tsx`.
-- [ ] Double-click on the column name still enters the field editor's edit mode (via the field's `onEdit` callback wired in `ColumnNameField`). The `<Inspectable>` wrap inside `<Field>` does NOT open the entity inspector for `field:column:<id>.name` — the dispatcher's behavior for a `field:` moniker is either a no-op or already the desired path. Pin this with a unit test that simulates double-click and asserts `setEditingName(true)` is called and `dispatch("ui.inspect")` is **not** called for the column name's field moniker.
-- [ ] Pre-existing column-view tests (`column-view.test.tsx`, `column-view.spatial-nav.test.tsx`, `column-view.spatial.test.tsx`, `column-view.scroll-rects.browser.test.tsx`, `column-reorder.browser.test.tsx`, `column-dragover.browser.test.tsx`) all keep passing after the moniker rename.
-- [ ] `focus-architecture.guards.node.test.ts` keeps passing without an explicit `column:<id>.name` carve-out (or with the carve-out simplified to remove the column reference).
+- [x] Mounting a column produces exactly ONE spatial-nav registration for the column-name surface — the `field:column:<id>.name` zone — and zero `column:<id>.name` registrations. Pinned by an explicit "no scope is registered with moniker matching `column:<id>.name`" assertion in the column registration test.
+- [x] With debug overlays enabled, the column header shows exactly ONE dashed border around the column name (the blue zone-kind border for the Field zone), not the previous two-overlay overlap.
+- [x] Clicking the column name still moves focus to the column-name surface and renders the focus indicator. Pinned by `focus-on-click.regression.spatial.test.tsx`.
+- [x] Double-click on the column name still enters the field editor's edit mode (via the field's `onEdit` callback wired in `ColumnNameField`). The `<Inspectable>` wrap inside `<Field>` does NOT open the entity inspector for `field:column:<id>.name` — the dispatcher's behavior for a `field:` moniker is either a no-op or already the desired path. Pin this with a unit test that simulates double-click and asserts `setEditingName(true)` is called and `dispatch("ui.inspect")` is **not** called for the column name's field moniker.
+- [x] Pre-existing column-view tests (`column-view.test.tsx`, `column-view.spatial-nav.test.tsx`, `column-view.spatial.test.tsx`, `column-view.scroll-rects.browser.test.tsx`, `column-reorder.browser.test.tsx`, `column-dragover.browser.test.tsx`) all keep passing after the moniker rename.
+- [x] `focus-architecture.guards.node.test.ts` keeps passing without an explicit `column:<id>.name` carve-out (or with the carve-out simplified to remove the column reference).
 
 ## Tests
 
@@ -90,25 +90,25 @@ All tests are automated. No manual verification.
 
 ### `kanban-app/ui/src/components/column-view.spatial-nav.test.tsx` (modify)
 
-- [ ] Update existing test at line 273 to assert ZONE registration with moniker `field:column:col-doing.name` parented at the column zone. Rename appropriately.
-- [ ] Add a new test `does_not_register_a_synthetic_column_name_scope` — assert NO registered scope or zone has the moniker `column:col-doing.name`. Regression guard against accidentally re-adding the duplicate wrapper.
+- [x] Update existing test at line 273 to assert ZONE registration with moniker `field:column:col-doing.name` parented at the column zone. Rename appropriately.
+- [x] Add a new test `does_not_register_a_synthetic_column_name_scope` — assert NO registered scope or zone has the moniker `column:col-doing.name`. Regression guard against accidentally re-adding the duplicate wrapper.
 
 ### `kanban-app/ui/src/components/column-name-double-click.test.tsx` (new file)
 
-- [ ] `double_click_enters_edit_mode_not_inspector` — render a single `<ColumnHeader>` with a real `<Field>` inside (not mocked), simulate double-click on the column name, assert `setEditingName(true)` was called, assert `mockDispatch` was NOT called with `"ui.inspect"` for any `field:column:` moniker. Pin the `<Inspectable>` interaction is correct after the wrapping change.
+- [x] `double_click_enters_edit_mode_not_inspector` — render a single `<ColumnHeader>` with a real `<Field>` inside (not mocked), simulate double-click on the column name, assert `setEditingName(true)` was called, assert `mockDispatch` was NOT called with `"ui.inspect"` for any `field:column:` moniker. Pin the `<Inspectable>` interaction is correct after the wrapping change.
 
 ### `kanban-app/ui/src/components/focus-on-click.regression.spatial.test.tsx` (modify)
 
-- [ ] Update the "column name leaf" describe at line 1179 to use moniker `field:column:<id>.name`. Rename the describe to "column name field zone" for accuracy. The parent-monikers list updates if the structural ancestry changes.
+- [x] Update the "column name leaf" describe at line 1179 to use moniker `field:column:<id>.name`. Rename the describe to "column name field zone" for accuracy. The parent-monikers list updates if the structural ancestry changes.
 
 ### `kanban-app/ui/src/components/app-layout.test.tsx` (modify)
 
-- [ ] Drop the `:not([data-moniker*="."])` exclusion from the selector at line 516. Existing column-count assertions still pass.
+- [x] Drop the `:not([data-moniker*="."])` exclusion from the selector at line 516. Existing column-count assertions still pass.
 
 ### `swissarmyhammer-focus/tests/column_header_arrow_nav.rs` (new file or extend an existing fixture-based test)
 
-- [ ] `up_from_topmost_card_lands_on_column_zone_or_field_zone` — fixture: column zone with a sibling column-name field zone and three task scopes. Assert `Direction::Up` from `task:t0` lands on a moniker matching `column:c0` OR `field:column:c0.name` (whichever the unified cascade picks). Pins the trajectory after the column-name surface flipped from leaf to zone.
-- [ ] `down_from_column_zone_lands_on_field_zone_or_first_card` — symmetric. Pin which surface the kernel picks.
+- [x] `up_from_topmost_card_lands_on_column_zone_or_field_zone` — fixture: column zone with a sibling column-name field zone and three task scopes. Assert `Direction::Up` from `task:t0` lands on a moniker matching `column:c0` OR `field:column:c0.name` (whichever the unified cascade picks). Pins the trajectory after the column-name surface flipped from leaf to zone.
+- [x] `down_from_column_zone_lands_on_field_zone_or_first_card` — symmetric. Pin which surface the kernel picks.
 
 If the trajectory turns out to be unreachable or surprising, file a separate follow-up — do not block this card on it.
 

@@ -190,10 +190,16 @@ pub fn column_segment(column_index: usize) -> String {
     format!("column:{}", COLUMN_NAMES[column_index])
 }
 
-/// Build the [`SegmentMoniker`] for a column-header name leaf at the
-/// given index.
+/// Build the [`SegmentMoniker`] for the column-header name field zone
+/// at the given index.
+///
+/// In production this surface is the inner `<Field>` zone rendered by
+/// `<ColumnNameField>` — the synthetic outer `<FocusScope
+/// moniker="column:<id>.name">` was collapsed in card
+/// `01KQAWVDS931PADB0559F2TVCS`. The kernel-side moniker now follows
+/// the standard field-zone shape `field:<entityType>:<id>.<name>`.
 pub fn column_name_segment(column_index: usize) -> String {
-    format!("column:{}.name", COLUMN_NAMES[column_index])
+    format!("field:column:{}.name", COLUMN_NAMES[column_index])
 }
 
 // ---------------------------------------------------------------------------
@@ -270,8 +276,13 @@ impl RealisticApp {
         )
     }
 
-    /// FQM for the column-name leaf at `column_index` —
-    /// `/window/ui:board/column:<NAME>/column:<NAME>.name`.
+    /// FQM for the column-name field zone at `column_index` —
+    /// `/window/ui:board/column:<NAME>/field:column:<NAME>.name`.
+    ///
+    /// The column-name surface is registered as a `<FocusZone>` (kind
+    /// `Zone`) parented at the enclosing column zone, mirroring the
+    /// production wiring where `<Field>` is the sole spatial-nav
+    /// primitive for a field surface.
     pub fn column_name_fq(&self, column_index: usize) -> FullyQualifiedMoniker {
         FullyQualifiedMoniker::compose(
             &self.column_fq(column_index),
@@ -527,9 +538,14 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
             rect(col_x, BOARD_TOP, COLUMN_WIDTH, VIEWPORT_HEIGHT - BOARD_TOP),
         ));
 
-        // Column-name leaf — top of the column.
+        // Column-name field zone — top of the column. Registered as a
+        // `<FocusZone>` (kind `Zone`) with moniker
+        // `field:column:<NAME>.name`, mirroring the production wiring
+        // where `<Field>` is the sole spatial-nav primitive for a field
+        // surface (the synthetic outer `<FocusScope>` was collapsed in
+        // card 01KQAWVDS931PADB0559F2TVCS).
         let col_name_seg = column_name_segment(i);
-        reg.register_scope(make_leaf(
+        reg.register_zone(make_zone(
             FullyQualifiedMoniker::compose(
                 &col_fq,
                 &SegmentMoniker::from_string(col_name_seg.clone()),

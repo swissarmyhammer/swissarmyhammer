@@ -323,7 +323,7 @@ describe("focus-decoration architecture", () => {
       .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, prefix) => prefix);
   }
 
-  it("Guard A: useDispatchCommand(\"ui.inspect\") appears only in inspectable.tsx (double-click dispatch is single-sourced)", () => {
+  it('Guard A: useDispatchCommand("ui.inspect") appears only in inspectable.tsx (double-click dispatch is single-sourced)', () => {
     // The double-click → inspector route goes through a single
     // dispatch site so an audit can confirm both the gesture-
     // skipping rules (input/textarea/contenteditable) and the
@@ -480,24 +480,28 @@ describe("focus-decoration architecture", () => {
     // brittlely require the same expression on both sides.
     //
     // The escape hatch `// inspect:exempt` (within 3 lines above the
-    // JSX opener) is preserved for synthetic entity-prefixed monikers
-    // (e.g. the column-name navigation leaf `column:<id>.name` whose
-    // inner `<Field>` zone owns the inspect wiring). The
-    // `data-table.tsx` row case is handled differently: the row
-    // `<FocusScope renderContainer={false}>` doesn't render a host
-    // element, so DOM rules prevent wrapping in `<Inspectable>`. The
-    // inspect dispatch lives directly on the row's `<tr>` via the
-    // `useInspectOnDoubleClick` hook (still in `inspectable.tsx`).
-    // That row `<FocusScope>` carries `renderContainer={false}` and
-    // is therefore exempt from this guard — the runtime DOM never
-    // renders an element to attach `onDoubleClick` to anyway.
+    // JSX opener) is preserved for the rare case where an
+    // entity-prefixed `<FocusScope>` / `<FocusZone>` cannot be paired
+    // with an `<Inspectable>` in the same file. Today no production
+    // call site needs the carve-out — the column-name synthetic leaf
+    // (`column:<id>.name`) was the only consumer and it was collapsed
+    // into the inner `<Field>` zone (`fields/field.tsx` already wraps
+    // in `<Inspectable>`). The mechanism stays in place for any future
+    // synthetic-moniker case. The `data-table.tsx` row case is handled
+    // differently: the row `<FocusScope renderContainer={false}>`
+    // doesn't render a host element, so DOM rules prevent wrapping in
+    // `<Inspectable>`. The inspect dispatch lives directly on the row's
+    // `<tr>` via the `useInspectOnDoubleClick` hook (still in
+    // `inspectable.tsx`). That row `<FocusScope>` carries
+    // `renderContainer={false}` and is therefore exempt from this
+    // guard — the runtime DOM never renders an element to attach
+    // `onDoubleClick` to anyway.
 
     /**
      * Match a JSX element opener `<FocusScope ... >` or `<FocusZone ... >`
      * and capture the component name + attribute block.
      */
-    const PRIMITIVE_RE =
-      /<(FocusScope|FocusZone)\b([\s\S]*?)(\/>|>)/g;
+    const PRIMITIVE_RE = /<(FocusScope|FocusZone)\b([\s\S]*?)(\/>|>)/g;
 
     const MONIKER_RE = /moniker=\{\s*asSegment\(\s*[`"']([^`"']+)[`"']/;
 
@@ -568,8 +572,7 @@ describe("focus-decoration architecture", () => {
 
         if (hasRenderContainerFalse(attrs)) continue;
 
-        const lineIdx =
-          stripped.slice(0, match.index).split("\n").length - 1;
+        const lineIdx = stripped.slice(0, match.index).split("\n").length - 1;
         if (hasExemptComment(originalLines, lineIdx)) continue;
 
         // Match against the file's `<Inspectable>` monikers by tail
@@ -611,7 +614,59 @@ describe("focus-decoration architecture", () => {
     }
   });
 
-  it("focus-indicator.tsx contains no \"ring\" literal in code", () => {
+  // ---------------------------------------------------------------------
+  // Card-field migration guards (card 01KQAWV9C5F8Y3AA0KDDHHRRN1)
+  //
+  // The card surface migrated from the parallel render path
+  // (`<CardFieldIcon>` rendered as a sibling of `<Field>`) to the unified
+  // `<Field withIcon />` shape the inspector already uses. These guards
+  // catch a future revert at lint time, not at user-report time.
+  // ---------------------------------------------------------------------
+
+  it("entity-card.tsx does NOT define a CardFieldIcon symbol (card uses <Field withIcon />)", () => {
+    // The local `CardFieldIcon` helper was a sibling-icon render path
+    // that placed the icon OUTSIDE the field's `<FocusZone>`. The card
+    // now renders through `<Field withIcon />`, which puts the icon
+    // INSIDE the zone (matching the inspector). Re-introducing
+    // `CardFieldIcon` resurrects the parallel render path and the
+    // architectural divergence between card and inspector.
+    const cardPath = resolve(SRC_ROOT, "components/entity-card.tsx");
+    const stripped = stripJsComments(readFileSync(cardPath, "utf-8"));
+    if (/\bCardFieldIcon\b/.test(stripped)) {
+      throw new Error(
+        `entity-card.tsx must not define or reference CardFieldIcon — the card\n` +
+          `field icon now renders inside <Field withIcon />, matching the\n` +
+          `inspector. Re-introducing CardFieldIcon resurrects the parallel\n` +
+          `render path that put the icon outside the field's <FocusZone>.`,
+      );
+    }
+  });
+
+  it("entity-card.tsx contains no calls to getDisplayIconOverride / getDisplayTooltipOverride", () => {
+    // The card no longer reimplements icon / tooltip override resolution
+    // — `<Field withIcon />` does it via `resolveFieldIconAndTip`
+    // (`fields/field.tsx`). A reappearing import or call site means the
+    // card has drifted back into duplicating that logic.
+    const cardPath = resolve(SRC_ROOT, "components/entity-card.tsx");
+    const stripped = stripJsComments(readFileSync(cardPath, "utf-8"));
+    const offenders: string[] = [];
+    if (/\bgetDisplayIconOverride\b/.test(stripped)) {
+      offenders.push("getDisplayIconOverride");
+    }
+    if (/\bgetDisplayTooltipOverride\b/.test(stripped)) {
+      offenders.push("getDisplayTooltipOverride");
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `entity-card.tsx must not reference ${offenders.join(", ")} —\n` +
+          `the card field icon / tooltip resolution now lives inside\n` +
+          `<Field withIcon /> via resolveFieldIconAndTip. The card surface\n` +
+          `must not duplicate that logic.`,
+      );
+    }
+  });
+
+  it('focus-indicator.tsx contains no "ring" literal in code', () => {
     // The bar's class names never include the substring `ring`, so any
     // occurrence of the literal `"ring"` in this file would be the
     // resurrected variant branch. The guard scans the indicator file

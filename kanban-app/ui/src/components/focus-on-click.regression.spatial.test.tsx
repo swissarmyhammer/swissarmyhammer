@@ -41,7 +41,7 @@
  *
  *   - **Task / tag card** (`task:<id>`, `tag:<id>`).
  *   - **Column body** (`column:<id>`) — clicking column whitespace, NOT a card.
- *   - **Column name leaf** (`column:<id>.name`).
+ *   - **Column name field zone** (`field:column:<id>.name`).
  *   - **Perspective tab** (`perspective_tab:<id>`) — the user-reported bug.
  *   - **Perspective bar background** (`ui:perspective-bar`).
  *   - **Nav bar buttons** (`ui:navbar.search`, `ui:navbar.inspect`,
@@ -244,7 +244,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -342,9 +342,36 @@ const TAG_SCHEMA = {
   ],
 } as unknown as EntitySchema;
 
+/**
+ * Column schema — needed so the column-name `<Field>` resolves a
+ * `nameFieldDef` and renders its `<FocusZone>` (moniker
+ * `field:column:<id>.name`). Without this the header falls back to a
+ * bare `<span>` and the column-name field-zone test cannot find its
+ * registration.
+ */
+const COLUMN_SCHEMA = {
+  entity: {
+    name: "column",
+    entity_type: "column",
+    fields: ["name"],
+    sections: [{ id: "header", on_card: true }],
+  },
+  fields: [
+    {
+      id: "f-name",
+      name: "name",
+      type: { kind: "text", single_line: true },
+      editor: "text",
+      display: "text",
+      section: "header",
+    },
+  ],
+} as unknown as EntitySchema;
+
 const SCHEMAS: Record<string, EntitySchema> = {
   task: TASK_SCHEMA,
   tag: TAG_SCHEMA,
+  column: COLUMN_SCHEMA,
 };
 
 /**
@@ -1149,16 +1176,22 @@ describe("focus-on-click regression suite (every component class)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Column name leaf — moniker `column:<id>.name`.
+  // Column name field zone — moniker `field:column:<id>.name`.
+  //
+  // The column-name surface is registered exactly once — by the inner
+  // `<Field>` component as a `<FocusZone moniker="field:column:<id>.name">`.
+  // The previous synthetic `<FocusScope moniker="column:<id>.name">` wrap
+  // is gone (collapsed into the inner Field zone) — this test pins the
+  // post-refactor moniker.
   // -------------------------------------------------------------------------
-  describe("column name leaf", () => {
-    it("clicking the column name focuses the name leaf and renders the indicator", async () => {
+  describe("column name field zone", () => {
+    it("clicking the column name focuses the field zone and renders the indicator", async () => {
       const column = makeColumn(COLUMN_ID_A);
       const tasks = [makeTask(TASK_ID_A, COLUMN_ID_A)];
       const { container, unmount } = renderColumnInBoard(column, tasks);
       await flushSetup();
 
-      const moniker = `column:${COLUMN_ID_A}.name`;
+      const moniker = `field:column:${COLUMN_ID_A}.name`;
       await assertClickProducesIndicator({
         container,
         moniker,

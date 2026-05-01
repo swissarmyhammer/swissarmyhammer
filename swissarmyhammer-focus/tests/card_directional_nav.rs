@@ -101,16 +101,26 @@ fn up_from_t2a_lands_on_t1a() {
     );
 }
 
-/// Pressing `up` from the top card in column TODO retreats to the
-/// column-name leaf in the column header.
+/// Pressing `up` from the top card in column TODO drills out to the
+/// column zone.
+///
+/// The column-name surface is a `<FocusZone>` (kind `Zone`) — its
+/// same-kind filter at iter 0 skips it for a leaf-origin (card scope)
+/// search. The cascade escalates and falls back to the parent zone
+/// (`column:TODO`). To reach the column-name zone, the user drills out
+/// to `column:TODO` first and then presses `Down` — see
+/// `tests/column_header_arrow_nav.rs` for the symmetric cases.
 #[test]
-fn up_from_t1a_lands_on_column_header() {
+fn up_from_t1a_drills_out_to_column_zone() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.column_name_fq(0),
-        "up from task:T1A (top card) must land on the column-name header leaf"
+        app.column_fq(0),
+        "up from task:T1A (top card) must drill out to column:TODO \
+         (the column-name field zone above is filtered out by iter 0's \
+         same-kind leaf filter; the cascade escalates and returns the \
+         parent zone)"
     );
 }
 

@@ -6,7 +6,6 @@ import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
-import { FocusScope } from "@/components/focus-scope";
 import { FocusZone, useParentZoneFq } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
@@ -37,9 +36,11 @@ import {
  *
  * Cross-column keyboard navigation now lives in the spatial-nav layer: each
  * column body wraps in a `<FocusZone>` (parent zone = `ui:board`), the
- * column-name header is a leaf inside that zone, and each task card body
- * is its own `<FocusScope>` leaf parented at the column. Cards must be
- * leaves so the unified cascade produces the cross-column trajectory:
+ * column-name header renders a `<Field>` whose own `<FocusZone>` (moniker
+ * `field:column:<id>.name`) is the sole spatial-nav registration for the
+ * name surface, and each task card body is its own `<FocusScope>` leaf
+ * parented at the column. Cards must be leaves so the unified cascade
+ * produces the cross-column trajectory:
  * iter 0 scores in-column card peers (leaf candidates), and when no
  * peer satisfies the beam test the cascade escalates to iter 1 — the
  * card's parent column zone — and lands on the neighbouring column
@@ -471,7 +472,6 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
 interface ColumnBodyProps {
   props: ColumnViewProps;
   columnMoniker: string;
-  columnNameMoniker: string;
   layout: ColumnLayout;
   dragScroll: ColumnDragScroll;
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
@@ -493,7 +493,6 @@ interface ColumnBodyProps {
 function ColumnBody({
   props,
   columnMoniker,
-  columnNameMoniker,
   layout,
   dragScroll,
   nameFieldDef,
@@ -519,7 +518,6 @@ function ColumnBody({
       <ColumnHeader
         column={column}
         columnMoniker={columnMoniker}
-        columnNameMoniker={columnNameMoniker}
         nameFieldDef={nameFieldDef}
         editingName={editingName}
         setEditingName={setEditingName}
@@ -544,7 +542,6 @@ function ColumnBody({
 export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const { column } = props;
   const columnMoniker = column.moniker;
-  const columnNameMoniker = `${columnMoniker}.name`;
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -561,7 +558,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   // scroll height for `useVirtualizer`'s windowing.
   //
   // The column body is a zone (parent of cards), not a leaf — descendants
-  // (`task:{id}` zones, the column-name `<FocusScope>` leaf in the header)
+  // (`task:{id}` card scopes, the column-name `<Field>` zone in the header)
   // register `parentZone = column-zone-key` via `FocusZoneContext`, so beam
   // search treats the column's children as in-zone candidates.
   //
@@ -591,7 +588,6 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
         <ColumnBody
           props={props}
           columnMoniker={columnMoniker}
-          columnNameMoniker={columnNameMoniker}
           layout={layout}
           dragScroll={dragScroll}
           nameFieldDef={nameFieldDef}
@@ -611,7 +607,6 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
 interface ColumnHeaderProps {
   column: Entity;
   columnMoniker: string;
-  columnNameMoniker: string;
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
@@ -641,6 +636,14 @@ function ColumnNameField({
       </span>
     );
   }
+  // `showFocusBar` opts the field zone into rendering its own
+  // `<FocusIndicator>`. The column header has no enclosing focus
+  // chrome around just the name surface (the column body's own bar
+  // sits on the column zone, not on its descendants), so the field
+  // zone is the user's only focus cue when the name is the spatial
+  // focus. This replaces the focus indicator the synthetic outer
+  // `<FocusScope>` rendered before card 01KQAWVDS931PADB0559F2TVCS
+  // collapsed it.
   return (
     <Field
       fieldDef={nameFieldDef}
@@ -651,13 +654,13 @@ function ColumnNameField({
       onEdit={() => setEditingName(true)}
       onDone={() => setEditingName(false)}
       onCancel={() => setEditingName(false)}
+      showFocusBar
     />
   );
 }
 
 function ColumnHeader({
   column,
-  columnNameMoniker,
   nameFieldDef,
   editingName,
   setEditingName,
@@ -669,24 +672,23 @@ function ColumnHeader({
   // returns the column's FQM. Compose the column-zone FQM (for the
   // AddTaskButton's setFocus call) under it.
   const columnFq = useOptionalFullyQualifiedMoniker();
+  // The column-name surface is registered exactly once — by the inner
+  // `<Field>` component as a `<FocusZone moniker="field:column:<id>.name">`.
+  // The Field already owns its own `<Inspectable>` wrap, click →
+  // `spatial_focus(fq)` handler, and edit-mode plumbing, so the column
+  // header renders `<ColumnNameField>` directly without a synthetic
+  // outer wrapper. Double-click on the displayed column name enters
+  // edit mode via `FieldDisplayContent`'s `onClick={onEdit}` surface;
+  // once the editor mounts, `<Inspectable>`'s editable-surface skip
+  // suppresses the inspector dispatch on the second click.
   return (
     <div className="px-3 py-2 flex items-center gap-2 rounded">
-      {/* inspect:exempt — `column:<id>.name` is a synthetic navigation
-          leaf wrapping a `<Field>` zone (which itself owns the
-          per-field inspect opt-in via `fields/field.tsx`). Double-click
-          on the column name routes to the field editor's `onEdit`, not
-          to the inspector.
-          The enclosing `<FocusScope>` owns click → `spatial_focus(fq)`
-          for this leaf; an outer `onClickCapture` would dispatch a
-          redundant focus IPC for the same FQM. */}
-      <FocusScope moniker={asSegment(columnNameMoniker)} className="inline">
-        <ColumnNameField
-          column={column}
-          nameFieldDef={nameFieldDef}
-          editingName={editingName}
-          setEditingName={setEditingName}
-        />
-      </FocusScope>
+      <ColumnNameField
+        column={column}
+        nameFieldDef={nameFieldDef}
+        editingName={editingName}
+        setEditingName={setEditingName}
+      />
       <Badge variant="secondary">{taskCount}</Badge>
       <div className="flex-1" />
       {onAddTask && (

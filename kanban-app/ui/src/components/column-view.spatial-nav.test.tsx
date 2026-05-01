@@ -39,9 +39,52 @@ import type { Entity } from "@/types/kanban";
 // tests can assert against them.
 // ---------------------------------------------------------------------------
 
-const mockInvoke = vi.hoisted(() =>
-  vi.fn((..._args: unknown[]) => Promise.resolve()),
-);
+// Schema for the column entity. The column-name surface is rendered by
+// `<Field>`, which only mounts a `<FocusZone>` when the schema's
+// `getFieldDef("column", "name")` returns a definition — without a
+// schema the column header falls back to a bare `<span>` with no
+// spatial-nav participation, and the field-zone registration assertions
+// below cannot fire.
+const COLUMN_SCHEMA = {
+  entity: {
+    name: "column",
+    fields: ["name"],
+    commands: [],
+  },
+  fields: [
+    {
+      id: "name",
+      name: "name",
+      type: { kind: "text" },
+      section: "header",
+      display: "text",
+      editor: "text",
+    },
+  ],
+};
+
+const mockInvoke = vi.hoisted(() => {
+  const fn = vi.fn(async (...args: unknown[]) => {
+    if (args[0] === "list_entity_types") return ["column", "task"];
+    if (args[0] === "get_entity_schema") {
+      return COLUMN_SCHEMA;
+    }
+    if (args[0] === "get_ui_state") {
+      return {
+        palette_open: false,
+        palette_mode: "command",
+        keymap_mode: "cua",
+        scope_chain: [],
+        open_boards: [],
+        windows: {},
+        recent_boards: [],
+      };
+    }
+    if (args[0] === "list_commands_for_scope") return [];
+    return undefined;
+  });
+  return fn;
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
@@ -81,9 +124,7 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -272,7 +313,13 @@ describe("ColumnView (spatial-nav)", () => {
     unmount();
   });
 
-  it("registers the column-name field as a leaf inside the column zone", async () => {
+  it("registers the column-name field zone inside the column zone", async () => {
+    // After collapsing the synthetic `column:<id>.name` `<FocusScope>` wrap,
+    // the column-name surface is registered exactly once — by the inner
+    // `<Field>` component as a `<FocusZone>` with moniker
+    // `field:column:<id>.name`. The registration's `parentZone` is the
+    // enclosing column zone, so beam search treats the column-name field
+    // as an in-column candidate.
     const { unmount } = renderColumnInBoard(
       <ColumnView column={makeColumn("col-doing")} tasks={[]} />,
     );
@@ -283,11 +330,38 @@ describe("ColumnView (spatial-nav)", () => {
     );
     expect(columnZone).toBeTruthy();
 
-    const headerLeaf = registeredScopes().find(
-      (f) => f.segment === "column:col-doing.name",
+    const fieldZone = registeredZones().find(
+      (z) => z.segment === "field:column:col-doing.name",
     );
-    expect(headerLeaf).toBeTruthy();
-    expect(headerLeaf!.parentZone).toBe(columnZone!.fq);
+    expect(fieldZone).toBeTruthy();
+    expect(fieldZone!.parentZone).toBe(columnZone!.fq);
+
+    unmount();
+  });
+
+  it("does not register a synthetic column-name scope", async () => {
+    // Regression guard: after the refactor, the only spatial-nav
+    // registration for the column-name surface is the `<Field>` zone
+    // with moniker `field:column:<id>.name`. The previous synthetic
+    // `<FocusScope moniker="column:<id>.name">` wrap is gone — its
+    // existence created two registrations against the same DOM rect
+    // (a leaf and a zone), two click handlers, and two debug overlays.
+    // This test pins the absence of the synthetic moniker so a future
+    // change cannot silently re-introduce the duplication.
+    const { unmount } = renderColumnInBoard(
+      <ColumnView column={makeColumn("col-doing")} tasks={[]} />,
+    );
+    await flushSetup();
+
+    const syntheticScopes = registeredScopes().filter(
+      (s) => s.segment === "column:col-doing.name",
+    );
+    expect(syntheticScopes).toHaveLength(0);
+
+    const syntheticZones = registeredZones().filter(
+      (z) => z.segment === "column:col-doing.name",
+    );
+    expect(syntheticZones).toHaveLength(0);
 
     unmount();
   });

@@ -119,9 +119,7 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -150,7 +148,7 @@ let currentEntity: Entity = makeEntity();
 
 function renderCard(ui: React.ReactElement) {
   return render(
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0}>
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
           <EntityFocusProvider>
@@ -323,62 +321,92 @@ describe("EntityCard", () => {
   });
 
   describe("field icon tooltips", () => {
-    it("wraps the icon for a described field in a tooltip trigger labelled by the description", async () => {
+    // After card 01KQAWV9C5F8Y3AA0KDDHHRRN1, card fields render through
+    // `<Field withIcon />` (matching the inspector path). The icon badge is
+    // `<FieldIconBadge>` rendered *inside* the field's `<FocusZone>` — its
+    // outer span carries `data-slot="tooltip-trigger"` (set by Radix's
+    // `<TooltipTrigger asChild>`) and the description text lives in the
+    // separately-mounted `<TooltipContent>` rather than as `aria-label` on
+    // the trigger span. Tests below are restated in terms of the new
+    // shared shape.
+    it("renders an icon badge whose tooltip body is the field's static description", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The tags field has icon + description "Task tags" — the icon span
-      // should be the trigger element and carry aria-label="Task tags".
-      const trigger = container.querySelector(
-        'span[aria-label="Task tags"]',
+      // The tags field has icon=tag and description="Task tags" — the
+      // `<FieldIconBadge>` trigger lives inside the field zone wrapper, and
+      // hovering it must surface the description text via Radix's
+      // `<TooltipContent>`. Pins the static-description path
+      // (`field.description` → tooltip body) inside `resolveFieldIconAndTip`.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.tags"]',
+      ) as HTMLElement | null;
+      expect(fieldZone).toBeTruthy();
+      const trigger = fieldZone!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
       ) as HTMLElement | null;
       expect(trigger).toBeTruthy();
-      // Radix wires the trigger role/data-slot through asChild.
-      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+
+      await act(async () => {
+        fireEvent.pointerEnter(trigger!);
+        fireEvent.focus(trigger!);
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Radix renders tooltip content into a portal off the document body.
+      const allText = document.body.textContent ?? "";
+      expect(
+        allText.includes("Task tags"),
+        `tooltip body should include the field description "Task tags". document text: ${allText}`,
+      ).toBe(true);
     });
 
-    it("falls back to a humanized field name when the field has no description", async () => {
+    it("falls back to the humanized field name when the field has no description (e.g. progress)", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The progress field has an icon but no description — the tooltip
-      // label should be the humanized field name ("progress").
-      const trigger = container.querySelector(
-        'span[aria-label="progress"]',
+      // The progress field has icon=clock but no `description` — the
+      // tooltip body must fall back to the humanized field name
+      // (`field.name.replace(/_/g, " ")` → "progress"). Pins the fallback
+      // branch in `resolveFieldIconAndTip`.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.progress"]',
+      ) as HTMLElement | null;
+      expect(fieldZone).toBeTruthy();
+      const trigger = fieldZone!.querySelector(
+        'span[data-slot="tooltip-trigger"]',
       ) as HTMLElement | null;
       expect(trigger).toBeTruthy();
-      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+
+      await act(async () => {
+        fireEvent.pointerEnter(trigger!);
+        fireEvent.focus(trigger!);
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      const allText = document.body.textContent ?? "";
+      expect(
+        allText.includes("progress"),
+        `tooltip body should include the humanized field name "progress". document text: ${allText}`,
+      ).toBe(true);
     });
 
-    it("does not render a tooltip wrapper for fields without an icon", async () => {
+    it("does not render an icon badge for fields without an icon", async () => {
       currentEntity = makeEntity();
       const { container } = await renderWithProvider(
         <EntityCard entity={currentEntity} />,
       );
-      // The title field has no icon in the schema — no tooltip trigger
-      // labelled "title" should exist.
-      expect(container.querySelector('span[aria-label="title"]')).toBeNull();
-    });
-
-    it("CardFieldIcon renders icon wrapper with h-4 and items-center for line-height alignment", async () => {
-      // The tags field has icon + description "Task tags". The icon wrapper
-      // span should use h-4 (matching text-xs's 16px line-height) and
-      // items-center to vertically center the 12px icon, rather than a
-      // fragile mt-0.5 offset.
-      currentEntity = makeEntity();
-      const { container } = await renderWithProvider(
-        <EntityCard entity={currentEntity} />,
-      );
-      const trigger = container.querySelector(
-        'span[aria-label="Task tags"]',
+      // The title field has no icon — its field zone must not contain a
+      // tooltip-trigger badge.
+      const fieldZone = container.querySelector(
+        '[data-segment="field:task:task-1.title"]',
       ) as HTMLElement | null;
-      expect(trigger).toBeTruthy();
-      expect(trigger!.className).toContain("h-4");
-      expect(trigger!.className).toContain("items-center");
-      // The old mt-0.5 hack should be gone
-      expect(trigger!.className).not.toContain("mt-0.5");
+      expect(fieldZone).toBeTruthy();
+      expect(
+        fieldZone!.querySelector('span[data-slot="tooltip-trigger"]'),
+      ).toBeNull();
     });
   });
 

@@ -44,30 +44,35 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
 // ---------------------------------------------------------------------------
 
 /// Trajectory A: from `task:T1A`, repeated `Up` walks
-/// `T1A → column:TODO.name → column:TODO → ui:perspective-bar →
-/// ui:navbar → ui:navbar (echoed at layer root)`.
+/// `T1A → column:TODO → ui:perspective-bar → ui:navbar →
+/// ui:navbar (echoed at layer root)`.
+///
+/// The card is a leaf scope and the column-name surface is now a
+/// `<FocusZone>` (`field:column:TODO.name`) — same-rect, but a different
+/// kind. Iter 0's same-kind filter skips it for a leaf-origin search,
+/// so `Up` from a leaf inside the column drills out to the column zone
+/// instead of stopping at the column-name zone. This is the navbar's
+/// percent-complete precedent: leaf-origin cardinal nav never crosses
+/// kinds. The column-name zone is reached by drilling out to
+/// `column:TODO` first and then arrow-navigating Down (see the
+/// `column_header_arrow_nav` integration tests).
 #[test]
-fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_navbar() {
+fn unified_trajectory_a_up_walks_card_to_column_to_perspective_bar_to_navbar() {
     let app = RealisticApp::new();
 
-    // Step 1: T1A → column:TODO.name (peer at iter 0).
+    // Step 1: T1A → column:TODO (drill out — the column-name surface
+    // above is a zone of a different kind, so the leaf-origin same-kind
+    // filter at iter 0 skips it; iter 1 escalates to the parent zone).
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.column_name_fq(0),
-        "Up from task:T1A must land on column:TODO.name (in-zone peer above)"
-    );
-
-    // Step 2: column:TODO.name → column:TODO (drill out — no peer at
-    // either level).
-    let from = app.column_name_fq(0);
-    assert_eq!(
-        nav(&app, &from, Direction::Up),
         app.column_fq(0),
-        "Up from column:TODO.name must land on column:TODO (drill out, no peer at parent's level)"
+        "Up from task:T1A must drill out to column:TODO (the sibling \
+         field:column:TODO.name zone is filtered out by iter 0's same-kind \
+         leaf filter; the cascade escalates and returns the parent zone)"
     );
 
-    // Step 3: column:TODO → ui:perspective-bar (peer match at iter 1
+    // Step 2: column:TODO → ui:perspective-bar (peer match at iter 1
     // after escalation).
     let from = app.column_fq(0);
     assert_eq!(
@@ -76,7 +81,7 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
         "Up from column:TODO must land on ui:perspective-bar (peer at ui:board's level)"
     );
 
-    // Step 4: ui:perspective-bar → ui:navbar (peer at iter 0).
+    // Step 3: ui:perspective-bar → ui:navbar (peer at iter 0).
     let from = app.perspective_bar_fq();
     assert_eq!(
         nav(&app, &from, Direction::Up),
@@ -84,7 +89,7 @@ fn unified_trajectory_a_up_walks_card_to_header_to_column_to_perspective_bar_to_
         "Up from ui:perspective-bar must land on ui:navbar (peer at layer root)"
     );
 
-    // Step 5: ui:navbar → ui:navbar (no peer, no parent zone).
+    // Step 4: ui:navbar → ui:navbar (no peer, no parent zone).
     // Under the no-silent-dropout contract the cascade echoes the
     // focused FQM rather than returning None.
     let from = app.navbar_fq();
