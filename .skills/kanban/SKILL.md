@@ -1,6 +1,8 @@
 ---
 name: kanban
-description: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item.
+description: Execute the next task from the kanban board. Use when the user says "kanban", "/kanban", "next task", "what's the next task", or "pick up work". Picks up the next ready task from the board and drives it through doing to review.
+license: MIT OR Apache-2.0
+compatibility: Requires the `kanban` MCP tool for all board, column, and task operations.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -39,7 +41,7 @@ This procedure is **idempotent** — run it every time; it is a no-op when the c
 The resulting column order is: `... → doing → review → done` (or whatever the terminal column is).
 
 
-# Do
+# Kanban
 
 Pick up and execute the next task from the kanban board.
 

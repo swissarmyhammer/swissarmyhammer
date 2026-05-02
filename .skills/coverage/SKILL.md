@@ -1,6 +1,8 @@
 ---
 name: coverage
 description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban tasks for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool for project detection and the `kanban` MCP tool for creating coverage-gap tasks. Also requires a language-appropriate coverage tool on the system PATH (e.g. cargo-llvm-cov for Rust, pytest-cov for Python, go test -cover for Go).
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -32,10 +34,10 @@ Read the matching language-specific coverage guide bundled with this skill for e
 
 | Project type       | Guide |
 | ------------------ | ----- |
-| Rust (Cargo)       | [RUST_COVERAGE.md](./RUST_COVERAGE.md) |
-| JS/TS (npm/pnpm)   | [JS_TS_COVERAGE.md](./JS_TS_COVERAGE.md) |
-| Python (pytest)    | [PYTHON_COVERAGE.md](./PYTHON_COVERAGE.md) |
-| Dart/Flutter       | [DART_FLUTTER_COVERAGE.md](./DART_FLUTTER_COVERAGE.md) |
+| Rust (Cargo)       | [RUST_COVERAGE.md](./references/RUST_COVERAGE.md) |
+| JS/TS (npm/pnpm)   | [JS_TS_COVERAGE.md](./references/JS_TS_COVERAGE.md) |
+| Python (pytest)    | [PYTHON_COVERAGE.md](./references/PYTHON_COVERAGE.md) |
+| Dart/Flutter       | [DART_FLUTTER_COVERAGE.md](./references/DART_FLUTTER_COVERAGE.md) |
 
 Follow the guide's instructions for running coverage, installing tools, and scoping. The guide is authoritative — do not guess commands.
 
@@ -116,3 +118,42 @@ Report:
 - Report only actionable gaps. Ignore: trivial getters/setters, trait impl boilerplate, generated code.
 - If a coverage tool produces no output or errors, fall back to the next tool for that language. If no tool works, report the error clearly.
 - If the user wants to write the missing tests, use the implement skill to pick up the kanban tasks.
+
+## Troubleshooting
+
+### Error: `error: no such command: llvm-cov` / `cargo: command not found: llvm-cov`
+
+- **Cause**: `cargo-llvm-cov` (the preferred Rust coverage tool) is not installed on the system. The language guide lists it as the default, but it is not shipped with the Rust toolchain.
+- **Solution**: Install it and its LLVM component, then re-run:
+  ```
+  cargo install cargo-llvm-cov
+  rustup component add llvm-tools-preview
+  cargo llvm-cov --lcov --output-path lcov.info
+  ```
+  If the install itself fails (corporate mirrors, no network), fall through to the next tool documented in [RUST_COVERAGE.md](./references/RUST_COVERAGE.md) (e.g. `cargo-tarpaulin`) rather than fabricating coverage numbers.
+
+### Error: `pytest: error: unrecognized arguments: --cov`
+
+- **Cause**: `pytest-cov` is not installed in the active Python environment. `pytest` does not understand `--cov` on its own.
+- **Solution**: Install the plugin in the same environment that will run the tests:
+  ```
+  pip install pytest-cov
+  pytest --cov=<package> --cov-report=lcov:lcov.info
+  ```
+  In a virtualenv-based project, activate the venv first so `pip` writes to the correct site-packages.
+
+### Error: `lcov.info` exists but is empty, or contains no `DA:` lines for files you expected
+
+- **Cause**: The test run did not actually exercise the files you are analyzing — either the tests are filtered out (e.g. `--test-threads` plus a pattern), the files are not compiled into the test binary, or instrumentation failed silently because no binary was rebuilt.
+- **Solution**: Force a clean rebuild with instrumentation and verify tests were executed:
+  - Rust: `cargo llvm-cov clean --workspace && cargo llvm-cov --lcov --output-path lcov.info`
+  - Python: `coverage erase && pytest --cov=<pkg> --cov-report=lcov:lcov.info`
+  Then `grep -c '^SF:' lcov.info` — a non-zero count confirms at least one source file was instrumented. If the count is still zero, check that the test command actually ran tests (look for the pass/fail summary).
+
+### Error: coverage numbers drop to 0% for a file you just edited
+
+- **Cause**: The build cache is serving stale instrumented artifacts — common after switching between `cargo test` and `cargo llvm-cov`, which use different rustflags. The new code is not in the instrumented binary.
+- **Solution**: Clear the coverage cache and rerun:
+  - Rust: `cargo llvm-cov clean --workspace`
+  - Python: `coverage erase`
+  Then re-run the coverage command from scratch.

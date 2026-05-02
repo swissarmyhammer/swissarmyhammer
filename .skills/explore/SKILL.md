@@ -1,6 +1,8 @@
 ---
 name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool for symbol search, callgraph traversal, and blast-radius analysis during exploration.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -171,6 +173,39 @@ If exploration reveals:
 - **Work too large for a single test** — suggest `/plan` to break it into tasks
 - **A bug** — state the test that would catch it, suggest `/task` to track it
 - **An architectural question** — present what you found and ask the user, don't guess
+
+## Examples
+
+### Example 1: understanding how a function works, ending in a test specification
+
+User says: "explore how the kanban watcher decides which files to re-index"
+
+Actions:
+1. Orient with `{"op": "get status"}` — note which layers are active.
+2. Survey with `{"op": "search symbol", "query": "watcher", "max_results": 15}` and `{"op": "search symbol", "query": "invalidate"}` — locate `KanbanWatcher::on_event` and `invalidate_file`.
+3. Trace with `{"op": "get symbol", "query": "KanbanWatcher::on_event"}` to read the actual source, then `{"op": "get callgraph", "symbol": "invalidate_file", "direction": "inbound", "max_depth": 2}` to see who triggers invalidation.
+4. Scope with `{"op": "get blastradius", "file_path": "src/watcher.rs", "max_hops": 3}` — confirms only the indexer and the MCP layer are affected.
+5. Examine existing tests via `{"op": "grep code", "pattern": "on_event", "file_pattern": "test"}` — only one smoke test covers creation, none covers deletion.
+6. Conclude with a test spec:
+
+   ```
+   TEST: deleting a tracked file triggers invalidate_file with the deleted path
+   FILE: tests/watcher_integration.rs
+   FAILS BECAUSE: on_event currently ignores `EventKind::Remove`, so invalidate_file is never called
+   ```
+
+Result: Exploration is complete. The user can hand this test spec to `/task` or `/implement`. No code was written during exploration.
+
+### Example 2: exploration that reveals work too large for one test
+
+User says: `/explore what it would take to add SSO to the web app`
+
+Actions:
+1. Orient, survey auth-related symbols, trace the current login flow.
+2. Blast radius on `src/auth/login.rs` shows 40+ call sites across handlers, session store, and middleware.
+3. Recognize this crosses the "single test" threshold and stop exploring.
+
+Result: Escalate to `/plan` rather than forcing a single test spec — exploration correctly identifies that planning, not implementation, is the next step.
 
 ## Constraints
 

@@ -1,6 +1,8 @@
 ---
 name: double-check
 description: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool x for symbol lookup and blast-radius checks used when verifying recent work.x
 metadata:
   author: swissarmyhammer
   version: 0.12.11

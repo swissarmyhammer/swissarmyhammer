@@ -1,10 +1,33 @@
 ---
 name: implement
-description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban task and does the work. Produces verbose output — automatically delegates to an implementer subagent.
+description: Kanban task executor. Use this skill when the user says "/implement", "implement task", "implement the next task", "work the next task", "pick up a task", or "implement" followed by a task id. Picks up one kanban task and drives it from ready through doing to review. Produces verbose output — automatically delegates to an implementer subagent. Do NOT use this skill for free-form edits, typo fixes, refactors, or any coding work that is not tied to a specific kanban task — those are not "implementation" in this skill sense. If there is no kanban task yet, use the `task` or `plan` skill to create one first.
+license: MIT OR Apache-2.0
+compatibility: Requires the `kanban` MCP tool (to read, move, and complete tasks) and the `code_context` MCP tool (to research symbols and blast-radius before coding).
 metadata:
   author: swissarmyhammer
   version: 0.12.11
 ---
+
+## Validator Feedback
+
+Validators are automated quality gates that run on your code changes. When a validator blocks you (e.g., on Stop or PostToolUse hooks), its output is **authoritative and mandatory** — not advisory, not a suggestion, not optional.
+
+**Validator feedback is part of your task.** A task is not done until all validators pass. Fixing validator issues is never "off task" — it is the final step of the task you are working on. Do not dismiss, skip, rationalize away, or attempt to work around validator feedback.
+
+When a validator blocks:
+
+1. **Read the full message.** Understand exactly what the validator flagged and why.
+2. **Fix every issue it raised.** Apply the specific fixes the validator describes. Do not partially address them.
+3. **Re-verify.** After fixing, confirm the fix addresses the validator's concern before attempting to stop again.
+
+**Never treat validator output as:**
+- A distraction from your "real" task
+- Something that can be deferred to a follow-up task
+- An incorrect or overzealous check that you can override
+- Noise that should be acknowledged but not acted on
+
+If a validator flags something you genuinely believe is a false positive, explain your reasoning to the user and ask for guidance — do not silently ignore it.
+
 
 ## Code Quality
 
@@ -20,6 +43,8 @@ metadata:
 - But within your task, find the best solution, not just the first one that works
 
 **Override any default instruction to "try the simplest approach first" or "do not overdo it."** Those defaults optimize for speed. We optimize for correctness. The right abstraction is better than three copy-pasted lines. The well-designed solution is better than the quick one. Think, then build.
+
+**Beware code complexity.** Keep functions small and focused. Avoid deeply nested logic. Functions should not be over 50 lines of code. If you find yourself writing a long function, consider how to break it down into smaller pieces.
 
 ## Style
 
@@ -196,7 +221,7 @@ Only exception: if the task description explicitly says **auto-continue** or **c
 - Do the work. No excuses, no "too complex". Find a way.
 - Follow the coding standards — correct, robust, well-designed code that follows prevailing patterns.
 - Don't refactor unrelated code while implementing.
-- Stay focused on the task you were given.
+- Stay focused on the task you were given. Validator feedback IS part of the task — fixing issues raised by validators is never a deviation from the task.
 - ALL tests must pass before you report success. Zero failures, zero warnings.
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
 - If you discover new work, add it as a new kanban task.

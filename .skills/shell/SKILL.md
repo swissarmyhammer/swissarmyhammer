@@ -1,6 +1,8 @@
 ---
 name: shell
-description: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands.
+description: Shell command execution with persistent history, process management, and searchable output. Use when you need to run a shell command, search or grep previous command output, get output lines from a prior command, list running processes, or kill a hung process. Triggers on phrases like "run X", "execute X", "search the last build output", "grep the output", "kill that process", "show me the output of command N".
+license: MIT OR Apache-2.0
+compatibility: Requires the `shell` MCP tool for persistent command history, process management, and searchable output. A plain built-in Bash tool cannot replace it; this skill will not function as documented without the `shell` MCP tool.
 metadata:
   author: swissarmyhammer
   version: 0.12.11
@@ -10,9 +12,27 @@ metadata:
 
 Virtual shell with persistent history, process management, and searchable output. Every command's output is stored and indexed for later retrieval.
 
-Having the entire history of commands and their outputs allows you to:
-- no need to run with ` | tail` or `| grep` pipelines -- just run the command and search or get_lines after
-- run multiple greps or searches without re-running the command
+ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands — the persistent history, process management, and semantic search capabilities are only available through this skill.
+
+## Never pipe to tail, head, grep, wc, awk, sed, less
+
+Every command's full output is already captured and indexed. Piping wastes tokens (the pipeline still runs) and throws away output you may need next. Run the bare command, then use `grep history`, `search history`, or `get lines` against the stored output.
+
+Anti-patterns and replacements:
+
+| Don't write | Do instead |
+|---|---|
+| `cargo test 2>&1 \| tail -50` | `execute command: cargo test`, then `get lines` with start/end |
+| `cargo test \| grep FAIL` | `execute command: cargo test`, then `grep history` with `literal: true` |
+| `ls -la \| head -20` | `execute command: ls -la`, then `get lines` with `end: 20` |
+| `cmd \| wc -l` | `execute command: cmd` — line count is in `list processes` |
+| `cmd \| grep X \| grep Y` | `execute command: cmd`, then `grep history` once per pattern |
+
+You can grep the same output many times without re-running the command. Re-running a slow command just to filter differently is the mistake this skill prevents.
+
+Exceptions — pipes are fine when the pipe is the actual work, not output filtering:
+- Feeding data into a tool: `echo "$JSON" | jq .field`, `cat file | sha256sum`
+- Compound shell required for the command itself: `find . -name '*.rs' -exec wc -l {} +`
 
 ## Operations
 

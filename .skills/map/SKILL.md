@@ -1,6 +1,8 @@
 ---
 name: map
 description: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure.
+license: MIT OR Apache-2.0
+compatibility: Requires the `code_context` MCP tool for project detection, symbol enumeration, and callgraph traversal used to build the architecture diagram.
 metadata:
   author: swissarmyhammer
   version: 0.12.11

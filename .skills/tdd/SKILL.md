@@ -1,6 +1,7 @@
 ---
 name: tdd
-description: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR.
+description: Use before writing or changing production code — enforces strict test-driven development (RED, GREEN, REFACTOR) by writing the failing test first, watching it fail, then writing the code to pass. Use when the user says "tdd", "test first", "write the test first", "red-green-refactor", "write a failing test", or when implementing a new function, fixing a bug, or adding behavior that needs a regression test. Do NOT use for reading, exploring, or explaining existing code — use the explore skill instead. Do NOT use for running an already-written test suite — use the test skill. Do NOT use for pure refactors that add no new behavior and keep the existing tests green.
+license: MIT OR Apache-2.0
 metadata:
   author: swissarmyhammer
   version: 0.12.11
