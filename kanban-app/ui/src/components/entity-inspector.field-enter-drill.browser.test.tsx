@@ -360,12 +360,19 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Filter `dispatch_command` calls down to those for `ui.setFocus`. */
-function setFocusDispatches(): Array<Record<string, unknown>> {
+/**
+ * Collect every `spatial_focus` invocation. Under the production
+ * pathway (`SpatialFocusProvider` mounted), `FocusActions.setFocus(fq)`
+ * routes through `spatial.focus(fq)` → `invoke("spatial_focus", { fq })`
+ * rather than dispatching a `ui.setFocus` command. The kernel echoes
+ * a `focus-changed` event the bridge mirrors into the entity-focus
+ * store. Tests that observe a drill / setFocus fanout assert on this
+ * IPC, not on a `dispatch_command(ui.setFocus, ...)` call.
+ */
+function spatialFocusCalls(): Array<{ fq?: string }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "dispatch_command")
-    .map((c) => c[1] as Record<string, unknown>)
-    .filter((p) => p.cmd === "ui.setFocus");
+    .filter((c) => c[0] === "spatial_focus")
+    .map((c) => c[1] as { fq?: string });
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -518,18 +525,16 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     ).toBe(1);
     expect(drillCalls[0].fq).toBe(tagsZone!.fq);
 
-    // The closure's success branch fanned out via `setFocus` → the
-    // entity-focus bridge dispatched `ui.setFocus` whose
-    // `args.scope_chain` opens with `tag:tag-bug`.
-    const setFocusCalls = setFocusDispatches();
-    expect(setFocusCalls.length).toBeGreaterThanOrEqual(1);
-    const targetCall = setFocusCalls.find((c) => {
-      const args = c.args as { scope_chain?: string[] } | undefined;
-      return args?.scope_chain?.[0] === "tag:tag-bug";
-    });
+    // The closure's success branch forwards the kernel-returned
+    // moniker through `FocusActions.setFocus`, which under the
+    // production `SpatialFocusProvider` path invokes
+    // `spatial_focus({ fq: "tag:tag-bug" })`. Confirm that fanout fires.
+    const focusCalls = spatialFocusCalls();
+    expect(focusCalls.length).toBeGreaterThanOrEqual(1);
+    const targetCall = focusCalls.find((c) => c.fq === "tag:tag-bug");
     expect(
       targetCall,
-      "ui.setFocus dispatch must carry the first pill's moniker at the head of args.scope_chain",
+      "spatial_focus must carry the first pill's moniker as fq",
     ).toBeTruthy();
 
     // The field stayed in display mode. `BadgeListDisplay` renders
@@ -677,16 +682,15 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     expect(drillOutCalls.length).toBe(1);
     expect(drillOutCalls[0].fq).toBe(bugPill!.fq);
 
-    // The success branch dispatched `ui.setFocus` with the field zone
-    // moniker at the head of `args.scope_chain`.
-    const setFocusCalls = setFocusDispatches();
-    const target = setFocusCalls.find((c) => {
-      const args = c.args as { scope_chain?: string[] } | undefined;
-      return args?.scope_chain?.[0] === "field:task:T1.tags";
-    });
+    // The success branch forwarded the kernel-returned field-zone
+    // moniker through `FocusActions.setFocus`, which under the
+    // production `SpatialFocusProvider` path invokes `spatial_focus`
+    // with `{ fq: "field:task:T1.tags" }`.
+    const focusCalls = spatialFocusCalls();
+    const target = focusCalls.find((c) => c.fq === "field:task:T1.tags");
     expect(
       target,
-      "Escape from a pill must dispatch ui.setFocus(field zone moniker)",
+      "Escape from a pill must invoke spatial_focus with the field zone moniker",
     ).toBeTruthy();
 
     unmount();

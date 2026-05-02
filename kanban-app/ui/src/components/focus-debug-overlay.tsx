@@ -64,6 +64,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type RefObject,
 } from "react";
@@ -103,11 +104,12 @@ export interface FocusDebugOverlayProps {
    *
    * The overlay reads `hostRef.current.getBoundingClientRect()` on every
    * animation frame to keep its label coordinates in sync with the host's
-   * live rect. When `kind === "layer"`, the rect is intentionally not
-   * shown — layers are pure context providers and have no rect of their
-   * own; the overlay still mounts so the dashed border and the
-   * `layer:<name>` label render against the wrapper div the layer
-   * supplies in debug mode.
+   * live rect.
+   *
+   * Only used for `kind === "zone"` and `kind === "scope"`. Layer overlays
+   * route through `<FocusLayerOverlay>` which renders its own viewport-
+   * sized host directly and does not need a ref or rAF poll (layers are
+   * pure context providers and have no rect of their own).
    */
   hostRef: RefObject<HTMLElement | null>;
 }
@@ -141,9 +143,195 @@ const KIND_CLASSES: Record<
   },
 };
 
+// ---------------------------------------------------------------------------
+// Inline-style fallbacks paired with their Tailwind class chains
+// ---------------------------------------------------------------------------
+//
+// The kanban-app browser-mode vitest project mounts components without
+// the `tailwindcss()` Vite plugin, so utility classes like `fixed inset-0`
+// and `pointer-events-none` resolve to no styles in those tests. The
+// inline `style` objects below back the equivalent Tailwind classes so
+// the geometry holds in both environments. They are deliberately paired
+// with their `className` siblings — keep them in sync if either changes.
+//
+// Production picks up the Tailwind classes via the app stylesheet; the
+// inline style is then a redundant but harmless duplicate.
+
+/**
+ * Layer overlay host: viewport-sized, behind nothing, click-through.
+ *
+ * Pairs with the className chain `fixed inset-0 pointer-events-none`.
+ * Used by `<FocusLayerOverlay>` as the outer span carrying
+ * `data-debug="layer"`.
+ */
+const LAYER_OVERLAY_HOST_STYLE: CSSProperties = {
+  position: "fixed",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  pointerEvents: "none",
+};
+
+/**
+ * Layer / zone / scope dashed-border element: fills the parent overlay
+ * box. Pairs with the className chain `absolute inset-0 border
+ * border-dashed pointer-events-none`.
+ */
+const OVERLAY_BORDER_STYLE: CSSProperties = {
+  position: "absolute",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  pointerEvents: "none",
+};
+
+/**
+ * Hover-handle base style: the explicit `pointer-events: auto` is
+ * required because the layer overlay's host is `pointer-events: none`,
+ * and `pointer-events` is an INHERITED CSS property — without an inline
+ * override, the handle would inherit `none` in test environments where
+ * Tailwind's `pointer-events-auto` class is not loaded. The inline
+ * `width` / `height` give the handle a deterministic 12×12 hit area in
+ * the same environments. Pairs with the className chain
+ * `absolute left-0 top-0 rounded-sm pointer-events-auto cursor-help` and
+ * the per-kind `bg-*` / `ring-*` classes from `KIND_CLASSES`.
+ */
+const HANDLE_BASE_STYLE: CSSProperties = {
+  width: 12,
+  height: 12,
+  position: "absolute",
+  pointerEvents: "auto",
+};
+
+/**
+ * Stop click events on the handle from reaching the host's `onClick`
+ * (e.g. `<FocusScope>`'s `spatial_focus` dispatcher). The handle is
+ * the only interactive region of any overlay; clicking it is the
+ * affordance for opening the tooltip, not for activating the
+ * underlying primitive.
+ */
+function stopHandleClick(event: MouseEvent<HTMLSpanElement>) {
+  event.stopPropagation();
+}
+
+/**
+ * Hover-handle + tooltip used by both layer and zone/scope overlays.
+ *
+ * Renders the small (~12px) color-matched square pinned to the parent
+ * overlay's top-left corner, plus the Radix tooltip portal that holds
+ * the `labelText` on hover. Centralised so layer and zone/scope
+ * overlays share one set of click-stop / pointer-events / TooltipProvider
+ * conventions instead of duplicating them.
+ */
+function OverlayHandle({
+  kind,
+  labelText,
+}: {
+  kind: FocusDebugKind;
+  labelText: string;
+}) {
+  const classes = KIND_CLASSES[kind];
+
+  return (
+    /*
+     * Local `<TooltipProvider>` so overlays do not depend on the
+     * application root having mounted one. Production already mounts
+     * a `<TooltipProvider>` at `<WindowContainer>` for chrome
+     * tooltips, but the *window* layer mounts above
+     * `<WindowContainer>` in `App.tsx`, so its layer-kind overlay
+     * sits *outside* that provider. A local provider here keeps the
+     * overlay self-contained: it works under any caller, with
+     * `delayDuration={0}` so the visible label appears instantly on
+     * hover (a developer aid does not need the production 400ms
+     * settle delay). Nested `<TooltipProvider>`s are explicitly
+     * supported by Radix — the inner one shadows the outer for its
+     * own subtree.
+     */
+    <TooltipProvider delayDuration={0}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            data-debug-handle={kind}
+            role="button"
+            tabIndex={0}
+            aria-label={labelText}
+            onClick={stopHandleClick}
+            onMouseDown={stopHandleClick}
+            className={cn(
+              "absolute left-0 top-0 rounded-sm pointer-events-auto cursor-help",
+              classes.handle,
+            )}
+            style={HANDLE_BASE_STYLE}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start" className="font-mono">
+          {labelText}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/**
+ * Layer-kind debug overlay: a self-contained viewport-sized box that
+ * paints the dashed border and label-handle for one `<FocusLayer>`.
+ *
+ * Layers have no rect of their own — they are pure context providers
+ * representing modal-boundary scope for keyboard nav. The honest visual
+ * for "this is the layer's footprint" is a viewport-spanning dashed
+ * border. This component therefore:
+ *
+ *   - Renders its own `position: fixed; inset: 0; pointer-events: none`
+ *     host (no parent wrapper required) so the dashed border and label
+ *     paint against a real, viewport-sized box regardless of whether
+ *     the layer's children are in flow, fixed-positioned, or portaled.
+ *   - Skips the `requestAnimationFrame` rect poll that
+ *     `<FocusDebugOverlay>` runs for zones / scopes — the rect is
+ *     constant (the viewport), and the label intentionally omits
+ *     coordinates per the layer-has-no-rect data model.
+ *
+ * Carries `data-debug="layer"` on the outer span (the test selector
+ * shared with zone/scope overlays) plus `data-layer-name={name}` for
+ * tests that need to target a specific layer (e.g. `inspector` vs
+ * `window` when both are concurrently mounted).
+ *
+ * `pointer-events: none` is confined to this host span — descendants
+ * of the surrounding `<FocusLayer>` (the panels, board, etc.) are
+ * outside this subtree and keep their default `pointer-events: auto`.
+ */
+export function FocusLayerOverlay({ name }: { name: string }) {
+  const classes = KIND_CLASSES.layer;
+  const tier = useContext(FocusLayerZTierContext);
+  const labelText = `layer:${name}`;
+  const hostStyle: CSSProperties = {
+    ...LAYER_OVERLAY_HOST_STYLE,
+    zIndex: tier + OVERLAY_OFFSET_ABOVE_TIER,
+  };
+
+  return (
+    <span
+      data-debug="layer"
+      data-layer-name={name}
+      className="fixed inset-0 pointer-events-none"
+      style={hostStyle}
+    >
+      <span
+        className={cn(
+          "absolute inset-0 border border-dashed pointer-events-none",
+          classes.border,
+        )}
+        style={OVERLAY_BORDER_STYLE}
+      />
+      <OverlayHandle kind="layer" labelText={labelText} />
+    </span>
+  );
+}
+
 /**
  * Renders the dashed-border + hover-revealed coordinate-label debug
- * decorator.
+ * decorator for a zone or scope.
  *
  * The structure is three absolutely-positioned elements stacked inside
  * a `pointer-events: none` wrapper:
@@ -159,18 +347,32 @@ const KIND_CLASSES: Record<
  *      affordance; spurious clicks while reaching for the tooltip
  *      should not flip focus).
  *   3. A Radix `<TooltipContent>` portalled to the document body when
- *      the tooltip is open. Holds the `kind:label` (layer) or
- *      `kind:label (x,y)` (zone / scope) text.
+ *      the tooltip is open. Holds the `kind:label (x,y)` text.
  *
  * The outer wrapper carries `data-debug={kind}` for stable test
  * selectors. The handle carries `data-debug-handle={kind}` so tests can
  * target it directly when firing hover events.
+ *
+ * For `kind === "layer"`, this component delegates to the dedicated
+ * `<FocusLayerOverlay>` companion that drops the unused `hostRef` and
+ * rAF poll (layers are pure context providers and have no rect of
+ * their own — see `<FocusLayerOverlay>`).
  */
 export function FocusDebugOverlay({
   kind,
   label,
   hostRef,
 }: FocusDebugOverlayProps) {
+  // Layer overlays diverge from zone/scope on every axis: they own a
+  // viewport-sized host instead of decorating an existing one, they
+  // do not poll a rect (they have no rect), and their label omits
+  // coordinates. Routing them through a dedicated component keeps the
+  // hot path here narrowly scoped to "decorate someone else's host
+  // with a rect-tracking overlay."
+  if (kind === "layer") {
+    return <FocusLayerOverlay name={label} />;
+  }
+
   const classes = KIND_CLASSES[kind];
 
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -227,36 +429,20 @@ export function FocusDebugOverlay({
     };
   }, [hostRef]);
 
-  // Build the label text. Layers don't have a meaningful rect of their
-  // own (the wrapper div the layer supplies in debug mode is purely a
-  // host for the overlay), so we omit coordinates for them. For zones
-  // and scopes we show only the (x, y) pair — width / height were
-  // visual noise and have been deliberately dropped.
+  // Zone / scope label — `kind:label (x,y)`. The `(x,y)` only appears
+  // after the first rAF tick has populated `rect`; until then we show
+  // just `kind:label` so the handle's `aria-label` is never empty.
   const labelText =
-    kind === "layer" || rect === null
+    rect === null
       ? `${kind}:${label}`
       : `${kind}:${label} (${Math.round(rect.x)},${Math.round(rect.y)})`;
 
   // Layer-aware z-index: read the enclosing `<FocusLayer>`'s tier from
-  // context and offset by 5 so the overlay paints just above its
-  // layer's modal content but below the next layer's overlays. An
-  // inline `style` is required because Tailwind cannot generate
-  // classes for runtime-computed values; the previous hardcoded
-  // `z-50` is removed because it placed every overlay at the same
-  // height regardless of layer membership, causing window-root
-  // overlays to bleed across modal surfaces.
+  // context and offset so the overlay paints just above its layer's
+  // modal content but below the next layer's overlays. An inline
+  // `style` is required because Tailwind cannot generate classes for
+  // runtime-computed values.
   const tier = useContext(FocusLayerZTierContext);
-
-  /**
-   * Stop click events on the handle from reaching the host's `onClick`
-   * (e.g. `<FocusScope>`'s `spatial_focus` dispatcher). The handle is
-   * the only interactive region of the overlay; clicking it is the
-   * affordance for opening the tooltip, not for activating the
-   * underlying primitive.
-   */
-  const stopHandleClick = (event: MouseEvent<HTMLSpanElement>) => {
-    event.stopPropagation();
-  };
 
   return (
     <span
@@ -270,50 +456,7 @@ export function FocusDebugOverlay({
           classes.border,
         )}
       />
-      {/*
-        * Local `<TooltipProvider>` so the overlay does not depend on
-        * the application root having mounted one. Production already
-        * mounts a `<TooltipProvider>` at `<WindowContainer>` for chrome
-        * tooltips, but `<FocusDebugOverlay>` is invoked from
-        * `<FocusLayer>` — and the *window* layer mounts above
-        * `<WindowContainer>` in `App.tsx`, so its layer-kind overlay
-        * sits *outside* that provider. A local provider here keeps the
-        * overlay self-contained: it works under any caller, with
-        * `delayDuration={0}` so the visible label appears instantly on
-        * hover (a developer aid does not need the production 400ms
-        * settle delay). Nested `<TooltipProvider>`s are explicitly
-        * supported by Radix — the inner one shadows the outer for its
-        * own subtree.
-        */}
-      <TooltipProvider delayDuration={0}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              data-debug-handle={kind}
-              role="button"
-              tabIndex={0}
-              aria-label={labelText}
-              onClick={stopHandleClick}
-              onMouseDown={stopHandleClick}
-              className={cn(
-                "absolute left-0 top-0 rounded-sm pointer-events-auto cursor-help",
-                classes.handle,
-              )}
-              // Inline width/height so the handle has a deterministic
-              // 12×12 hit area even in test environments where
-              // Tailwind is not loaded (the kanban-app vitest browser
-              // project mounts components without the `tailwindcss()`
-              // plugin). Production picks up the same 12×12 from the
-              // equivalent Tailwind classes via `<WindowContainer>`'s
-              // stylesheet.
-              style={{ width: 12, height: 12, position: "absolute" }}
-            />
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="start" className="font-mono">
-            {labelText}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <OverlayHandle kind={kind} labelText={labelText} />
     </span>
   );
 }

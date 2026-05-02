@@ -466,7 +466,7 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     unmount();
   });
 
-  it("ArrowDown from the last field stays put, kernel's focused key remains the last field", async () => {
+  it("ArrowDown from the last field drills out to the parent panel via the unified cascade", async () => {
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -482,11 +482,23 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
     await flushSetup();
 
     const lastField = sim.findBySegment("field:task:T1.body")!;
+    const titleField = sim.findBySegment("field:task:T1.title")!;
 
     // Drive the kernel to the last field via the entity-focus setter — the
     // user-visible flow that matters most here. After the new contract,
     // `setFocus("field:task:T1.body")` calls the kernel; the kernel
     // emits `focus-changed`; the React store mirrors it.
+    //
+    // Wait for first-field auto-focus to settle the kernel. Without this
+    // gate, `focusedKeyBefore` could capture a transient pre-auto-focus
+    // null and the loop below would try to navigate from no-focus, which
+    // `nav.down` short-circuits.
+    await waitFor(
+      () => {
+        expect(sim.currentFocus.fq).toBe(titleField.fq);
+      },
+      { timeout: 200 },
+    );
     const focusedKeyBefore = sim.currentFocus.fq;
     expect(focusedKeyBefore).not.toBe(lastField.fq); // first field auto-focused, not last
     // Move via spatial_focus from inside React: invoke setFocus directly
@@ -507,18 +519,29 @@ describe("Inspector kernel-focus advance — kernel is the source of truth", () 
       "field:task:T1.body",
     );
 
-    // ArrowDown at the last field — beam search has no down-peer, so
-    // the cascade echoes the focused moniker (no-silent-dropout).
+    // ArrowDown at the last field — beam search finds no down-peer
+    // among same-kind siblings (iter 0) and no sibling-zone of the
+    // parent field zone (iter 1), so the unified cascade drills *out*
+    // to the parent panel zone (`task:T1`). Mirrors
+    // `BeamNavStrategy::next`'s drill-out fallback in
+    // `swissarmyhammer-focus/src/navigate.rs`.
+    //
+    // Asserting the drill-out contract — focus lifts one step up the
+    // scope tree to the inspector panel — guarantees:
+    //   1. `spatial_navigate` was invoked (kernel got the keystroke).
+    //   2. The result reflects the unified cascade, not a silent drop.
+    //   3. The bridge mirrored the kernel's `focus-changed` payload
+    //      back into the React store, so the focused-moniker probe
+    //      flips to the panel's segment (`task:T1`).
+    const expectedDrillOutFq = "/window/inspector/task:T1";
     await act(async () => {
       fireEvent.keyDown(document, { key: "ArrowDown", code: "ArrowDown" });
       await new Promise((r) => setTimeout(r, 50));
     });
     await flushSetup();
 
-    expect(sim.currentFocus.fq).toBe(lastField.fq);
-    expect(getByTestId("focused-moniker-probe").textContent).toBe(
-      "field:task:T1.body",
-    );
+    expect(sim.currentFocus.fq).toBe(expectedDrillOutFq);
+    expect(getByTestId("focused-moniker-probe").textContent).toBe("task:T1");
     unmount();
   });
 });

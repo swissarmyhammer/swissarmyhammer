@@ -354,19 +354,6 @@ function registerZoneArgs(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/**
- * Pull every `spatial_register_scope` invocation argument bag.
- *
- * Cards register here (as leaves), not in `registerZoneArgs()`. See
- * the docstring on `<EntityCard>` for why the card body is a
- * `<FocusScope>` rather than a `<FocusZone>`.
- */
-function registerScopeArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_scope")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Pull every `spatial_focus` call's args, in order. */
 function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
   return mockInvoke.mock.calls

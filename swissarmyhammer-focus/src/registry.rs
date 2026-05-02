@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use super::layer::FocusLayer;
 use super::scope::{FocusScope, FocusZone, RegisteredScope};
 use super::types::{
-    pixels_cmp, Direction, FullyQualifiedMoniker, Rect, SegmentMoniker, WindowLabel,
+    pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
 
 /// Emit `tracing::error!` only when re-registering at an already-occupied
@@ -296,6 +296,89 @@ fn same_shape_layer(existing: &FocusLayer, candidate: &FocusLayer) -> bool {
         && existing.window_label == candidate.window_label
 }
 
+/// Round a [`Pixels`] coordinate to its nearest integer pixel as
+/// `i64`.
+///
+/// Subpixel rendering produces tiny variations between successive
+/// `getBoundingClientRect()` reads on the same DOM node (anti-aliased
+/// borders, ResizeObserver fractional dpr math) that aren't user-
+/// relevant. The same-(x, y) overlap check rounds before comparing so
+/// it catches structural overlaps (parent zone wrapping a single child
+/// with no offset) and ignores noise. `i64` is used rather than `i32`
+/// because viewport coordinates can exceed `i32::MAX` after extreme
+/// CSS transforms; the rounded value is only used for equality
+/// comparison so the larger range is free.
+fn rounded_pixel(p: Pixels) -> i64 {
+    p.value().round() as i64
+}
+
+/// Returns `true` when the new entry's rounded `(left, top)` equals
+/// the existing entry's rounded `(left, top)`.
+///
+/// Both rects are reduced to their `(left, top)` corner and rounded
+/// via [`rounded_pixel`] before comparison — see that helper for the
+/// rationale on integer rounding. Width / height are intentionally not
+/// part of the comparison: the structural overlap signal we hunt for
+/// is "two same-kind entries anchored at the same point", which is
+/// what catches needless-nesting wrappers regardless of whether the
+/// inner entry trims a few pixels of padding.
+fn same_rounded_origin(new: &Rect, existing: &Rect) -> bool {
+    rounded_pixel(new.left()) == rounded_pixel(existing.left())
+        && rounded_pixel(new.top()) == rounded_pixel(existing.top())
+}
+
+/// Borrowed payload for [`warn_overlap`].
+///
+/// Bundles the entry, partner, and shared origin coordinates so the
+/// warn helper takes a single argument; clippy's
+/// `too_many_arguments` lint flagged the prior multi-arg form. All
+/// fields are borrowed because the caller already holds them as
+/// references off the registry's scopes map.
+struct OverlapWarn<'a> {
+    /// Calling op tag (`"register_scope"`, `"register_zone"`,
+    /// `"update_rect"`).
+    op: &'static str,
+    /// Owning layer's FQM — same for both entry and partner; same-
+    /// layer is part of the overlap definition.
+    layer_fq: &'a FullyQualifiedMoniker,
+    /// FQM of the entry whose registration / rect update introduced
+    /// the overlap.
+    new_fq: &'a FullyQualifiedMoniker,
+    /// Relative segment of the new entry — included for human-readable
+    /// log inspection without re-fetching from the registry.
+    new_segment: &'a SegmentMoniker,
+    /// FQM of the pre-existing same-kind entry the new one landed on
+    /// top of.
+    overlap_fq: &'a FullyQualifiedMoniker,
+    /// Relative segment of the partner.
+    overlap_segment: &'a SegmentMoniker,
+    /// Shared rounded x-coordinate in viewport space.
+    rounded_x: i64,
+    /// Shared rounded y-coordinate in viewport space.
+    rounded_y: i64,
+}
+
+/// Emit one `WARN`-level tracing event for a same-kind overlap.
+///
+/// The message carries the literal `needless-nesting` substring so a
+/// grep pipeline filters it out of the broader log stream without
+/// risking false positives on adjacent registry warnings. See
+/// [`OverlapWarn`] for the field semantics.
+fn warn_overlap(payload: OverlapWarn<'_>) {
+    tracing::warn!(
+        target: "swissarmyhammer_focus::registry",
+        op = payload.op,
+        layer = %payload.layer_fq,
+        new_fq = %payload.new_fq,
+        new_segment = %payload.new_segment,
+        overlap_fq = %payload.overlap_fq,
+        overlap_segment = %payload.overlap_segment,
+        x = payload.rounded_x,
+        y = payload.rounded_y,
+        "two same-kind entries share (x, y); likely needless-nesting — review React tree for redundant wrappers"
+    );
+}
+
 /// Headless store for spatial scopes and layers.
 ///
 /// See module docs for the threading model and the split between scopes
@@ -313,6 +396,24 @@ pub struct SpatialRegistry {
     /// [`FullyQualifiedMoniker`]. Layer hierarchy is derived from each
     /// layer's `parent` field, not stored here.
     layers: HashMap<FullyQualifiedMoniker, FocusLayer>,
+    /// Per-entry suppression state for the same-kind overlap warning.
+    ///
+    /// Maps an entry's FQM to the FQM of the same-kind partner it was
+    /// last reported as overlapping. The registry consults this map
+    /// before emitting a fresh overlap `WARN` on `update_rect`: when
+    /// the moved entry is already overlapping the *same* partner as
+    /// last time, the warning is suppressed. Per-frame scroll tracking
+    /// (`01KQ9XBAG5P9W3JREQYNGAYM8Y`) re-fires `update_rect` every
+    /// animation frame; without this gate every frame would re-emit
+    /// the warning for an unchanged overlap.
+    ///
+    /// The suppression entry is cleared when the overlap clears (the
+    /// entry moves off the partner) or when the partner identity
+    /// changes. [`SpatialRegistry::unregister_scope`] also drops the
+    /// entry's suppression slot so a fresh re-register at the same
+    /// overlapping position emits a fresh warning rather than being
+    /// silently swallowed by stale state.
+    overlap_warn_partner: HashMap<FullyQualifiedMoniker, FullyQualifiedMoniker>,
 }
 
 impl SpatialRegistry {
@@ -452,6 +553,13 @@ impl SpatialRegistry {
             // detection without a deferred-validation queue.
             self.warn_backward_scope_descendants(&fq, &parent_segment);
         }
+
+        // Same-kind overlap check: a `<FocusScope>` registered at the
+        // same rounded `(x, y)` as an existing scope in the same layer
+        // is almost always a needless-nesting candidate (parent zone
+        // wrapping a single child with no offset, sibling stacked at
+        // the same anchor due to a pass-through wrapper).
+        self.check_overlap_warning("register_scope", &fq);
     }
 
     /// Register a [`FocusZone`] container.
@@ -524,7 +632,13 @@ impl SpatialRegistry {
         // FQM does not introduce a new Scope ancestor for any existing
         // descendant (their existing Scope ancestors, if any, would
         // already have been flagged when those descendants registered).
-        self.scopes.insert(z.fq.clone(), RegisteredScope::Zone(z));
+        let fq = z.fq.clone();
+        self.scopes.insert(fq.clone(), RegisteredScope::Zone(z));
+
+        // Same-kind overlap check: a `<FocusZone>` registered at the
+        // same rounded `(x, y)` as an existing zone in the same layer
+        // is almost always a needless-nesting candidate.
+        self.check_overlap_warning("register_zone", &fq);
     }
 
     /// Forward scope-is-leaf check used by both [`register_scope`] and
@@ -701,18 +815,110 @@ impl SpatialRegistry {
     /// [`SpatialState::handle_unregister`](crate::state::SpatialState::handle_unregister)
     /// on the same FQM so the per-window focus slot is cleared and a
     /// `Some → None` event is emitted for any claim that was active.
+    ///
+    /// Also drops the entry's per-key overlap-warn suppression slot so
+    /// a fresh re-register at the same overlapping position emits a
+    /// fresh `WARN` rather than being silently swallowed by stale
+    /// suppression state. See
+    /// [`overlap_warn_partner`](Self#structfield.overlap_warn_partner).
     pub fn unregister_scope(&mut self, fq: &FullyQualifiedMoniker) {
         self.scopes.remove(fq);
+        self.overlap_warn_partner.remove(fq);
     }
 
     /// Update the bounding rect of a registered scope.
     ///
     /// No-op if the FQM is unknown. Called from the React side via
     /// `spatial_update_rect` when ResizeObserver fires.
+    ///
+    /// Emits the same-kind overlap `WARN` if the new rect lands the
+    /// entry on top of another same-kind entry in the same layer. Per-
+    /// key suppression elides re-warnings while the same overlap pair
+    /// persists — `update_rect` fires every animation frame during
+    /// scroll-tracking, so without the gate every frame would re-emit.
     pub fn update_rect(&mut self, fq: &FullyQualifiedMoniker, rect: Rect) {
         if let Some(scope) = self.scopes.get_mut(fq) {
             *scope.rect_mut() = rect;
         }
+        self.check_overlap_warning("update_rect", fq);
+    }
+
+    /// Detect a same-kind overlap for the entry at `fq` and emit
+    /// `WARN` once per (entry, partner) overlap pair.
+    ///
+    /// `op` is the caller op tag (`"register_scope"`,
+    /// `"register_zone"`, or `"update_rect"`). The entry must already
+    /// be inserted in the scopes map — this helper reads the entry's
+    /// kind, layer, and rect from the registry to scan for a same-kind
+    /// same-(rounded x, y) partner in the same layer (excluding itself).
+    ///
+    /// Suppression rules, consulted via the
+    /// [`overlap_warn_partner`](Self#structfield.overlap_warn_partner)
+    /// map:
+    ///
+    /// - **No overlap found** — clear `fq`'s suppression slot. The
+    ///   entry is no longer overlapping anyone; the next time it does
+    ///   overlap (potentially the same partner again), the warn
+    ///   should fire fresh.
+    /// - **Overlap found, suppression slot already names this partner**
+    ///   — skip the warn (this is the per-frame scroll-tracking case;
+    ///   the same overlap pair from last call still holds).
+    /// - **Overlap found, slot empty or names a different partner** —
+    ///   emit one `WARN` and record the new partner in the slot.
+    ///
+    /// Skips silently when the registry has fewer than two entries
+    /// total (cold start; nothing to overlap with) or when the FQM is
+    /// unregistered (torn state, but not this helper's concern).
+    fn check_overlap_warning(&mut self, op: &'static str, fq: &FullyQualifiedMoniker) {
+        // Cold start guard — nothing to overlap with.
+        if self.scopes.len() < 2 {
+            self.overlap_warn_partner.remove(fq);
+            return;
+        }
+        let Some(entry) = self.scopes.get(fq) else {
+            return;
+        };
+        let entry_is_zone = entry.is_zone();
+        let entry_layer = entry.layer_fq().clone();
+        let entry_rect = *entry.rect();
+        let entry_segment = entry.segment().clone();
+
+        // Scan same-layer entries for a same-kind same-rounded-origin
+        // partner, excluding ourselves. Yields the first match's FQM
+        // and segment as owned values so we can release the immutable
+        // borrow before mutating `overlap_warn_partner`.
+        let partner: Option<(FullyQualifiedMoniker, SegmentMoniker)> = self
+            .scopes
+            .values()
+            .filter(|other| other.layer_fq() == &entry_layer)
+            .filter(|other| other.is_zone() == entry_is_zone)
+            .filter(|other| other.fq() != fq)
+            .find(|other| same_rounded_origin(&entry_rect, other.rect()))
+            .map(|other| (other.fq().clone(), other.segment().clone()));
+
+        let Some((partner_fq, partner_segment)) = partner else {
+            // No overlap — release any stale suppression slot so the
+            // next overlap-creating motion emits fresh.
+            self.overlap_warn_partner.remove(fq);
+            return;
+        };
+
+        // Suppression: skip if the slot already names this partner.
+        if self.overlap_warn_partner.get(fq) == Some(&partner_fq) {
+            return;
+        }
+
+        warn_overlap(OverlapWarn {
+            op,
+            layer_fq: &entry_layer,
+            new_fq: fq,
+            new_segment: &entry_segment,
+            overlap_fq: &partner_fq,
+            overlap_segment: &partner_segment,
+            rounded_x: rounded_pixel(entry_rect.left()),
+            rounded_y: rounded_pixel(entry_rect.top()),
+        });
+        self.overlap_warn_partner.insert(fq.clone(), partner_fq);
     }
 
     /// Borrow a leaf [`FocusScope`] by FQM, or `None` if the FQM is

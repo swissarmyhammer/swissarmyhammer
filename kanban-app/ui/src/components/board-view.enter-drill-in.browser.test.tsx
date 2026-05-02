@@ -620,22 +620,21 @@ describe("BoardView — Enter drills in, not inspect", () => {
     ).toBe(1);
     expect(drillCalls[0].fq).toBe(columnKey);
 
-    // The closure's success branch dispatches setFocus for the
-    // returned moniker. The bridge in `EntityFocusProvider` builds a
-    // scope chain whose first element is the focused moniker and
-    // dispatches `ui.setFocus` with `args.scope_chain = [<moniker>, ...]`.
-    // Confirm that fanout fires and carries the resolved card moniker.
-    const setFocusDispatch = mockInvoke.mock.calls.find(
-      (c) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    // The closure's success branch forwards the kernel-returned
+    // moniker to `FocusActions.setFocus`, which under the
+    // `SpatialFocusProvider` (production) path invokes
+    // `spatial_focus` with that moniker. The kernel then echoes a
+    // `focus-changed` event that the bridge mirrors into the entity
+    // focus store. Confirm that the `spatial_focus` fanout fires and
+    // carries the resolved card moniker.
+    const focusCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "spatial_focus",
     );
-    expect(setFocusDispatch).toBeTruthy();
-    const dispatchArgs = (setFocusDispatch![1] as Record<string, unknown>)
-      .args as { scope_chain: string[] } | undefined;
+    expect(focusCall).toBeTruthy();
+    const focusArgs = focusCall![1] as { fq?: string };
     expect(
-      dispatchArgs?.scope_chain?.[0],
-      "drill-in's setFocus dispatch must carry the resolved child moniker as the head of the scope chain",
+      focusArgs.fq,
+      "drill-in's setFocus must invoke spatial_focus with the resolved child moniker",
     ).toBe("task:t1");
 
     unmount();
@@ -696,16 +695,13 @@ describe("BoardView — Enter drills in, not inspect", () => {
     expect(drillCalls.length).toBe(1);
     expect(drillCalls[0].fq).toBe(columnKey);
 
-    const setFocusDispatch = mockInvoke.mock.calls.find(
-      (c) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "ui.setFocus",
+    const focusCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "spatial_focus",
     );
-    expect(setFocusDispatch).toBeTruthy();
-    const dispatchArgs = (setFocusDispatch![1] as Record<string, unknown>)
-      .args as { scope_chain: string[] } | undefined;
+    expect(focusCall).toBeTruthy();
+    const focusArgs = focusCall![1] as { fq?: string };
     expect(
-      dispatchArgs?.scope_chain?.[0],
+      focusArgs.fq,
       "drill-in must follow the kernel-returned remembered moniker",
     ).toBe("task:t2");
 

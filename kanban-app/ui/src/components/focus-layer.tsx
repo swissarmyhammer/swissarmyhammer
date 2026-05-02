@@ -50,7 +50,7 @@
  * your overlay, you want a `<FocusLayer>`.
  */
 
-import { useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, type ReactNode } from "react";
 import {
   asLayerName,
   composeFq,
@@ -70,7 +70,7 @@ import {
 } from "@/components/focus-layer-z-tier-context";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
+import { FocusLayerOverlay } from "@/components/focus-debug-overlay";
 
 // ---------------------------------------------------------------------------
 // Z-index tier table for layer-aware debug overlays
@@ -214,32 +214,51 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
   }, [fq, name, parent, pushLayer, popLayer]);
 
   // Debug-overlay branch — see `lib/focus-debug-context.tsx`. When the
-  // flag is on, wrap children in a `<div className="relative">` so the
-  // absolutely-positioned dashed border + label have a containing block
-  // to paint against. When the flag is off, render children directly so
-  // production layout is byte-identical to the pre-overlay tree.
+  // flag is on, render the layer's debug overlay as a SIBLING of
+  // children (Option B in card `01KQCHZW5R0WJXTP4BG67QE0Z7`). When the
+  // flag is off, render children directly so production layout is
+  // byte-identical to the pre-overlay tree.
+  //
+  // # Why a sibling overlay instead of wrapping children
+  //
+  // The first attempt (Option A in the card) wrapped children in a
+  // `position: fixed; inset: 0; pointer-events: none` host. That
+  // gave the dashed border + label a viewport-sized box to paint
+  // against, but `pointer-events` is an INHERITED CSS property —
+  // setting `pointer-events: none` on the wrapper made every
+  // descendant (the SlidePanel, the inspector body, the entire
+  // window root subtree) inherit `none` and become hit-test
+  // invisible. `document.elementsFromPoint(...)` then returned only
+  // `<body>` / `<html>`, breaking the `column_overlay_does_not_paint
+  // _over_inspector_panel` regression guard in
+  // `focus-debug-overlay.layer-z.browser.test.tsx`. Real clicks
+  // would have failed in production too.
+  //
+  // The sibling form keeps the `pointer-events: none` declaration
+  // confined to the overlay's own subtree (owned by
+  // `<FocusLayerOverlay>`), which has no descendants that need
+  // pointer events apart from its own `pointer-events: auto`
+  // tooltip handle. Descendants of `<FocusLayer>` (the panels, the
+  // board, etc.) sit OUTSIDE that subtree and keep their default
+  // `pointer-events: auto`.
+  //
+  // # Why this fixes the original 0×0 bug
+  //
+  // The previous wrapper was `<div className="relative">` and
+  // collapsed to 0×0 whenever a layer's children were entirely
+  // out-of-flow (e.g. the inspector layer's only DOM child is a
+  // `position: fixed` SlidePanel). `<FocusLayerOverlay>` is
+  // self-positioning (`position: fixed; inset: 0`) — viewport-sized
+  // regardless of what the children look like — so the dashed
+  // border + label paint against a real, viewport-sized box.
   const debugEnabled = useFocusDebug();
-  // Ref outside the conditional so the hook count is stable across
-  // debug-on / debug-off renders. The host element is only attached when
-  // debug is enabled; when off, the ref simply never receives a node.
-  const debugHostRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <FullyQualifiedMonikerContext.Provider value={fq}>
       <LayerFqContext.Provider value={fq}>
         <FocusLayerZTierContext.Provider value={myTier}>
-          {debugEnabled ? (
-            <div ref={debugHostRef} className="relative">
-              <FocusDebugOverlay
-                kind="layer"
-                label={name}
-                hostRef={debugHostRef}
-              />
-              {children}
-            </div>
-          ) : (
-            children
-          )}
+          {debugEnabled ? <FocusLayerOverlay name={name} /> : null}
+          {children}
         </FocusLayerZTierContext.Provider>
       </LayerFqContext.Provider>
     </FullyQualifiedMonikerContext.Provider>

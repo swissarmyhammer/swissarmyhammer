@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a880
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffff080
 project: spatial-nav
 title: 'Spatial-nav debug overlay: inspector `<FocusLayer>` paints into a 0×0 wrapper because all its children are `position: fixed`'
 ---
@@ -66,26 +66,34 @@ Option B is more honest to the data model (layers have no rect; don't pretend) b
 
 **Default to Option A.** Smaller change, single overlay component, single rendering path.
 
+## Implementation note (post-implementation update)
+
+Option A was attempted first (wrap children in `fixed inset-0 pointer-events-none`). Implementation revealed a CSS-inheritance problem: `pointer-events` is an inherited property, and setting `pointer-events: none` on the wrapper made every descendant inherit `none`. `document.elementsFromPoint(...)` then returned only `<body>`/`<html>` for points inside the slide-panel area, breaking the existing `column_overlay_does_not_paint_over_inspector_panel` regression guard (and would break real clicks in production).
+
+The fallback (Option B in the card) was adopted: render the overlay as a SIBLING of children, inside its own `position: fixed; inset: 0; pointer-events: none` host. The inheritance is now confined to the overlay host, which has no children that need pointer events (just `<FocusDebugOverlay>`, with its own `pointer-events: auto` handle for tooltip hover). Descendants of the layer keep their default `pointer-events: auto`.
+
+The overlay component is unchanged (single rendering path is preserved); only the layout structure switched from "wrap children" to "render alongside children." `data-layer-name={name}` was added to the layer-kind overlay span as required.
+
 ## Acceptance Criteria
 
 All asserted by automated tests below.
 
-- [ ] When `<FocusDebugProvider enabled>` is mounted and any inspector panel is open, a red dashed `[data-debug="layer"]` element exists in the DOM AND its bounding rect spans the viewport (`width === window.innerWidth`, `height === window.innerHeight`).
-- [ ] The label inside the inspector-layer overlay reads `layer:inspector` and is visible in the top-left of the viewport.
-- [ ] The overlay does NOT intercept clicks, drags, or hovers — clicking on a panel still focuses it; clicking the backdrop still closes panels.
-- [ ] When the last inspector panel closes (`<FocusLayer>` unmounts), the layer overlay disappears (no leftover `[data-debug="layer"][data-layer-name="inspector"]`).
-- [ ] Window-root layer overlay continues to render (regression guard for Option A's wrapper change). Its rect is also viewport-sized after the change; this is acceptable per the layer-has-no-rect data model.
-- [ ] Existing tests continue to pass: `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`, `kanban-app/ui/src/components/inspectors-container.spatial-nav.test.tsx`, `kanban-app/ui/src/components/inspector-dismiss.browser.test.tsx`.
+- [x] When `<FocusDebugProvider enabled>` is mounted and any inspector panel is open, a red dashed `[data-debug="layer"]` element exists in the DOM AND its bounding rect spans the viewport (`width === window.innerWidth`, `height === window.innerHeight`).
+- [x] The label inside the inspector-layer overlay reads `layer:inspector` and is visible in the top-left of the viewport.
+- [x] The overlay does NOT intercept clicks, drags, or hovers — clicking on a panel still focuses it; clicking the backdrop still closes panels.
+- [x] When the last inspector panel closes (`<FocusLayer>` unmounts), the layer overlay disappears (no leftover `[data-debug="layer"][data-layer-name="inspector"]`).
+- [x] Window-root layer overlay continues to render (regression guard for Option A's wrapper change). Its rect is also viewport-sized after the change; this is acceptable per the layer-has-no-rect data model.
+- [x] Existing tests continue to pass: `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`, `kanban-app/ui/src/components/inspectors-container.spatial-nav.test.tsx`, `kanban-app/ui/src/components/inspector-dismiss.browser.test.tsx`.
 
 ## Tests
 
 ### `kanban-app/ui/src/components/focus-debug-overlay.layer.browser.test.tsx` (new file or extend existing browser test)
 
-- [ ] `inspector_layer_overlay_renders_at_viewport_size` — mount `<App />` with debug enabled and one inspector panel open; assert `[data-debug="layer"]` (with the inspector layer's identifying attribute) has bounding rect `width === window.innerWidth` and `height === window.innerHeight`.
-- [ ] `inspector_layer_overlay_label_includes_layer_name` — same mount; assert the overlay's label text contains `layer:inspector`.
-- [ ] `inspector_layer_overlay_does_not_intercept_clicks` — same mount; click a panel's content; assert the click handler runs (focus claim fires; `pointer-events: none` on the overlay is honoured).
-- [ ] `inspector_layer_overlay_unmounts_when_last_panel_closes` — same mount; close all panels; assert no `[data-debug="layer"][data-layer-name="inspector"]` remains.
-- [ ] `window_layer_overlay_still_renders_after_wrapper_change` — mount `<App />` with no panels open; assert the window-root `[data-debug="layer"]` still renders with non-zero rect (regression guard for Option A's flow → viewport switch on the window layer).
+- [x] `inspector_layer_overlay_renders_at_viewport_size` — mount `<App />` with debug enabled and one inspector panel open; assert `[data-debug="layer"]` (with the inspector layer's identifying attribute) has bounding rect `width === window.innerWidth` and `height === window.innerHeight`.
+- [x] `inspector_layer_overlay_label_includes_layer_name` — same mount; assert the overlay's label text contains `layer:inspector`.
+- [x] `inspector_layer_overlay_does_not_intercept_clicks` — same mount; click a panel's content; assert the click handler runs (focus claim fires; `pointer-events: none` on the overlay is honoured).
+- [x] `inspector_layer_overlay_unmounts_when_last_panel_closes` — same mount; close all panels; assert no `[data-debug="layer"][data-layer-name="inspector"]` remains.
+- [x] `window_layer_overlay_still_renders_after_wrapper_change` — mount `<App />` with no panels open; assert the window-root `[data-debug="layer"]` still renders with non-zero rect (regression guard for Option A's flow → viewport switch on the window layer).
 
 If the layer overlay component lacks a stable per-layer-name selector (currently it carries `data-debug="layer"` only), add `data-layer-name={name}` to the overlay's outer span so the test selectors can target the inspector vs window layer specifically.
 
@@ -93,10 +101,10 @@ Test command: `cd kanban-app/ui && bun test focus-debug-overlay.layer.browser` �
 
 ### Existing tests must keep passing
 
-- [ ] `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx` (the existing nine cases, including `layer_renders_no_dom_when_debug_off` — the regression guard for the production-layout-byte-identical-when-debug-off behaviour stays intact).
-- [ ] `kanban-app/ui/src/components/inspectors-container.spatial-nav.test.tsx`
-- [ ] `kanban-app/ui/src/components/inspector-dismiss.browser.test.tsx`
-- [ ] `kanban-app/ui/src/components/focus-layer.test.tsx`
+- [x] `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx` (the existing nine cases, including `layer_renders_no_dom_when_debug_off` — the regression guard for the production-layout-byte-identical-when-debug-off behaviour stays intact).
+- [x] `kanban-app/ui/src/components/inspectors-container.spatial-nav.test.tsx`
+- [x] `kanban-app/ui/src/components/inspector-dismiss.browser.test.tsx`
+- [x] `kanban-app/ui/src/components/focus-layer.test.tsx`
 
 Test command: `cd kanban-app/ui && bun test focus-layer focus-debug-overlay inspectors-container inspector-dismiss` — all green.
 
@@ -107,3 +115,23 @@ Test command: `cd kanban-app/ui && bun test focus-layer focus-debug-overlay insp
 - Add `data-layer-name={name}` to `<FocusDebugOverlay kind="layer" label={name}>` (or the host span it renders) so tests can target specific layers — required for the new browser test selectors. This is a one-line additive change in `focus-debug-overlay.tsx`.
 
 #frontend #spatial-nav #kanban-app
+
+## Review Findings (2026-05-02 09:27)
+
+### Warnings
+- [x] `kanban-app/ui/src/components/focus-debug-overlay.layer.browser.test.tsx:301` — The `inspector_layer_overlay_does_not_intercept_clicks` test invokes `target!.click()`, which dispatches a synthetic click directly to the target element and bypasses CSS hit-testing entirely. The acceptance criterion ("clicks pass through the overlay") is about pointer-event interception, which is a hit-testing property — the current assertion would pass even if the overlay sat on top with `pointer-events: auto`. Strengthen by computing a coordinate inside the panel and asserting `document.elementFromPoint(x, y) === target` (or that `target` is in the `elementsFromPoint(x, y)` stack and is the topmost non-debug element). The existing `column_overlay_does_not_paint_over_inspector_panel` test in `focus-debug-overlay.layer-z.browser.test.tsx:330` uses exactly this `elementsFromPoint` pattern — mirror it here.
+
+  Resolution: rewrote the test to mirror the `elementsFromPoint(x, y)` pattern from the column-overlay regression guard. The test now picks a point well inside the panel rect, asserts the topmost element returned by `document.elementsFromPoint` is the panel (or a descendant) and is NOT a `[data-debug="layer"]` span. The synthetic `.click()` is kept as a belt-and-braces tail check.
+
+### Nits
+- [x] `kanban-app/ui/src/components/focus-debug-overlay.tsx:281-292` — The implementation comment claims it preserves "single rendering path," but the layer/zone/scope branching has actually grown: `kind === "layer"` short-circuits in `labelText` (line 236), in the `layerNameAttr` spread (line 268), and now in `overlayInlineStyle` (line 282). Three runtime branches in one render means the "single component" win is mostly cosmetic. Either embrace the divergence with a small `<FocusLayerOverlay>` companion that drops the unused rAF poll and the `hostRef`, or consolidate the three branches into one early `if (kind === "layer") return <LayerOverlay ... />`. Lower priority — the code works; the architectural argument for keeping it together is just thinner than the comments imply.
+
+  Resolution: factored a `<FocusLayerOverlay>` companion component that owns the layer overlay's viewport-sized host, dashed border, and label-handle. `<FocusDebugOverlay>` now early-returns to it via `if (kind === "layer") return <FocusLayerOverlay name={label} />`. The hover handle + tooltip are extracted into a shared `<OverlayHandle>` so layer and zone/scope overlays share one code path for the click-stop / pointer-events / TooltipProvider conventions. `<FocusLayer>` no longer wraps the overlay in a host div — it imports `<FocusLayerOverlay>` directly and renders it as a sibling of `children`. The three runtime branches that previously short-circuited inside `<FocusDebugOverlay>` collapse to a single early `if`.
+
+- [x] `kanban-app/ui/src/components/focus-layer.tsx:271-281` and `focus-debug-overlay.tsx:281-291`, `focus-debug-overlay.tsx:336-358` — The Tailwind classes (`fixed inset-0 pointer-events-none`, `absolute inset-0`, etc.) are duplicated by inline `style` objects. Documented as a deliberate vitest-without-Tailwind fallback, but if a future change updates one source and not the other, the drift is silent. Consider extracting the inline-style fallbacks into named constants near the top of each file (e.g. `LAYER_HOST_FALLBACK_STYLE`, `LAYER_OVERLAY_FALLBACK_STYLE`) so a reader can see at a glance that `className` and `style` are intentional pairs, and ESLint/grep can find them together. Alternatively pull the test-env Tailwind plugin in for these tests so the duplication can be deleted.
+
+  Resolution: extracted three named constants near the top of `focus-debug-overlay.tsx` — `LAYER_OVERLAY_HOST_STYLE`, `OVERLAY_BORDER_STYLE`, `HANDLE_BASE_STYLE`. Each is documented with the className chain it pairs with. The `<FocusLayer>` component no longer carries any inline-style fallback at all (the host wrapper that needed one was removed when the layer overlay became a sibling), removing the second duplication site entirely.
+
+- [x] `kanban-app/ui/src/components/focus-debug-overlay.tsx:181-228` — The rAF rect-poll continues running for `kind === "layer"` overlays even though the result is unused (the `labelText` short-circuit at line 236 drops the coordinates, and there is no other consumer for the rect on layer overlays). The task description's Option B explicitly identified this as "wasted work in the layer case." Either skip scheduling the rAF when `kind === "layer"`, or factor a tiny `<LayerOverlay>` that doesn't take a `hostRef` at all. Negligible perf cost in production (debug overlays are off), but the dead code path is misleading when reading the component cold.
+
+  Resolution: `<FocusLayerOverlay>` does not take a `hostRef` and does not run the rAF rect poll. Layer overlays no longer execute the dead code path. `<FocusDebugOverlay>` only schedules the rAF for `kind === "zone"` and `kind === "scope"`, where the rect is actually consumed by the label.

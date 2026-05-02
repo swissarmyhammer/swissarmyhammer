@@ -22,4 +22,4 @@ Proposed fix directions:
 2. Or add a `test-group` in `.config/nextest.toml` limiting `package(swissarmyhammer-cli) & test(error_scenarios::)` to low concurrency.
 3. Or raise the 60 s wrapping timeout in `execute_via_subprocess` (line 297) for this test module — but that just hides the oversubscription.
 
-Option 1 is the principled fix; option 2 is the pragmatic test-infra fix. #test-failure
+Option 1 is the principled fix; option 2 is the pragmatic test-infra fix. #test-failure #tes
