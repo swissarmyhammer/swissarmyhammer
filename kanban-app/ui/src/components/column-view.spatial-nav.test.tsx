@@ -18,11 +18,11 @@
  *     under the layer root.
  *   - The column header registers as a leaf with `parentZone` equal to the
  *     column's zone key.
- *   - Each task card registers as a leaf (`<FocusScope>`) parented at
- *     the column zone — cards must be leaves so the unified cascade's
- *     iter-0 / iter-1 trajectory works as the user expects (iter 0
- *     finds in-column card peers; iter 1 escalates to the card's parent
- *     column zone and lands on the neighbouring column zone).
+ *   - Each task card registers as a navigable container (`<FocusZone>`)
+ *     parented at the column zone — cards are zones because they hold
+ *     multiple focusable atoms (drag handle, Field rows, inspect button)
+ *     and the kernel's path-prefix scope-is-leaf invariant rejects a
+ *     `<FocusScope>` whose FQM is a strict prefix of any descendant.
  *   - No claim-predicate registration calls are emitted for the column or
  *     its header.
  */
@@ -366,16 +366,14 @@ describe("ColumnView (spatial-nav)", () => {
     unmount();
   });
 
-  it("registers each task card as a leaf parented at the column zone", async () => {
-    // Cards register as `<FocusScope>` leaves — NOT zones — so the
-    // unified cascade's iter-0 / iter-1 trajectory works as the user
-    // expects: iter 0 finds in-column card peers, and when no peer
-    // satisfies the beam test the cascade escalates to iter 1 — the
-    // card's parent column zone — and lands on the neighbouring column
-    // zone (which the React adapter drills back into). The card's
-    // `parentZone` must be the enclosing column's zone key so the
-    // kernel can group cards by column when computing same-level peers
-    // for iter 0.
+  it("registers each task card as a zone parented at the column zone", async () => {
+    // Cards register as `<FocusZone>` containers — NOT scopes —
+    // because they hold multiple focusable atoms (drag handle, Field
+    // rows, inspect button). The card's `parentZone` is the enclosing
+    // column's zone key so the kernel groups cards by column for
+    // cross-column nav. The previous card-as-Scope shape violated the
+    // kernel's path-prefix scope-is-leaf invariant — see
+    // `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
     const tasks = [makeTask("t1"), makeTask("t2")];
     const { unmount } = renderColumnInBoard(
       <ColumnView column={makeColumn("col-doing")} tasks={tasks} />,
@@ -388,20 +386,20 @@ describe("ColumnView (spatial-nav)", () => {
     expect(columnZone).toBeTruthy();
 
     for (const id of ["t1", "t2"]) {
-      const taskScope = registeredScopes().find(
-        (s) => s.segment === `task:${id}`,
-      );
-      expect(taskScope, `task:${id} leaf registered`).toBeTruthy();
-      expect(taskScope!.parentZone).toBe(columnZone!.fq);
-
-      // And no `task:${id}` is registered as a zone — the card is a
-      // leaf, never a zone.
       const taskZone = registeredZones().find(
         (z) => z.segment === `task:${id}`,
       );
+      expect(taskZone, `task:${id} zone registered`).toBeTruthy();
+      expect(taskZone!.parentZone).toBe(columnZone!.fq);
+
+      // And no `task:${id}` is registered as a scope — the card is a
+      // zone, never a scope (path-prefix scope-is-leaf invariant).
+      const taskScope = registeredScopes().find(
+        (s) => s.segment === `task:${id}`,
+      );
       expect(
-        taskZone,
-        `task:${id} must NOT be registered as a zone`,
+        taskScope,
+        `task:${id} must NOT be registered as a scope`,
       ).toBeUndefined();
     }
 

@@ -247,14 +247,25 @@ async function flushScroll() {
 }
 
 /**
- * Pull every `spatial_register_scope` invocation argument bag for tasks.
- * Returns a `(moniker → key)` map so the test can convert visible
- * `data-moniker` attributes to the kernel-side keys for assertion.
+ * Pull every `spatial_register_zone` (and legacy `spatial_register_scope`,
+ * for placeholder rows) invocation argument bag for tasks. Returns a
+ * `(moniker → key)` map so the test can convert visible `data-moniker`
+ * attributes to the kernel-side keys for assertion.
+ *
+ * Cards register as zones (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`) — the
+ * placeholder/real-mount swap may transiently register a card as a
+ * scope while it's off-screen; the live entry is the most recent
+ * register IPC for the moniker, so last-write-wins.
  */
 function taskMonikerToKey(): Map<string, FullyQualifiedMoniker> {
   const map = new Map<string, FullyQualifiedMoniker>();
   for (const [cmd, args] of mockInvoke.mock.calls) {
-    if (cmd !== "spatial_register_scope") continue;
+    if (
+      cmd !== "spatial_register_scope" &&
+      cmd !== "spatial_register_zone"
+    ) {
+      continue;
+    }
     const a = args as { segment?: string; fq?: FullyQualifiedMoniker };
     if (typeof a.segment === "string" && a.segment.startsWith("task:") && a.fq) {
       // Last-write-wins. The most recent register for this moniker is
@@ -471,7 +482,14 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
       { x: number; y: number; width: number; height: number }
     >();
     for (const [cmd, args] of mockInvoke.mock.calls) {
-      if (cmd !== "spatial_register_scope") continue;
+      // Cards register as zones; the placeholder/real-mount swap may
+      // briefly register a card as a scope, so accept both.
+      if (
+        cmd !== "spatial_register_scope" &&
+        cmd !== "spatial_register_zone"
+      ) {
+        continue;
+      }
       const a = args as {
         fq?: FullyQualifiedMoniker;
         rect?: { x: number; y: number; width: number; height: number };

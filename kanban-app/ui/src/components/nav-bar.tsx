@@ -82,7 +82,19 @@ export function NavBar() {
       role="banner"
       className="relative flex h-12 items-center border-b px-4 gap-2"
     >
-      <FocusScope moniker={asSegment("ui:navbar.board-selector")}>
+      {/*
+        `<BoardSelector>` is itself a multi-leaf surface (editable name
+        Field, dropdown trigger, tear-off button), so the navbar wraps
+        it in a `<FocusZone>` rather than a `<FocusScope>`. The selector
+        component places `<FocusScope>` leaves around the dropdown and
+        tear-off; the editable name `<Field>` is its own zone. This
+        keeps the kernel's scope-is-leaf invariant intact — see
+        `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
+      */}
+      <FocusZone
+        moniker={asSegment("ui:navbar.board-selector")}
+        showFocusBar={false}
+      >
         <BoardSelector
           boards={openBoards}
           selectedPath={
@@ -92,7 +104,7 @@ export function NavBar() {
           boardEntity={board?.board}
           showTearOff
         />
-      </FocusScope>
+      </FocusZone>
       {board && (
         <FocusScope moniker={asSegment("ui:navbar.inspect")}>
           <Tooltip>

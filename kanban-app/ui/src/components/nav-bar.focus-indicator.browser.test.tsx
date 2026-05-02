@@ -328,21 +328,24 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 1. Indicator renders on the board-selector leaf.
+  // 1. The board-selector is a zone (multi-leaf surface), not a leaf, so
+  //    the data-focused attribute flips on the wrapper but no indicator
+  //    mounts on the zone — its inner leaves own the visible focus signal
+  //    (dropdown trigger, tear-off button, editable name Field).
   // -------------------------------------------------------------------------
 
-  it("focus_indicator_renders_when_board_selector_leaf_is_focused", async () => {
+  it("board_selector_zone_flips_data_focused_without_indicator", async () => {
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
+    const zone = registerZoneArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     );
-    expect(leaf, "board-selector leaf must register").toBeDefined();
+    expect(zone, "board-selector zone must register").toBeDefined();
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: leaf!.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: zone!.fq as FullyQualifiedMoniker });
 
     await waitFor(() => {
       const node = container.querySelector(
@@ -352,15 +355,8 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
       expect(node!.getAttribute("data-focused")).not.toBeNull();
     });
 
-    const node = container.querySelector(
-      "[data-segment='ui:navbar.board-selector']",
-    ) as HTMLElement;
-    const indicator = queryByTestId("focus-indicator");
-    expect(indicator, "indicator must mount when leaf is focused").not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must render inside the focused leaf's wrapper",
-    ).toBe(true);
+    // No indicator on the zone wrapper — leaves own the visible focus.
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });

@@ -422,9 +422,21 @@ describe("BoardView — browser spatial behaviour", () => {
     expect(boardZone).toBeTruthy();
     expect(typeof boardZone!.fq).toBe("string");
     expect(boardZone!.layerFq).toBeTruthy();
-    // The board zone is rooted directly under the window layer — no
-    // enclosing FocusZone wraps it, so `parentZone` must be null.
-    expect(boardZone!.parentZone).toBeNull();
+    // The `ui:board` chrome zone sits inside the outer
+    // `board:<id>` entity zone (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
+    // so its `parentZone` must be the outer entity zone's FQM. The
+    // outer zone is what carries the `<Inspectable>` wrapper for
+    // double-click → inspector dispatch; the inner chrome zone is
+    // pure-spatial.
+    const boardEntityZone = registerZoneArgs().find((a) =>
+      typeof a.segment === "string" &&
+      (a.segment as string).startsWith("board:"),
+    );
+    expect(
+      boardEntityZone,
+      "outer board:<id> entity zone must register",
+    ).toBeTruthy();
+    expect(boardZone!.parentZone).toBe(boardEntityZone!.fq);
 
     unmount();
   });
@@ -734,11 +746,11 @@ describe("BoardView — browser spatial behaviour", () => {
     // this test pins is "when the kernel does route up, the React tree
     // mirrors the new focus end-to-end across the full chain."
     //
-    // Note: the card is a `<FocusScope>` (leaf), so its registration is
-    // captured via `registerScopeArgs()`. The column and board are
-    // `<FocusZone>`s and live in `registerZoneArgs()`. Drill-out from
-    // the focused card lands on its parent zone (the column), then the
-    // board chrome zone, then the window-root layer.
+    // Note: the card is a `<FocusZone>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`)
+    // — every register IPC for cards, columns, and the board lives in
+    // `registerZoneArgs()`. Drill-out from a focused atom inside the
+    // card lands on the card zone first, then the column zone, then
+    // the board chrome zone, then the window-root layer.
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
@@ -748,8 +760,8 @@ describe("BoardView — browser spatial behaviour", () => {
       (a) => a.segment === "column:col-todo",
     )!;
     const todoColumnKey = todoColumn.fq as FullyQualifiedMoniker;
-    const t1Card = registerScopeArgs().find((a) => a.segment === "task:t1");
-    expect(t1Card, "task:t1 leaf should be registered").toBeTruthy();
+    const t1Card = registerZoneArgs().find((a) => a.segment === "task:t1");
+    expect(t1Card, "task:t1 zone should be registered").toBeTruthy();
     const t1CardKey = t1Card!.fq as FullyQualifiedMoniker;
 
     // Step 1: focus a card (task:t1).

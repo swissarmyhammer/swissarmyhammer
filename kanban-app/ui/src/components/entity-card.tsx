@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusZone } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
 import { asSegment } from "@/types/spatial";
 import { Field } from "@/components/fields/field";
@@ -55,50 +56,54 @@ export const EntityCard = memo(
     } = props;
     const cardSections = useCardSections(entity.entity_type);
 
-    // The card body registers as a `<FocusScope>` — a leaf in the
-    // spatial-nav graph. Cards are leaves (not zones) so the unified
-    // cascade's same-kind filtering produces the user-expected
-    // trajectory: iter 0 finds in-column card peers (leaf candidates),
-    // and when no leaf peer satisfies the beam test the cascade
-    // escalates to iter 1 and lands on the neighbouring column zone.
-    // If the card body were a zone, iter 0 would consider sibling
-    // zones only — same-column cards reachable as zones, never a card
-    // in another column — and the cross-column trajectory would never
-    // produce the column-zone moniker the React adapter drills back
-    // into. The card-as-leaf shape is what the kernel's
-    // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
-    // test pins (`swissarmyhammer-focus/tests/navigate.rs`).
+    // The card body registers as a `<FocusZone>` — a navigable
+    // container in the spatial-nav graph. The card holds multiple
+    // focusable atoms (drag handle, the `<Field>` rows with their
+    // own zones and pill leaves, inspect button), so it is a zone
+    // by the kernel's three-peer contract: scopes are leaves, zones
+    // are containers. Each interactive non-Field atom inside the card
+    // is wrapped in its own inner `<FocusScope>` leaf — mirroring the
+    // navbar pattern (`<FocusZone moniker="ui:navbar">` → leaf scopes
+    // for inspect / search). The card's inner Field zones nest under
+    // this card zone via `FocusZoneContext`, so drill-in / drill-out
+    // work field → card → column → board.
+    //
+    // Pre-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG` history: the card body was
+    // a `<FocusScope>` because of an earlier kernel cross-zone-nav
+    // workaround. That shape silently degraded the spatial graph: the
+    // card scope was a kernel "leaf" with no children (because Scopes
+    // do not push `FocusZoneContext`), but the React tree composed
+    // Field zones inside it whose `parent_zone` skipped to the column
+    // — so the kernel saw fields as siblings of cards under the
+    // column rather than as descendants of a card. The card-as-zone
+    // shape restores the topology and surfaces drill-in / drill-out
+    // memory (`last_focused`) at the right level.
     //
     // When the surrounding tree mounts the spatial-nav stack
     // (`<SpatialFocusProvider>` + `<FocusLayer>` — the production path
-    // in `App.tsx`) the leaf registers via `spatial_register_scope`;
-    // outside that stack the scope falls back to a plain `<div>` so
+    // in `App.tsx`) the zone registers via `spatial_register_zone`;
+    // outside that stack the zone falls back to a plain `<div>` so
     // isolated unit tests don't need to spin up the spatial providers.
     // Either way the card carries the entity-focus / command-scope /
     // context-menu wiring shared with every other entity surface.
     //
-    // Each field inside the card (`title`, `status`, multi-value badge
-    // fields like `assignees` / `tags`) is rendered through `<Field>`,
-    // which itself registers a nested `<FocusZone>` keyed
-    // `field:{type}:{id}.{name}` whose `parent_zone` is the column
-    // (the card's enclosing zone) — fields are zones because they
-    // contain pill leaves and need a navigable container of their own.
-    // Pills inside multi-value fields are leaves under their owning
-    // Field zone; drill-in / arrow-key navigation between fields and
-    // pills is handled by the spatial-nav primitives, not by per-card
-    // predicates.
+    // `showFocusBar` defaults to true on `<FocusZone>`, which renders
+    // the visible focus indicator on the card itself when the user
+    // focuses the card body. The inner `<FocusScope>` leaves and the
+    // `<Field>` zones own their own indicators when those atoms are
+    // the focused FQM — same pattern as the navbar.
     return (
       // The card wraps an entity (`task:` / `tag:` moniker), so a
       // double-click on the card body should open the inspector for
       // that entity. The `<Inspectable>` wrapper owns the
       // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
-      // handler; the spatial primitive `<FocusScope>` stays pure-spatial.
-      // UI-chrome scopes (`ui:*` / `perspective_tab:`) are NOT wrapped
+      // handler; the spatial primitive `<FocusZone>` stays pure-spatial.
+      // UI-chrome zones (`ui:*` / `perspective_tab:`) are NOT wrapped
       // in `<Inspectable>`. The architectural guard
       // (`focus-architecture.guards.node.test.ts`, Guards B + C)
       // enforces both directions.
       <Inspectable moniker={asSegment(entity.moniker)}>
-        <FocusScope
+        <FocusZone
           moniker={asSegment(entity.moniker)}
           commands={extraCommands}
         >
@@ -112,11 +117,14 @@ export const EntityCard = memo(
             className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
             {...rest}
           >
-            <DragHandle dragHandleProps={dragHandleProps} />
+            <DragHandle
+              entityId={entity.id}
+              dragHandleProps={dragHandleProps}
+            />
             <CardFields sections={cardSections} entity={entity} />
-            <InspectButton moniker={entity.moniker} />
+            <InspectButton entityId={entity.id} moniker={entity.moniker} />
           </div>
-        </FocusScope>
+        </FocusZone>
       </Inspectable>
     );
   }),
@@ -148,21 +156,38 @@ function useCardSections(entityType: string): ResolvedSection[] {
   }, [resolved, entitySections]);
 }
 
-/** Drag handle button — stops click propagation and wires drag handle props. */
+/**
+ * Drag handle button — stops click propagation and wires drag handle props.
+ *
+ * Wrapped in a `<FocusScope moniker="card.drag-handle">` leaf so the
+ * outer card `<FocusZone>` has a navigable atom for the drag-grip
+ * affordance. Mirrors the navbar's `<FocusScope moniker="ui:navbar.search">`
+ * pattern: a single button atom inside a parent zone is a leaf scope.
+ *
+ * `entityId` parameterises the segment so each card's drag handle is
+ * a distinct FQM (composes through the card's
+ * `FullyQualifiedMonikerContext`). Without per-entity disambiguation the
+ * registry would see two cards' drag handles collide on the same segment
+ * and trip the structural-mismatch check.
+ */
 function DragHandle({
+  entityId,
   dragHandleProps,
 }: {
+  entityId: string;
   dragHandleProps?: Record<string, unknown>;
 }) {
   return (
-    <button
-      type="button"
-      className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
-      onClick={(e) => e.stopPropagation()}
-      {...dragHandleProps}
-    >
-      <GripVertical className="h-4 w-4" />
-    </button>
+    <FocusScope moniker={asSegment(`card.drag-handle:${entityId}`)}>
+      <button
+        type="button"
+        className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
+        onClick={(e) => e.stopPropagation()}
+        {...dragHandleProps}
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
+    </FocusScope>
   );
 }
 
@@ -274,25 +299,39 @@ function CardField({
  * The target is passed directly so the backend uses ctx.target rather than
  * walking the scope chain (which comes from FocusedScopeContext and may
  * point to a previously-focused entity, not this card).
+ *
+ * Wrapped in a `<FocusScope moniker="card.inspect:{id}">` leaf so the
+ * outer card `<FocusZone>` has a navigable atom for the inspector
+ * affordance. Same pattern as the navbar's
+ * `<FocusScope moniker="ui:navbar.inspect">`. The `entityId` suffix
+ * keeps each card's inspect leaf at a distinct FQM under the card.
  */
-function InspectButton({ moniker }: { moniker: string }) {
+function InspectButton({
+  entityId,
+  moniker,
+}: {
+  entityId: string;
+  moniker: string;
+}) {
   const dispatch = useDispatchCommand("ui.inspect");
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label="Inspect"
-          className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-          onClick={(e) => {
-            e.stopPropagation();
-            dispatch({ target: moniker }).catch(console.error);
-          }}
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>Inspect</TooltipContent>
-    </Tooltip>
+    <FocusScope moniker={asSegment(`card.inspect:${entityId}`)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="Inspect"
+            className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              dispatch({ target: moniker }).catch(console.error);
+            }}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Inspect</TooltipContent>
+      </Tooltip>
+    </FocusScope>
   );
 }

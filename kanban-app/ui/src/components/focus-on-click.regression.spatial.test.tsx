@@ -588,6 +588,76 @@ async function assertClickProducesIndicator({
   expect(node!.contains(indicator!)).toBe(true);
 }
 
+/**
+ * Variant of [`assertClickProducesIndicator`] for `<FocusZone>` wrappers
+ * that intentionally ship `showFocusBar={false}` — their inner leaves
+ * own the visible focus signal, so the wrapper itself must NOT mount a
+ * `<FocusIndicator>` even when claimed. The data-focused attribute
+ * still flips so e2e selectors and debug tooling can observe the
+ * claim.
+ *
+ * Usage matches `assertClickProducesIndicator`: pass the zone's
+ * moniker and the list of parent monikers the click MUST NOT bubble to.
+ */
+async function assertClickProducesZoneFocusWithoutIndicator({
+  container,
+  moniker,
+  parentMonikers,
+}: {
+  container: HTMLElement;
+  moniker: string;
+  parentMonikers: readonly string[];
+}) {
+  const node = container.querySelector(
+    `[data-segment='${moniker}']`,
+  ) as HTMLElement | null;
+  expect(node, `[data-segment='${moniker}'] must be in the DOM`).not.toBeNull();
+
+  const registration = findRegistration(moniker);
+  const capturedKey = registration.fq as FullyQualifiedMoniker;
+  expect(typeof capturedKey).toBe("string");
+
+  const parentKeys = parentMonikers.map((m) => {
+    const reg = findRegistration(m);
+    return reg.fq as FullyQualifiedMoniker;
+  });
+
+  mockInvoke.mockClear();
+  mockInvoke.mockImplementation(defaultInvokeImpl);
+
+  fireEvent.click(node!);
+
+  const focusCalls = spatialFocusCalls();
+  expect(
+    focusCalls.length,
+    `expected exactly one spatial_focus call for moniker '${moniker}'`,
+  ).toBe(1);
+  expect(focusCalls[0].fq).toBe(capturedKey);
+
+  for (const parentKey of parentKeys) {
+    expect(
+      focusCalls.find((c) => c.fq === parentKey),
+      `click on '${moniker}' must NOT bubble to any parent zone`,
+    ).toBeUndefined();
+  }
+
+  await fireFocusChanged({ next_fq: capturedKey, next_segment: moniker });
+
+  await waitFor(() => {
+    expect(node!.getAttribute("data-focused")).toBe("true");
+  });
+
+  // Leaves inside the zone own the visible focus signal — the wrapper
+  // must NOT mount its own `<FocusIndicator>`.
+  const indicator = node!.querySelector(
+    "[data-testid='focus-indicator']",
+  ) as HTMLElement | null;
+  expect(
+    indicator,
+    `<FocusIndicator> must NOT mount on the zone wrapper '${moniker}' (showFocusBar={false})`,
+  ).toBeNull();
+}
+
 // ---------------------------------------------------------------------------
 // Provider-stack helpers
 //
@@ -1013,11 +1083,19 @@ describe("focus-on-click regression suite (every component class)", () => {
       unmount();
     });
 
-    it("clicking ui:navbar.board-selector focuses it and renders the indicator", async () => {
+    it("clicking ui:navbar.board-selector focuses the zone but renders no indicator on the wrapper", async () => {
+      // The board-selector is a zone (multi-leaf surface), not a leaf —
+      // its inner leaves (dropdown trigger, tear-off button, editable
+      // name `<Field>` zone) own the visible focus signal. The kernel's
+      // scope-is-leaf invariant rejects a `<FocusScope>` wrapping
+      // further focus primitives — see
+      // swissarmyhammer-focus/tests/scope_is_leaf.rs. The zone uses
+      // `showFocusBar={false}` so the data-focused attribute flips on
+      // the wrapper but no `<FocusIndicator>` mounts on it.
       const { container, unmount } = renderNavBar();
       await flushSetup();
 
-      await assertClickProducesIndicator({
+      await assertClickProducesZoneFocusWithoutIndicator({
         container,
         moniker: "ui:navbar.board-selector",
         parentMonikers: ["ui:navbar"],

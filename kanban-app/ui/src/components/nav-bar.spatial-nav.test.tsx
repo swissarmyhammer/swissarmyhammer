@@ -309,14 +309,18 @@ describe("NavBar — browser spatial behaviour", () => {
   // regression in any link surfaces here.
   // -------------------------------------------------------------------------
 
-  it("clicking the board-selector leaf dispatches spatial_focus for THAT leaf's key", async () => {
+  it("clicking the board-selector zone dispatches spatial_focus for THAT zone's key", async () => {
+    // The board-selector is a zone (multi-leaf surface), not a scope —
+    // the kernel rejects a scope wrapping further focus primitives via the
+    // scope-is-leaf invariant. See
+    // swissarmyhammer-focus/tests/scope_is_leaf.rs.
     const { container, unmount } = renderNavBar();
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
+    const zone = registerZoneArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     );
-    expect(leaf).toBeDefined();
+    expect(zone).toBeDefined();
 
     mockInvoke.mockClear();
 
@@ -329,7 +333,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].fq).toBe(leaf!.fq);
+    expect(focusCalls[0].fq).toBe(zone!.fq);
 
     unmount();
   });
@@ -384,27 +388,32 @@ describe("NavBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("focus claim mounts the FocusIndicator inside the board-selector leaf", async () => {
+  it("focus claim on the board-selector zone flips data-focused but renders no indicator", async () => {
+    // The board-selector is a zone with `showFocusBar={false}` — its inner
+    // leaves (the dropdown trigger and tear-off button registered by
+    // <BoardSelector>, plus the editable name `<Field>` zone) own the
+    // visible focus signal. The data-focused attribute still flips so
+    // e2e selectors and debugging tooling can observe the claim, but no
+    // `<FocusIndicator>` mounts on the zone wrapper itself.
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
+    const zone = registerZoneArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
-    expect(queryByTestId("focus-indicator")).toBeNull();
-
-    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
-
-    await waitFor(() => {
-      expect(queryByTestId("focus-indicator")).not.toBeNull();
-    });
     const node = container.querySelector(
       "[data-segment='ui:navbar.board-selector']",
     ) as HTMLElement;
-    const indicator = queryByTestId("focus-indicator")!;
-    expect(node.contains(indicator)).toBe(true);
-    expect(node.getAttribute("data-focused")).not.toBeNull();
+    expect(node).not.toBeNull();
+    expect(node.getAttribute("data-focused")).toBeNull();
+
+    await fireFocusChanged({ next_fq: zone.fq as FullyQualifiedMoniker });
+
+    await waitFor(() => {
+      expect(node.getAttribute("data-focused")).not.toBeNull();
+    });
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });
@@ -518,22 +527,24 @@ describe("NavBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("renders the cursor-bar (not a ring) on the board-selector leaf when focused", async () => {
+  it("does not mount a cursor-bar on the board-selector zone (leaves own the indicator)", async () => {
+    // The board-selector zone uses `showFocusBar={false}` so the visible
+    // bar is owned by inner leaves (dropdown trigger, tear-off button,
+    // editable name Field). Confirm the zone-level focus claim does NOT
+    // mount the indicator.
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
+    const zone = registerZoneArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
-    await fireFocusChanged({ next_fq: leaf.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: zone.fq as FullyQualifiedMoniker });
 
-    await waitFor(() => {
-      expect(queryByTestId("focus-indicator")).not.toBeNull();
-    });
-    const indicator = queryByTestId("focus-indicator")!;
-    expect(indicator.className).toContain("-left-2");
-    expect(indicator.className).not.toContain("inset-0");
+    // Wait for the focus claim to propagate, then assert no indicator on
+    // the zone.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });
@@ -742,8 +753,24 @@ describe("NavBar — browser spatial behaviour", () => {
       ).toBe(true);
     }
 
+    // The board-selector is now registered as a zone (multi-leaf surface),
+    // not a leaf scope; check it under registerZoneArgs.
+    const boardSelectorZoneEntries = registerZoneArgs().filter(
+      (a) => a.segment === "ui:navbar.board-selector",
+    );
+    expect(
+      boardSelectorZoneEntries.length,
+      "ui:navbar.board-selector zone must register at first paint",
+    ).toBeGreaterThan(0);
+    for (const entry of boardSelectorZoneEntries) {
+      const rect = entry.rect as { width: number; height: number };
+      expect(
+        isPositiveRect(entry),
+        `ui:navbar.board-selector zone rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height}); a zero rect silently breaks beam search`,
+      ).toBe(true);
+    }
+
     const navbarLeafMonikers = [
-      "ui:navbar.board-selector",
       "ui:navbar.inspect",
       "ui:navbar.search",
     ] as const;

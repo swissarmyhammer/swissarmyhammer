@@ -1,28 +1,35 @@
 /**
  * Browser-mode test for `<EntityCard>`'s spatial-nav behaviour.
  *
- * Source of truth for acceptance of card `01KQ20NMRQ...`. The card body
- * wraps in `<FocusScope moniker="task:{id}">` — a leaf in the spatial
- * graph, NOT a zone. The leaf shape is what enables cross-column nav
- * under the unified cascade: pressing right on a card in column A
- * runs iter 0 against in-column card peers, and when no peer
- * satisfies the beam test the cascade escalates to iter 1 — the
- * card's parent column zone — and lands on the neighbouring column
- * zone (which the React adapter drills back into). If the card body
- * were a zone, iter 0 would consider sibling zones only — same-column
- * cards reachable as zones, never the cross-column trajectory the
- * user expects. See the docstring on `<EntityCard>` and the kernel
- * test `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
+ * Pinned shape (after card `01KQJDYJ4SDKK2G8FTAQ348ZHG`): the card body
+ * wraps in `<FocusZone moniker="task:{id}">` — a navigable container,
+ * NOT a leaf. Cards hold multiple focusable atoms (drag handle, the
+ * `<Field>` rows with their own zones and pill leaves, inspect button)
+ * and so are zones by the kernel's three-peer contract.
+ *
+ * Pre-card history: the card body was a `<FocusScope>` because of an
+ * earlier kernel cross-zone-nav workaround. That shape silently
+ * degraded the spatial graph — Scopes do not push `FocusZoneContext`
+ * so the inner Field zones picked the column zone as their
+ * `parent_zone`, making fields siblings of the card instead of
+ * descendants. The path-prefix branch of the scope-is-leaf invariant
+ * caught the mistake (`swissarmyhammer-focus/tests/scope_is_leaf.rs`'s
+ * `path_prefix_zone_under_scope_logs_error`) — see the kernel registry
+ * (`swissarmyhammer_focus::registry::warn_forward_scope_ancestors`) and
+ * the navbar's matching shape pinned in
+ * `nav-bar.scope-leaf.spatial.test.tsx`.
  *
  * Each visible field inside the card renders through `<Field>`, which
- * is itself a `<FocusZone moniker="field:task:{id}.{name}">`. Because
- * `<FocusScope>` does NOT push a `FocusZoneContext.Provider`, those
- * field zones are siblings of the card under the column zone — not
- * children of the card. Multi-value fields (badge-list assignees /
- * tags) render one `<FocusScope>` leaf per pill under their owning
- * field zone. This file exercises the click → `spatial_focus` →
- * `focus-changed` → React state → `<FocusIndicator>` chain end-to-end
- * so a regression in any link surfaces here.
+ * is itself a `<FocusZone moniker="field:task:{id}.{name}">`. With the
+ * card now a `<FocusZone>`, those field zones nest under the card zone
+ * via `FocusZoneContext` — the kernel sees fields as descendants of
+ * cards, which restores `last_focused` memory at the card level and
+ * makes drill-in / drill-out work field → card → column → board.
+ * Multi-value fields (badge-list assignees / tags) render one
+ * `<FocusScope>` leaf per pill under their owning field zone. This
+ * file exercises the click → `spatial_focus` → `focus-changed` →
+ * React state → `<FocusIndicator>` chain end-to-end so a regression
+ * in any link surfaces here.
  *
  * Mock pattern matches `grid-view.nav-is-eventdriven.test.tsx` and
  * `perspective-bar.spatial.test.tsx`:
@@ -510,45 +517,45 @@ describe("EntityCard — browser spatial behaviour", () => {
   // ---------------------------------------------------------------------
   // #1 Registration
   // ---------------------------------------------------------------------
-  it("registers the card body as a FocusScope (leaf) with moniker task:{id} (test #1)", async () => {
+  it("registers the card body as a FocusZone with moniker task:{id} (test #1)", async () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardScope = registerScopeArgs().find(
+    const cardZone = registerZoneArgs().find(
       (a) => a.segment === "task:task-1",
     );
-    expect(cardScope).toBeTruthy();
-    expect(typeof cardScope!.fq).toBe("string");
-    // The key matches the `^task:[0-9A-Z-]+$` shape — runtime key minted
-    // via `crypto.randomUUID()` in `<FocusScope>`. The moniker is the
-    // production task moniker; the spatial key is opaque per-mount.
-    expect(cardScope!.segment).toMatch(/^task:[A-Za-z0-9-]+$/);
-    expect(cardScope!.layerFq).toBeTruthy();
+    expect(cardZone).toBeTruthy();
+    expect(typeof cardZone!.fq).toBe("string");
+    // The segment matches the `task:{id}` shape — composed via
+    // `FullyQualifiedMonikerContext` from the parent FQM in production
+    // and from the layer root in this isolated harness.
+    expect(cardZone!.segment).toMatch(/^task:[A-Za-z0-9-]+$/);
+    expect(cardZone!.layerFq).toBeTruthy();
     // In this isolated harness the card has no surrounding `<FocusZone>`,
     // so its `parentZone` is null. In production the card is wrapped by
     // a `column:` zone and that zone's key flows through here.
-    expect(cardScope!.parentZone).toBeNull();
-    expect(cardScope!.rect).toBeTruthy();
+    expect(cardZone!.parentZone).toBeNull();
+    expect(cardZone!.rect).toBeTruthy();
 
     unmount();
   });
 
-  it("does not register the card root as a FocusZone (the card is a leaf, not a zone) (test #1b)", async () => {
-    // Cards must register as leaves so the unified cascade's iter-0 /
-    // iter-1 trajectory works as the user expects: iter 0 finds
-    // in-column card peers; iter 1 escalates to the card's parent
-    // column zone and lands on the neighbouring column zone. If the
-    // card ever flips back to being a zone, iter 0 would consider
-    // sibling zones only and trap focus inside the column. See the
-    // docstring on `<EntityCard>` and the kernel test
-    // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
+  it("does not register the card root as a FocusScope (the card is a zone, not a leaf) (test #1b)", async () => {
+    // Cards register as zones because they hold multiple focusable
+    // atoms (drag handle, Field rows, inspect button). A `<FocusScope>`
+    // wrapper would violate the kernel's scope-is-leaf invariant —
+    // the path-prefix branch of `swissarmyhammer-focus`'s
+    // `warn_forward_scope_ancestors` fires
+    // `scope-not-leaf` when a Scope's FQM is a strict prefix of any
+    // registered descendant's FQM, exactly as the previous card-as-Scope
+    // shape produced.
     const { unmount } = renderCard();
     await flushSetup();
 
-    const zoneCalls = registerZoneArgs().filter(
+    const scopeCalls = registerScopeArgs().filter(
       (a) => a.segment === "task:task-1",
     );
-    expect(zoneCalls).toEqual([]);
+    expect(scopeCalls).toEqual([]);
 
     unmount();
   });
@@ -560,15 +567,15 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { container, unmount } = renderCard();
     await flushSetup();
 
-    const cardScope = registerScopeArgs().find(
+    const cardZone = registerZoneArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.fq as FullyQualifiedMoniker;
+    const cardKey = cardZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
 
     // Click the card body's chrome — outside any inner field — so the
-    // event lands on the card-scope div, not on a descendant zone.
+    // event lands on the card-zone div, not on a descendant zone.
     const cardBody = container.querySelector(
       `[data-entity-card='task-1']`,
     ) as HTMLElement | null;
@@ -591,10 +598,10 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderCard();
     await flushSetup();
 
-    const cardScope = registerScopeArgs().find(
+    const cardZone = registerZoneArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.fq as FullyQualifiedMoniker;
+    const cardKey = cardZone.fq as FullyQualifiedMoniker;
 
     // Before the focus claim, the card has no FocusIndicator descendant
     // attributable to it: the card body is `data-focused === undefined`
@@ -734,10 +741,10 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardScope = registerScopeArgs().find(
+    const cardZone = registerZoneArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
-    const cardKey = cardScope.fq as FullyQualifiedMoniker;
+    const cardKey = cardZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
@@ -788,17 +795,17 @@ describe("EntityCard — browser spatial behaviour", () => {
       );
       expect(titleZone).toBeTruthy();
 
-      // Card body is a `<FocusScope>` (leaf), so it does NOT push a
-      // `FocusZoneContext.Provider`. The field zone therefore sees the
-      // same enclosing zone the card sees — they are siblings under
-      // their common parent zone, not parent/child. In production that
-      // shared parent is the column zone; in this isolated harness
-      // there is no enclosing zone, so both `parentZone` slots are null.
-      const cardScope = registerScopeArgs().find(
+      // The card is a `<FocusZone>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
+      // so it pushes a `FocusZoneContext.Provider`. The field zone
+      // therefore sees the card as its enclosing zone and registers
+      // `parentZone = cardZone.fq` — fields are *children* of the card
+      // zone, not siblings of the card under a column. This restores
+      // the spatial topology that the previous Scope wrapper silently
+      // broke.
+      const cardZone = registerZoneArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
-      expect(titleZone!.parentZone).toBe(cardScope.parentZone);
-      expect(titleZone!.parentZone).toBeNull();
+      expect(titleZone!.parentZone).toBe(cardZone.fq);
 
       // The DOM exposes the moniker for e2e selectors.
       const titleNode = container.querySelector(
@@ -813,7 +820,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardScope = registerScopeArgs().find(
+      const cardZone = registerZoneArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
       const titleZone = registerZoneArgs().find(
@@ -832,7 +839,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(focusCalls[0].fq).toBe(titleZone.fq);
       // Crucially, NOT the card's key — the title's `e.stopPropagation`
       // keeps the click from bubbling.
-      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(cardZone.fq);
 
       unmount();
     });
@@ -912,7 +919,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardScope = registerScopeArgs().find(
+      const cardZone = registerZoneArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
       const tagsZone = registerZoneArgs().find(
@@ -934,7 +941,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       expect(focusCalls[0].fq).toBe(bugTag.fq);
       // Not the card key, not the parent field zone key — the leaf
       // owns its own click.
-      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(cardZone.fq);
       expect(focusCalls[0].fq).not.toBe(tagsZone.fq);
 
       unmount();
@@ -1023,7 +1030,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardScope = registerScopeArgs().find(
+      const cardZone = registerZoneArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
       const assigneesZone = registerZoneArgs().find(
@@ -1043,7 +1050,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
       expect(focusCalls[0].fq).toBe(alice.fq);
-      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(cardZone.fq);
       expect(focusCalls[0].fq).not.toBe(assigneesZone.fq);
 
       unmount();
@@ -1120,7 +1127,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardScope = registerScopeArgs().find(
+      const cardZone = registerZoneArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
       const statusZone = registerZoneArgs().find(
@@ -1137,7 +1144,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const focusCalls = spatialFocusCalls();
       expect(focusCalls).toHaveLength(1);
       expect(focusCalls[0].fq).toBe(statusZone.fq);
-      expect(focusCalls[0].fq).not.toBe(cardScope.fq);
+      expect(focusCalls[0].fq).not.toBe(cardZone.fq);
 
       unmount();
     });

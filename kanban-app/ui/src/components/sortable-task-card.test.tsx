@@ -142,28 +142,29 @@ describe("DraggableTaskCard", () => {
     currentEntity = makeEntity();
   });
 
-  it("registers the card body as a FocusScope (leaf) with the entity moniker", async () => {
-    await renderWith(<DraggableTaskCard entity={currentEntity} />);
-    const scopeCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_register_scope")
-      .map((c) => c[1] as Record<string, unknown>);
-    expect(scopeCalls.find((a) => a.segment === "task:task-7")).toBeTruthy();
-  });
-
-  it("does not register the card root as a FocusZone (the card is a leaf, not a zone)", async () => {
-    // Cards must register as leaves so the unified cascade's iter-0 /
-    // iter-1 trajectory works as the user expects: iter 0 finds
-    // in-column card peers; iter 1 escalates to the card's parent
-    // column zone and lands on the neighbouring column zone. If the
-    // wrapper ever forwards a `kind="zone"` flag through `<EntityCard>`,
-    // iter 0 would consider sibling zones only and trap focus in the
-    // column. See the docstring on `<EntityCard>` and the kernel test
-    // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
+  it("registers the card body as a FocusZone with the entity moniker", async () => {
     await renderWith(<DraggableTaskCard entity={currentEntity} />);
     const zoneCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_zone")
       .map((c) => c[1] as Record<string, unknown>);
-    expect(zoneCalls.find((a) => a.segment === "task:task-7")).toBeUndefined();
+    expect(zoneCalls.find((a) => a.segment === "task:task-7")).toBeTruthy();
+  });
+
+  it("does not register the card root as a FocusScope (the card is a zone, not a leaf)", async () => {
+    // Cards register as zones because they hold multiple focusable
+    // atoms (drag handle, Field rows, inspect button). The kernel's
+    // path-prefix scope-is-leaf invariant fires
+    // `scope-not-leaf` whenever a Scope's FQM is a strict prefix of
+    // any registered descendant — exactly the shape the previous
+    // card-as-Scope wrapper produced. See
+    // `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
+    await renderWith(<DraggableTaskCard entity={currentEntity} />);
+    const scopeCalls = mockInvoke.mock.calls
+      .filter((c) => c[0] === "spatial_register_scope")
+      .map((c) => c[1] as Record<string, unknown>);
+    expect(
+      scopeCalls.find((a) => a.segment === "task:task-7"),
+    ).toBeUndefined();
   });
 
   it("renders the drag handle button", async () => {

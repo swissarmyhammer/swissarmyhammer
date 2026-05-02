@@ -24,7 +24,6 @@ import {
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
 import {
@@ -1019,10 +1018,21 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
 
   // The outer wrapper carries the real `board:<id>` entity moniker.
   // The `<Inspectable>` wrapper owns inspector dispatch on double-click;
-  // the spatial primitive `<FocusScope>` stays pure-spatial. The inner
+  // the spatial primitive `<FocusZone>` stays pure-spatial. The inner
   // `ui:board` chrome zone (in `BoardSpatialZone`) is NOT wrapped in
   // `<Inspectable>` — only this entity wrapper is — so a double-click
   // on the board surface inspects the board.
+  //
+  // The outer wrapper registers as a `<FocusZone>` because its React
+  // subtree contains `<BoardSpatialZone>` (a `<FocusZone>`) plus every
+  // column zone, card zone, and field zone inside the board. A
+  // `<FocusScope>` here would violate the kernel's path-prefix
+  // scope-is-leaf invariant (every descendant FQM begins with the board
+  // moniker's FQM) — see
+  // `swissarmyhammer-focus/tests/scope_is_leaf.rs`. `showFocusBar={false}`
+  // because `<BoardSpatialZone>` already owns the visible board chrome
+  // and a focus rectangle around the entire viewport would be visual
+  // noise.
   //
   // Action commands and focus dispatch live INSIDE `BoardSpatialZone`
   // because the FQM composition for `card:<id>` targets requires the
@@ -1031,8 +1041,9 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   // `useFullyQualifiedMoniker()`.
   return (
     <Inspectable moniker={asSegment(board.board.moniker)}>
-      <FocusScope
+      <FocusZone
         moniker={asSegment(board.board.moniker)}
+        showFocusBar={false}
         className="flex flex-col flex-1 min-h-0 relative"
       >
         <BoardSpatialZone>
@@ -1042,7 +1053,7 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
             scrollContainerRef={scrollContainerRef}
           />
         </BoardSpatialZone>
-      </FocusScope>
+      </FocusZone>
     </Inspectable>
   );
 }

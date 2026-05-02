@@ -414,9 +414,11 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /**
- * Find the registered FullyQualifiedMoniker for a given moniker. The board zone
- * registers via `spatial_register_zone`; cards are leaves and register
- * via `spatial_register_scope`.
+ * Find the registered FullyQualifiedMoniker for a given moniker. The
+ * board zone, columns, and cards all register via
+ * `spatial_register_zone` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`);
+ * the scope-fallback path is kept for any leaf segment a future test
+ * driver might emit.
  */
 function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
   const zone = registerZoneArgs().find((a) => a.segment === moniker);
@@ -453,11 +455,11 @@ describe("BoardView — Enter drills in, not inspect", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    // Cards register as leaves — find the first task's scope key.
+    // Cards register as zones — find the first task's zone key.
     const cardKey = keyForMoniker("task:t1");
     expect(
       cardKey,
-      "the first card must register a spatial scope as a leaf",
+      "the first card must register a spatial zone",
     ).toBeTruthy();
 
     // Drive a focus-changed event so the entity-focus store reflects

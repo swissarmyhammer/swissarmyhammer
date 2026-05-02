@@ -605,32 +605,32 @@ describe("BoardView — cross-column spatial navigation", () => {
   // wrong `parent_zone`, or columns spread across multiple layers.
   // -------------------------------------------------------------------------
 
-  it("registers tasks as scope leaves with parent_zone matching their column zone (test #5)", async () => {
+  it("registers tasks as zones with parent_zone matching their column zone (test #5)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    // Each task must register exactly once via `spatial_register_scope`
-    // (i.e. as a leaf), NOT via `spatial_register_zone`. If the card
-    // body were a zone, the unified cascade's iter-1 escalation from
-    // T1A would land on the next card zone inside the same column
-    // (a sibling card) rather than the next column's zone — and the
-    // wiring contract this file pins (cross-column nav lands a card-
-    // moniker in the destination column) would break.
+    // Each task must register exactly once via `spatial_register_zone`
+    // (i.e. as a navigable container), NOT via
+    // `spatial_register_scope`. The card holds multiple focusable
+    // atoms (drag handle, Field rows, inspect button), so it is a
+    // zone by the kernel's three-peer contract. The previous
+    // card-as-Scope shape violated the path-prefix scope-is-leaf
+    // invariant — see `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
     for (const taskId of taskColumnById.keys()) {
       const taskMoniker = `task:${taskId}`;
-      const zoneCalls = registerZoneArgs().filter(
+      const scopeCalls = registerScopeArgs().filter(
         (a) => a.segment === taskMoniker,
       );
       expect(
-        zoneCalls,
-        `${taskMoniker} must NOT register via spatial_register_zone`,
+        scopeCalls,
+        `${taskMoniker} must NOT register via spatial_register_scope`,
       ).toEqual([]);
-      const scopeRec = findRegisterRecord(taskMoniker);
+      const zoneRec = findRegisterRecord(taskMoniker);
       expect(
-        scopeRec,
-        `${taskMoniker} must register via spatial_register_scope`,
+        zoneRec,
+        `${taskMoniker} must register via spatial_register_zone`,
       ).toBeTruthy();
-      expect(scopeRec!.kind).toBe("scope");
+      expect(zoneRec!.kind).toBe("zone");
     }
 
     // Each column must register via `spatial_register_zone`, with a

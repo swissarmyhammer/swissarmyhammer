@@ -45,6 +45,26 @@
  * For containers (board, column, grid, perspective, view, nav-bar,
  * toolbar group), use `<FocusZone>` directly. For modal boundaries
  * (window root, inspector, dialog), use `<FocusLayer>` directly.
+ *
+ * # Scope-is-leaf invariant (enforced by the kernel)
+ *
+ * `<FocusScope>` MUST be a **leaf** in the spatial graph — its subtree
+ * may contain DOM elements but MUST NOT contain further `<FocusScope>`
+ * or `<FocusZone>` registrations. Registering a `<FocusScope>` whose
+ * subtree contains further `<FocusScope>` or `<FocusZone>` is a kernel
+ * error and is logged as `scope-not-leaf` to `just logs`. Grep for the
+ * literal token to find the offending wrapper:
+ *
+ * ```bash
+ * just logs | grep scope-not-leaf
+ * ```
+ *
+ * The fix is always to promote the misused `<FocusScope>` to a
+ * `<FocusZone>` and add inner `<FocusScope>` leaves around the actual
+ * interactive elements. Mirror the navbar's
+ * `<FocusZone moniker="ui:navbar">`-with-leaves pattern, or the
+ * perspective-tab-bar's `<FocusZone moniker="ui:perspective-bar">`
+ * with per-tab leaf scopes.
  */
 
 import {

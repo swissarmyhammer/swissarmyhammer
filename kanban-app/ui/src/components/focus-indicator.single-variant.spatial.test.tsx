@@ -367,8 +367,12 @@ describe("FocusIndicator — single variant contract", () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
+    // `ui:navbar.board-selector` is a zone (multi-leaf surface), not a
+    // leaf — its inner leaves (dropdown trigger, tear-off button, editable
+    // name `<Field>` zone) own the visible focus signal. The kernel's
+    // scope-is-leaf invariant rejects a `<FocusScope>` wrapping further
+    // focus primitives — see swissarmyhammer-focus/tests/scope_is_leaf.rs.
     const monikers = [
-      "ui:navbar.board-selector",
       "ui:navbar.inspect",
       "ui:navbar.search",
     ] as const;
@@ -429,8 +433,10 @@ describe("FocusIndicator — single variant contract", () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
+    // `ui:navbar.board-selector` is a zone (multi-leaf surface), not a
+    // leaf — see comment above. Only the leaf monikers are exercised
+    // here.
     const monikers = [
-      "ui:navbar.board-selector",
       "ui:navbar.inspect",
       "ui:navbar.search",
     ] as const;

@@ -1258,7 +1258,11 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Walks the captured `spatial_register_*` calls and asserts the
   // app-shaped registry has the right structural shape:
   //
-  //   - `task:*` is always `spatial_register_scope` (leaf), never zone.
+  //   - `task:*` is always `spatial_register_zone` (zone container),
+  //     never scope. Cards hold focusable atoms (drag handle, Field
+  //     rows, inspect button) so they are zones by the kernel's
+  //     three-peer contract — see card
+  //     `01KQJDYJ4SDKK2G8FTAQ348ZHG`.
   //   - Each `column:*` carries `parent_zone` equal to `ui:board`'s key.
   //   - `<Inspectable>`-wrapped entities are the only path to
   //     `ui.inspect` dispatch (architectural guard A).
@@ -1269,27 +1273,27 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // =========================================================================
 
   describe("Family 8 — Registry shape audit", () => {
-    it("task:* monikers register as scope (leaf), never as zone", async () => {
+    it("task:* monikers register as zone (container), never as scope", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const taskZoneCalls = registerZoneArgs().filter((a) =>
-        String(a.moniker).startsWith("task:"),
+      const taskScopeCalls = registerScopeArgs().filter((a) =>
+        String(a.segment).startsWith("task:"),
       );
       expect(
-        taskZoneCalls,
-        "no task:* moniker may register as a zone — cards must be leaves",
+        taskScopeCalls,
+        "no task:* moniker may register as a scope — cards are zones",
       ).toEqual([]);
 
-      // And every fixture task DID register as a scope.
+      // And every fixture task DID register as a zone.
       for (const t of E2E_TASKS) {
         const taskMoniker = `task:${t.id}`;
-        const scopeReg = registerScopeArgs().find(
+        const zoneReg = registerZoneArgs().find(
           (a) => a.segment === taskMoniker,
         );
         expect(
-          scopeReg,
-          `${taskMoniker} must register via spatial_register_scope`,
+          zoneReg,
+          `${taskMoniker} must register via spatial_register_zone`,
         ).toBeTruthy();
       }
 

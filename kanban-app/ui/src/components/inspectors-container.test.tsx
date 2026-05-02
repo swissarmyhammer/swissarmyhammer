@@ -223,11 +223,11 @@ function registeredZones() {
     .map(
       (c) =>
         c[1] as {
-          key: string;
-          moniker: string;
+          fq: FullyQualifiedMoniker;
+          segment: string;
           rect: unknown;
-          layerKey: FullyQualifiedMoniker;
-          parentZone: string | null;
+          layerFq: FullyQualifiedMoniker;
+          parentZone: FullyQualifiedMoniker | null;
         },
     );
 }
@@ -460,7 +460,7 @@ describe("InspectorsContainer", () => {
     // No `panel:*` zone is registered — the panel zone was deleted in
     // card `01KQCTJY1QZ710A05SE975GHNR`.
     const panelZones = registeredZones().filter((z) =>
-      z.moniker.startsWith("panel:"),
+      z.segment.startsWith("panel:"),
     );
     expect(panelZones).toEqual([]);
   });

@@ -238,20 +238,28 @@ describe("BoardView (spatial-nav)", () => {
     mockInvoke.mockClear();
   });
 
-  it("registers a single ui:board zone whose parentZone is null and layerKey is the window root", async () => {
+  it("registers a single ui:board zone whose parentZone is the outer board entity zone and layerKey is the window root", async () => {
     const { unmount } = renderBoardWithSpatialStack();
     await flushSetup();
 
-    // The `ui:board` zone must mount exactly once.
+    // The `ui:board` chrome zone must mount exactly once.
     const boardZones = registeredZones().filter(
       (z) => z.segment === "ui:board",
     );
     expect(boardZones).toHaveLength(1);
     const boardZone = boardZones[0];
 
-    // Board zone is rooted directly under the window layer — no enclosing
-    // FocusZone wraps it, so `parentZone` must be null.
-    expect(boardZone.parentZone).toBeNull();
+    // The `ui:board` chrome zone sits inside the outer
+    // `board:<id>` entity zone (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
+    // so `parentZone` is the outer entity zone's FQM. The outer zone
+    // carries the `<Inspectable>` wrapper for double-click dispatch;
+    // the inner chrome zone is pure-spatial.
+    const boardEntityZone = registeredZones().find((z) =>
+      typeof z.segment === "string" &&
+      (z.segment as string).startsWith("board:"),
+    );
+    expect(boardEntityZone).toBeTruthy();
+    expect(boardZone.parentZone).toBe(boardEntityZone!.fq);
 
     // The `layerKey` must match the window-root layer that was just pushed.
     const windowLayer = pushedLayers().find((l) => l.name === "window");
