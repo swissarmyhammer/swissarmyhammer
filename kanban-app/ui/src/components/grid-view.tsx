@@ -23,8 +23,16 @@ import {
 } from "@/components/ui/tooltip";
 import { FocusZone } from "@/components/focus-zone";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
-import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asSegment } from "@/types/spatial";
+import {
+  useOptionalSpatialFocusActions,
+  type SpatialFocusActions,
+} from "@/lib/spatial-focus-context";
+import {
+  asFq,
+  asSegment,
+  composeFq,
+  type FullyQualifiedMoniker,
+} from "@/types/spatial";
 import { gridCellMoniker, parseGridCellMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
@@ -219,7 +227,6 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     setVisibleRowCount(entities.length);
   }, [entities.length]);
 
-  const { broadcastNavCommand } = useFocusActions();
   const focusCellSegment = useFocusBySegmentPath();
   // Adapt the multi-segment focus helper to a single-cell-segment caller —
   // every cell-focus mutation in the grid is one segment under the grid
@@ -285,60 +292,173 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     setVisibleRowCount,
     grid,
     focusCell,
-    broadcastNavCommand,
     gridCellCursor,
   };
 }
 
-/** Build a navigation command that broadcasts a nav event. */
-function navCmd(
-  id: string,
-  name: string,
-  navEvent: string,
-  broadcastRef: React.RefObject<(cmd: string) => void>,
-  keys?: CommandDef["keys"],
-): CommandDef {
-  return { id, name, keys, execute: () => broadcastRef.current(navEvent) };
+/**
+ * Snapshot of the data the row-extreme / grid-extreme commands need at
+ * execute time.
+ *
+ * Held in a ref so the command closures can be minted once per `useMemo`
+ * without re-binding on every cursor move. The ref is updated synchronously
+ * on each render so the closures always read fresh data when they fire.
+ */
+interface GridExtremeContext {
+  entities: Entity[];
+  columns: DataTableColumn[];
+  spatial: SpatialFocusActions | null;
+  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }
 
-/** Build navigation CommandDefs for the grid. */
-function buildGridNavCommands(
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+/**
+ * Strip the trailing segment from a fully-qualified moniker, returning the
+ * parent FQM.
+ *
+ * The kernel guarantees every cell FQM has the shape
+ * `/window/.../ui:grid/grid_cell:R:K`, so the parent of a focused cell FQM
+ * is always the `ui:grid` zone's FQM. Returns `null` when the input has no
+ * separator (a malformed FQM the kernel does not produce in well-formed
+ * code) so the caller can short-circuit gracefully.
+ *
+ * @param fq - The fully-qualified moniker to walk one level up.
+ */
+function fqDropLastSegment(fq: FullyQualifiedMoniker): FullyQualifiedMoniker | null {
+  const idx = fq.lastIndexOf("/");
+  if (idx <= 0) return null;
+  return asFq(fq.slice(0, idx));
+}
+
+/**
+ * Compute the row index from the currently focused FQM, falling back to the
+ * grid's internal cursor when focus is outside the grid (or when the grid
+ * is empty).
+ *
+ * Used by the row-extreme commands (`grid.moveToRowStart` /
+ * `grid.moveToRowEnd`) to determine which row's first/last cell to jump to.
+ * The focused FQM is the source of truth — `useGrid`'s cursor is a derived
+ * mirror of it, but the focused FQM survives focus moves outside the grid
+ * (e.g. into the inspector) and the cursor would have been clamped.
+ */
+function rowFromFocus(focusedFq: FullyQualifiedMoniker | null): number | null {
+  if (focusedFq === null) return null;
+  const parsed = parseGridCellMoniker(focusedFq);
+  if (!parsed) return null;
+  return parsed.row;
+}
+
+/**
+ * Move focus to the cell at `(row, colKey)` inside the grid that currently
+ * owns the focused cell.
+ *
+ * Reads the parent FQM (the `ui:grid` zone) by stripping the trailing cell
+ * segment from the current focused FQM, then composes the destination cell
+ * FQM and dispatches it through `setFocus`. This routes through the
+ * spatial-nav kernel via `spatial_focus(fq)` — exactly what a click on the
+ * destination cell would do.
+ *
+ * Silently returns when there is no focused cell to derive the parent FQM
+ * from (focus is outside the grid) or when the destination row/column is
+ * out of range — the keystroke becomes a visible no-op rather than a
+ * runtime error.
+ *
+ * @param ctx - The grid extreme context (entities, columns, setFocus, spatial actions).
+ * @param row - Destination row index.
+ * @param colKey - Destination column field name.
+ */
+function focusGridCell(
+  ctx: GridExtremeContext,
+  row: number,
+  colKey: string,
+): void {
+  if (ctx.spatial === null) return;
+  if (row < 0 || row >= ctx.entities.length) return;
+  if (!ctx.columns.some((c) => c.field.name === colKey)) return;
+
+  const focusedFq = ctx.spatial.focusedFq();
+  if (focusedFq === null) return;
+
+  const gridZoneFq = fqDropLastSegment(focusedFq);
+  if (gridZoneFq === null) return;
+
+  const cellSegment = asSegment(gridCellMoniker(row, colKey));
+  ctx.setFocus(composeFq(gridZoneFq, cellSegment));
+}
+
+/**
+ * Build the grid-scope commands that have no global `nav.*` counterpart.
+ *
+ * These commands route through the spatial-nav kernel via `setFocus` —
+ * never via the legacy broadcast path. The cardinal directions
+ * (`up`/`down`/`left`/`right`) and the global `first`/`last` (vim `Shift+G`,
+ * cua `Home`/`End` outside the grid scope) are owned by the global
+ * `nav.*` commands in `app-shell.tsx` and intentionally NOT shadowed here.
+ *
+ * The four commands kept here:
+ *
+ *   - `grid.moveToRowStart` (vim `0`, cua `Home`) — first cell of the
+ *     focused row. Shadows the global `nav.first` cua `Home` binding so
+ *     `Home` inside the grid means "row start", not "grid start".
+ *   - `grid.moveToRowEnd` (vim `$`, cua `End`) — last cell of the focused
+ *     row. Shadows the global `nav.last` cua `End` binding so `End` inside
+ *     the grid means "row end", not "grid end".
+ *   - `grid.firstCell` (cua `Mod+Home`) — absolute first cell of the grid.
+ *     Fills a gap: the global `nav.first` only binds `Home` (cua), not
+ *     `Mod+Home`.
+ *   - `grid.lastCell` (cua `Mod+End`) — absolute last cell of the grid.
+ *     Fills a gap: the global `nav.last` binds `Shift+G` (vim) and `End`
+ *     (cua), but not `Mod+End`.
+ */
+function buildGridExtremeCommands(
+  ctxRef: React.RefObject<GridExtremeContext>,
 ): CommandDef[] {
   return [
-    navCmd("grid.moveUp", "Move Up", "nav.up", broadcastRef, {
-      vim: "k",
-      cua: "ArrowUp",
-    }),
-    navCmd("grid.moveDown", "Move Down", "nav.down", broadcastRef, {
-      vim: "j",
-      cua: "ArrowDown",
-    }),
-    navCmd("grid.moveLeft", "Move Left", "nav.left", broadcastRef, {
-      vim: "h",
-      cua: "ArrowLeft",
-    }),
-    navCmd("grid.moveRight", "Move Right", "nav.right", broadcastRef, {
-      vim: "l",
-      cua: "ArrowRight",
-    }),
-    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", broadcastRef, {
-      vim: "0",
-      cua: "Home",
-    }),
-    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", broadcastRef, {
-      vim: "$",
-      cua: "End",
-    }),
-    navCmd("grid.firstCell", "First Cell", "nav.first", broadcastRef, {
-      cua: "Mod+Home",
-    }),
-    navCmd("grid.lastCell", "Last Cell", "nav.last", broadcastRef, {
-      vim: "Shift+G",
-      cua: "Mod+End",
-    }),
-    navCmd("nav.first", "First Cell", "nav.first", broadcastRef),
-    navCmd("nav.last", "Last Cell", "nav.last", broadcastRef),
+    {
+      id: "grid.moveToRowStart",
+      name: "Row Start",
+      keys: { vim: "0", cua: "Home" },
+      execute: () => {
+        const ctx = ctxRef.current;
+        const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
+        if (row === null || ctx.columns.length === 0) return;
+        focusGridCell(ctx, row, ctx.columns[0].field.name);
+      },
+    },
+    {
+      id: "grid.moveToRowEnd",
+      name: "Row End",
+      keys: { vim: "$", cua: "End" },
+      execute: () => {
+        const ctx = ctxRef.current;
+        const row = rowFromFocus(ctx.spatial?.focusedFq() ?? null);
+        if (row === null || ctx.columns.length === 0) return;
+        focusGridCell(ctx, row, ctx.columns[ctx.columns.length - 1].field.name);
+      },
+    },
+    {
+      id: "grid.firstCell",
+      name: "First Cell",
+      keys: { cua: "Mod+Home" },
+      execute: () => {
+        const ctx = ctxRef.current;
+        if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
+        focusGridCell(ctx, 0, ctx.columns[0].field.name);
+      },
+    },
+    {
+      id: "grid.lastCell",
+      name: "Last Cell",
+      keys: { cua: "Mod+End" },
+      execute: () => {
+        const ctx = ctxRef.current;
+        if (ctx.columns.length === 0 || ctx.entities.length === 0) return;
+        focusGridCell(
+          ctx,
+          ctx.entities.length - 1,
+          ctx.columns[ctx.columns.length - 1].field.name,
+        );
+      },
+    },
   ];
 }
 
@@ -435,26 +555,53 @@ function buildGridEditCommands(
 }
 
 /**
- * Compose the full grid CommandDef array from navigation + editing commands.
+ * Compose the full grid CommandDef array.
+ *
+ * The grid scope owns two non-overlapping command families:
+ *
+ *   - Edit / mode / row-mutation commands (`grid.edit`, `grid.toggleVisual`,
+ *     `grid.deleteRow`, `grid.newAbove`/`grid.newBelow`, …) — these have no
+ *     equivalent at any other scope.
+ *   - Row-extreme and grid-extreme cell-jump commands
+ *     (`grid.moveToRowStart`, `grid.moveToRowEnd`, `grid.firstCell`,
+ *     `grid.lastCell`) — these route through the spatial-nav kernel via
+ *     `setFocus`. The cardinal-direction nav commands (`nav.up` /
+ *     `nav.down` / `nav.left` / `nav.right`) live at the global scope in
+ *     `app-shell.tsx` and intentionally are NOT shadowed here — the global
+ *     versions correctly dispatch `spatial_navigate` against the focused
+ *     cell's FQM.
  */
 function useGridCommands(
-  broadcastNavCommand: (cmd: string) => void,
   grid: ReturnType<typeof useGrid>,
   entities: Entity[],
+  columns: DataTableColumn[],
   entityType: string,
   dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
+  // Read the spatial-focus actions (for `focusedFq()`) and the entity-focus
+  // `setFocus` once and stash them in a context bag for the row-extreme
+  // commands. The bag is held in a ref so the commands minted in `useMemo`
+  // below can read fresh values (cursor row, visible columns) without
+  // re-binding on every keystroke.
+  const spatial = useOptionalSpatialFocusActions();
+  const { setFocus } = useFocusActions();
+  const extremeCtxRef = useRef<GridExtremeContext>({
+    entities,
+    columns,
+    spatial,
+    setFocus,
+  });
+  extremeCtxRef.current = { entities, columns, spatial, setFocus };
+
   return useMemo<CommandDef[]>(
     () => [
-      ...buildGridNavCommands(broadcastRef),
+      ...buildGridExtremeCommands(extremeCtxRef),
       ...buildGridEditCommands(gridRef, entities, entityType, dispatch),
     ],
-    [entities, entityType],
+    [entities, entityType, dispatch],
   );
 }
 
@@ -774,9 +921,9 @@ export function GridView({ view }: GridViewProps) {
   const data = useGridData(view);
   const nav = useGridNavigation(data.entities, data.columns);
   const gridCommands = useGridCommands(
-    nav.broadcastNavCommand,
     nav.grid,
     data.entities,
+    data.columns,
     data.entityType,
     dispatch,
   );

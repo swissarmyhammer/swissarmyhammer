@@ -1004,20 +1004,97 @@ interface RowSelectorProps {
   onClick: () => void;
 }
 
-/** Row number selector cell. */
+/**
+ * Build the row label leaf's moniker segment.
+ *
+ * Encodes the data-row index (`row_label:{di}`) so siblings have
+ * distinct FQMs even though they share a parent FQM context. The row's
+ * outer `<FocusScope renderContainer={false}>` does not push a new
+ * `FullyQualifiedMonikerContext`, so every row's children compose
+ * their FQM against the surrounding grid zone's FQM — without `{di}`
+ * in the segment, every row would collide on the same composed FQM
+ * `/window/.../ui:grid/row_label` and the kernel would only see one
+ * leaf instead of one per row.
+ *
+ * Same disambiguation convention as `grid_cell:{di}:{colKey}` (see
+ * {@link gridCellMoniker}); the `row_label:` namespace prefix keeps
+ * the segment distinguishable from cell monikers in the focus chain.
+ */
+function rowLabelMoniker(di: number): string {
+  return `row_label:${di}`;
+}
+
+/**
+ * Row number selector cell — the leftmost "row label" of each data row.
+ *
+ * Renders a `<FocusScope>` leaf inside the cell when mounted under the
+ * spatial-nav stack, so a keyboard user can navigate to the row label
+ * (e.g. `ArrowLeft` from the first data cell of the row). When the leaf
+ * is focused, entity-level commands (`entity.archive`, `task.archive`,
+ * …) resolve against the row entity via the surrounding row's
+ * `<FocusScope moniker={asSegment(entityMk)} renderContainer={false}>`
+ * command-scope frame — that wrapper pushes the entity moniker into
+ * the React `CommandScopeContext` chain so `useDispatchCommand`'s
+ * scope walk picks it up at dispatch time.
+ *
+ * Mirrors the spatial-path / fallback-path split documented on
+ * {@link GridCellFocusable}: when `useOptionalEnclosingLayerFq()` and
+ * `useOptionalSpatialFocusActions()` both return non-null we mount the
+ * `<FocusScope>` with an inner click wrapper (so the legacy
+ * move-cursor click runs before `FocusScope.onClick` calls
+ * `e.stopPropagation()`); otherwise we render a plain `<TableCell>` so
+ * a narrower test harness without `<FocusLayer>` keeps working without
+ * throwing.
+ *
+ * @param di - Zero-based data-row index (1-based label rendered).
+ * @param isCursorRow - Whether this row is the current cursor row.
+ * @param onClick - Legacy move-cursor handler — fires in both branches.
+ */
 function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  // The spatial-nav stack may be absent in unit tests with a narrow
+  // provider tree (see {@link GridCellFocusable} for the same guard).
+  // Mounting `<FocusScope>` in that case would throw
+  // `useCurrentLayerKey must be called inside a <FocusLayer>`.
+  const inSpatialStack = layerKey !== null && actions !== null;
+
+  const moniker = useMemo(() => asSegment(rowLabelMoniker(di)), [di]);
+
+  const cellClassName = cn(
+    "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+    isCursorRow && "bg-muted text-foreground",
+  );
+
+  if (!inSpatialStack) {
+    return (
+      <TableCell
+        data-testid="row-selector"
+        data-active={isCursorRow ? "true" : "false"}
+        className={cellClassName}
+        style={{ width: 40 }}
+        onClick={onClick}
+      >
+        {di + 1}
+      </TableCell>
+    );
+  }
+
+  // Spatial path: the click handler goes on a wrapper INSIDE the
+  // `<FocusScope>` so it fires before `FocusScope.onClick` calls
+  // `e.stopPropagation()`. An `onClick` on the outer `<TableCell>`
+  // would never see the event in this branch — the leaf swallows it
+  // before it reaches the cell. Same shape as {@link GridCellFocusable}.
   return (
     <TableCell
       data-testid="row-selector"
       data-active={isCursorRow ? "true" : "false"}
-      className={cn(
-        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-        isCursorRow && "bg-muted text-foreground",
-      )}
+      className={cellClassName}
       style={{ width: 40 }}
-      onClick={onClick}
     >
-      {di + 1}
+      <FocusScope moniker={moniker}>
+        <div onClick={onClick}>{di + 1}</div>
+      </FocusScope>
     </TableCell>
   );
 }
