@@ -180,13 +180,22 @@ export function InspectorsContainer() {
 
   return (
     <>
-      {/* Backdrop — visible when any panel is open */}
-      <div
-        className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
-          hasPanels ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
-        onClick={closeAll}
-      />
+      {/* Backdrop — only mounted while a panel is open.
+          `position: fixed` + numeric `z-index` always creates a stacking
+          context (per CSS spec), so an always-mounted z-20 transparent
+          backdrop covering the viewport would suppress sibling overlays
+          at lower z-indices in the closed-inspector state — including
+          the navbar's window-layer focus-debug overlays at z-15. The
+          fade-in on open is preserved by `transition-opacity` plus the
+          initial render at `opacity-100`; the fade-out on close is
+          intentionally dropped (the SlidePanel's slide-out animation
+          is the user-visible signal). */}
+      {hasPanels && (
+        <div
+          className="fixed inset-0 z-20 bg-black/20 opacity-100 transition-opacity duration-200"
+          onClick={closeAll}
+        />
+      )}
 
       {/* The inspector layer mounts only while at least one panel is open.
           On unmount the Rust side pops the layer and emits the parent's

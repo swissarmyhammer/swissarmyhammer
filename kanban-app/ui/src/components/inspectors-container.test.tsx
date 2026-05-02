@@ -129,10 +129,7 @@ import { InspectorsContainer } from "./inspectors-container";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import {
-  asSegment,
-  type FullyQualifiedMoniker
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -257,9 +254,13 @@ describe("InspectorsContainer", () => {
     const { container } = renderInspectors();
     await flushSetup();
 
-    // Backdrop should have pointer-events-none (invisible)
+    // Backdrop must NOT be in the DOM when no panel is open. A
+    // permanently mounted `position: fixed` + numeric `z-index` element
+    // creates a stacking context (per CSS spec) that suppresses sibling
+    // overlays at lower z-indices — see card 01KQB1GQS1C12J4M13P8V5HGH0
+    // for the navbar focus-debug overlay regression this guards against.
     const backdrop = container.querySelector(".fixed.inset-0");
-    expect(backdrop?.className).toContain("pointer-events-none");
+    expect(backdrop).toBeNull();
     // No slide panels
     expect(container.querySelectorAll('[class*="w-[420px]"]').length).toBe(0);
   });
@@ -282,8 +283,8 @@ describe("InspectorsContainer", () => {
     await flushSetup();
 
     const backdrop = container.querySelector(".fixed.inset-0");
+    expect(backdrop).not.toBeNull();
     expect(backdrop?.className).toContain("opacity-100");
-    expect(backdrop?.className).not.toContain("pointer-events-none");
   });
 
   it("dispatches ui.inspector.close_all when backdrop is clicked", async () => {

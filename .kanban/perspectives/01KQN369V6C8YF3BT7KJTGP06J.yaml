@@ -1,0 +1,7 @@
+id: 01KQN369V6C8YF3BT7KJTGP06J
+name: Navigation
+view: grid
+filter: $spatial-nav
+sort:
+- field: position_column
+  direction: desc
