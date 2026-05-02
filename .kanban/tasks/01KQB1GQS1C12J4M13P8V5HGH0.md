@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: review
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffff380
 project: spatial-nav
 title: 'Make the navbar keyboard-navigable: register `ui:navbar` zone and its leaves with the spatial kernel in production'
 ---
