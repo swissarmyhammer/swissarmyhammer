@@ -1,6 +1,7 @@
 /**
  * `<FocusDebugOverlay>` — visual decorator that paints a dashed border and
- * coordinate label on top of a spatial primitive's host box.
+ * a hover-revealed coordinate label on top of a spatial primitive's host
+ * box.
  *
  * This is a developer aid, not production chrome. It renders only when
  * `useFocusDebug()` returns `true` — controlled by the
@@ -26,11 +27,26 @@
  * - `kind="zone"` → blue dashed border (`border-blue-500/70`).
  * - `kind="scope"` → emerald dashed border (`border-emerald-500/70`).
  *
+ * # Hover-revealed label
+ *
+ * The kind / moniker / coordinate label is hidden behind a small
+ * (~12px) color-matched handle pinned to the host's top-left corner.
+ * Hovering the handle pops a Radix tooltip whose content is exactly the
+ * computed `labelText`. With overlays mounted on every Layer / Zone /
+ * Scope the screen would otherwise be wallpapered with overlapping label
+ * badges that obscure the actual UI being debugged; the dashed border is
+ * the part that's load-bearing — the text is reference info you only
+ * need on demand.
+ *
  * # Pointer events
  *
- * The overlay is `pointer-events: none` so it never intercepts clicks,
- * right-clicks, or hovers from the host primitive. Click routing (e.g.
- * `spatial_focus`, `setFocus`, the entity-focus side effects) is unaffected.
+ * The wrapping span and the dashed-border span are `pointer-events:
+ * none` so they never intercept clicks, right-clicks, or hovers from the
+ * host primitive. The handle is the *only* `pointer-events: auto`
+ * region — it is the explicit affordance for hover. Clicks on the
+ * handle itself are stopped at the handle (they do not bubble up to the
+ * host's `onClick` / `spatial_focus` path); clicks anywhere else on the
+ * host pass through the overlay unchanged.
  *
  * # Coordinate refresh
  *
@@ -43,8 +59,21 @@
  * inline TODO below.
  */
 
-import { useContext, useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type RefObject,
+} from "react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   FocusLayerZTierContext,
   OVERLAY_OFFSET_ABOVE_TIER,
@@ -84,44 +113,58 @@ export interface FocusDebugOverlayProps {
 }
 
 /**
- * Border / text classes per `FocusDebugKind`.
+ * Border / handle classes per `FocusDebugKind`.
  *
  * Hard-coded so Tailwind's just-in-time scanner picks the colours up at
  * build time (constructing class names dynamically would defeat that).
+ *
+ * - `border` is the dashed-border colour for the rect outline.
+ * - `handle` is the solid-fill background for the small hover handle in
+ *   the top-left corner. The same hue family as the border so the
+ *   handle reads as "the affordance for *this* primitive" at a glance.
  */
 const KIND_CLASSES: Record<
   FocusDebugKind,
-  { border: string; labelBg: string; labelText: string }
+  { border: string; handle: string }
 > = {
   layer: {
     border: "border-red-500/70",
-    labelBg: "bg-red-500/10",
-    labelText: "text-red-500",
+    handle: "bg-red-500/70 ring-1 ring-red-500",
   },
   zone: {
     border: "border-blue-500/70",
-    labelBg: "bg-blue-500/10",
-    labelText: "text-blue-500",
+    handle: "bg-blue-500/70 ring-1 ring-blue-500",
   },
   scope: {
     border: "border-emerald-500/70",
-    labelBg: "bg-emerald-500/10",
-    labelText: "text-emerald-500",
+    handle: "bg-emerald-500/70 ring-1 ring-emerald-500",
   },
 };
 
 /**
- * Renders the dashed-border + coordinate-label debug decorator.
+ * Renders the dashed-border + hover-revealed coordinate-label debug
+ * decorator.
  *
- * Two stacked absolutely-positioned `<span>` elements:
+ * The structure is three absolutely-positioned elements stacked inside
+ * a `pointer-events: none` wrapper:
  *
  *   1. The dashed border, filling the host's content box (`inset-0`).
- *   2. The label pinned to the host's top-left corner, with a tiny
- *      monospace font so it does not overflow small primitives.
+ *      `pointer-events: none` so it does not intercept anything on the
+ *      host.
+ *   2. A small (~12px) color-matched square handle pinned to the host's
+ *      top-left corner. This is the *only* `pointer-events: auto`
+ *      region of the overlay — hover here to reveal the tooltip. Click
+ *      events on the handle are stopped at the handle so they do not
+ *      reach the host's `onClick` (the handle is the explicit
+ *      affordance; spurious clicks while reaching for the tooltip
+ *      should not flip focus).
+ *   3. A Radix `<TooltipContent>` portalled to the document body when
+ *      the tooltip is open. Holds the `kind:label` (layer) or
+ *      `kind:label (x,y)` (zone / scope) text.
  *
- * Both spans carry `pointer-events: none` so click routing on the host
- * is unaffected. The outer wrapper carries `data-debug={kind}` for stable
- * test selectors.
+ * The outer wrapper carries `data-debug={kind}` for stable test
+ * selectors. The handle carries `data-debug-handle={kind}` so tests can
+ * target it directly when firing hover events.
  */
 export function FocusDebugOverlay({
   kind,
@@ -204,10 +247,20 @@ export function FocusDebugOverlay({
   // overlays to bleed across modal surfaces.
   const tier = useContext(FocusLayerZTierContext);
 
+  /**
+   * Stop click events on the handle from reaching the host's `onClick`
+   * (e.g. `<FocusScope>`'s `spatial_focus` dispatcher). The handle is
+   * the only interactive region of the overlay; clicking it is the
+   * affordance for opening the tooltip, not for activating the
+   * underlying primitive.
+   */
+  const stopHandleClick = (event: MouseEvent<HTMLSpanElement>) => {
+    event.stopPropagation();
+  };
+
   return (
     <span
       data-debug={kind}
-      aria-hidden="true"
       className="pointer-events-none absolute inset-0"
       style={{ zIndex: tier + OVERLAY_OFFSET_ABOVE_TIER }}
     >
@@ -217,15 +270,50 @@ export function FocusDebugOverlay({
           classes.border,
         )}
       />
-      <span
-        className={cn(
-          "absolute left-0 top-0 px-1 text-[9px] font-mono leading-none pointer-events-none",
-          classes.labelBg,
-          classes.labelText,
-        )}
-      >
-        {labelText}
-      </span>
+      {/*
+        * Local `<TooltipProvider>` so the overlay does not depend on
+        * the application root having mounted one. Production already
+        * mounts a `<TooltipProvider>` at `<WindowContainer>` for chrome
+        * tooltips, but `<FocusDebugOverlay>` is invoked from
+        * `<FocusLayer>` — and the *window* layer mounts above
+        * `<WindowContainer>` in `App.tsx`, so its layer-kind overlay
+        * sits *outside* that provider. A local provider here keeps the
+        * overlay self-contained: it works under any caller, with
+        * `delayDuration={0}` so the visible label appears instantly on
+        * hover (a developer aid does not need the production 400ms
+        * settle delay). Nested `<TooltipProvider>`s are explicitly
+        * supported by Radix — the inner one shadows the outer for its
+        * own subtree.
+        */}
+      <TooltipProvider delayDuration={0}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              data-debug-handle={kind}
+              role="button"
+              tabIndex={0}
+              aria-label={labelText}
+              onClick={stopHandleClick}
+              onMouseDown={stopHandleClick}
+              className={cn(
+                "absolute left-0 top-0 rounded-sm pointer-events-auto cursor-help",
+                classes.handle,
+              )}
+              // Inline width/height so the handle has a deterministic
+              // 12×12 hit area even in test environments where
+              // Tailwind is not loaded (the kanban-app vitest browser
+              // project mounts components without the `tailwindcss()`
+              // plugin). Production picks up the same 12×12 from the
+              // equivalent Tailwind classes via `<WindowContainer>`'s
+              // stylesheet.
+              style={{ width: 12, height: 12, position: "absolute" }}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start" className="font-mono">
+            {labelText}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </span>
   );
 }

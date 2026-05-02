@@ -71,11 +71,13 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Imports — after mocks
 // ---------------------------------------------------------------------------
 
+import type { ReactNode } from "react";
 import { FocusZone } from "./focus-zone";
 import { FocusLayer } from "./focus-layer";
 import { SlidePanel } from "./slide-panel";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,21 @@ function getOverlayUnder(
   return overlay as HTMLElement;
 }
 
+/**
+ * Wrap a tree in `<TooltipProvider>` so the hover-handle tooltip in
+ * `<FocusDebugOverlay>` has the Radix context it requires. Production
+ * supplies this via `<WindowContainer>`'s `<TooltipProvider>`; the
+ * synthetic harnesses in this suite mount overlays outside that
+ * provider hierarchy.
+ *
+ * `delayDuration={0}` is fine here because none of the layer-z tests
+ * exercise hover; the wrapper exists purely so the Tooltip primitives
+ * render without throwing.
+ */
+function withTooltipProvider(children: ReactNode) {
+  return <TooltipProvider delayDuration={0}>{children}</TooltipProvider>;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -158,22 +175,24 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // z-index < 20 so it cannot paint over the inspector backdrop
     // (z-20 in `inspectors-container.tsx`).
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <div data-testid="column-host">
-              <FocusZone moniker={asSegment("column:todo")}>
-                <span>column body</span>
-              </FocusZone>
-            </div>
-            <FocusLayer name={asSegment("inspector")}>
-              <FocusZone moniker={asSegment("task:T1")}>
-                <span>panel body</span>
-              </FocusZone>
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <div data-testid="column-host">
+                <FocusZone moniker={asSegment("column:todo")}>
+                  <span>column body</span>
+                </FocusZone>
+              </div>
+              <FocusLayer name={asSegment("inspector")}>
+                <FocusZone moniker={asSegment("task:T1")}>
+                  <span>panel body</span>
+                </FocusZone>
+              </FocusLayer>
             </FocusLayer>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -190,24 +209,26 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // Same shape — assert that the panel zone's overlay sits above the
     // SlidePanel content (z-30).
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <div data-testid="column-host">
-              <FocusZone moniker={asSegment("column:todo")}>
-                <span>column body</span>
-              </FocusZone>
-            </div>
-            <FocusLayer name={asSegment("inspector")}>
-              <div data-testid="panel-host">
-                <FocusZone moniker={asSegment("task:T1")}>
-                  <span>panel body</span>
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <div data-testid="column-host">
+                <FocusZone moniker={asSegment("column:todo")}>
+                  <span>column body</span>
                 </FocusZone>
               </div>
+              <FocusLayer name={asSegment("inspector")}>
+                <div data-testid="panel-host">
+                  <FocusZone moniker={asSegment("task:T1")}>
+                    <span>panel body</span>
+                  </FocusZone>
+                </div>
+              </FocusLayer>
             </FocusLayer>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -242,53 +263,55 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // component's class so this duplicated number cannot silently
     // drift out of sync.
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <div data-testid="column-host">
-              <FocusZone
-                moniker={asSegment("column:todo")}
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <div data-testid="column-host">
+                <FocusZone
+                  moniker={asSegment("column:todo")}
+                  style={{
+                    position: "fixed",
+                    left: 0,
+                    top: 0,
+                    width: "100%",
+                    height: "100%",
+                  }}
+                >
+                  <span>column body fills viewport</span>
+                </FocusZone>
+              </div>
+              <div
+                data-testid="backdrop"
                 style={{
                   position: "fixed",
-                  left: 0,
+                  inset: 0,
+                  zIndex: 20,
+                  background: "rgba(0,0,0,0.2)",
+                }}
+              />
+              <div
+                data-testid="slide-panel"
+                style={{
+                  position: "fixed",
                   top: 0,
-                  width: "100%",
+                  right: 0,
+                  zIndex: 30,
+                  width: "420px",
                   height: "100%",
+                  background: "white",
                 }}
               >
-                <span>column body fills viewport</span>
-              </FocusZone>
-            </div>
-            <div
-              data-testid="backdrop"
-              style={{
-                position: "fixed",
-                inset: 0,
-                zIndex: 20,
-                background: "rgba(0,0,0,0.2)",
-              }}
-            />
-            <div
-              data-testid="slide-panel"
-              style={{
-                position: "fixed",
-                top: 0,
-                right: 0,
-                zIndex: 30,
-                width: "420px",
-                height: "100%",
-                background: "white",
-              }}
-            >
-              <FocusLayer name={asSegment("inspector")}>
-                <FocusZone moniker={asSegment("task:T1")}>
-                  <span>panel body</span>
-                </FocusZone>
-              </FocusLayer>
-            </div>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+                <FocusLayer name={asSegment("inspector")}>
+                  <FocusZone moniker={asSegment("task:T1")}>
+                    <span>panel body</span>
+                  </FocusZone>
+                </FocusLayer>
+              </div>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -367,26 +390,28 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // tier table sets palette = 60, inspector = 30, so the gap is
     // generous (palette overlays at 65, inspector overlays at 35).
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusLayer name={asSegment("inspector")}>
-              <div data-testid="panel-host">
-                <FocusZone moniker={asSegment("task:T1")}>
-                  <span>panel body</span>
-                </FocusZone>
-              </div>
-              <FocusLayer name={asSegment("palette")}>
-                <div data-testid="palette-host">
-                  <FocusZone moniker={asSegment("ui:command-palette")}>
-                    <span>palette body</span>
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusLayer name={asSegment("inspector")}>
+                <div data-testid="panel-host">
+                  <FocusZone moniker={asSegment("task:T1")}>
+                    <span>panel body</span>
                   </FocusZone>
                 </div>
+                <FocusLayer name={asSegment("palette")}>
+                  <div data-testid="palette-host">
+                    <FocusZone moniker={asSegment("ui:command-palette")}>
+                      <span>palette body</span>
+                    </FocusZone>
+                  </div>
+                </FocusLayer>
               </FocusLayer>
             </FocusLayer>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -418,17 +443,19 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // Inspector tier is 30, overlay offset is 5, so the layer-kind
     // overlay rendered by the inspector layer must compute to z-35.
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <div data-testid="inspector-host">
-              <FocusLayer name={asSegment("inspector")}>
-                <span>inspector body</span>
-              </FocusLayer>
-            </div>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <div data-testid="inspector-host">
+                <FocusLayer name={asSegment("inspector")}>
+                  <span>inspector body</span>
+                </FocusLayer>
+              </div>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -453,21 +480,23 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     // (tier 30) → custom (tier 50 = 30 + 20). The custom layer's
     // descendant overlay should sit at exactly 50 + 5 = 55.
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusLayer name={asSegment("inspector")}>
-              <FocusLayer name={asSegment("custom-unknown-layer")}>
-                <div data-testid="custom-host">
-                  <FocusZone moniker={asSegment("ui:custom")}>
-                    <span>custom body</span>
-                  </FocusZone>
-                </div>
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusLayer name={asSegment("inspector")}>
+                <FocusLayer name={asSegment("custom-unknown-layer")}>
+                  <div data-testid="custom-host">
+                    <FocusZone moniker={asSegment("ui:custom")}>
+                      <span>custom body</span>
+                    </FocusZone>
+                  </div>
+                </FocusLayer>
               </FocusLayer>
             </FocusLayer>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();

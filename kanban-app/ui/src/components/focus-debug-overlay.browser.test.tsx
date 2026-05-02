@@ -6,22 +6,28 @@
  *   1. When `<FocusDebugProvider enabled>` wraps the tree, every
  *      `<FocusLayer>` / `<FocusZone>` / `<FocusScope>` mounts a
  *      `[data-debug=…]` element with the `border-dashed` class and a
- *      label that mentions the primitive's name / moniker.
+ *      hover-revealed tooltip that mentions the primitive's name /
+ *      moniker.
  *   2. When the provider is disabled (or absent), no `[data-debug=…]`
  *      elements render anywhere in the tree.
  *   3. The overlay's coordinate label tracks the host's bounding rect so
- *      a fixed-position parent at `(100, 200)` produces a label that
+ *      a fixed-position parent at `(100, 200)` produces a tooltip that
  *      contains `"100,200"`.
- *   4. The overlay's `pointer-events: none` is honoured — clicks on the
- *      host content land on the host's click handler, not the overlay.
+ *   4. The overlay's `pointer-events: none` (on the wrapper / border) is
+ *      honoured — clicks on the host content land on the host's click
+ *      handler, not the overlay. Clicks on the *handle* (the only
+ *      `pointer-events: auto` region) are stopped at the handle and do
+ *      NOT reach the host.
  *
  * Runs in real Chromium via vitest browser mode so layout (the rect
- * reads, the absolute positioning, the dashed border) is genuine.
+ * reads, the absolute positioning, the dashed border, hover events) is
+ * genuine.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
-import { Profiler, useRef } from "react";
+import { userEvent } from "vitest/browser";
+import { Profiler, useRef, type ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -66,6 +72,7 @@ import { FocusLayer } from "./focus-layer";
 import { FocusDebugOverlay, type FocusDebugKind } from "./focus-debug-overlay";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   asSegment
 } from "@/types/spatial";
@@ -130,35 +137,105 @@ function OverlayHarness({
     <FocusDebugOverlay kind={kind} label={label} hostRef={hostRef} />
   );
   return (
-    <div
-      ref={hostRef}
-      data-testid="overlay-host"
-      style={{ position: "fixed", ...hostStyle }}
-    >
-      {onRender ? (
-        <Profiler id="overlay-probe" onRender={(_id, phase) => onRender(phase)}>
-          {overlay}
-        </Profiler>
-      ) : (
-        overlay
-      )}
-    </div>
+    <TooltipProvider delayDuration={0}>
+      <div
+        ref={hostRef}
+        data-testid="overlay-host"
+        style={{ position: "fixed", ...hostStyle }}
+      >
+        {onRender ? (
+          <Profiler
+            id="overlay-probe"
+            onRender={(_id, phase) => onRender(phase)}
+          >
+            {overlay}
+          </Profiler>
+        ) : (
+          overlay
+        )}
+      </div>
+    </TooltipProvider>
   );
 }
 
 /**
- * Resolve the rendered debug label text for a given overlay kind. The label
- * sits in the overlay's second child `<span>` (the first is the dashed
- * border). Returns the trimmed `textContent` or null if the overlay is not
+ * Resolve the debug overlay's hover handle for a given kind. The handle
+ * is the only `pointer-events: auto` region of the overlay; tests fire
+ * hover and click events against it.
+ *
+ * Returns null when the overlay is not mounted (e.g. when the debug
+ * provider is disabled).
+ */
+function getHandle(
+  container: HTMLElement,
+  kind: FocusDebugKind,
+): HTMLElement | null {
+  return container.querySelector<HTMLElement>(
+    `[data-debug="${kind}"] [data-debug-handle="${kind}"]`,
+  );
+}
+
+/**
+ * Read the overlay's label text for a given kind without opening the
+ * tooltip — the handle's `aria-label` mirrors the tooltip content
+ * exactly so screen readers announce the same string the visual
+ * tooltip would. This is the deterministic way to assert label content
+ * across both production and test environments; the explicit hover
+ * path is exercised in `tooltip_opens_on_handle_hover` below.
+ *
+ * Returns null when the overlay (or the handle within it) is not
  * mounted.
  */
 function readOverlayLabel(
   container: HTMLElement,
   kind: FocusDebugKind,
 ): string | null {
-  const overlay = container.querySelector(`[data-debug="${kind}"]`);
-  if (!overlay) return null;
-  return overlay.textContent?.trim() ?? null;
+  const handle = getHandle(container, kind);
+  if (!handle) return null;
+  return handle.getAttribute("aria-label");
+}
+
+/**
+ * Read the visible tooltip's text content from the document body.
+ * Radix portals `<TooltipContent>` outside the test container, so this
+ * helper queries the entire document for the `[data-slot="tooltip-
+ * content"]` portal element.
+ *
+ * Note: Radix renders both a visible `Slottable` *and* an offscreen
+ * `<VisuallyHidden role="tooltip">` clone of the same children inside
+ * the same content node, so `textContent` would naturally double the
+ * label string. We strip the `[role="tooltip"]` clone before reading
+ * `textContent` so the result matches what the user actually sees.
+ *
+ * Returns null when no tooltip is currently open.
+ */
+function readOpenTooltipText(): string | null {
+  const content = document.body.querySelector<HTMLElement>(
+    '[data-slot="tooltip-content"]',
+  );
+  if (!content) return null;
+  const visuallyHidden = content.querySelector('[role="tooltip"]');
+  // textContent of just the non-VisuallyHidden subtree.
+  const visibleText = Array.from(content.childNodes)
+    .filter((node) => node !== visuallyHidden)
+    .map((node) => node.textContent ?? "")
+    .join("")
+    .trim();
+  return visibleText;
+}
+
+/**
+ * Wrapper that ensures a `<TooltipProvider>` ancestor is present. The
+ * production `<FocusDebugOverlay>` lives under the
+ * `<TooltipProvider>` mounted at `<WindowContainer>`; tests must
+ * supply an equivalent wrapper because the integration trees here
+ * mount overlays outside the real provider hierarchy.
+ *
+ * `delayDuration={0}` makes hover-to-open instant so tests do not need
+ * to wait for the production 400ms hover delay.
+ */
+function withTooltipProvider(children: ReactNode) {
+  return <TooltipProvider delayDuration={0}>{children}</TooltipProvider>;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,15 +253,17 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
   it("zone_renders_debug_overlay_when_debug_on", async () => {
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusZone moniker={asSegment("ui:test")}>
-              <span>zone-content</span>
-            </FocusZone>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusZone moniker={asSegment("ui:test")}>
+                <span>zone-content</span>
+              </FocusZone>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -198,23 +277,27 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     expect(borderSpan).toBeTruthy();
     expect(borderSpan!.className).toContain("border-dashed");
 
-    // Label includes the moniker.
-    expect(overlay!.textContent).toContain("ui:test");
+    // The label (now a tooltip) carries the moniker. Read it via the
+    // handle's `aria-label`, which mirrors the tooltip content
+    // verbatim — deterministic without a hover round-trip.
+    expect(readOverlayLabel(container, "zone")).toContain("ui:test");
 
     unmount();
   });
 
   it("scope_renders_debug_overlay_when_debug_on", async () => {
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusScope moniker={asSegment("ui:test.leaf")}>
-              <span>scope-content</span>
-            </FocusScope>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusScope moniker={asSegment("ui:test.leaf")}>
+                <span>scope-content</span>
+              </FocusScope>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -226,20 +309,22 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     expect(borderSpan).toBeTruthy();
     expect(borderSpan!.className).toContain("border-dashed");
 
-    expect(overlay!.textContent).toContain("ui:test.leaf");
+    expect(readOverlayLabel(container, "scope")).toContain("ui:test.leaf");
 
     unmount();
   });
 
   it("layer_renders_debug_overlay_when_debug_on", async () => {
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <span>layer-content</span>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <span>layer-content</span>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -251,24 +336,26 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     expect(borderSpan).toBeTruthy();
     expect(borderSpan!.className).toContain("border-dashed");
 
-    expect(overlay!.textContent).toContain("window");
+    expect(readOverlayLabel(container, "layer")).toContain("window");
 
     unmount();
   });
 
   it("no_overlay_when_debug_off", async () => {
     const { container, unmount } = render(
-      <FocusDebugProvider enabled={false}>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusZone moniker={asSegment("ui:test")}>
-              <FocusScope moniker={asSegment("ui:test.leaf")}>
-                <span>content</span>
-              </FocusScope>
-            </FocusZone>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled={false}>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusZone moniker={asSegment("ui:test")}>
+                <FocusScope moniker={asSegment("ui:test.leaf")}>
+                  <span>content</span>
+                </FocusScope>
+              </FocusZone>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -280,15 +367,17 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
   it("no_overlay_when_no_provider", async () => {
     const { container, unmount } = render(
-      <SpatialFocusProvider>
-        <FocusLayer name={asSegment("window")}>
-          <FocusZone moniker={asSegment("ui:test")}>
-            <FocusScope moniker={asSegment("ui:test.leaf")}>
-              <span>content</span>
-            </FocusScope>
-          </FocusZone>
-        </FocusLayer>
-      </SpatialFocusProvider>,
+      withTooltipProvider(
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <FocusZone moniker={asSegment("ui:test")}>
+              <FocusScope moniker={asSegment("ui:test.leaf")}>
+                <span>content</span>
+              </FocusScope>
+            </FocusZone>
+          </FocusLayer>
+        </SpatialFocusProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -306,24 +395,26 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // the inline `position: fixed` style overrides that for layout
     // (the merged class ends up unused; that's acceptable for a test).
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusZone
-              moniker={asSegment("ui:positioned")}
-              style={{
-                position: "fixed",
-                left: "100px",
-                top: "200px",
-                width: "150px",
-                height: "80px",
-              }}
-            >
-              <span>positioned</span>
-            </FocusZone>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusZone
+                moniker={asSegment("ui:positioned")}
+                style={{
+                  position: "fixed",
+                  left: "100px",
+                  top: "200px",
+                  width: "150px",
+                  height: "80px",
+                }}
+              >
+                <span>positioned</span>
+              </FocusZone>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -333,24 +424,28 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
     const overlay = container.querySelector('[data-debug="zone"]');
     expect(overlay).toBeTruthy();
-    expect(overlay!.textContent).toContain("100,200");
+    // The (x,y) coordinates live in the tooltip — assert via the
+    // handle's `aria-label`, which mirrors the tooltip text exactly.
+    expect(readOverlayLabel(container, "zone")).toContain("100,200");
 
     unmount();
   });
 
   it("overlay_kind_classes_are_distinct", async () => {
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusZone moniker={asSegment("ui:zone-test")}>
-              <FocusScope moniker={asSegment("ui:scope-test")}>
-                <span>nested</span>
-              </FocusScope>
-            </FocusZone>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusZone moniker={asSegment("ui:zone-test")}>
+                <FocusScope moniker={asSegment("ui:scope-test")}>
+                  <span>nested</span>
+                </FocusScope>
+              </FocusZone>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -387,24 +482,35 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   it("overlay_does_not_intercept_clicks", async () => {
     // Mount a `<FocusScope>` with debug on. A click on the host's
     // content should still call the spatial-focus IPC (`spatial_focus`).
-    // If the overlay's `pointer-events: none` is broken, the overlay
-    // span would intercept the click and the IPC would never fire.
+    // If the overlay's `pointer-events: none` (on the wrapper / border)
+    // were broken, the overlay span would intercept the click and the
+    // IPC would never fire.
+    //
+    // Sub-assertion (added for the hover-handle redesign): the *handle*
+    // is the only `pointer-events: auto` region of the overlay and must
+    // explicitly stop click propagation — clicking the handle is the
+    // affordance for opening the tooltip, NOT for activating the host.
+    // If the handle's `stopPropagation` is removed, this sub-assertion
+    // catches the regression.
     const { container, unmount } = render(
-      <FocusDebugProvider enabled>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <FocusScope moniker={asSegment("ui:click-test")}>
-              <span data-testid="click-target">click me</span>
-            </FocusScope>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <FocusScope moniker={asSegment("ui:click-test")}>
+                <span data-testid="click-target">click me</span>
+              </FocusScope>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
 
-    // The overlay sits above the content — but `pointer-events: none`
-    // makes the browser see the click on the underlying span.
+    // 1) Click on the host content — the overlay's wrapper / border
+    // are `pointer-events: none` so the click reaches the host's
+    // `spatial_focus` handler.
     const target = container.querySelector(
       '[data-testid="click-target"]',
     ) as HTMLElement;
@@ -414,12 +520,26 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     target.click();
     await flushSetup();
 
-    // `spatial_focus` should have been dispatched. If the overlay had
-    // intercepted the click, this filter would be empty.
-    const focusCalls = mockInvoke.mock.calls.filter(
+    const focusCallsFromHost = mockInvoke.mock.calls.filter(
       (c) => c[0] === "spatial_focus",
     );
-    expect(focusCalls.length).toBeGreaterThan(0);
+    expect(focusCallsFromHost.length).toBeGreaterThan(0);
+
+    // 2) Click on the handle itself — the handle stops propagation so
+    // the host's click handler MUST NOT fire. Clear the mock so any
+    // new `spatial_focus` calls would come from this synthetic event
+    // alone.
+    const handle = getHandle(container, "scope");
+    expect(handle).toBeTruthy();
+
+    mockInvoke.mockClear();
+    handle!.click();
+    await flushSetup();
+
+    const focusCallsFromHandle = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "spatial_focus",
+    );
+    expect(focusCallsFromHandle.length).toBe(0);
 
     unmount();
   });
@@ -429,13 +549,15 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // introduce a wrapper div around its children. Production layout
     // depends on the layer being a pure context provider.
     const { container, unmount } = render(
-      <FocusDebugProvider enabled={false}>
-        <SpatialFocusProvider>
-          <FocusLayer name={asSegment("window")}>
-            <span data-testid="layer-child">child</span>
-          </FocusLayer>
-        </SpatialFocusProvider>
-      </FocusDebugProvider>,
+      withTooltipProvider(
+        <FocusDebugProvider enabled={false}>
+          <SpatialFocusProvider>
+            <FocusLayer name={asSegment("window")}>
+              <span data-testid="layer-child">child</span>
+            </FocusLayer>
+          </SpatialFocusProvider>
+        </FocusDebugProvider>,
+      ),
     );
     await flushSetup();
     await flushFrame();
@@ -529,6 +651,74 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
     const text = readOverlayLabel(container, "layer");
     expect(text).toBe("layer:window");
+
+    unmount();
+  });
+
+  it("tooltip_opens_on_handle_hover", async () => {
+    // End-to-end check on the hover affordance: when the user hovers
+    // the handle, Radix opens a `<TooltipContent>` portal whose text
+    // is exactly the computed `labelText` (which the handle's
+    // `aria-label` mirrors). Uses `userEvent.hover()` from
+    // vitest/browser so the real Chromium pointer plumbing fires the
+    // `pointerenter` event Radix listens for.
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="zone"
+        label="ui:test"
+        hostStyle={{
+          left: "10px",
+          top: "20px",
+          width: "100px",
+          height: "50px",
+        }}
+      />,
+    );
+    await flushFrame();
+    await flushFrame();
+
+    // Tooltip starts closed — no portal in the document.
+    expect(readOpenTooltipText()).toBeNull();
+
+    const handle = getHandle(container, "zone");
+    expect(handle).toBeTruthy();
+
+    await userEvent.hover(handle!);
+    // Allow Radix's open-state effect + portal mount to flush.
+    await flushSetup();
+
+    // Tooltip is now open and its content matches the handle's
+    // aria-label exactly.
+    expect(readOpenTooltipText()).toBe("zone:ui:test (10,20)");
+    expect(readOverlayLabel(container, "zone")).toBe("zone:ui:test (10,20)");
+
+    unmount();
+  });
+
+  it("tooltip_for_layer_kind_shows_kind_and_label", async () => {
+    // Layer overlays omit (x,y) — the tooltip text is `layer:<name>`.
+    const { container, unmount } = render(
+      <OverlayHarness
+        kind="layer"
+        label="window"
+        hostStyle={{
+          left: "0px",
+          top: "0px",
+          width: "100px",
+          height: "100px",
+        }}
+      />,
+    );
+    await flushFrame();
+    await flushFrame();
+
+    const handle = getHandle(container, "layer");
+    expect(handle).toBeTruthy();
+
+    await userEvent.hover(handle!);
+    await flushSetup();
+
+    expect(readOpenTooltipText()).toBe("layer:window");
 
     unmount();
   });
