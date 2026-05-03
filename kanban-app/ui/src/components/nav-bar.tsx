@@ -1,7 +1,6 @@
 import { Info, Search } from "lucide-react";
 import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
-import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
 import { Pressable } from "@/components/pressable";
 import {
@@ -146,24 +145,36 @@ export function NavBar() {
           editing={false}
         />
       )}
-      <FocusScope
-        moniker={asSegment("ui:navbar.search")}
-        className="ml-auto"
-      >
+      {/*
+        `ml-auto` lives on a wrapping flex child so the search button is
+        pushed to the right edge of the navbar. `<Pressable asChild>`
+        spreads its className onto the inner `<button>` host (via
+        `Slot.Root` mergeProps), not onto the `<FocusScope>` `<div>` it
+        mounts — so ml-auto on the Pressable would land on the button
+        and fail to push the FocusScope wrapper right. The wrapper div
+        keeps the layout invariant intact while leaving Pressable's
+        contract untouched.
+      */}
+      <div className="ml-auto">
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label="Search"
-              className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-              onClick={() => dispatchSearch().catch(console.error)}
+            <Pressable
+              asChild
+              moniker={asSegment("ui:navbar.search")}
+              ariaLabel="Search"
+              onPress={() => dispatchSearch().catch(console.error)}
             >
-              <Search className="h-4 w-4" />
-            </button>
+              <button
+                type="button"
+                className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </Pressable>
           </TooltipTrigger>
           <TooltipContent side="bottom">Search</TooltipContent>
         </Tooltip>
-      </FocusScope>
+      </div>
       {isBusy && (
         <div
           role="progressbar"

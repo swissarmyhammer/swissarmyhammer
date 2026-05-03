@@ -18,7 +18,6 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipTrigger,
@@ -32,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Field } from "@/components/fields/field";
 import { FocusScope } from "@/components/focus-scope";
+import { Pressable } from "@/components/pressable";
 import { useSchema } from "@/lib/schema-context";
 import { useFieldValue } from "@/lib/entity-store-context";
 import { asSegment } from "@/types/spatial";
@@ -143,26 +143,28 @@ export function BoardSelector({
       </FocusScope>
 
       {showTearOff && selectedPath && (
-        <FocusScope moniker={asSegment("board-selector.tear-off")}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Open in new window"
-                className="h-6 w-6 text-muted-foreground/40"
-                onClick={() => {
-                  dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
-                    console.error,
-                  );
-                }}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Pressable
+              asChild
+              moniker={asSegment("board-selector.tear-off")}
+              ariaLabel="Open in new window"
+              onPress={() => {
+                dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
+                  console.error,
+                );
+              }}
+            >
+              <button
+                type="button"
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground/40 hover:bg-accent hover:text-accent-foreground transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Open in new window</TooltipContent>
-          </Tooltip>
-        </FocusScope>
+              </button>
+            </Pressable>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in new window</TooltipContent>
+        </Tooltip>
       )}
     </div>
   );
