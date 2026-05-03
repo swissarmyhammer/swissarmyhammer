@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7d80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffff980
 project: spatial-nav
 title: Filter formula bar lacks a FocusScope — not navigable in spatial graph
 ---
@@ -41,19 +41,19 @@ Apply the wrapper around `<FilterFormulaBar>` at perspective-tab-bar.tsx:267–2
 
 ## Acceptance Criteria
 
-- [ ] Mounting the perspective tab bar inside the spatial provider stack produces exactly one additional `spatial_register_scope` call whose `segment` is `filter_editor:{activePerspectiveId}`, with `parentZone` equal to the `ui:perspective-bar` zone's FQM and the same `layerFq` as the tabs.
-- [ ] The filter-formula-bar DOM node carries `data-segment="filter_editor:{activePerspectiveId}"` and a composed `data-moniker` attribute.
-- [ ] Driving a `focus-changed` event whose `next_fq` matches the filter editor leaf's FQM flips `data-focused="true"` on that node and renders the `<FocusIndicator>` inside it.
-- [ ] No regression: each `perspective_tab:{id}` leaf still registers, and clicking a tab still dispatches exactly one `spatial_focus` for that tab's FQM (perspective-bar.spatial.test.tsx:344 stays green).
-- [ ] Switching active perspective unregisters the previous `filter_editor:{prevId}` leaf and registers a new `filter_editor:{nextId}` leaf (the existing `key={activePerspective.id}` remount drives this — assert via `spatial_unregister_scope` / `spatial_register_scope` IPC counts).
+- [x] Mounting the perspective tab bar inside the spatial provider stack produces exactly one additional `spatial_register_scope` call whose `segment` is `filter_editor:{activePerspectiveId}`, with `parentZone` equal to the `ui:perspective-bar` zone's FQM and the same `layerFq` as the tabs.
+- [x] The filter-formula-bar DOM node carries `data-segment="filter_editor:{activePerspectiveId}"` and a composed `data-moniker` attribute.
+- [x] Driving a `focus-changed` event whose `next_fq` matches the filter editor leaf's FQM flips `data-focused="true"` on that node and renders the `<FocusIndicator>` inside it.
+- [x] No regression: each `perspective_tab:{id}` leaf still registers, and clicking a tab still dispatches exactly one `spatial_focus` for that tab's FQM (perspective-bar.spatial.test.tsx:344 stays green).
+- [x] Switching active perspective unregisters the previous `filter_editor:{prevId}` leaf and registers a new `filter_editor:{nextId}` leaf (the existing `key={activePerspective.id}` remount drives this — assert via `spatial_unregister_scope` / `spatial_register_scope` IPC counts).
 
 ## Tests
 
-- [ ] In `kanban-app/ui/src/components/perspective-bar.spatial.test.tsx`, add `it("registers a filter_editor:{activePerspectiveId} scope as a peer of the perspective tabs", …)` that mounts the bar with two perspectives, finds the active one's id, asserts the register-scope args contain `segment === \`filter_editor:${activeId}\`` exactly once, and asserts its `parentZone` equals the bar zone's FQM and its `layerFq` equals the bar zone's `layerFq`.
-- [ ] Add `it("driving focus-changed to the filter_editor leaf flips data-focused on the formula bar", …)` that, after registration, calls `fireFocusChanged({ next_fq: filterLeaf.fq })`, then asserts `[data-segment="filter_editor:..."][data-focused]` is present and `[data-testid="focus-indicator"]` lives inside it.
-- [ ] Add `it("switching perspectives unregisters the previous filter_editor leaf and registers the next", …)` that switches the active perspective via `setActivePerspectiveId` (or the equivalent test helper), then asserts an `spatial_unregister_scope` for `filter_editor:{prevId}` and a fresh `spatial_register_scope` for `filter_editor:{nextId}`.
-- [ ] In `kanban-app/ui/src/components/perspective-spatial-nav.guards.node.test.ts`, add a guard `it("wraps the filter formula bar in FocusScope with moniker filter_editor:${activePerspectiveId}", …)` modeled on the existing tab guard at line 61, regex-matching the source for the new wrapper.
-- [ ] Run `pnpm -C kanban-app/ui test perspective-bar.spatial perspective-spatial-nav.guards` and confirm all new tests pass and none of the existing tests in those files regress.
+- [x] In `kanban-app/ui/src/components/perspective-bar.spatial.test.tsx`, add `it("registers a filter_editor:{activePerspectiveId} scope as a peer of the perspective tabs", …)` that mounts the bar with two perspectives, finds the active one's id, asserts the register-scope args contain `segment === \`filter_editor:${activeId}\`` exactly once, and asserts its `parentZone` equals the bar zone's FQM and its `layerFq` equals the bar zone's `layerFq`.
+- [x] Add `it("driving focus-changed to the filter_editor leaf flips data-focused on the formula bar", …)` that, after registration, calls `fireFocusChanged({ next_fq: filterLeaf.fq })`, then asserts `[data-segment="filter_editor:..."][data-focused]` is present and `[data-testid="focus-indicator"]` lives inside it.
+- [x] Add `it("switching perspectives unregisters the previous filter_editor leaf and registers the next", …)` that switches the active perspective via `setActivePerspectiveId` (or the equivalent test helper), then asserts an `spatial_unregister_scope` for `filter_editor:{prevId}` and a fresh `spatial_register_scope` for `filter_editor:{nextId}`.
+- [x] In `kanban-app/ui/src/components/perspective-spatial-nav.guards.node.test.ts`, add a guard `it("wraps the filter formula bar in FocusScope with moniker filter_editor:${activePerspectiveId}", …)` modeled on the existing tab guard at line 61, regex-matching the source for the new wrapper.
+- [x] Run `pnpm -C kanban-app/ui test perspective-bar.spatial perspective-spatial-nav.guards` and confirm all new tests pass and none of the existing tests in those files regress.
 
 ## Workflow
 

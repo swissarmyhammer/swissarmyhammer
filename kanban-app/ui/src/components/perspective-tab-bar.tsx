@@ -266,12 +266,16 @@ export function PerspectiveTabBar() {
       </div>
       {/* Right: filter formula bar — always visible when a perspective is active */}
       {activePerspective && (
-        <FilterFormulaBar
+        <FilterFormulaBarFocusable
           key={activePerspective.id}
-          ref={filterEditorRef}
-          filter={activePerspective.filter}
           perspectiveId={activePerspective.id}
-        />
+        >
+          <FilterFormulaBar
+            ref={filterEditorRef}
+            filter={activePerspective.filter}
+            perspectiveId={activePerspective.id}
+          />
+        </FilterFormulaBarFocusable>
       )}
     </PerspectiveBarSpatialZone>
   );
@@ -456,6 +460,49 @@ function PerspectiveTabFocusable({
   }
   return (
     <FocusScope moniker={asSegment(`perspective_tab:${id}`)}>
+      {children}
+    </FocusScope>
+  );
+}
+
+/**
+ * Wrap the always-visible filter formula bar in
+ * `<FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>` when
+ * the spatial-nav stack is mounted; otherwise fall through.
+ *
+ * Without this leaf the kernel's beam-search has no scope to land on for
+ * the formula bar — it would skip the editor entirely on `nav.left` /
+ * `nav.right`. The per-perspective segment matches the
+ * `key={activePerspective.id}` remount on the outer component so the kernel
+ * sees a distinct leaf per perspective and runs through a clean
+ * unregister → register cycle when the active perspective switches, rather
+ * than aliasing across perspectives via a shared moniker.
+ *
+ * `<FocusScope>`'s click handler skips clicks landing on `INPUT`,
+ * `TEXTAREA`, `SELECT`, or `[contenteditable]` (focus-scope.tsx
+ * `handleClick`), which preserves the existing
+ * `onClick={() => editorRef.current?.focus()}` behaviour on the bar's
+ * interior — clicks on the CM6 contenteditable surface route through to the
+ * editor's own caret placement instead of being intercepted by the leaf.
+ *
+ * Same conditional pattern as `PerspectiveBarSpatialZone` and
+ * `PerspectiveTabFocusable` — the strict primitive contract is preserved
+ * for production while keeping the existing narrow-provider tests passing.
+ */
+function FilterFormulaBarFocusable({
+  perspectiveId,
+  children,
+}: {
+  perspectiveId: string;
+  children: ReactNode;
+}) {
+  const layerKey = useOptionalEnclosingLayerFq();
+  const actions = useOptionalSpatialFocusActions();
+  if (!layerKey || !actions) {
+    return <>{children}</>;
+  }
+  return (
+    <FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>
       {children}
     </FocusScope>
   );

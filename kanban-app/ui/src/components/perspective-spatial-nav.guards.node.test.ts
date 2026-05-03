@@ -64,6 +64,18 @@ describe("PerspectiveTabBar source-level guards", () => {
     );
   });
 
+  it("wraps the filter formula bar in FocusScope with moniker filter_editor:${activePerspectiveId}", () => {
+    // Mirror of the per-tab guard — the filter formula bar must be a leaf
+    // peer of the tabs inside the `ui:perspective-bar` zone so beam-search
+    // can land on it via `nav.left` / `nav.right`. The per-perspective
+    // segment matches the existing `key={activePerspective.id}` remount on
+    // `<FilterFormulaBar>` so the kernel sees a distinct leaf per perspective
+    // rather than a shared one whose identity flips on perspective change.
+    expect(SRC).toMatch(
+      /<FocusScope\s+moniker=\{asSegment\(`filter_editor:\$\{perspectiveId\}`\)/,
+    );
+  });
+
   it("uses the asSegment brand helper from @/types/spatial", () => {
     expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
     expect(SRC).toMatch(/\basSegment\b/);

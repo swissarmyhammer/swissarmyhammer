@@ -272,6 +272,11 @@ function isTabMoniker(m: unknown): boolean {
   return typeof m === "string" && /^perspective_tab:.+$/.test(m);
 }
 
+/** True when the moniker matches `^filter_editor:.+$`. */
+function isFilterEditorMoniker(m: unknown): boolean {
+  return typeof m === "string" && /^filter_editor:.+$/.test(m);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -492,6 +497,111 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     expect(
       container.querySelector("[data-segment^='perspective_tab:']"),
     ).toBeNull();
+  });
+
+  it("registers a filter_editor:{activePerspectiveId} scope as a peer of the perspective tabs", async () => {
+    // The filter formula bar must register exactly one FocusScope leaf with
+    // segment `filter_editor:${activePerspectiveId}` — distinct per
+    // perspective, parented to the `ui:perspective-bar` zone, on the same
+    // layer as the tabs. This is what makes the formula bar a navigable
+    // peer of the tabs in the spatial graph.
+    const { unmount } = renderBar();
+    await flushSetup();
+
+    const activeId = mockPerspectivesValue.activePerspective!.id;
+    const filterScopes = registerScopeArgs().filter((a) =>
+      isFilterEditorMoniker(a.segment),
+    );
+    expect(filterScopes).toHaveLength(1);
+    expect(filterScopes[0].segment).toBe(`filter_editor:${activeId}`);
+
+    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    expect(filterScopes[0].parentZone).toBe(barZone.fq);
+    expect(filterScopes[0].layerFq).toBe(barZone.layerFq);
+
+    unmount();
+  });
+
+  it("driving focus-changed to the filter_editor leaf flips data-focused on the formula bar", async () => {
+    // After registration, dispatching a `focus-changed` event whose
+    // `next_fq` matches the filter editor leaf's FQM must flip
+    // `data-focused="true"` on its DOM node and mount a `<FocusIndicator>`
+    // inside it.
+    const { container, queryByTestId, unmount } = renderBar();
+    await flushSetup();
+
+    const activeId = mockPerspectivesValue.activePerspective!.id;
+    const filterLeaf = registerScopeArgs().find(
+      (a) => a.segment === `filter_editor:${activeId}`,
+    )!;
+    expect(filterLeaf).toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: filterLeaf.fq as FullyQualifiedMoniker,
+    });
+
+    await waitFor(() => {
+      const node = container.querySelector(
+        `[data-segment='filter_editor:${activeId}'][data-focused]`,
+      );
+      expect(node).not.toBeNull();
+    });
+
+    const focusedNode = container.querySelector(
+      `[data-segment='filter_editor:${activeId}']`,
+    ) as HTMLElement;
+    const indicator = queryByTestId("focus-indicator")!;
+    expect(indicator).not.toBeNull();
+    expect(focusedNode.contains(indicator)).toBe(true);
+
+    unmount();
+  });
+
+  it("switching perspectives unregisters the previous filter_editor leaf and registers the next", async () => {
+    // The `key={activePerspective.id}` remount on `<FilterFormulaBar>` must
+    // drive the kernel through a clean unregister → register cycle when the
+    // active perspective changes, so the moniker `filter_editor:${id}` always
+    // tracks the currently active perspective rather than aliasing across
+    // them.
+    const { rerender, unmount } = renderBar();
+    await flushSetup();
+
+    const prevId = mockPerspectivesValue.activePerspective!.id;
+    const prevLeaf = registerScopeArgs().find(
+      (a) => a.segment === `filter_editor:${prevId}`,
+    )!;
+    expect(prevLeaf).toBeTruthy();
+
+    // Reset invoke mock so we measure only the IPC produced by the switch.
+    mockInvoke.mockClear();
+
+    // Flip the active perspective to p2 and rerender — the mocked
+    // `usePerspectives` reads from `mockPerspectivesValue` on every render.
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      activePerspective: { id: "p2", name: "Backlog", view: "board" },
+    };
+    rerender(
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
+    );
+    await flushSetup();
+
+    const unregisterKeys = unregisterScopeCalls().map((c) => c.fq);
+    expect(unregisterKeys).toContain(prevLeaf.fq);
+
+    const nextLeaf = registerScopeArgs().find(
+      (a) => a.segment === `filter_editor:p2`,
+    );
+    expect(nextLeaf).toBeTruthy();
+    expect(nextLeaf!.segment).toBe("filter_editor:p2");
+
+    unmount();
   });
 
   it("only the focused tab's FocusIndicator is mounted at any time", async () => {
