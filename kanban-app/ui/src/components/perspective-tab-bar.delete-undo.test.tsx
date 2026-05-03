@@ -127,6 +127,9 @@ import {
   ActiveBoardPathProvider,
 } from "@/lib/command-scope";
 import { PerspectiveTabBar } from "./perspective-tab-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { asSegment } from "@/types/spatial";
 import type { PerspectiveDef } from "@/types/kanban";
 
 /** Build a minimal board-kind PerspectiveDef for test use. */
@@ -157,13 +160,17 @@ function countRenderedTabs(names: readonly string[]): number {
  */
 function renderWithProvider(): ReturnType<typeof render> {
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <CommandScopeProvider commands={[]} moniker="window:main">
-      <ActiveBoardPathProvider value="/tmp/test/.kanban">
-        <PerspectiveProvider>
-          <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
-        </PerspectiveProvider>
-      </ActiveBoardPathProvider>
-    </CommandScopeProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <CommandScopeProvider commands={[]} moniker="window:main">
+          <ActiveBoardPathProvider value="/tmp/test/.kanban">
+            <PerspectiveProvider>
+              <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
+            </PerspectiveProvider>
+          </ActiveBoardPathProvider>
+        </CommandScopeProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
   return render(<PerspectiveTabBar />, { wrapper });
 }

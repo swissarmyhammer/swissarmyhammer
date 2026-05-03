@@ -98,7 +98,7 @@ import { cn } from "@/lib/utils";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import {
   FullyQualifiedMonikerContext,
-  useOptionalFullyQualifiedMoniker,
+  useFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useParentZoneFq } from "@/components/focus-zone";
@@ -193,18 +193,20 @@ export function FocusScope({
   ref: externalRef,
   ...rest
 }: FocusScopeProps) {
-  // Compose this scope's FQM from the ancestor FQM + the segment.
-  const parentFq = useOptionalFullyQualifiedMoniker();
-  const fq = useMemo<FullyQualifiedMoniker | null>(() => {
-    if (parentFq === null) return null;
-    return composeFq(parentFq, segment);
-  }, [parentFq, segment]);
-
-  const focusKey = fq ?? segment;
+  // Compose this scope's FQM from the ancestor FQM + the segment. The
+  // throwing hook variant enforces that every `<FocusScope>` lives inside
+  // a `<FocusLayer>` — mounting a scope outside the spatial provider
+  // stack is a setup bug and surfaces as a clear error rather than
+  // silently degrading to a plain `<div>`.
+  const parentFq = useFullyQualifiedMoniker();
+  const fq = useMemo<FullyQualifiedMoniker>(
+    () => composeFq(parentFq, segment),
+    [parentFq, segment],
+  );
 
   // Selective subscription: this scope re-renders only when *its own*
   // focus slot flips — not on every focus move elsewhere in the tree.
-  const isFocused = useOptionalIsDirectFocus(focusKey);
+  const isFocused = useOptionalIsDirectFocus(fq);
 
   // Build the scope ourselves so we can register it in the entity-focus
   // registry. Same shape as CommandScopeProvider produces, but we control
@@ -221,16 +223,14 @@ export function FocusScope({
   const isDirectFocus = showFocusBar && isFocused;
 
   // Register the scope in the entity-focus registry.
-  useEntityScopeRegistration(focusKey, scope);
-
-  const hasSpatialContext = fq !== null;
+  useEntityScopeRegistration(fq, scope);
 
   return (
     <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
         {!renderContainer ? (
           children
-        ) : hasSpatialContext ? (
+        ) : (
           <SpatialFocusScopeBody
             fq={fq}
             segment={segment}
@@ -243,16 +243,6 @@ export function FocusScope({
           >
             {children}
           </SpatialFocusScopeBody>
-        ) : (
-          <FallbackFocusScopeBody
-            segment={segment}
-            isDirectFocus={isDirectFocus}
-            handleEvents={handleEvents}
-            ref={externalRef}
-            {...rest}
-          >
-            {children}
-          </FallbackFocusScopeBody>
         )}
       </CommandScopeContext.Provider>
     </FocusScopeContext.Provider>
@@ -443,117 +433,6 @@ function SpatialFocusScopeBody({
         {children}
       </div>
     </FullyQualifiedMonikerContext.Provider>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Body — no-spatial-context fallback
-// ---------------------------------------------------------------------------
-
-interface FallbackFocusScopeBodyProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  "onClick" | "children"
-> {
-  segment: SegmentMoniker;
-  isDirectFocus: boolean;
-  handleEvents: boolean;
-  children: ReactNode;
-  ref?: Ref<HTMLDivElement>;
-}
-
-/**
- * Body branch for tests that mount a `<FocusScope>` outside the spatial
- * provider stack (no `<SpatialFocusProvider>` / no `<FocusLayer>`).
- */
-function FallbackFocusScopeBody({
-  segment,
-  isDirectFocus,
-  handleEvents,
-  children,
-  ref: externalRef,
-  ...htmlProps
-}: FallbackFocusScopeBodyProps) {
-  const contextMenuHandler = useContextMenu();
-  const focusActions = useOptionalFocusActions();
-  const setFocus = focusActions?.setFocus;
-
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  const setRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      ref.current = node;
-      if (typeof externalRef === "function") {
-        externalRef(node);
-      } else if (externalRef) {
-        (externalRef as React.MutableRefObject<HTMLDivElement | null>).current =
-          node;
-      }
-    },
-    [externalRef],
-  );
-
-  useEffect(() => {
-    if (isDirectFocus && ref.current?.scrollIntoView) {
-      ref.current.scrollIntoView({ block: "nearest" });
-    }
-  }, [isDirectFocus]);
-
-  // No spatial ancestor → no parent FQM available, so this fallback can't
-  // compose a fully-qualified moniker for `setFocus`. Tests that mount
-  // a single primitive without `<SpatialFocusProvider>` only exercise
-  // render output, not focus mutations, so skipping the dispatch is the
-  // right behavior. Production code never enters this branch.
-  const parentFq = useOptionalFullyQualifiedMoniker();
-  const fallbackFq = useMemo(
-    () => (parentFq === null ? null : composeFq(parentFq, segment)),
-    [parentFq, segment],
-  );
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      if (!handleEvents) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
-      contextMenuHandler(e);
-    },
-    [fallbackFq, setFocus, contextMenuHandler, handleEvents],
-  );
-
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (!handleEvents) return;
-      const target = e.target as HTMLElement;
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (target.closest("[contenteditable]")) return;
-      e.stopPropagation();
-      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
-    },
-    [fallbackFq, setFocus, handleEvents],
-  );
-
-  const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
-  const mergedClassName = cn(consumerClassName, "relative");
-
-  const debugEnabled = useFocusDebug();
-
-  return (
-    <div
-      ref={setRef}
-      data-moniker={segment}
-      data-segment={segment}
-      data-focused={isDirectFocus || undefined}
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
-      {...restWithoutClassName}
-      className={mergedClassName}
-    >
-      {debugEnabled && (
-        <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
-      )}
-      {children}
-    </div>
   );
 }
 

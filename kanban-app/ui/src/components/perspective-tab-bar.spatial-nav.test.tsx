@@ -305,25 +305,4 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     unmount();
   });
 
-  it("does not wrap in FocusZone when no SpatialFocusProvider is present", () => {
-    mockPerspectivesValue = {
-      ...mockPerspectivesValue,
-      perspectives: [{ id: "p1", name: "Sprint", view: "board" }],
-      activePerspective: { id: "p1", name: "Sprint", view: "board" },
-    };
-
-    // Without the provider stack, the conditional zone falls back to a plain
-    // div; there must be no `data-moniker` on the bar or tabs.
-    const { container } = render(
-      <TooltipProvider delayDuration={100}>
-        <PerspectiveTabBar />
-      </TooltipProvider>,
-    );
-    expect(
-      container.querySelector("[data-segment='ui:perspective-bar']"),
-    ).toBeNull();
-    expect(
-      container.querySelector("[data-segment='perspective_tab:p1']"),
-    ).toBeNull();
-  });
 });

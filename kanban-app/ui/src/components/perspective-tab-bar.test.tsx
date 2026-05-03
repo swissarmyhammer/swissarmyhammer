@@ -110,13 +110,26 @@ vi.mock("@/lib/ui-state-context", () => ({
 }));
 
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { asSegment } from "@/types/spatial";
 
-/** Renders PerspectiveTabBar inside the required TooltipProvider. */
+/**
+ * Renders PerspectiveTabBar inside the required providers. The spatial
+ * provider stack (`SpatialFocusProvider` + `FocusLayer`) is required
+ * since `PerspectiveTabBar` mounts `<FocusZone>` / `<FocusScope>` and
+ * the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function renderTabBar(delayDuration = 100) {
   return render(
-    <TooltipProvider delayDuration={delayDuration}>
-      <PerspectiveTabBar />
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={delayDuration}>
+          <PerspectiveTabBar />
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

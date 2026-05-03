@@ -129,13 +129,26 @@ vi.mock("@/lib/ui-state-context", () => ({
 }));
 
 import { PerspectiveTabBar } from "./perspective-tab-bar";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { asSegment } from "@/types/spatial";
 
-/** Render PerspectiveTabBar with the required TooltipProvider. */
+/**
+ * Render PerspectiveTabBar with the required providers. The spatial
+ * provider stack (`SpatialFocusProvider` + `FocusLayer`) is required
+ * since `PerspectiveTabBar` mounts spatial primitives and the
+ * no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function renderTabBar() {
   return render(
-    <TooltipProvider delayDuration={100}>
-      <PerspectiveTabBar />
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={100}>
+          <PerspectiveTabBar />
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -208,9 +221,13 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
 
     await act(async () => {
       rerender(
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
       // Allow the reconciliation effect + setValue dispatch to run.
       await new Promise((r) => setTimeout(r, 20));
@@ -252,9 +269,13 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
     setActivePerspectiveFilter("@alice");
     await act(async () => {
       rerender(
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
       await new Promise((r) => setTimeout(r, 20));
     });
@@ -298,9 +319,13 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
     setActivePerspectiveFilter("#bug");
     await act(async () => {
       rerender(
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
       await new Promise((r) => setTimeout(r, 20));
     });
@@ -344,9 +369,13 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
     };
     await act(async () => {
       rerender(
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
       await new Promise((r) => setTimeout(r, 20));
     });

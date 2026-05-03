@@ -20,6 +20,9 @@ import { AvatarDisplay } from "./avatar-display";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
@@ -60,20 +63,24 @@ function renderDisplay(
   const mode = options.mode ?? "compact";
   const entity = options.entity ?? DEFAULT_ENTITY;
   return render(
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ actor: actors }}>
-          <EntityFocusProvider>
-            <AvatarDisplay
-              field={field}
-              value={value}
-              entity={entity}
-              mode={mode}
-            />
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ actor: actors }}>
+              <EntityFocusProvider>
+                <AvatarDisplay
+                  field={field}
+                  value={value}
+                  entity={entity}
+                  mode={mode}
+                />
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

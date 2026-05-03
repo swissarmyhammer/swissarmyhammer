@@ -106,6 +106,9 @@ vi.mock("@/components/window-container", () => ({
 import { BadgeListDisplay } from "./badge-list-display";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -128,12 +131,21 @@ const taskEntity: Entity = {
   fields: { tags: ["bugfix", "feature"] },
 };
 
-/** Wrap children in the providers MentionView requires. */
+/**
+ * Wrap children in the providers `BadgeListDisplay` (via `MentionView`)
+ * requires. The spatial provider stack (`SpatialFocusProvider` +
+ * `FocusLayer`) is required since the no-spatial-context fallback was
+ * removed in card `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <EntityFocusProvider>
-      <TooltipProvider>{children}</TooltipProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
@@ -192,9 +204,11 @@ describe("BadgeListDisplay", () => {
 
     const scopes = getScopes(container);
     expect(scopes.length).toBe(2);
-    const monikers = scopes.map((s) => s.getAttribute("data-moniker"));
-    expect(monikers).toContain("tag:tag-1");
-    expect(monikers).toContain("tag:tag-2");
+    // `data-segment` carries the relative segment moniker; `data-moniker`
+    // carries the composed FQM (path-form, including the layer prefix).
+    const segments = scopes.map((s) => s.getAttribute("data-segment"));
+    expect(segments).toContain("tag:tag-1");
+    expect(segments).toContain("tag:tag-2");
   });
 
   it("renders a dash in compact mode when values are empty", async () => {
@@ -283,9 +297,11 @@ describe("BadgeListDisplay", () => {
     // And one FocusScope per item with a task moniker (derived from entity id).
     const scopes = getScopes(container);
     expect(scopes.length).toBe(3);
-    const monikers = scopes.map((s) => s.getAttribute("data-moniker"));
-    expect(monikers).toContain("task:task-dep-1");
-    expect(monikers).toContain("task:task-dep-2");
-    expect(monikers).toContain("task:task-dep-3");
+    // `data-segment` carries the relative segment moniker; `data-moniker`
+    // carries the composed FQM (path-form, including the layer prefix).
+    const segments = scopes.map((s) => s.getAttribute("data-segment"));
+    expect(segments).toContain("task:task-dep-1");
+    expect(segments).toContain("task:task-dep-2");
+    expect(segments).toContain("task:task-dep-3");
   });
 });

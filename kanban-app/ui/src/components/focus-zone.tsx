@@ -87,7 +87,7 @@ import { cn } from "@/lib/utils";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import {
   FullyQualifiedMonikerContext,
-  useOptionalFullyQualifiedMoniker,
+  useFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
 import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
@@ -236,27 +236,22 @@ export function FocusZone({
   ...rest
 }: FocusZoneProps) {
   // Compose this zone's FQM from the ancestor FQM (the layer root or
-  // an enclosing zone) and the consumer's declared segment. When no
-  // primitive ancestor is mounted (test harness without a `<FocusLayer>`),
-  // the parent FQM is `null` and we fall back to the segment alone for
-  // `<FullyQualifiedMonikerContext.Provider>` and the entity-focus
-  // bookkeeping below — the spatial registration is skipped on this
-  // path anyway.
-  const parentFq = useOptionalFullyQualifiedMoniker();
-  const fq = useMemo<FullyQualifiedMoniker | null>(() => {
-    if (parentFq === null) return null;
-    return composeFq(parentFq, segment);
-  }, [parentFq, segment]);
+  // an enclosing zone) and the consumer's declared segment. The throwing
+  // hook variant enforces that every `<FocusZone>` lives inside a
+  // `<FocusLayer>` — mounting a zone outside the spatial provider stack
+  // is a setup bug and surfaces as a clear error rather than silently
+  // degrading to a plain `<div>`.
+  const parentFq = useFullyQualifiedMoniker();
+  const fq = useMemo<FullyQualifiedMoniker>(
+    () => composeFq(parentFq, segment),
+    [parentFq, segment],
+  );
 
-  // Selective subscription: re-renders only when *this segment's* focus
-  // slot flips. Drives the `scrollIntoView` effect in the body branches.
-  // Returns `false` permanently when no `EntityFocusProvider` is mounted.
-  // The entity-focus store is keyed by the FQM (the kernel's identifier),
-  // so we subscribe on the composed FQM when present and the bare segment
-  // otherwise (tests that mount without spatial context still observe
-  // segment-form moves through the legacy fallback path).
-  const focusKey = fq ?? segment;
-  const isFocused = useOptionalIsDirectFocus(focusKey);
+  // Selective subscription: re-renders only when *this FQM's* focus slot
+  // flips. Drives the `scrollIntoView` effect in the body. Returns `false`
+  // permanently when no `EntityFocusProvider` is mounted. The entity-focus
+  // store is keyed by the FQM (the kernel's identifier).
+  const isFocused = useOptionalIsDirectFocus(fq);
 
   // Build the scope ourselves so we can register it in the entity-focus
   // registry. Same shape as `<FocusScope>` produces, with `moniker`
@@ -277,11 +272,9 @@ export function FocusZone({
   const isDirectFocus = showFocusBar && isFocused;
 
   // Register the scope in the entity-focus registry via the shared helper.
-  useEntityScopeRegistration(focusKey, scope);
+  useEntityScopeRegistration(fq, scope);
 
-  const hasSpatialContext = fq !== null;
-
-  // `renderContainer={false}` short-circuit: skip both body branches
+  // `renderContainer={false}` short-circuit: skip the body branch
   // entirely. We still publish the zone's identity downward — the
   // FullyQualifiedMonikerContext provider so descendants compose their
   // FQM under this zone, and the FocusZoneContext provider so descendant
@@ -291,11 +284,11 @@ export function FocusZone({
   // matching short-circuit in `<FocusScope>`, with the additional
   // FocusZone-only providers added so descendants treat us as a Zone.
   //
-  // Provider nesting order matches the full-body branch (line 308 +
-  // line 548): `FocusScope > CommandScope > FullyQualifiedMoniker >
-  // FocusZone`. Functionally identical to any other order (context
-  // lookups don't depend on provider nesting) — kept consistent so
-  // the two branches read the same.
+  // Provider nesting order matches the full-body branch:
+  // `FocusScope > CommandScope > FullyQualifiedMoniker > FocusZone`.
+  // Functionally identical to any other order (context lookups don't
+  // depend on provider nesting) — kept consistent so the two branches
+  // read the same.
   if (!renderContainer) {
     return (
       <FocusScopeContext.Provider value={fq}>
@@ -313,30 +306,18 @@ export function FocusZone({
   return (
     <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
-        {hasSpatialContext ? (
-          <SpatialFocusZoneBody
-            fq={fq}
-            segment={segment}
-            navOverride={navOverride}
-            showFocusBar={showFocusBar}
-            handleEvents={handleEvents}
-            isDirectFocus={isDirectFocus}
-            ref={externalRef}
-            {...rest}
-          >
-            {children}
-          </SpatialFocusZoneBody>
-        ) : (
-          <FallbackFocusZoneBody
-            segment={segment}
-            handleEvents={handleEvents}
-            isDirectFocus={isDirectFocus}
-            ref={externalRef}
-            {...rest}
-          >
-            {children}
-          </FallbackFocusZoneBody>
-        )}
+        <SpatialFocusZoneBody
+          fq={fq}
+          segment={segment}
+          navOverride={navOverride}
+          showFocusBar={showFocusBar}
+          handleEvents={handleEvents}
+          isDirectFocus={isDirectFocus}
+          ref={externalRef}
+          {...rest}
+        >
+          {children}
+        </SpatialFocusZoneBody>
       </CommandScopeContext.Provider>
     </FocusScopeContext.Provider>
   );
@@ -571,127 +552,6 @@ function SpatialFocusZoneBody({
         </div>
       </FocusZoneContext.Provider>
     </FullyQualifiedMonikerContext.Provider>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Body — no-spatial-context fallback
-// ---------------------------------------------------------------------------
-
-/** Props for the no-spatial-context fallback body. */
-interface FallbackFocusZoneBodyProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  "onClick" | "children"
-> {
-  segment: SegmentMoniker;
-  /** See {@link FocusZoneOwnProps.handleEvents}. */
-  handleEvents: boolean;
-  isDirectFocus: boolean;
-  children: ReactNode;
-  ref?: Ref<HTMLDivElement>;
-}
-
-/**
- * Body branch for tests that mount a `<FocusZone>` outside the spatial
- * provider stack (no `<SpatialFocusProvider>` / no `<FocusLayer>`).
- *
- * Renders a plain `<div>` with as much chrome as the surrounding providers
- * make available. Skips the spatial registration and the per-FQM
- * focus-claim subscription that would otherwise throw. Production code
- * never enters this branch.
- */
-function FallbackFocusZoneBody({
-  segment,
-  handleEvents,
-  isDirectFocus,
-  children,
-  ref: externalRef,
-  ...htmlProps
-}: FallbackFocusZoneBodyProps) {
-  const contextMenuHandler = useContextMenu();
-  const focusActions = useOptionalFocusActions();
-  const setFocus = focusActions?.setFocus;
-
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  const setRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      ref.current = node;
-      if (typeof externalRef === "function") {
-        externalRef(node);
-      } else if (externalRef) {
-        (externalRef as React.MutableRefObject<HTMLDivElement | null>).current =
-          node;
-      }
-    },
-    [externalRef],
-  );
-
-  // Scroll-into-view when the entity-focus store reports this zone as
-  // directly focused — same legacy behavior the spatial branch has.
-  useEffect(() => {
-    if (isDirectFocus && ref.current?.scrollIntoView) {
-      ref.current.scrollIntoView({ block: "nearest" });
-    }
-  }, [isDirectFocus]);
-
-  // No spatial ancestor → no parent FQM available, so this fallback can't
-  // compose a fully-qualified moniker for `setFocus`. Tests that mount
-  // a single primitive without `<SpatialFocusProvider>` only exercise
-  // render output, not focus mutations, so skipping the dispatch is the
-  // right behavior. Production code never enters this branch.
-  const parentFq = useOptionalFullyQualifiedMoniker();
-  const fallbackFq = useMemo(
-    () => (parentFq === null ? null : composeFq(parentFq, segment)),
-    [parentFq, segment],
-  );
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      if (!handleEvents) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
-      contextMenuHandler(e);
-    },
-    [fallbackFq, setFocus, contextMenuHandler, handleEvents],
-  );
-
-  const handleClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (!handleEvents) return;
-      const target = e.target as HTMLElement;
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (target.closest("[contenteditable]")) return;
-      e.stopPropagation();
-      if (setFocus && fallbackFq !== null) setFocus(fallbackFq);
-    },
-    [fallbackFq, setFocus, handleEvents],
-  );
-
-  // Merge `relative` into the consumer's className.
-  const { className: consumerClassName, ...restWithoutClassName } = htmlProps;
-  const mergedClassName = cn(consumerClassName, "relative");
-
-  const debugEnabled = useFocusDebug();
-
-  return (
-    <div
-      ref={setRef}
-      data-moniker={segment}
-      data-segment={segment}
-      data-focused={isDirectFocus || undefined}
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
-      {...restWithoutClassName}
-      className={mergedClassName}
-    >
-      {debugEnabled && (
-        <FocusDebugOverlay kind="zone" label={segment} hostRef={ref} />
-      )}
-      {children}
-    </div>
   );
 }
 

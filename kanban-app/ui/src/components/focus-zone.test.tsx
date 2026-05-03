@@ -8,8 +8,9 @@
  *  - Calling `spatial_unregister_scope` on unmount.
  *  - Publishing its key via `FocusZoneContext` so descendants pick it up
  *    as their `parent_zone`.
- *  - Falling back to a plain `<div>` (no spatial registration) when
- *    mounted outside a `<FocusLayer>` — same contract `<FocusScope>` has.
+ *  - Throwing when mounted outside a `<FocusLayer>` — mounting a zone
+ *    without its required spatial-provider ancestors is a setup bug,
+ *    not a supported degraded mode.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -252,24 +253,23 @@ describe("<FocusZone>", () => {
     unmount();
   });
 
-  it("renders a fallback div when mounted outside any FocusLayer (no spatial registration)", () => {
-    // Three-peer architecture: `<FocusZone>` is an entity-aware composite
-    // that needs to keep working in unit tests that omit the spatial
-    // provider stack — same fallback contract `<FocusScope>` exposes.
-    // The plain `<div>` carries `data-moniker` for selector-based test
-    // assertions, but no `spatial_register_zone` call fires and there is
-    // no `<FocusIndicator>` because there is no Rust-side focus state to
-    // follow.
-    const { container, unmount } = render(
-      <FocusZone moniker={asSegment("ui:orphan")}>{null}</FocusZone>,
-    );
-    const node = container.querySelector("[data-segment='ui:orphan']");
-    expect(node).not.toBeNull();
-    const registers = mockInvoke.mock.calls.filter(
-      (c) => c[0] === "spatial_register_zone",
-    );
-    expect(registers).toHaveLength(0);
-    unmount();
+  it("throws when <FocusZone> is mounted without <FocusLayer>", () => {
+    // Mounting a `<FocusZone>` outside the spatial provider stack is a
+    // setup bug, not a supported mode. The primitive must surface the
+    // missing `<FocusLayer>` ancestor as a clear error rather than
+    // silently rendering a plain `<div>` (the legacy fallback). Suppress
+    // React's auto-logging of the thrown error so the test output stays
+    // readable; we still assert the throw via `expect(...).toThrow`.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    try {
+      expect(() =>
+        render(<FocusZone moniker={asSegment("ui:orphan")}>{null}</FocusZone>),
+      ).toThrow(/FocusLayer/);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("FocusZoneContext default is null when no zone wraps the consumer", () => {

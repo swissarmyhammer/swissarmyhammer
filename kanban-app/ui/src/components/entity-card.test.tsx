@@ -148,17 +148,21 @@ let currentEntity: Entity = makeEntity();
 
 function renderCard(ui: React.ReactElement) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>{ui}</UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={0}>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>{ui}</UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

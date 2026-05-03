@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act } from "@testing-library/react";
 
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -26,6 +27,8 @@ import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -228,23 +231,27 @@ function renderColumnWithCard(column: Entity, task: Entity) {
   document.body.appendChild(host);
 
   const result = render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [task], column: [column] }}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/card-fit">
-              <DragSessionProvider>
-                <UIStateProvider>
-                  <FieldUpdateProvider>
-                    <ColumnView column={column} tasks={[task]} />
-                  </FieldUpdateProvider>
-                </UIStateProvider>
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [task], column: [column] }}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/card-fit">
+                  <DragSessionProvider>
+                    <UIStateProvider>
+                      <FieldUpdateProvider>
+                        <ColumnView column={column} tasks={[task]} />
+                      </FieldUpdateProvider>
+                    </UIStateProvider>
+                  </DragSessionProvider>
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
     { container: host },
   );
 

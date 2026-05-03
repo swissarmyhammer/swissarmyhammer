@@ -21,26 +21,39 @@ import { Avatar } from "./avatar";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
-/** Render Avatar inside required providers with a configurable entity store. */
+/**
+ * Render `Avatar` inside required providers with a configurable entity
+ * store. The spatial provider stack (`SpatialFocusProvider` +
+ * `FocusLayer`) is required since `Avatar` mounts a `<FocusScope>`, and
+ * the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function renderAvatar(
   actorId: string,
   actors: Entity[],
   size?: "sm" | "md" | "lg",
 ) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ actor: actors }}>
-          <EntityFocusProvider>
-            <Avatar actorId={actorId} size={size} />
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={0}>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ actor: actors }}>
+              <EntityFocusProvider>
+                <Avatar actorId={actorId} size={size} />
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

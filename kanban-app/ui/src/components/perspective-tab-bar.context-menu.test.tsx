@@ -123,6 +123,9 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { PerspectivesContainer } from "./perspectives-container";
 import { CommandScopeProvider } from "@/lib/command-scope";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "./focus-layer";
+import { asSegment } from "@/types/spatial";
 
 /**
  * Drive the mocked `invoke` so `list_commands_for_scope` returns a fixed
@@ -167,14 +170,24 @@ function capturedItemScopes(): string[][] {
   return items.filter((i) => !i.separator).map((i) => i.scope_chain);
 }
 
-/** Render the tab bar inside a `window:main` ancestor scope so the captured chain is realistic. */
+/**
+ * Render the tab bar inside a `window:main` ancestor scope so the
+ * captured chain is realistic. Wraps in the spatial provider stack
+ * since `PerspectiveTabBar` mounts a `<FocusZone>` and the
+ * no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function renderTabBarWithWindowScope() {
   return render(
-    <TooltipProvider delayDuration={100}>
-      <CommandScopeProvider moniker="window:main">
-        <PerspectiveTabBar />
-      </CommandScopeProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider delayDuration={100}>
+          <CommandScopeProvider moniker="window:main">
+            <PerspectiveTabBar />
+          </CommandScopeProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -215,8 +228,11 @@ describe("PerspectiveTabBar right-click scope chain", () => {
 
     const chain = capturedListScope();
     expect(chain).toBeDefined();
-    // Innermost first: perspective:p2 → window:main
-    expect(chain![0]).toBe("perspective:p2");
+    // Innermost first: perspective_tab:p2 → perspective:p2 → window:main
+    // (`perspective_tab:<id>` comes from the inner `<FocusScope>` leaf;
+    // `perspective:<id>` from the surrounding `<CommandScopeProvider>`.)
+    expect(chain![0]).toBe("perspective_tab:p2");
+    expect(chain).toContain("perspective:p2");
     expect(chain).toContain("window:main");
   });
 
@@ -248,7 +264,10 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     const chains = capturedItemScopes();
     expect(chains.length).toBeGreaterThan(0);
     for (const chain of chains) {
-      expect(chain[0]).toBe("perspective:p1");
+      // Innermost: perspective_tab:p1 (the `<FocusScope>` leaf) →
+      // perspective:p1 (the surrounding `<CommandScopeProvider>`).
+      expect(chain[0]).toBe("perspective_tab:p1");
+      expect(chain).toContain("perspective:p1");
       expect(chain).toContain("window:main");
     }
   });
@@ -275,7 +294,9 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     // The scope chain must reflect p2, not p1 — this is the contract
     // that lets "Clear Filter" act on a non-active perspective.
     const chain = capturedListScope();
-    expect(chain![0]).toBe("perspective:p2");
+    expect(chain![0]).toBe("perspective_tab:p2");
+    expect(chain).toContain("perspective:p2");
+    expect(chain).not.toContain("perspective_tab:p1");
     expect(chain).not.toContain("perspective:p1");
   });
 });
@@ -301,20 +322,28 @@ describe("PerspectivesContainer view-body scope", () => {
     };
   });
 
-  /** Render `PerspectivesContainer` with a child that captures right-click events from the view body. */
+  /**
+   * Render `PerspectivesContainer` with a child that captures right-click
+   * events from the view body. Wraps in the spatial provider stack since
+   * the container mounts spatial primitives.
+   */
   function renderWithBodyChild(bodyTestId = "view-body") {
     return render(
-      <TooltipProvider delayDuration={100}>
-        <CommandScopeProvider moniker="window:main">
-          <PerspectivesContainer>
-            {/* Attach a passthrough onContextMenu via the real useContextMenu
-                hook by delegating to a child component. Keeping the hook
-                call inside the child means it reads the scope chain that
-                PerspectivesContainer's `ActivePerspectiveScope` injected. */}
-            <ViewBodyWithContextMenu testId={bodyTestId} />
-          </PerspectivesContainer>
-        </CommandScopeProvider>
-      </TooltipProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <TooltipProvider delayDuration={100}>
+            <CommandScopeProvider moniker="window:main">
+              <PerspectivesContainer>
+                {/* Attach a passthrough onContextMenu via the real useContextMenu
+                    hook by delegating to a child component. Keeping the hook
+                    call inside the child means it reads the scope chain that
+                    PerspectivesContainer's `ActivePerspectiveScope` injected. */}
+                <ViewBodyWithContextMenu testId={bodyTestId} />
+              </PerspectivesContainer>
+            </CommandScopeProvider>
+          </TooltipProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
   }
 

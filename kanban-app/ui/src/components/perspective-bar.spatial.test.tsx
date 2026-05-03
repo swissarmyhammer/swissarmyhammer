@@ -481,24 +481,6 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("falls back to a plain div when no SpatialFocusProvider wraps the bar", () => {
-    // Outside the spatial-nav stack, the conditional zone short-circuits so
-    // the existing narrow-provider tests (perspective-tab-bar.test.tsx) keep
-    // their layout assertions stable. There must be no `data-moniker` on
-    // the bar or any tab.
-    const { container } = render(
-      <TooltipProvider delayDuration={100}>
-        <PerspectiveTabBar />
-      </TooltipProvider>,
-    );
-    expect(
-      container.querySelector("[data-segment='ui:perspective-bar']"),
-    ).toBeNull();
-    expect(
-      container.querySelector("[data-segment^='perspective_tab:']"),
-    ).toBeNull();
-  });
-
   it("registers a filter_editor:{activePerspectiveId} scope as a peer of the perspective tabs", async () => {
     // The filter formula bar must register exactly one FocusScope leaf with
     // segment `filter_editor:${activePerspectiveId}` — distinct per

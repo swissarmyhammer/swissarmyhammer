@@ -4,13 +4,12 @@
  *
  * Two layers of coverage:
  *
- * 1. **Structural** (no spatial provider stack) — pins the per-pill
- *    `<FocusScope>` shape that the spatial graph relies on. Each pill
- *    renders with `data-moniker = "${entityType}:${id|slug}"` nested
- *    under the parent field-row scope. These tests run against the
- *    `<FocusScope>` fallback branch (no `<FocusLayer>` ancestor) — they
- *    do not exercise `spatial_register_*` IPCs, only the React-side
- *    DOM shape.
+ * 1. **Structural** — pins the per-pill `<FocusScope>` shape that the
+ *    spatial graph relies on. Each pill renders with `data-segment =
+ *    "${entityType}:${id|slug}"` nested under the parent field-row
+ *    scope. Wrapped in the spatial provider stack so the primitives
+ *    have their required `<FocusLayer>` ancestor (the no-spatial-context
+ *    fallback was removed in card `01KQPVA127YMJ8D7NB6M824595`).
  *
  * 2. **Click → indicator chain** (production-shaped spatial provider
  *    stack) — pins the user-visible affordance the parent card
@@ -247,14 +246,15 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
 }
 
 // ---------------------------------------------------------------------------
-// Structural harnesses (no spatial provider stack)
+// Structural harnesses
 // ---------------------------------------------------------------------------
 
 /**
  * Full provider tree with a parent FocusScope (simulating a field row)
- * containing BadgeListDisplay. The parent is `` to mirror the
- * real `FieldRow`, which registers as a navigable zone in the spatial-nav
- * graph.
+ * containing BadgeListDisplay. The parent is a `<FocusScope>` to mirror
+ * the real `FieldRow`. The spatial provider stack is required since the
+ * no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
  */
 function NavHarness({
   values,
@@ -264,28 +264,29 @@ function NavHarness({
   parentMoniker: string;
 }) {
   return (
-    <EntityFocusProvider>
-      <TooltipProvider>
-        <FocusScope
-          moniker={asSegment(parentMoniker)}
-
-          commands={[]}
-        >
-          <BadgeListDisplay
-            field={tagField}
-            value={values}
-            entity={taskEntity}
-            mode="full"
-          />
-        </FocusScope>
-      </TooltipProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>
+            <FocusScope moniker={asSegment(parentMoniker)} commands={[]}>
+              <BadgeListDisplay
+                field={tagField}
+                value={values}
+                entity={taskEntity}
+                mode="full"
+              />
+            </FocusScope>
+          </TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
 /**
- * Harness for reference-field navigation (entity ID values, no slug resolution).
- * The parent is `` to mirror the real `FieldRow`.
+ * Harness for reference-field navigation (entity ID values, no slug
+ * resolution). The parent is a `<FocusScope>` to mirror the real
+ * `FieldRow`. Same spatial-provider wrapping as `NavHarness`.
  */
 function RefNavHarness({
   values,
@@ -295,22 +296,22 @@ function RefNavHarness({
   parentMoniker: string;
 }) {
   return (
-    <EntityFocusProvider>
-      <TooltipProvider>
-        <FocusScope
-          moniker={asSegment(parentMoniker)}
-
-          commands={[]}
-        >
-          <BadgeListDisplay
-            field={refField}
-            value={values}
-            entity={refEntity}
-            mode="full"
-          />
-        </FocusScope>
-      </TooltipProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>
+            <FocusScope moniker={asSegment(parentMoniker)} commands={[]}>
+              <BadgeListDisplay
+                field={refField}
+                value={values}
+                entity={refEntity}
+                mode="full"
+              />
+            </FocusScope>
+          </TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
@@ -384,10 +385,12 @@ describe("BadgeListDisplay pill scope structure", () => {
       '[data-segment^="tag:"]',
     ) as NodeListOf<HTMLElement>;
     expect(pills.length).toBe(3);
-    const monikers = Array.from(pills).map((p) =>
-      p.getAttribute("data-moniker"),
+    // `data-segment` carries the relative segment moniker; `data-moniker`
+    // carries the composed FQM (path-form, including the layer prefix).
+    const segments = Array.from(pills).map((p) =>
+      p.getAttribute("data-segment"),
     );
-    expect(monikers).toEqual(["tag:tag-1", "tag:tag-2", "tag:tag-3"]);
+    expect(segments).toEqual(["tag:tag-1", "tag:tag-2", "tag:tag-3"]);
   });
 
   it("renders the expected scope tree: parent field row plus one scope per pill", async () => {
@@ -433,10 +436,12 @@ describe("BadgeListDisplay reference-field pill structure", () => {
       '[data-segment^="task:"]',
     ) as NodeListOf<HTMLElement>;
     expect(pills.length).toBe(2);
-    const monikers = Array.from(pills).map((p) =>
-      p.getAttribute("data-moniker"),
+    // `data-segment` carries the relative segment moniker; `data-moniker`
+    // carries the composed FQM (path-form, including the layer prefix).
+    const segments = Array.from(pills).map((p) =>
+      p.getAttribute("data-segment"),
     );
-    expect(monikers).toEqual(["task:task-dep-A", "task:task-dep-B"]);
+    expect(segments).toEqual(["task:task-dep-A", "task:task-dep-B"]);
   });
 });
 

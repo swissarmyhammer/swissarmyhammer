@@ -59,11 +59,14 @@ import "@/components/fields/registrations";
 
 import { useState, useCallback } from "react";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { SchemaProvider } from "@/lib/schema-context";
 import { Field } from "@/components/fields/field";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -111,28 +114,32 @@ function TestHarness({ onDoneSpy }: { onDoneSpy?: () => void }) {
   }, [onDoneSpy]);
 
   return (
-    <ActiveBoardPathProvider value="/test/board">
-      <SchemaProvider>
-        <EntityStoreProvider entities={{ task: [TASK_ENTITY] }}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <div data-testid="harness" data-editing={String(editing)}>
-                <Field
-                  fieldDef={TITLE_FIELD}
-                  entityType="task"
-                  entityId="t1"
-                  mode="full"
-                  editing={editing}
-                  onEdit={() => setEditing(true)}
-                  onDone={handleDone}
-                  onCancel={() => setEditing(false)}
-                />
-              </div>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </ActiveBoardPathProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <ActiveBoardPathProvider value="/test/board">
+          <SchemaProvider>
+            <EntityStoreProvider entities={{ task: [TASK_ENTITY] }}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <div data-testid="harness" data-editing={String(editing)}>
+                    <Field
+                      fieldDef={TITLE_FIELD}
+                      entityType="task"
+                      entityId="t1"
+                      mode="full"
+                      editing={editing}
+                      onEdit={() => setEditing(true)}
+                      onDone={handleDone}
+                      onCancel={() => setEditing(false)}
+                    />
+                  </div>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </ActiveBoardPathProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 

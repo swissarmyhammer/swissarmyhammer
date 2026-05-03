@@ -116,8 +116,11 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 /**
@@ -199,17 +202,21 @@ function ReactiveCardHarness({
 }) {
   const entities = useMinimalEventStore(initial);
   return (
-    <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={entities}>
-          <EntityFocusProvider>
-            <FieldUpdateProvider>
-              <UIStateProvider>{children}</UIStateProvider>
-            </FieldUpdateProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </TooltipProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={entities}>
+              <EntityFocusProvider>
+                <FieldUpdateProvider>
+                  <UIStateProvider>{children}</UIStateProvider>
+                </FieldUpdateProvider>
+              </EntityFocusProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 

@@ -14,18 +14,32 @@ import { BoardSelector, pathStem } from "./board-selector";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { OpenBoard } from "@/types/kanban";
 
+/**
+ * Wrap `BoardSelector` in the providers it (transitively) needs. The
+ * spatial provider stack (`SpatialFocusProvider` + `FocusLayer`) is
+ * required since the component mounts `<FocusScope>`-using descendants
+ * and the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <SchemaProvider>
-      <EntityStoreProvider entities={{}}>
-        <FieldUpdateProvider>
-          <TooltipProvider>{children}</TooltipProvider>
-        </FieldUpdateProvider>
-      </EntityStoreProvider>
-    </SchemaProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <SchemaProvider>
+          <EntityStoreProvider entities={{}}>
+            <FieldUpdateProvider>
+              <TooltipProvider>{children}</TooltipProvider>
+            </FieldUpdateProvider>
+          </EntityStoreProvider>
+        </SchemaProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 

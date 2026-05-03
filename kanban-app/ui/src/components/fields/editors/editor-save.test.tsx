@@ -171,11 +171,14 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Field } from "@/components/fields/field";
+import { FocusLayer } from "@/components/focus-layer";
 import { FileDropProvider } from "@/lib/file-drop-context";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -283,30 +286,34 @@ function renderField(
   const onCancel = vi.fn();
 
   const result = render(
-    <TooltipProvider>
-      <FileDropProvider>
-        <SchemaProvider>
-          <EntityStoreProvider entities={TEST_ENTITIES}>
-            <EntityFocusProvider>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <Field
-                    fieldDef={fieldDef}
-                    entityType="task"
-                    entityId="test-task-1"
-                    mode={mode}
-                    editing={editing}
-                    onEdit={onEdit}
-                    onDone={onDone}
-                    onCancel={onCancel}
-                  />
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </EntityFocusProvider>
-          </EntityStoreProvider>
-        </SchemaProvider>
-      </FileDropProvider>
-    </TooltipProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <TooltipProvider>
+          <FileDropProvider>
+            <SchemaProvider>
+              <EntityStoreProvider entities={TEST_ENTITIES}>
+                <EntityFocusProvider>
+                  <FieldUpdateProvider>
+                    <UIStateProvider>
+                      <Field
+                        fieldDef={fieldDef}
+                        entityType="task"
+                        entityId="test-task-1"
+                        mode={mode}
+                        editing={editing}
+                        onEdit={onEdit}
+                        onDone={onDone}
+                        onCancel={onCancel}
+                      />
+                    </UIStateProvider>
+                  </FieldUpdateProvider>
+                </EntityFocusProvider>
+              </EntityStoreProvider>
+            </SchemaProvider>
+          </FileDropProvider>
+        </TooltipProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 
   return { ...result, onEdit, onDone, onCancel };

@@ -26,10 +26,13 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { ColumnView } from "./column-view";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
@@ -56,20 +59,29 @@ function makeTask(id: string, column = "col-1"): Entity {
   };
 }
 
-/** Wrap component with required providers. */
+/**
+ * Wrap component with required providers. The spatial provider stack
+ * (`SpatialFocusProvider` + `FocusLayer`) is required since `ColumnView`
+ * mounts `<FocusScope>`-using descendants and the no-spatial-context
+ * fallback was removed in card `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function renderColumn(ui: React.ReactElement) {
   return render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              {ui}
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <SchemaProvider>
+            <EntityStoreProvider entities={{}}>
+              <TooltipProvider>
+                <ActiveBoardPathProvider value="/test/board">
+                  {ui}
+                </ActiveBoardPathProvider>
+              </TooltipProvider>
+            </EntityStoreProvider>
+          </SchemaProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 

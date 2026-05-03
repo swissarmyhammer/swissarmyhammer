@@ -37,14 +37,25 @@ import {
 } from "./attachment-display";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { asSegment } from "@/types/spatial";
 
-/** Wraps component in providers needed by hooks (useDispatchCommand, useFileDrop). */
+/**
+ * Wraps component in the providers `AttachmentDisplay`'s `<FocusScope>`
+ * needs. The spatial provider stack (`SpatialFocusProvider` +
+ * `FocusLayer`) is required since the no-spatial-context fallback was
+ * removed in card `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <EntityFocusProvider>
-      <FileDropProvider>{children}</FileDropProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <FileDropProvider>{children}</FileDropProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 import {

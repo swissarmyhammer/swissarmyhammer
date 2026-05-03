@@ -110,7 +110,9 @@ function mockListCommands(commands: ResolvedCommand[]) {
 
 import { MentionView } from "./mention-view";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   asSegment
@@ -164,12 +166,22 @@ function setupFixtures() {
   ];
 }
 
-/** Wrap children in the minimal provider tree MentionView needs. */
+/**
+ * Wrap children in the minimal provider tree `MentionView` needs. The
+ * spatial provider stack (`SpatialFocusProvider` + `FocusLayer`) is
+ * required since `MentionView` mounts a `<FocusScope>` per pill, and
+ * the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <EntityFocusProvider>
-      <TooltipProvider>{children}</TooltipProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
@@ -309,20 +321,24 @@ describe("MentionView — list mode", () => {
     const parentMoniker = "field:mixed";
 
     const { container } = render(
-      <EntityFocusProvider>
-        <TooltipProvider>
-          <FocusScope moniker={asSegment(parentMoniker)} commands={[]}>
-            <MentionView
-              items={[
-                { entityType: "tag", id: "tag-1" },
-                { entityType: "tag", id: "tag-2" },
-                { entityType: "actor", id: "alice" },
-              ]}
-              mode="full"
-            />
-          </FocusScope>
-        </TooltipProvider>
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <TooltipProvider>
+              <FocusScope moniker={asSegment(parentMoniker)} commands={[]}>
+                <MentionView
+                  items={[
+                    { entityType: "tag", id: "tag-1" },
+                    { entityType: "tag", id: "tag-2" },
+                    { entityType: "actor", id: "alice" },
+                  ]}
+                  mode="full"
+                />
+              </FocusScope>
+            </TooltipProvider>
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
     await flush();
 
@@ -336,10 +352,10 @@ describe("MentionView — list mode", () => {
     const pills = fieldRow!.querySelectorAll(
       '[data-segment]:not([data-segment="field:mixed"])',
     ) as NodeListOf<HTMLElement>;
-    const monikers = Array.from(pills).map((p) =>
-      p.getAttribute("data-moniker"),
+    const segments = Array.from(pills).map((p) =>
+      p.getAttribute("data-segment"),
     );
-    expect(monikers).toEqual(["tag:tag-1", "tag:tag-2", "actor:alice"]);
+    expect(segments).toEqual(["tag:tag-1", "tag:tag-2", "actor:alice"]);
   });
 });
 

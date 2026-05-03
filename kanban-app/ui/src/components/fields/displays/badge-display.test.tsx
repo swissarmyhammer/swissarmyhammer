@@ -78,7 +78,10 @@ vi.mock("@/components/window-container", () => ({
 
 import { BadgeDisplay } from "./badge-display";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { asSegment } from "@/types/spatial";
 
 /** Task entity used as the host of the `position_column` field in tests. */
 const taskEntity: Entity = {
@@ -88,12 +91,21 @@ const taskEntity: Entity = {
   fields: {},
 };
 
-/** Minimal provider tree MentionView needs. */
+/**
+ * Minimal provider tree `BadgeDisplay` (via `MentionView`) needs. The
+ * spatial provider stack (`SpatialFocusProvider` + `FocusLayer`) is
+ * required since the no-spatial-context fallback was removed in card
+ * `01KQPVA127YMJ8D7NB6M824595`.
+ */
 function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <EntityFocusProvider>
-      <TooltipProvider>{children}</TooltipProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 

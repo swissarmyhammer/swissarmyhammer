@@ -37,6 +37,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { AttachmentEditor } from "./attachment-editor";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { FocusLayer } from "@/components/focus-layer";
+import { asSegment } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 import type { AttachmentMeta } from "@/components/fields/displays/attachment-display";
 
@@ -87,18 +90,22 @@ function renderEditor(props: {
   onChange?: (val: unknown) => void;
 }) {
   return render(
-    <EntityFocusProvider>
-      <FileDropProvider>
-        <AttachmentEditor
-          field={props.field ?? ATTACHMENT_FIELD}
-          value={props.value ?? []}
-          onCommit={props.onCommit ?? vi.fn()}
-          onCancel={props.onCancel ?? vi.fn()}
-          onChange={props.onChange}
-          mode="compact"
-        />
-      </FileDropProvider>
-    </EntityFocusProvider>,
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <FileDropProvider>
+            <AttachmentEditor
+              field={props.field ?? ATTACHMENT_FIELD}
+              value={props.value ?? []}
+              onCommit={props.onCommit ?? vi.fn()}
+              onCancel={props.onCancel ?? vi.fn()}
+              onChange={props.onChange}
+              mode="compact"
+            />
+          </FileDropProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>,
   );
 }
 
@@ -114,11 +121,15 @@ function FileDropTestHarness({
   isDragging: boolean;
 }) {
   return (
-    <EntityFocusProvider>
-      <FileDropProvider _testOverride={{ isDragging }}>
-        {children}
-      </FileDropProvider>
-    </EntityFocusProvider>
+    <SpatialFocusProvider>
+      <FocusLayer name={asSegment("window")}>
+        <EntityFocusProvider>
+          <FileDropProvider _testOverride={{ isDragging }}>
+            {children}
+          </FileDropProvider>
+        </EntityFocusProvider>
+      </FocusLayer>
+    </SpatialFocusProvider>
   );
 }
 
@@ -372,18 +383,22 @@ describe("AttachmentEditor", () => {
       // calling the "add file" flow which exercises the same code path.
       // Instead, test through the actual provider:
       render(
-        <EntityFocusProvider>
-          <FileDropProvider>
-            <AttachmentEditor
-              field={ATTACHMENT_FIELD}
-              value={SAMPLE_ATTACHMENTS}
-              onCommit={vi.fn()}
-              onCancel={vi.fn()}
-              onChange={onChange}
-              mode="compact"
-            />
-          </FileDropProvider>
-        </EntityFocusProvider>,
+        <SpatialFocusProvider>
+          <FocusLayer name={asSegment("window")}>
+            <EntityFocusProvider>
+              <FileDropProvider>
+                <AttachmentEditor
+                  field={ATTACHMENT_FIELD}
+                  value={SAMPLE_ATTACHMENTS}
+                  onCommit={vi.fn()}
+                  onCancel={vi.fn()}
+                  onChange={onChange}
+                  mode="compact"
+                />
+              </FileDropProvider>
+            </EntityFocusProvider>
+          </FocusLayer>
+        </SpatialFocusProvider>,
       );
 
       // The editor registered a drop callback when it mounted.

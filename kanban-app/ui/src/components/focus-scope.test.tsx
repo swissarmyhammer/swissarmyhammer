@@ -70,7 +70,6 @@ import {
 import { FocusScope, useParentFocusScope } from "./focus-scope";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import {
-  asFq,
   asSegment,
   fqLastSegment,
   type FullyQualifiedMoniker,
@@ -619,19 +618,27 @@ describe("FocusScope", () => {
     }
 
     const { unmount } = render(
-      <EntityFocusProvider>
-        <ScopeProbe />
-        <FocusScope moniker={asSegment("task:abc")} commands={[]}>
-          <span>card</span>
-        </FocusScope>
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            <ScopeProbe />
+            <FocusScope moniker={asSegment("task:abc")} commands={[]}>
+              <span>card</span>
+            </FocusScope>
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
 
+    // The entity-focus registry is keyed by the composed FQM (the kernel
+    // identifier), not the bare segment — `<FocusLayer name="window">`
+    // wraps the scope so its key is `/window/task:abc`.
+    const scopeFq = "/window/task:abc";
     // After mount + effects, scope should be registered in the ref
-    expect(probeGetScope!("task:abc")).not.toBeNull();
+    expect(probeGetScope!(scopeFq)).not.toBeNull();
     unmount();
     // After unmount, the cleanup should have deregistered
-    expect(probeGetScope!("task:abc")).toBeNull();
+    expect(probeGetScope!(scopeFq)).toBeNull();
   });
 
   it("showFocusBar=false still fires context menu (handleEvents defaults true)", async () => {
@@ -836,8 +843,16 @@ describe("FocusScope", () => {
       asSegment("scope:e"),
     ] as const;
 
+    // After wrapping in `<FocusLayer name="window">`, each scope registers
+    // under its composed FQM (`/window/scope:a`). The counters subscribe
+    // and the SetFocus buttons write the same FQMs so the subscription
+    // keys line up across all three sites.
+    const fqs = monikers.map(
+      (m) => `/window/${m}` as FullyQualifiedMoniker,
+    ) as readonly FullyQualifiedMoniker[];
+
     const counts: Record<string, number> = Object.fromEntries(
-      monikers.map((m) => [m, 0]),
+      fqs.map((fq) => [fq, 0]),
     );
 
     /**
@@ -865,18 +880,22 @@ describe("FocusScope", () => {
     }
 
     const { getByTestId } = render(
-      <EntityFocusProvider>
-        {monikers.map((m) => (
-          <FocusScope key={m} moniker={m}>
-            <span>scope</span>
-          </FocusScope>
-        ))}
-        {monikers.map((m) => (
-          <SubscribedCounter key={`sub-${m}`} moniker={m} />
-        ))}
-        <SetFocus moniker={asFq("scope:a")} />
-        <SetFocus moniker={asFq("scope:b")} />
-      </EntityFocusProvider>,
+      <SpatialFocusProvider>
+        <FocusLayer name={asSegment("window")}>
+          <EntityFocusProvider>
+            {monikers.map((m) => (
+              <FocusScope key={m} moniker={m}>
+                <span>scope</span>
+              </FocusScope>
+            ))}
+            {fqs.map((fq) => (
+              <SubscribedCounter key={`sub-${fq}`} moniker={fq} />
+            ))}
+            <SetFocus moniker={fqs[0]} />
+            <SetFocus moniker={fqs[1]} />
+          </EntityFocusProvider>
+        </FocusLayer>
+      </SpatialFocusProvider>,
     );
 
     // Baseline: capture mount-time render counts so the assertion below
@@ -886,34 +905,31 @@ describe("FocusScope", () => {
     // the selective-wake behavior is identical — this counter proves it.)
     const base = { ...counts };
 
-    fireEvent.click(getByTestId("set-scope:a"));
+    fireEvent.click(getByTestId(`set-${fqs[0]}`));
     // Only scope:a's subscription slot fired.
-    expect(counts["scope:a"]).toBe(base["scope:a"] + 1);
-    expect(counts["scope:b"]).toBe(base["scope:b"]);
-    expect(counts["scope:c"]).toBe(base["scope:c"]);
-    expect(counts["scope:d"]).toBe(base["scope:d"]);
-    expect(counts["scope:e"]).toBe(base["scope:e"]);
+    expect(counts[fqs[0]]).toBe(base[fqs[0]] + 1);
+    expect(counts[fqs[1]]).toBe(base[fqs[1]]);
+    expect(counts[fqs[2]]).toBe(base[fqs[2]]);
+    expect(counts[fqs[3]]).toBe(base[fqs[3]]);
+    expect(counts[fqs[4]]).toBe(base[fqs[4]]);
 
-    fireEvent.click(getByTestId("set-scope:b"));
+    fireEvent.click(getByTestId(`set-${fqs[1]}`));
     // Moving focus A -> B wakes A (lost) and B (gained), nothing else.
-    expect(counts["scope:a"]).toBe(base["scope:a"] + 2);
-    expect(counts["scope:b"]).toBe(base["scope:b"] + 1);
-    expect(counts["scope:c"]).toBe(base["scope:c"]);
-    expect(counts["scope:d"]).toBe(base["scope:d"]);
-    expect(counts["scope:e"]).toBe(base["scope:e"]);
+    expect(counts[fqs[0]]).toBe(base[fqs[0]] + 2);
+    expect(counts[fqs[1]]).toBe(base[fqs[1]] + 1);
+    expect(counts[fqs[2]]).toBe(base[fqs[2]]);
+    expect(counts[fqs[3]]).toBe(base[fqs[3]]);
+    expect(counts[fqs[4]]).toBe(base[fqs[4]]);
   });
 
   /**
    * Composition tests — verify FocusScope is the leaf primitive,
-   * forwards `navOverride` through to the registration call, and routes click
-   * to the primitive's `spatial_focus` invoke (not the legacy
-   * `setFocus(moniker)` path) when a `<FocusLayer>` ancestor is mounted.
-   *
-   * These tests stand up the spatial provider stack
-   * (`SpatialFocusProvider` + `FocusLayer`) so the primitive is exercised
-   * end-to-end. Tests that omit those wrappers (the bulk of this file)
-   * exercise the no-spatial-context fallback path that drives entity
-   * focus directly via `setFocus(moniker)` — both paths matter.
+   * forwards `navOverride` through to the registration call, and routes
+   * click to the primitive's `spatial_focus` invoke. Every test in this
+   * file mounts the primitive inside the spatial provider stack
+   * (`SpatialFocusProvider` + `FocusLayer`) — the no-spatial-context
+   * fallback path was removed in card `01KQPVA127YMJ8D7NB6M824595`, so
+   * mounting `<FocusScope>` without `<FocusLayer>` now throws.
    */
   describe("spatial-context registration", () => {
     it("registers via spatial_register_scope as a leaf when wrapped in <FocusLayer>", async () => {
@@ -1045,29 +1061,29 @@ describe("FocusScope", () => {
       });
     });
 
-    it("falls back to a plain div when no <FocusLayer> ancestor is mounted", () => {
-      // Render WITHOUT a FocusLayer to exercise the fallback path that
-      // emits a plain `<div>` and skips the primitive registration. The
-      // bare `<EntityFocusProvider>` is sufficient — the optional spatial
-      // hooks return null and the fallback body branch runs.
-      const { container } = render(
-        <EntityFocusProvider>
-          <FocusScope moniker={asSegment("task:abc")}>
-            <span>card</span>
-          </FocusScope>
-        </EntityFocusProvider>,
-      );
-      const node = container.querySelector("[data-segment='task:abc']");
-      expect(node).not.toBeNull();
-      // No primitive registration happened
-      expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_scope",
-        expect.anything(),
-      );
-      expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_zone",
-        expect.anything(),
-      );
+    it("throws when <FocusScope> is mounted without <FocusLayer>", () => {
+      // Mounting a `<FocusScope>` outside the spatial provider stack is a
+      // setup bug, not a supported mode. The primitive must surface the
+      // missing `<FocusLayer>` ancestor as a clear error rather than
+      // silently rendering a plain `<div>` (the legacy fallback). Suppress
+      // React's auto-logging of the thrown error so the test output stays
+      // readable; we still assert the throw via `expect(...).toThrow`.
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      try {
+        expect(() =>
+          render(
+            <EntityFocusProvider>
+              <FocusScope moniker={asSegment("task:abc")}>
+                <span>card</span>
+              </FocusScope>
+            </EntityFocusProvider>,
+          ),
+        ).toThrow(/FocusLayer/);
+      } finally {
+        consoleError.mockRestore();
+      }
     });
 
     /**
