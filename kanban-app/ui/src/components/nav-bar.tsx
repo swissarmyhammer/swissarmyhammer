@@ -3,6 +3,7 @@ import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
+import { Pressable } from "@/components/pressable";
 import {
   Tooltip,
   TooltipTrigger,
@@ -106,25 +107,28 @@ export function NavBar() {
         />
       </FocusZone>
       {board && (
-        <FocusScope moniker={asSegment("ui:navbar.inspect")}>
-          <Tooltip>
-            <TooltipTrigger asChild>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Pressable
+              asChild
+              moniker={asSegment("ui:navbar.inspect")}
+              ariaLabel="Inspect board"
+              onPress={() => {
+                dispatchInspect({ target: board.board.moniker }).catch(
+                  console.error,
+                );
+              }}
+            >
               <button
                 type="button"
-                aria-label="Inspect board"
                 className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-                onClick={() => {
-                  dispatchInspect({ target: board.board.moniker }).catch(
-                    console.error,
-                  );
-                }}
               >
                 <Info className="h-4 w-4" />
               </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Inspect board</TooltipContent>
-          </Tooltip>
-        </FocusScope>
+            </Pressable>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Inspect board</TooltipContent>
+        </Tooltip>
       )}
       {/*
         `<Field>` is itself a `<FocusZone>` keyed by

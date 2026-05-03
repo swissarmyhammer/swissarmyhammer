@@ -40,6 +40,7 @@ import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
+import { Pressable } from "@/components/pressable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { asSegment } from "@/types/spatial";
@@ -488,13 +489,19 @@ function AddPerspectiveButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          onClick={handleAdd}
-          aria-label="Add perspective"
-          className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
+        <Pressable
+          asChild
+          moniker={asSegment("ui:perspective-bar.add")}
+          ariaLabel="Add perspective"
+          onPress={handleAdd}
         >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </Pressable>
       </TooltipTrigger>
       <TooltipContent>New perspective</TooltipContent>
     </Tooltip>

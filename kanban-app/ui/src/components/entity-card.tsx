@@ -1,8 +1,8 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info } from "lucide-react";
-import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
+import { Pressable } from "@/components/pressable";
 import { asSegment } from "@/types/spatial";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
@@ -304,11 +304,24 @@ function CardField({
  * walking the scope chain (which comes from FocusedScopeContext and may
  * point to a previously-focused entity, not this card).
  *
- * Wrapped in a `<FocusScope moniker="card.inspect:{id}">` leaf so the
- * outer card `<FocusZone>` has a navigable atom for the inspector
- * affordance. Same pattern as the navbar's
- * `<FocusScope moniker="ui:navbar.inspect">`. The `entityId` suffix
- * keeps each card's inspect leaf at a distinct FQM under the card.
+ * Migrates to `<Pressable asChild>` so the inspect leaf gains both
+ * keyboard reachability (`<FocusScope>` provided by Pressable) AND the
+ * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
+ * the same dispatch as a pointer click. Pre-migration the leaf was
+ * focusable but Enter did NOTHING — the kernel's drillIn echoes the
+ * focused FQM for a leaf, `setFocus` is idempotent, the visible effect
+ * was a no-op. Pressable's CommandDefs close that gap. The `entityId`
+ * suffix keeps each card's inspect leaf at a distinct FQM under the
+ * card.
+ *
+ * The inner `<button>`'s `onClick={(e) => e.stopPropagation()}` is
+ * preserved: a click on (i) must NOT bubble to the enclosing card
+ * `<FocusZone>`'s own onClick (which would fire `spatial_focus(cardFq)`
+ * and steal focus to the card body). Radix Slot's `mergeProps` runs
+ * the child's `onClick` first, then the slot's — so
+ * `e.stopPropagation()` lands BEFORE Pressable's `handleClick`
+ * triggers `onPress` (dispatch). Both behaviours hold in the correct
+ * order.
  */
 function InspectButton({
   entityId,
@@ -319,23 +332,26 @@ function InspectButton({
 }) {
   const dispatch = useDispatchCommand("ui.inspect");
   return (
-    <FocusScope moniker={asSegment(`card.inspect:${entityId}`)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Pressable
+          asChild
+          moniker={asSegment(`card.inspect:${entityId}`)}
+          ariaLabel="Inspect"
+          onPress={() => {
+            dispatch({ target: moniker }).catch(console.error);
+          }}
+        >
           <button
             type="button"
-            aria-label="Inspect"
             className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              dispatch({ target: moniker }).catch(console.error);
-            }}
+            onClick={(e) => e.stopPropagation()}
           >
             <Info className="h-3.5 w-3.5" />
           </button>
-        </TooltipTrigger>
-        <TooltipContent>Inspect</TooltipContent>
-      </Tooltip>
-    </FocusScope>
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent>Inspect</TooltipContent>
+    </Tooltip>
   );
 }

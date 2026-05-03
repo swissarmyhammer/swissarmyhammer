@@ -8,6 +8,7 @@ import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusZone, useParentZoneFq } from "@/components/focus-zone";
 import { Inspectable } from "@/components/inspectable";
+import { Pressable } from "@/components/pressable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
@@ -704,7 +705,19 @@ function ColumnHeader({
   );
 }
 
-/** The "+" button in the column header that adds a new task. */
+/**
+ * The "+" button in the column header that adds a new task.
+ *
+ * Wraps a `<Pressable asChild>` inside the existing `<TooltipTrigger asChild>`
+ * so the button gains both keyboard reachability AND Enter / Space
+ * activation. Pre-migration this was a bare `<button>` with no
+ * `<FocusScope>` — keyboard users could not focus it at all.
+ *
+ * Moniker `ui:column.add-task:{columnId}` — entity-disambiguated like
+ * `card.inspect:{id}`, namespaced under `ui:column.*` so future
+ * column-level icon buttons (filter, sort, etc.) can compose under the
+ * same prefix.
+ */
 function AddTaskButton({
   columnId,
   columnName,
@@ -721,17 +734,22 @@ function AddTaskButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Add task to ${columnName}`}
-          className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-          onClick={() => {
+        <Pressable
+          asChild
+          moniker={asSegment(`ui:column.add-task:${columnId}`)}
+          ariaLabel={`Add task to ${columnName}`}
+          onPress={() => {
             if (columnFq) setFocus(columnFq);
             onAddTask(columnId);
           }}
         >
-          <Plus className="h-4 w-4" />
-        </button>
+          <button
+            type="button"
+            className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </Pressable>
       </TooltipTrigger>
       <TooltipContent>{`Add task to ${columnName}`}</TooltipContent>
     </Tooltip>
