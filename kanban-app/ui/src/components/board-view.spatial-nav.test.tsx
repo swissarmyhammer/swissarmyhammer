@@ -170,25 +170,6 @@ function renderBoardWithSpatialStack() {
   );
 }
 
-/** Render `BoardView` without the spatial-nav stack (pre-zone shape). */
-function renderBoardWithoutSpatialStack() {
-  return render(
-    <EntityFocusProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={{}}>
-          <TooltipProvider>
-            <ActiveBoardPathProvider value="/test/board">
-              <DragSessionProvider>
-                <BoardView board={board} tasks={tasks} />
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
-          </TooltipProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
-    </EntityFocusProvider>,
-  );
-}
-
 /** Pull every `spatial_register_zone` call as a typed record. */
 function registeredZones(): Array<{
   fq: string;
@@ -279,22 +260,11 @@ describe("BoardView (spatial-nav)", () => {
     unmount();
   });
 
-  it.skip("does not wrap in FocusZone when no SpatialFocusProvider is present", async () => {
-    // SKIPPED: Under path-monikers (card 01KQD6064G1C1RAXDFPJVT1F46) the
-    // BoardSpatialBody invokes the non-optional `useFullyQualifiedMoniker`
-    // directly so this no-provider short-circuit is no longer reachable
-    // from production code paths. Tests that need this contract must wrap
-    // in `<SpatialFocusProvider>` + `<FocusLayer>`.
-    const { container, unmount } = renderBoardWithoutSpatialStack();
-    await flushSetup();
-
-    expect(container.querySelector("[data-segment='ui:board']")).toBeNull();
-
-    const boardZones = registeredZones().filter(
-      (z) => z.segment === "ui:board",
-    );
-    expect(boardZones).toHaveLength(0);
-
-    unmount();
-  });
+  // Note: a former `it.skip("does not wrap in FocusZone when no
+  // SpatialFocusProvider is present", …)` was removed under path-monikers
+  // (card 01KQD6064G1C1RAXDFPJVT1F46). `BoardSpatialBody` now calls the
+  // non-optional `useFullyQualifiedMoniker`, so the no-provider
+  // short-circuit no longer exists in production. Tests asserting board
+  // wrapper shape must mount inside `<SpatialFocusProvider>` +
+  // `<FocusLayer>` (see the test above).
 });

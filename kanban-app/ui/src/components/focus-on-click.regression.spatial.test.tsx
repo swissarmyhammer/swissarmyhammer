@@ -46,9 +46,10 @@
  *   - **Perspective bar background** (`ui:perspective-bar`).
  *   - **Nav bar buttons** (`ui:navbar.search`, `ui:navbar.inspect`,
  *     `ui:navbar.board-selector`) — three named tests, one per leaf.
- *   - **Toolbar action** (`ui:toolbar.*`) — skipped: production has no
- *     toolbar component today; see `it.skip` note for the linked card to
- *     file when one ships.
+ *   - **Toolbar action** (`ui:toolbar.*`) — deferred: production has no
+ *     toolbar component today. The architectural guard already pins
+ *     the registration shape; add a click-side block here when one
+ *     ships (see the trailing comment near the task-card section).
  *   - **Inspector field row** (`field:task:<id>.<name>`).
  *   - ~~Inspector panel background~~ — removed in card
  *     `01KQCTJY1QZ710A05SE975GHNR`. The `<FocusZone moniker="panel:*">`
@@ -1106,22 +1107,14 @@ describe("focus-on-click regression suite (every component class)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Toolbar action — production has no toolbar component today. The card
-  // description lists `ui:toolbar.*` as a target class so the suite stays
-  // exhaustive when one ships.
+  // Toolbar action — production has no toolbar component today. The
+  // architectural guard (`focus-architecture.guards.node.test.ts`, Guard A)
+  // already requires every `ui:` prefix to register as `<FocusZone>` or
+  // `<FocusScope>`, so the registration shape is pinned. When a toolbar
+  // ships, add a `describe("toolbar action", …)` block here that follows
+  // the same `assertClickProducesIndicator` pattern used by the navbar
+  // and perspective-tab cases against the toolbar's `ui:toolbar.*` leaves.
   // -------------------------------------------------------------------------
-  describe("toolbar action", () => {
-    it.skip("clicking a toolbar action focuses it and renders the indicator — production has no toolbar component today", () => {
-      // No toolbar component exists in production yet. When one lands,
-      // unskip and replace with the same `assertClickProducesIndicator`
-      // chain pointed at the toolbar's leaf monikers (`ui:toolbar.<id>`).
-      // The architectural guard
-      // (`focus-architecture.guards.node.test.ts`, Guard A) requires every
-      // `ui:` prefix to register as a `<FocusZone>` or `<FocusScope>`,
-      // so the registration shape is already pinned — only the click side
-      // remains to be tested here.
-    });
-  });
 
   // -------------------------------------------------------------------------
   // Task card

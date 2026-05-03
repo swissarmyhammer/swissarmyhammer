@@ -198,32 +198,26 @@ async function fireTauriEvent(eventName: string, payload: unknown) {
 /**
  * Capture the focus API into a ref so tests can drive nav without the real
  * keybinding pipeline. The probe mounts inside the `EntityFocusProvider`,
- * reads `broadcastNavCommand` and `setFocus` from context, and writes them
- * to the test-owned ref.
+ * reads `setFocus` from context, and writes it to the test-owned ref.
  *
- * `broadcastNavCommand` is the production entry point — `AppShell` wires
- * arrow keys through it. It only dispatches `ui.setFocus` when some
- * FocusScope claim predicate matches. Our mocked `DataTable` does not
- * register predicates, so tests that need to exercise the full dispatch
- * path call `setFocus` directly with a known moniker instead. Both paths
- * flow through the same `useDispatchCommand("ui.setFocus")` — that's the
- * contract this test is guarding.
+ * The legacy `broadcastNavCommand` callable was a no-op stub from the
+ * pre-spatial-nav predicate registry; it has been removed (kanban task
+ * `01KQJDKBQ2VNT3SE7AN3VM2KGZ`). Real navigation now flows through
+ * `spatial_navigate` against the Rust kernel; tests that need to drive
+ * the dispatch path call `setFocus` directly with a known moniker.
  */
 interface NavRef {
-  broadcast: ((cmd: string) => boolean) | null;
   setFocus: ((fq: FullyQualifiedMoniker | null) => void) | null;
 }
 
 function NavProbe({ navRef }: { navRef: NavRef }) {
-  const { broadcastNavCommand, setFocus } = useEntityFocus();
+  const { setFocus } = useEntityFocus();
   useEffect(() => {
-    navRef.broadcast = broadcastNavCommand;
     navRef.setFocus = setFocus;
     return () => {
-      navRef.broadcast = null;
       navRef.setFocus = null;
     };
-  }, [broadcastNavCommand, setFocus, navRef]);
+  }, [setFocus, navRef]);
   return null;
 }
 
@@ -329,7 +323,7 @@ describe("GridView — nav is event-driven", () => {
   });
 
   it("fires zero fetch IPCs during arrow-key navigation", async () => {
-    const navRef: NavRef = { broadcast: null, setFocus: null };
+    const navRef: NavRef = { setFocus: null };
     const entities = { task: fiveTasks() };
 
     await act(async () => {
@@ -342,31 +336,25 @@ describe("GridView — nav is event-driven", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    expect(navRef.broadcast).toBeTruthy();
     expect(navRef.setFocus).toBeTruthy();
 
     // Capture the baseline and clear: tests measure only post-mount IPCs.
     mockInvoke.mockClear();
 
-    // Simulate nav in two faithful ways:
+    // Simulate nav by driving `setFocus(moniker)` against the entity
+    // focus store — this is the effect every matching nav claim has on
+    // production. Drives the `ui.setFocus` dispatch path end-to-end,
+    // which is the one IPC legitimately allowed on nav. Cycle through
+    // every seeded task so the contract is exercised across every
+    // moniker real keyboard nav would surface.
     //
-    // 1. `broadcastNavCommand` — the production entry point. In this test
-    //    harness the `DataTable` is mocked, so no FocusScope predicates
-    //    register; these broadcasts become no-ops. That's still a valid
-    //    probe — if any *other* code path reached by a nav broadcast
-    //    fetched, we'd catch it.
-    // 2. `setFocus(moniker)` — the effect every matching nav claim has.
-    //    Drives the `ui.setFocus` dispatch path end-to-end, which is the
-    //    one IPC legitimately allowed on nav.
-    //
-    // Alternating 10 nav commands exercises both axes; the 5 setFocus
-    // calls cycle through every seeded task so we hit every moniker the
-    // grid would surface on real keyboard nav.
+    // Pre-spatial-nav, this test also drove a no-op `broadcastNavCommand`
+    // probe — that callable is gone (kanban task
+    // `01KQJDKBQ2VNT3SE7AN3VM2KGZ`); arrow-key navigation routes through
+    // the Rust spatial-nav kernel via `spatial_navigate`, exercised
+    // end-to-end by browser-mode tests like
+    // `grid-view.keyboard-nav.spatial.test.tsx`.
     await act(async () => {
-      for (let i = 0; i < 5; i++) {
-        navRef.broadcast?.("nav.down");
-        navRef.broadcast?.("nav.right");
-      }
       navRef.setFocus?.(asFq("field:task:t1.title"));
       navRef.setFocus?.(asFq("field:task:t2.title"));
       navRef.setFocus?.(asFq("field:task:t3.title"));
@@ -406,7 +394,7 @@ describe("GridView — nav is event-driven", () => {
   });
 
   it("allows ui.setFocus through — the only legitimate per-nav dispatch", async () => {
-    const navRef: NavRef = { broadcast: null, setFocus: null };
+    const navRef: NavRef = { setFocus: null };
     const entities = { task: fiveTasks() };
 
     await act(async () => {

@@ -769,7 +769,7 @@ describe("FocusScope", () => {
     });
   });
 
-  it.skip("useIsFocused ancestor: column gets data-focused when card inside is focused", () => {
+  it("useIsFocused ancestor: column gets data-focused when card inside is focused", () => {
     /** Column component that reads useIsFocused. */
     function ColumnWithFocus({
       moniker,

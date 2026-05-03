@@ -664,39 +664,10 @@ describe("useEntityFocus (compat shim)", () => {
     expect(typeof shim.registerScope).toBe("function");
     expect(typeof shim.unregisterScope).toBe("function");
     expect(typeof shim.getScope).toBe("function");
-    expect(typeof shim.broadcastNavCommand).toBe("function");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// broadcastNavCommand — predicate registry has been removed
-// ---------------------------------------------------------------------------
-
-describe("broadcastNavCommand", () => {
-  it("is a no-op stub that always returns false", () => {
-    // The pull-based predicate registry has been replaced by the Rust
-    // spatial-nav kernel's `overrides` map. The callable remains in the
-    // actions bag for source compatibility but has no behavior — it
-    // never claims focus and always returns `false`.
-    const { result } = renderHook(() => useFocusActions(), { wrapper });
-    expect(result.current.broadcastNavCommand("nav.right")).toBe(false);
-    expect(result.current.broadcastNavCommand("nav.up")).toBe(false);
-    expect(result.current.broadcastNavCommand("any.command")).toBe(false);
-  });
-
-  it("does not mutate focus state", () => {
-    // Even when there's a focused entity, broadcastNavCommand must not
-    // touch the store — all real navigation lives in the Rust kernel.
-    const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    act(() => {
-      result.current.setFocus(asFq("task:abc"));
-    });
-    expect(result.current.focusedFq).toBe("task:abc");
-
-    act(() => {
-      result.current.broadcastNavCommand("nav.right");
-    });
-    expect(result.current.focusedFq).toBe("task:abc");
+    // `broadcastNavCommand` was a no-op stub for the legacy predicate
+    // registry. It has been removed end-to-end (kanban task
+    // `01KQJDKBQ2VNT3SE7AN3VM2KGZ`); the structural guard lives in
+    // `entity-focus-context.no-broadcast.test.tsx`.
   });
 });
 

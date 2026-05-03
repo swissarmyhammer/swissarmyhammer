@@ -172,14 +172,6 @@ export interface FocusActions {
   unregisterScope: (moniker: string) => void;
   /** Look up a registered scope by moniker key. */
   getScope: (moniker: string) => CommandScope | null;
-  /**
-   * Broadcast a navigation command. Retained as a stable callback in
-   * the actions bag so existing call sites (board-view, grid-view,
-   * app-shell) compile without churn while the spatial-nav migration
-   * completes — but the function is a no-op that always returns `false`.
-   * Real navigation lives in the Rust spatial-nav kernel.
-   */
-  broadcastNavCommand: (commandId: string) => boolean;
 }
 
 /** Combined legacy shape returned by `useEntityFocus` (the deprecated shim). */
@@ -416,18 +408,11 @@ function buildFocusActions(deps: FocusActionsDeps): FocusActions {
   const getScope = (moniker: string): CommandScope | null =>
     registryRef.current.get(moniker) ?? null;
 
-  /**
-   * No-op stand-in for the legacy predicate-broadcast entry point.
-   * Always returns `false`.
-   */
-  const broadcastNavCommand = (_commandId: string): boolean => false;
-
   return {
     setFocus,
     registerScope,
     unregisterScope,
     getScope,
-    broadcastNavCommand,
   };
 }
 

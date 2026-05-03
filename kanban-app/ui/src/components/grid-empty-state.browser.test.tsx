@@ -89,7 +89,6 @@ vi.mock("@/lib/entity-focus-context", () => {
     registerScope: vi.fn(),
     unregisterScope: vi.fn(),
     getScope: vi.fn(),
-    broadcastNavCommand: vi.fn(),
   };
   return {
     useEntityFocus: () => ({
@@ -98,7 +97,6 @@ vi.mock("@/lib/entity-focus-context", () => {
       registerScope: vi.fn(),
       unregisterScope: vi.fn(),
       getScope: vi.fn(),
-      broadcastNavCommand: vi.fn(),
     }),
     useFocusActions: () => actions,
     useOptionalFocusActions: () => actions,

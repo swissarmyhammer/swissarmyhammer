@@ -31,10 +31,14 @@ import {
   useOptionalFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
-import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import {
+  useOptionalSpatialFocusActions,
+  type SpatialFocusActions,
+} from "@/lib/spatial-focus-context";
 import {
   asSegment,
   composeFq,
+  type Direction,
   type FullyQualifiedMoniker,
   type SegmentMoniker,
 } from "@/types/spatial";
@@ -619,7 +623,19 @@ function BoardDragOverlay({ activeColumn }: BoardDragOverlayProps) {
 /** Shared dependencies passed to each board-action command factory. */
 interface BoardActionDeps {
   columns: Entity[];
-  broadcastRef: React.RefObject<(cmd: string) => void>;
+  /**
+   * Latest spatial-focus actions ref. Read at command-execute time so
+   * the column-extreme commands dispatch `spatial_navigate` against the
+   * focused FQM the kernel currently knows about — without re-binding
+   * the command list on every focus move.
+   *
+   * `null` when the board is mounted in a pre-spatial-nav harness
+   * (legacy unit tests that wrap only `<EntityFocusProvider>`); in that
+   * case the column-extreme commands are no-ops, matching the same
+   * "no kernel, nothing to navigate" fallback that
+   * `app-shell.tsx::buildNavCommands` uses.
+   */
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>;
   dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>;
   /**
    * Focus a freshly-created task by composing the FQM from the
@@ -678,20 +694,46 @@ function makeNewTaskCommand(deps: BoardActionDeps): CommandDef {
   };
 }
 
-/** Factory for a nav-broadcast command (first/last column). */
-function makeNavBroadcastCommand(
+/**
+ * Factory for a column-extreme nav command (first / last column).
+ *
+ * Dispatches `spatial_navigate(focusedFq, direction)` to the Rust
+ * spatial-nav kernel directly — same wire shape as the global
+ * `nav.first` / `nav.last` commands defined in
+ * `app-shell.tsx::buildNavCommands`. The board defines this command
+ * locally only because vim `0` / `$` and cua `Mod+Home` / `Mod+End`
+ * are NOT in the global `NAV_COMMAND_SPEC` (`Home` / `End` are cua
+ * there, vim has only `Shift+G` for last). Both keysets resolve to
+ * the same kernel call; the command exists to fill the keymap gap.
+ *
+ * No broadcast indirection — earlier the closure threaded the press
+ * through `FocusActions.broadcastNavCommand`, which was a no-op stub
+ * that always returned `false`. That pathway has been deleted (kanban
+ * task `01KQJDKBQ2VNT3SE7AN3VM2KGZ`).
+ *
+ * Reads the latest spatial-focus actions from `deps.spatialActionsRef`
+ * at execute time so the command memo stays stable across focus moves.
+ * No-ops when the kernel is unavailable (pre-spatial-nav unit harnesses)
+ * or when nothing is focused — there is nothing to navigate from.
+ */
+function makeNavCommand(
   deps: BoardActionDeps,
   id: string,
   name: string,
   keys: CommandDef["keys"],
-  navCmd: string,
+  direction: Direction,
 ): CommandDef {
   return {
     id,
     name,
     keys,
-    execute: () => {
-      if (deps.columns.length > 0) deps.broadcastRef.current(navCmd);
+    execute: async () => {
+      if (deps.columns.length === 0) return;
+      const actions = deps.spatialActionsRef.current;
+      if (!actions) return;
+      const fq = actions.focusedFq();
+      if (fq === null) return;
+      await actions.navigate(fq, direction);
     },
   };
 }
@@ -699,44 +741,51 @@ function makeNavBroadcastCommand(
 /**
  * Board-level action commands: new task, first/last column navigation.
  *
- * Uses a ref for the broadcast callback to avoid rebuilding the command
- * list on every focus change. Inspect is no longer a board-scope
- * concern — it lives on each `<Inspectable>` wrapper (see
- * `inspectable.tsx`), so every inspectable entity carries its own
- * scope-level Space binding regardless of which layer it is rendered
- * in (board, inspector, palette result list).
+ * The first / last column commands fill keymap gaps the global
+ * `NAV_COMMAND_SPEC` (in `app-shell.tsx`) does not cover: vim `0` /
+ * `$` and cua `Mod+Home` / `Mod+End`. Both pairs map to the kernel's
+ * `first` / `last` directions and dispatch `spatial_navigate` against
+ * the focused FQM. The global `nav.first` / `nav.last` (cua `Home` /
+ * `End`, emacs `Alt+<` / `Alt+>`, vim `Shift+G`) still own those keys
+ * — these commands shadow nothing.
+ *
+ * Inspect is no longer a board-scope concern — it lives on each
+ * `<Inspectable>` wrapper (see `inspectable.tsx`), so every
+ * inspectable entity carries its own scope-level Space binding
+ * regardless of which layer it is rendered in (board, inspector,
+ * palette result list).
  */
 function useBoardActionCommands(
   columns: Entity[],
-  broadcastRef: React.RefObject<(cmd: string) => void>,
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>,
   dispatchEntityAddTask: ReturnType<typeof useDispatchCommand>,
   focusCreatedTask: (taskId: string, columnSegment: SegmentMoniker) => void,
 ): CommandDef[] {
   return useMemo<CommandDef[]>(() => {
     const deps: BoardActionDeps = {
       columns,
-      broadcastRef,
+      spatialActionsRef,
       dispatchEntityAddTask,
       focusCreatedTask,
     };
     return [
       makeNewTaskCommand(deps),
-      makeNavBroadcastCommand(
+      makeNavCommand(
         deps,
         "board.firstColumn",
         "First Column",
         { vim: "0", cua: "Mod+Home" },
-        "nav.first",
+        "first",
       ),
-      makeNavBroadcastCommand(
+      makeNavCommand(
         deps,
         "board.lastColumn",
         "Last Column",
         { vim: "$", cua: "Mod+End" },
-        "nav.last",
+        "last",
       ),
     ];
-  }, [columns, dispatchEntityAddTask, broadcastRef, focusCreatedTask]);
+  }, [columns, dispatchEntityAddTask, spatialActionsRef, focusCreatedTask]);
 }
 
 /**
@@ -978,22 +1027,25 @@ function BoardDndWrapper({
 
 /** Mutable refs BoardView threads into its action-command factories. */
 interface BoardCommandRefs {
-  broadcastRef: React.RefObject<(cmd: string) => void>;
+  spatialActionsRef: React.RefObject<SpatialFocusActions | null>;
 }
 
 /**
  * Allocate and keep up-to-date the refs used by board action commands.
  *
- * The broadcast callback comes from the stable actions bag, but we wrap
- * it in a ref so the board action factories receive a mutable handle —
- * keeping the command list memo stable across BoardView renders.
+ * The spatial-focus actions come from `useOptionalSpatialFocusActions()`,
+ * which can be `null` when `<BoardView>` is mounted outside the
+ * spatial-nav stack (older unit tests). We wrap the latest value in a
+ * ref so the column-extreme command factories receive a mutable handle
+ * — keeping the command list memo stable across BoardView renders. The
+ * commands themselves no-op when the ref is null at execute time.
  */
 function useBoardCommandRefs(
-  broadcastNavCommand: (cmd: string) => void,
+  spatialActions: SpatialFocusActions | null,
 ): BoardCommandRefs {
-  const broadcastRef = useRef(broadcastNavCommand);
-  broadcastRef.current = broadcastNavCommand;
-  return { broadcastRef };
+  const spatialActionsRef = useRef<SpatialFocusActions | null>(spatialActions);
+  spatialActionsRef.current = spatialActions;
+  return { spatialActionsRef };
 }
 
 /**
@@ -1086,10 +1138,16 @@ function BoardSpatialBody({
   scrollContainerRef,
 }: BoardSpatialBodyProps) {
   const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
-  const { broadcastNavCommand, setFocus } = useFocusActions();
+  const { setFocus } = useFocusActions();
   const focusedFq = useFocusedFq();
   const boardZoneFq = useFullyQualifiedMoniker();
-  const { broadcastRef } = useBoardCommandRefs(broadcastNavCommand);
+  // The column-extreme commands (`board.firstColumn` /
+  // `board.lastColumn`) dispatch `spatial_navigate` against the
+  // spatial-nav kernel — same wire shape as `app-shell.tsx`'s global
+  // nav commands. The actions are read through a ref so the command
+  // memo stays stable across focus moves.
+  const spatialActions = useOptionalSpatialFocusActions();
+  const { spatialActionsRef } = useBoardCommandRefs(spatialActions);
 
   const focusCreatedTask = useCallback(
     (taskId: string, columnSegment: SegmentMoniker) => {
@@ -1102,7 +1160,7 @@ function BoardSpatialBody({
 
   const boardActionCommands = useBoardActionCommands(
     layout.columns,
-    broadcastRef,
+    spatialActionsRef,
     dispatchEntityAddTask,
     focusCreatedTask,
   );
