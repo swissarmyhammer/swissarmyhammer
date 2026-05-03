@@ -174,6 +174,24 @@ export interface FocusZoneOwnProps {
    * Defaults to true. Mirrors the `<FocusScope>` prop of the same name.
    */
   handleEvents?: boolean;
+  /**
+   * When false, omits the wrapping `<div>` — children render directly
+   * under the CommandScopeContext + FocusZoneContext +
+   * FullyQualifiedMonikerContext providers. The kernel registration is
+   * skipped (no rect tracking, no focus-claim subscription, no event
+   * handlers) because there is no DOM node to attach them to.
+   *
+   * Use for table rows where a wrapping div would break HTML structure
+   * (`<tbody>` requires `<tr>` children, not `<div>` children) but the
+   * row still needs to be a Zone in the spatial graph so cell leaves
+   * compose their FQMs and `parent_zone` under the row instead of
+   * skipping up to the surrounding grid zone. Mirrors the `<FocusScope>`
+   * prop of the same name, but pushes the additional `FocusZoneContext`
+   * + `FullyQualifiedMonikerContext` providers so descendants resolve
+   * the row Zone as their nearest enclosing zone (rather than walking
+   * past it).
+   */
+  renderContainer?: boolean;
   /** Children rendered inside the zone container. */
   children: ReactNode;
   /**
@@ -212,6 +230,7 @@ export function FocusZone({
   commands = EMPTY_COMMANDS,
   showFocusBar = true,
   handleEvents = true,
+  renderContainer = true,
   children,
   ref: externalRef,
   ...rest
@@ -261,6 +280,35 @@ export function FocusZone({
   useEntityScopeRegistration(focusKey, scope);
 
   const hasSpatialContext = fq !== null;
+
+  // `renderContainer={false}` short-circuit: skip both body branches
+  // entirely. We still publish the zone's identity downward — the
+  // FullyQualifiedMonikerContext provider so descendants compose their
+  // FQM under this zone, and the FocusZoneContext provider so descendant
+  // primitives' `useParentZoneFq()` resolves to this zone — but no DOM
+  // is rendered, no rect is tracked, and no kernel registration happens
+  // (there is no node to call `getBoundingClientRect()` on). Mirrors the
+  // matching short-circuit in `<FocusScope>`, with the additional
+  // FocusZone-only providers added so descendants treat us as a Zone.
+  //
+  // Provider nesting order matches the full-body branch (line 308 +
+  // line 548): `FocusScope > CommandScope > FullyQualifiedMoniker >
+  // FocusZone`. Functionally identical to any other order (context
+  // lookups don't depend on provider nesting) — kept consistent so
+  // the two branches read the same.
+  if (!renderContainer) {
+    return (
+      <FocusScopeContext.Provider value={fq}>
+        <CommandScopeContext.Provider value={scope}>
+          <FullyQualifiedMonikerContext.Provider value={fq}>
+            <FocusZoneContext.Provider value={fq}>
+              {children}
+            </FocusZoneContext.Provider>
+          </FullyQualifiedMonikerContext.Provider>
+        </CommandScopeContext.Provider>
+      </FocusScopeContext.Provider>
+    );
+  }
 
   return (
     <FocusScopeContext.Provider value={fq}>

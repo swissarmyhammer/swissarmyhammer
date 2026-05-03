@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: c480
+position_ordinal: '7e80'
 project: spatial-nav
 title: Row label click logs ui.setFocus success but visible focus does not update
 ---

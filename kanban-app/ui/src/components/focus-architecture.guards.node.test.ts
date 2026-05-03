@@ -488,11 +488,11 @@ describe("focus-decoration architecture", () => {
     // into the inner `<Field>` zone (`fields/field.tsx` already wraps
     // in `<Inspectable>`). The mechanism stays in place for any future
     // synthetic-moniker case. The `data-table.tsx` row case is handled
-    // differently: the row `<FocusScope renderContainer={false}>`
+    // differently: the row `<FocusZone renderContainer={false}>`
     // doesn't render a host element, so DOM rules prevent wrapping in
     // `<Inspectable>`. The inspect dispatch lives directly on the row's
     // `<tr>` via the `useInspectOnDoubleClick` hook (still in
-    // `inspectable.tsx`). That row `<FocusScope>` carries
+    // `inspectable.tsx`). That row `<FocusZone>` carries
     // `renderContainer={false}` and is therefore exempt from this
     // guard — the runtime DOM never renders an element to attach
     // `onDoubleClick` to anyway.

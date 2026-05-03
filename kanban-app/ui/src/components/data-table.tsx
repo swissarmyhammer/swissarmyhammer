@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusZone } from "@/components/focus-zone";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useInspectOnDoubleClick } from "@/components/inspectable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
@@ -613,20 +614,34 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
   const entityMk = entity.moniker;
   return (
     // The row carries the row entity's moniker (`task:<id>` or
-    // `tag:<id>`). `renderContainer={false}` means the FocusScope
-    // pushes the moniker into the command-scope chain (so right-click
-    // resolves the row's context menu) without rendering a wrapping
-    // `<div>` — the table layout requires `<tr>` to be a direct child
-    // of `<tbody>`, which a `<div>` parent would break.
+    // `tag:<id>`). `renderContainer={false}` means the FocusZone
+    // publishes its identity downward (CommandScopeContext +
+    // FocusZoneContext + FullyQualifiedMonikerContext) so cell scopes
+    // compose their FQMs and `parent_zone` under the row entity,
+    // without rendering a wrapping `<div>` — the table layout
+    // requires `<tr>` to be a direct child of `<tbody>`, which a
+    // `<div>` parent would break.
     //
-    // Because of that DOM constraint, the standard `<Inspectable>`
-    // wrapper (which renders a `<div className="contents">`) cannot
-    // wrap the row. Instead, `<EntityRow>` calls
-    // `useInspectOnDoubleClick(entityMk)` directly and attaches the
-    // resulting handler to its `<tr>`. Both paths share the same
-    // hook, so Guard A continues to hold (the inspect dispatch site
-    // is still `inspectable.tsx`).
-    <FocusScope
+    // Why a `<FocusZone>` and not a `<FocusScope>`: the row's React
+    // subtree contains per-cell `<GridCellFocusable>` `<FocusScope>`
+    // leaves. Wrapping leaves inside another `<FocusScope>` violates
+    // the kernel's scope-is-leaf invariant (the path-prefix branch in
+    // `swissarmyhammer-focus/src/registry.rs` flags any registered
+    // descendant whose FQM begins with a registered Scope's FQM
+    // followed by `/`). Promoting the row to a Zone lifts the
+    // restriction — Zones legally contain nested scopes — and keeps
+    // the entity-moniker frame in the command-scope chain so
+    // right-click still resolves entity-level commands against the
+    // row.
+    //
+    // Because of the `<tr>`-must-be-`<tbody>`-child DOM constraint,
+    // the standard `<Inspectable>` wrapper (which renders a `<div
+    // className="contents">`) cannot wrap the row. Instead,
+    // `<EntityRow>` calls `useInspectOnDoubleClick(entityMk)`
+    // directly and attaches the resulting handler to its `<tr>`.
+    // Both paths share the same hook, so Guard A continues to hold
+    // (the inspect dispatch site is still `inspectable.tsx`).
+    <FocusZone
       moniker={asSegment(entityMk)}
       renderContainer={false}
     >
@@ -667,7 +682,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
           );
         })}
       </EntityRow>
-    </FocusScope>
+    </FocusZone>
   );
 });
 
@@ -843,7 +858,14 @@ interface GridCellFocusableProps {
  *
  * The cell's moniker is the canonical `grid_cell:{di}:{colKey}` shape
  * (built via {@link gridCellMoniker}). The leaf registers in the spatial-nav
- * graph with `parent_zone = ui:grid` (the surrounding `<GridSpatialZone>`).
+ * graph with `parent_zone` pointing at the row Zone — the row's outer
+ * `<FocusZone renderContainer={false}>` publishes its FQM through
+ * `FocusZoneContext`, so `useParentZoneFq()` resolves to the row entity
+ * instead of skipping past it to the surrounding `<GridSpatialZone>`
+ * (`ui:grid`). The row Zone itself does not register a rect with the
+ * kernel (it has no DOM node — `<tr>` is structural), but its FQM is
+ * still the legal nearest-zone ancestor for cell registrations.
+ *
  * When the spatial stack is absent (unit tests with a narrow provider
  * tree), `<FocusScope>` would throw because no `<FocusLayer>` ancestor is
  * mounted, so we render a plain `<TableCell>` instead — keeping the table
@@ -951,12 +973,22 @@ interface EntityRowProps {
 }
 
 /**
- * Table row rendered inside a FocusScope(renderContainer=false).
+ * Table row rendered inside a FocusZone(renderContainer=false).
  *
- * Mirrors FocusScope's behavior on a `<tr>`: right-click opens the
+ * Mirrors FocusZone's behavior on a `<tr>`: right-click opens the
  * context menu, double-click dispatches `ui.inspect` against the row's
  * entity moniker. Per-cell click semantics live on the grid-cell
  * `<FocusScope>` leaves; the row itself does not own click → focus.
+ *
+ * The wrapping `<FocusZone>` is `renderContainer={false}` so the
+ * primitive does NOT register a rect with the kernel — the row has no
+ * focusable DOM node of its own (a `<tr>` is structural, not
+ * focusable). Promoting the row from a Scope to a Zone keeps the
+ * scope-is-leaf invariant intact (the row's per-cell `<FocusScope>`
+ * leaves can no longer be path-prefix-flagged as illegal descendants
+ * of an outer Scope) while still pushing the entity moniker into the
+ * React `CommandScopeContext` chain so right-click resolves
+ * entity-level commands against the row.
  *
  * Inspector dispatch on double-click would normally live in the
  * `<Inspectable>` wrapper, but DOM table rules forbid `<div>` between
@@ -974,8 +1006,11 @@ function EntityRow({
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
-  // Read the row's FQM from the surrounding `<FocusScope moniker={entityMk}>`
-  // — that's the spatial identity setFocus needs to dispatch against.
+  // Read the row's FQM from the surrounding `<FocusZone moniker={entityMk}
+  // renderContainer={false}>` — that wrapper publishes the row's FQM
+  // through `FullyQualifiedMonikerContext.Provider` even though it
+  // renders no DOM node, so this hook resolves to the composed row FQM
+  // (the spatial identity setFocus needs to dispatch against).
   const rowFq = useFullyQualifiedMoniker();
   const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
 
@@ -1007,18 +1042,18 @@ interface RowSelectorProps {
 /**
  * Build the row label leaf's moniker segment.
  *
- * Encodes the data-row index (`row_label:{di}`) so siblings have
- * distinct FQMs even though they share a parent FQM context. The row's
- * outer `<FocusScope renderContainer={false}>` does not push a new
- * `FullyQualifiedMonikerContext`, so every row's children compose
- * their FQM against the surrounding grid zone's FQM — without `{di}`
- * in the segment, every row would collide on the same composed FQM
- * `/window/.../ui:grid/row_label` and the kernel would only see one
- * leaf instead of one per row.
+ * Encodes the data-row index (`row_label:{di}`) as a defensive
+ * disambiguation. After the row was promoted to a `<FocusZone
+ * renderContainer={false}>`, every row publishes its own distinct FQM
+ * (`.../ui:grid/task:T1`, `.../ui:grid/task:T2`, …), so a bare
+ * `row_label` segment under each row would already produce distinct
+ * composed FQMs. The `{di}` suffix is kept to mirror the
+ * `grid_cell:{di}:{colKey}` convention (see {@link gridCellMoniker})
+ * and to keep the leaf's segment self-describing in `data-segment`
+ * attributes and focus-chain logs.
  *
- * Same disambiguation convention as `grid_cell:{di}:{colKey}` (see
- * {@link gridCellMoniker}); the `row_label:` namespace prefix keeps
- * the segment distinguishable from cell monikers in the focus chain.
+ * The `row_label:` namespace prefix keeps the segment distinguishable
+ * from cell monikers in the focus chain.
  */
 function rowLabelMoniker(di: number): string {
   return `row_label:${di}`;
@@ -1032,7 +1067,7 @@ function rowLabelMoniker(di: number): string {
  * (e.g. `ArrowLeft` from the first data cell of the row). When the leaf
  * is focused, entity-level commands (`entity.archive`, `task.archive`,
  * …) resolve against the row entity via the surrounding row's
- * `<FocusScope moniker={asSegment(entityMk)} renderContainer={false}>`
+ * `<FocusZone moniker={asSegment(entityMk)} renderContainer={false}>`
  * command-scope frame — that wrapper pushes the entity moniker into
  * the React `CommandScopeContext` chain so `useDispatchCommand`'s
  * scope walk picks it up at dispatch time.

@@ -359,11 +359,12 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // `spatial_register_scope`. With two tasks, that's exactly two
     // registrations — no more (each row mounts one leaf), no fewer
     // (the spatial path was taken in both rows). The `{di}` suffix is
-    // load-bearing: the row's outer `<FocusScope renderContainer={false}>`
-    // doesn't push a new FQM context, so siblings under it share a
-    // parent FQM and would collide on identical composed FQMs without
-    // the per-row index in the segment (same disambiguation convention
-    // as `grid_cell:{di}:{colKey}`).
+    // kept for self-describing segments and for parity with the
+    // `grid_cell:{di}:{colKey}` convention; the row's outer
+    // `<FocusZone renderContainer={false}>` now publishes a distinct
+    // FQM per row through `FullyQualifiedMonikerContext`, so the
+    // composed leaf FQMs are unique even before the suffix is
+    // considered.
     const registerCalls = mockInvoke.mock.calls.filter(
       (c) => c[0] === "spatial_register_scope",
     );
@@ -486,7 +487,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     expect(dispatchArgs.cmd).toBe("entity.archive");
     // The scope chain must include `task:a` — that's the row's entity
     // moniker, contributed by the row's outer
-    // `<FocusScope moniker={asSegment("task:a")} renderContainer={false}>`
+    // `<FocusZone moniker={asSegment("task:a")} renderContainer={false}>`
     // frame the row label leaf is mounted inside (the wrapper pushes
     // `task:a` into the React command-scope chain even though it
     // doesn't itself register with the kernel). This is the

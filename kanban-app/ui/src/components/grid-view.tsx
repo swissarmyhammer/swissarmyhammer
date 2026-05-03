@@ -228,14 +228,34 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   }, [entities.length]);
 
   const focusCellSegment = useFocusBySegmentPath();
-  // Adapt the multi-segment focus helper to a single-cell-segment caller —
-  // every cell-focus mutation in the grid is one segment under the grid
-  // zone (`grid_cell:R:K`).
+  // Adapt the multi-segment focus helper to a single-cell-segment caller.
+  // Cell-focus mutations in the grid land at FQM
+  // `<gridZone>/<rowEntityMk>/grid_cell:R:K` — the row's outer
+  // `<FocusZone moniker={asSegment(entityMk)} renderContainer={false}>`
+  // publishes its FQM through `FullyQualifiedMonikerContext`, so the
+  // cell's composed FQM nests under the row entity. Parse the cell
+  // segment to recover the data-row index, look up the row's entity
+  // moniker, and dispatch the two-segment compose `[<entityMk>, <cellSeg>]`
+  // through the multi-segment helper. When the segment can't be parsed
+  // (callers that pre-validated) or the row is out of range, fall back
+  // to a single-segment compose so the dispatch still reaches the
+  // kernel — the kernel will log an `unknown FQM` error on a malformed
+  // target rather than silently dropping the keystroke.
   const focusCell = useCallback(
     (cellSegment: string) => {
-      focusCellSegment(asSegment(cellSegment));
+      const parsed = parseGridCellMoniker(cellSegment);
+      if (
+        parsed === null ||
+        parsed.row < 0 ||
+        parsed.row >= entities.length
+      ) {
+        focusCellSegment(asSegment(cellSegment));
+        return;
+      }
+      const rowEntityMk = entities[parsed.row].moniker;
+      focusCellSegment(asSegment(rowEntityMk), asSegment(cellSegment));
     },
-    [focusCellSegment],
+    [focusCellSegment, entities],
   );
   const focusedMoniker = useFocusedMoniker();
 
@@ -315,11 +335,9 @@ interface GridExtremeContext {
  * Strip the trailing segment from a fully-qualified moniker, returning the
  * parent FQM.
  *
- * The kernel guarantees every cell FQM has the shape
- * `/window/.../ui:grid/grid_cell:R:K`, so the parent of a focused cell FQM
- * is always the `ui:grid` zone's FQM. Returns `null` when the input has no
- * separator (a malformed FQM the kernel does not produce in well-formed
- * code) so the caller can short-circuit gracefully.
+ * Returns `null` when the input has no separator (a malformed FQM the
+ * kernel does not produce in well-formed code) so the caller can
+ * short-circuit gracefully.
  *
  * @param fq - The fully-qualified moniker to walk one level up.
  */
@@ -351,10 +369,15 @@ function rowFromFocus(focusedFq: FullyQualifiedMoniker | null): number | null {
  * Move focus to the cell at `(row, colKey)` inside the grid that currently
  * owns the focused cell.
  *
- * Reads the parent FQM (the `ui:grid` zone) by stripping the trailing cell
- * segment from the current focused FQM, then composes the destination cell
- * FQM and dispatches it through `setFocus`. This routes through the
- * spatial-nav kernel via `spatial_focus(fq)` — exactly what a click on the
+ * Walks up two segments from the currently focused cell FQM to recover
+ * the `ui:grid` zone FQM — every cell FQM has the shape
+ * `/window/.../ui:grid/<rowEntityMk>/grid_cell:R:K` because the row's
+ * `<FocusZone moniker={asSegment(entityMk)} renderContainer={false}>`
+ * publishes its FQM through `FullyQualifiedMonikerContext`. Looks up
+ * the destination row's entity moniker from `ctx.entities[row]` and
+ * composes the destination cell FQM as `<gridZone>/<destEntityMk>/<cellSeg>`.
+ * Dispatches through `setFocus`, which routes through the spatial-nav
+ * kernel via `spatial_focus(fq)` — exactly what a click on the
  * destination cell would do.
  *
  * Silently returns when there is no focused cell to derive the parent FQM
@@ -378,11 +401,21 @@ function focusGridCell(
   const focusedFq = ctx.spatial.focusedFq();
   if (focusedFq === null) return;
 
-  const gridZoneFq = fqDropLastSegment(focusedFq);
+  // Walk up two segments: cell → row → ui:grid. The row Zone is
+  // `renderContainer={false}` so it does not appear in the kernel
+  // registry, but its FQM is still part of the cell's path because
+  // descendant scopes compose against the FQM context the row Zone
+  // publishes.
+  const rowFq = fqDropLastSegment(focusedFq);
+  if (rowFq === null) return;
+  const gridZoneFq = fqDropLastSegment(rowFq);
   if (gridZoneFq === null) return;
 
+  const destEntityMk = ctx.entities[row].moniker;
   const cellSegment = asSegment(gridCellMoniker(row, colKey));
-  ctx.setFocus(composeFq(gridZoneFq, cellSegment));
+  ctx.setFocus(
+    composeFq(composeFq(gridZoneFq, asSegment(destEntityMk)), cellSegment),
+  );
 }
 
 /**

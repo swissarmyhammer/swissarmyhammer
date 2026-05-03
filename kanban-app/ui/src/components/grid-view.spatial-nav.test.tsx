@@ -391,7 +391,7 @@ describe("GridView (spatial-nav)", () => {
     );
   });
 
-  it("registers cell focusables with parentZone = the ui:grid zone key", async () => {
+  it("registers cell focusables with parentZone = the row's FQM under the ui:grid zone", async () => {
     const entities = { task: threeTasks() };
 
     await act(async () => {
@@ -402,7 +402,7 @@ describe("GridView (spatial-nav)", () => {
     const zoneCalls = registerZoneCalls();
     const gridZone = zoneCalls.find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
-    const gridZoneKey = gridZone!.fq;
+    const gridZoneKey = gridZone!.fq as string;
     expect(gridZoneKey).toBeTruthy();
 
     const focusableCalls = registerScopeCalls();
@@ -413,11 +413,23 @@ describe("GridView (spatial-nav)", () => {
     );
     expect(cellFocusables.length).toBeGreaterThan(0);
 
-    // Every cell focusable must point its parentZone at the grid zone's
-    // key — that anchors the spatial-nav graph so cross-cell beam search
-    // stays inside `ui:grid`.
+    // Every cell focusable must point its parentZone at the row Zone
+    // — the row mounts a `<FocusZone moniker={asSegment(entityMk)}
+    // renderContainer={false}>` which publishes its FQM via
+    // `FocusZoneContext.Provider`. Cell `useParentZoneFq()` therefore
+    // resolves to the row, not the surrounding `ui:grid` zone. The
+    // composed shape is `<gridZoneKey>/task:<id>`. The row Zone uses
+    // `renderContainer={false}` and so does NOT register a rect with
+    // the kernel itself — but its FQM is still the legal nearest-zone
+    // ancestor for cell registrations under it (lifting the
+    // scope-is-leaf restriction the row's previous `<FocusScope>`
+    // wrapper would have triggered now that `<FocusScope
+    // renderContainer={false}>` ALSO publishes its FQM through the
+    // path-prefix branch).
     for (const cell of cellFocusables) {
-      expect(cell.parentZone).toBe(gridZoneKey);
+      const parentZone = cell.parentZone as string;
+      expect(parentZone).toBeTruthy();
+      expect(parentZone.startsWith(`${gridZoneKey}/task:`)).toBe(true);
     }
   });
 
@@ -668,14 +680,21 @@ describe("GridView (spatial-nav)", () => {
     // Each cell must have:
     //   - a non-empty FullyQualifiedMoniker (the argument `spatial_navigate` would receive)
     //   - the canonical `grid_cell:R:K` moniker
-    //   - `parentZone` pointing at the grid zone (so beam search routes
-    //     in-grid moves through the kernel's `ui:grid` subgraph)
+    //   - `parentZone` pointing at the row Zone (a path-descendant of
+    //     the `ui:grid` zone — the row's outer `<FocusZone
+    //     renderContainer={false}>` publishes its FQM through
+    //     `FocusZoneContext`, so `useParentZoneFq()` lands on the row
+    //     entity rather than skipping past it to `ui:grid`). Beam
+    //     search still stays inside the grid because the row is itself
+    //     a path-descendant of `ui:grid`.
     //   - a layer key (so the kernel knows which modal layer the cell lives in)
+    const gridZoneKeyStr = gridZoneKey as string;
     for (const cell of cellRegistrations) {
       expect(typeof cell.fq).toBe("string");
       expect((cell.fq as string).length).toBeGreaterThan(0);
       expect(cell.segment).toMatch(/^grid_cell:[0-9]+:[a-z_]+$/);
-      expect(cell.parentZone).toBe(gridZoneKey);
+      const parentZone = cell.parentZone as string;
+      expect(parentZone.startsWith(`${gridZoneKeyStr}/task:`)).toBe(true);
       expect(cell.layerFq).toBe(gridZone.layerFq);
     }
   });
