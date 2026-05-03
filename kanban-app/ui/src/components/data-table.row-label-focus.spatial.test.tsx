@@ -501,6 +501,93 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // contracts.
     expect(dispatchArgs.scopeChain).toContain("row_label:0");
   });
+
+  it("clicking a row label flips data-focused on the matching row_label leaf", async () => {
+    // Regression pin for kanban task 01KQPVHMJC4F79YXGWGSFZ4FJK.
+    //
+    // Bug history: clicking a row label leaf logged
+    // `cmd=ui.setFocus` success but the leaf's `data-focused`
+    // attribute did not flip. Root cause was that the row's outer
+    // `<FocusScope renderContainer={false}>` did not publish a
+    // distinct FQM into `FullyQualifiedMonikerContext`, so the
+    // composed FQM for the inner `row_label:{di}` leaf collided
+    // across rows and `useFocusClaim`'s registry lookup missed.
+    //
+    // Fixed upstream by commit 1b6c4950d (data-table row promoted
+    // from FocusScope to FocusZone with renderContainer={false}). The
+    // FocusZone publishes the row's FQM through context, so each
+    // row_label leaf now composes a unique FQM and the click →
+    // spatial_focus(fq) → focus-changed → useFocusClaim path lands.
+    //
+    // This test pins the click-to-paint behavior end-to-end so a
+    // future refactor that breaks FQM composition under the row Zone
+    // surfaces immediately.
+    const entities = { task: twoTasks() };
+
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(<GridHarness entities={entities} />);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    // Locate the row 0 label leaf via the FQM captured at
+    // registration time. Going through `fqToSegment` (vs querying by
+    // `data-segment`) keeps the test honest: it asserts the same FQM
+    // the kernel knows about is the one the React tree renders.
+    const row0LabelEntry = Array.from(fqToSegment.entries()).find(
+      ([, seg]) => seg === "row_label:0",
+    );
+    expect(row0LabelEntry).toBeTruthy();
+    const row0Fq = row0LabelEntry![0];
+
+    const leafEl = result.container.querySelector(
+      `[data-moniker="${row0Fq}"]`,
+    ) as HTMLElement | null;
+    expect(leafEl).not.toBeNull();
+    expect(leafEl!.getAttribute("data-focused")).not.toBe("true");
+
+    // Clear invoke history so the post-click assertion can count
+    // `spatial_focus` calls against just the click, not the
+    // mount-time registrations.
+    mockInvoke.mockClear();
+
+    // Click the inner click wrapper (mirrors the click-target lookup
+    // pattern from the click-to-cursor test below). The wrapper sits
+    // inside the FocusScope's outer div; the outer div's `onClick`
+    // calls `focus(fq)` which invokes `spatial_focus`.
+    const innerClickTarget =
+      (leafEl!.firstElementChild as HTMLElement | null) ?? leafEl!;
+    await act(async () => {
+      fireEvent.click(innerClickTarget);
+    });
+    // Allow the queued `focus-changed` microtask + any state flushes
+    // to settle before asserting.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // The leaf's `data-focused` flipped to `"true"` after the kernel
+    // `focus-changed` event arrived — proving the click → focus →
+    // indicator path lands end-to-end.
+    const focusedLeaf = result.container.querySelector(
+      `[data-moniker="${row0Fq}"]`,
+    ) as HTMLElement | null;
+    expect(focusedLeaf).not.toBeNull();
+    expect(focusedLeaf!.getAttribute("data-focused")).toBe("true");
+
+    // Exactly one `spatial_focus` call fired, targeting the leaf's
+    // FQM. The acceptance criterion forbids a duplicate IPC double-
+    // fire — if a future change accidentally wires both
+    // `spatial_focus` and a sibling focus IPC to the click, this
+    // assertion catches it.
+    const spatialFocusCalls = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "spatial_focus",
+    );
+    expect(spatialFocusCalls.length).toBe(1);
+    expect((spatialFocusCalls[0][1] as { fq?: string }).fq).toBe(row0Fq);
+  });
 });
 
 // ---------------------------------------------------------------------------
