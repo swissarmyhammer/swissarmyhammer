@@ -915,10 +915,12 @@ function GridBody({ data, nav, callbacks, dispatch }: GridBodyProps) {
  * the strict contract intact for direct `<FocusZone>` usage while letting
  * the existing test suite keep its narrow provider tree.
  *
- * Mirrors the `BoardSpatialZone` / `ViewSpatialZone` / `PerspectiveSpatialZone`
- * pattern used elsewhere in the project. The zone renders inside the
- * already-mounted `ui:view` zone so its `parent_zone` is `ui:view`. Cells
- * register as `<FocusScope>` leaves under this zone in `data-table.tsx`.
+ * Mirrors the `BoardSpatialZone` / `PerspectiveSpatialZone` pattern used
+ * elsewhere in the project. The zone renders directly inside the
+ * surrounding `ui:perspective` zone so its `parent_zone` is
+ * `ui:perspective` — the inner view body has no intermediate chrome
+ * wrapper of its own. Cells register as `<FocusScope>` leaves under this
+ * zone in `data-table.tsx`.
  *
  * The wrapper renders `<>` (a fragment) when the spatial stack is absent so
  * the inner DOM tree (DataTable's scroll container + AddEntityBar) keeps the

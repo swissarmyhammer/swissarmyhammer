@@ -14,6 +14,12 @@
  *   └─ ViewContainer              ← this component
  *        └─ BoardView | GridView | placeholder
  * ```
+ *
+ * Spatial nav: ViewContainer does NOT register a spatial zone of its own.
+ * The inner view (BoardView, GridView, …) already registers its own
+ * viewport-sized chrome zone (`ui:board`, `ui:grid`, …) for the same
+ * rect, so an outer view zone would be a redundant graph hop. The view's
+ * parent zone in the spatial graph is therefore `ui:perspective`.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -23,10 +29,6 @@ import { GroupedBoardView } from "@/components/grouped-board-view";
 import { GridView } from "@/components/grid-view";
 import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
-import { FocusZone } from "@/components/focus-zone";
-import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
-import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { asSegment } from "@/types/spatial";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -55,54 +57,13 @@ export function ViewContainer({ children }: ViewContainerProps) {
 
   return (
     <CommandScopeProvider moniker={moniker}>
-      <ViewSpatialZone>
-        <ActiveViewRenderer
-          activeView={activeView}
-          board={board!}
-          tasks={entitiesByType.task ?? []}
-        />
-        {children}
-      </ViewSpatialZone>
-    </CommandScopeProvider>
-  );
-}
-
-/**
- * Wrap the rendered view in a `<FocusZone moniker={asSegment("ui:view")}>`
- * when the surrounding tree mounts the spatial-nav stack.
- *
- * `<FocusZone>` enforces a strict contract — it throws when no `<FocusLayer>`
- * ancestor is present. That contract is correct for the production tree
- * (`App.tsx` always mounts the providers) but would force every
- * `ViewContainer` unit test that doesn't care about spatial nav to set up
- * the providers. Conditionally rendering the zone when both context lookups
- * succeed keeps the strict contract intact for direct `<FocusZone>` usage
- * while letting the existing test suite keep its narrow provider tree.
- *
- * The zone preserves the `flex-1 flex flex-col min-h-0 min-w-0` chain so the
- * inner BoardView / GridView can keep filling the available space when the
- * spatial-nav stack is present.
- */
-function ViewSpatialZone({ children }: { children: ReactNode }) {
-  const layerKey = useOptionalEnclosingLayerFq();
-  const actions = useOptionalSpatialFocusActions();
-  if (!layerKey || !actions) {
-    return <>{children}</>;
-  }
-  return (
-    <FocusZone
-      moniker={asSegment("ui:view")}
-      // Viewport-sized chrome zone — a visible focus bar around the entire
-      // active view (board, grid, …) would surround the whole content
-      // region and add no information. Drilling into the view advances
-      // focus to the body's first leaf; that leaf renders the indicator.
-      // `data-focused` still flips on the wrapper so drill-out tests can
-      // observe focus landing on the view zone.
-      showFocusBar={false}
-      className="flex-1 flex flex-col min-h-0 min-w-0"
-    >
+      <ActiveViewRenderer
+        activeView={activeView}
+        board={board!}
+        tasks={entitiesByType.task ?? []}
+      />
       {children}
-    </FocusZone>
+    </CommandScopeProvider>
   );
 }
 

@@ -1,11 +1,17 @@
 /**
- * Spatial-nav integration tests for `<ViewContainer>`.
+ * Spatial-nav regression tests for `<ViewContainer>`.
+ *
+ * The `ui:view` `<FocusZone>` wrapper was deleted because its rect exactly
+ * overlapped the inner view's own zone (`ui:board` for `<BoardView>`,
+ * `ui:grid` for `<GridView>`). It added no semantic value to the spatial
+ * graph and just inserted an extra hop the cascade had to traverse. These
+ * tests pin its absence so a future refactor cannot reintroduce the
+ * redundant wrapper.
  *
  * Mounts the container inside the production-shaped provider stack
- * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<ViewSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:view")}>`
- * branch. The Tauri `invoke` boundary is mocked at the module level so we can
- * inspect the `spatial_register_zone` calls the zone makes on mount.
+ * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`). The Tauri
+ * `invoke` boundary is mocked at the module level so we can inspect every
+ * `spatial_register_zone` call ViewContainer's subtree makes on mount.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -174,50 +180,38 @@ describe("ViewContainer (spatial-nav)", () => {
     mockEntitiesByType.mockReturnValue({});
   });
 
-  it("registers a ui:view zone when wrapped in SpatialFocusProvider + FocusLayer", async () => {
+  it("does NOT register a ui:view zone when wrapped in SpatialFocusProvider + FocusLayer", async () => {
     const { unmount } = renderWithSpatialStack();
     await flushSetup();
 
+    // The redundant `ui:view` chrome zone was deleted — it overlapped the
+    // inner view's own zone (`ui:board` / `ui:grid`) for the same rect.
+    // Nothing in `view-container.tsx`'s subtree (the bare ViewContainer
+    // itself, not the inner view bodies that are mocked here) should call
+    // `spatial_register_zone` with `segment === "ui:view"`.
     const calls = registerZoneCalls();
     const viewZone = calls.find((c) => c.segment === "ui:view");
-    expect(viewZone).toBeTruthy();
-    expect(viewZone?.parentZone).toBeNull();
-    expect(viewZone?.layerFq).toBeTruthy();
+    expect(viewZone).toBeUndefined();
 
     unmount();
   });
 
-  it("emits a wrapper element with data-moniker='ui:view'", async () => {
+  it("does NOT emit a wrapper element with data-segment='ui:view'", async () => {
     const { container, unmount } = renderWithSpatialStack();
     await flushSetup();
 
+    // The wrapper DOM element is gone too — no `[data-segment='ui:view']`
+    // node should exist anywhere in the rendered tree.
     const node = container.querySelector("[data-segment='ui:view']");
-    expect(node).not.toBeNull();
+    expect(node).toBeNull();
 
     unmount();
   });
 
-  it("preserves the flex chain className on the view zone wrapper", async () => {
-    const { container, unmount } = renderWithSpatialStack();
-    await flushSetup();
-
-    const node = container.querySelector(
-      "[data-segment='ui:view']",
-    ) as HTMLElement;
-    expect(node).not.toBeNull();
-    // The zone className must keep the BoardView / GridView chain alive.
-    expect(node.className).toContain("flex-1");
-    expect(node.className).toContain("flex");
-    expect(node.className).toContain("flex-col");
-    expect(node.className).toContain("min-h-0");
-    expect(node.className).toContain("min-w-0");
-
-    unmount();
-  });
-
-  it("does not wrap in FocusZone when no SpatialFocusProvider is present", () => {
-    // Without the provider stack, the conditional zone must short-circuit and
-    // render children directly so existing tests stay unaffected.
+  it("does NOT emit a ui:view wrapper when no SpatialFocusProvider is present", () => {
+    // Without the provider stack, the ViewContainer renders bare children.
+    // The absence assertion holds in this configuration too — the zone is
+    // gone for good, not just conditional on the providers.
     const { container } = render(
       <EntityFocusProvider>
         <ViewContainer />

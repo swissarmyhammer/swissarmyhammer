@@ -148,8 +148,9 @@ export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
  * provider tree.
  *
  * The zone preserves the `flex flex-col flex-1 min-h-0 min-w-0` chain so the
- * nested `<ui:view>` zone (and the BoardView/GridView inside it) can keep
- * filling the available space when the spatial-nav stack is present.
+ * nested view body (BoardView / GridView and its own viewport-sized
+ * `ui:board` / `ui:grid` chrome zone) can keep filling the available space
+ * when the spatial-nav stack is present.
  */
 function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
   const layerKey = useOptionalEnclosingLayerFq();

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c780
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffd80
 project: spatial-nav
 title: Delete redundant ui:view FocusZone — overlaps ui:board / ui:grid
 ---
@@ -56,21 +56,26 @@ The `view:{viewId}` `<CommandScopeProvider>` on `ViewContainer` (view-container.
 
 ## Acceptance Criteria
 
-- [ ] `ViewSpatialZone` no longer exists in `view-container.tsx`. `grep -r "ui:view"` in `kanban-app/ui/src` returns no production source matches.
-- [ ] Mounting `<ViewContainer>` inside the production provider stack produces zero `spatial_register_zone` calls with `segment === "ui:view"`. The DOM has no `[data-segment='ui:view']` element.
-- [ ] When `<BoardView>` is the active view, `ui:board`'s `parent_zone` resolves to `ui:perspective`'s FQM (one zone level closer to the root). When `<GridView>` is the active view, `ui:grid`'s `parent_zone` similarly resolves to `ui:perspective`'s FQM.
-- [ ] `ViewContainer`'s `<CommandScopeProvider moniker="view:{viewId}">` is still present — view-scoped command resolution unchanged.
-- [ ] `pnpm -C kanban-app/ui test` passes with no skipped tests added. Updated `perspective-view.spatial`, `view-container.spatial-nav`, `perspective-spatial-nav.guards`, and `spatial-nav-end-to-end.spatial` suites all green.
-- [ ] `pnpm -C kanban-app/ui typecheck` passes with no unused imports left over from the removed `ViewSpatialZone`.
+- [x] `ViewSpatialZone` no longer exists in `view-container.tsx`. `grep -r "ui:view"` in `kanban-app/ui/src` returns no production source matches.
+- [x] Mounting `<ViewContainer>` inside the production provider stack produces zero `spatial_register_zone` calls with `segment === "ui:view"`. The DOM has no `[data-segment='ui:view']` element.
+- [x] When `<BoardView>` is the active view, `ui:board`'s `parent_zone` resolves to `ui:perspective`'s FQM (one zone level closer to the root). When `<GridView>` is the active view, `ui:grid`'s `parent_zone` similarly resolves to `ui:perspective`'s FQM.
+- [x] `ViewContainer`'s `<CommandScopeProvider moniker="view:{viewId}">` is still present — view-scoped command resolution unchanged.
+- [x] `pnpm -C kanban-app/ui test` passes with no skipped tests added. Updated `perspective-view.spatial`, `view-container.spatial-nav`, `perspective-spatial-nav.guards`, and `spatial-nav-end-to-end.spatial` suites all green.
+- [x] `pnpm -C kanban-app/ui typecheck` passes with no unused imports left over from the removed `ViewSpatialZone`.
 
 ## Tests
 
-- [ ] Add a regression test in `kanban-app/ui/src/components/view-container.spatial-nav.test.tsx` (or rename the file if its premise no longer fits): `it("does NOT register a ui:view zone", …)` that mounts `<ViewContainer>` inside `SpatialFocusProvider` + `FocusLayer`, lets effects flush, and asserts `mockInvoke.mock.calls.filter(c => c[0] === "spatial_register_zone" && c[1].segment === "ui:view")` is empty AND `container.querySelector("[data-segment='ui:view']")` is `null`.
-- [ ] Add `it("ui:board's parent_zone is ui:perspective when board view is active", …)` in `kanban-app/ui/src/components/perspective-view.spatial.test.tsx` (or the analogous board-view test file) that captures both registrations and asserts `ui:board`'s `parentZone` arg equals `ui:perspective`'s `fq` arg — i.e. the `ui:view` hop is gone.
-- [ ] Update / delete `perspective-spatial-nav.guards.node.test.ts:125` so the source no longer asserts the `ui:view` `<FocusZone>` exists; flip to assert the wrapper is absent.
-- [ ] Run `pnpm -C kanban-app/ui test view-container perspective-view perspective-spatial-nav spatial-nav-end-to-end` and confirm all four target suites pass with the updated assertions.
-- [ ] Run the full `pnpm -C kanban-app/ui test` to catch any other test that relied on `ui:view` being present (parent-zone assertions, scope-chain length assertions, drill-out targets).
+- [x] Add a regression test in `kanban-app/ui/src/components/view-container.spatial-nav.test.tsx` (or rename the file if its premise no longer fits): `it("does NOT register a ui:view zone", …)` that mounts `<ViewContainer>` inside `SpatialFocusProvider` + `FocusLayer`, lets effects flush, and asserts `mockInvoke.mock.calls.filter(c => c[0] === "spatial_register_zone" && c[1].segment === "ui:view")` is empty AND `container.querySelector("[data-segment='ui:view']")` is `null`.
+- [x] Add `it("ui:board's parent_zone is ui:perspective when board view is active", …)` in `kanban-app/ui/src/components/perspective-view.spatial.test.tsx` (or the analogous board-view test file) that captures both registrations and asserts `ui:board`'s `parentZone` arg equals `ui:perspective`'s `fq` arg — i.e. the `ui:view` hop is gone.
+- [x] Update / delete `perspective-spatial-nav.guards.node.test.ts:125` so the source no longer asserts the `ui:view` `<FocusZone>` exists; flip to assert the wrapper is absent.
+- [x] Run `pnpm -C kanban-app/ui test view-container perspective-view perspective-spatial-nav spatial-nav-end-to-end` and confirm all four target suites pass with the updated assertions.
+- [x] Run the full `pnpm -C kanban-app/ui test` to catch any other test that relied on `ui:view` being present (parent-zone assertions, scope-chain length assertions, drill-out targets).
 
 ## Workflow
 
 - Use `/tdd` — write the regression "no `ui:view` zone registers" test first (RED against current code), delete `ViewSpatialZone` from `view-container.tsx`, then sweep the dependent tests / doc comments until the suite is green again.
+
+## Review Findings (2026-05-03 15:24)
+
+### Nits
+- [x] `kanban-app/ui/src/components/perspective-view.spatial.test.tsx:285-291` — Orphaned JSDoc block. The `/** ... */` previously documented the `isViewMoniker` helper that was deleted in this change. The block was repurposed into a narrative comment but kept JSDoc syntax even though it now floats above the `// Tests` separator with no symbol to attach to. Convert it to a `// ...` block comment, fold its content into the file-level docstring at the top of the file (which already covers the same point), or delete it — JSDoc on nothing is misleading to tooling and readers.

@@ -1215,10 +1215,10 @@ function BoardSpatialZone({ children }: BoardSpatialZoneProps) {
   // graph — only the visible bar is muted. Sized container zones
   // (column, card, field row) keep `showFocusBar={true}` because they
   // are bounded boxes whose users need a visible "here is focus" hint;
-  // viewport-sized chrome zones (board, perspective, view, navbar)
-  // suppress it for the same reason. See
+  // viewport-sized chrome zones (board, perspective, navbar) suppress
+  // it for the same reason. See
   // `kanban-app/ui/src/components/perspective-view.spatial.test.tsx`
-  // for the matching contract on the perspective and view zones.
+  // for the matching contract on the perspective zone.
   return (
     <FocusZone
       moniker={asSegment("ui:board")}

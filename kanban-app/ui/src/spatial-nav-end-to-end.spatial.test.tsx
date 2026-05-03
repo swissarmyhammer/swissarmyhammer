@@ -1146,27 +1146,15 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("dblclick on the view container chrome does NOT dispatch ui.inspect", async () => {
-      const { container, unmount } = renderApp();
-      await flushAppMount();
-
-      const viewNode = container.querySelector(
-        "[data-segment='ui:view']",
-      ) as HTMLElement | null;
-      expect(viewNode).not.toBeNull();
-
-      mockInvoke.mockClear();
-      fireEvent.doubleClick(viewNode!);
-      await flushAppMount();
-
-      const inspectCalls = dispatchCallsFor("ui.inspect");
-      expect(
-        inspectCalls.length,
-        "dblclick on view-container chrome must NOT dispatch ui.inspect",
-      ).toBe(0);
-
-      unmount();
-    });
+    // Note: a former `dblclick on the view container chrome…` test was
+    // removed when the redundant `ui:view` `<FocusZone>` was deleted from
+    // `view-container.tsx`. The view chrome rect is now owned by the
+    // surrounding `ui:perspective` zone (covered above as
+    // `dblclick on the perspective bar background…` and the perspective
+    // zone tests in `perspective-view.spatial.test.tsx`). Re-introducing
+    // the wrapper would pull this test back too — see
+    // `perspective-spatial-nav.guards.node.test.ts`'s ViewContainer guards
+    // for the source-level absence pin.
   });
 
   // =========================================================================
@@ -1364,6 +1352,48 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         boardReg,
         `${E2E_BOARD_MONIKER} must register on App mount`,
       ).toBeTruthy();
+
+      unmount();
+    });
+
+    it("the board entity zone's parent is ui:perspective — the redundant ui:view hop is gone", async () => {
+      const { unmount } = renderApp();
+      await flushAppMount();
+
+      // The redundant `ui:view` chrome zone was deleted from
+      // `view-container.tsx` (its rect overlapped the inner
+      // `ui:board` / `ui:grid` zone for the same area). After the
+      // deletion, the spatial graph is one zone shorter — the
+      // `board:<id>` entity zone (which wraps `ui:board`) hangs
+      // directly off `ui:perspective`. This test pins both halves of
+      // the cleanup: no `ui:view` zone is registered, and the
+      // `board:<id>` zone's `parent_zone` is the `ui:perspective`
+      // chrome zone's fq.
+      const viewZone = registerZoneArgs().find((a) => a.segment === "ui:view");
+      expect(
+        viewZone,
+        "no ui:view chrome zone may register — it was deleted as redundant",
+      ).toBeUndefined();
+
+      const perspectiveZone = registerZoneArgs().find(
+        (a) => a.segment === "ui:perspective",
+      );
+      expect(
+        perspectiveZone,
+        "ui:perspective zone must register so the view body can hang off it",
+      ).toBeTruthy();
+
+      const boardEntityZone = registerZoneArgs().find(
+        (a) => a.segment === E2E_BOARD_MONIKER,
+      );
+      expect(
+        boardEntityZone,
+        `${E2E_BOARD_MONIKER} must register as a zone (the Inspectable+FocusZone wrapper around ui:board)`,
+      ).toBeTruthy();
+      expect(
+        boardEntityZone!.parentZone,
+        `${E2E_BOARD_MONIKER}'s parent_zone must equal ui:perspective's key now that ui:view is gone`,
+      ).toBe(perspectiveZone!.fq);
 
       unmount();
     });

@@ -11,8 +11,9 @@
  *     each tab is a `perspective_tab:{id}` FocusScope leaf.
  *   - `perspective-container.tsx` — registers as `ui:perspective` zone with
  *     the canonical `flex flex-col flex-1 min-h-0 min-w-0` layout.
- *   - `view-container.tsx` — registers as `ui:view` zone with the canonical
- *     `flex-1 flex flex-col min-h-0 min-w-0` layout.
+ *   - `view-container.tsx` — does NOT register a `ui:view` zone. The
+ *     redundant viewport-sized chrome wrapper was deleted because it
+ *     overlapped the inner `ui:board` / `ui:grid` zone for the same rect.
  *
  * Node-only because they read source files from disk; lives under the
  * `*.node.test.ts` suffix recognised by `vite.config.ts`.
@@ -134,16 +135,20 @@ describe("ViewContainer source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("wraps the rendered view in FocusZone with moniker ui:view", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:view"\)/);
+  it("does NOT wrap the rendered view in a FocusZone with moniker ui:view", () => {
+    // The redundant `ui:view` chrome zone overlapped the inner view's own
+    // viewport-sized zone (`ui:board` / `ui:grid`) for the same rect. It
+    // was deleted to remove the no-op graph hop. Regression: keep the
+    // source free of any `<FocusZone moniker={asSegment("ui:view")}>`.
+    expect(SRC).not.toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:view"\)/);
   });
 
-  it("preserves the flex chain via className on the view zone", () => {
-    expect(SRC).toMatch(/flex-1\s+flex\s+flex-col\s+min-h-0\s+min-w-0/);
-  });
-
-  it("uses the asSegment brand helper from @/types/spatial", () => {
-    expect(SRC).toMatch(/from\s+["']@\/types\/spatial["']/);
-    expect(SRC).toMatch(/\basSegment\b/);
+  it("does NOT import the FocusZone primitive (no spatial zone is mounted here)", () => {
+    // After the wrapper deletion, view-container.tsx has no `<FocusZone>`
+    // at all — its only spatial-related responsibility is the
+    // `<CommandScopeProvider moniker={`view:${viewId}`}>` frame. Pin the
+    // import absence so a follow-up that re-introduces a zone is forced
+    // to update this guard explicitly.
+    expect(SRC).not.toMatch(/from\s+["']@\/components\/focus-zone["']/);
   });
 });

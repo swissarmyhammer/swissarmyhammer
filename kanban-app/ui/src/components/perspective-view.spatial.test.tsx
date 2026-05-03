@@ -2,17 +2,28 @@
  * Browser-mode test for `<PerspectiveContainer>` + `<ViewContainer>` zone
  * behaviour.
  *
- * Source of truth for acceptance of card `01KPZS32YN7CRNM0TH7GR28M86`. The
- * perspective and view containers are viewport-sized chrome zones — they
- * register in the spatial graph (so the navigator can drill into them) but
- * intentionally do NOT render a visible focus bar around the entire
- * viewport. This file pins both halves of that contract:
+ * Source of truth for acceptance of card `01KPZS32YN7CRNM0TH7GR28M86` and
+ * its follow-up that deleted the redundant `ui:view` chrome zone. The
+ * perspective container is a viewport-sized chrome zone — it registers in
+ * the spatial graph (so the navigator can drill into it) but intentionally
+ * does NOT render a visible focus bar around the entire viewport.
  *
- *   1. The view zone registers via `spatial_register_zone` with a
- *      `ui:view`-shaped moniker and unregisters on unmount.
- *   2. A focus claim on the view zone flips `data-focused` for e2e
+ * The `<ViewContainer>` no longer mounts its own `ui:view` zone — it
+ * overlapped the inner view's `ui:board` / `ui:grid` zone for the same
+ * rect, so it was deleted as a redundant graph hop. The inner view zone is
+ * therefore the direct child of `ui:perspective` in the spatial graph.
+ *
+ * This file pins:
+ *
+ *   1. The perspective zone registers via `spatial_register_zone` with the
+ *      `ui:perspective` moniker and unregisters on unmount.
+ *   2. The inner view zone (`ui:board` here, since the active view is
+ *      `BoardView`) registers with `parentZone === ui:perspective.fq`.
+ *   3. A focus claim on the perspective zone flips `data-focused` for e2e
  *      selectors but does NOT mount `<FocusIndicator>` (because
  *      `showFocusBar={false}` — see the inline comment on the zone).
+ *   4. Regression: no `ui:view` zone is ever registered, and no DOM node
+ *      with `data-segment='ui:view'` is rendered.
  *
  * Mock pattern matches `grid-view.nav-is-eventdriven.test.tsx`:
  * `vi.hoisted` builds an invoke / listen mock pair; `mockListen` records
@@ -271,11 +282,6 @@ function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
     .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
-/** Bar zones in this test accept either the dotted or hyphenated moniker. */
-function isViewMoniker(m: unknown): boolean {
-  return m === "ui:view" || m === "ui:perspective.view";
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -304,69 +310,88 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     vi.clearAllMocks();
   });
 
-  it("registers a ui:view zone on mount (test #1)", async () => {
-    const { unmount } = renderViewStack();
+  it("does NOT register a ui:view zone on mount — the redundant chrome wrapper was deleted (test #1)", async () => {
+    const { container, unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment));
-    expect(viewZone).toBeTruthy();
-    expect(typeof viewZone!.fq).toBe("string");
-    expect(viewZone!.layerFq).toBeTruthy();
-    // The zone's parent is the surrounding `ui:perspective` zone — both
-    // chrome zones live under the window layer.
+    // Regression: no `<FocusZone moniker={asSegment("ui:view")}>` is
+    // mounted by `view-container.tsx` anymore. Its rect overlapped the
+    // inner view's own viewport-sized zone (`ui:board` / `ui:grid`); the
+    // wrapper added no semantic value and was deleted.
+    const viewZone = registerZoneArgs().find((a) => a.segment === "ui:view");
+    expect(viewZone).toBeUndefined();
+    expect(container.querySelector("[data-segment='ui:view']")).toBeNull();
+
+    // The surrounding `ui:perspective` zone is still registered — it owns
+    // the chrome rect now and is the spatial-graph parent for whichever
+    // inner view zone (`ui:board` / `ui:grid`) the active view body
+    // mounts. (View bodies are mocked out in this file; their parent-zone
+    // assertion lives in `board-view.spatial-nav.test.tsx` and the
+    // end-to-end test.)
     const perspectiveZone = registerZoneArgs().find(
       (a) => a.segment === "ui:perspective",
     );
     expect(perspectiveZone).toBeTruthy();
-    expect(viewZone!.parentZone).toBe(perspectiveZone!.fq);
+    expect(typeof perspectiveZone!.fq).toBe("string");
+    expect(perspectiveZone!.layerFq).toBeTruthy();
 
     unmount();
   });
 
-  it("focus claim on the view zone flips data-focused but renders no indicator (test #2)", async () => {
-    // The view zone is viewport-sized chrome — a focus bar around the
-    // entire body would be visual noise, so `showFocusBar={false}` is
-    // applied at the zone (`view-container.tsx`). The data-focused
-    // attribute must still flip so e2e tooling and the umbrella card
-    // (`01KQ5PEHWT...`) verification protocol can observe the claim.
+  it("focus claim on the perspective zone flips data-focused but renders no indicator (test #2)", async () => {
+    // The perspective zone is viewport-sized chrome — a focus bar around
+    // the entire body would be visual noise, so `showFocusBar={false}` is
+    // applied at the zone (`perspective-container.tsx`). The
+    // `data-focused` attribute must still flip so e2e tooling and the
+    // umbrella card (`01KQ5PEHWT...`) verification protocol can observe
+    // the claim. (Previously this test targeted the now-deleted `ui:view`
+    // chrome zone; the contract moves up one level to its surviving
+    // parent.)
     const { container, queryByTestId, unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
-    const viewNode = container.querySelector(
-      `[data-segment='${viewZone.segment as string}']`,
+    const perspectiveZone = registerZoneArgs().find(
+      (a) => a.segment === "ui:perspective",
+    )!;
+    const node = container.querySelector(
+      "[data-segment='ui:perspective']",
     ) as HTMLElement;
-    expect(viewNode).not.toBeNull();
-    expect(viewNode.getAttribute("data-focused")).toBeNull();
+    expect(node).not.toBeNull();
+    expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: viewZone.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({
+      next_fq: perspectiveZone.fq as FullyQualifiedMoniker,
+    });
 
     await waitFor(() => {
-      expect(viewNode.getAttribute("data-focused")).not.toBeNull();
+      expect(node.getAttribute("data-focused")).not.toBeNull();
     });
     // Inline-comment rationale: viewport-sized chrome zones suppress the
     // visible bar; only sized leaves and entities show one. See
-    // `view-container.tsx` for the production-side comment.
+    // `perspective-container.tsx` for the production-side comment.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
     unmount();
   });
 
-  it("drill-out from an inner zone lands on the view (test #3)", async () => {
+  it("drill-out from an inner zone lands on the perspective (test #3)", async () => {
     // Drill-out semantics: when the user is focused on an inner element
     // and Escape pops them out, focus eventually lands on the enclosing
-    // `ui:view` zone. From the bar's point of view, "lands on view" means
-    // a `focus-changed` event arrives whose `next_fq` matches the view
-    // zone's spatial key. The bar test mirrors the kernel's emit by
+    // chrome zone. With the redundant `ui:view` hop removed, that
+    // enclosing zone is `ui:perspective` directly (the inner view zone's
+    // direct parent). The bar test mirrors the kernel's emit by
     // dispatching that payload directly — drill-out routing itself lives
     // in the spatial-focus-context tests; what we verify here is that
-    // when the kernel does route to the view, the React tree follows.
+    // when the kernel does route to the perspective, the React tree
+    // follows.
     const { container, unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
-    const viewNode = container.querySelector(
-      `[data-segment='${viewZone.segment as string}']`,
+    const perspectiveZone = registerZoneArgs().find(
+      (a) => a.segment === "ui:perspective",
+    )!;
+    const node = container.querySelector(
+      "[data-segment='ui:perspective']",
     ) as HTMLElement;
 
     // Pretend an inner board/grid leaf was focused first; we use a unique
@@ -374,28 +399,31 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // any registered listener.
     const phantomInnerKey = "ffffffff-ffff-4fff-8fff-ffffffffffff" as FullyQualifiedMoniker;
     await fireFocusChanged({ next_fq: phantomInnerKey });
-    expect(viewNode.getAttribute("data-focused")).toBeNull();
+    expect(node.getAttribute("data-focused")).toBeNull();
 
-    // Escape drives a drill-out chain that ultimately pushes focus to the
-    // view zone. Mimic the kernel's resulting `focus-changed` payload.
+    // Escape drives a drill-out chain that ultimately pushes focus to
+    // the perspective zone. Mimic the kernel's resulting `focus-changed`
+    // payload.
     await fireFocusChanged({
       prev_fq: phantomInnerKey,
-      next_fq: viewZone.fq as FullyQualifiedMoniker,
+      next_fq: perspectiveZone.fq as FullyQualifiedMoniker,
     });
 
     await waitFor(() => {
-      expect(viewNode.getAttribute("data-focused")).not.toBeNull();
+      expect(node.getAttribute("data-focused")).not.toBeNull();
     });
 
     unmount();
   });
 
-  it("the view zone unregisters via spatial_unregister_scope on unmount (test #4)", async () => {
+  it("the perspective zone unregisters via spatial_unregister_scope on unmount (test #4)", async () => {
     const { unmount } = renderViewStack();
     await flushSetup();
 
-    const viewZone = registerZoneArgs().find((a) => isViewMoniker(a.segment))!;
-    const expectedKey = viewZone.fq as FullyQualifiedMoniker;
+    const perspectiveZone = registerZoneArgs().find(
+      (a) => a.segment === "ui:perspective",
+    )!;
+    const expectedKey = perspectiveZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
     unmount();
