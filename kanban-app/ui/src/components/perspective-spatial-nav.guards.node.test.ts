@@ -8,7 +8,10 @@
  *
  * Files under guard:
  *   - `perspective-tab-bar.tsx` — registers as `ui:perspective-bar` zone;
- *     each tab is a `perspective_tab:{id}` FocusScope leaf.
+ *     each tab is a `perspective_tab:{id}` FocusZone wrapper containing
+ *     `perspective_tab.name:{id}` (and, when rendered, the
+ *     `perspective_tab.filter:{id}` / `perspective_tab.group:{id}` icon
+ *     button) FocusScope leaves.
  *   - `perspective-container.tsx` — registers as `ui:perspective` zone with
  *     the canonical `flex flex-col flex-1 min-h-0 min-w-0` layout.
  *   - `view-container.tsx` — does NOT register a `ui:view` zone. The
@@ -59,9 +62,24 @@ describe("PerspectiveTabBar source-level guards", () => {
     );
   });
 
-  it("wraps each tab in FocusScope with moniker perspective_tab:${id}", () => {
+  it("wraps each tab in FocusZone with moniker perspective_tab:${id}", () => {
+    // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the per-tab wrapper is a
+    // `<FocusZone>` rather than a `<FocusScope>` leaf — promoting it lets the
+    // inner Pressable-based icon buttons mount their own FocusScope leaves
+    // without violating the kernel's `scope-not-leaf` rule.
     expect(SRC).toMatch(
-      /<FocusScope\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
+      /<FocusZone\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
+    );
+  });
+
+  it("wraps the tab name button in FocusScope with moniker perspective_tab.name:${id}", () => {
+    // Companion to the per-tab zone guard: the inner `<TabButton>` is itself
+    // wrapped in a `<FocusScope perspective_tab.name:${id}>` leaf so the
+    // visible name target is keyboard-focusable. Beam-search lands here for
+    // `nav.up` / `nav.down` between tabs, and the focus indicator anchors to
+    // this leaf rather than the wrapping zone.
+    expect(SRC).toMatch(
+      /<FocusScope\s+moniker=\{asSegment\(`perspective_tab\.name:\$\{id\}`\)/,
     );
   });
 

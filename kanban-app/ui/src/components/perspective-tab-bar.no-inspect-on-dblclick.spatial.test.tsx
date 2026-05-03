@@ -350,32 +350,34 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
   // Test 3 — Single-click still focuses (regression guard for focus path)
   // -------------------------------------------------------------------------
 
-  it("single-click on a tab still dispatches spatial_focus for THAT tab's key", async () => {
+  it("single-click on a tab name still dispatches spatial_focus for THAT name leaf's key", async () => {
     const { container, unmount } = renderBar();
     await flushSetup();
 
-    // Capture the tab's spatial key from its registration call so we
-    // can assert against the precise key, not just any focus dispatch.
-    const tabRegistrations = mockInvoke.mock.calls
+    // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN)
+    // clicks on the tab land on the inner `perspective_tab.name:{id}`
+    // leaf — that is the `<FocusScope>` whose click handler dispatches
+    // `spatial_focus`. The outer `perspective_tab:{id}` is now a
+    // `<FocusZone>` (not a leaf scope) and the inner FocusScope's
+    // `stopPropagation` keeps the click from bubbling.
+    const nameLeaf = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
-      .map((c) => c[1] as Record<string, unknown>);
-    const p1Tab = tabRegistrations.find(
-      (r) => r.segment === "perspective_tab:p1",
-    );
-    expect(p1Tab).toBeTruthy();
+      .map((c) => c[1] as Record<string, unknown>)
+      .find((r) => r.segment === "perspective_tab.name:p1");
+    expect(nameLeaf).toBeTruthy();
 
-    const tabNode = container.querySelector(
-      "[data-segment='perspective_tab:p1']",
+    const nameNode = container.querySelector(
+      "[data-segment='perspective_tab.name:p1']",
     ) as HTMLElement | null;
-    expect(tabNode).not.toBeNull();
+    expect(nameNode).not.toBeNull();
 
     mockInvoke.mockClear();
 
-    fireEvent.click(tabNode!);
+    fireEvent.click(nameNode!);
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].fq).toBe(p1Tab!.fq);
+    expect(focusCalls[0].fq).toBe(nameLeaf!.fq);
 
     unmount();
   });

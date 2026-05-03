@@ -874,7 +874,12 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       // Capture the registered key for the leaf BEFORE we clear the
       // invoke mock — `findRegistration` reads from the mock's call log.
-      const moniker = "perspective_tab:p1";
+      // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN)
+      // the per-tab wrapper is a `<FocusZone perspective_tab:{id}>` and
+      // the click-target leaf is the inner
+      // `<FocusScope perspective_tab.name:{id}>` that wraps the
+      // `TabButton`.
+      const moniker = "perspective_tab.name:p1";
       const tabRegistration = findRegistration(moniker);
       const tabKey = tabRegistration.fq as FullyQualifiedMoniker;
 

@@ -358,11 +358,14 @@ interface ScopedPerspectiveTabProps {
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  *
- * The tab's render also goes through `<PerspectiveTabFocusable>`, which adds a
- * `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>` leaf when the
- * spatial-nav stack is mounted. That makes each tab a peer leaf in the
- * surrounding `ui:perspective-bar` zone so beam-search picks them up as
- * sibling navigation targets.
+ * The tab's render also goes through `<PerspectiveTabFocusable>`, which mounts
+ * a `<FocusZone moniker={asSegment(`perspective_tab:${id}`)} showFocusBar={false}>`
+ * wrapper when the spatial-nav stack is mounted. Each tab is therefore a
+ * sibling zone inside the surrounding `ui:perspective-bar` zone, and the
+ * interactive controls inside the tab — name, filter icon, group icon — are
+ * `<FocusScope>` leaves at `perspective_tab.name:{id}`,
+ * `perspective_tab.filter:{id}`, and `perspective_tab.group:{id}`. See
+ * `PerspectiveTabFocusable` below for the structural rationale.
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
  * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
@@ -439,12 +442,34 @@ function ScopedPerspectiveTab({
 }
 
 /**
- * Wrap a perspective tab in `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>`
+ * Wrap a perspective tab in `<FocusZone moniker={asSegment(`perspective_tab:${id}`)}>`
  * when the spatial-nav stack is mounted; otherwise fall through.
  *
- * Same conditional pattern as `PerspectiveBarSpatialZone` and
- * `ViewSpatialZone` — the strict primitive contract is preserved for
- * production while keeping the test surface narrow.
+ * # Why a zone, not a leaf
+ *
+ * Pre-iteration the tab wrapper was a `<FocusScope>` leaf with the
+ * `<TabButton>`, `<FilterFocusButton>`, and `<GroupPopoverButton>`
+ * rendered as plain `<button>` children inside it. Migrating the
+ * inner controls to `<Pressable>` (which mounts its own
+ * `<FocusScope>` leaf) creates a Scope-inside-Scope violation that the
+ * kernel's iteration-3 `scope-not-leaf` enforcement detects.
+ *
+ * The fix mirrors entity-card's iteration-2 reshape (card
+ * `01KQJDYJ4SDKK2G8FTAQ348ZHG`): promote the wrapper to `<FocusZone>`
+ * and wrap each interactive child in its own `<FocusScope>` leaf —
+ * `perspective_tab.name:{id}` for the name button,
+ * `perspective_tab.filter:{id}` for the filter icon (via Pressable),
+ * `perspective_tab.group:{id}` for the group icon (via Pressable).
+ * `showFocusBar={false}` because the inner leaves carry the focus
+ * signal — no visible bar across the whole tab is wanted.
+ *
+ * Same conditional pattern as `PerspectiveBarSpatialZone` —
+ * the strict primitive contract is preserved for production while
+ * keeping the test surface narrow.
+ *
+ * See also: `ScopedPerspectiveTab` above — it explains how this wrapper
+ * composes with the `<CommandScopeProvider moniker="perspective:{id}">`
+ * that surrounds it, so right-click context-menu chains pick up both.
  */
 function PerspectiveTabFocusable({
   id,
@@ -459,9 +484,12 @@ function PerspectiveTabFocusable({
     return <>{children}</>;
   }
   return (
-    <FocusScope moniker={asSegment(`perspective_tab:${id}`)}>
+    <FocusZone
+      moniker={asSegment(`perspective_tab:${id}`)}
+      showFocusBar={false}
+    >
       {children}
-    </FocusScope>
+    </FocusZone>
   );
 }
 
@@ -611,18 +639,24 @@ function PerspectiveTab({
 
   return (
     <div className="inline-flex items-center">
-      <TabButton
-        name={name}
-        isActive={isActive}
-        isRenaming={isRenaming}
-        onSelect={onSelect}
-        onDoubleClick={onDoubleClick}
-        onContextMenu={handleContextMenu}
-        onRenameCommit={onRenameCommit}
-        onRenameCancel={onRenameCancel}
-      />
+      <FocusScope moniker={asSegment(`perspective_tab.name:${id}`)}>
+        <TabButton
+          name={name}
+          isActive={isActive}
+          isRenaming={isRenaming}
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          onContextMenu={handleContextMenu}
+          onRenameCommit={onRenameCommit}
+          onRenameCancel={onRenameCancel}
+        />
+      </FocusScope>
       {isActive && (
-        <FilterFocusButton filter={filter} onFocus={onFilterFocus} />
+        <FilterFocusButton
+          perspectiveId={id}
+          filter={filter}
+          onFocus={onFilterFocus}
+        />
       )}
       {isActive && (
         <GroupPopoverButton
@@ -822,31 +856,51 @@ export function InlineRenameEditor({
  *
  * Does NOT open a popover. Instead, clicking calls `onFocus` which focuses
  * the formula bar CM6 editor to the right of the tabs.
+ *
+ * Migrates to `<Pressable asChild>` so the icon gains both keyboard
+ * reachability (the inner `<FocusScope>` provided by Pressable) AND
+ * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
+ * the same `onFocus` callback as a pointer click. The leaf moniker is
+ * `perspective_tab.filter:{id}` — its parent zone is the surrounding
+ * `perspective_tab:{id}` `<FocusZone>` so the kernel sees it as a
+ * sibling leaf of the name and group leaves.
+ *
+ * The inner `<button>`'s `onClick={(e) => e.stopPropagation()}` is
+ * preserved: a click on the filter icon must NOT bubble to the tab's
+ * own click-to-activate handler. Radix Slot's `mergeProps` runs the
+ * child's `onClick` first, then the slot's — so `e.stopPropagation()`
+ * lands BEFORE Pressable's `handleClick` triggers `onPress`.
  */
 function FilterFocusButton({
+  perspectiveId,
   filter,
   onFocus,
 }: {
+  perspectiveId: string;
   filter?: string;
   onFocus: () => void;
 }) {
   const hasFilter = Boolean(filter);
   return (
-    <button
-      aria-label="Filter"
-      className={cn(
-        "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
-        hasFilter
-          ? "text-primary"
-          : "text-muted-foreground/50 hover:text-muted-foreground",
-      )}
-      onClick={(e) => {
-        e.stopPropagation();
-        onFocus();
-      }}
+    <Pressable
+      asChild
+      moniker={asSegment(`perspective_tab.filter:${perspectiveId}`)}
+      ariaLabel="Filter"
+      onPress={onFocus}
     >
-      <Filter className="h-3 w-3" fill={hasFilter ? "currentColor" : "none"} />
-    </button>
+      <button
+        type="button"
+        className={cn(
+          "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
+          hasFilter
+            ? "text-primary"
+            : "text-muted-foreground/50 hover:text-muted-foreground",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Filter className="h-3 w-3" fill={hasFilter ? "currentColor" : "none"} />
+      </button>
+    </Pressable>
   );
 }
 
@@ -922,6 +976,24 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
  *
  * Opens a `GroupSelector` in a Radix Popover anchored below the button.
  * Highlighted in primary color when a group is active on the perspective.
+ *
+ * Migrates to `<Pressable asChild>` (inside the existing
+ * `<PopoverTrigger asChild>` slot) so the icon gains both keyboard
+ * reachability (the inner `<FocusScope>` provided by Pressable) AND
+ * scope-level CommandDefs that bind Enter (vim/cua) and Space (cua) to
+ * `onOpenChange(true)` — the same effect as a pointer click that opens
+ * the popover. The leaf moniker is `perspective_tab.group:{id}` — its
+ * parent zone is the surrounding `perspective_tab:{id}` `<FocusZone>`
+ * so the kernel sees it as a sibling leaf of the name and filter
+ * leaves.
+ *
+ * Trigger composition is `<PopoverTrigger asChild><Pressable
+ * asChild><button>`. Radix Slot's `mergeProps` composes the chain so
+ * exactly one `<button>` lands in the DOM, the trigger's onClick fires
+ * (toggling open state), Pressable's `handleClick` fires `onPress`
+ * (which calls `onOpenChange(true)`), and the inner button's
+ * `e.stopPropagation()` keeps the click from bubbling to the tab's
+ * activate handler.
  */
 function GroupPopoverButton({
   group,
@@ -940,21 +1012,28 @@ function GroupPopoverButton({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <button
-          aria-label="Group"
-          className={cn(
-            "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-0.5",
-            hasGroup
-              ? "text-primary"
-              : "text-muted-foreground/50 hover:text-muted-foreground",
-          )}
-          onClick={(e) => e.stopPropagation()}
+        <Pressable
+          asChild
+          moniker={asSegment(`perspective_tab.group:${perspectiveId}`)}
+          ariaLabel="Group"
+          onPress={() => onOpenChange(true)}
         >
-          <Group
-            className="h-3 w-3"
-            fill={hasGroup ? "currentColor" : "none"}
-          />
-        </button>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-0.5",
+              hasGroup
+                ? "text-primary"
+                : "text-muted-foreground/50 hover:text-muted-foreground",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Group
+              className="h-3 w-3"
+              fill={hasGroup ? "currentColor" : "none"}
+            />
+          </button>
+        </Pressable>
       </PopoverTrigger>
       <PopoverContent
         align="start"

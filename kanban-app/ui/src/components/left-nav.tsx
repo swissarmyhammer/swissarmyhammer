@@ -1,16 +1,14 @@
-import { useMemo } from "react";
 import { icons, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
 import {
   CommandScopeProvider,
   useDispatchCommand,
-  type CommandDef,
 } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import { cn } from "@/lib/utils";
-import { FocusScope } from "@/components/focus-scope";
 import { FocusZone } from "@/components/focus-zone";
+import { Pressable } from "@/components/pressable";
 import {
   Tooltip,
   TooltipContent,
@@ -86,28 +84,9 @@ interface ScopedViewButtonProps {
  * `view:{id}` moniker to resolve their scope.
  */
 function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
-  const dispatch = useDispatchCommand("view.set");
-  const activateCommands = useMemo<readonly CommandDef[]>(
-    () => [
-      {
-        id: "view.activate",
-        name: `Activate ${view.name}`,
-        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
-        execute: () => {
-          dispatch({ args: { view_id: view.id } }).catch(console.error);
-        },
-      },
-    ],
-    [dispatch, view.id, view.name],
-  );
   return (
-    <CommandScopeProvider
-      moniker={moniker("view", view.id)}
-      commands={activateCommands}
-    >
-      <FocusScope moniker={asSegment(`view:${view.id}`)}>
-        <ViewButton view={view} isActive={isActive} />
-      </FocusScope>
+    <CommandScopeProvider moniker={moniker("view", view.id)}>
+      <ViewButton view={view} isActive={isActive} />
     </CommandScopeProvider>
   );
 }
@@ -118,6 +97,20 @@ function ScopedViewButton({ view, isActive }: ScopedViewButtonProps) {
  * Must be rendered inside a {@link CommandScopeProvider} that supplies the
  * `view:{id}` moniker — {@link useContextMenu} reads that scope chain when
  * building the context-menu request to the backend.
+ *
+ * Migrates to `<Pressable asChild>` so the chrome leaf gains both
+ * keyboard reachability (the inner `<FocusScope>` provided by Pressable)
+ * AND scope-level CommandDefs that bind Enter (vim/cua) and Space (cua)
+ * to the same `view.set` dispatch as a pointer click. Pre-migration the
+ * site was a hand-rolled `<FocusScope view:{id}>` plus a manually-built
+ * `view.activate` CommandDef; Pressable's `pressable.activate` Enter
+ * binding subsumes the manual CommandDef so the dead weight is gone.
+ *
+ * The leaf moniker `ui:leftnav.view:{id}` follows the chrome-namespace
+ * pattern (`ui:navbar.*` / `ui:perspective-bar.*`) — UI chrome is not
+ * inspectable. The outer `CommandScopeProvider` keeps `view:{id}` in
+ * the right-click scope chain so `entity.add:{type}` dynamics still
+ * resolve for views that declare an `entity_type`.
  *
  * Left-click dispatches the canonical `view.set` command with the view id
  * in `args` (the palette fan-out that used to emit `view.switch:{id}` was
@@ -133,18 +126,27 @@ function ViewButton({ view, isActive }: ScopedViewButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          onClick={() => dispatch({ args: { view_id: view.id } })}
-          onContextMenu={handleContextMenu}
-          className={cn(
-            "flex items-center justify-center rounded-md p-1.5 transition-colors",
-            isActive
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-          )}
+        <Pressable
+          asChild
+          moniker={asSegment(`ui:leftnav.view:${view.id}`)}
+          ariaLabel={view.name}
+          onPress={() => {
+            dispatch({ args: { view_id: view.id } }).catch(console.error);
+          }}
         >
-          {viewIcon(view)}
-        </button>
+          <button
+            type="button"
+            onContextMenu={handleContextMenu}
+            className={cn(
+              "flex items-center justify-center rounded-md p-1.5 transition-colors",
+              isActive
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+            )}
+          >
+            {viewIcon(view)}
+          </button>
+        </Pressable>
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={8}>
         {view.name}

@@ -163,13 +163,6 @@ function registerZoneCalls(): Array<Record<string, unknown>> {
     .map((c) => c[1] as Record<string, unknown>);
 }
 
-/** Collect every `spatial_register_scope` call in order. */
-function registerScopeCalls(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_scope")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -236,7 +229,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     unmount();
   });
 
-  it("registers a perspective_tab:{id} focusable per tab", async () => {
+  it("registers a perspective_tab:{id} zone per tab", async () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,
       perspectives: [
@@ -250,17 +243,21 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const { unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const calls = registerScopeCalls();
+    // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the
+    // tab wrapper is a `<FocusZone>` not a `<FocusScope>` — the inner
+    // name / filter / group buttons are the leaves now. Mirror entity-card
+    // iteration 2 (`01KQJDYJ4SDKK2G8FTAQ348ZHG`).
+    const calls = registerZoneCalls();
     const monikers = calls.map((c) => c.segment as string);
     expect(monikers).toContain("perspective_tab:p1");
     expect(monikers).toContain("perspective_tab:p2");
-    // Grid perspective is filtered by view kind and must not produce a tab leaf.
+    // Grid perspective is filtered by view kind and must not produce a tab zone.
     expect(monikers).not.toContain("perspective_tab:p3");
 
     unmount();
   });
 
-  it("each tab focusable's parentZone is the ui:perspective-bar zone key", async () => {
+  it("each tab zone's parentZone is the ui:perspective-bar zone key", async () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,
       perspectives: [{ id: "p1", name: "Sprint", view: "board" }],
@@ -273,11 +270,11 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const barZone = registerZoneCalls().find(
       (c) => c.segment === "ui:perspective-bar",
     )!;
-    const tabFocusable = registerScopeCalls().find(
+    const tabZone = registerZoneCalls().find(
       (c) => c.segment === "perspective_tab:p1",
     )!;
-    expect(tabFocusable.parentZone).toBe(barZone.fq);
-    expect(tabFocusable.layerFq).toBe(barZone.layerFq);
+    expect(tabZone.parentZone).toBe(barZone.fq);
+    expect(tabZone.layerFq).toBe(barZone.layerFq);
 
     unmount();
   });

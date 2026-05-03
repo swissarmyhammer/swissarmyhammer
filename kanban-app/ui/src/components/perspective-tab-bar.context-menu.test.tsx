@@ -228,9 +228,15 @@ describe("PerspectiveTabBar right-click scope chain", () => {
 
     const chain = capturedListScope();
     expect(chain).toBeDefined();
-    // Innermost first: perspective_tab:p2 → perspective:p2 → window:main
-    // (`perspective_tab:<id>` comes from the inner `<FocusScope>` leaf;
-    // `perspective:<id>` from the surrounding `<CommandScopeProvider>`.)
+    // Innermost first: perspective_tab:p2 → perspective:p2 → window:main.
+    // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) `perspective_tab:<id>`
+    // comes from the `<FocusZone>` wrapper, not the inner FocusScope leaf
+    // (which is `perspective_tab.name:<id>`). chain[0] still resolves to
+    // `perspective_tab:p2` because `useContextMenu` is captured at
+    // `PerspectiveTab`'s render scope — outside the inner
+    // `<FocusScope perspective_tab.name:${id}>` — so the innermost segment
+    // visible at capture time is the wrapping tab zone. `perspective:<id>`
+    // continues to come from the surrounding `<CommandScopeProvider>`.
     expect(chain![0]).toBe("perspective_tab:p2");
     expect(chain).toContain("perspective:p2");
     expect(chain).toContain("window:main");
@@ -264,8 +270,10 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     const chains = capturedItemScopes();
     expect(chains.length).toBeGreaterThan(0);
     for (const chain of chains) {
-      // Innermost: perspective_tab:p1 (the `<FocusScope>` leaf) →
-      // perspective:p1 (the surrounding `<CommandScopeProvider>`).
+      // Innermost: perspective_tab:p1 (the `<FocusZone>` wrapper, NOT the
+      // inner `<FocusScope perspective_tab.name:p1>` leaf — `useContextMenu`
+      // is captured outside that inner leaf) → perspective:p1 (the
+      // surrounding `<CommandScopeProvider>`).
       expect(chain[0]).toBe("perspective_tab:p1");
       expect(chain).toContain("perspective:p1");
       expect(chain).toContain("window:main");

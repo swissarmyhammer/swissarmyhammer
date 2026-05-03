@@ -780,8 +780,12 @@ describe("PerspectiveTabBar", () => {
         await Promise.resolve();
       });
 
-      // Collect the rect for each perspective tab leaf from the
-      // `spatial_register_scope` invocation argument bag.
+      // Collect the rect for each perspective tab from the
+      // `spatial_register_zone` invocation argument bag. After the
+      // iteration-2 reshape the per-tab wrapper is a `<FocusZone>`, not
+      // a `<FocusScope>` leaf — the rect lives on the zone now and the
+      // inner name / filter / group leaves are smaller children inside
+      // it.
       type RectArg = {
         x: number;
         y: number;
@@ -790,7 +794,7 @@ describe("PerspectiveTabBar", () => {
       };
       const tabRects = new Map<string, RectArg>();
       for (const call of mockInvoke.mock.calls) {
-        if (call[0] !== "spatial_register_scope") continue;
+        if (call[0] !== "spatial_register_zone") continue;
         const args = call[1] as { segment: string; rect: RectArg };
         if (typeof args?.segment !== "string") continue;
         if (!args.segment.startsWith("perspective_tab:")) continue;

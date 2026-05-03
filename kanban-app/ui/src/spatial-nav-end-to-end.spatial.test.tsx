@@ -647,28 +647,41 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("clicking a perspective tab focuses that tab (not a card or chrome leaf)", async () => {
+    it("clicking a perspective tab name focuses the name leaf inside that tab", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      // Active perspective is `default`; the tab moniker is
-      // `perspective_tab:default`.
-      const tabKey = harness.getRegisteredFqBySegment(
-        "perspective_tab:default",
+      // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the active perspective
+      // mounts `<FocusZone perspective_tab:default>` with an inner
+      // `<FocusScope perspective_tab.name:default>` leaf. A real user click
+      // on the visible tab name lands on the inner leaf — that is the
+      // realistic user path. The wrapping zone's onClick still calls
+      // `focus(zone_fq)`, but the leaf calls `stopPropagation` so only one
+      // `spatial_focus` reaches IPC. Mirrors `perspective-bar.spatial.test.tsx`
+      // test #3 ("clicking a tab dispatches exactly one spatial_focus for the
+      // name leaf").
+      const nameLeafKey = harness.getRegisteredFqBySegment(
+        "perspective_tab.name:default",
       );
-      expect(tabKey, "perspective_tab:default must register").not.toBeNull();
+      expect(
+        nameLeafKey,
+        "perspective_tab.name:default must register",
+      ).not.toBeNull();
 
-      const tabNode = container.querySelector(
-        "[data-segment='perspective_tab:default']",
+      const nameNode = container.querySelector(
+        "[data-segment='perspective_tab.name:default']",
       ) as HTMLElement | null;
-      expect(tabNode, "perspective_tab:default DOM node must exist").not.toBeNull();
+      expect(
+        nameNode,
+        "perspective_tab.name:default DOM node must exist",
+      ).not.toBeNull();
 
       mockInvoke.mockClear();
-      fireEvent.click(tabNode!);
+      fireEvent.click(nameNode!);
 
       await waitFor(() => {
         const focused = container.querySelector(
-          "[data-segment='perspective_tab:default'][data-focused='true']",
+          "[data-segment='perspective_tab.name:default'][data-focused='true']",
         );
         expect(focused).not.toBeNull();
       });
@@ -678,9 +691,16 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         document.querySelectorAll("[data-focused='true']").length,
       ).toBe(1);
 
-      // The focus call's key matches the registered tab key.
+      // The focus call's key matches the registered name-leaf key — and the
+      // outer zone's key is NOT also reported, because the leaf stops the
+      // click from bubbling to the wrapping zone's onClick.
       const focusCalls = spatialFocusCalls();
-      expect(focusCalls.some((c) => c.fq === tabKey!)).toBe(true);
+      expect(focusCalls.some((c) => c.fq === nameLeafKey!)).toBe(true);
+      const zoneKey = harness.getRegisteredFqBySegment(
+        "perspective_tab:default",
+      );
+      expect(zoneKey, "perspective_tab:default must register").not.toBeNull();
+      expect(focusCalls.find((c) => c.fq === zoneKey!)).toBeUndefined();
 
       unmount();
     });
