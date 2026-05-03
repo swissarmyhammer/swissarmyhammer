@@ -37,48 +37,62 @@
 //! identity. Callers that need the relative segment (for human-readable
 //! logs or local-only display) read it from the registry by FQM.
 //!
+//! # The sibling rule — zones and scopes are siblings under a parent zone
+//!
+//! Within a parent [`crate::scope::FocusZone`], child
+//! [`crate::scope::FocusScope`] leaves and child
+//! [`crate::scope::FocusZone`] containers are **siblings**. Cardinal
+//! navigation must treat them as peers — never filter by kind at the
+//! in-zone (iter 0) level. This is the load-bearing contract of the
+//! kernel; see the crate README (`swissarmyhammer-focus/README.md`) for
+//! the prose version with diagrams.
+//!
+//! Translated to algorithm terms:
+//!
+//! - **Iter 0 — any-kind in-zone peers**: candidates are ANY registered
+//!   scope (leaf OR zone) sharing the focused entry's `parent_zone`,
+//!   geometrically in `direction`. Pick best by Android beam score.
+//!   The kernel must NOT use kind as a candidate filter at iter 0 —
+//!   doing so re-introduces the bug where pressing Right from a card's
+//!   drag-handle leaf jumps over the title field zone to the inspect
+//!   leaf, or pressing Down from a card's chrome leaves the card.
+//! - **Iter 1 — same-kind peer zones**: when iter 0 misses, escalate
+//!   to the focused entry's `parent_zone` and search its peers. The
+//!   parent IS a zone, so its peers are zones by construction — iter
+//!   1's same-kind filter is structural, not a kind policy.
+//!
 //! # Algorithm — unified edge drill-out cascade
 //!
 //! Within a single layer (the focused entry's `layer_fq` is the hard
 //! boundary — nav never crosses it), the cascade runs:
 //!
-//! 1. **Iter 0 — same-kind peer search** at the focused entry's level:
-//!    candidates are scopes of the same kind as `focused` (leaf for
-//!    leaf, zone for zone) sharing its `parent_zone`. If a candidate
-//!    satisfies the in-beam Android score (`13 * major² + minor²`),
-//!    return its FQM.
+//! 1. **Iter 0 — any-kind in-zone peer search** at the focused entry's
+//!    level: candidates are ANY scope (leaf or zone) sharing
+//!    `parent_zone` with the focused entry. If a candidate satisfies
+//!    the in-beam Android score (`13 * major² + minor²`), return its
+//!    FQM. The geometrically best candidate wins regardless of kind.
 //! 2. **Escalate** to the focused entry's `parent_zone` (with a
 //!    layer-boundary guard — escalation never crosses the layer FQM).
 //!    If the focused entry has no parent zone (it sits at the layer
 //!    root), the cascade stays put.
-//! 3. **Iter 1 — sibling-zone peer search** at the parent's level:
-//!    candidates are zones (the parent is itself a zone, so iter 1's
-//!    same-kind filter restricts to zones) sharing the parent's
-//!    `parent_zone` — i.e. the focused entry's grandparent in the
-//!    zone tree. Same beam scoring. If a candidate matches, return its
-//!    FQM.
+//! 3. **Iter 1 — same-kind sibling-zone peer search** at the parent's
+//!    level: candidates are zones (the parent is itself a zone, so
+//!    iter 1's same-kind filter restricts to zones) sharing the
+//!    parent's `parent_zone` — i.e. the focused entry's grandparent in
+//!    the zone tree. Same beam scoring. If a candidate matches, return
+//!    its FQM.
 //! 4. **Drill-out fallback**: when no peer matches at iter 0 *or* iter
 //!    1, return the parent zone's FQM. A single key press moves at
 //!    most one zone level out from the focused entry; the user is
 //!    never "stuck" returning a stay-put unless the focused entry sits
 //!    at the very root of its layer.
 //!
-//! Same-kind filtering at iter 0 is intentional. In production, a
-//! `<Field>` zone mounted inside a `<FocusScope>` card body inherits
-//! the card's enclosing `parent_zone` (the column), so the field zone
-//! and the card leaf are sibling-registered even though visually the
-//! field is *inside* the card. Pulling both kinds into iter 0 would
-//! let pressing Down from a focused card land on a field zone inside
-//! the next card (vertically aligned because the field is inside the
-//! card), stealing the press from the card-leaf neighbor. Same-kind
-//! filtering keeps "Down from a card" landing on the next card; users
-//! cross the kind boundary via drill-in / drill-out, not via cardinal
-//! nav.
-//!
 //! Edge commands ([`Direction::First`], [`Direction::Last`],
 //! [`Direction::RowStart`], [`Direction::RowEnd`]) keep their
-//! level-bounded behavior — no escalation cascade. They pick the
-//! boundary candidate from the focused entry's siblings only.
+//! level-bounded behavior AND keep their same-kind filter — `Home` in
+//! a row of cells means "first cell in the row", not "the row's
+//! container zone". The level-bounded "first/last among siblings of my
+//! kind" semantics are correct for those keys.
 //!
 //! Override (rule 0) still runs first — the focused scope's
 //! per-direction `overrides` map short-circuits the cascade entirely.
@@ -134,12 +148,18 @@ pub trait NavStrategy: Send + Sync {
 /// Default Android-beam-search navigation strategy.
 ///
 /// Implements the unified cascade described in the module docs:
-/// override (rule 0) → iter-0 peer search at the focused entry's
-/// level → iter-1 peer search at the parent's level → drill-out to
-/// the parent zone itself when no peer matches at either level.
+/// override (rule 0) → iter-0 ANY-KIND peer search at the focused
+/// entry's level → iter-1 same-kind peer-zone search at the parent's
+/// level → drill-out to the parent zone itself when no peer matches
+/// at either level. The any-kind iter-0 rule realises the sibling
+/// contract: a child [`crate::scope::FocusZone`] and a child
+/// [`crate::scope::FocusScope`] under the same parent zone are peers,
+/// not segregated kinds.
+///
 /// Edge commands ([`Direction::First`], [`Direction::Last`],
 /// [`Direction::RowStart`], [`Direction::RowEnd`]) keep their
-/// level-bounded behavior — no escalation cascade for those.
+/// level-bounded same-kind behavior — no escalation cascade and `Home`
+/// in a row of cells still picks "first cell", not "row container".
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BeamNavStrategy;
 
@@ -270,9 +290,17 @@ fn check_override(
 /// Run the unified cardinal-direction cascade from `focused` in
 /// `direction`.
 ///
-/// See module docs for the full cascade contract; this helper just
-/// composes the three observable outcomes (iter 0, iter 1, drill-out
-/// fallback) plus the layer-root and torn-state edges.
+/// See the module-level docstring for the full cascade contract; this
+/// helper composes the three observable outcomes (iter 0, iter 1,
+/// drill-out fallback) plus the layer-root and torn-state edges.
+///
+/// Iter 0 uses [`beam_among_in_zone_any_kind`] — any sibling of the
+/// focused entry under the same `parent_zone`, regardless of kind.
+/// Iter 1 uses [`beam_among_siblings`] with `expect_zone = true` —
+/// only sibling zones of the parent zone enter the search, which is
+/// structural (the parent is itself a zone), not a kind policy.
+///
+/// See `swissarmyhammer-focus/README.md` for the prose contract.
 fn cardinal_cascade(
     reg: &SpatialRegistry,
     focused: &RegisteredScope,
@@ -280,17 +308,16 @@ fn cardinal_cascade(
     focused_segment: &SegmentMoniker,
     direction: Direction,
 ) -> FullyQualifiedMoniker {
-    let focused_is_zone = focused.is_zone();
-
-    // Iter 0: same-kind peers of the focused entry sharing its
-    // parent_zone.
-    if let Some(target) = beam_among_siblings(
+    // Iter 0: ANY-kind peers of the focused entry sharing its
+    // parent_zone. A child FocusZone and a child FocusScope under the
+    // same parent FocusZone are peers — the geometrically best
+    // candidate wins regardless of kind.
+    if let Some(target) = beam_among_in_zone_any_kind(
         reg,
         focused.layer_fq(),
         focused.rect(),
         focused.parent_zone(),
         focused.fq(),
-        focused_is_zone,
         direction,
     ) {
         return target;
@@ -320,8 +347,8 @@ fn cardinal_cascade(
     };
 
     // Iter 1: same-kind peers of the parent zone sharing its
-    // parent_zone. The parent is always a zone, so this is the
-    // sibling-zone beam.
+    // parent_zone. The parent IS always a zone, so this restricts
+    // candidates to zones — structural fact, not a kind policy.
     if let Some(target) = beam_among_siblings(
         reg,
         &parent.layer_fq,
@@ -382,6 +409,21 @@ fn parent_zone_resolution<'a>(
 
 /// Beam-search candidates that share `from_parent` (excluding `from_fq`),
 /// filtered by `layer` and by kind matching `expect_zone`.
+///
+/// **Caller contract — used by iter 1 only.** The same-kind filter on
+/// this helper is appropriate when the focused entry is the parent
+/// zone in the iter-1 escalation: the parent IS a zone, so peer zones
+/// of the parent are zones by construction. Restricting candidates to
+/// `expect_zone == true` is structural at iter 1, NOT a kind policy.
+///
+/// Iter 0 must NOT use this helper — iter 0 is any-kind in-zone (see
+/// [`beam_among_in_zone_any_kind`]). The `expect_zone` parameter is
+/// retained because edge commands ([`edge_command`]) also rely on
+/// kind-bounded candidates by design (`Home` in a row of cells means
+/// "first cell", not "row container"); but cardinal nav's iter 0 has
+/// no business filtering by kind.
+///
+/// See `swissarmyhammer-focus/README.md` for the prose contract.
 fn beam_among_siblings(
     reg: &SpatialRegistry,
     layer: &FullyQualifiedMoniker,
@@ -398,6 +440,40 @@ fn beam_among_siblings(
             if s.is_zone() != expect_zone {
                 return None;
             }
+            if s.parent_zone() == from_parent && s.fq() != from_fq {
+                Some((s.fq(), *s.rect()))
+            } else {
+                None
+            }
+        }),
+    )
+}
+
+/// Beam-search ANY-KIND candidates sharing `from_parent` (excluding
+/// `from_fq`), filtered by `layer` only.
+///
+/// **Caller contract — used by iter 0 only.** Implements the sibling
+/// rule: within a parent [`crate::scope::FocusZone`], child
+/// [`crate::scope::FocusScope`] leaves and child
+/// [`crate::scope::FocusZone`] containers are peers. Cardinal nav at
+/// iter 0 considers both kinds together and lets the Android beam
+/// score pick the geometrically best candidate.
+///
+/// See `swissarmyhammer-focus/README.md` for the prose contract — and
+/// for the anti-pattern callout warning future contributors NOT to
+/// re-introduce a `is_zone()` filter at iter 0.
+fn beam_among_in_zone_any_kind(
+    reg: &SpatialRegistry,
+    layer: &FullyQualifiedMoniker,
+    from_rect: &Rect,
+    from_parent: Option<&FullyQualifiedMoniker>,
+    from_fq: &FullyQualifiedMoniker,
+    direction: Direction,
+) -> Option<FullyQualifiedMoniker> {
+    pick_best_candidate(
+        from_rect,
+        direction,
+        reg.entries_in_layer(layer).filter_map(|s| {
             if s.parent_zone() == from_parent && s.fq() != from_fq {
                 Some((s.fq(), *s.rect()))
             } else {

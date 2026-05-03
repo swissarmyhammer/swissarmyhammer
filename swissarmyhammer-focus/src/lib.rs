@@ -10,6 +10,28 @@
 //! consumer (the path through the focus hierarchy); the kernel only
 //! sees rectangles, layers, and zones.
 //!
+//! # Navigation rules
+//!
+//! Cardinal navigation obeys one load-bearing contract: **within a
+//! parent [`FocusZone`], child [`FocusScope`] leaves and child
+//! [`FocusZone`] containers are siblings.** Iter 0 of the cascade
+//! considers any-kind in-zone candidates and lets the Android beam
+//! score pick the geometrically best one. Only iter 1 (escalation to
+//! peer-zone level) restricts candidates to zones — that's structural,
+//! not a kind policy, because the parent IS a zone.
+//!
+//! Edge commands ([`Direction::First`], [`Direction::Last`],
+//! [`Direction::RowStart`], [`Direction::RowEnd`]) keep level-bounded
+//! same-kind semantics — `Home` in a row of cells means "first cell",
+//! not "row container".
+//!
+//! See the crate README (`swissarmyhammer-focus/README.md`) for the
+//! prose contract with diagrams, the anti-pattern callout against
+//! re-introducing kind filters at iter 0, and the cascade walkthrough.
+//! The [`navigate`] module docs cover the full algorithm and the
+//! `tests/in_zone_any_kind_first.rs` integration suite pins each
+//! iter-0 trajectory.
+//!
 //! # No-silent-dropout contract
 //!
 //! Nav and drill APIs always return a [`FullyQualifiedMoniker`]. "No

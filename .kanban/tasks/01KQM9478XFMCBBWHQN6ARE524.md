@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bf80
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffff580
 project: spatial-nav
 title: 'Card drag handle: drop the FocusScope wrapper — handle is mouse-only, no keyboard target needed'
 ---
@@ -33,20 +33,28 @@ Edit `entity-card.tsx` only. In `DragHandle` (lines 173–192):
 The cleanest answer is "don't register what cannot be acted on." A focusable element with no keyboard action is a tab-stop trap. The card's other inner leaf (`InspectButton`) has a real keyboard action (Space/Enter → dispatch `ui.inspect`); the drag handle has none.
 
 ## Acceptance Criteria
-- [ ] `DragHandle` in `kanban-app/ui/src/components/entity-card.tsx` no longer wraps its `<button>` in a `<FocusScope>`. The component takes only `dragHandleProps` and returns `<button … onClick={…} {...dragHandleProps}><GripVertical /></button>`.
-- [ ] The single call site (line ~120) is updated — no `entityId` prop passed.
-- [ ] Doc-comment on `DragHandle` is rewritten to explain the mouse-only rationale and reference `board-view.tsx::useSensor(PointerSensor, …)` as the source of truth.
-- [ ] `mockInvoke("spatial_register_scope", …)` calls during card mount no longer include any segment matching `^card\.drag-handle:`.
-- [ ] Drag-and-drop still works: `dragHandleProps` are still spread onto the `<button>`, so dnd-kit's pointer sensor still picks up grip drags.
-- [ ] Click on the drag handle still does NOT bubble to the card body's inspect handler (the `onClick={(e) => e.stopPropagation()}` is preserved).
+- [x] `DragHandle` in `kanban-app/ui/src/components/entity-card.tsx` no longer wraps its `<button>` in a `<FocusScope>`. The component takes only `dragHandleProps` and returns `<button … onClick={…} {...dragHandleProps}><GripVertical /></button>`.
+- [x] The single call site (line ~120) is updated — no `entityId` prop passed.
+- [x] Doc-comment on `DragHandle` is rewritten to explain the mouse-only rationale and reference `board-view.tsx::useSensor(PointerSensor, …)` as the source of truth.
+- [x] `mockInvoke("spatial_register_scope", …)` calls during card mount no longer include any segment matching `^card\.drag-handle:`.
+- [x] Drag-and-drop still works: `dragHandleProps` are still spread onto the `<button>`, so dnd-kit's pointer sensor still picks up grip drags.
+- [x] Click on the drag handle still does NOT bubble to the card body's inspect handler (the `onClick={(e) => e.stopPropagation()}` is preserved).
 
 ## Tests
-- [ ] Update `kanban-app/ui/src/components/entity-card.scope-leaf.spatial.test.tsx`:
+- [x] Update `kanban-app/ui/src/components/entity-card.scope-leaf.spatial.test.tsx`:
   - Rewrite `it("the drag-handle leaf registers as a scope under the card zone")` (line ~283) to `it("the drag-handle does NOT register as a scope")`. Assert that `mockInvoke` was called zero times with `cmd === "spatial_register_scope"` and `args.segment` matching `/^card\.drag-handle:/`.
   - Update the file's top-of-file docstring (lines 28–30) to remove "drag-handle" from the list of inner leaf scopes.
-- [ ] Existing card spatial tests stay green: `entity-card.spatial.test.tsx`, `entity-card.test.tsx`, `entity-card.field-icon-inside-zone.browser.test.tsx`, `column-view.spatial-nav.test.tsx`, `board-view.cross-column-nav.spatial.test.tsx`. In particular, the inspect-button leaf assertion in `scope-leaf.spatial.test.tsx` must remain green (inspect IS keyboard-actionable; only the drag handle is being demoted).
-- [ ] Existing drag-drop tests stay green: `column-dragover.browser.test.tsx`, `sortable-task-card.test.tsx`, `sortable-column.tsx`'s tests. Confirm the pointer-driven drag path is unaffected by removing the FocusScope (the FocusScope was a sibling of the drag handlers, not in their event path).
-- [ ] Run `cd kanban-app/ui && pnpm vitest run src/components/entity-card src/components/sortable-task-card src/components/column-dragover` and confirm green.
+- [x] Existing card spatial tests stay green: `entity-card.spatial.test.tsx`, `entity-card.test.tsx`, `entity-card.field-icon-inside-zone.browser.test.tsx`, `column-view.spatial-nav.test.tsx`, `board-view.cross-column-nav.spatial.test.tsx`. In particular, the inspect-button leaf assertion in `scope-leaf.spatial.test.tsx` must remain green (inspect IS keyboard-actionable; only the drag handle is being demoted).
+- [x] Existing drag-drop tests stay green: `column-dragover.browser.test.tsx`, `sortable-task-card.test.tsx`, `sortable-column.tsx`'s tests. Confirm the pointer-driven drag path is unaffected by removing the FocusScope (the FocusScope was a sibling of the drag handlers, not in their event path).
+- [x] Run `cd kanban-app/ui && pnpm vitest run src/components/entity-card src/components/sortable-task-card src/components/column-dragover` and confirm green.
 
 ## Workflow
 - Use `/tdd` — invert the existing scope-leaf assertion first (failing test demanding the drag handle NOT be a scope), watch it fail, then remove the wrapper from `DragHandle` and confirm it passes. Final pass: drag-drop browser tests stay green.
+
+## Review Findings (2026-05-02 12:30)
+
+### Nits
+- [x] `kanban-app/ui/src/components/entity-card.in-zone-nav.spatial.test.tsx` (the `ArrowLeft from card.inspect:{id} lands on the title field zone` test, the block guarded by `if (dragNode)`) — Now that `DragHandle` no longer registers a `<FocusScope>`, no element carries `data-segment='card.drag-handle:task-1'`, so `dragNode` is always `null` and the entire `if (dragNode) { expect(...).toBeNull() }` branch is dead code. Either delete the dead conditional outright (the primary `titleNode` assertion still pins the desired ArrowLeft outcome), or replace it with a positive assertion that no element carries that `data-segment` attribute. While there, refresh the test's docstring (the `ArrowLeft from card.inspect:{id}` block) and the inline comment that begins "Crucially, focus must NOT be on the drag-handle leaf" — both still describe a "drag-handle leaf" that no longer exists, so the pre-fix counterfactual is no longer reproducible and the wording is stale.
+
+### Resolution (2026-05-03)
+Replaced the dead `if (dragNode) { ... }` conditional in `entity-card.in-zone-nav.spatial.test.tsx` with a positive `expect(dragNode).toBeNull()` assertion that pins the post-fix invariant: the drag handle is intentionally absent from the spatial-nav DOM. Refreshed the test docstring on `it("ArrowLeft from card.inspect:{id} lands on the title field zone")` and the inline comment to describe the current state (drag handle is mouse-only, not a `<FocusScope>`) and to drop the now-unreproducible "jumping over the title to the drag-handle leaf" pre-fix narrative. Also refreshed the `TASK_SCHEMA` docstring (the `[drag-handle leaf, title field zone, inspect leaf]` list) to read `[title field zone, inspect leaf]` with a parenthetical noting why the drag handle isn't in the list. Verified with `pnpm vitest run src/components/entity-card` — 58/58 pass.

@@ -25,13 +25,15 @@
  *   1. The card body registers as a `<FocusZone>` (segment matches
  *      `^task:` and the call lands on `spatial_register_zone`, NOT on
  *      `spatial_register_scope`).
- *   2. The drag-handle and inspect-button are inner leaf scopes
- *      (`card.drag-handle:{id}` / `card.inspect:{id}` segments,
- *      registered via `spatial_register_scope`).
- *   3. The drag-handle / inspect-button leaves register their
- *      `parentZone` as the card zone's FQM — so the card zone has at
- *      least the two chrome leaves as direct path-descendants
- *      `parent_zone`-wise.
+ *   2. The inspect-button is an inner leaf scope
+ *      (`card.inspect:{id}` segment, registered via
+ *      `spatial_register_scope`). The drag-handle is intentionally NOT
+ *      a leaf scope — it has no keyboard activation story (dnd-kit on
+ *      the board uses `PointerSensor` only, no `KeyboardSensor`), so
+ *      registering it would create a tab-stop trap with no action.
+ *   3. The inspect-button leaf registers its `parentZone` as the card
+ *      zone's FQM — so the card zone has the inspect chrome leaf as a
+ *      direct path-descendant `parent_zone`-wise.
  *   4. The `<Field>` zones inside the card register their `parentZone`
  *      as the card zone's FQM — fields are children of cards, not
  *      siblings.
@@ -280,30 +282,24 @@ describe("EntityCard — scope-is-leaf invariant", () => {
     unmount();
   });
 
-  it("the drag-handle leaf registers as a scope under the card zone", async () => {
-    // The drag-handle is a single button atom and the card's <FocusZone>
-    // needs a navigable peer for it. Register it as a leaf scope —
-    // mirrors the navbar's <FocusScope moniker="ui:navbar.search">
-    // pattern.
+  it("the drag-handle does NOT register as a scope", async () => {
+    // The drag-handle is mouse-only — `@dnd-kit` on the board uses
+    // `useSensor(PointerSensor, …)` with no `KeyboardSensor` (see
+    // `board-view.tsx`). A focusable element with no keyboard action
+    // would be a tab-stop trap, so the drag-handle is intentionally
+    // NOT wrapped in a `<FocusScope>`. Assert that no
+    // `spatial_register_scope` call carries a `card.drag-handle:` segment.
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
-      (a) => a.segment === "task:task-1",
-    )!;
-    expect(cardZone).toBeDefined();
-
-    const dragHandle = registerScopeArgs().find(
-      (a) => a.segment === "card.drag-handle:task-1",
+    const dragHandleScopes = registerScopeArgs().filter((a) =>
+      typeof a.segment === "string" &&
+      /^card\.drag-handle:/.test(a.segment),
     );
     expect(
-      dragHandle,
-      "card.drag-handle:{id} must register as a leaf scope",
-    ).toBeDefined();
-    expect(
-      dragHandle!.parentZone,
-      "drag-handle leaf's parentZone must point at the card zone",
-    ).toBe(cardZone.fq);
+      dragHandleScopes,
+      "no card.drag-handle:* segment should be registered as a scope",
+    ).toEqual([]);
 
     unmount();
   });

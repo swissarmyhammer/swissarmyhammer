@@ -57,16 +57,20 @@ export const EntityCard = memo(
     const cardSections = useCardSections(entity.entity_type);
 
     // The card body registers as a `<FocusZone>` — a navigable
-    // container in the spatial-nav graph. The card holds multiple
-    // focusable atoms (drag handle, the `<Field>` rows with their
-    // own zones and pill leaves, inspect button), so it is a zone
-    // by the kernel's three-peer contract: scopes are leaves, zones
-    // are containers. Each interactive non-Field atom inside the card
-    // is wrapped in its own inner `<FocusScope>` leaf — mirroring the
-    // navbar pattern (`<FocusZone moniker="ui:navbar">` → leaf scopes
-    // for inspect / search). The card's inner Field zones nest under
-    // this card zone via `FocusZoneContext`, so drill-in / drill-out
-    // work field → card → column → board.
+    // container in the spatial-nav graph. The card holds focusable
+    // atoms (the `<Field>` rows with their own zones and pill leaves,
+    // the inspect button), so it is a zone by the kernel's three-peer
+    // contract: scopes are leaves, zones are containers. Keyboard-
+    // actionable non-Field atoms inside the card are wrapped in their
+    // own inner `<FocusScope>` leaf — mirroring the navbar pattern
+    // (`<FocusZone moniker="ui:navbar">` → leaf scopes for inspect /
+    // search). The drag handle is intentionally NOT a leaf: it is
+    // mouse-only (dnd-kit uses `PointerSensor` with no `KeyboardSensor`
+    // — see `board-view.tsx`), so a focusable leaf there would be a
+    // tab-stop trap. See `DragHandle` below for the full rationale.
+    // The card's inner Field zones nest under this card zone via
+    // `FocusZoneContext`, so drill-in / drill-out work field → card →
+    // column → board.
     //
     // Pre-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG` history: the card body was
     // a `<FocusScope>` because of an earlier kernel cross-zone-nav
@@ -117,10 +121,7 @@ export const EntityCard = memo(
             className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
             {...rest}
           >
-            <DragHandle
-              entityId={entity.id}
-              dragHandleProps={dragHandleProps}
-            />
+            <DragHandle dragHandleProps={dragHandleProps} />
             <CardFields sections={cardSections} entity={entity} />
             <InspectButton entityId={entity.id} moniker={entity.moniker} />
           </div>
@@ -159,35 +160,38 @@ function useCardSections(entityType: string): ResolvedSection[] {
 /**
  * Drag handle button — stops click propagation and wires drag handle props.
  *
- * Wrapped in a `<FocusScope moniker="card.drag-handle">` leaf so the
- * outer card `<FocusZone>` has a navigable atom for the drag-grip
- * affordance. Mirrors the navbar's `<FocusScope moniker="ui:navbar.search">`
- * pattern: a single button atom inside a parent zone is a leaf scope.
+ * The drag handle is **mouse-only**. `@dnd-kit` is configured on the
+ * board with `useSensor(PointerSensor, …)` and no `KeyboardSensor`
+ * (see `board-view.tsx::useSensor(PointerSensor, …)`). It is
+ * intentionally NOT wrapped in a `<FocusScope>` because there is
+ * nothing the keyboard user could do once focus landed there: the
+ * `<button>` has no `onClick` action of its own (the handler only
+ * stops propagation so the click doesn't bubble to the card body's
+ * inspect dispatch), and the drag handlers from `dragHandleProps`
+ * respond exclusively to pointer events. Registering it as a leaf
+ * scope would create a tab-stop trap with no keyboard activation
+ * story — contrast with `InspectButton` below, which IS a leaf
+ * because Space/Enter on a focused inspect button dispatches
+ * `ui.inspect`.
  *
- * `entityId` parameterises the segment so each card's drag handle is
- * a distinct FQM (composes through the card's
- * `FullyQualifiedMonikerContext`). Without per-entity disambiguation the
- * registry would see two cards' drag handles collide on the same segment
- * and trip the structural-mismatch check.
+ * The `onClick={(e) => e.stopPropagation()}` is preserved: it
+ * prevents click-bubble to the card body, which would otherwise
+ * dispatch `ui.inspect` via the `<Inspectable>` wrapper.
  */
 function DragHandle({
-  entityId,
   dragHandleProps,
 }: {
-  entityId: string;
   dragHandleProps?: Record<string, unknown>;
 }) {
   return (
-    <FocusScope moniker={asSegment(`card.drag-handle:${entityId}`)}>
-      <button
-        type="button"
-        className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
-        onClick={(e) => e.stopPropagation()}
-        {...dragHandleProps}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-    </FocusScope>
+    <button
+      type="button"
+      className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
+      onClick={(e) => e.stopPropagation()}
+      {...dragHandleProps}
+    >
+      <GripVertical className="h-4 w-4" />
+    </button>
   );
 }
 

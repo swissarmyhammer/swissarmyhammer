@@ -207,13 +207,16 @@ export function rectFromWire(r: unknown): RectLike {
 // Mirrors the unified cascade implemented in
 // `swissarmyhammer-focus/src/navigate.rs`:
 //
-//   1. Iter 0 — beam search among scopes sharing `from.parentZone`
+//   1. Iter 0 — ANY-KIND beam search among scopes sharing `from.parentZone`
 //      (excluding `from` itself), filtered by layer. Both zones and
-//      leaves are eligible candidates.
+//      leaves are siblings under the same parent zone, so iter 0
+//      considers them peers.
 //   2. Escalate to `from.parentZone` (with a layer-boundary guard).
 //      If the focused entry has no `parentZone`, return `null`.
-//   3. Iter 1 — beam search among scopes sharing the parent's
-//      `parentZone` (excluding the parent itself).
+//   3. Iter 1 — same-kind beam search among ZONES sharing the parent's
+//      `parentZone` (excluding the parent itself). The parent IS a
+//      zone, so its peers are zones by construction — this is
+//      structural, not a kind policy.
 //   4. Drill-out fallback — when neither iter finds a peer, return
 //      the parent zone itself.
 // ---------------------------------------------------------------------------
@@ -225,21 +228,19 @@ export function rectFromWire(r: unknown): RectLike {
  *
  * The cascade has three observable outcomes:
  *
- *   1. **Iter 0** — same-kind peer match at the focused entry's level.
+ *   1. **Iter 0** — any-kind in-zone peer match at the focused entry's
+ *      level. Within a parent FocusZone, child FocusScope leaves and
+ *      child FocusZone containers are siblings (the kernel's sibling
+ *      rule).
  *   2. **Iter 1** — same-kind peer match at the parent's level (after
- *      escalation, with a layer-boundary guard).
+ *      escalation, with a layer-boundary guard). Same-kind here
+ *      restricts to zones because the parent IS a zone — structural,
+ *      not a kind policy.
  *   3. **Drill-out** — return the parent zone itself when neither
  *      iter finds a peer. Returns `null` only when the focused entry
  *      sits at the very root of its layer with no parent zone.
  *
- * Same-kind filtering at iter 0 is intentional — see
- * `beam_among_siblings` in `swissarmyhammer-focus/src/navigate.rs` for
- * the rationale. Short version: a `<Field>` zone mounted inside a
- * `<FocusScope>` card body inherits the card's enclosing
- * `parent_zone`, so field zones and card leaves are sibling-registered
- * even though visually the field is *inside* the card. Same-kind
- * filtering keeps "Down from a card" landing on the next card, not on
- * a zone *inside* the next card.
+ * See `swissarmyhammer-focus/README.md` for the prose contract.
  *
  * Returns the FQM of the next focus target, or `null` when the
  * navigator declines to navigate.
@@ -252,14 +253,14 @@ export function navigateInShadow(
   const from = registry.get(fromFq);
   if (!from) return null;
 
-  // Iter 0: same-kind peers sharing from.parentZone.
-  const iter0 = beamAmongSiblings(
+  // Iter 0: ANY-KIND peers sharing from.parentZone — zones and scopes
+  // are siblings under a parent zone.
+  const iter0 = beamAmongInZoneAnyKind(
     registry,
     from.layerFq,
     from.rect,
     from.parentZone,
     from.fq,
-    from.kind,
     direction,
   );
   if (iter0) return iter0;
@@ -274,7 +275,7 @@ export function navigateInShadow(
   if (parent.kind !== "zone") return null; // parent of any scope must be a zone
 
   // Iter 1: same-kind peers of the parent zone sharing its parentZone.
-  // The parent is always a zone, so this is the sibling-zone beam.
+  // The parent IS always a zone, so this is the sibling-zone beam.
   const iter1 = beamAmongSiblings(
     registry,
     parent.layerFq,
@@ -291,14 +292,40 @@ export function navigateInShadow(
 }
 
 /**
+ * Beam-search ANY-KIND candidates sharing `fromParent` (excluding
+ * `fromFq`), filtered by `layer`. Matches `beam_among_in_zone_any_kind`
+ * in the Rust kernel — this is the iter-0 helper. The sibling rule
+ * applies: child FocusScope leaves and child FocusZone containers are
+ * peers under the same parent zone.
+ */
+function beamAmongInZoneAnyKind(
+  registry: Map<FullyQualifiedMoniker, ShadowEntry>,
+  layer: FullyQualifiedMoniker,
+  fromRect: RectLike,
+  fromParent: FullyQualifiedMoniker | null,
+  fromFq: FullyQualifiedMoniker,
+  direction: Direction,
+): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
+  const candidates: ShadowEntry[] = [];
+  for (const e of registry.values()) {
+    if (
+      e.layerFq === layer &&
+      e.parentZone === fromParent &&
+      e.fq !== fromFq
+    ) {
+      candidates.push(e);
+    }
+  }
+  return pickBestRect(fromRect, candidates, direction);
+}
+
+/**
  * Beam-search candidates of the named kind sharing `fromParent`
  * (excluding `fromFq`), filtered by `layer`. Matches
- * `beam_among_siblings` in the Rust kernel.
- *
- * The kind filter is the cascade's same-kind matching: leaf-focused
- * navigation considers leaf candidates only, zone-focused navigation
- * considers zone candidates only. See `navigateInShadow`'s docstring
- * for the rationale.
+ * `beam_among_siblings` in the Rust kernel — used by iter 1, where
+ * the parent IS a zone and its peers are zones by construction. Iter
+ * 0 must NOT use this helper; it must use `beamAmongInZoneAnyKind`
+ * instead.
  */
 function beamAmongSiblings(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,

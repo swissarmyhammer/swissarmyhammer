@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Spatial focus and keyboard navigation engine — generic, no domain dependencies"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

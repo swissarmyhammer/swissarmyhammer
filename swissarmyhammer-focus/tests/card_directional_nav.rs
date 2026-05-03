@@ -101,26 +101,30 @@ fn up_from_t2a_lands_on_t1a() {
     );
 }
 
-/// Pressing `up` from the top card in column TODO drills out to the
-/// column zone.
+/// Pressing `up` from the top card in column TODO lands on the
+/// column-name field zone above it — both share `column:TODO` as
+/// their `parent_zone`, so they are siblings under the new any-kind
+/// iter-0 rule.
 ///
-/// The column-name surface is a `<FocusZone>` (kind `Zone`) — its
-/// same-kind filter at iter 0 skips it for a leaf-origin (card scope)
-/// search. The cascade escalates and falls back to the parent zone
-/// (`column:TODO`). To reach the column-name zone, the user drills out
-/// to `column:TODO` first and then presses `Down` — see
-/// `tests/column_header_arrow_nav.rs` for the symmetric cases.
+/// Pre-fix behaviour (now removed): iter 0 used a same-kind filter
+/// that skipped the column-name `<FocusZone>` for a leaf-origin (card
+/// scope) search; the cascade escalated and returned the parent zone
+/// (`column:TODO`). The new contract: zones and scopes are siblings
+/// under a parent zone, and iter 0 considers any-kind candidates. See
+/// `swissarmyhammer-focus/README.md` for the prose contract and
+/// `tests/in_zone_any_kind_first.rs` for the synthetic regression
+/// suite.
 #[test]
-fn up_from_t1a_drills_out_to_column_zone() {
+fn up_from_t1a_lands_on_column_name_zone() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.column_fq(0),
-        "up from task:T1A (top card) must drill out to column:TODO \
-         (the column-name field zone above is filtered out by iter 0's \
-         same-kind leaf filter; the cascade escalates and returns the \
-         parent zone)"
+        app.column_name_fq(0),
+        "Up from task:T1A (top card) must land on the column-name field zone \
+         above it. They are siblings under the same parent zone (`column:TODO`); \
+         the unified-cascade iter-0 rule considers any-kind in-zone candidates, \
+         so the column-name zone is a valid peer for the card leaf."
     );
 }
 

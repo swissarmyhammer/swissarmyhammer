@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ac8180
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffff480
 project: spatial-nav
 title: 'Spatial nav: drop same-kind filter at iter 0 — exhaust in-zone siblings of any kind before escalating'
 ---

@@ -1,11 +1,19 @@
 //! Source-of-truth integration tests for **Left/Right arrow navigation
-//! among the navbar's sibling entries** under the unified cascade.
+//! among the navbar's sibling entries** under the unified cascade with
+//! the **any-kind iter-0 sibling rule**.
 //!
 //! Built against the realistic-app fixture in `tests/fixtures/mod.rs`,
 //! whose `ui:navbar` zone holds — left to right — the
 //! `ui:navbar.board-selector` leaf, the `ui:navbar.inspect` leaf, the
 //! `field:board:b1.percent_complete` field zone, and the
 //! `ui:navbar.search` leaf.
+//!
+//! Under the sibling rule (`zones and scopes are siblings under a
+//! parent zone`), the percent-complete field zone is a peer of the
+//! navbar's leaf entries — Left/Right walks through it like any other
+//! sibling. See `swissarmyhammer-focus/README.md` for the prose
+//! contract and `tests/in_zone_any_kind_first.rs` for the synthetic
+//! regression suite.
 
 mod fixtures;
 
@@ -43,36 +51,45 @@ fn navbar_right_from_board_selector_lands_on_inspect() {
     );
 }
 
-/// Pressing `Right` from `ui:navbar.inspect` lands on
-/// `ui:navbar.search` — the next sibling **leaf** to its right.
+/// Pressing `Right` from `ui:navbar.inspect` lands on the
+/// percent-complete field **zone** to its right — the next in-zone
+/// sibling, regardless of kind.
+///
+/// Under the any-kind iter-0 sibling rule, the percent-complete field
+/// zone (a `<FocusZone>` inside `ui:navbar`) is a peer of the leaf
+/// scopes around it. `inspect` (right edge x=296) sees percent (left
+/// x=304) as the geometrically closest Right candidate, beating
+/// `search` (left x=1200) on distance.
 #[test]
-fn navbar_right_from_inspect_lands_on_search() {
+fn navbar_right_from_inspect_lands_on_percent_field_zone() {
     let app = RealisticApp::new();
     let from = app.navbar_inspect_fq();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.navbar_search_fq(),
-        "Right from ui:navbar.inspect must land on ui:navbar.search \
-         (next leaf to the right under the unified cascade's same-kind iter-0 filter; \
-         the percent-complete field zone is skipped because cardinal nav stays within \
-         the leaf kind — drill in to reach it)"
+        app.navbar_percent_field_fq(),
+        "Right from ui:navbar.inspect must land on the percent-complete \
+         field zone (any-kind in-zone sibling under ui:navbar; the field zone \
+         is geometrically closer than ui:navbar.search). Pre-fix this used to \
+         skip the field zone via a same-kind iter-0 filter; the new contract \
+         (zones and scopes are siblings) treats them as peers."
     );
 }
 
-/// Pressing `Right` from the percent-complete field **zone** drills
-/// out to `ui:navbar`.
+/// Pressing `Right` from the percent-complete field **zone** lands on
+/// `ui:navbar.search` — the next in-zone sibling to its right under
+/// the any-kind iter-0 rule. Pre-fix the same-kind filter blocked
+/// leaf candidates from a zone-origin search and this drilled out to
+/// `ui:navbar`; the new contract makes the leaf a valid peer.
 #[test]
-fn navbar_right_from_percent_field_zone_drills_out_to_navbar() {
+fn navbar_right_from_percent_field_zone_lands_on_search() {
     let app = RealisticApp::new();
     let from = app.navbar_percent_field_fq();
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.navbar_fq(),
-        "Right from field:board:b1.percent_complete must drill out to ui:navbar \
-         (zone-only iter 0 has no sibling zones inside ui:navbar; iter 1's parent \
-         ui:navbar sits at the layer root with no Right peer at that level; the \
-         cascade falls back to the parent zone — the kernel never crosses kinds \
-         via cardinal nav and never returns None when a parent zone exists)"
+        app.navbar_search_fq(),
+        "Right from field:board:b1.percent_complete must land on \
+         ui:navbar.search (any-kind in-zone sibling — both share ui:navbar \
+         as their parent_zone, so the leaf is a valid peer of the field zone)"
     );
 }
 
@@ -80,30 +97,41 @@ fn navbar_right_from_percent_field_zone_drills_out_to_navbar() {
 // Left — horizontal retreat through the navbar's leaf siblings.
 // ---------------------------------------------------------------------------
 
-/// Pressing `Left` from `ui:navbar.search` (the rightmost leaf) lands
-/// on `ui:navbar.inspect` — the next sibling **leaf** to its left.
+/// Walking Left through the navbar: `search → percent-field-zone →
+/// inspect → board-selector`. Under the any-kind iter-0 rule the
+/// percent-complete field zone is a peer of the leaf siblings around
+/// it; the walk visits it on the way through.
 #[test]
 fn navbar_left_walks_symmetric_path() {
     let app = RealisticApp::new();
 
-    // Step 1: search → inspect (skipping the field zone via same-kind
-    // filter).
+    // Step 1: search → percent-field-zone (any-kind in-zone Left peer
+    // — the zone is geometrically closer than the inspect leaf).
     let from = app.navbar_search_fq();
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        app.navbar_inspect_fq(),
-        "Left from ui:navbar.search must land on ui:navbar.inspect \
-         (the next leaf to the left under same-kind iter-0 filter; the percent-complete \
-         field zone is skipped — symmetric to the Right case)"
+        app.navbar_percent_field_fq(),
+        "Left from ui:navbar.search must land on the percent-complete field zone \
+         (any-kind in-zone sibling — geometrically closer than the leaves further left). \
+         Symmetric to Right from inspect under the new sibling rule."
     );
 
-    // Step 2: inspect → board-selector (in-zone leaf peer to the left).
+    // Step 2: percent-field-zone → inspect (any-kind in-zone Left peer).
+    let from = app.navbar_percent_field_fq();
+    assert_eq!(
+        nav(&app, &from, Direction::Left),
+        app.navbar_inspect_fq(),
+        "Left from the percent-complete field zone must land on ui:navbar.inspect \
+         (any-kind in-zone sibling)"
+    );
+
+    // Step 3: inspect → board-selector (in-zone peer to the left).
     let from = app.navbar_inspect_fq();
     assert_eq!(
         nav(&app, &from, Direction::Left),
         app.navbar_board_selector_fq(),
         "Left from ui:navbar.inspect must land on ui:navbar.board-selector \
-         (in-zone leaf peer to the left)"
+         (in-zone peer to the left)"
     );
 }
 

@@ -9,22 +9,19 @@
 //! the previous synthetic outer `<FocusScope moniker="column:<id>.name">`
 //! that was a leaf duplicating the inner Field zone.
 //!
-//! These tests pin the post-refactor trajectory:
+//! These tests pin the post-refactor trajectory under the **any-kind
+//! iter-0 sibling rule** (zones and scopes are siblings under a parent
+//! zone — see `swissarmyhammer-focus/README.md` and
+//! `tests/in_zone_any_kind_first.rs` for the contract):
 //!
-//!   - `Up` from the topmost card scope drills out to the column
-//!     zone — iter 0's same-kind leaf filter skips the sibling
-//!     field zone above, and the cascade escalates to the parent.
+//!   - `Up` from the topmost card scope lands on the column-name field
+//!     zone above it — the two share `column:TODO` as their parent
+//!     zone, so iter 0 considers them peers regardless of kind.
 //!   - `Down` from the column zone drills out to `ui:board` — cardinal
 //!     nav from a zone walks sibling zones, not descendants, so the
 //!     column-name field zone and the card scopes (both children of
-//!     `column:TODO`) do not enter the search.
-//!
-//! The column-name zone is reachable by drilling out to the column
-//! zone and pressing `Enter` (the React adapter's drill-in), not by
-//! arrow nav. The user does not lose access to the header surface, the
-//! trajectory just changes from "step on every peer" to "drill out →
-//! Enter back in". This matches the navbar's percent-complete
-//! precedent and is the documented unified-cascade contract.
+//!     `column:TODO`) do not enter the search at the column zone's
+//!     level.
 //!
 //! [`01KQAWVDS931PADB0559F2TVCS`]: # "column-header redundancy collapse"
 
@@ -50,32 +47,33 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
 // Up — leaf-origin cardinal nav from the topmost card.
 // ---------------------------------------------------------------------------
 
-/// Pressing `Up` from the topmost card in `column:TODO` drills out to
-/// the column zone.
+/// Pressing `Up` from the topmost card in `column:TODO` lands on the
+/// column-name field zone above it.
 ///
 /// The card is a leaf scope; the sibling above it is the column-name
-/// field zone (`field:column:TODO.name`). Iter 0's same-kind filter
-/// skips zone candidates for a leaf-origin search, so the cascade
-/// escalates and the parent-zone fallback returns `column:TODO`.
+/// field zone (`field:column:TODO.name`) — both share `column:TODO`
+/// as their `parent_zone`. Under the any-kind iter-0 rule the kernel
+/// considers them peers and picks the column-name zone (the geometric
+/// best Up candidate).
 #[test]
-fn up_from_topmost_card_drills_out_to_column_zone() {
+fn up_from_topmost_card_lands_on_column_name_zone() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
     let landing = nav(&app, &from, Direction::Up);
 
     assert_eq!(
         landing,
-        app.column_fq(0),
-        "Up from task:T1A must drill out to column:TODO. The column-name \
-         surface above is now a `<FocusZone>` (`field:column:TODO.name`); \
-         the unified-cascade iter-0 same-kind filter skips it for a \
-         leaf-origin search. The cascade escalates and returns the parent \
-         zone — symmetric to the navbar's percent-complete precedent."
+        app.column_name_fq(0),
+        "Up from task:T1A must land on the column-name field zone \
+         (`field:column:TODO.name`) above it — they are siblings under the \
+         same parent zone (`column:TODO`), and the unified-cascade iter-0 \
+         rule considers any-kind in-zone candidates."
     );
 }
 
 /// The result is consistent across all three columns (TODO, DOING,
-/// DONE) — there is no special-case in the leftmost or rightmost column.
+/// DONE) — there is no special-case in the leftmost or rightmost
+/// column.
 #[test]
 fn up_from_topmost_card_is_consistent_across_columns() {
     let app = RealisticApp::new();
@@ -84,8 +82,8 @@ fn up_from_topmost_card_is_consistent_across_columns() {
         let landing = nav(&app, &from, Direction::Up);
         assert_eq!(
             landing,
-            app.column_fq(col),
-            "Up from task:T1{col} must drill out to its parent column zone \
+            app.column_name_fq(col),
+            "Up from task:T1{col} must land on its column-name field zone \
              (column index {col})",
             col = col,
         );
