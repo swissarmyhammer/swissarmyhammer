@@ -3,6 +3,7 @@ assignees:
 - claude-code
 depends_on:
 - 01KQPVRYW2CRCNSDR3XMSPRN3B
+- 01KQQTY2HZBX7M9TW95862JVQ3
 position_column: todo
 position_ordinal: cb80
 project: spatial-nav

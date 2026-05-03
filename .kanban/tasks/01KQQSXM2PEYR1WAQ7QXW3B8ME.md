@@ -8,7 +8,7 @@ title: 'DESIGN: Spatial nav — keyboard-as-mouse cardinal + drill / first / las
 ---
 ## What
 
-This is the **design spec** for a redesigned spatial focus navigation system. It defines the contract; six component tasks (listed below) implement the contract piecewise.
+This is the **design spec** for a redesigned spatial focus navigation system. It defines the contract; six component tasks (listed below) implement the contract piecewise. All seven tasks (this design plus the six components) carry the `spatial-nav-redesign` tag — finish them as a batch with `kanban list tasks --filter "spatial-nav-redesign"`.
 
 User's mental model: **"directional nav is keyboard-as-mouse"** — pressing an arrow key picks the visually-nearest thing in that direction, regardless of structural depth. Containers (zones) earn their keep only for the **drill** / **first** / **last** operations, where the tree shape matters.
 
@@ -31,7 +31,7 @@ This redesign supersedes the structural-cascade bug class — symptoms include `
 - **Layer is the hard wall.** No operation crosses `layer_fq`. The inspector layer remains isolated from the main layer.
 - **`navOverride` runs first** (rule 0). Per-direction redirects and walls short-circuit the cascade entirely.
 - **No-silent-dropout.** Every operation returns a `FullyQualifiedMoniker` — never `None`, never `target=None` in the IPC, never collapses to engine root. "No motion possible" is signalled by returning the focused FQM (stay-put).
-- **Coordinate system: viewport-relative.** All registered rects are sampled by `getBoundingClientRect()` and refreshed on ancestor scroll via `useTrackRectOnAncestorScroll`. The kernel's geometric pick is correct iff all candidate rects in the same layer were sampled in the same coordinate system. **This invariant is load-bearing — see component task #6 (coordinate consistency).**
+- **Coordinate system: viewport-relative.** All registered rects are sampled by `getBoundingClientRect()` and refreshed on ancestor scroll via `useTrackRectOnAncestorScroll`. The kernel's geometric pick is correct iff all candidate rects in the same layer were sampled in the same coordinate system. **This invariant is load-bearing — see component task six (coordinate consistency).**
 
 ### Why this is elegant
 
@@ -43,46 +43,61 @@ This redesign supersedes the structural-cascade bug class — symptoms include `
 
 **Essential** — the app uses windowed rendering and off-viewport rows do not register `<FocusScope>`. The kernel cannot find them via geometric pick. The fix is a **scroll-on-edge** rule that lives in the React glue, not the kernel:
 
-> When the kernel returns stay-put AND the focused scope is at the edge of a scrollable ancestor in direction D AND that ancestor can scroll further in D, scroll it by one item-height in D, wait for the virtualizer to mount the next row, then re-run nav.
+> When the kernel returns stay-put AND the focused scope is at the edge of a scrollable ancestor in direction D AND that ancestor can scroll further in D, scroll the ancestor by one item-height in D, wait for the virtualizer to mount the next row, then re-run nav.
 
-This is component task #5.
+This is component task five.
 
 ### Containment tree contract (for drill / first / last)
 
 - **First child** = the child whose rect is topmost; ties broken by leftmost.
 - **Last child** = the child whose rect is bottommost; ties broken by rightmost.
-- **Parent** = the focused scope's `parent_zone` (after `FocusZone` / `FocusScope` distinction is preserved at the type level — see component task #2 / #4 for whether the kernel exposes `parent_scope` more generally).
+- **Parent** = the focused scope's `parent_zone`.
 - **Children** = registered scopes whose `parent_zone` is the focused scope's FQM.
 
 If the type-level `FocusZone` / `FocusScope` split is collapsed into one `Scope` primitive (separate follow-up, NOT in this plan), drill / first / last work on any scope's children — leaves just have zero children.
 
-## Component tasks (links to follow as they're filed)
+## Component tasks
 
-| # | Component | Task | Dependencies |
+All tagged `spatial-nav-redesign` and in the `spatial-nav` project.
+
+| Order | Component | Task ID | Dependencies |
 |---|---|---|---|
-| 1 | Geometric cardinal nav (replaces `cardinal_cascade` with `geometric_pick`) | TBD | (none — can start) |
-| 2 | `nav.drillIn` = focus first child | TBD | (none) |
-| 3 | `nav.drillOut` = focus parent | TBD | (none) |
-| 4 | `nav.first` / `nav.last` = focus first/last child | TBD | (none) |
-| 5 | Scroll-on-edge React glue for virtualized regions | TBD | depends on #1 |
-| 6 | Coordinate consistency: TS-side audit + kernel debug assertions | TBD | (none — can start in parallel with #1) |
+| One | Geometric cardinal pick (replaces `cardinal_cascade`) | `01KQQTXDHP3XBHZ8G40AC4FG4D` | (design only) |
+| Two | `nav.drillIn` = focus first child | `01KQQTY2HZBX7M9TW95862JVQ3` | (design only) |
+| Three | `nav.drillOut` = focus parent | `01KQQTYKS63RPM62PPVJ7S7J60` | (design only) |
+| Four | `nav.first` / `nav.last` = focus first/last child | `01KQQTZ7PSXEQF1WWX14ST8WRT` | (design only) |
+| Five | Scroll-on-edge React glue for virtualized regions | `01KQQV1FDQXGBJ70ZRMP7AG66J` | depends on task one |
+| Six | Coordinate consistency: TS audit + kernel debug assertions | `01KQQV2H8HW2BF3619DFXHX3RX` | (design only — runs in parallel with task one) |
 
-Each component task **must** open with a `## Reference` section that points back to this design and restates the contract for that op, so an implementer reading only the component task has the full context.
+Each component task opens with a `## Reference` section pointing back to this design and restating the contract for that op, so an implementer reading only the component task has full context.
 
-`01KQQDXHANWGMBG872KZ3FZ86P` (drill into editor on Enter) is kept and re-pointed at component task #2.
+`01KQQDXHANWGMBG872KZ3FZ86P` (drill into editor on Enter) is kept and now depends on `01KQPVRYW2CRCNSDR3XMSPRN3B` (filter editor FocusScope) AND component task two.
+
+### README ownership
+
+`swissarmyhammer-focus/README.md` is rewritten section-by-section across the components — each component task owns and updates its section:
+
+- Task one — `## The cascade` (becomes `## Cardinal nav (geometric)`), `## No-silent-dropout`, `## Kind is not a filter`
+- Task two — `## Drill in` (new)
+- Task three — `## Drill out` (new)
+- Task four — `## First / Last` (new — replaces `## Edge commands`)
+- Task five — `## Scrolling` (new)
+- Task six — `## Coordinate system` (new)
+
+The implementer of task one lands first; subsequent components add their sections. After all six components land, the README reflects the entire new contract.
 
 ## Files this plan touches (across all six components)
 
-- `swissarmyhammer-focus/src/navigate.rs` — algorithm rewrite (#1, #2, #3, #4)
-- `swissarmyhammer-focus/src/types.rs` — `Direction` enum changes (#4)
-- `swissarmyhammer-focus/src/registry.rs` — debug assertions (#6)
-- `swissarmyhammer-focus/README.md` — rewrite with new contract
-- `swissarmyhammer-focus/tests/fixtures/mod.rs` — fixture extensions (#1, #6)
+- `swissarmyhammer-focus/src/navigate.rs` — algorithm rewrite (tasks one, two, three, four)
+- `swissarmyhammer-focus/src/types.rs` — `Direction` enum changes (task four)
+- `swissarmyhammer-focus/src/registry.rs` — debug assertions (task six)
+- `swissarmyhammer-focus/README.md` — rewrite, owned per-section by each component
+- `swissarmyhammer-focus/tests/fixtures/mod.rs` — fixture extensions (tasks one and six)
 - `swissarmyhammer-focus/tests/` — new and revised integration tests
-- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — register/update IPC adapters (#6)
-- `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts` — coordinate audit (#6)
-- `kanban-app/ui/src/components/app-shell.tsx` — nav command builders, scroll-on-edge (#5)
-- `kanban-app/ui/src/components/focus-scope.tsx` and `focus-zone.tsx` — registration callsites (#6)
+- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — register/update IPC adapters (task six)
+- `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts` — coordinate audit (task six)
+- `kanban-app/ui/src/components/app-shell.tsx` — nav command builders, scroll-on-edge (task five)
+- `kanban-app/ui/src/components/focus-scope.tsx` and `focus-zone.tsx` — registration callsites (task six)
 
 ## Acceptance for the plan as a whole
 
@@ -96,12 +111,18 @@ Each component task carries its own acceptance criteria. The plan as a whole is 
 - [ ] No-silent-dropout contract holds across all five ops.
 - [ ] Layer boundary respected.
 - [ ] `navOverride` rule 0 still runs first.
+- [ ] Virtualized region nav works end-to-end (Down past the last visible row scrolls and lands).
+- [ ] Coordinate consistency validators are in place and quiet on a clean run.
 - [ ] `cargo test -p swissarmyhammer-focus` passes.
 - [ ] `pnpm -C kanban-app/ui test` passes.
 
 ## Workflow
 
 - This task itself does NO implementation. It is the spec.
-- The six component tasks are implemented in their own PRs, each landing the contract for its op.
-- The component tasks can land in any order EXCEPT #5 depends on #1 (scroll-on-edge needs geometric pick to detect "stay-put" reliably).
+- The six component tasks are implemented in their own PRs, each landing the contract for its op AND its README section.
+- Component tasks one, two, three, four, six can land in any order. Task five depends on task one.
 - The follow-up "collapse `FocusZone` / `FocusScope` into one `Scope` primitive" is **not** part of this plan — file separately if motivated by the work.
+
+## Note on internal cross-references
+
+Earlier revisions of this description used `#1`, `#2`, etc. to cross-reference component tasks. The kanban tool's auto-tagger interpreted those as hashtags and the subsequent untag operation stripped them from the body. The current revision uses "task one" / "task two" plain English to avoid that re-corruption. Component tasks may still contain `#N` references in their descriptions (e.g. component one references "components #2, #3, #5, #6 each own their own README sections") — those are intact and should NOT be cleaned up via untag. #spatial-nav-redesign
