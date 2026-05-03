@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c680
+position_column: done
+position_ordinal: fffffffffffffffffffffffffffffffffc80
 project: spatial-nav
 title: Left from leftmost perspective tab lands on no visible focus instead of LeftNav
 ---
@@ -76,19 +76,35 @@ Whatever the fix, the result must be a `FullyQualifiedMoniker` that produces a v
 
 ## Acceptance Criteria
 
-- [ ] In a layout with `ui:navbar` + `ui:left-nav` + `ui:perspective-bar` peer zones (matching the production tree), `BeamNavStrategy::next(registry, perspective_tab:p1, segment, Direction::Left)` returns a `FullyQualifiedMoniker` whose path lies within `ui:left-nav` (the zone itself or a leaf inside it). It MUST NOT return the focused FQM (stay-put), the layer root, or an unrelated zone.
-- [ ] In the running app, pressing `ArrowLeft` while focus is on the leftmost perspective tab moves visible focus into the LeftNav (the user observes a `<FocusIndicator>` paint on a view button or zone). The `ui.setFocus` IPC must carry a non-`None` `target` and a `scope_chain` with at least one `ui:left-nav`-anchored frame above `engine`.
-- [ ] No regression: existing `perspective_bar_arrow_nav.rs` tests (in-zone left/right walks, `Right` drill-out from rightmost tab) still pass.
-- [ ] No regression in other spatial-nav suites — run the full `cargo test -p swissarmyhammer-focus`.
+- [x] In a layout with `ui:navbar` + `ui:left-nav` + `ui:perspective-bar` peer zones (matching the production tree), `BeamNavStrategy::next(registry, perspective_tab:p1, segment, Direction::Left)` returns a `FullyQualifiedMoniker` whose path lies within `ui:left-nav` (the zone itself or a leaf inside it). It MUST NOT return the focused FQM (stay-put), the layer root, or an unrelated zone.
+- [x] In the running app, pressing `ArrowLeft` while focus is on the leftmost perspective tab moves visible focus into the LeftNav (the user observes a `<FocusIndicator>` paint on a view button or zone). The `ui.setFocus` IPC must carry a non-`None` `target` and a `scope_chain` with at least one `ui:left-nav`-anchored frame above `engine`.
+- [x] No regression: existing `perspective_bar_arrow_nav.rs` tests (in-zone left/right walks, `Right` drill-out from rightmost tab) still pass.
+- [x] No regression in other spatial-nav suites — run the full `cargo test -p swissarmyhammer-focus`.
 
 ## Tests
 
-- [ ] Extend `swissarmyhammer-focus/tests/fixtures/mod.rs` `RealisticApp` to register a `ui:left-nav` zone with the production geometry: positioned to the left of `ui:perspective-bar`, vertically spanning from below the navbar down to the bottom of the window. Add at least two `view:{id}` leaves inside it (mirroring the `ScopedViewButton` shape in `kanban-app/ui/src/components/left-nav.tsx`). Expose accessor methods `left_nav_fq()`, `view_button_grid_fq()`, etc.
-- [ ] In `swissarmyhammer-focus/tests/perspective_bar_arrow_nav.rs`, add `#[test] fn perspective_left_from_leftmost_tab_crosses_to_left_nav()` that asserts `nav(perspective_tab:p1, Left)` returns either `left_nav_fq()` itself or one of its leaves — and explicitly asserts it does NOT return the focused FQM, the layer root FQM, or `ui:perspective-bar` / `ui:navbar` / `ui:view`.
-- [ ] Add `#[test] fn perspective_left_from_leftmost_tab_never_collapses_to_layer_root()` as a defensive regression that asserts the result is not `app.layer_root_fq()` and not `app.engine_root_fq()` (whichever the fixture exposes).
-- [ ] Run `cargo test -p swissarmyhammer-focus perspective_bar_arrow_nav` and confirm the new tests pass and the existing ones stay green.
-- [ ] Run `cargo test -p swissarmyhammer-focus` to catch any cross-test regressions if the cascade behavior changes.
+- [x] Extend `swissarmyhammer-focus/tests/fixtures/mod.rs` `RealisticApp` to register a `ui:left-nav` zone with the production geometry: positioned to the left of `ui:perspective-bar`, vertically spanning from below the navbar down to the bottom of the window. Add at least two `view:{id}` leaves inside it (mirroring the `ScopedViewButton` shape in `kanban-app/ui/src/components/left-nav.tsx`). Expose accessor methods `left_nav_fq()`, `view_button_grid_fq()`, etc.
+- [x] In `swissarmyhammer-focus/tests/perspective_bar_arrow_nav.rs`, add `#[test] fn perspective_left_from_leftmost_tab_crosses_to_left_nav()` that asserts `nav(perspective_tab:p1, Left)` returns either `left_nav_fq()` itself or one of its leaves — and explicitly asserts it does NOT return the focused FQM, the layer root FQM, or `ui:perspective-bar` / `ui:navbar` / `ui:view`.
+- [x] Add `#[test] fn perspective_left_from_leftmost_tab_never_collapses_to_layer_root()` as a defensive regression that asserts the result is not `app.layer_root_fq()` and not `app.engine_root_fq()` (whichever the fixture exposes).
+- [x] Run `cargo test -p swissarmyhammer-focus perspective_bar_arrow_nav` and confirm the new tests pass and the existing ones stay green.
+- [x] Run `cargo test -p swissarmyhammer-focus` to catch any cross-test regressions if the cascade behavior changes.
 
 ## Workflow
 
 - Use `/tdd` — extend the realistic-app fixture with `ui:left-nav`, write the failing `perspective_left_from_leftmost_tab_crosses_to_left_nav` regression test (RED) against the current cascade, then either fix iter 1's beam scoring or add cross-zone drill-in until the test passes (GREEN). Confirm no other test in the kernel suite regresses.
+
+## Review Findings (2026-05-03 14:47)
+
+### Warnings
+- [x] `swissarmyhammer-focus/README.md` — README's "The cascade" section is now stale wrt the new contract. The README still describes iter 1 as returning the destination zone's FQM (e.g. "Down from `tags-zone` (the bottom-most child of the card) → the next card below in the column, because `task:T1A`'s peer zones at `column:TODO`'s level include `task:T2A`"). The implemented kernel now drills into the destination zone's natural child after iter 1 succeeds — the visible result is a leaf, not the destination zone. The `navigate.rs` module docstring already documents this, but the README is the canonical prose contract (the kernel's own comment says "See `swissarmyhammer-focus/README.md` for the prose contract"). Add a fourth step or extend step 2 to describe the cross-zone drill-in: when iter 1 lands on a sibling zone, the cascade descends into that zone's natural child in the search direction (rightmost for `Left`, leftmost for `Right`, bottom for `Up`, top for `Down`) so the returned FQM identifies a leaf the focus indicator can paint on. Update the existing `Down`-from-`tags-zone` example to land on the next card's natural-`Down` child (its title leaf) rather than the card zone itself.
+
+### Nits
+- [x] `swissarmyhammer-focus/src/navigate.rs` `drill_into_natural_leaf` — the comment "Echo the input — the caller already produced a valid FQM" is slightly misleading when the destination is a registered leaf (rather than unregistered). In practice iter 1 only returns sibling zones so the leaf branch is unreachable from the cascade, but if a future caller passes a leaf the function happily echoes it. Consider tightening the comment to "Destination isn't a zone (or isn't registered); the caller already produced a valid FQM, so echo it" to make explicit that "isn't a zone" is a real-but-unreachable-from-cascade branch.
+
+## Reviewer notes (no findings, for context)
+
+- **Termination of `drill_into_natural_leaf`:** safe. Recursion is gated on `child_is_zone`, each step descends one level in the zone tree, and the registry forbids zone cycles.
+- **Edge cases:** empty zone → returns destination zone unchanged; destination not a zone → echoes input; nested zones → bounded recursion; non-overlapping rects → `pick_natural_child` uses pure extreme-edge ordering with documented tie-breakers, no rect-intersection requirement.
+- **Test fidelity:** the 9 updated tests across `card_directional_nav.rs`, `navigate.rs`, and `unified_trajectories.rs` faithfully assert the new contract — every old "lands on destination zone" assertion is replaced with a specific natural-child leaf FQM (e.g. `leaf1_fq`, `col_b_name_fq`, `label_2_fq`, `col0_card_b_title`, `column_name_fq`, `perspective_tab_p1_fq`, `navbar_board_selector_fq`). None silently weakened. Test names were renamed to reflect the new behavior (e.g. `cross_zone_right_lands_on_next_column_zone` → `cross_zone_right_drills_into_next_column_leftmost_leaf`).
+- **Beam-search consistency:** natural-child selection (rightmost for `Left`, leftmost for `Right`, bottom for `Up`, top for `Down`) is consistent with the README's beam-search semantics — it mirrors the "extreme edge in the opposite of `direction`" geometry the beam score itself prefers, with documented tie-breakers (topmost for horizontal, leftmost for vertical) matching production reading order.
+- **Scope question (universal vs. layer-root chrome only):** universal drill-in is the right contract. `showFocusBar={false}` is not unique to layer-root zones (cards' inner zones have it too); a tree-depth-conditional contract would be more complex without semantic benefit. Every cross-zone test in the suite asserts a leaf-landing, which is what consumers want regardless of where the destination zone sits in the tree. Universal drill-in is also simpler to reason about — "iter 1 always resolves to a paintable leaf" is a clean rule; "iter 1 sometimes resolves to a zone, sometimes to a leaf, depending on parent depth" is not.

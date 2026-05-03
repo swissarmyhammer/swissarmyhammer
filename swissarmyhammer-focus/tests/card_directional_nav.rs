@@ -133,16 +133,30 @@ fn up_from_t1a_lands_on_column_name_zone() {
 // ---------------------------------------------------------------------------
 
 /// Pressing `right` from the top card in column TODO advances onto
-/// column DOING's zone.
+/// column DOING and drills into its natural leaf in the search
+/// direction — for `Right`, the leftmost child of column DOING (with
+/// ties broken topmost). Both column-name field zone and cards share
+/// the same left edge, so the topmost child wins: the column-name
+/// field zone above the cards.
+///
+/// The cross-zone drill-in landed in card
+/// `01KQPW1FTYFWTDMW6ESM5ABGJQ` — iter 1 still finds `column:DOING`
+/// as the right peer of `column:TODO`, but the cascade no longer
+/// stops at the destination zone. Drilling in produces a leaf the
+/// focus indicator can paint on regardless of whether the
+/// destination zone has `showFocusBar={false}`.
 #[test]
-fn right_from_t1a_lands_on_column_doing_zone() {
+fn right_from_t1a_lands_on_column_doing_name_field() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.column_fq(1),
-        "right from task:T1A must land on column:DOING (peer at the parent's level under the \
-         unified cascade)"
+        app.column_name_fq(1),
+        "right from task:T1A must drill into column:DOING's natural child for the \
+         `Right` direction — the leftmost child, with topmost as tie-break (the \
+         column-name field zone). Pre-drill-in this stopped at column:DOING; the \
+         new contract resolves cross-zone landings to a leaf so the focus \
+         indicator paints regardless of the destination zone's `showFocusBar`."
     );
 }
 
@@ -167,16 +181,26 @@ fn right_from_t1c_drills_out_to_column_done_zone() {
 // ---------------------------------------------------------------------------
 
 /// Pressing `left` from the top card in column DOING retreats onto
-/// column TODO's zone.
+/// column TODO and drills into its natural leaf for the search
+/// direction — for `Left`, the rightmost child (ties broken topmost).
+/// All children of `column:TODO` share the same right edge
+/// (`col_width - 8` from the column's left), so the topmost wins:
+/// the column-name field zone at the top of the column.
+///
+/// The cross-zone drill-in landed in card
+/// `01KQPW1FTYFWTDMW6ESM5ABGJQ` — iter 1 still picks `column:TODO`
+/// as the left peer of `column:DOING`, but the cascade now resolves
+/// cross-zone landings to a leaf so the focus indicator paints.
 #[test]
-fn left_from_t1b_lands_on_column_todo_zone() {
+fn left_from_t1b_lands_on_column_todo_name_field() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        app.column_fq(0),
-        "left from task:T1B must land on column:TODO (peer at the parent's level under the \
-         unified cascade)"
+        app.column_name_fq(0),
+        "left from task:T1B must drill into column:TODO's natural child for the \
+         `Left` direction — the rightmost child, with topmost as tie-break (the \
+         column-name field zone). Symmetric to the `Right` drill-in test."
     );
 }
 

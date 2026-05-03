@@ -301,10 +301,11 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
 
 /// Two columns laid out side-by-side, each with a single leaf inside.
 /// From the left column's leaf, `nav.right` finds no in-zone peer; the
-/// cascade escalates to the column zone and finds the right column zone
-/// as a peer at the parent's level.
+/// cascade escalates to the column zone, finds the right column zone
+/// as a peer at the parent's level, and drills into its natural child
+/// for `Right` (the leftmost child, here `leaf1`).
 #[test]
-fn cross_zone_right_lands_on_next_column_zone() {
+fn cross_zone_right_drills_into_next_column_leftmost_leaf() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
@@ -331,20 +332,23 @@ fn cross_zone_right_lands_on_next_column_zone() {
         Some(col0_fq),
         rect(10.0, 10.0, 80.0, 40.0),
     ));
+    let leaf1_fq = fq_in_zone(&col1_fq, "leaf1");
     reg.register_scope(leaf(
-        fq_in_zone(&col1_fq, "leaf1"),
+        leaf1_fq.clone(),
         "leaf1",
         "/L",
-        Some(col1_fq.clone()),
+        Some(col1_fq),
         rect(110.0, 10.0, 80.0, 40.0),
     ));
 
-    assert_eq!(nav(&reg, &leaf0_fq, Direction::Right), col1_fq);
+    assert_eq!(nav(&reg, &leaf0_fq, Direction::Right), leaf1_fq);
 }
 
-/// Mirror of `cross_zone_right_lands_on_next_column_zone` for `nav.left`.
+/// Mirror of `cross_zone_right_drills_into_next_column_leftmost_leaf`
+/// for `nav.left` — drilling into the previous column resolves to its
+/// rightmost child, here `leaf0`.
 #[test]
-fn cross_zone_left_lands_on_previous_column_zone() {
+fn cross_zone_left_drills_into_previous_column_rightmost_leaf() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
@@ -363,11 +367,12 @@ fn cross_zone_left_lands_on_previous_column_zone() {
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
+    let leaf0_fq = fq_in_zone(&col0_fq, "leaf0");
     reg.register_scope(leaf(
-        fq_in_zone(&col0_fq, "leaf0"),
+        leaf0_fq.clone(),
         "leaf0",
         "/L",
-        Some(col0_fq.clone()),
+        Some(col0_fq),
         rect(10.0, 10.0, 80.0, 40.0),
     ));
     let leaf1_fq = fq_in_zone(&col1_fq, "leaf1");
@@ -379,13 +384,18 @@ fn cross_zone_left_lands_on_previous_column_zone() {
         rect(110.0, 10.0, 80.0, 40.0),
     ));
 
-    assert_eq!(nav(&reg, &leaf1_fq, Direction::Left), col0_fq);
+    assert_eq!(nav(&reg, &leaf1_fq, Direction::Left), leaf0_fq);
 }
 
 /// Production-shape regression: a board with two columns, three card
 /// leaves per column, and a column-name leaf in each column header.
+///
+/// Cross-zone navigation drills into the destination column's natural
+/// child for the search direction — for `Right`, the leftmost child
+/// of column B (with topmost as tie-break, the column-name leaf); for
+/// `Left`, the rightmost child of column A (same tie-break shape).
 #[test]
-fn cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone() {
+fn cross_zone_realistic_board_right_from_card_in_a_drills_into_column_b_name() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
 
@@ -475,8 +485,10 @@ fn cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone() {
         rect(310.0, 190.0, 280.0, 60.0),
     ));
 
-    assert_eq!(nav(&reg, &task1_a_fq, Direction::Right), col_b_fq);
-    assert_eq!(nav(&reg, &task1_b_fq, Direction::Left), col_a_fq);
+    let col_a_name_fq = fq_in_zone(&col_a_fq, "column:A.name");
+    let col_b_name_fq = fq_in_zone(&col_b_fq, "column:B.name");
+    assert_eq!(nav(&reg, &task1_a_fq, Direction::Right), col_b_name_fq);
+    assert_eq!(nav(&reg, &task1_b_fq, Direction::Left), col_a_name_fq);
 }
 
 /// In-zone candidate is preferred over a closer cross-zone candidate.
@@ -694,8 +706,10 @@ fn inspector_pill_a_to_pill_b_in_zone() {
 }
 
 /// Two field-row leaves stacked vertically, each in its own zone.
+/// Cross-zone `Down` drills into the destination row's natural child
+/// for `Down` (the topmost child, here `label_2`).
 #[test]
-fn cross_zone_inspector_down_lands_on_next_row_zone() {
+fn cross_zone_inspector_down_drills_into_next_row_topmost_leaf() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let row1_fq = fq_in_layer("/L", "row1");
@@ -722,15 +736,16 @@ fn cross_zone_inspector_down_lands_on_next_row_zone() {
         Some(row1_fq),
         rect(0.0, 0.0, 50.0, 30.0),
     ));
+    let label_2_fq = fq_in_zone(&row2_fq, "label_2");
     reg.register_scope(leaf(
-        fq_in_zone(&row2_fq, "label_2"),
+        label_2_fq.clone(),
         "label_2",
         "/L",
-        Some(row2_fq.clone()),
+        Some(row2_fq),
         rect(0.0, 50.0, 50.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &label_1_fq, Direction::Down), row2_fq);
+    assert_eq!(nav(&reg, &label_1_fq, Direction::Down), label_2_fq);
 }
 
 /// The last leaf in the layer with `nav.down` returns its own FQM.
@@ -828,11 +843,15 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
         col0_card_a_status
     );
 
-    // Status of card A → card B's zone (no peer below in card A;
-    // escalate to col0 and find col0_card_b at the parent's level).
+    // Status of card A → drills into card B's natural child for
+    // `Down` (the topmost leaf, here card B's `title`). Iter 1 still
+    // finds card B's zone as the down peer of card A; the cascade
+    // then descends into card B's natural child so the focus
+    // indicator paints.
+    let col0_card_b_title = fq_in_zone(col0_card_b, "title");
     assert_eq!(
         nav(&reg, &col0_card_a_status, Direction::Down),
-        *col0_card_b
+        col0_card_b_title
     );
 
     // Title of col0 card_a → Right: drill out to the enclosing card zone.

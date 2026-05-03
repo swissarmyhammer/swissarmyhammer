@@ -57,6 +57,17 @@ pub const PERSPECTIVE_BAR_HEIGHT: f64 = 40.0;
 /// Top edge of the board area (after navbar + perspective bar).
 pub const BOARD_TOP: f64 = NAVBAR_HEIGHT + PERSPECTIVE_BAR_HEIGHT;
 
+/// Width of the LeftNav sidebar (a vertical icon column on the far
+/// left of the viewport). Mirrors the `w-10` Tailwind class on the
+/// production `<LeftNav>` (40 px).
+pub const LEFT_NAV_WIDTH: f64 = 40.0;
+/// Left edge of the columns of content sitting *to the right* of the
+/// LeftNav sidebar — the perspective bar, the board, and everything
+/// inside them. In production these are flex siblings of `<LeftNav>`
+/// inside `ViewsContainer`'s row, so their left edge equals the
+/// LeftNav's width.
+pub const CONTENT_LEFT: f64 = LEFT_NAV_WIDTH;
+
 /// Width of one column. Matches the lower bound of the production
 /// `min-w-[24em]` (24em ≈ 384 px) bumped to a round 440 px so three
 /// columns at 440 px each plus margin stay inside a 1400 px viewport.
@@ -254,6 +265,44 @@ impl RealisticApp {
         )
     }
 
+    /// FQM for the LeftNav sidebar zone — `/window/ui:left-nav`.
+    ///
+    /// Mirrors the production `<LeftNav>` (`kanban-app/ui/src/components/left-nav.tsx`)
+    /// which mounts a `<FocusZone moniker="ui:left-nav">` inside
+    /// `ViewsContainer` as a flex sibling of `PerspectivesContainer`. In
+    /// the kernel registry the LeftNav lives at the layer root with
+    /// `parent_zone = None`, peer to `ui:navbar`, `ui:perspective-bar`,
+    /// and `ui:board`.
+    pub fn left_nav_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &window_layer_fq(),
+            &SegmentMoniker::from_string("ui:left-nav"),
+        )
+    }
+
+    /// FQM for `view:grid`, the leftmost / topmost view-button leaf
+    /// inside the LeftNav sidebar.
+    ///
+    /// Mirrors the production `ScopedViewButton` shape — each view in
+    /// `kanban-app/ui/src/components/left-nav.tsx` wraps a single button
+    /// in `<FocusScope moniker={asSegment(\`view:${view.id}\`)}>`, so
+    /// the leaf segment shape is `view:{id}`.
+    pub fn view_button_grid_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.left_nav_fq(),
+            &SegmentMoniker::from_string("view:grid"),
+        )
+    }
+
+    /// FQM for `view:list`, the second view-button leaf stacked beneath
+    /// `view:grid` in the LeftNav sidebar.
+    pub fn view_button_list_fq(&self) -> FullyQualifiedMoniker {
+        FullyQualifiedMoniker::compose(
+            &self.left_nav_fq(),
+            &SegmentMoniker::from_string("view:list"),
+        )
+    }
+
     /// FQM for the perspective-bar zone — `/window/ui:perspective-bar`.
     pub fn perspective_bar_fq(&self) -> FullyQualifiedMoniker {
         FullyQualifiedMoniker::compose(
@@ -407,7 +456,17 @@ fn register_layers(reg: &mut SpatialRegistry) {
     ));
 }
 
-/// Register the navbar and perspective-bar zones on the window layer.
+/// Register the navbar, LeftNav sidebar, and perspective-bar zones on
+/// the window layer.
+///
+/// In production (`kanban-app/ui/src/App.tsx` →
+/// `ViewsContainer`), the chrome under the navbar lays out as a flex
+/// row with `<LeftNav>` to the left of `<PerspectivesContainer>`. The
+/// perspective bar and the board both live to the right of LeftNav, so
+/// their left edge starts at [`CONTENT_LEFT`] (= [`LEFT_NAV_WIDTH`])
+/// rather than at `0`. The fixture mirrors that geometry so cardinal
+/// `Left` from the leftmost perspective tab has a real LeftNav zone to
+/// its left in the kernel's beam search.
 fn register_window_chrome(reg: &mut SpatialRegistry) {
     let win = window_layer_fq();
     let navbar_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:navbar"));
@@ -464,7 +523,51 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
         rect(VIEWPORT_WIDTH - 200.0, 8.0, 192.0, 24.0),
     ));
 
-    // ui:perspective-bar — full-width strip directly below the navbar.
+    // ui:left-nav — narrow vertical sidebar on the far left, spanning
+    // from below the navbar to the bottom of the viewport. Mirrors
+    // production: a flex sibling of `<PerspectivesContainer>` inside
+    // `ViewsContainer`'s row, with the production `w-10` Tailwind class
+    // (40 px) captured by [`LEFT_NAV_WIDTH`].
+    let left_nav_fq =
+        FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:left-nav"));
+    reg.register_zone(make_zone(
+        left_nav_fq.clone(),
+        "ui:left-nav",
+        win.clone(),
+        None,
+        rect(
+            0.0,
+            NAVBAR_HEIGHT,
+            LEFT_NAV_WIDTH,
+            VIEWPORT_HEIGHT - NAVBAR_HEIGHT,
+        ),
+    ));
+    // Two view-button leaves stacked vertically inside the LeftNav.
+    // Mirrors `ScopedViewButton` in production — each declares
+    // `<FocusScope moniker={asSegment("view:" + view.id)}>`.
+    reg.register_scope(make_leaf(
+        FullyQualifiedMoniker::compose(
+            &left_nav_fq,
+            &SegmentMoniker::from_string("view:grid"),
+        ),
+        "view:grid",
+        win.clone(),
+        Some(left_nav_fq.clone()),
+        rect(4.0, NAVBAR_HEIGHT + 8.0, LEFT_NAV_WIDTH - 8.0, 24.0),
+    ));
+    reg.register_scope(make_leaf(
+        FullyQualifiedMoniker::compose(
+            &left_nav_fq,
+            &SegmentMoniker::from_string("view:list"),
+        ),
+        "view:list",
+        win.clone(),
+        Some(left_nav_fq),
+        rect(4.0, NAVBAR_HEIGHT + 36.0, LEFT_NAV_WIDTH - 8.0, 24.0),
+    ));
+
+    // ui:perspective-bar — strip directly below the navbar, sitting to
+    // the right of `ui:left-nav`. Width = viewport minus the LeftNav.
     let pbar_fq =
         FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:perspective-bar"));
     reg.register_zone(make_zone(
@@ -472,11 +575,18 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
         "ui:perspective-bar",
         win.clone(),
         None,
-        rect(0.0, NAVBAR_HEIGHT, VIEWPORT_WIDTH, PERSPECTIVE_BAR_HEIGHT),
+        rect(
+            CONTENT_LEFT,
+            NAVBAR_HEIGHT,
+            VIEWPORT_WIDTH - CONTENT_LEFT,
+            PERSPECTIVE_BAR_HEIGHT,
+        ),
     ));
-    // Three perspective tab leaves laid out left-to-right.
-    // Layout: 8 px left padding, then p1 (96 px) + 8 px gap +
-    // p2 (160 px, wider for active chrome) + 8 px gap + p3 (96 px).
+    // Three perspective tab leaves laid out left-to-right inside the
+    // perspective bar. Layout: 8 px left padding inside the bar (so 8 px
+    // from `CONTENT_LEFT` in absolute coords), then p1 (96 px) + 8 px
+    // gap + p2 (160 px, wider for active chrome) + 8 px gap + p3 (96
+    // px).
     reg.register_scope(make_leaf(
         FullyQualifiedMoniker::compose(
             &pbar_fq,
@@ -485,7 +595,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
         "perspective_tab:p1",
         win.clone(),
         Some(pbar_fq.clone()),
-        rect(8.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
+        rect(CONTENT_LEFT + 8.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
     ));
     reg.register_scope(make_leaf(
         FullyQualifiedMoniker::compose(
@@ -495,7 +605,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
         "perspective_tab:p2",
         win.clone(),
         Some(pbar_fq.clone()),
-        rect(112.0, NAVBAR_HEIGHT + 8.0, 160.0, 24.0),
+        rect(CONTENT_LEFT + 112.0, NAVBAR_HEIGHT + 8.0, 160.0, 24.0),
     ));
     reg.register_scope(make_leaf(
         FullyQualifiedMoniker::compose(
@@ -505,11 +615,16 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
         "perspective_tab:p3",
         win,
         Some(pbar_fq),
-        rect(280.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
+        rect(CONTENT_LEFT + 280.0, NAVBAR_HEIGHT + 8.0, 96.0, 24.0),
     ));
 }
 
 /// Register the board zone and the three columns inside it.
+///
+/// Like the perspective bar, the board sits to the right of
+/// `ui:left-nav` in production — its left edge starts at
+/// [`CONTENT_LEFT`] rather than `0`, and the columns/cards are
+/// positioned relative to that edge.
 fn register_board_and_columns(reg: &mut SpatialRegistry) {
     let win = window_layer_fq();
     let board_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:board"));
@@ -518,11 +633,16 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
         "ui:board",
         win.clone(),
         None,
-        rect(0.0, BOARD_TOP, VIEWPORT_WIDTH, VIEWPORT_HEIGHT - BOARD_TOP),
+        rect(
+            CONTENT_LEFT,
+            BOARD_TOP,
+            VIEWPORT_WIDTH - CONTENT_LEFT,
+            VIEWPORT_HEIGHT - BOARD_TOP,
+        ),
     ));
 
     for (i, _name) in COLUMN_NAMES.iter().enumerate() {
-        let col_x = (i as f64) * COLUMN_WIDTH;
+        let col_x = CONTENT_LEFT + (i as f64) * COLUMN_WIDTH;
         let col_seg = column_segment(i);
         let col_fq = FullyQualifiedMoniker::compose(
             &board_fq,

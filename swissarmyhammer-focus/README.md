@@ -86,7 +86,7 @@ contract exists.
 
 ## The cascade
 
-Cardinal navigation runs a three-step cascade per direction key:
+Cardinal navigation runs a four-step cascade per direction key:
 
 1. **Iter 0 — any-kind in-zone peer search.** Candidates are ANY
    registered scope (leaf or zone) sharing the focused entry's
@@ -101,11 +101,25 @@ Cardinal navigation runs a three-step cascade per direction key:
    The parent IS a zone, so candidates are zones by construction —
    iter 1's same-kind filter is structural, not a kind policy.
 
-   *Example:* `Down` from `tags-zone` (the bottom-most child of the
-   card) → the next card below in the column, because `task:T1A`'s
-   peer zones at `column:TODO`'s level include `task:T2A`.
+3. **Cross-zone drill-in.** When iter 1 lands on a sibling zone, the
+   cascade descends into that zone's natural child in the search
+   direction — rightmost child for `Left`, leftmost for `Right`,
+   bottom-most for `Up`, top-most for `Down` — recursing until it
+   reaches a leaf (or a zone with no children, which is then returned
+   as-is). The returned FQM identifies a leaf the focus indicator can
+   paint on, not the destination zone itself. This matches the user's
+   mental model — pressing `Left` lands them on something visible
+   inside the leftward zone, not on the zone wrapper whose indicator
+   may be suppressed.
 
-3. **Drill-out fallback.** When iter 1 also misses, return the parent
+   *Example:* `Down` from `tags-zone` (the bottom-most child of the
+   card) → the title leaf of the next card below in the column. Iter 1
+   finds `task:T2A` as `task:T1A`'s peer zone at `column:TODO`'s level,
+   then the drill-in step descends into `task:T2A` and picks its
+   top-most child for `Down` (the title leaf), which is what the user
+   sees focus paint on.
+
+4. **Drill-out fallback.** When iter 1 also misses, return the parent
    zone's FQM. A single key press moves at most one zone level out
    from the focused entry; the user is never "stuck" returning a
    stay-put unless the focused entry sits at the very root of its

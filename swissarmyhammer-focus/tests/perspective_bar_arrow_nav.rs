@@ -121,6 +121,88 @@ fn perspective_right_from_rightmost_tab_drills_out_to_perspective_bar() {
 }
 
 // ---------------------------------------------------------------------------
+// Left from the leftmost tab — cross-zone landing in `ui:left-nav`.
+// ---------------------------------------------------------------------------
+
+/// Pressing `Left` from the leftmost perspective tab `perspective_tab:p1`
+/// must land in `ui:left-nav` (the LeftNav sidebar to the left of the
+/// perspective bar) — either on the zone itself or on one of its
+/// `view:{id}` leaves.
+///
+/// Regression for the bug captured in card
+/// `01KQPW1FTYFWTDMW6ESM5ABGJQ`: the user pressed `ArrowLeft` on the
+/// leftmost tab and saw no visible focus indicator anywhere on screen,
+/// because the cascade either failed to find `ui:left-nav` at iter 1
+/// or returned `ui:perspective-bar` (a `showFocusBar={false}` zone)
+/// without follow-through into a leaf the indicator could paint on.
+///
+/// The result MUST be a real, visible target inside `ui:left-nav`:
+/// never the focused FQM (stay-put), never the layer root, never an
+/// unrelated zone. The test pins the intended landing surface so the
+/// kernel can ship either iter-1 candidate-set fixes or cross-zone
+/// drill-in without losing the contract.
+#[test]
+fn perspective_left_from_leftmost_tab_crosses_to_left_nav() {
+    let app = RealisticApp::new();
+    let from = app.perspective_tab_p1_fq();
+    let result = nav(&app, &from, Direction::Left);
+
+    let acceptable = [
+        app.left_nav_fq(),
+        app.view_button_grid_fq(),
+        app.view_button_list_fq(),
+    ];
+    assert!(
+        acceptable.contains(&result),
+        "Left from perspective_tab:p1 must land inside ui:left-nav (the zone \
+         itself or one of its view:{{id}} leaves), got {result:?}. \
+         Expected one of: {acceptable:?}",
+    );
+
+    // Forbidden destinations — pin the bug shape so a future regression
+    // can't quietly land on the focused FQM, the perspective bar, an
+    // unrelated chrome zone, or the board.
+    let forbidden = [
+        app.perspective_tab_p1_fq(), // stay-put / echo
+        app.perspective_bar_fq(),    // showFocusBar=false zone (the bug)
+        app.navbar_fq(),             // unrelated chrome above
+        app.board_fq(),              // unrelated content area below
+    ];
+    assert!(
+        !forbidden.contains(&result),
+        "Left from perspective_tab:p1 must not land on the focused FQM, \
+         ui:perspective-bar, ui:navbar, or ui:board — got {result:?}",
+    );
+}
+
+/// Defensive regression: `Left` from the leftmost perspective tab must
+/// never collapse to the layer root (which produced the
+/// `scope_chain=[\"engine\"]` / `target=None` IPC result reported in the
+/// bug log). The window-layer FQM is the structural root of the focused
+/// entry's layer; any landing there means the cascade has lost its
+/// way.
+#[test]
+fn perspective_left_from_leftmost_tab_never_collapses_to_layer_root() {
+    let app = RealisticApp::new();
+    let from = app.perspective_tab_p1_fq();
+    let result = nav(&app, &from, Direction::Left);
+
+    let layer_root = fixtures::window_layer_fq();
+    assert_ne!(
+        result, layer_root,
+        "Left from perspective_tab:p1 must not collapse to the window \
+         layer root — that path produces the no-visible-focus blip the \
+         bug card pins."
+    );
+    assert_ne!(
+        result, from,
+        "Left from perspective_tab:p1 must not echo the focused FQM — \
+         there is a real LeftNav zone to the left, the cascade should \
+         find it (or one of its leaves) rather than staying put."
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Sanity — fixture has the perspective-bar shape we asserted on.
 // ---------------------------------------------------------------------------
 

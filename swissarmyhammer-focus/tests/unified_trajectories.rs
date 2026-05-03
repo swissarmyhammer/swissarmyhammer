@@ -44,8 +44,8 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
 // ---------------------------------------------------------------------------
 
 /// Trajectory A: from `task:T1A`, repeated `Up` walks
-/// `T1A → field:column:TODO.name → column:TODO → ui:perspective-bar
-/// → ui:navbar → ui:navbar (echoed at layer root)`.
+/// `T1A → field:column:TODO.name → column:TODO → perspective_tab:p1
+/// → ui:navbar.board-selector → ui:navbar (echoed at layer root)`.
 ///
 /// Under the any-kind iter-0 sibling rule (`zones and scopes are
 /// siblings under a parent zone`), the column-name field zone above
@@ -53,9 +53,12 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
 /// the focused entry is a leaf — both share `column:TODO` as their
 /// `parent_zone`. The walk visits the column-name zone first, then
 /// drills out to the column zone, then escalates through the chrome
-/// peers at the layer root.
+/// peers at the layer root with cross-zone drill-in landing on each
+/// destination's natural child for `Up` (the bottommost leaf, with
+/// leftmost as tie-break).
 #[test]
-fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_bar_to_navbar() {
+fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_tab_to_navbar_leaf()
+{
     let app = RealisticApp::new();
 
     // Step 1: T1A → field:column:TODO.name (any-kind in-zone Up peer
@@ -74,33 +77,56 @@ fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_ba
     // is no Up peer of the column-name zone in column:TODO at iter 0,
     // and iter 1 finds no peer-zone of column:TODO above it at
     // ui:board's level; the cascade falls back to the parent zone).
+    // Drill-out does NOT trigger drill-in.
     let from = app.column_name_fq(0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
         app.column_fq(0),
         "Up from field:column:TODO.name must drill out to column:TODO \
          (no Up peer at iter 0 inside column:TODO; iter 1 finds no \
-         peer-zone of column:TODO above; cascade returns the parent zone)"
+         peer-zone of column:TODO above; cascade returns the parent zone). \
+         Drill-out does not trigger drill-in."
     );
 
-    // Step 3: column:TODO → ui:perspective-bar (peer match at iter 1
-    // after escalation).
+    // Step 3: column:TODO → perspective_tab:p1 (peer match at iter 1
+    // after escalation, then cross-zone drill-in into
+    // ui:perspective-bar's natural Up child — the bottommost leaf,
+    // with leftmost as tie-break — lands on perspective_tab:p1).
     let from = app.column_fq(0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.perspective_bar_fq(),
-        "Up from column:TODO must land on ui:perspective-bar (peer at ui:board's level)"
+        app.perspective_tab_p1_fq(),
+        "Up from column:TODO must drill into ui:perspective-bar's natural \
+         Up child (bottommost leaf, tie-broken leftmost): perspective_tab:p1"
     );
 
-    // Step 4: ui:perspective-bar → ui:navbar (peer at iter 0).
-    let from = app.perspective_bar_fq();
+    // Step 4: perspective_tab:p1 → ui:navbar.board-selector (iter 1
+    // escalates to ui:perspective-bar, finds ui:navbar as the Up
+    // peer at the layer root, drills into ui:navbar's natural Up
+    // child — the bottommost leaf, tie-broken leftmost — which is
+    // ui:navbar.board-selector).
+    let from = app.perspective_tab_p1_fq();
+    assert_eq!(
+        nav(&app, &from, Direction::Up),
+        app.navbar_board_selector_fq(),
+        "Up from perspective_tab:p1 must drill into ui:navbar's natural \
+         Up child (bottommost leaf, tie-broken leftmost): ui:navbar.board-selector"
+    );
+
+    // Step 5: ui:navbar.board-selector → ui:navbar (drill out — no
+    // Up peer inside ui:navbar at iter 0; iter 1 from ui:navbar's
+    // grandparent finds no Up peer at the layer root; cascade falls
+    // back to ui:navbar). Drill-out does not trigger drill-in.
+    let from = app.navbar_board_selector_fq();
     assert_eq!(
         nav(&app, &from, Direction::Up),
         app.navbar_fq(),
-        "Up from ui:perspective-bar must land on ui:navbar (peer at layer root)"
+        "Up from ui:navbar.board-selector must drill out to ui:navbar \
+         (no Up peer at iter 0; iter 1 finds no peer-zone of ui:navbar \
+         above at the layer root; cascade returns the parent zone)"
     );
 
-    // Step 5: ui:navbar → ui:navbar (no peer, no parent zone).
+    // Step 6: ui:navbar → ui:navbar (no peer, no parent zone).
     // Under the no-silent-dropout contract the cascade echoes the
     // focused FQM rather than returning None.
     let from = app.navbar_fq();
@@ -115,25 +141,35 @@ fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_ba
 // Trajectory B — cross-column horizontal navigation.
 // ---------------------------------------------------------------------------
 
-/// Trajectory B: `nav("task:T1A", Right) == column:DOING`.
+/// Trajectory B: `nav("task:T1A", Right) == field:column:DOING.name`
+/// — iter 1 finds `column:DOING` as the Right peer of `column:TODO`,
+/// then cross-zone drill-in descends into `column:DOING`'s natural
+/// `Right` child (leftmost child with topmost tie-break, here the
+/// column-name field zone).
 #[test]
-fn unified_trajectory_b_right_from_card_in_column_a_returns_column_doing_zone() {
+fn unified_trajectory_b_right_from_card_in_column_a_drills_into_column_doing_name() {
     let app = RealisticApp::new();
 
-    // Right from T1A → column:DOING.
+    // Right from T1A → field:column:DOING.name (cross-zone drill-in
+    // resolves to the leftmost child of column:DOING, tie-broken
+    // topmost).
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.column_fq(1),
-        "Right from task:T1A must land on column:DOING (peer at parent's level)"
+        app.column_name_fq(1),
+        "Right from task:T1A must drill into column:DOING's natural Right child \
+         (leftmost child, tie-broken topmost): field:column:DOING.name"
     );
 
-    // Mirror: Left from T1B → column:TODO.
+    // Mirror: Left from T1B → field:column:TODO.name (cross-zone
+    // drill-in resolves to the rightmost child of column:TODO,
+    // tie-broken topmost).
     let from = app.card_fq(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        app.column_fq(0),
-        "Left from task:T1B must land on column:TODO (mirror of trajectory B)"
+        app.column_name_fq(0),
+        "Left from task:T1B must drill into column:TODO's natural Left child \
+         (rightmost child, tie-broken topmost): field:column:TODO.name"
     );
 }
 

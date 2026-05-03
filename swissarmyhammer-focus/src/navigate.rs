@@ -79,13 +79,22 @@
 //!    level: candidates are zones (the parent is itself a zone, so
 //!    iter 1's same-kind filter restricts to zones) sharing the
 //!    parent's `parent_zone` — i.e. the focused entry's grandparent in
-//!    the zone tree. Same beam scoring. If a candidate matches, return
-//!    its FQM.
+//!    the zone tree. Same beam scoring. When a candidate matches, the
+//!    cascade does NOT return the destination zone's FQM directly:
+//!    it drills into the destination's **natural child** in the
+//!    search direction (rightmost for `Left`, leftmost for `Right`,
+//!    bottom for `Up`, top for `Down`) so the returned FQM identifies
+//!    a leaf the focus indicator can paint on. Without this drill-in,
+//!    cross-zone landings on `showFocusBar={false}` containers
+//!    (e.g. `ui:left-nav`, `ui:perspective-bar`, `ui:board`) produce
+//!    a valid FQM but no visible focus on screen.
 //! 4. **Drill-out fallback**: when no peer matches at iter 0 *or* iter
 //!    1, return the parent zone's FQM. A single key press moves at
 //!    most one zone level out from the focused entry; the user is
 //!    never "stuck" returning a stay-put unless the focused entry sits
-//!    at the very root of its layer.
+//!    at the very root of its layer. Drill-out does NOT trigger
+//!    drill-in — the user is moving up the parent chain, not crossing
+//!    into a new zone.
 //!
 //! Edge commands ([`Direction::First`], [`Direction::Last`],
 //! [`Direction::RowStart`], [`Direction::RowEnd`]) keep their
@@ -300,6 +309,13 @@ fn check_override(
 /// only sibling zones of the parent zone enter the search, which is
 /// structural (the parent is itself a zone), not a kind policy.
 ///
+/// When iter 1 succeeds, the cascade does NOT return the destination
+/// zone's FQM directly — it calls [`drill_into_natural_leaf`] so the
+/// returned FQM identifies a leaf the focus indicator can paint on.
+/// Cross-zone landings on `showFocusBar={false}` containers
+/// (e.g. `ui:left-nav`, `ui:perspective-bar`, `ui:board`) would
+/// otherwise produce a valid FQM but no visible focus.
+///
 /// See `swissarmyhammer-focus/README.md` for the prose contract.
 fn cardinal_cascade(
     reg: &SpatialRegistry,
@@ -358,12 +374,145 @@ fn cardinal_cascade(
         true, /* parent is always a zone */
         direction,
     ) {
-        return target;
+        // Cross-zone drill-in: when iter 1 lands on a sibling zone,
+        // descend into that zone's natural child in the search
+        // direction so the returned FQM identifies a leaf the focus
+        // indicator can paint on. Without this, cross-zone landings
+        // on `showFocusBar={false}` containers (e.g. `ui:left-nav`,
+        // `ui:perspective-bar`, `ui:board`) produce a valid FQM but
+        // no visible focus on screen — the bug captured in card
+        // `01KQPW1FTYFWTDMW6ESM5ABGJQ`.
+        return drill_into_natural_leaf(reg, &target, direction);
     }
 
     // Drill-out fallback: return the parent zone's FQM. A single key
     // press moves at most one zone level out from the focused entry.
     parent.fq.clone()
+}
+
+/// Drill into the destination zone's natural leaf in the search
+/// `direction`, descending one zone level at a time until a leaf is
+/// reached or the zone has no children.
+///
+/// "Natural leaf" means the child entry that's most extreme in the
+/// opposite of `direction` — for `Left`, the rightmost child; for
+/// `Right`, the leftmost; for `Up`, the bottommost; for `Down`, the
+/// topmost. This is the surface a user crossing the zone boundary
+/// from `direction` would visually land on first.
+///
+/// The function descends through nested zones — if the natural child
+/// is itself a zone, we recurse one more level — so a destination
+/// zone whose immediate children are all containers still resolves to
+/// an actual leaf the focus indicator can paint on. Recursion is
+/// bounded by the registry's tree depth (zones cannot cycle), so this
+/// always terminates.
+///
+/// If the destination zone has no children at all (a stub or a
+/// dynamic surface that hasn't mounted yet), the destination zone's
+/// own FQM is returned unchanged. The caller still gets a valid FQM —
+/// the no-silent-dropout contract holds.
+fn drill_into_natural_leaf(
+    reg: &SpatialRegistry,
+    destination_fq: &FullyQualifiedMoniker,
+    direction: Direction,
+) -> FullyQualifiedMoniker {
+    let Some(destination) = reg.zone(destination_fq) else {
+        // Destination isn't a zone (or isn't registered); the caller
+        // already produced a valid FQM, so echo it. In practice the
+        // cascade only calls this with iter-1's sibling-zone result, so
+        // the "isn't a zone" branch is real but unreachable from the
+        // cascade — it exists for future callers that might pass a
+        // leaf or unregistered FQM.
+        return destination_fq.clone();
+    };
+
+    // Pick the child of `destination` that's most extreme in the
+    // opposite of `direction`. Children include both leaf scopes and
+    // sub-zones (the sibling rule).
+    let pick = pick_natural_child(reg, &destination.layer_fq, destination_fq, direction);
+    let Some((child_fq, child_is_zone)) = pick else {
+        // No children — return the destination zone itself.
+        return destination_fq.clone();
+    };
+
+    if child_is_zone {
+        // Descend one more level so the result is a leaf when
+        // possible.
+        drill_into_natural_leaf(reg, &child_fq, direction)
+    } else {
+        child_fq
+    }
+}
+
+/// Pick the natural child of `parent_fq` for `direction` — the child
+/// whose extreme edge in the opposite direction is furthest. Returns
+/// the child's FQM and a flag indicating whether it's a sub-zone (so
+/// the caller can decide whether to recurse).
+///
+/// Tie-breaking matches the user's expected reading order:
+/// horizontal directions tie-break by smallest `top` (topmost);
+/// vertical directions tie-break by smallest `left` (leftmost).
+fn pick_natural_child(
+    reg: &SpatialRegistry,
+    layer: &FullyQualifiedMoniker,
+    parent_fq: &FullyQualifiedMoniker,
+    direction: Direction,
+) -> Option<(FullyQualifiedMoniker, bool)> {
+    let mut best: Option<(&FullyQualifiedMoniker, bool, Rect)> = None;
+    for entry in reg.entries_in_layer(layer) {
+        if entry.parent_zone() != Some(parent_fq) {
+            continue;
+        }
+        let cand_rect = *entry.rect();
+        match best {
+            None => best = Some((entry.fq(), entry.is_zone(), cand_rect)),
+            Some((_, _, cur_rect)) => {
+                if natural_child_better(&cand_rect, &cur_rect, direction) {
+                    best = Some((entry.fq(), entry.is_zone(), cand_rect));
+                }
+            }
+        }
+    }
+    best.map(|(fq, is_zone, _)| (fq.clone(), is_zone))
+}
+
+/// Returns `true` when `cand` is a more natural child landing than
+/// `incumbent` for `direction`. See [`pick_natural_child`] for the
+/// tie-break rules.
+fn natural_child_better(cand: &Rect, incumbent: &Rect, direction: Direction) -> bool {
+    use std::cmp::Ordering;
+    match direction {
+        // Entering from the right → prefer the rightmost child;
+        // tie-break topmost.
+        Direction::Left => match pixels_cmp(cand.right(), incumbent.right()) {
+            Ordering::Greater => true,
+            Ordering::Less => false,
+            Ordering::Equal => pixels_cmp(cand.top(), incumbent.top()) == Ordering::Less,
+        },
+        // Entering from the left → prefer the leftmost child;
+        // tie-break topmost.
+        Direction::Right => match pixels_cmp(cand.left(), incumbent.left()) {
+            Ordering::Less => true,
+            Ordering::Greater => false,
+            Ordering::Equal => pixels_cmp(cand.top(), incumbent.top()) == Ordering::Less,
+        },
+        // Entering from below → prefer the bottommost child;
+        // tie-break leftmost.
+        Direction::Up => match pixels_cmp(cand.bottom(), incumbent.bottom()) {
+            Ordering::Greater => true,
+            Ordering::Less => false,
+            Ordering::Equal => pixels_cmp(cand.left(), incumbent.left()) == Ordering::Less,
+        },
+        // Entering from above → prefer the topmost child; tie-break
+        // leftmost.
+        Direction::Down => match pixels_cmp(cand.top(), incumbent.top()) {
+            Ordering::Less => true,
+            Ordering::Greater => false,
+            Ordering::Equal => pixels_cmp(cand.left(), incumbent.left()) == Ordering::Less,
+        },
+        // Edge commands never call this helper.
+        Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => false,
+    }
 }
 
 /// Outcome of resolving a focused scope's parent zone, distinguishing
