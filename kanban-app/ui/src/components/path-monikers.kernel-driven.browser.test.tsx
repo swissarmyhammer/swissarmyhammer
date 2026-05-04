@@ -78,7 +78,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
 import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider, useFocusActions } from "@/lib/entity-focus-context";
@@ -130,9 +129,9 @@ describe("path-monikers — kernel-driven contract", () => {
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
           <FocusLayer name={asSegment("inspector")}>
-            <FocusZone moniker={asSegment("field:T1.title")}>
+            <FocusScope moniker={asSegment("field:T1.title")}>
               <Probe />
-            </FocusZone>
+            </FocusScope>
           </FocusLayer>
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -161,15 +160,15 @@ describe("path-monikers — kernel-driven contract", () => {
     const { unmount } = render(
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
-          <FocusZone moniker={asSegment("ui:board")}>
-            <FocusZone moniker={asSegment("column:c1")}>
-              <FocusZone moniker={asSegment("card:T1")}>
-                <FocusZone moniker={asSegment("field:title")}>
+          <FocusScope moniker={asSegment("ui:board")}>
+            <FocusScope moniker={asSegment("column:c1")}>
+              <FocusScope moniker={asSegment("card:T1")}>
+                <FocusScope moniker={asSegment("field:title")}>
                   <Probe />
-                </FocusZone>
-              </FocusZone>
-            </FocusZone>
-          </FocusZone>
+                </FocusScope>
+              </FocusScope>
+            </FocusScope>
+          </FocusScope>
         </FocusLayer>
       </SpatialFocusProvider>,
     );
@@ -189,7 +188,7 @@ describe("path-monikers — kernel-driven contract", () => {
 
   it("useFullyQualifiedMoniker_outside_primitive_throws", () => {
     // The strict variant requires an enclosing primitive (`<FocusLayer>`,
-    // `<FocusZone>`, or `<FocusScope>`). Outside that chain it must throw
+    // `<FocusScope>`, or `<FocusScope>`). Outside that chain it must throw
     // a precisely-worded error so misuse is loud.
     function Probe() {
       // Reading inside a render — React surfaces the throw to ErrorBoundary
@@ -250,12 +249,12 @@ describe("path-monikers — kernel-driven contract", () => {
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
           <EntityFocusProvider>
-            <FocusZone moniker={asSegment("ui:board")}>
+            <FocusScope moniker={asSegment("ui:board")}>
               <FocusScope moniker={asSegment("card:T1")}>
                 <Probe />
                 <span>card</span>
               </FocusScope>
-            </FocusZone>
+            </FocusScope>
           </EntityFocusProvider>
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -340,18 +339,18 @@ describe("path-monikers — kernel-driven contract", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             {/* Board side: a card with a title field. */}
-            <FocusZone moniker={asSegment("ui:board")}>
-              <FocusZone moniker={asSegment("card:T1")}>
-                <FocusZone moniker={asSegment("field:title")}>
+            <FocusScope moniker={asSegment("ui:board")}>
+              <FocusScope moniker={asSegment("card:T1")}>
+                <FocusScope moniker={asSegment("field:title")}>
                   <span>board card title</span>
-                </FocusZone>
-              </FocusZone>
-            </FocusZone>
+                </FocusScope>
+              </FocusScope>
+            </FocusScope>
             {/* Inspector side: same trailing segment, different path. */}
             <FocusLayer name={asSegment("inspector")}>
-              <FocusZone moniker={asSegment("field:title")}>
+              <FocusScope moniker={asSegment("field:title")}>
                 <span>inspector title</span>
-              </FocusZone>
+              </FocusScope>
             </FocusLayer>
           </FocusLayer>
         </SpatialFocusProvider>,

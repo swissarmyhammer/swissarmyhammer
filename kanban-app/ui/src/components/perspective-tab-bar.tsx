@@ -39,7 +39,6 @@ import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { FocusScope } from "@/components/focus-scope";
-import { FocusZone } from "@/components/focus-zone";
 import { Pressable } from "@/components/pressable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
@@ -309,7 +308,7 @@ function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
     return <div className={PERSPECTIVE_BAR_LAYOUT}>{children}</div>;
   }
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:perspective-bar")}
       // The bar is viewport-spanning chrome (full window width × 32px high) —
       // a focus indicator running across its entire row would be visual
@@ -321,7 +320,7 @@ function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
       className={PERSPECTIVE_BAR_LAYOUT}
     >
       {children}
-    </FocusZone>
+    </FocusScope>
   );
 }
 
@@ -484,12 +483,12 @@ function PerspectiveTabFocusable({
     return <>{children}</>;
   }
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment(`perspective_tab:${id}`)}
       showFocusBar={false}
     >
       {children}
-    </FocusZone>
+    </FocusScope>
   );
 }
 

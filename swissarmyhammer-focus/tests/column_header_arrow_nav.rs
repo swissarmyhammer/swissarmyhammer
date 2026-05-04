@@ -4,7 +4,7 @@
 //!
 //! Built against the realistic-app fixture in `tests/fixtures/mod.rs`.
 //! After card `01KQAWVDS931PADB0559F2TVCS`, the column-name surface is
-//! registered as a `<FocusZone>` (kind `Zone`) with moniker
+//! registered as a `<FocusScope>` (kind `Zone`) with moniker
 //! `field:column:<NAME>.name` parented at the column zone — collapsing
 //! the previous synthetic outer `<FocusScope moniker="column:<id>.name">`
 //! that was a leaf duplicating the inner Field zone.
@@ -38,7 +38,7 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
     let focused_segment = app
         .registry()
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(app.registry(), from, &focused_segment, dir)
 }

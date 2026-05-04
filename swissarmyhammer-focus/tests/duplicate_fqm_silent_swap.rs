@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    Direction, FocusScope, FocusZone, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker,
+    Direction, FocusScope, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker,
     SpatialRegistry,
 };
 use tracing::{
@@ -137,6 +137,7 @@ fn make_scope(
         layer_fq: fq(layer),
         parent_zone: parent_zone.map(fq),
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
@@ -146,8 +147,8 @@ fn make_zone(
     layer: &str,
     parent_zone: Option<&str>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq: fq(path),
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -210,14 +211,14 @@ fn same_shape_zone_re_register_emits_no_error() {
 
     let ((), events) = capture_errors(|| {
         let mut reg = SpatialRegistry::new();
-        reg.register_zone(make_zone(
+        reg.register_scope(make_zone(
             path,
             "column:done",
             layer,
             parent_zone,
             rect(0.0, 0.0, 320.0, 800.0),
         ));
-        reg.register_zone(make_zone(
+        reg.register_scope(make_zone(
             path,
             "column:done",
             layer,
@@ -348,49 +349,15 @@ fn structural_mismatch_layer_fq_emits_error() {
     );
 }
 
-/// Kind flip: an FQM previously registered as a leaf scope is
-/// re-registered as a zone (or vice versa). This is a real bug — the
-/// React adapter on the consumer side must not flip a primitive's
-/// kind. The error log surfaces the mismatch, and the `apply_batch`
-/// path also enforces this via [`BatchRegisterError::KindMismatch`]
-/// for atomicity. The single-entry path here uses the error log only;
-/// the registry replaces in place because there is no error return on
-/// these methods.
-#[test]
-fn structural_mismatch_kind_flip_emits_error() {
-    let path = "/window/x";
-    let layer = "/window";
-
-    let ((), events) = capture_errors(|| {
-        let mut reg = SpatialRegistry::new();
-        reg.register_scope(make_scope(
-            path,
-            "x",
-            layer,
-            None,
-            rect(0.0, 0.0, 10.0, 10.0),
-        ));
-        // Re-register as a zone — kind flip.
-        reg.register_zone(make_zone(
-            path,
-            "x",
-            layer,
-            None,
-            rect(0.0, 0.0, 10.0, 10.0),
-        ));
-    });
-
-    assert_eq!(events.len(), 1, "kind flip must emit one error");
-    assert_eq!(
-        events[0].fields.get("op").map(String::as_str),
-        Some("register_zone")
-    );
-    assert_eq!(
-        events[0].fields.get("kind_flipped").map(String::as_str),
-        Some("true"),
-        "the error must surface the kind_flipped flag"
-    );
-}
+// Note: the prior `structural_mismatch_kind_flip_emits_error` test
+// asserted that re-registering an FQM with a different `kind`
+// discriminator (leaf-scope → zone-container) produced a structural-
+// mismatch error. With the FocusZone/FocusScope collapse, kind is no
+// longer a structural property — every primitive is a `FocusScope` and
+// whether it acts as a leaf or container is decided at runtime by what
+// registers under it. A "kind flip" is no longer a representable bug,
+// so the test was removed alongside the discriminator.
+// Kept after the collapse — every scope is uniform now.
 
 /// Different `overrides` map at the same FQM — same shape on every
 /// other field. Override directives are the closest thing to a

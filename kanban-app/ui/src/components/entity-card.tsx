@@ -1,6 +1,6 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info } from "lucide-react";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import { Pressable } from "@/components/pressable";
 import { asSegment } from "@/types/spatial";
@@ -107,7 +107,7 @@ export const EntityCard = memo(
       // (`focus-architecture.guards.node.test.ts`, Guards B + C)
       // enforces both directions.
       <Inspectable moniker={asSegment(entity.moniker)}>
-        <FocusZone
+        <FocusScope
           moniker={asSegment(entity.moniker)}
           commands={extraCommands}
         >
@@ -125,7 +125,7 @@ export const EntityCard = memo(
             <CardFields sections={cardSections} entity={entity} />
             <InspectButton entityId={entity.id} moniker={entity.moniker} />
           </div>
-        </FocusZone>
+        </FocusScope>
       </Inspectable>
     );
   }),

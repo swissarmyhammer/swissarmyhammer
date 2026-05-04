@@ -70,7 +70,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);
@@ -152,7 +152,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { ColumnView } from "./column-view";
 import { AppShell } from "./app-shell";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -203,13 +203,13 @@ async function renderColumn(onAddTask: (columnId: string) => void) {
                         <FieldUpdateProvider>
                           <TooltipProvider delayDuration={100}>
                             <ActiveBoardPathProvider value="/test/board">
-                              <FocusZone moniker={asSegment("ui:board")}>
+                              <FocusScope moniker={asSegment("ui:board")}>
                                 <ColumnView
                                   column={makeColumn()}
                                   tasks={[]}
                                   onAddTask={onAddTask}
                                 />
-                              </FocusZone>
+                              </FocusScope>
                             </ActiveBoardPathProvider>
                           </TooltipProvider>
                         </FieldUpdateProvider>
@@ -232,13 +232,6 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
   const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
   return mockInvoke.mock.calls
     .filter((c: unknown[]) => c[0] === "spatial_register_scope")
-    .map((c: unknown[]) => c[1] as Record<string, unknown>);
-}
-
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
-  return mockInvoke.mock.calls
-    .filter((c: unknown[]) => c[0] === "spatial_register_zone")
     .map((c: unknown[]) => c[1] as Record<string, unknown>);
 }
 
@@ -272,7 +265,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
       "ui:column.add-task:col-doing must register as a FocusScope leaf via Pressable",
     ).toBeDefined();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === "column:col-doing",
     );
     expect(columnZone, "column zone must register").toBeDefined();
@@ -324,7 +317,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
     const { container } = await renderColumn(onAddTask);
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === "column:col-doing",
     );
     expect(columnZone).toBeDefined();
@@ -347,7 +340,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
     expect(onAddTask).toHaveBeenCalledWith("col-doing");
 
     // Click on "+" calls `setFocus(columnFq)` from the onPress closure
-    // and also bubbles to the enclosing column `<FocusZone>`'s
+    // and also bubbles to the enclosing column `<FocusScope>`'s
     // own onClick, which fires a second `spatial_focus(columnFq)`.
     // Both pre- and post-migration the inner button has no
     // `e.stopPropagation()` (the click bubble to the column zone is

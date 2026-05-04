@@ -249,7 +249,7 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return undefined;

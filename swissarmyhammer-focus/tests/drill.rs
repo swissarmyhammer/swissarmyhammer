@@ -36,7 +36,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusScope, FocusZone, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, SpatialRegistry,
+    FocusScope, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, SpatialRegistry,
 };
 
 // ---------------------------------------------------------------------------
@@ -77,18 +77,19 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
-/// Construct a [`FocusZone`] with optional `last_focused` and parent.
+/// Construct a [`FocusScope`] with optional `last_focused` and parent.
 fn zone(
     fq: FullyQualifiedMoniker,
     segment: &str,
     layer: &str,
     parent_zone: Option<FullyQualifiedMoniker>,
     last_focused: Option<FullyQualifiedMoniker>,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: rect_at(0.0, 0.0),
@@ -114,7 +115,7 @@ fn drill_in_zone_with_live_last_focused_returns_remembered_fq() {
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-a"));
     let leaf_b_fq =
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-b"));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",
@@ -156,7 +157,7 @@ fn drill_in_zone_with_stale_last_focused_falls_back_to_first_child() {
     let leaf_b_fq =
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-b"));
     let ghost_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ghost"));
-    reg.register_zone(zone(zone_fq.clone(), "ui:zone", "/L", None, Some(ghost_fq)));
+    reg.register_scope(zone(zone_fq.clone(), "ui:zone", "/L", None, Some(ghost_fq)));
     // leaf-a is at (10, 0), leaf-b is at (0, 0). Top-left ordering ranks
     // by (top, left) — leaf-b (top=0, left=0) wins over leaf-a (top=0,
     // left=10).
@@ -193,7 +194,7 @@ fn drill_in_zone_with_no_last_focused_uses_first_child_by_rect() {
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-top"));
     let leaf_bottom_fq =
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-bottom"));
-    reg.register_zone(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
+    reg.register_scope(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
     // Two children: one at (5, 5), one at (5, 0). Top-left ordering ranks
     // (top=0, left=5) over (top=5, left=5) since `top` is the primary key.
     reg.register_scope(leaf(
@@ -226,7 +227,7 @@ fn drill_in_zone_with_no_last_focused_uses_first_child_by_rect() {
 fn drill_in_empty_zone_returns_focused_fq() {
     let mut reg = SpatialRegistry::new();
     let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_zone(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
+    reg.register_scope(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
 
     let target = reg.drill_in(zone_fq.clone(), &zone_fq);
     assert_eq!(target, zone_fq);
@@ -282,7 +283,7 @@ fn drill_out_focusable_returns_parent_zone_fq() {
     let mut reg = SpatialRegistry::new();
     let zone_fq = fq_in_layer("/L", "ui:zone");
     let leaf_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf"));
-    reg.register_zone(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
+    reg.register_scope(zone(zone_fq.clone(), "ui:zone", "/L", None, None));
     reg.register_scope(leaf(
         leaf_fq.clone(),
         "ui:leaf",
@@ -307,8 +308,8 @@ fn drill_out_zone_returns_parent_zone_fq() {
     let outer_fq = fq_in_layer("/L", "ui:outer");
     let inner_fq =
         FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:inner"));
-    reg.register_zone(zone(outer_fq.clone(), "ui:outer", "/L", None, None));
-    reg.register_zone(zone(
+    reg.register_scope(zone(outer_fq.clone(), "ui:outer", "/L", None, None));
+    reg.register_scope(zone(
         inner_fq.clone(),
         "ui:inner",
         "/L",
@@ -380,7 +381,7 @@ fn drill_in_after_remembered_position_returns_remembered_fq() {
         FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:leaf-b"));
     // Pre-populate `last_focused` so the test does not depend on the
     // navigator's update path.
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",
@@ -434,7 +435,7 @@ fn drill_in_field_zone_with_pill_children_returns_first_pill_fq() {
     // layer for simplicity. The contract under test is the in-zone
     // ordering, which doesn't depend on the parent chain.
     let field_fq = fq_in_layer("/L", "field:task:T1.tags");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         field_fq.clone(),
         "field:task:T1.tags",
         "/L",
@@ -503,7 +504,7 @@ fn drill_in_field_zone_with_no_children_returns_focused_fq() {
     // Register the field zone but no pill children — mirrors an
     // editable scalar field (e.g. `name`) or an empty pill field.
     let field_fq = fq_in_layer("/L", "field:task:T1.name");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         field_fq.clone(),
         "field:task:T1.name",
         "/L",

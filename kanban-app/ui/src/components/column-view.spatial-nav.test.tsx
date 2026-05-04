@@ -5,7 +5,7 @@
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the column's
  * `<FocusScope>` and the inner column-name-field `<FocusScope>`
  * register through the live spatial primitives. The Tauri `invoke` boundary
- * is mocked at the module level so we can inspect the `spatial_register_zone`
+ * is mocked at the module level so we can inspect the `spatial_register_scope`
  * and `spatial_register_scope` calls each emits on mount.
  *
  * Companion file: `column-view.guards.node.test.ts` pins the source-level
@@ -13,12 +13,12 @@
  * column-level keydown listener). This file pins the runtime contract:
  *
  *   - The column body registers as a zone with moniker `column:{id}`.
- *   - Its `parentZone` is the surrounding `<FocusZone>` (e.g. `ui:board`)
+ *   - Its `parentZone` is the surrounding `<FocusScope>` (e.g. `ui:board`)
  *     when one is present, and `null` when the column is mounted directly
  *     under the layer root.
  *   - The column header registers as a leaf with `parentZone` equal to the
  *     column's zone key.
- *   - Each task card registers as a navigable container (`<FocusZone>`)
+ *   - Each task card registers as a navigable container (`<FocusScope>`)
  *     parented at the column zone — cards are zones because they hold
  *     multiple focusable atoms (drag handle, Field rows, inspect button)
  *     and the kernel's path-prefix scope-is-leaf invariant rejects a
@@ -35,12 +35,12 @@ import type { Entity } from "@/types/kanban";
 // Tauri API mocks — must come before any module that imports them.
 //
 // `mockInvoke` is hoisted so the SpatialFocusProvider's invoke calls
-// (`spatial_push_layer`, `spatial_register_zone`, …) flow through it and
+// (`spatial_push_layer`, `spatial_register_scope`, …) flow through it and
 // tests can assert against them.
 // ---------------------------------------------------------------------------
 
 // Schema for the column entity. The column-name surface is rendered by
-// `<Field>`, which only mounts a `<FocusZone>` when the schema's
+// `<Field>`, which only mounts a `<FocusScope>` when the schema's
 // `getFieldDef("column", "name")` returns a definition — without a
 // schema the column header falls back to a bare `<span>` with no
 // spatial-nav participation, and the field-zone registration assertions
@@ -117,7 +117,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { ColumnView } from "./column-view";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -159,7 +159,7 @@ function makeTask(id: string, column = "col-1"): Entity {
 /**
  * Flush microtasks queued by the spatial-primitive register effects.
  *
- * `<FocusZone>` / `<FocusScope>` perform their `spatial_register_*` invocations
+ * `<FocusScope>` / `<FocusScope>` perform their `spatial_register_*` invocations
  * inside `useEffect`, which React flushes asynchronously. Without this nudge
  * the assertions run before the register calls land in the mock.
  */
@@ -183,7 +183,7 @@ function renderColumnInBoard(ui: React.ReactElement) {
             <EntityStoreProvider entities={{}}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusZone moniker={asSegment("ui:board")}>{ui}</FocusZone>
+                  <FocusScope moniker={asSegment("ui:board")}>{ui}</FocusScope>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>
@@ -194,7 +194,7 @@ function renderColumnInBoard(ui: React.ReactElement) {
   );
 }
 
-/** Pull every `spatial_register_zone` call as a typed record. */
+/** Pull every `spatial_register_scope` call as a typed record. */
 function registeredZones(): Array<{
   fq: string;
   segment: string;
@@ -203,7 +203,7 @@ function registeredZones(): Array<{
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map(
       (c) =>
         c[1] as {
@@ -316,7 +316,7 @@ describe("ColumnView (spatial-nav)", () => {
   it("registers the column-name field zone inside the column zone", async () => {
     // After collapsing the synthetic `column:<id>.name` `<FocusScope>` wrap,
     // the column-name surface is registered exactly once — by the inner
-    // `<Field>` component as a `<FocusZone>` with moniker
+    // `<Field>` component as a `<FocusScope>` with moniker
     // `field:column:<id>.name`. The registration's `parentZone` is the
     // enclosing column zone, so beam search treats the column-name field
     // as an in-column candidate.
@@ -367,7 +367,7 @@ describe("ColumnView (spatial-nav)", () => {
   });
 
   it("registers each task card as a zone parented at the column zone", async () => {
-    // Cards register as `<FocusZone>` containers — NOT scopes —
+    // Cards register as `<FocusScope>` containers — NOT scopes —
     // because they hold multiple focusable atoms (drag handle, Field
     // rows, inspect button). The card's `parentZone` is the enclosing
     // column's zone key so the kernel groups cards by column for
@@ -529,7 +529,7 @@ describe("ColumnView (spatial-nav)", () => {
     // (1) is declared first in `VirtualColumn` so its effect fires first
     // in commit order. If (2) reads the deleted task's key from the live
     // (and now-pruned) `stableKeys` map during the unregister loop, the
-    // lookup misses and the kernel keeps a stale `RegisterEntry::Zone`
+    // lookup misses and the kernel keeps a stale `FocusScope` entry
     // under an orphaned `FullyQualifiedMoniker` — a beam-search dead-end after
     // delete. (2) must therefore remember the key it registered against,
     // independent of the live `stableKeys` map.
@@ -584,12 +584,12 @@ describe("ColumnView (spatial-nav)", () => {
               <EntityStoreProvider entities={{}}>
                 <TooltipProvider>
                   <ActiveBoardPathProvider value="/test/board">
-                    <FocusZone moniker={asSegment("ui:board")}>
+                    <FocusScope moniker={asSegment("ui:board")}>
                       <ColumnView
                         column={makeColumn("col-doing")}
                         tasks={tasksAfter}
                       />
-                    </FocusZone>
+                    </FocusScope>
                   </ActiveBoardPathProvider>
                 </TooltipProvider>
               </EntityStoreProvider>
@@ -694,7 +694,7 @@ describe("ColumnView (spatial-nav)", () => {
     // Pinned cleanup contract: tearing down a virtualized column must
     // not leak placeholder entries into the kernel registry. Without
     // this, a board that re-renders columns (perspective swap, project
-    // filter change) would accumulate dead `RegisterEntry::Zone` keys
+    // filter change) would accumulate dead `FocusScope` keys
     // forever.
     const N = 60;
     const tasks: Entity[] = [];

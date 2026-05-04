@@ -239,10 +239,9 @@ function nextFrame(): Promise<void> {
 }
 
 /**
- * Look up the DOM node owned by `<FocusScope>` / `<FocusZone>` for the
- * given FQM. Both primitives stamp `data-moniker={fq}` on their root
- * div; reading by that attribute is the React-side mirror of the
- * kernel's registry lookup.
+ * Look up the DOM node owned by `<FocusScope>` for the given FQM. The
+ * primitive stamps `data-moniker={fq}` on its root div; reading by that
+ * attribute is the React-side mirror of the kernel's registry lookup.
  *
  * Returns `null` when the focused scope is not in the DOM (e.g. a
  * virtualizer just unmounted it, or the test harness mounted the

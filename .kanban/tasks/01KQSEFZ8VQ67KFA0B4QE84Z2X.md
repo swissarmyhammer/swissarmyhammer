@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQSDP4ZJY5ERAJ68TFPVFRRE
 - 01KQSEDYSJT9J8Y1N8JYX7TQ12
-position_column: todo
-position_ordinal: d380
+position_column: doing
+position_ordinal: '80'
 project: spatial-nav
 title: 'Spatial-nav follow-up D: sweep tests + rewrite README for single FocusScope primitive'
 ---

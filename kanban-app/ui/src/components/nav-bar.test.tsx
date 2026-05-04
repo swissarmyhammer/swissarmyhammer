@@ -113,8 +113,8 @@ const WINDOW_LAYER_NAME = asSegment("window");
  * Render `NavBar` inside the spatial-focus + window-root layer providers
  * that the production tree mounts in `App.tsx`.
  *
- * `NavBar` is wrapped in a `<FocusZone>`, which registers via
- * `spatial_register_zone` only inside a `<FocusLayer>` — production wraps
+ * `NavBar` is wrapped in a `<FocusScope>`, which registers via
+ * `spatial_register_scope` only inside a `<FocusLayer>` — production wraps
  * everything in one, so we mirror that here to exercise the spatial-context
  * path.
  */
@@ -255,7 +255,7 @@ describe("NavBar", () => {
   // -------------------------------------------------------------------------
   // Spatial-nav wiring
   //
-  // The nav bar mounts as `<FocusZone moniker="ui:navbar">` with each
+  // The nav bar mounts as `<FocusScope moniker="ui:navbar">` with each
   // actionable child registered as a `<FocusScope>` leaf whose `parent_zone`
   // is the navbar zone. These tests assert the structural wiring — the
   // spatial-graph contract the rest of the app relies on for arrow nav.
@@ -269,39 +269,40 @@ describe("NavBar", () => {
   }
 
   it("exposes the implicit banner landmark for screen readers", () => {
-    // Replacing the previous <header> with <FocusZone> (a <div>) used to drop
+    // Replacing the previous <header> with <FocusScope> (a <div>) used to drop
     // the implicit `role="banner"` landmark — losing the top-of-page anchor
-    // that screen-reader users navigate to. The FocusZone now forwards
+    // that screen-reader users navigate to. The FocusScope now forwards
     // `role="banner"`; this test guards against that regression.
     renderNavBar();
     expect(screen.getByRole("banner")).toBeTruthy();
   });
 
-  it("registers as a FocusZone with moniker ui:navbar at the layer root", async () => {
+  it("registers as a FocusScope with moniker ui:navbar at the layer root", async () => {
     renderNavBar();
     await flushSetup();
 
-    const zoneCalls = callsFor("spatial_register_zone");
+    const zoneCalls = callsFor("spatial_register_scope");
     const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
     expect(navbarZone!.parentZone).toBeNull();
     expect(navbarZone!.layerFq).toBeTruthy();
   });
 
-  it("registers ui:navbar.board-selector as a FocusZone child of the navbar zone", async () => {
+  it("registers ui:navbar.board-selector as a FocusScope child of the navbar zone", async () => {
     // The board-selector houses multiple focusable surfaces (editable name
-    // Field, dropdown trigger, tear-off button), so it registers as a zone
-    // rather than a leaf. The kernel enforces the scope-is-leaf invariant
-    // (see swissarmyhammer-focus/tests/scope_is_leaf.rs); a FocusScope here
-    // would log `scope-not-leaf` because its subtree contains other
-    // FocusZones / FocusScopes.
+    // Field, dropdown trigger, tear-off button), so it registers as a
+    // FocusScope-with-children container rather than a leaf scope. The
+    // kernel enforces the leaf-must-have-no-children invariant (see
+    // swissarmyhammer-focus/tests/scope_is_leaf.rs); a leaf FocusScope
+    // here would log `scope-not-leaf` because its subtree contains
+    // other FocusScopes.
     mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
 
     renderNavBar();
     await flushSetup();
 
-    const zoneCalls = callsFor("spatial_register_zone");
+    const zoneCalls = callsFor("spatial_register_scope");
     const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
@@ -325,7 +326,7 @@ describe("NavBar", () => {
     renderNavBar();
     await flushSetup();
 
-    const zoneCalls = callsFor("spatial_register_zone");
+    const zoneCalls = callsFor("spatial_register_scope");
     const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 
@@ -351,7 +352,7 @@ describe("NavBar", () => {
     renderNavBar();
     await flushSetup();
 
-    const zoneCalls = callsFor("spatial_register_zone");
+    const zoneCalls = callsFor("spatial_register_scope");
     const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
     expect(navbarZone).toBeDefined();
 

@@ -13,7 +13,7 @@
  *
  * The migration:
  *   1. Promotes `PerspectiveTabFocusable` from `<FocusScope>` to
- *      `<FocusZone>` with `showFocusBar={false}` (entity-card
+ *      `<FocusScope>` with `showFocusBar={false}` (entity-card
  *      iteration-2 reshape precedent).
  *   2. Wraps the existing `<TabButton>` in an inner
  *      `<FocusScope perspective_tab.name:{id}>` leaf so the name button
@@ -64,7 +64,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);

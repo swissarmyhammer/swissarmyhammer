@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 use tracing::{
@@ -156,6 +156,7 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone,
         overrides,
+        last_focused: None,
     }
 }
 
@@ -166,8 +167,8 @@ fn zone(
     parent_zone: Option<FullyQualifiedMoniker>,
     last_focused: Option<FullyQualifiedMoniker>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -348,7 +349,7 @@ fn nav_with_unknown_fq_returns_focused_fq_and_traces_error() {
 fn drill_in_zone_with_no_children_returns_zone_fq_no_trace() {
     let mut reg = SpatialRegistry::new();
     let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",

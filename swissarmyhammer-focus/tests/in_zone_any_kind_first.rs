@@ -3,8 +3,8 @@
 //!
 //! # Contract
 //!
-//! Within a parent `<FocusZone>`, child `<FocusScope>` leaves and child
-//! `<FocusZone>` containers are **siblings**. Cardinal navigation must
+//! Within a parent `<FocusScope>`, child `<FocusScope>` leaves and child
+//! `<FocusScope>` containers are **siblings**. Cardinal navigation must
 //! treat them as peers — never filter by kind at the in-zone (iter 0)
 //! level. The Android beam score picks the geometrically best candidate
 //! of any kind. See `swissarmyhammer-focus/README.md` for the full
@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
@@ -79,10 +79,11 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer_fq),
         parent_zone,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
-/// Build a `FocusZone` with the given identity, rect, layer, and
+/// Build a `FocusScope` with the given identity, rect, layer, and
 /// optional parent zone.
 fn zone(
     fq: FullyQualifiedMoniker,
@@ -90,8 +91,8 @@ fn zone(
     layer_fq: &str,
     parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -122,7 +123,7 @@ fn nav(
 ) -> FullyQualifiedMoniker {
     let focused_segment = reg
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(reg, from, &focused_segment, dir)
 }
@@ -159,7 +160,7 @@ fn build_card_fixture() -> CardFixture {
 
     // The card zone is the parent zone for the four siblings.
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -170,7 +171,7 @@ fn build_card_fixture() -> CardFixture {
     // A peer zone next to the card, used so iter 1 has a Down target
     // when iter 0 misses below the card.
     let peer_fq = fq_in_layer("/L", "peer-zone");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         peer_fq.clone(),
         "peer-zone",
         "/L",
@@ -190,7 +191,7 @@ fn build_card_fixture() -> CardFixture {
     ));
 
     let title_fq = fq_in_zone(&card_fq, "title");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         title_fq.clone(),
         "title",
         "/L",
@@ -210,7 +211,7 @@ fn build_card_fixture() -> CardFixture {
     // Tags row directly below the top row, spans the full card width
     // so it is in-beam from any of the top-row siblings.
     let tags_fq = fq_in_zone(&card_fq, "tags");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         tags_fq.clone(),
         "tags",
         "/L",

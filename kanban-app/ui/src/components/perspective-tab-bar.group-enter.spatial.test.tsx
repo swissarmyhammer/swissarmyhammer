@@ -11,8 +11,8 @@
  * `pressable.activate` CommandDef.
  *
  * The migration (covered by the same PerspectiveTabFocusable
- * `<FocusScope>` → `<FocusZone>` reshape as the FilterButton path):
- *   1. Promotes `PerspectiveTabFocusable` to `<FocusZone>` with
+ * `<FocusScope>` → `<FocusScope>` reshape as the FilterButton path):
+ *   1. Promotes `PerspectiveTabFocusable` to `<FocusScope>` with
  *      `showFocusBar={false}`.
  *   2. Adds `<Pressable asChild moniker="perspective_tab.group:{id}">`
  *      inside the existing `<PopoverTrigger asChild>` slot. Because
@@ -59,7 +59,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);

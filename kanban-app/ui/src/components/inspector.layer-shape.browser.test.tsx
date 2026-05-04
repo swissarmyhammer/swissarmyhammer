@@ -6,12 +6,12 @@
  * simplification — field zones at the layer root with
  * `parentZone === null`). Updated for card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`:
  * each open inspector wraps its body in an entity-keyed
- * `<FocusZone moniker={asSegment(\`${entityType}:${entityId}\`)}>`,
+ * `<FocusScope moniker={asSegment(\`${entityType}:${entityId}\`)}>`,
  * so the spatial structure is now:
  *
  *   - One shared `<FocusLayer name="inspector">` for the whole panel
  *     stack (unchanged).
- *   - One `<FocusZone moniker="task:T1">` per open inspector, keyed by
+ *   - One `<FocusScope moniker="task:T1">` per open inspector, keyed by
  *     the entity moniker itself (NOT a `panel:` prefix). The zone
  *     registers at the inspector layer root with `parentZone === null`.
  *   - Field zones register with `parentZone === <entity zone FQM>` —
@@ -339,7 +339,7 @@ describe("Inspector entity-zone barrier — kernel-state shape", () => {
 
   it("registers a ZONE for the entity moniker (task:T1) — not a scope, no InspectorFocusBridge", async () => {
     // The entity moniker IS a zone now, registered via
-    // `<FocusZone moniker={asSegment(\`${type}:${id}\`)}>` in
+    // `<FocusScope moniker={asSegment(\`${type}:${id}\`)}>` in
     // `<InspectorPanel>` (card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`). The
     // deleted `<InspectorFocusBridge>` would have registered the
     // entity moniker as a leaf scope (`<FocusScope>`); the bridge
@@ -365,7 +365,7 @@ describe("Inspector entity-zone barrier — kernel-state shape", () => {
     ).toBeDefined();
     expect(
       entityRegistration!.kind,
-      "the entity moniker registers as a zone (FocusZone), not a scope (FocusScope)",
+      "the entity moniker registers as a zone (FocusScope), not a scope (FocusScope)",
     ).toBe("zone");
     expect(
       entityRegistration!.parentZone,

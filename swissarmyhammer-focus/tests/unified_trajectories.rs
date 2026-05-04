@@ -34,7 +34,7 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
     let focused_segment = app
         .registry()
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(app.registry(), from, &focused_segment, dir)
 }
@@ -222,11 +222,11 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     let window_layer_fq = fixtures::window_layer_fq();
     let window_fqs: Vec<&FullyQualifiedMoniker> = app
         .registry()
-        .leaves_in_layer(&window_layer_fq)
+        .scopes_in_layer(&window_layer_fq)
         .map(|f| &f.fq)
         .chain(
             app.registry()
-                .zones_in_layer(&window_layer_fq)
+                .scopes_in_layer(&window_layer_fq)
                 .map(|z| &z.fq),
         )
         .collect();
@@ -258,7 +258,7 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
     let inspector_layer_fq = fixtures::inspector_layer_fq();
     let panel_lives_in_inspector = app
         .registry()
-        .zones_in_layer(&inspector_layer_fq)
+        .scopes_in_layer(&inspector_layer_fq)
         .any(|z| z.segment.as_str() == "panel:task:T1A");
     assert!(
         panel_lives_in_inspector,

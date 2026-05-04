@@ -72,7 +72,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import type { ReactNode } from "react";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
 import { SlidePanel } from "./slide-panel";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
@@ -180,14 +180,14 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
               <div data-testid="column-host">
-                <FocusZone moniker={asSegment("column:todo")}>
+                <FocusScope moniker={asSegment("column:todo")}>
                   <span>column body</span>
-                </FocusZone>
+                </FocusScope>
               </div>
               <FocusLayer name={asSegment("inspector")}>
-                <FocusZone moniker={asSegment("task:T1")}>
+                <FocusScope moniker={asSegment("task:T1")}>
                   <span>panel body</span>
-                </FocusZone>
+                </FocusScope>
               </FocusLayer>
             </FocusLayer>
           </SpatialFocusProvider>
@@ -214,15 +214,15 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
               <div data-testid="column-host">
-                <FocusZone moniker={asSegment("column:todo")}>
+                <FocusScope moniker={asSegment("column:todo")}>
                   <span>column body</span>
-                </FocusZone>
+                </FocusScope>
               </div>
               <FocusLayer name={asSegment("inspector")}>
                 <div data-testid="panel-host">
-                  <FocusZone moniker={asSegment("task:T1")}>
+                  <FocusScope moniker={asSegment("task:T1")}>
                     <span>panel body</span>
-                  </FocusZone>
+                  </FocusScope>
                 </div>
               </FocusLayer>
             </FocusLayer>
@@ -268,7 +268,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
               <div data-testid="column-host">
-                <FocusZone
+                <FocusScope
                   moniker={asSegment("column:todo")}
                   style={{
                     position: "fixed",
@@ -279,7 +279,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
                   }}
                 >
                   <span>column body fills viewport</span>
-                </FocusZone>
+                </FocusScope>
               </div>
               <div
                 data-testid="backdrop"
@@ -303,9 +303,9 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
                 }}
               >
                 <FocusLayer name={asSegment("inspector")}>
-                  <FocusZone moniker={asSegment("task:T1")}>
+                  <FocusScope moniker={asSegment("task:T1")}>
                     <span>panel body</span>
-                  </FocusZone>
+                  </FocusScope>
                 </FocusLayer>
               </div>
             </FocusLayer>
@@ -396,15 +396,15 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
             <FocusLayer name={asSegment("window")}>
               <FocusLayer name={asSegment("inspector")}>
                 <div data-testid="panel-host">
-                  <FocusZone moniker={asSegment("task:T1")}>
+                  <FocusScope moniker={asSegment("task:T1")}>
                     <span>panel body</span>
-                  </FocusZone>
+                  </FocusScope>
                 </div>
                 <FocusLayer name={asSegment("palette")}>
                   <div data-testid="palette-host">
-                    <FocusZone moniker={asSegment("ui:command-palette")}>
+                    <FocusScope moniker={asSegment("ui:command-palette")}>
                       <span>palette body</span>
-                    </FocusZone>
+                    </FocusScope>
                   </div>
                 </FocusLayer>
               </FocusLayer>
@@ -487,9 +487,9 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
               <FocusLayer name={asSegment("inspector")}>
                 <FocusLayer name={asSegment("custom-unknown-layer")}>
                   <div data-testid="custom-host">
-                    <FocusZone moniker={asSegment("ui:custom")}>
+                    <FocusScope moniker={asSegment("ui:custom")}>
                       <span>custom body</span>
-                    </FocusZone>
+                    </FocusScope>
                   </div>
                 </FocusLayer>
               </FocusLayer>

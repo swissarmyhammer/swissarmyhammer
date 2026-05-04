@@ -3,9 +3,9 @@
  *
  * Mounts the board inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<BoardSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:board")}>`
+ * `<BoardSpatialZone>` lights up its `<FocusScope moniker={asSegment("ui:board")}>`
  * branch. The Tauri `invoke` boundary is mocked at the module level so we can
- * inspect the `spatial_register_zone` calls the zone makes on mount.
+ * inspect the `spatial_register_scope` calls the zone makes on mount.
  *
  * Companion file: `board-view.guards.node.test.ts` pins the source-level
  * invariants (no `ClaimPredicate` import, no neighbor-moniker plumbing, no
@@ -21,7 +21,7 @@ import type { BoardData, Entity } from "@/types/kanban";
 // Tauri API mocks — must come before any module that imports them.
 //
 // `mockInvoke` is hoisted so the SpatialFocusProvider's invoke calls
-// (`spatial_push_layer`, `spatial_register_zone`, …) flow through it and
+// (`spatial_push_layer`, `spatial_register_scope`, …) flow through it and
 // tests can assert against them.
 // ---------------------------------------------------------------------------
 
@@ -134,7 +134,7 @@ const tasks: Entity[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Flush microtasks queued by FocusZone's register effect. */
+/** Flush microtasks queued by FocusScope's register effect. */
 async function flushSetup() {
   await act(async () => {
     await Promise.resolve();
@@ -146,7 +146,7 @@ async function flushSetup() {
  *
  * Mirrors the App.tsx wrapping (`<SpatialFocusProvider>` →
  * `<FocusLayer name="window">`) so `BoardSpatialZone`'s optional-context
- * lookups both succeed and the conditional `<FocusZone>` branch is taken.
+ * lookups both succeed and the conditional `<FocusScope>` branch is taken.
  */
 function renderBoardWithSpatialStack() {
   return render(
@@ -170,7 +170,7 @@ function renderBoardWithSpatialStack() {
   );
 }
 
-/** Pull every `spatial_register_zone` call as a typed record. */
+/** Pull every `spatial_register_scope` call as a typed record. */
 function registeredZones(): Array<{
   fq: string;
   segment: string;
@@ -179,7 +179,7 @@ function registeredZones(): Array<{
   parentZone: string | null;
 }> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map(
       (c) =>
         c[1] as {
@@ -260,7 +260,7 @@ describe("BoardView (spatial-nav)", () => {
     unmount();
   });
 
-  // Note: a former `it.skip("does not wrap in FocusZone when no
+  // Note: a former `it.skip("does not wrap in FocusScope when no
   // SpatialFocusProvider is present", …)` was removed under path-monikers
   // (card 01KQD6064G1C1RAXDFPJVT1F46). `BoardSpatialBody` now calls the
   // non-optional `useFullyQualifiedMoniker`, so the no-provider

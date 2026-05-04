@@ -314,10 +314,10 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`).
  *
  * Without this wrapper, `<FocusScope>` falls through to its no-spatial-context
- * branch and renders a plain `<div>` instead of a `<FocusZone>` primitive.
+ * branch and renders a plain `<div>` instead of a `<FocusScope>` primitive.
  * The two paths share a contract — children render as direct layout children
  * of the scope's root element — but they exercise different code: the
- * primitive path goes through `<FocusZone>`'s ResizeObserver/click wiring and
+ * primitive path goes through `<FocusScope>`'s ResizeObserver/click wiring and
  * forwards the consumer's `className` onto the same div that owns
  * `data-moniker`/`data-focused`. This helper pins the production DOM shape so
  * a future refactor of the primitive can't silently break the inspector's
@@ -495,18 +495,18 @@ describe("EntityInspector", () => {
     );
     // First navigable field (title, in header) should be focused. After
     // card `01KQ5QB6F4MTD35GBTARJH4JEW` the row's outer `<div>` is plain;
-    // the moniker-bearing FocusZone (driven by Field) lives inside it.
+    // the moniker-bearing FocusScope (driven by Field) lives inside it.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    const titleFocusZone = titleRow!.querySelector(
+    const titleFocusScope = titleRow!.querySelector(
       "[data-segment='field:task:test-id.title']",
     );
-    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
+    expect(titleFocusScope!.getAttribute("data-focused")).toBe("true");
     // Second field should not be focused
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
-    const tagsFocusZone = tagsRow!.querySelector(
+    const tagsFocusScope = tagsRow!.querySelector(
       "[data-segment='field:task:test-id.tags']",
     );
-    expect(tagsFocusZone!.getAttribute("data-focused")).toBeNull();
+    expect(tagsFocusScope!.getAttribute("data-focused")).toBeNull();
   });
 
   it("clicking a field syncs the inspector nav cursor to that field", async () => {
@@ -515,12 +515,12 @@ describe("EntityInspector", () => {
     );
     // Initially first field (title) is focused. After card
     // `01KQ5QB6F4MTD35GBTARJH4JEW` the focus-bearing element is the
-    // Field's FocusZone (a descendant of the row), not the row itself.
+    // Field's FocusScope (a descendant of the row), not the row itself.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
-    const titleFocusZone = titleRow!.querySelector(
+    const titleFocusScope = titleRow!.querySelector(
       "[data-segment='field:task:test-id.title']",
     );
-    expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
+    expect(titleFocusScope!.getAttribute("data-focused")).toBe("true");
 
     // Click on the body field's display wrapper (the div that Field
     // renders with `cursor-text min-h-[1.25rem]` around its Display).
@@ -537,13 +537,13 @@ describe("EntityInspector", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    const bodyFocusZone = bodyRow!.querySelector(
+    const bodyFocusScope = bodyRow!.querySelector(
       "[data-segment='field:task:test-id.body']",
     );
     // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
-    expect(bodyFocusZone!.getAttribute("data-focused")).toBe("true");
+    expect(bodyFocusScope!.getAttribute("data-focused")).toBe("true");
     // Title should no longer be focused
-    expect(titleFocusZone!.getAttribute("data-focused")).toBeNull();
+    expect(titleFocusScope!.getAttribute("data-focused")).toBeNull();
   });
 
   it("only one field has data-focused at a time", async () => {
@@ -628,10 +628,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      const titleFocusZone = titleRow!.querySelector(
+      const titleFocusScope = titleRow!.querySelector(
         "[data-segment='field:task:test-id.title']",
       );
-      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
+      expect(titleFocusScope!.getAttribute("data-focused")).toBe("true");
 
       // The hidden progress row is not rendered, so it never registers as
       // a zone in the spatial graph.
@@ -664,10 +664,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      const titleFocusZone = titleRow!.querySelector(
+      const titleFocusScope = titleRow!.querySelector(
         "[data-segment='field:task:test-id.title']",
       );
-      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
+      expect(titleFocusScope!.getAttribute("data-focused")).toBe("true");
 
       // Header order is title → tags → progress; all three rows render.
       expect(
@@ -1172,10 +1172,10 @@ describe("EntityInspector", () => {
       const titleRow = container.querySelector(
         '[data-testid="field-row-title"]',
       );
-      const titleFocusZone = titleRow!.querySelector(
+      const titleFocusScope = titleRow!.querySelector(
         "[data-segment='field:task:test-id.title']",
       );
-      expect(titleFocusZone!.getAttribute("data-focused")).toBe("true");
+      expect(titleFocusScope!.getAttribute("data-focused")).toBe("true");
 
       // All four navigable rows render and live in the right sections.
       const headerSection = container.querySelector(
@@ -1203,13 +1203,13 @@ describe("EntityInspector", () => {
   });
 
   describe("field rows as zones", () => {
-    it("each field row contains a FocusZone with the entity's field moniker", async () => {
+    it("each field row contains a FocusScope with the entity's field moniker", async () => {
       // After card `01KQ5QB6F4MTD35GBTARJH4JEW`, `<Field>` itself
-      // registers as a `<FocusZone>` keyed by
+      // registers as a `<FocusScope>` keyed by
       // `field:<entityType>:<entityId>.<fieldName>` — the inspector row
-      // no longer wraps the field in its own outer FocusZone. The row's
+      // no longer wraps the field in its own outer FocusScope. The row's
       // outer `<div>` carries the `data-testid` and the icon-and-content
-      // layout; the moniker-bearing FocusZone lives inside it (around
+      // layout; the moniker-bearing FocusScope lives inside it (around
       // the field's display content). Verify the moniker shape per row.
       const { container } = await renderInspector(
         makeEntity({ title: "T", body: "B", tags: [] }),
@@ -1224,7 +1224,7 @@ describe("EntityInspector", () => {
       // Field monikers follow the `field:<entityType>:<entityId>.<fieldName>`
       // convention from `lib/moniker.ts`. The exact entity type / id come
       // from `makeEntity()` (task, test-id). The element bearing the
-      // moniker is a descendant of the row (the Field's FocusZone div).
+      // moniker is a descendant of the row (the Field's FocusScope div).
       expect(
         titleRow!.querySelector("[data-segment='field:task:test-id.title']"),
       ).toBeTruthy();
@@ -1240,7 +1240,7 @@ describe("EntityInspector", () => {
       // Regression guard: the icon | content layout inside the field row
       // must not collapse to a vertical stack. After card
       // `01KQ9ZJHRXCY8Z5YT6RF4SG6EK`, the icon and the content live
-      // *inside* the field's `<FocusZone>` (so a click on the icon
+      // *inside* the field's `<FocusScope>` (so a click on the icon
       // bubbles to the zone's spatial-focus handler and the focus bar
       // paints to the LEFT of the icon). The flex-row container is now
       // a child of the zone wrapper; the outer `data-testid` div is a
@@ -1248,7 +1248,7 @@ describe("EntityInspector", () => {
       //
       // CRITICAL: this test must mount inside the spatial-focus provider
       // stack (`<SpatialFocusProvider>` + `<FocusLayer>`). Without it,
-      // `<FocusZone>` short-circuits to its no-spatial-context fallback
+      // `<FocusScope>` short-circuits to its no-spatial-context fallback
       // (a plain `<div>`) instead of mounting the spatial primitive, so
       // any regression that manifests only against the primitive path
       // would slip past.

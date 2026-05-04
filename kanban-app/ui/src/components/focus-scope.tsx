@@ -101,7 +101,6 @@ import {
   useFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
-import { useParentZoneFq } from "@/components/focus-zone";
 import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
 import { FocusIndicator } from "@/components/focus-indicator";
 import {
@@ -117,9 +116,9 @@ import {
   type SegmentMoniker,
 } from "@/types/spatial";
 
-// `FocusScopeContext` is shared with `<FocusZone>` via `./focus-scope-context`.
-// Both push the nearest entity moniker so descendants resolve without walking
-// the command-scope chain.
+// `FocusScopeContext` lives in `./focus-scope-context`. Every `<FocusScope>`
+// pushes its FQ so descendants can resolve their nearest enclosing scope
+// without walking the command-scope chain.
 
 /** Own props for `<FocusScope>`; standard HTML attributes (className, style, data-*) pass through. */
 export interface FocusScopeOwnProps {
@@ -225,6 +224,13 @@ export function FocusScope({
   // Register the scope in the entity-focus registry.
   useEntityScopeRegistration(fq, scope);
 
+  // Read the enclosing scope's FQM BEFORE we push our own
+  // `<FocusScopeContext.Provider value={fq}>` — otherwise the body's
+  // `useParentFocusScope()` would resolve to `fq` (this scope itself)
+  // and `parent_zone` would be self-referential, causing the kernel's
+  // `record_focus` walker to loop indefinitely.
+  const parentZone = useParentFocusScope();
+
   return (
     <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
@@ -238,6 +244,7 @@ export function FocusScope({
             showFocusBar={showFocusBar}
             isDirectFocus={isDirectFocus}
             handleEvents={handleEvents}
+            parentZone={parentZone}
             ref={externalRef}
             {...rest}
           >
@@ -264,6 +271,12 @@ interface SpatialFocusScopeBodyProps extends Omit<
   showFocusBar: boolean;
   isDirectFocus: boolean;
   handleEvents: boolean;
+  /**
+   * FQM of the enclosing `<FocusScope>` — read in the OUTER component
+   * before its own `FocusScopeContext.Provider` push, so this stays the
+   * true parent rather than `fq` (this scope itself).
+   */
+  parentZone: FullyQualifiedMoniker | null;
   children: ReactNode;
   ref?: Ref<HTMLDivElement>;
 }
@@ -284,6 +297,7 @@ function SpatialFocusScopeBody({
   showFocusBar,
   isDirectFocus,
   handleEvents,
+  parentZone,
   children,
   ref: externalRef,
   ...htmlProps
@@ -293,7 +307,6 @@ function SpatialFocusScopeBody({
   const setFocus = focusActions?.setFocus;
 
   const layerFq = useEnclosingLayerFq();
-  const parentZone = useParentZoneFq();
 
   const ref = useRef<HTMLDivElement | null>(null);
 

@@ -57,7 +57,7 @@ import { useFieldUpdate } from "@/lib/field-update-context";
 import { useDebouncedSave } from "@/lib/use-debounced-save";
 import { resolveEditor } from "@/components/fields/editors";
 import type { EditorProps } from "@/components/fields/editors";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import { EMPTY_COMMANDS, type CommandDef } from "@/lib/command-scope";
 import { fieldMoniker } from "@/lib/moniker";
@@ -618,14 +618,14 @@ export function Field({
   const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
   return (
     <Inspectable moniker={fmk}>
-      <FocusZone
+      <FocusScope
         moniker={fmk}
         handleEvents={handleEvents}
         showFocusBar={showFocusBar}
         commands={editCommands}
       >
         {zoneChildren}
-      </FocusZone>
+      </FocusScope>
     </Inspectable>
   );
 }

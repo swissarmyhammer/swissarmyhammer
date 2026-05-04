@@ -2,7 +2,7 @@
  * Browser-mode test for the perspective bar's spatial-nav behaviour.
  *
  * Source of truth for acceptance of card `01KPZS32YN7CRNM0TH7GR28M86`. The
- * bar wraps its row in a `<FocusZone moniker="ui:perspective-bar">` and each
+ * bar wraps its row in a `<FocusScope moniker="ui:perspective-bar">` and each
  * tab in a `<FocusScope moniker="perspective_tab:{id}">` leaf. This file
  * exercises the click → `spatial_focus` → `focus-changed` → React state →
  * `<FocusIndicator>` chain end-to-end so a regression in any link surfaces
@@ -234,13 +234,6 @@ function withSpatialStack(children: ReactNode) {
   );
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -316,7 +309,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const { unmount } = renderBar();
     await flushSetup();
 
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment));
+    const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment));
     expect(barZone).toBeTruthy();
     expect(typeof barZone!.fq).toBe("string");
     expect(barZone!.layerFq).toBeTruthy();
@@ -330,10 +323,10 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     await flushSetup();
 
     // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the
-    // tab wrapper is a `<FocusZone>` with `perspective_tab.name`,
+    // tab wrapper is a `<FocusScope>` with `perspective_tab.name`,
     // `perspective_tab.filter`, and `perspective_tab.group` leaves
     // inside it. Mirror entity-card iteration 2.
-    const tabZones = registerZoneArgs().filter((a) =>
+    const tabZones = registerScopeArgs().filter((a) =>
       isTabMoniker(a.segment),
     );
     const monikers = tabZones.map((a) => a.segment as string).sort();
@@ -342,7 +335,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // Each tab zone's parentZone is the bar zone's key — the inner
     // name / filter / group leaves are siblings inside each tab zone,
     // and the tab zones themselves are siblings inside the bar.
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment))!;
     for (const tab of tabZones) {
       expect(tab.parentZone).toBe(barZone.fq);
       expect(tab.layerFq).toBe(barZone.layerFq);
@@ -362,7 +355,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // `perspective_tab:p1` zone's click handler also fires, but the
     // FocusScope leaf calls `stopPropagation` so only one
     // `spatial_focus` reaches IPC.
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment))!;
     const p1NameLeaf = registerScopeArgs().find(
       (a) => a.segment === "perspective_tab.name:p1",
     )!;
@@ -426,7 +419,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderBar();
     await flushSetup();
 
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment))!;
     const barNode = container.querySelector(
       `[data-segment='${barZone.segment as string}']`,
     ) as HTMLElement;
@@ -461,11 +454,11 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     const { unmount } = renderBar();
     await flushSetup();
 
-    // After the reshape `perspective_tab:{id}` is a zone — `<FocusZone>`
+    // After the reshape `perspective_tab:{id}` is a zone — `<FocusScope>`
     // unregistration also flows through `spatial_unregister_scope` (the
     // shared kernel sink), so the test's invariant — every registered
     // tab key gets a corresponding unregister call — still holds.
-    const tabZones = registerZoneArgs().filter((a) =>
+    const tabZones = registerScopeArgs().filter((a) =>
       isTabMoniker(a.segment),
     );
     expect(tabZones.length).toBeGreaterThanOrEqual(2);
@@ -515,7 +508,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     expect(filterScopes).toHaveLength(1);
     expect(filterScopes[0].segment).toBe(`filter_editor:${activeId}`);
 
-    const barZone = registerZoneArgs().find((a) => isBarMoniker(a.segment))!;
+    const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment))!;
     expect(filterScopes[0].parentZone).toBe(barZone.fq);
     expect(filterScopes[0].layerFq).toBe(barZone.layerFq);
 

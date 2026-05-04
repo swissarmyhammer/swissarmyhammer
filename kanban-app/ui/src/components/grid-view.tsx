@@ -21,7 +21,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import {
   useOptionalSpatialFocusActions,
@@ -933,7 +933,7 @@ function GridSpatialZone({ children }: { children: ReactNode }) {
     return <>{children}</>;
   }
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:grid")}
       // Suppress the visible focus bar around the grid body. The grid is a
       // viewport-filling zone — every cell already advertises its own focus
@@ -947,7 +947,7 @@ function GridSpatialZone({ children }: { children: ReactNode }) {
       className="flex-1 flex flex-col min-h-0"
     >
       {children}
-    </FocusZone>
+    </FocusScope>
   );
 }
 

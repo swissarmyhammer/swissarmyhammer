@@ -1,8 +1,8 @@
 /**
  * `FocusDebugContext` — single-flag context for the spatial-nav debug overlay.
  *
- * When the flag is `true`, every mounted `<FocusLayer>`, `<FocusZone>`, and
- * `<FocusScope>` renders a dashed-border + coordinate-label decorator
+ * When the flag is `true`, every mounted `<FocusLayer>` and `<FocusScope>`
+ * renders a dashed-border + coordinate-label decorator
  * (`<FocusDebugOverlay>`) on top of its host box. The decorator is a
  * developer aid for diagnosing rect-staleness, conditional-remount, and
  * zero-rect bugs in the spatial-nav graph — it makes the live geometry
@@ -19,7 +19,7 @@
  * # Default
  *
  * Outside any provider — for example, a unit test that renders a
- * `<FocusZone>` in isolation — the hook returns `false` and no overlay
+ * `<FocusScope>` in isolation — the hook returns `false` and no overlay
  * renders. Tests that want the overlay must wrap their tree in
  * `<FocusDebugProvider enabled>` explicitly.
  */
@@ -74,7 +74,7 @@ export function FocusDebugProvider({
  * `<FocusDebugProvider enabled={false}>` or when no provider is mounted
  * at all.
  *
- * Consumers (`<FocusLayer>`, `<FocusZone>`, `<FocusScope>`) call this
+ * Consumers (`<FocusLayer>`, `<FocusScope>`) call this
  * during render and conditionally render `<FocusDebugOverlay>` based on
  * the result. Hooks must remain unconditional — render the overlay
  * element conditionally, do not wrap a hook call in an `if`.

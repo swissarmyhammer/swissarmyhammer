@@ -4,7 +4,7 @@
  *
  * Source of truth for card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`. With two
  * inspectors open and each inspector body wrapped in a
- * `<FocusZone moniker={asSegment(\`${entityType}:${entityId}\`)}>`,
+ * `<FocusScope moniker={asSegment(\`${entityType}:${entityId}\`)}>`,
  * cardinal nav at iter 0 of the kernel's beam-search cascade is
  * confined to peers under the same entity zone:
  *

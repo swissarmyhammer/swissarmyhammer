@@ -7,7 +7,7 @@ import {
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import { cn } from "@/lib/utils";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { Pressable } from "@/components/pressable";
 import {
   Tooltip,
@@ -49,7 +49,7 @@ export function LeftNav() {
   if (views.length === 0) return null;
 
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:left-nav")}
       showFocusBar={false}
       role="navigation"
@@ -62,7 +62,7 @@ export function LeftNav() {
           isActive={activeView?.id === view.id}
         />
       ))}
-    </FocusZone>
+    </FocusScope>
   );
 }
 

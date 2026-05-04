@@ -5,14 +5,14 @@
  * wrap as zone, strip legacy keyboard nav from column-view"). The column body
  * is a sized, distinct entity — it registers as a zone in the spatial graph
  * and **advertises its focus** with a visible `<FocusIndicator>` (the
- * production-side default `showFocusBar={true}` on the wrapping `<FocusZone>`).
+ * production-side default `showFocusBar={true}` on the wrapping `<FocusScope>`).
  * This file pins the click → claim → indicator chain that the user actually
  * sees, as well as the keystroke + drill-out wiring that depends on it.
  *
  * Test cases (per the card's "Browser Tests (mandatory)" section):
  *
  * 1. **Registration** — after mount, `mockInvoke` recorded a
- *    `spatial_register_zone` call with moniker `column:{id}`.
+ *    `spatial_register_scope` call with moniker `column:{id}`.
  * 2. **Click on column whitespace → focus** — clicking the column body
  *    fires exactly one `spatial_focus` for the column key, and does NOT
  *    bubble into the parent `ui:board` zone.
@@ -106,7 +106,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { ColumnView } from "./column-view";
 import { AppShell } from "./app-shell";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -250,7 +250,7 @@ function renderColumnInBoard(ui: React.ReactElement) {
             <EntityStoreProvider entities={{}}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusZone moniker={asSegment("ui:board")}>{ui}</FocusZone>
+                  <FocusScope moniker={asSegment("ui:board")}>{ui}</FocusScope>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>
@@ -286,9 +286,9 @@ function renderColumnInAppShell(ui: React.ReactElement) {
                     <TooltipProvider>
                       <ActiveBoardPathProvider value="/test/board">
                         <AppShell>
-                          <FocusZone moniker={asSegment("ui:board")}>
+                          <FocusScope moniker={asSegment("ui:board")}>
                             {ui}
-                          </FocusZone>
+                          </FocusScope>
                         </AppShell>
                       </ActiveBoardPathProvider>
                     </TooltipProvider>
@@ -303,10 +303,10 @@ function renderColumnInAppShell(ui: React.ReactElement) {
   );
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -368,7 +368,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     );
     expect(columnZone).toBeTruthy();
@@ -379,7 +379,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     expect(columnZone!.overrides).toEqual({});
 
     // Parent zone is the surrounding `ui:board` zone (mirrors production).
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
     expect(boardZone).toBeTruthy();
     expect(columnZone!.parentZone).toBe(boardZone!.fq);
 
@@ -397,10 +397,10 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
 
     // Clear so the assertion measures only the click's IPC.
     mockInvoke.mockClear();
@@ -437,7 +437,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     // The visible-bar regression: the previous wrap had
     // `showFocusBar={false}`, which suppressed `<FocusIndicator>` even
     // when the kernel emitted a focus claim for the column. The fix
-    // (drop the `false` and rely on `<FocusZone>`'s default `true`)
+    // (drop the `false` and rely on `<FocusScope>`'s default `true`)
     // is what this test pins. If a future edit adds the suppression
     // back, this assertion will fail because the indicator never
     // mounts.
@@ -447,7 +447,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(
@@ -482,7 +482,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
     const columnKey = columnZone.fq as FullyQualifiedMoniker;
@@ -521,7 +521,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnKey = registerZoneArgs().find(
+    const columnKey = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!.fq as FullyQualifiedMoniker;
 
@@ -550,7 +550,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnKey = registerZoneArgs().find(
+    const columnKey = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!.fq as FullyQualifiedMoniker;
 
@@ -579,7 +579,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnKey = registerZoneArgs().find(
+    const columnKey = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!.fq as FullyQualifiedMoniker;
 
@@ -612,7 +612,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
     const columnKey = columnZone.fq as FullyQualifiedMoniker;
@@ -680,7 +680,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     await flushSetup();
 
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
     const columnKey = columnZone.fq as FullyQualifiedMoniker;
@@ -712,7 +712,7 @@ describe("ColumnView — browser spatial behaviour", () => {
 
     // Drive a click + a synthetic focus-changed to exercise the same
     // hot paths the bug report covered.
-    const columnZone = registerZoneArgs().find(
+    const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
     const columnNode = container.querySelector(

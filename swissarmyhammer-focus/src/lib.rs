@@ -8,31 +8,33 @@
 //! kanban tasks, columns, projects, or any other application concept.
 //! Identities are [`FullyQualifiedMoniker`] paths produced by the
 //! consumer (the path through the focus hierarchy); the kernel only
-//! sees rectangles, layers, and zones.
+//! sees rectangles, layers, and scopes.
+//!
+//! # Two peers, not three
+//!
+//! The kernel exposes two peer types: [`FocusLayer`] (modal boundary)
+//! and [`FocusScope`]. There is no separate "zone" type — whether a
+//! scope is a leaf or a navigable container is determined at runtime
+//! by whether anything else is registered under it
+//! ([`SpatialRegistry::children_of`] / [`SpatialRegistry::has_children`]).
+//! UI authoring stays simple: the consumer mounts a `<FocusScope>`
+//! and the kernel decides what role it plays.
 //!
 //! # Navigation rules
 //!
 //! Cardinal navigation obeys one load-bearing contract: **within a
-//! parent [`FocusZone`], child [`FocusScope`] leaves and child
-//! [`FocusZone`] containers are siblings.** Iter 0 of the cascade
-//! considers any-kind in-zone candidates and lets the Android beam
-//! score pick the geometrically best one. Only iter 1 (escalation to
-//! peer-zone level) restricts candidates to zones — that's structural,
-//! not a kind policy, because the parent IS a zone.
+//! parent [`FocusScope`], child scopes — leaves and containers alike —
+//! are siblings.** The Android beam score picks the geometrically best
+//! candidate.
 //!
 //! [`Direction::First`] / [`Direction::Last`] focus the focused
 //! scope's children — first by topmost-then-leftmost, last by
-//! bottommost-then-rightmost. Kind is not a filter. On a focused leaf
-//! they return the focused FQM (no children → no-op). The deprecated
+//! bottommost-then-rightmost. On a focused leaf they return the
+//! focused FQM (no children → no-op). The deprecated
 //! `Direction::RowStart` / `Direction::RowEnd` aliases route through
 //! the same path during the one-release deprecation window.
 //!
-//! See the crate README (`swissarmyhammer-focus/README.md`) for the
-//! prose contract with diagrams, the anti-pattern callout against
-//! re-introducing kind filters at iter 0, and the cascade walkthrough.
-//! The [`navigate`] module docs cover the full algorithm and the
-//! `tests/in_zone_any_kind_first.rs` integration suite pins each
-//! iter-0 trajectory.
+//! See the [`navigate`] module docs for the full algorithm.
 //!
 //! # No-silent-dropout contract
 //!
@@ -55,18 +57,17 @@
 //!   spatial-nav surface. Every public signature uses these newtypes —
 //!   never bare `String` or `f64`.
 //!
-//! - [`scope`] — the two registered struct types that describe a point in
-//!   the spatial-nav tree: [`FocusScope`] leaves and [`FocusZone`]
-//!   containers. There is no public sum-type enum; the registry stores
-//!   them via an internal discriminator and exposes typed accessors.
+//! - [`scope`] — the single registered struct type [`FocusScope`] that
+//!   describes one point in the spatial-nav tree. Whether a scope is a
+//!   leaf or a container is a runtime property of the registry.
 //!
 //! - [`layer`] — the modal-boundary primitive [`FocusLayer`]. Layers form
-//!   a per-window forest; spatial nav, fallback resolution, and zone tree
-//!   walks never cross a layer.
+//!   a per-window forest; spatial nav, fallback resolution, and scope
+//!   tree walks never cross a layer.
 //!
 //! - [`registry`] — the headless [`SpatialRegistry`] that stores scopes
-//!   and layers. Tree / forest structure is derived from `parent_zone` and
-//!   `parent` fields rather than stored separately.
+//!   and layers. Tree / forest structure is derived from `parent_zone`
+//!   and `parent` fields rather than stored separately.
 //!
 //! - [`state`] — the per-window focus tracker [`SpatialState`] plus the
 //!   [`FocusChangedEvent`] value adapters emit to the frontend on every
@@ -85,10 +86,9 @@
 //!
 //! All public types use `serde` with stable JSON shapes — string newtypes
 //! serialize transparently as bare strings, [`Pixels`] serializes as a
-//! bare number, [`RegisterEntry`] uses a `kind` discriminator with
-//! `snake_case` rename. The frontend mirrors these as branded TypeScript
-//! types so a `WindowLabel` and a `Moniker` cannot be mixed up at the
-//! Tauri boundary.
+//! bare number. The frontend mirrors these as branded TypeScript types
+//! so a `WindowLabel` and a `Moniker` cannot be mixed up at the Tauri
+//! boundary.
 
 pub mod layer;
 pub mod navigate;
@@ -101,10 +101,8 @@ pub mod types;
 pub use layer::FocusLayer;
 pub use navigate::{BeamNavStrategy, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
-pub use registry::{
-    BatchRegisterError, ChildScope, FocusEntry, RegisterEntry, ScopeKind, SpatialRegistry,
-};
-pub use scope::{FocusScope, FocusZone};
+pub use registry::{RegisterEntry, SpatialRegistry};
+pub use scope::FocusScope;
 pub use state::{FallbackResolution, FocusChangedEvent, SpatialState};
 pub use types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,

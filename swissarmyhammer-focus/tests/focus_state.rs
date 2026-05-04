@@ -13,7 +13,7 @@
 //!   registry).
 //! - Focus in window A does not perturb `focus_by_window` for window B.
 //! - Unregistering the focused scope clears that window's slot only.
-//! - `FocusChangedEvent.next_segment` is `Some(scope.segment().clone())`
+//! - `FocusChangedEvent.next_segment` is `Some(scope.segment.clone())`
 //!   whenever `next_fq` is `Some`.
 //!
 //! `SpatialState` does not maintain a per-FQM entry table — the
@@ -52,6 +52,7 @@ fn registry_with_scope(window: &str, layer: &str, fq: &str, segment: &str) -> Sp
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone: None,
         overrides: HashMap::new(),
+        last_focused: None,
     });
     reg
 }
@@ -70,6 +71,7 @@ fn add_scope(reg: &mut SpatialRegistry, layer: &str, fq: &str, segment: &str) {
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone: None,
         overrides: HashMap::new(),
+        last_focused: None,
     });
 }
 
@@ -77,12 +79,12 @@ fn add_scope(reg: &mut SpatialRegistry, layer: &str, fq: &str, segment: &str) {
 /// whose `window_label` matches the focused scope's window.
 #[test]
 fn focus_updates_per_window_state_and_emits_with_window_label() {
-    let registry = registry_with_scope("main", "/L", "/L/scope-1", "task:01ABC");
+    let mut registry = registry_with_scope("main", "/L", "/L/scope-1", "task:01ABC");
     let mut state = SpatialState::new();
     let fq = FullyQualifiedMoniker::from_string("/L/scope-1");
 
     let event = state
-        .focus(&registry, fq.clone())
+        .focus(&mut registry, fq.clone())
         .expect("focus must emit on first move");
 
     assert_eq!(event.window_label, WindowLabel::from_string("main"));
@@ -125,10 +127,10 @@ fn focus_in_a_does_not_affect_focus_in_b() {
     let a2_fq = FullyQualifiedMoniker::from_string("/La/a-2");
 
     let mut state = SpatialState::new();
-    state.focus(&reg, a_fq.clone()).expect("focus a");
-    state.focus(&reg, b_fq.clone()).expect("focus b");
+    state.focus(&mut reg, a_fq.clone()).expect("focus a");
+    state.focus(&mut reg, b_fq.clone()).expect("focus b");
 
-    let event = state.focus(&reg, a2_fq.clone()).expect("focus a2");
+    let event = state.focus(&mut reg, a2_fq.clone()).expect("focus a2");
 
     assert_eq!(event.window_label, WindowLabel::from_string("window-a"));
     assert_eq!(event.prev_fq, Some(a_fq));
@@ -172,11 +174,11 @@ fn unregister_of_focused_fq_clears_only_that_windows_focus() {
     let b_fq = FullyQualifiedMoniker::from_string("/Lb/b-1");
 
     let mut state = SpatialState::new();
-    state.focus(&reg, a_fq.clone()).expect("focus a");
-    state.focus(&reg, b_fq.clone()).expect("focus b");
+    state.focus(&mut reg, a_fq.clone()).expect("focus a");
+    state.focus(&mut reg, b_fq.clone()).expect("focus b");
 
     let event = state
-        .handle_unregister(&reg, &a_fq)
+        .handle_unregister(&mut reg, &a_fq)
         .expect("unregistering the focused FQM emits a clear event");
 
     assert_eq!(event.window_label, WindowLabel::from_string("window-a"));
@@ -204,24 +206,24 @@ fn unregister_of_unfocused_fq_emits_no_event() {
     let other = FullyQualifiedMoniker::from_string("/L/other");
 
     let mut state = SpatialState::new();
-    state.focus(&reg, focused.clone()).expect("focus focused");
+    state.focus(&mut reg, focused.clone()).expect("focus focused");
 
-    assert!(state.handle_unregister(&reg, &other).is_none());
+    assert!(state.handle_unregister(&mut reg, &other).is_none());
     assert_eq!(
         state.focused_in(&WindowLabel::from_string("main")),
         Some(&focused),
     );
 }
 
-/// `FocusChangedEvent.next_segment` is `Some(scope.segment().clone())`
+/// `FocusChangedEvent.next_segment` is `Some(scope.segment.clone())`
 /// whenever `next_fq` is `Some`.
 #[test]
 fn next_segment_matches_scope_segment_when_next_fq_is_some() {
-    let registry = registry_with_scope("main", "/L", "/L/scope-1", "task:01XYZ");
+    let mut registry = registry_with_scope("main", "/L", "/L/scope-1", "task:01XYZ");
     let mut state = SpatialState::new();
     let fq = FullyQualifiedMoniker::from_string("/L/scope-1");
 
-    let event = state.focus(&registry, fq).expect("focus emits");
+    let event = state.focus(&mut registry, fq).expect("focus emits");
     assert_eq!(
         event.next_segment,
         Some(SegmentMoniker::from_string("task:01XYZ"))
@@ -233,12 +235,12 @@ fn next_segment_matches_scope_segment_when_next_fq_is_some() {
 /// have to filter.
 #[test]
 fn focus_no_op_when_already_focused_in_that_window() {
-    let registry = registry_with_scope("main", "/L", "/L/k", "task:01");
+    let mut registry = registry_with_scope("main", "/L", "/L/k", "task:01");
     let mut state = SpatialState::new();
     let fq = FullyQualifiedMoniker::from_string("/L/k");
 
-    assert!(state.focus(&registry, fq.clone()).is_some());
-    let second: Option<FocusChangedEvent> = state.focus(&registry, fq);
+    assert!(state.focus(&mut registry, fq.clone()).is_some());
+    let second: Option<FocusChangedEvent> = state.focus(&mut registry, fq);
     assert!(second.is_none());
 }
 
@@ -254,8 +256,8 @@ fn focus_transfer_within_window_carries_prev_fq() {
     let second = FullyQualifiedMoniker::from_string("/L/second");
 
     let mut state = SpatialState::new();
-    state.focus(&reg, first.clone()).expect("focus first");
-    let event = state.focus(&reg, second.clone()).expect("focus second");
+    state.focus(&mut reg, first.clone()).expect("focus first");
+    let event = state.focus(&mut reg, second.clone()).expect("focus second");
 
     assert_eq!(event.prev_fq, Some(first));
     assert_eq!(event.next_fq, Some(second));
@@ -267,12 +269,12 @@ fn focus_transfer_within_window_carries_prev_fq() {
 /// `FullyQualifiedMonikerContext` and dispatches it directly.
 #[test]
 fn focus_advances_focus_when_fq_resolves() {
-    let registry = registry_with_scope("main", "/L", "/L/k1", "task:01ABC");
+    let mut registry = registry_with_scope("main", "/L", "/L/k1", "task:01ABC");
     let mut state = SpatialState::new();
     let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
     let event = state
-        .focus(&registry, fq.clone())
+        .focus(&mut registry, fq.clone())
         .expect("focus emits when the FQM resolves");
     assert_eq!(event.window_label, WindowLabel::from_string("main"));
     assert_eq!(event.prev_fq, None);
@@ -294,15 +296,15 @@ fn focus_advances_focus_when_fq_resolves() {
 /// adapter logs `tracing::error!`.
 #[test]
 fn focus_unknown_fq_returns_none_and_does_not_change_focus() {
-    let registry = registry_with_scope("main", "/L", "/L/k1", "task:known");
+    let mut registry = registry_with_scope("main", "/L", "/L/k1", "task:known");
     let mut state = SpatialState::new();
 
     state
-        .focus(&registry, FullyQualifiedMoniker::from_string("/L/k1"))
+        .focus(&mut registry, FullyQualifiedMoniker::from_string("/L/k1"))
         .expect("seed focus succeeds");
 
     let unknown = FullyQualifiedMoniker::from_string("/L/does-not-exist");
-    let event = state.focus(&registry, unknown);
+    let event = state.focus(&mut registry, unknown);
     assert!(event.is_none());
 
     assert_eq!(
@@ -317,12 +319,12 @@ fn focus_unknown_fq_returns_none_and_does_not_change_focus() {
 /// dispatches through.
 #[test]
 fn clear_focus_emits_some_to_none_event() {
-    let registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
+    let mut registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
     let mut state = SpatialState::new();
     let window = WindowLabel::from_string("main");
 
     state
-        .focus(&registry, FullyQualifiedMoniker::from_string("/L/k1"))
+        .focus(&mut registry, FullyQualifiedMoniker::from_string("/L/k1"))
         .expect("seed focus succeeds");
     assert_eq!(
         state.focused_in(&window),

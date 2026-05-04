@@ -4,11 +4,11 @@
  * Mounts the tab bar inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
  * spatial-nav branches light up:
- *   - the tab-bar root becomes a `<FocusZone moniker={asSegment("ui:perspective-bar")}>`
+ *   - the tab-bar root becomes a `<FocusScope moniker={asSegment("ui:perspective-bar")}>`
  *   - each tab becomes a `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>` leaf
  *
  * The Tauri `invoke` boundary is mocked so we can inspect the
- * `spatial_register_zone` and `spatial_register_scope` calls each
+ * `spatial_register_scope` and `spatial_register_scope` calls each
  * primitive makes on mount.
  */
 
@@ -156,10 +156,10 @@ function renderWithSpatialStack() {
   );
 }
 
-/** Collect every `spatial_register_zone` call in order. */
-function registerZoneCalls(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` call in order. */
+function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -193,7 +193,7 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const { unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const calls = registerZoneCalls();
+    const calls = registerScopeCalls();
     const barZone = calls.find((c) => c.segment === "ui:perspective-bar");
     expect(barZone).toBeTruthy();
     expect(barZone?.parentZone).toBeNull();
@@ -244,10 +244,10 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     await flushSetup();
 
     // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the
-    // tab wrapper is a `<FocusZone>` not a `<FocusScope>` — the inner
+    // tab wrapper is a `<FocusScope>` not a `<FocusScope>` — the inner
     // name / filter / group buttons are the leaves now. Mirror entity-card
     // iteration 2 (`01KQJDYJ4SDKK2G8FTAQ348ZHG`).
-    const calls = registerZoneCalls();
+    const calls = registerScopeCalls();
     const monikers = calls.map((c) => c.segment as string);
     expect(monikers).toContain("perspective_tab:p1");
     expect(monikers).toContain("perspective_tab:p2");
@@ -267,10 +267,10 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
     const { unmount } = renderWithSpatialStack();
     await flushSetup();
 
-    const barZone = registerZoneCalls().find(
+    const barZone = registerScopeCalls().find(
       (c) => c.segment === "ui:perspective-bar",
     )!;
-    const tabZone = registerZoneCalls().find(
+    const tabZone = registerScopeCalls().find(
       (c) => c.segment === "perspective_tab:p1",
     )!;
     expect(tabZone.parentZone).toBe(barZone.fq);

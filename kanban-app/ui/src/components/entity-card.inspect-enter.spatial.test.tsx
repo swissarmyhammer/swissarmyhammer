@@ -91,7 +91,7 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
       windows: {},
       recent_boards: [],
     });
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return Promise.resolve(null);
@@ -323,7 +323,7 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
   });
 
   it("clicking the (i) button dispatches ui.inspect once and does NOT bubble to the card zone's spatial_focus", async () => {
-    // The card body is wrapped in a `<FocusZone>` whose onClick handler
+    // The card body is wrapped in a `<FocusScope>` whose onClick handler
     // calls `focus(cardFq)` to make the card the spatial focus. If a
     // click on the (i) button bubbled up, the card zone's onClick would
     // fire `spatial_focus(cardFq)` — moving the focus to the card

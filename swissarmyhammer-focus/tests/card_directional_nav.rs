@@ -34,7 +34,7 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
     let focused_segment = app
         .registry()
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(app.registry(), from, &focused_segment, dir)
 }
@@ -114,7 +114,7 @@ fn up_from_t2a_lands_on_t1a() {
 /// iter-0 rule.
 ///
 /// Pre-fix behaviour (now removed): iter 0 used a same-kind filter
-/// that skipped the column-name `<FocusZone>` for a leaf-origin (card
+/// that skipped the column-name `<FocusScope>` for a leaf-origin (card
 /// scope) search; the cascade escalated and returned the parent zone
 /// (`column:TODO`). The new contract: zones and scopes are siblings
 /// under a parent zone, and iter 0 considers any-kind candidates. See
@@ -255,7 +255,7 @@ fn fixture_has_nine_cards_across_three_columns() {
     let app = RealisticApp::new();
     let mut card_segments: Vec<String> = app
         .registry()
-        .leaves_iter()
+        .scopes_iter()
         .filter(|f| f.segment.as_str().starts_with("task:"))
         .map(|f| f.segment.as_str().to_string())
         .collect();

@@ -2,7 +2,7 @@
 //!
 //! Overrides are a per-direction directive map that runs as **rule 0**
 //! before the beam-search cascade in [`BeamNavStrategy`]. They live on
-//! [`FocusScope::overrides`] and [`FocusZone::overrides`] as
+//! [`FocusScope::overrides`] and [`FocusScope::overrides`] as
 //! `HashMap<Direction, Option<FullyQualifiedMoniker>>` and have three
 //! states:
 //!
@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
@@ -66,6 +66,7 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
@@ -84,10 +85,11 @@ fn leaf_with_overrides(
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone,
         overrides,
+        last_focused: None,
     }
 }
 
-/// Build a `FocusZone` carrying the supplied overrides map. `last_focused`
+/// Build a `FocusScope` carrying the supplied overrides map. `last_focused`
 /// starts empty.
 fn zone_with_overrides(
     segment: &str,
@@ -95,8 +97,8 @@ fn zone_with_overrides(
     parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
     overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq: fq_in_layer(layer, segment),
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -132,7 +134,7 @@ fn nav(
 ) -> FullyQualifiedMoniker {
     let focused_segment = reg
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| {
             let s = from.as_str().rsplit('/').next().unwrap_or("");
             SegmentMoniker::from_string(s)
@@ -195,7 +197,7 @@ fn override_redirects_to_same_layer_target_for_zone() {
     reg.push_layer(layer("/L", "L", "main", None));
 
     // Beam-search candidate: a sibling zone to the right of `src`.
-    reg.register_zone(zone_with_overrides(
+    reg.register_scope(zone_with_overrides(
         "ui:beam_zone",
         "/L",
         None,
@@ -204,7 +206,7 @@ fn override_redirects_to_same_layer_target_for_zone() {
     ));
     // Override target: a sibling zone elsewhere.
     let override_zone_fq = fq_in_layer("/L", "ui:override_zone");
-    reg.register_zone(zone_with_overrides(
+    reg.register_scope(zone_with_overrides(
         "ui:override_zone",
         "/L",
         None,
@@ -215,7 +217,7 @@ fn override_redirects_to_same_layer_target_for_zone() {
     let mut overrides = HashMap::new();
     overrides.insert(Direction::Right, Some(override_zone_fq.clone()));
     let src_fq = fq_in_layer("/L", "ui:src");
-    reg.register_zone(zone_with_overrides(
+    reg.register_scope(zone_with_overrides(
         "ui:src",
         "/L",
         None,

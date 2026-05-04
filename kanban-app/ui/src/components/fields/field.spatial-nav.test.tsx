@@ -2,13 +2,13 @@
  * Spatial-nav integration tests for `<Field>`.
  *
  * Pins the contract from card `01KQ5QB6F4MTD35GBTARJH4JEW`: `<Field>` is
- * a `<FocusZone>` keyed by `field:{type}:{id}.{name}` whose internal
+ * a `<FocusScope>` keyed by `field:{type}:{id}.{name}` whose internal
  * children are leaves of mode-appropriate shape. Edit mode replaces the
  * zone with the bare editor (which takes DOM focus directly).
  *
  * Mounts `<Field>` inside the production spatial provider stack so the
- * conditional `<FocusZone>` body lights up its
- * `spatial_register_zone`-emitting branch. The Tauri `invoke` boundary
+ * conditional `<FocusScope>` body lights up its
+ * `spatial_register_scope`-emitting branch. The Tauri `invoke` boundary
  * is mocked at the module level so we can inspect the registration
  * calls. Companion tests in `field.test.tsx` cover the
  * registration-side of the display registry; this file pins the
@@ -127,7 +127,7 @@ function makeTask(fields: Record<string, unknown>): Entity {
 
 /**
  * Render a `<Field>` inside the production-shaped provider stack with
- * the spatial-nav layer present so the FocusZone body lights up.
+ * the spatial-nav layer present so the FocusScope body lights up.
  */
 function FieldHarness({
   field,
@@ -210,10 +210,10 @@ async function defaultInvokeImpl(
   return undefined;
 }
 
-/** Collect every `spatial_register_zone` payload. */
-function registerZoneCalls(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` payload. */
+function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -234,7 +234,7 @@ describe("Field (spatial-nav)", () => {
     vi.clearAllMocks();
   });
 
-  it("registers a FocusZone with moniker field:{type}:{id}.{name} on mount", async () => {
+  it("registers a FocusScope with moniker field:{type}:{id}.{name} on mount", async () => {
     let result!: ReturnType<typeof render>;
     await act(async () => {
       result = render(
@@ -246,7 +246,7 @@ describe("Field (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const zones = registerZoneCalls().filter(
+    const zones = registerScopeCalls().filter(
       (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);
@@ -258,7 +258,7 @@ describe("Field (spatial-nav)", () => {
     expect(node).not.toBeNull();
   });
 
-  it("keeps the FocusZone wrap in edit mode so spatial focus stays on the field moniker", async () => {
+  it("keeps the FocusScope wrap in edit mode so spatial focus stays on the field moniker", async () => {
     // The editor element takes DOM focus via its own ref-driven `.focus()`
     // call; the surrounding zone marks the moniker without interfering
     // because its click handler short-circuits on `INPUT/TEXTAREA/SELECT`
@@ -277,7 +277,7 @@ describe("Field (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const zones = registerZoneCalls().filter(
+    const zones = registerScopeCalls().filter(
       (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);
@@ -319,11 +319,11 @@ describe("Field (spatial-nav)", () => {
     expect(monikers).toEqual(["tag:bug", "tag:ui"]);
   });
 
-  it("handleEvents={false} skips FocusZone click ownership (cell parent keeps the click)", async () => {
+  it("handleEvents={false} skips FocusScope click ownership (cell parent keeps the click)", async () => {
     // Smoke test — when handleEvents is false the zone still registers
     // (so command-scope chrome works) but its outer `<div>` carries no
     // click handler that would `e.stopPropagation()`. We assert the
-    // zone is registered and rely on the existing `<FocusZone>` test
+    // zone is registered and rely on the existing `<FocusScope>` test
     // suite for the click-handling behaviour.
     await act(async () => {
       render(
@@ -336,7 +336,7 @@ describe("Field (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const zones = registerZoneCalls().filter(
+    const zones = registerScopeCalls().filter(
       (c) => c.segment === "field:task:t1.title",
     );
     expect(zones).toHaveLength(1);

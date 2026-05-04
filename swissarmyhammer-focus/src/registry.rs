@@ -2,18 +2,18 @@
 //!
 //! The registry holds two flat maps:
 //!
-//! - `scopes: HashMap<FullyQualifiedMoniker, RegisteredScope>` — every
-//!   registered leaf or container, keyed by its canonical FQM. The
-//!   discriminator between leaves and zones lives on an internal enum
-//!   ([`super::scope::RegisteredScope`]); the public API exposes the
-//!   two typed structs ([`FocusScope`], [`FocusZone`]) directly.
+//! - `scopes: HashMap<FullyQualifiedMoniker, FocusScope>` — every
+//!   registered scope, keyed by its canonical FQM. Whether a scope is
+//!   a leaf or a navigable container is determined at runtime by
+//!   whether anything else is registered under it
+//!   (see [`SpatialRegistry::children_of`]).
 //! - `layers: HashMap<FullyQualifiedMoniker, FocusLayer>` — every
 //!   registered layer node, keyed by its FQM.
 //!
-//! Tree / forest structure is **derived**, not stored: zone hierarchy
+//! Tree / forest structure is **derived**, not stored: scope hierarchy
 //! comes from each scope's `parent_zone`, layer hierarchy from each
 //! layer's `parent`. This keeps mutation simple (one map insert per mount)
-//! and makes the structural queries (`children_of_zone`, `ancestor_zones`,
+//! and makes the structural queries (`children_of`, `ancestor_zones`,
 //! `children_of_layer`, `ancestors_of_layer`) the source of truth for
 //! "what's inside what".
 //!
@@ -21,7 +21,7 @@
 //!
 //! The kernel uses **one** identifier shape per primitive: the
 //! [`FullyQualifiedMoniker`]. The path through the focus hierarchy IS
-//! the spatial key. A consumer constructing a `<FocusZone>` declares
+//! the spatial key. A consumer constructing a `<FocusScope>` declares
 //! a relative [`SegmentMoniker`]; the React adapter composes the FQM
 //! through `FullyQualifiedMonikerContext` and ships it through IPC.
 //! There is no UUID-based `SpatialKey` and no flat `Moniker`.
@@ -32,20 +32,14 @@
 //! the FQMs `/window/board/.../card:T1/field:T1.title` and
 //! `/window/inspector/field:T1.title` are distinct by construction.
 //!
-//! ## Three peers, not four
+//! ## Two peers, not three
 //!
-//! The kernel exposes three peer types: [`super::layer::FocusLayer`],
-//! [`FocusZone`], and [`FocusScope`]. There is no public sum-type enum
-//! that conflates leaves and zones — consumers iterate the registry via
-//! the variant-aware helpers ([`leaves_in_layer`], [`zones_in_layer`],
-//! [`leaves_iter`], [`zones_iter`]) which yield the typed structs. This
-//! mirrors the React side, where `<FocusLayer>`, `<FocusZone>`, and
-//! `<FocusScope>` are the three components.
-//!
-//! [`leaves_in_layer`]: SpatialRegistry::leaves_in_layer
-//! [`zones_in_layer`]: SpatialRegistry::zones_in_layer
-//! [`leaves_iter`]: SpatialRegistry::leaves_iter
-//! [`zones_iter`]: SpatialRegistry::zones_iter
+//! The kernel exposes two peer types: [`super::layer::FocusLayer`] and
+//! [`FocusScope`]. There is no separate "zone" type — a scope that has
+//! children acts as a navigable container, a scope with no children
+//! acts as a leaf. Consumers iterate the registry via
+//! [`scopes_iter`](SpatialRegistry::scopes_iter) and
+//! [`scopes_in_layer`](SpatialRegistry::scopes_in_layer).
 //!
 //! ## Threading model
 //!
@@ -58,7 +52,7 @@
 //!
 //! [`super::state::SpatialState`] tracks per-window focus (the
 //! `focus_by_window` map) and emits [`super::state::FocusChangedEvent`]s.
-//! `SpatialRegistry` tracks the geometry / layer / zone structure that
+//! `SpatialRegistry` tracks the geometry / layer / scope structure that
 //! the navigator reads to compute the next focus target. The two are
 //! intentionally separate: focus state mutates frequently (every
 //! keystroke), structural data mutates only on mount / unmount / resize.
@@ -68,15 +62,15 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::layer::FocusLayer;
-use super::scope::{FocusScope, FocusZone, RegisteredScope};
+use super::scope::FocusScope;
 use super::types::{
     pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
 
 /// Emit `tracing::error!` only when re-registering at an already-occupied
-/// FQM with a *structurally different* entry — i.e. a mismatch in the
-/// kind discriminator (zone vs scope) or in any of the structural
-/// fields (`segment`, `layer_fq`, `parent_zone`, `overrides`).
+/// FQM with a *structurally different* entry — i.e. a mismatch in any
+/// of the structural fields (`segment`, `layer_fq`, `parent_zone`,
+/// `overrides`).
 ///
 /// Same-shape re-registration is silent. The legitimate paths that hit
 /// this case repeatedly:
@@ -93,14 +87,14 @@ use super::types::{
 ///   kernel sees a same-shape re-register that is part of the
 ///   intentional swap.
 ///
-/// * **React StrictMode dev double-mount.** The `<FocusScope>` /
-///   `<FocusZone>` register effect runs, cleans up, and re-runs in a
-///   single mount under StrictMode. Both register IPCs ship with
-///   identical structural data; the cleanup's unregister IPC sits in
-///   between, so this is *normally* not even a duplicate at the kernel.
-///   But if any IPC reordering or batching causes the second register
-///   to land before the cleanup unregister, the kernel still sees a
-///   same-shape re-register.
+/// * **React StrictMode dev double-mount.** The `<FocusScope>` register
+///   effect runs, cleans up, and re-runs in a single mount under
+///   StrictMode. Both register IPCs ship with identical structural
+///   data; the cleanup's unregister IPC sits in between, so this is
+///   *normally* not even a duplicate at the kernel. But if any IPC
+///   reordering or batching causes the second register to land before
+///   the cleanup unregister, the kernel still sees a same-shape
+///   re-register.
 ///
 /// * **ResizeObserver-driven rect refresh.** The same `<FocusScope>`
 ///   re-fires its register effect when its dependency tuple shifts
@@ -109,191 +103,35 @@ use super::types::{
 ///
 /// A genuine programmer mistake — two primitives whose composed paths
 /// collide with conflicting metadata (different segments, different
-/// enclosing zones / layers, different override sets) or with a kind
-/// flip — still trips the error log so it stays visible.
-///
-/// `op` is the calling registration op for log readability
-/// (`"register_scope"` or `"register_zone"`).
+/// enclosing zones / layers, different override sets) — still trips
+/// the error log so it stays visible.
 fn warn_on_structural_mismatch(
-    op: &'static str,
-    existing: &RegisteredScope,
+    existing: &FocusScope,
     new_segment: &SegmentMoniker,
     new_layer_fq: &FullyQualifiedMoniker,
     new_parent_zone: Option<&FullyQualifiedMoniker>,
     new_overrides: &HashMap<Direction, Option<FullyQualifiedMoniker>>,
-    new_is_zone: bool,
 ) {
-    let kind_flipped = existing.is_zone() != new_is_zone;
-    let segment_differs = existing.segment() != new_segment;
-    let layer_differs = existing.layer_fq() != new_layer_fq;
-    let parent_zone_differs = existing.parent_zone() != new_parent_zone;
-    let overrides_differ = existing.overrides() != new_overrides;
+    let segment_differs = existing.segment != *new_segment;
+    let layer_differs = existing.layer_fq != *new_layer_fq;
+    let parent_zone_differs = existing.parent_zone.as_ref() != new_parent_zone;
+    let overrides_differ = existing.overrides != *new_overrides;
 
-    if kind_flipped || segment_differs || layer_differs || parent_zone_differs || overrides_differ {
+    if segment_differs || layer_differs || parent_zone_differs || overrides_differ {
         tracing::error!(
-            op,
-            fq = %existing.fq(),
-            kind_flipped,
+            op = "register_scope",
+            fq = %existing.fq,
             segment_differs,
             layer_differs,
             parent_zone_differs,
             overrides_differ,
             "duplicate FQM registration with structural mismatch — \
              two primitives composed the same path but disagree on \
-             segment / layer / parent_zone / overrides / kind. \
+             segment / layer / parent_zone / overrides. \
              Replacing prior entry; nav may be inconsistent until \
              the offending primitive is fixed."
         );
     }
-}
-
-/// Emit `tracing::error!` when the entry being registered violates the
-/// **scope-is-leaf** invariant.
-///
-/// The kernel's three peers are [`super::layer::FocusLayer`] (modal
-/// boundary), [`FocusZone`] (navigable container — may have children),
-/// and [`FocusScope`] (leaf — no navigable children). Wrapping a
-/// non-leaf as a [`FocusScope`] confuses beam search (the scope's rect
-/// is treated as a single leaf candidate even though it spans a whole
-/// sub-region) and breaks "drill into the bar and remember the
-/// last-focused leaf" — the enclosing zone's `last_focused` ends up
-/// pointing at the scope wrapper, not the actually-focused inner
-/// control. The misuse silently degrades keyboard nav in toolbars; this
-/// log surfaces it so a developer can `just logs | grep scope-not-leaf`
-/// and find the offender.
-///
-/// The violation is detected through one of two **relations** between
-/// the offender and the ancestor Scope:
-///
-/// - `"parent-zone"` — the offender's `parent_zone` field literally
-///   names the ancestor Scope's FQM. Rare in production: descendants
-///   read `parent_zone` from `useParentZoneFq()`, which walks
-///   `FocusZoneContext` and skips Scopes (Scopes do not push that
-///   context).
-/// - `"path-prefix"` — the offender's FQM is a strict path-descendant of
-///   the ancestor Scope's FQM, i.e. the React tree composed the offender
-///   inside the Scope's `<FocusScope>` (which DOES push
-///   `<FullyQualifiedMonikerContext.Provider>`). This is the common case
-///   in production and the path-prefix branch is what catches misused
-///   `<FocusScope>` wrappers like the entity card and the board view.
-/// - `"both"` — both relations apply; emitted once per offender × ancestor
-///   pair so the log is one event per logical violation, not per relation.
-///
-/// The message carries the literal `scope-not-leaf` substring so a grep
-/// pipeline filters it out of the broader log stream without risking
-/// false positives on adjacent registry warnings.
-///
-/// `kind` is the offending child's own kind discriminator (`"scope"`,
-/// `"zone"`, or `"layer"`); `parent_kind` is the resolved parent's kind
-/// discriminator (always `"scope"` today — the helper is used by the
-/// scope-is-leaf invariant only). Both are passed by the caller because
-/// `RegisteredScope` is private. `relation` discriminates the detection
-/// branch, as described above. Layers only ever match the path-prefix
-/// branch — they do not have a `parent_zone` field, only a `parent`
-/// (layer) field that always points at another Layer FQM, never a
-/// scope/zone FQM.
-fn warn_scope_not_leaf(
-    fq: &FullyQualifiedMoniker,
-    segment: &SegmentMoniker,
-    parent_zone: &FullyQualifiedMoniker,
-    parent_segment: &SegmentMoniker,
-    kind: &'static str,
-    parent_kind: &'static str,
-    relation: &'static str,
-) {
-    tracing::error!(
-        target: "swissarmyhammer_focus::registry",
-        kind,
-        fq = %fq,
-        segment = %segment,
-        parent_zone = %parent_zone,
-        parent_segment = %parent_segment,
-        parent_kind,
-        relation,
-        "scope-not-leaf — FocusScope registered under a parent that is itself \
-         a leaf scope; scope must be a leaf, parent must be a Zone"
-    );
-}
-
-/// `true` when `child_fq` is a strict path-descendant of `ancestor_fq`,
-/// i.e. its FQM string begins with `"{ancestor_fq}/"`. The trailing slash
-/// guard prevents false matches between sibling FQMs that share a prefix
-/// up to the segment boundary (e.g. `/L/task:T1A` vs `/L/task:T1`).
-///
-/// Path-descendant is distinct from `parent_zone` ancestry: it captures
-/// the React tree shape (`<FullyQualifiedMonikerContext>` composition)
-/// rather than the spatial-graph parent_zone field. The two diverge for a
-/// `<FocusScope>` containing `<FocusZone>` descendants — exactly the
-/// violation [`warn_scope_not_leaf_by_path`] is designed to catch.
-fn is_path_descendant(
-    child_fq: &FullyQualifiedMoniker,
-    ancestor_fq: &FullyQualifiedMoniker,
-) -> bool {
-    let ancestor = ancestor_fq.as_str();
-    let child = child_fq.as_str();
-    // Strict descendant: child must be longer than ancestor and the next
-    // char after the ancestor prefix must be the path separator.
-    child.len() > ancestor.len() + 1
-        && child.starts_with(ancestor)
-        && child.as_bytes()[ancestor.len()] == FQ_PATH_SEPARATOR_BYTE
-}
-
-/// The `'/'` path separator as a byte. Mirrors the wire-format constant
-/// used by the React side and by [`FullyQualifiedMoniker::compose`]; kept
-/// local so [`is_path_descendant`] does not pull the FQ separator from
-/// the [`super::types`] module's private constant.
-const FQ_PATH_SEPARATOR_BYTE: u8 = b'/';
-
-/// Compare an existing registry entry against a pending registration and
-/// return `true` when the structural shape is unchanged.
-///
-/// Same shape ⇔ same kind discriminator AND identical
-/// `(segment, layer_fq, parent_zone, overrides)` tuple. This mirrors the
-/// invariant pinned by [`warn_on_structural_mismatch`]: rect refreshes are
-/// not structural, kind flips and metadata changes are.
-///
-/// Used by [`SpatialRegistry::register_scope`] and
-/// [`SpatialRegistry::register_zone`] to gate the **scope-is-leaf**
-/// checks: same-shape re-registration is the hot path
-/// (StrictMode double-mount, ResizeObserver rect refresh, virtualizer
-/// placeholder→real-mount swap) and must stay silent — otherwise an
-/// already-reported illegal edge re-fires `scope-not-leaf` on every
-/// render.
-fn same_shape(
-    existing: &RegisteredScope,
-    new_segment: &SegmentMoniker,
-    new_layer_fq: &FullyQualifiedMoniker,
-    new_parent_zone: Option<&FullyQualifiedMoniker>,
-    new_overrides: &HashMap<Direction, Option<FullyQualifiedMoniker>>,
-    new_is_zone: bool,
-) -> bool {
-    existing.is_zone() == new_is_zone
-        && existing.segment() == new_segment
-        && existing.layer_fq() == new_layer_fq
-        && existing.parent_zone() == new_parent_zone
-        && existing.overrides() == new_overrides
-}
-
-/// Compare an existing registered [`FocusLayer`] against a pending
-/// `push_layer` payload and return `true` when the structural shape is
-/// unchanged.
-///
-/// Same shape ⇔ identical `(segment, name, parent, window_label)` tuple.
-/// `last_focused` is mutable runtime state populated by the navigator on
-/// focus changes inside the layer; it intentionally does NOT participate
-/// in the shape comparison so a layer that has acquired focus history is
-/// not mis-classified as "structurally novel" on a same-shape re-mount.
-///
-/// Used by [`SpatialRegistry::push_layer`] to gate the **scope-is-leaf**
-/// path-prefix check for layers: same-shape re-registration is the hot
-/// path (StrictMode double-mount, palette open/close cycles that re-push
-/// the same layer) and must stay silent so an already-reported illegal
-/// Layer-under-Scope edge does not re-fire on every render.
-fn same_shape_layer(existing: &FocusLayer, candidate: &FocusLayer) -> bool {
-    existing.segment == candidate.segment
-        && existing.name == candidate.name
-        && existing.parent == candidate.parent
-        && existing.window_label == candidate.window_label
 }
 
 /// Round a [`Pixels`] coordinate to its nearest integer pixel as
@@ -303,7 +141,7 @@ fn same_shape_layer(existing: &FocusLayer, candidate: &FocusLayer) -> bool {
 /// `getBoundingClientRect()` reads on the same DOM node (anti-aliased
 /// borders, ResizeObserver fractional dpr math) that aren't user-
 /// relevant. The same-(x, y) overlap check rounds before comparing so
-/// it catches structural overlaps (parent zone wrapping a single child
+/// it catches structural overlaps (parent scope wrapping a single child
 /// with no offset) and ignores noise. `i64` is used rather than `i32`
 /// because viewport coordinates can exceed `i32::MAX` after extreme
 /// CSS transforms; the rounded value is only used for equality
@@ -319,9 +157,9 @@ fn rounded_pixel(p: Pixels) -> i64 {
 /// via [`rounded_pixel`] before comparison — see that helper for the
 /// rationale on integer rounding. Width / height are intentionally not
 /// part of the comparison: the structural overlap signal we hunt for
-/// is "two same-kind entries anchored at the same point", which is
-/// what catches needless-nesting wrappers regardless of whether the
-/// inner entry trims a few pixels of padding.
+/// is "two entries anchored at the same point", which is what catches
+/// needless-nesting wrappers regardless of whether the inner entry
+/// trims a few pixels of padding.
 fn same_rounded_origin(new: &Rect, existing: &Rect) -> bool {
     rounded_pixel(new.left()) == rounded_pixel(existing.left())
         && rounded_pixel(new.top()) == rounded_pixel(existing.top())
@@ -335,8 +173,7 @@ fn same_rounded_origin(new: &Rect, existing: &Rect) -> bool {
 /// fields are borrowed because the caller already holds them as
 /// references off the registry's scopes map.
 struct OverlapWarn<'a> {
-    /// Calling op tag (`"register_scope"`, `"register_zone"`,
-    /// `"update_rect"`).
+    /// Calling op tag (`"register_scope"`, `"update_rect"`).
     op: &'static str,
     /// Owning layer's FQM — same for both entry and partner; same-
     /// layer is part of the overlap definition.
@@ -347,8 +184,7 @@ struct OverlapWarn<'a> {
     /// Relative segment of the new entry — included for human-readable
     /// log inspection without re-fetching from the registry.
     new_segment: &'a SegmentMoniker,
-    /// FQM of the pre-existing same-kind entry the new one landed on
-    /// top of.
+    /// FQM of the pre-existing entry the new one landed on top of.
     overlap_fq: &'a FullyQualifiedMoniker,
     /// Relative segment of the partner.
     overlap_segment: &'a SegmentMoniker,
@@ -358,7 +194,7 @@ struct OverlapWarn<'a> {
     rounded_y: i64,
 }
 
-/// Emit one `WARN`-level tracing event for a same-kind overlap.
+/// Emit one `WARN`-level tracing event for an overlap.
 ///
 /// The message carries the literal `needless-nesting` substring so a
 /// grep pipeline filters it out of the broader log stream without
@@ -375,7 +211,7 @@ fn warn_overlap(payload: OverlapWarn<'_>) {
         overlap_segment = %payload.overlap_segment,
         x = payload.rounded_x,
         y = payload.rounded_y,
-        "two same-kind entries share (x, y); likely needless-nesting — review React tree for redundant wrappers"
+        "two entries share (x, y); likely needless-nesting — review React tree for redundant wrappers"
     );
 }
 
@@ -420,8 +256,8 @@ const COORDINATE_CONSISTENCY_MULTIPLIER: f64 = 10.0;
 /// - **Non-positive dimensions** — `width <= 0` or `height <= 0`. The
 ///   handling depends on the op:
 ///
-///   - On `"register_scope"` / `"register_zone"` (initial registration),
-///     a zero in either dimension is treated as a *pre-layout transient*:
+///   - On `"register_scope"` (initial registration), a zero in either
+///     dimension is treated as a *pre-layout transient*:
 ///     `getBoundingClientRect()` legitimately returns rects with zero
 ///     dims for `display: none`, just-mounted-but-not-yet-laid-out, and
 ///     detached nodes (and in test environments, jsdom-style flex/grid
@@ -449,11 +285,10 @@ const COORDINATE_CONSISTENCY_MULTIPLIER: f64 = 10.0;
 /// mode, so the kernel-side check is the safety net for IPC adapters
 /// or test fixtures that bypass the React tree.
 ///
-/// `op` is the caller op tag (`"register_scope"`, `"register_zone"`,
-/// `"update_rect"`) — used as a structured tracing field so log
-/// readers can correlate the event back to the IPC adapter, AND as the
-/// dispatch key for the registration vs update zero-dim handling
-/// described above.
+/// `op` is the caller op tag (`"register_scope"`, `"update_rect"`) —
+/// used as a structured tracing field so log readers can correlate the
+/// event back to the IPC adapter, AND as the dispatch key for the
+/// registration vs update zero-dim handling described above.
 fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: &Rect) {
     #[cfg(debug_assertions)]
     {
@@ -479,7 +314,7 @@ fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: 
 
         let width = rect.width.value();
         let height = rect.height.value();
-        let is_registration = matches!(op, "register_scope" | "register_zone");
+        let is_registration = op == "register_scope";
         // Pre-layout transient: at least one dim is exactly zero, both
         // are finite, neither is negative, AND we're on the registration
         // path. Surface as a single warning. On `update_rect`, fall
@@ -545,25 +380,23 @@ fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: 
 
 /// Headless store for spatial scopes and layers.
 ///
-/// See module docs for the threading model and the split between scopes
-/// and layers. `Default` produces an empty registry; `new` is provided
-/// for symmetry with `SpatialState::new`.
+/// See module docs for the threading model. `Default` produces an empty
+/// registry; `new` is provided for symmetry with `SpatialState::new`.
 #[derive(Debug, Default, Clone)]
 pub struct SpatialRegistry {
-    /// All registered focus points keyed by their canonical
-    /// [`FullyQualifiedMoniker`]. Both [`FocusScope`] leaves and
-    /// [`FocusZone`] containers live here behind the internal
-    /// [`RegisteredScope`] enum — the public API exposes the typed
-    /// structs only.
-    scopes: HashMap<FullyQualifiedMoniker, RegisteredScope>,
+    /// All registered scopes keyed by their canonical
+    /// [`FullyQualifiedMoniker`]. Whether a scope is a leaf or a
+    /// container is decided at runtime by whether anything is
+    /// registered under it.
+    scopes: HashMap<FullyQualifiedMoniker, FocusScope>,
     /// All registered layers keyed by their canonical
     /// [`FullyQualifiedMoniker`]. Layer hierarchy is derived from each
     /// layer's `parent` field, not stored here.
     layers: HashMap<FullyQualifiedMoniker, FocusLayer>,
-    /// Per-entry suppression state for the same-kind overlap warning.
+    /// Per-entry suppression state for the overlap warning.
     ///
-    /// Maps an entry's FQM to the FQM of the same-kind partner it was
-    /// last reported as overlapping. The registry consults this map
+    /// Maps an entry's FQM to the FQM of the partner it was last
+    /// reported as overlapping. The registry consults this map
     /// before emitting a fresh overlap `WARN` on `update_rect`: when
     /// the moved entry is already overlapping the *same* partner as
     /// last time, the warning is suppressed. Per-frame scroll tracking
@@ -588,11 +421,11 @@ pub struct SpatialRegistry {
     ///
     /// Re-validation is triggered by clearing this set; in practice
     /// the registry resets the entry when the layer is removed via
-    /// [`SpatialRegistry::remove_layer`], when a scope is registered or
-    /// updated in the layer (`register_scope`, `register_zone`,
-    /// `update_rect`), or when a scope is unregistered from the layer
-    /// (`unregister_scope`). A re-mounted layer is therefore
-    /// re-validated on its next first nav.
+    /// [`SpatialRegistry::remove_layer`], when a scope is registered
+    /// or updated in the layer (`register_scope`, `update_rect`), or
+    /// when a scope is unregistered from the layer (`unregister_scope`).
+    /// A re-mounted layer is therefore re-validated on its next first
+    /// nav.
     ///
     /// `push_layer` is **intentionally not** an invalidator: re-pushing
     /// a layer (StrictMode double-mount, palette open/close cycles, IPC
@@ -613,7 +446,7 @@ impl SpatialRegistry {
     // Scope ops
     // ---------------------------------------------------------------------
 
-    /// Register a [`FocusScope`] leaf.
+    /// Register a [`FocusScope`].
     ///
     /// Replaces any prior scope under the same FQM. Re-registration at
     /// the same FQM is part of the normal lifecycle — the virtualizer's
@@ -622,76 +455,20 @@ impl SpatialRegistry {
     /// refreshes all funnel through here repeatedly under the same
     /// path. The registry treats those silently: same `(segment,
     /// layer_fq, parent_zone, overrides)` tuple is a structural
-    /// no-op and only the `rect` is refreshed.
+    /// no-op and only the `rect` is refreshed. Any pre-existing
+    /// `last_focused` slot on the prior registration — written by the
+    /// kernel via [`Self::record_focus`] as focus moved through the
+    /// scope — is preserved across the swap so drill-out memory
+    /// survives the placeholder / real-mount cycle.
     ///
     /// A *structural* duplicate — same FQM but a different
-    /// `(segment, layer_fq, parent_zone, overrides)` tuple, or a kind
-    /// flip from zone→scope — IS a programmer mistake (two primitives
-    /// whose composed paths collide with conflicting metadata, or two
-    /// disagreeing variants). Those still surface via `tracing::error!`
-    /// so the noise stays bounded to genuine bugs while the second
-    /// registration replaces the first to keep the registry consistent.
-    ///
-    /// A `<FocusScope>` is a **leaf** in the spatial graph: it must not
-    /// contain a [`FocusScope`], a [`FocusZone`], **or** a
-    /// [`FocusLayer`]. The kernel enforces this with five checks — four
-    /// against the scopes map (scope/zone descendants and ancestors) and
-    /// one against the layers map (layer descendants). All five are
-    /// gated on structural novelty:
-    ///
-    /// 1. *Forward (parent-zone)* — if the new scope's `parent_zone`
-    ///    resolves to an existing leaf [`FocusScope`], emit one
-    ///    `scope-not-leaf` error pointing at the new scope. A
-    ///    `<FocusScope>` cannot wrap further focus primitives — see
-    ///    [`warn_scope_not_leaf`] and
-    ///    `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
-    /// 2. *Backward (parent-zone)* — after the new scope is inserted,
-    ///    scan for any pre-existing entries whose `parent_zone` names
-    ///    this scope's FQM and emit one `scope-not-leaf` error per
-    ///    such offender. This makes the check order-independent: a
-    ///    child registered before its parent's kind is known is
-    ///    re-validated here when the parent eventually registers as a
-    ///    leaf.
-    /// 3. *Forward (path-prefix)* — if some already-registered Scope's
-    ///    FQM is a strict path-prefix of the new scope's FQM (i.e. the
-    ///    new scope's React subtree was rendered inside that scope's
-    ///    `<FocusScope>`), emit one `scope-not-leaf` error per such
-    ///    ancestor. This is the catch-all that fires when the React
-    ///    side composes through a Scope without that Scope appearing in
-    ///    `parent_zone` (because `<FocusScope>` does not push a
-    ///    `FocusZoneContext.Provider`, so descendants pick the nearest
-    ///    enclosing `<FocusZone>` for `parent_zone`, skipping the
-    ///    offending Scope).
-    /// 4. *Backward (path-prefix, scopes/zones)* — after the new scope
-    ///    is inserted, scan the scopes map for any pre-existing entries
-    ///    whose FQM is a strict path-descendant of this scope's FQM and
-    ///    emit one `scope-not-leaf` error per such offender. The
-    ///    path-prefix branch is what catches the entity-card /
-    ///    board-view shape where the scope wraps a non-trivial subtree
-    ///    containing `<FocusZone>` (e.g. `<Field>`) descendants.
-    /// 5. *Backward (path-prefix, layers)* — after the new scope is
-    ///    inserted, scan the layers map for any pre-existing
-    ///    [`FocusLayer`] whose FQM is a strict path-descendant of this
-    ///    scope's FQM and emit one `scope-not-leaf` error per such
-    ///    offender, tagged `kind = "layer"`. A layer mounted inside a
-    ///    `<FocusScope>` is just as illegal as a zone mounted inside
-    ///    one — the scope is a leaf, period. Walked in the same single
-    ///    pass as check 4 (see [`warn_backward_scope_descendants`]) so
-    ///    a single backward scan covers all three primitive kinds.
-    ///
-    /// All five checks are gated on **structural novelty** (new FQM, kind
-    /// flip Zone→Scope, or any change to the
-    /// `(segment, layer_fq, parent_zone, overrides)` tuple). Same-shape
-    /// re-registration is silent on the same hot paths that
-    /// [`warn_on_structural_mismatch`] silences — StrictMode
-    /// double-mount, ResizeObserver rect refresh, and the virtualizer
-    /// placeholder→real-mount swap. Without that gate, an already-known
-    /// illegal edge would re-fire `scope-not-leaf` on every render.
-    /// The contract is therefore: **exactly one error per structurally
-    /// novel offending edge**, regardless of registration order.
-    ///
-    /// [`warn_backward_scope_descendants`]: Self::warn_backward_scope_descendants
-    pub fn register_scope(&mut self, f: FocusScope) {
+    /// `(segment, layer_fq, parent_zone, overrides)` tuple — IS a
+    /// programmer mistake (two primitives whose composed paths collide
+    /// with conflicting metadata). Those still surface via
+    /// `tracing::error!` so the noise stays bounded to genuine bugs
+    /// while the second registration replaces the first to keep the
+    /// registry consistent.
+    pub fn register_scope(&mut self, mut f: FocusScope) {
         // Coordinate-system invariant check (debug-only, observability-
         // only). See `validate_rect_invariants` for the contract; logs
         // and continues on bad input so the registry stays consistent.
@@ -701,313 +478,34 @@ impl SpatialRegistry {
         // next nav into the layer re-runs the consistency walk.
         self.validated_layers.remove(&f.layer_fq);
 
-        let shape_unchanged = self
-            .scopes
-            .get(&f.fq)
-            .map(|existing| {
-                warn_on_structural_mismatch(
-                    "register_scope",
-                    existing,
-                    /* new_segment */ &f.segment,
-                    /* new_layer_fq */ &f.layer_fq,
-                    /* new_parent_zone */ f.parent_zone.as_ref(),
-                    /* new_overrides */ &f.overrides,
-                    /* new_is_zone */ false,
-                );
-                same_shape(
-                    existing,
-                    &f.segment,
-                    &f.layer_fq,
-                    f.parent_zone.as_ref(),
-                    &f.overrides,
-                    /* new_is_zone */ false,
-                )
-            })
-            .unwrap_or(false);
-
-        if !shape_unchanged {
-            // Forward checks: emit one `scope-not-leaf` per ancestor
-            // Scope of the new entry. An ancestor is detected via
-            // either its `parent_zone` field (literal naming) or its
-            // FQM path (DOM-subtree containment). When both relations
-            // apply to the same `(offender, ancestor)` pair the helper
-            // emits a single event tagged with `relation = "both"` so
-            // the log stays one-event-per-offender-per-ancestor.
-            self.warn_forward_scope_ancestors(&f.fq, &f.segment, f.parent_zone.as_ref(), "scope");
+        // Preserve any existing `last_focused` so a real-mount swap
+        // from a placeholder doesn't lose drill-out memory accumulated
+        // while the placeholder was live. The kernel writer
+        // (`record_focus`) populates this slot as focus moves; new
+        // registrations start with whatever was passed in (typically
+        // `None`).
+        if let Some(existing) = self.scopes.get(&f.fq) {
+            warn_on_structural_mismatch(
+                existing,
+                &f.segment,
+                &f.layer_fq,
+                f.parent_zone.as_ref(),
+                &f.overrides,
+            );
+            if f.last_focused.is_none() && existing.last_focused.is_some() {
+                f.last_focused = existing.last_focused.clone();
+            }
         }
 
         let fq = f.fq.clone();
-        let parent_segment = f.segment.clone();
-        self.scopes.insert(fq.clone(), RegisteredScope::Scope(f));
+        self.scopes.insert(fq.clone(), f);
 
-        if !shape_unchanged {
-            // Backward checks: we just inserted as a (structurally
-            // novel) Scope. Any pre-existing entry that named us as
-            // their `parent_zone` *or* whose FQM is a strict
-            // path-descendant of ours is now retroactively illegal.
-            // Fire one event per descendant — order-independent
-            // detection without a deferred-validation queue.
-            self.warn_backward_scope_descendants(&fq, &parent_segment);
-        }
-
-        // Same-kind overlap check: a `<FocusScope>` registered at the
-        // same rounded `(x, y)` as an existing scope in the same layer
-        // is almost always a needless-nesting candidate (parent zone
+        // Overlap check: a `<FocusScope>` registered at the same
+        // rounded `(x, y)` as an existing scope in the same layer is
+        // almost always a needless-nesting candidate (parent scope
         // wrapping a single child with no offset, sibling stacked at
         // the same anchor due to a pass-through wrapper).
         self.check_overlap_warning("register_scope", &fq);
-    }
-
-    /// Register a [`FocusZone`] container.
-    ///
-    /// Replaces any prior scope under the same FQM. Same semantics as
-    /// [`register_scope`] — same-shape re-registration is a silent
-    /// no-op (the placeholder→real-mount and StrictMode-double-mount
-    /// paths land here every render); a structural mismatch still
-    /// surfaces via `tracing::error!`.
-    ///
-    /// Two **forward** scope-is-leaf checks fire when the new entry is
-    /// structurally novel:
-    ///
-    /// - *parent-zone* — if the new zone's `parent_zone` resolves to an
-    ///   existing leaf [`FocusScope`], emit one `scope-not-leaf` error.
-    ///   A leaf cannot contain a navigable container.
-    /// - *path-prefix* — if any already-registered [`FocusScope`]'s FQM
-    ///   is a strict prefix of the new zone's FQM, the React tree
-    ///   composed this zone inside a misused `<FocusScope>` — fire one
-    ///   `scope-not-leaf` error per offending Scope.
-    ///
-    /// Same-shape re-registration is silent — the already-reported edge
-    /// would otherwise re-fire on every render under StrictMode /
-    /// ResizeObserver / the virtualizer swap.
-    ///
-    /// No backward check is needed here — a [`FocusZone`] is a legal
-    /// parent for both scopes and zones, so any pre-existing children
-    /// pointing at this FQM stay valid. The forward-only branch is the
-    /// asymmetry between the two register entry points.
-    ///
-    /// [`register_scope`]: SpatialRegistry::register_scope
-    pub fn register_zone(&mut self, z: FocusZone) {
-        // Coordinate-system invariant check (debug-only). Mirrors the
-        // call in [`register_scope`].
-        validate_rect_invariants("register_zone", &z.fq, &z.rect);
-        // Invalidate the coordinate-consistency cache for this layer
-        // so the next nav re-walks the (possibly larger) layer scopes.
-        self.validated_layers.remove(&z.layer_fq);
-
-        let shape_unchanged = self
-            .scopes
-            .get(&z.fq)
-            .map(|existing| {
-                warn_on_structural_mismatch(
-                    "register_zone",
-                    existing,
-                    /* new_segment */ &z.segment,
-                    /* new_layer_fq */ &z.layer_fq,
-                    /* new_parent_zone */ z.parent_zone.as_ref(),
-                    /* new_overrides */ &z.overrides,
-                    /* new_is_zone */ true,
-                );
-                same_shape(
-                    existing,
-                    &z.segment,
-                    &z.layer_fq,
-                    z.parent_zone.as_ref(),
-                    &z.overrides,
-                    /* new_is_zone */ true,
-                )
-            })
-            .unwrap_or(false);
-
-        if !shape_unchanged {
-            // Forward checks: emit one `scope-not-leaf` per ancestor
-            // Scope of the new Zone, detected via either `parent_zone`
-            // naming or FQM path-prefix. A Zone under a Scope is
-            // illegal under both relations; the helper deduplicates
-            // when both apply to the same ancestor.
-            self.warn_forward_scope_ancestors(&z.fq, &z.segment, z.parent_zone.as_ref(), "zone");
-        }
-        // No backward check needed when registering a Zone: a Zone is a
-        // legal parent for both Scopes and Zones, so any pre-existing
-        // children that named us as their parent_zone are still legal.
-        // Path-prefix backward check is also unnecessary — only Scope
-        // ancestors create the violation, and inserting a Zone at this
-        // FQM does not introduce a new Scope ancestor for any existing
-        // descendant (their existing Scope ancestors, if any, would
-        // already have been flagged when those descendants registered).
-        let fq = z.fq.clone();
-        self.scopes.insert(fq.clone(), RegisteredScope::Zone(z));
-
-        // Same-kind overlap check: a `<FocusZone>` registered at the
-        // same rounded `(x, y)` as an existing zone in the same layer
-        // is almost always a needless-nesting candidate.
-        self.check_overlap_warning("register_zone", &fq);
-    }
-
-    /// Forward scope-is-leaf check used by both [`register_scope`] and
-    /// [`register_zone`]: if `parent_zone` is `Some(p)` and `p` is
-    /// already registered as a leaf [`FocusScope`], the new entry
-    /// violates the invariant that scopes are leaves. Emit one
-    /// `scope-not-leaf` error and let the insert proceed so the rest of
-    /// the registry stays consistent.
-    ///
-    /// Silent when:
-    /// - `parent_zone` is `None` (the new entry sits under the layer root).
-    /// - The parent's FQM is not yet registered (deferred to the
-    ///   [`warn_existing_children_of_scope`] backward scan that fires
-    ///   when the parent eventually registers).
-    /// - The parent is a [`FocusZone`] (the legal layout).
-    ///
-    /// `kind` is the offending child's own kind discriminator (`"scope"`
-    /// for [`register_scope`], `"zone"` for [`register_zone`]) — used as
-    /// a structured tracing field so log readers can tell whether they
-    /// have a misused `<FocusScope>` wrapping a sub-tree of
-    /// `<FocusScope>` leaves or a misused `<FocusScope>` enclosing a
-    /// nested `<FocusZone>`.
-    ///
-    /// [`warn_existing_children_of_scope`]: Self::warn_existing_children_of_scope
-    fn warn_forward_scope_ancestors(
-        &self,
-        fq: &FullyQualifiedMoniker,
-        segment: &SegmentMoniker,
-        parent_zone: Option<&FullyQualifiedMoniker>,
-        kind: &'static str,
-    ) {
-        // Discover all Scope ancestors of the new entry, deduplicated by
-        // FQM. Two relations contribute:
-        //
-        //   - parent-zone: the new entry's `parent_zone` resolves to a
-        //     Scope. At most one Scope per offender from this branch
-        //     (an entry has exactly one `parent_zone`).
-        //   - path-prefix: some registered Scope's FQM is a strict
-        //     prefix of the new entry's FQM. Multiple Scopes can match
-        //     in pathological registries; in practice there is at most
-        //     one (the nearest enclosing Scope).
-        //
-        // For each unique ancestor Scope FQM, emit exactly one
-        // `scope-not-leaf` event, tagging the relation appropriately.
-        let mut emitted_for: std::collections::HashSet<FullyQualifiedMoniker> =
-            std::collections::HashSet::new();
-
-        // parent-zone branch.
-        if let Some(parent_fq) = parent_zone {
-            if let Some(RegisteredScope::Scope(parent_scope)) = self.scopes.get(parent_fq) {
-                let path_match = is_path_descendant(fq, parent_fq);
-                let relation = if path_match { "both" } else { "parent-zone" };
-                warn_scope_not_leaf(
-                    fq,
-                    segment,
-                    parent_fq,
-                    &parent_scope.segment,
-                    kind,
-                    /* parent_kind */ "scope",
-                    relation,
-                );
-                emitted_for.insert(parent_fq.clone());
-            }
-        }
-
-        // path-prefix branch — emit only for Scopes not already covered
-        // by the parent-zone branch above.
-        for entry in self.scopes.values() {
-            let RegisteredScope::Scope(ancestor) = entry else {
-                continue;
-            };
-            if !is_path_descendant(fq, &ancestor.fq) {
-                continue;
-            }
-            if emitted_for.contains(&ancestor.fq) {
-                continue;
-            }
-            warn_scope_not_leaf(
-                fq,
-                segment,
-                &ancestor.fq,
-                &ancestor.segment,
-                kind,
-                /* parent_kind */ "scope",
-                "path-prefix",
-            );
-            emitted_for.insert(ancestor.fq.clone());
-        }
-    }
-
-    /// Backward scope-is-leaf check used by [`register_scope`] only:
-    /// when a new entry is inserted as a leaf [`FocusScope`], any
-    /// pre-existing primitive (scope, zone, OR layer) that names this
-    /// scope as its `parent_zone` **or** whose FQM is a strict
-    /// path-descendant of this scope's FQM is now retroactively illegal.
-    /// Fire one event per offender — deduplicated when both relations
-    /// apply to the same descendant — so the invariant is enforced
-    /// regardless of registration order.
-    ///
-    /// Walks both the scopes map and the layers map once per call. The
-    /// cost is O(n_scopes + n_layers) per `register_scope`, which is in
-    /// line with the existing scan and acceptable given registration
-    /// burst frequency. Walking both maps in a single pass keeps the
-    /// "exactly one event per structurally novel offending edge"
-    /// contract uniform across all three primitive kinds (scope, zone,
-    /// layer).
-    ///
-    /// Layers do not have a `parent_zone` field — their `parent` field
-    /// always names another Layer FQM, never a scope/zone FQM — so the
-    /// path-prefix relation is the only one that can match a Layer
-    /// descendant. The relation field on the emitted event is therefore
-    /// always `"path-prefix"` for layer offenders.
-    ///
-    /// `parent_segment` is supplied by the caller (it owns the
-    /// just-inserted scope's segment) so the helper does not have to
-    /// re-read its own entry from the map.
-    fn warn_backward_scope_descendants(
-        &self,
-        parent_fq: &FullyQualifiedMoniker,
-        parent_segment: &SegmentMoniker,
-    ) {
-        for entry in self.scopes.values() {
-            // Skip self — `is_path_descendant` returns false for self
-            // anyway, but the explicit guard keeps the parent-zone arm
-            // honest if a future change ever weakens that helper.
-            if entry.fq() == parent_fq {
-                continue;
-            }
-            let parent_zone_match = entry.parent_zone() == Some(parent_fq);
-            let path_match = is_path_descendant(entry.fq(), parent_fq);
-            if !parent_zone_match && !path_match {
-                continue;
-            }
-            let relation = match (parent_zone_match, path_match) {
-                (true, true) => "both",
-                (true, false) => "parent-zone",
-                (false, true) => "path-prefix",
-                (false, false) => unreachable!(),
-            };
-            let kind = if entry.is_zone() { "zone" } else { "scope" };
-            warn_scope_not_leaf(
-                entry.fq(),
-                entry.segment(),
-                parent_fq,
-                parent_segment,
-                kind,
-                /* parent_kind */ "scope",
-                relation,
-            );
-        }
-        // Layer pass — only the path-prefix relation can match because
-        // a Layer's `parent` field always points at another Layer FQM.
-        for layer in self.layers.values() {
-            if !is_path_descendant(&layer.fq, parent_fq) {
-                continue;
-            }
-            warn_scope_not_leaf(
-                &layer.fq,
-                &layer.segment,
-                parent_fq,
-                parent_segment,
-                /* kind */ "layer",
-                /* parent_kind */ "scope",
-                /* relation */ "path-prefix",
-            );
-        }
     }
 
     /// Remove a scope from the registry.
@@ -1029,11 +527,112 @@ impl SpatialRegistry {
         // layer before the entry leaves the map — a future nav into
         // the same layer should re-validate the (now smaller) scope set
         // rather than skip the walk on a stale "already validated" bit.
-        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq().clone()) {
+        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq.clone()) {
             self.validated_layers.remove(&layer_fq);
         }
         self.scopes.remove(fq);
         self.overlap_warn_partner.remove(fq);
+    }
+
+    /// Record `fq` as the most recently focused descendant on every
+    /// scope ancestor and every layer ancestor in the chain rooted at
+    /// `fq`.
+    ///
+    /// This is the kernel writer for [`FocusScope::last_focused`] and
+    /// [`FocusLayer::last_focused`]. [`super::state::SpatialState::focus`]
+    /// and any other code path that mutates `focus_by_window` calls this
+    /// after the new focus FQM has been validated. The walk:
+    ///
+    /// 1. Climbs the `parent_zone` chain starting from `fq`'s scope; each
+    ///    visited ancestor scope's `last_focused` is set to `Some(fq)`.
+    ///    The walk terminates when an ancestor's `parent_zone` is `None`
+    ///    (the scope sits directly under the layer root) or names an
+    ///    unregistered FQM (torn state).
+    /// 2. Climbs the layer ancestor chain starting from `fq`'s
+    ///    `layer_fq`; each visited layer (the scope's own layer plus
+    ///    every ancestor reachable via `FocusLayer::parent`) has its
+    ///    `last_focused` set to `Some(fq)`. Terminates at the window
+    ///    root (`parent` is `None`) or at a missing layer reference.
+    ///
+    /// Both walks make the cascade arms
+    /// [`super::state::FallbackResolution::FallbackParentZoneLastFocused`]
+    /// and
+    /// [`super::state::FallbackResolution::FallbackParentLayerLastFocused`]
+    /// reachable in production: when the focused scope is later
+    /// unregistered, the resolver consults these recorded slots to
+    /// land the user back on a meaningful target.
+    ///
+    /// The lost FQM itself is not written into its own scope's
+    /// `last_focused` — that slot is reserved for descendants. A scope's
+    /// own focus event is reflected only on its ancestors (and on its
+    /// owning layer plus the layer's ancestors).
+    ///
+    /// No-op when `fq` is not a registered scope: the writer is invoked
+    /// at the same boundary as `state.focus`, which already validates
+    /// registration and short-circuits otherwise. The defensive check
+    /// here keeps the registry sound even if a future caller invokes
+    /// `record_focus` on a torn registry.
+    pub fn record_focus(&mut self, fq: &FullyQualifiedMoniker) {
+        // Snapshot the focused scope's metadata into owned values so the
+        // immutable borrow can be released before we mutate the scopes
+        // map. Walking the parent_zone chain mutates entries in `scopes`,
+        // and Rust's borrow checker rejects iterating an immutable view
+        // while writing through a mutable one.
+        let Some(focused) = self.scopes.get(fq) else {
+            return;
+        };
+        let layer_fq = focused.layer_fq.clone();
+        let mut next_zone = focused.parent_zone.clone();
+
+        // Phase 1: walk the scope ancestor chain, recording `fq` on
+        // each ancestor's `last_focused` slot.
+        //
+        // `visited` guards against a self-referential or cyclic
+        // `parent_zone` chain — e.g. a scope whose `parent_zone == fq`
+        // (the React-side bug fixed alongside this guard) — which
+        // would otherwise loop indefinitely while holding the
+        // registry mutex and freeze every focus IPC.
+        let mut visited: HashSet<FullyQualifiedMoniker> = HashSet::new();
+        while let Some(zone_fq) = next_zone {
+            if !visited.insert(zone_fq.clone()) {
+                tracing::error!(
+                    op = "record_focus",
+                    cycle_fq = %zone_fq,
+                    "parent_zone chain cycle detected; breaking walk"
+                );
+                break;
+            }
+            let Some(zone) = self.scopes.get_mut(&zone_fq) else {
+                // Torn registry — parent_zone names an FQM with no
+                // entry. Stop the walk; callers that care about
+                // structural integrity log elsewhere.
+                break;
+            };
+            zone.last_focused = Some(fq.clone());
+            next_zone = zone.parent_zone.clone();
+        }
+
+        // Phase 2: walk the layer ancestor chain (the focused scope's
+        // own layer plus every ancestor reachable via
+        // `FocusLayer::parent`). Each visited layer's `last_focused`
+        // slot is set to `fq`. Same cycle guard as phase 1.
+        let mut next_layer = Some(layer_fq);
+        let mut visited_layers: HashSet<FullyQualifiedMoniker> = HashSet::new();
+        while let Some(layer_fq) = next_layer {
+            if !visited_layers.insert(layer_fq.clone()) {
+                tracing::error!(
+                    op = "record_focus",
+                    cycle_fq = %layer_fq,
+                    "layer parent chain cycle detected; breaking walk"
+                );
+                break;
+            }
+            let Some(layer) = self.layers.get_mut(&layer_fq) else {
+                break;
+            };
+            layer.last_focused = Some(fq.clone());
+            next_layer = layer.parent.clone();
+        }
     }
 
     /// Update the bounding rect of a registered scope.
@@ -1041,11 +640,11 @@ impl SpatialRegistry {
     /// No-op if the FQM is unknown. Called from the React side via
     /// `spatial_update_rect` when ResizeObserver fires.
     ///
-    /// Emits the same-kind overlap `WARN` if the new rect lands the
-    /// entry on top of another same-kind entry in the same layer. Per-
-    /// key suppression elides re-warnings while the same overlap pair
-    /// persists — `update_rect` fires every animation frame during
-    /// scroll-tracking, so without the gate every frame would re-emit.
+    /// Emits the overlap `WARN` if the new rect lands the entry on
+    /// top of another entry in the same layer. Per-key suppression
+    /// elides re-warnings while the same overlap pair persists —
+    /// `update_rect` fires every animation frame during scroll-tracking,
+    /// so without the gate every frame would re-emit.
     pub fn update_rect(&mut self, fq: &FullyQualifiedMoniker, rect: Rect) {
         // Coordinate-system invariant check (debug-only). Validates
         // before the mutation so a bad rect surfaces in the log even
@@ -1058,12 +657,12 @@ impl SpatialRegistry {
         // update is caught on the next nav. We look the layer up via
         // the entry rather than have the caller pass it — a moved
         // entry stays in its layer.
-        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq().clone()) {
+        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq.clone()) {
             self.validated_layers.remove(&layer_fq);
         }
 
         if let Some(scope) = self.scopes.get_mut(fq) {
-            *scope.rect_mut() = rect;
+            scope.rect = rect;
         }
         self.check_overlap_warning("update_rect", fq);
     }
@@ -1083,11 +682,11 @@ impl SpatialRegistry {
     ///
     /// **Lazy**: the first call per layer runs the walk; subsequent
     /// calls return immediately until the layer is mutated (a
-    /// `register_scope`, `register_zone`, `update_rect`,
-    /// `unregister_scope`, or `remove_layer` clears the cache and
-    /// the next call re-walks). The intended call site is the
-    /// navigator's first nav into the layer, where the registry is
-    /// stable and the walk is paid for once per user session.
+    /// `register_scope`, `update_rect`, `unregister_scope`, or
+    /// `remove_layer` clears the cache and the next call re-walks).
+    /// The intended call site is the navigator's first nav into the
+    /// layer, where the registry is stable and the walk is paid for
+    /// once per user session.
     ///
     /// **Observability-only**: emits log events but never panics, never
     /// returns an error, never refuses to compute. A coordinate-system
@@ -1113,12 +712,12 @@ impl SpatialRegistry {
         let centers: Vec<(FullyQualifiedMoniker, f64, f64)> = self
             .scopes
             .values()
-            .filter(|s| s.layer_fq() == layer_fq)
+            .filter(|s| &s.layer_fq == layer_fq)
             .map(|s| {
-                let r = s.rect();
+                let r = &s.rect;
                 let cx = r.left().value() + r.width.value() / 2.0;
                 let cy = r.top().value() + r.height.value() / 2.0;
-                (s.fq().clone(), cx, cy)
+                (s.fq.clone(), cx, cy)
             })
             .collect();
 
@@ -1194,14 +793,14 @@ impl SpatialRegistry {
         }
     }
 
-    /// Detect a same-kind overlap for the entry at `fq` and emit
-    /// `WARN` once per (entry, partner) overlap pair.
+    /// Detect an overlap for the entry at `fq` and emit `WARN` once
+    /// per (entry, partner) overlap pair.
     ///
-    /// `op` is the caller op tag (`"register_scope"`,
-    /// `"register_zone"`, or `"update_rect"`). The entry must already
-    /// be inserted in the scopes map — this helper reads the entry's
-    /// kind, layer, and rect from the registry to scan for a same-kind
-    /// same-(rounded x, y) partner in the same layer (excluding itself).
+    /// `op` is the caller op tag (`"register_scope"` or
+    /// `"update_rect"`). The entry must already be inserted in the
+    /// scopes map — this helper reads the entry's layer and rect from
+    /// the registry to scan for a same-(rounded x, y) partner in the
+    /// same layer (excluding itself).
     ///
     /// Suppression rules, consulted via the
     /// [`overlap_warn_partner`](Self#structfield.overlap_warn_partner)
@@ -1229,23 +828,21 @@ impl SpatialRegistry {
         let Some(entry) = self.scopes.get(fq) else {
             return;
         };
-        let entry_is_zone = entry.is_zone();
-        let entry_layer = entry.layer_fq().clone();
-        let entry_rect = *entry.rect();
-        let entry_segment = entry.segment().clone();
+        let entry_layer = entry.layer_fq.clone();
+        let entry_rect = entry.rect;
+        let entry_segment = entry.segment.clone();
 
-        // Scan same-layer entries for a same-kind same-rounded-origin
-        // partner, excluding ourselves. Yields the first match's FQM
-        // and segment as owned values so we can release the immutable
-        // borrow before mutating `overlap_warn_partner`.
+        // Scan same-layer entries for a same-rounded-origin partner,
+        // excluding ourselves. Yields the first match's FQM and segment
+        // as owned values so we can release the immutable borrow before
+        // mutating `overlap_warn_partner`.
         let partner: Option<(FullyQualifiedMoniker, SegmentMoniker)> = self
             .scopes
             .values()
-            .filter(|other| other.layer_fq() == &entry_layer)
-            .filter(|other| other.is_zone() == entry_is_zone)
-            .filter(|other| other.fq() != fq)
-            .find(|other| same_rounded_origin(&entry_rect, other.rect()))
-            .map(|other| (other.fq().clone(), other.segment().clone()));
+            .filter(|other| other.layer_fq == entry_layer)
+            .filter(|other| &other.fq != fq)
+            .find(|other| same_rounded_origin(&entry_rect, &other.rect))
+            .map(|other| (other.fq.clone(), other.segment.clone()));
 
         let Some((partner_fq, partner_segment)) = partner else {
             // No overlap — release any stale suppression slot so the
@@ -1272,29 +869,16 @@ impl SpatialRegistry {
         self.overlap_warn_partner.insert(fq.clone(), partner_fq);
     }
 
-    /// Borrow a leaf [`FocusScope`] by FQM, or `None` if the FQM is
-    /// unregistered or registered as a zone.
+    /// Borrow a [`FocusScope`] by FQM, or `None` if the FQM is
+    /// unregistered.
     ///
-    /// Use [`zone`](Self::zone) to look up zones, [`is_registered`](Self::is_registered)
-    /// for variant-blind presence checks.
+    /// Use [`is_registered`](Self::is_registered) for presence checks
+    /// when the inner data isn't needed.
     pub fn scope(&self, fq: &FullyQualifiedMoniker) -> Option<&FocusScope> {
-        self.scopes.get(fq).and_then(RegisteredScope::as_scope)
+        self.scopes.get(fq)
     }
 
-    /// Borrow a [`FocusZone`] by FQM, or `None` if the FQM is
-    /// unregistered or registered as a leaf.
-    ///
-    /// `last_focused` is populated at registration (the kernel preserves
-    /// it across re-registers via [`apply_batch`](Self::apply_batch));
-    /// the registry does not mutate it after the fact.
-    pub fn zone(&self, fq: &FullyQualifiedMoniker) -> Option<&FocusZone> {
-        self.scopes.get(fq).and_then(RegisteredScope::as_zone)
-    }
-
-    /// `true` when **any** scope (leaf or zone) is registered under
-    /// `fq`. Convenience for callers that don't care which variant —
-    /// the navigator uses this to validate a starting FQM before
-    /// consulting a strategy.
+    /// `true` when a scope is registered under `fq`.
     pub fn is_registered(&self, fq: &FullyQualifiedMoniker) -> bool {
         self.scopes.contains_key(fq)
     }
@@ -1306,146 +890,74 @@ impl SpatialRegistry {
     /// no UUID sidecar, no topmost-layer heuristic. An unknown FQM
     /// returns `None` and the higher-level caller emits
     /// `tracing::error!` per the no-silent-dropout contract.
-    ///
-    /// Returns a public [`FocusEntry`] view — a variant-aware borrow
-    /// over the registered scope so callers that need leaf-vs-zone
-    /// variant access can branch via
-    /// [`FocusEntry::as_scope`](FocusEntry::as_scope) /
-    /// [`FocusEntry::as_zone`](FocusEntry::as_zone). For most consumers,
-    /// [`scope`](Self::scope) / [`zone`](Self::zone) are the
-    /// variant-typed shorthands.
-    pub fn find_by_fq(&self, fq: &FullyQualifiedMoniker) -> Option<FocusEntry<'_>> {
-        self.scopes.get(fq).map(FocusEntry::from_registered)
-    }
-
-    /// Crate-internal accessor returning the discriminated entry directly.
-    ///
-    /// External callers should use [`find_by_fq`](Self::find_by_fq),
-    /// [`scope`](Self::scope), or [`zone`](Self::zone). The
-    /// internal navigator and focus-state code pattern-match on the
-    /// entry variant; rather than expose that enum publicly (the kernel
-    /// has three peers, not four), we keep the match site inside the
-    /// crate.
-    pub(crate) fn entry(&self, fq: &FullyQualifiedMoniker) -> Option<&RegisteredScope> {
+    pub fn find_by_fq(&self, fq: &FullyQualifiedMoniker) -> Option<&FocusScope> {
         self.scopes.get(fq)
     }
 
-    /// Iterate every registered [`FocusScope`] leaf in the registry,
+    /// Iterate every registered [`FocusScope`] in the registry,
     /// regardless of layer.
-    pub fn leaves_iter(&self) -> impl Iterator<Item = &FocusScope> + '_ {
-        self.scopes.values().filter_map(RegisteredScope::as_scope)
+    pub fn scopes_iter(&self) -> impl Iterator<Item = &FocusScope> + '_ {
+        self.scopes.values()
     }
 
-    /// Iterate every registered [`FocusZone`] container in the registry,
-    /// regardless of layer.
-    pub fn zones_iter(&self) -> impl Iterator<Item = &FocusZone> + '_ {
-        self.scopes.values().filter_map(RegisteredScope::as_zone)
-    }
-
-    /// Iterate over the direct children of a zone — scopes whose
-    /// `parent_zone` equals `zone_fq`.
+    /// Iterate over the direct children of a scope — scopes whose
+    /// `parent_zone` equals `parent_fq`.
     ///
     /// Direct children only; grandchildren whose `parent_zone` points at
-    /// some other zone are excluded. Yields a small variant-aware view
-    /// (`ChildScope::Leaf` or `ChildScope::Zone`) so callers that need
-    /// to distinguish leaf vs container do so without pattern-matching
-    /// a public enum.
-    pub fn children_of_zone(
+    /// some other scope are excluded. A scope is a navigable container
+    /// when this iterator is non-empty, and a leaf when it is empty.
+    pub fn children_of(
         &self,
-        zone_fq: &FullyQualifiedMoniker,
-    ) -> impl Iterator<Item = ChildScope<'_>> + '_ {
-        let zone_fq = zone_fq.clone();
-        self.scopes.values().filter_map(move |s| {
-            if s.parent_zone() == Some(&zone_fq) {
-                Some(child_scope_from_entry(s))
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Crate-internal version of [`children_of_zone`](Self::children_of_zone)
-    /// that yields the discriminated entry directly. Used by the
-    /// navigator and state, which already pattern-match internally.
-    pub(crate) fn child_entries_of_zone(
-        &self,
-        zone_fq: &FullyQualifiedMoniker,
-    ) -> impl Iterator<Item = &RegisteredScope> + '_ {
-        let zone_fq = zone_fq.clone();
+        parent_fq: &FullyQualifiedMoniker,
+    ) -> impl Iterator<Item = &FocusScope> + '_ {
+        let parent_fq = parent_fq.clone();
         self.scopes
             .values()
-            .filter(move |s| s.parent_zone() == Some(&zone_fq))
+            .filter(move |s| s.parent_zone.as_ref() == Some(&parent_fq))
+    }
+
+    /// `true` when at least one scope is registered with
+    /// `parent_zone == Some(parent_fq)`.
+    ///
+    /// Equivalent to `children_of(parent_fq).next().is_some()` and
+    /// shorthand for the navigator's leaves-vs-containers tie-break.
+    pub fn has_children(&self, parent_fq: &FullyQualifiedMoniker) -> bool {
+        self.children_of(parent_fq).next().is_some()
     }
 
     /// Walk the `parent_zone` chain from the scope at `fq` upward,
-    /// collecting each ancestor [`FocusZone`] in innermost-first order.
+    /// collecting each ancestor scope in innermost-first order.
     ///
     /// The scope at `fq` is **not** included in the result — only its
-    /// ancestors. If `fq` is unknown, returns an empty vector. The walk
-    /// stops at the first ancestor that is not itself a zone (which
-    /// should not happen in a well-formed registry but is handled
-    /// defensively rather than panicking).
-    pub fn ancestor_zones(&self, fq: &FullyQualifiedMoniker) -> Vec<&FocusZone> {
+    /// ancestors. If `fq` is unknown, returns an empty vector.
+    pub fn ancestor_zones(&self, fq: &FullyQualifiedMoniker) -> Vec<&FocusScope> {
         let mut chain = Vec::new();
         let Some(start) = self.scopes.get(fq) else {
             return chain;
         };
 
-        let mut next = start.parent_zone().cloned();
+        let mut next = start.parent_zone.clone();
         while let Some(parent_fq) = next {
             let Some(parent) = self.scopes.get(&parent_fq) else {
                 break;
             };
-            let Some(zone) = parent.as_zone() else {
-                // A scope's parent_zone always names a Zone; if the
-                // registry is in an inconsistent state, stop walking
-                // rather than misclassifying the chain.
-                break;
-            };
-            chain.push(zone);
-            next = zone.parent_zone.clone();
+            chain.push(parent);
+            next = parent.parent_zone.clone();
         }
         chain
     }
 
-    /// Iterate every leaf [`FocusScope`] in `layer_fq`'s layer.
+    /// Iterate every [`FocusScope`] in `layer_fq`'s layer.
     ///
     /// Used by the navigator when computing beam-search candidate sets
-    /// — leaves outside the active layer are filtered out at this
+    /// — scopes outside the active layer are filtered out at this
     /// boundary rather than during scoring.
-    pub fn leaves_in_layer(
+    pub fn scopes_in_layer(
         &self,
         layer_fq: &FullyQualifiedMoniker,
     ) -> impl Iterator<Item = &FocusScope> + '_ {
         let layer_fq = layer_fq.clone();
-        self.scopes.values().filter_map(move |s| match s {
-            RegisteredScope::Scope(f) if f.layer_fq == layer_fq => Some(f),
-            _ => None,
-        })
-    }
-
-    /// Iterate every [`FocusZone`] in `layer_fq`'s layer.
-    pub fn zones_in_layer(
-        &self,
-        layer_fq: &FullyQualifiedMoniker,
-    ) -> impl Iterator<Item = &FocusZone> + '_ {
-        let layer_fq = layer_fq.clone();
-        self.scopes.values().filter_map(move |s| match s {
-            RegisteredScope::Zone(z) if z.layer_fq == layer_fq => Some(z),
-            _ => None,
-        })
-    }
-
-    /// Crate-internal: iterate every entry (leaf or zone) in
-    /// `layer_fq`'s layer.
-    pub(crate) fn entries_in_layer(
-        &self,
-        layer_fq: &FullyQualifiedMoniker,
-    ) -> impl Iterator<Item = &RegisteredScope> + '_ {
-        let layer_fq = layer_fq.clone();
-        self.scopes
-            .values()
-            .filter(move |s| s.layer_fq() == &layer_fq)
+        self.scopes.values().filter(move |s| s.layer_fq == layer_fq)
     }
 
     // ---------------------------------------------------------------------
@@ -1455,21 +967,18 @@ impl SpatialRegistry {
     /// Pick the [`FullyQualifiedMoniker`] to focus when the user drills
     /// *into* the scope at `fq`.
     ///
-    /// The semantics are zone-aware:
+    /// The semantics are:
     ///
-    /// - **Zone with a live `last_focused`** — returns that descendant's
-    ///   FQM, restoring the user's last position inside the zone
+    /// - **Scope with a live `last_focused`** — returns that descendant's
+    ///   FQM, restoring the user's last position inside the scope
     ///   across drill-out / drill-in cycles.
-    /// - **Zone with a stale or absent `last_focused`** — falls back to
+    /// - **Scope with a stale or absent `last_focused`** — falls back to
     ///   the first child by rect top-left ordering (topmost wins; ties
     ///   broken by leftmost). Matches `Direction::First` ordering so the
     ///   keyboard model stays consistent.
-    /// - **Zone with no children** — returns `focused_fq`. The caller
-    ///   compares the result against the focused FQM; equal means "no
-    ///   descent happened, fall through to edit / no-op".
-    /// - **[`FocusScope`] leaf** — returns `focused_fq`. Leaves do not
-    ///   have children to drill into; the React side decides
-    ///   separately whether the leaf has an inline-edit affordance.
+    /// - **Scope with no children (a leaf)** — returns `focused_fq`.
+    ///   The caller compares the result against the focused FQM; equal
+    ///   means "no descent happened, fall through to edit / no-op".
     /// - **Unknown `fq`** — emits `tracing::error!` and returns
     ///   `focused_fq`. The error is observable in logs; the React side
     ///   stays put visually.
@@ -1499,18 +1008,12 @@ impl SpatialRegistry {
             return focused_fq.clone();
         };
 
-        let Some(zone) = entry.as_zone() else {
-            // Leaf focused — leaves have no children to descend into.
-            // Semantic "stay put"; React falls through to inline edit.
-            return focused_fq.clone();
-        };
-
-        // Honor the zone's remembered position when it still resolves to
-        // a registered scope. A `last_focused` whose target was since
+        // Honor the scope's remembered position when it still resolves
+        // to a registered scope. A `last_focused` whose target was since
         // unregistered is treated the same as no memory at all.
-        if let Some(remembered) = &zone.last_focused {
+        if let Some(remembered) = &entry.last_focused {
             if let Some(remembered_entry) = self.scopes.get(remembered) {
-                return remembered_entry.fq().clone();
+                return remembered_entry.fq.clone();
             }
         }
 
@@ -1518,20 +1021,18 @@ impl SpatialRegistry {
         // shared `first_child_by_top_left` helper. The navigator's
         // `Direction::First` edge command calls the same helper, so
         // drill-in's cold-start pick and `nav.first` cannot drift apart.
-        // When the zone has no children at all, echo the focused FQM so
+        // When the scope has no children at all, echo the focused FQM so
         // the caller's no-descent fall-through fires.
-        first_child_by_top_left(self.child_entries_of_zone(&zone.fq))
-            .map(|s| s.fq().clone())
+        first_child_by_top_left(self.children_of(&entry.fq))
+            .map(|s| s.fq.clone())
             .unwrap_or_else(|| focused_fq.clone())
     }
 
     /// Pick the [`FullyQualifiedMoniker`] to focus when the user drills
     /// *out of* the scope at `fq`.
     ///
-    /// Returns the FQM of the scope's `parent_zone`. Works the same for
-    /// both [`FocusScope`] leaves and nested [`FocusZone`] containers —
-    /// the result is always the enclosing zone, so a repeated drill-out
-    /// walks the zone chain toward the layer root.
+    /// Returns the FQM of the scope's `parent_zone`. Walks the parent
+    /// chain toward the layer root.
     ///
     /// Returns `focused_fq` when:
     /// - the scope at `fq` has no `parent_zone` (sits directly under
@@ -1566,8 +1067,8 @@ impl SpatialRegistry {
             );
             return focused_fq.clone();
         };
-        let Some(parent_zone_fq) = entry.parent_zone() else {
-            // Layer-root edge — no enclosing zone. Well-formed; the
+        let Some(parent_zone_fq) = &entry.parent_zone else {
+            // Layer-root edge — no enclosing scope. Well-formed; the
             // React adapter dispatches `app.dismiss` on the
             // FQM-equality fall-through.
             return focused_fq.clone();
@@ -1584,7 +1085,7 @@ impl SpatialRegistry {
             );
             return focused_fq.clone();
         };
-        parent_entry.fq().clone()
+        parent_entry.fq.clone()
     }
 
     // ---------------------------------------------------------------------
@@ -1597,56 +1098,16 @@ impl SpatialRegistry {
     /// is on the React side (palette opens push, palette closes pop);
     /// the kanban-side store is just a flat map keyed by
     /// [`FullyQualifiedMoniker`].
-    ///
-    /// One **scope-is-leaf** check fires here, gated on structural
-    /// novelty: if any already-registered [`FocusScope`]'s FQM is a
-    /// strict path-prefix of the new layer's FQM, the React tree
-    /// composed this layer inside a misused `<FocusScope>`. Fire one
-    /// `scope-not-leaf` error per offending Scope ancestor with
-    /// `kind = "layer"` and `relation = "path-prefix"`.
-    ///
-    /// Layers do not have a `parent_zone` field — their `parent` field
-    /// always points at another Layer FQM — so the parent-zone branch
-    /// of the scope-is-leaf check does not apply to layers; only the
-    /// path-prefix branch does.
-    ///
-    /// Same-shape re-registration is silent. A layer's structural shape
-    /// is `(segment, name, parent, window_label)`; `last_focused` is
-    /// mutable runtime state and intentionally excluded so a layer that
-    /// has acquired focus history is not mis-classified as "novel" on
-    /// re-mount. The hot paths that re-push the same layer (StrictMode
-    /// double-mount, palette open/close cycles, IPC re-batch) all flow
-    /// through here repeatedly; without the gate an already-reported
-    /// illegal Layer-under-Scope edge would re-fire `scope-not-leaf` on
-    /// every render.
-    pub fn push_layer(&mut self, l: FocusLayer) {
-        let shape_unchanged = self
-            .layers
-            .get(&l.fq)
-            .map(|existing| same_shape_layer(existing, &l))
-            .unwrap_or(false);
-
-        if !shape_unchanged {
-            // Forward path-prefix scan: a Layer cannot be composed
-            // inside a `<FocusScope>` (Scopes are leaves). Walk the
-            // registered Scopes once and emit one event per ancestor
-            // Scope FQM that is a strict path-prefix of `l.fq`.
-            for entry in self.scopes.values() {
-                let RegisteredScope::Scope(ancestor) = entry else {
-                    continue;
-                };
-                if !is_path_descendant(&l.fq, &ancestor.fq) {
-                    continue;
-                }
-                warn_scope_not_leaf(
-                    &l.fq,
-                    &l.segment,
-                    &ancestor.fq,
-                    &ancestor.segment,
-                    /* kind */ "layer",
-                    /* parent_kind */ "scope",
-                    /* relation */ "path-prefix",
-                );
+    pub fn push_layer(&mut self, mut l: FocusLayer) {
+        // Preserve any existing `last_focused` so a re-push (StrictMode
+        // double-mount, palette open/close cycles, IPC re-batch) does
+        // not lose drill-out memory accumulated by the kernel writer
+        // (`record_focus`) while the prior push was live. New
+        // registrations start with whatever was passed in (typically
+        // `None`).
+        if l.last_focused.is_none() {
+            if let Some(existing) = self.layers.get(&l.fq) {
+                l.last_focused = existing.last_focused.clone();
             }
         }
 
@@ -1758,114 +1219,44 @@ impl SpatialRegistry {
     /// ships it through a single IPC invoke; the adapter holds the
     /// registry lock once and forwards the slice here.
     ///
-    /// Iteration order is the order of the input vector. Each entry is
-    /// validated before mutating any existing scope: if any entry fails
-    /// the kind-stability check (an FQM registered as one variant being
-    /// re-registered as the other), the call returns
-    /// [`BatchRegisterError::KindMismatch`] **without** applying any
-    /// part of the batch. Successful batches are atomic at the registry
-    /// boundary — observers see all-or-nothing.
-    ///
-    /// # Errors
-    /// - [`BatchRegisterError::KindMismatch`] when an entry's variant
-    ///   disagrees with the variant already registered under the same
-    ///   FQM. The placeholder/real-mount swap relies on
-    ///   `register_scope` and `register_zone` being **idempotent on
-    ///   FQM but not silently variant-changing**, so the error surface
-    ///   is the kernel's contract enforcement point.
-    pub fn apply_batch(&mut self, entries: Vec<RegisterEntry>) -> Result<(), BatchRegisterError> {
-        // Validate every entry up front so a partial application cannot
-        // leave the registry in a half-applied state. Cheap because the
-        // current scope set is read-only here — we only check the variant
-        // discriminator.
-        for entry in &entries {
-            let fq = entry.fq();
-            if let Some(existing) = self.scopes.get(fq) {
-                let existing_is_zone = existing.is_zone();
-                let entry_is_zone = matches!(entry, RegisterEntry::Zone { .. });
-                if existing_is_zone != entry_is_zone {
-                    return Err(BatchRegisterError::KindMismatch {
-                        fq: fq.clone(),
-                        existing_kind: if existing_is_zone {
-                            ScopeKind::Zone
-                        } else {
-                            ScopeKind::Scope
-                        },
-                        requested_kind: if entry_is_zone {
-                            ScopeKind::Zone
-                        } else {
-                            ScopeKind::Scope
-                        },
-                    });
-                }
-            }
-        }
-
-        // Validation passed — apply each entry. The registry's per-FQM
-        // overwrite semantics handle the placeholder→real-mount rect
-        // refresh transparently; zones preserve their `last_focused`
-        // slot across re-registers (rather than resetting it on every
-        // virtualizer pass) so drill-out memory survives the swap.
+    /// Iteration order is the order of the input vector. Successful
+    /// batches are atomic at the registry boundary — observers see
+    /// all-or-nothing.
+    pub fn apply_batch(&mut self, entries: Vec<RegisterEntry>) {
+        // Apply each entry. The registry's per-FQM overwrite semantics
+        // handle the placeholder→real-mount rect refresh transparently;
+        // scopes preserve their `last_focused` slot across re-registers
+        // (rather than resetting it on every virtualizer pass) so
+        // drill-out memory survives the swap.
         for entry in entries {
-            match entry {
-                RegisterEntry::Scope {
-                    fq,
-                    segment,
-                    rect,
-                    layer_fq,
-                    parent_zone,
-                    overrides,
-                } => {
-                    self.register_scope(FocusScope {
-                        fq,
-                        segment,
-                        rect,
-                        layer_fq,
-                        parent_zone,
-                        overrides,
-                    });
-                }
-                RegisterEntry::Zone {
-                    fq,
-                    segment,
-                    rect,
-                    layer_fq,
-                    parent_zone,
-                    overrides,
-                } => {
-                    // Preserve any existing `last_focused` so a real-mount
-                    // swap from a placeholder doesn't lose drill-out memory
-                    // accumulated while the placeholder was live. New zones
-                    // start with `None` as before.
-                    let last_focused = self
-                        .scopes
-                        .get(&fq)
-                        .and_then(|s| s.as_zone())
-                        .and_then(|z| z.last_focused.clone());
-                    self.register_zone(FocusZone {
-                        fq,
-                        segment,
-                        rect,
-                        layer_fq,
-                        parent_zone,
-                        last_focused,
-                        overrides,
-                    });
-                }
-            }
+            let RegisterEntry {
+                fq,
+                segment,
+                rect,
+                layer_fq,
+                parent_zone,
+                overrides,
+            } = entry;
+            self.register_scope(FocusScope {
+                fq,
+                segment,
+                rect,
+                layer_fq,
+                parent_zone,
+                last_focused: None,
+                overrides,
+            });
         }
-
-        Ok(())
     }
 }
 
 /// Pick the topmost-then-leftmost child from `children`.
 ///
-/// Compares `rect().top()`, breaking ties on `rect().left()`. This is
-/// the canonical "first child" ordering shared by:
+/// Compares `rect.top()`, breaking ties on `rect.left()`. This is the
+/// canonical "first child" ordering shared by:
 ///
 /// - [`SpatialRegistry::drill_in`]'s cold-start fallback (when the
-///   target zone has no `last_focused` memory).
+///   target scope has no `last_focused` memory).
 /// - The navigator's `Direction::First` edge command
 ///   (`navigate::edge_command`), and the deprecated
 ///   `Direction::RowStart` alias that routes through the same arm.
@@ -1876,274 +1267,66 @@ impl SpatialRegistry {
 /// construction — the two ops cannot diverge unless they stop calling
 /// this helper.
 pub(crate) fn first_child_by_top_left<'a>(
-    children: impl Iterator<Item = &'a RegisteredScope>,
-) -> Option<&'a RegisteredScope> {
+    children: impl Iterator<Item = &'a FocusScope>,
+) -> Option<&'a FocusScope> {
     children.min_by(|a, b| {
-        pixels_cmp(a.rect().top(), b.rect().top())
-            .then(pixels_cmp(a.rect().left(), b.rect().left()))
+        pixels_cmp(a.rect.top(), b.rect.top()).then(pixels_cmp(a.rect.left(), b.rect.left()))
     })
 }
 
 /// Pick the bottommost-then-rightmost child from `children`.
 ///
 /// The mirror of [`first_child_by_top_left`]: compares
-/// `rect().bottom()`, breaking ties on `rect().right()`. Comparing
+/// `rect.bottom()`, breaking ties on `rect.right()`. Comparing
 /// bottoms (rather than tops) means a child whose top sits higher than
 /// a sibling's but whose bottom extends below still wins. Used by the
 /// navigator's `Direction::Last` edge command, and by the deprecated
 /// `Direction::RowEnd` alias that routes through the same arm.
 pub(crate) fn last_child_by_bottom_right<'a>(
-    children: impl Iterator<Item = &'a RegisteredScope>,
-) -> Option<&'a RegisteredScope> {
+    children: impl Iterator<Item = &'a FocusScope>,
+) -> Option<&'a FocusScope> {
     children.max_by(|a, b| {
-        pixels_cmp(a.rect().bottom(), b.rect().bottom())
-            .then(pixels_cmp(a.rect().right(), b.rect().right()))
+        pixels_cmp(a.rect.bottom(), b.rect.bottom())
+            .then(pixels_cmp(a.rect.right(), b.rect.right()))
     })
-}
-
-/// Public variant-aware view over a registered scope, returned by
-/// [`SpatialRegistry::entry_for`] (the canonical FQM-keyed lookup).
-///
-/// Provides the leaf-vs-container split without exposing the internal
-/// [`RegisteredScope`] enum. Most consumers use the variant-typed
-/// shorthands [`SpatialRegistry::scope`] / [`SpatialRegistry::zone`];
-/// [`FocusEntry`] is for callers that need a uniform handle through
-/// which to inspect the FQM, segment, or rect regardless of variant.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FocusEntry<'a> {
-    /// The entry is a leaf [`FocusScope`].
-    Leaf(&'a FocusScope),
-    /// The entry is a [`FocusZone`] container.
-    Zone(&'a FocusZone),
-}
-
-impl<'a> FocusEntry<'a> {
-    /// Map an internal [`RegisteredScope`] to the public view.
-    pub(crate) fn from_registered(reg: &'a RegisteredScope) -> Self {
-        match reg {
-            RegisteredScope::Scope(f) => Self::Leaf(f),
-            RegisteredScope::Zone(z) => Self::Zone(z),
-        }
-    }
-
-    /// Canonical FQM of the entry, regardless of variant.
-    pub fn fq(&self) -> &FullyQualifiedMoniker {
-        match self {
-            Self::Leaf(f) => &f.fq,
-            Self::Zone(z) => &z.fq,
-        }
-    }
-
-    /// Relative segment of the entry, regardless of variant. For
-    /// human-readable logging.
-    pub fn segment(&self) -> &SegmentMoniker {
-        match self {
-            Self::Leaf(f) => &f.segment,
-            Self::Zone(z) => &z.segment,
-        }
-    }
-
-    /// Owning layer's FQM, regardless of variant.
-    pub fn layer_fq(&self) -> &FullyQualifiedMoniker {
-        match self {
-            Self::Leaf(f) => &f.layer_fq,
-            Self::Zone(z) => &z.layer_fq,
-        }
-    }
-
-    /// Bounding rect of the entry, regardless of variant.
-    pub fn rect(&self) -> Rect {
-        match self {
-            Self::Leaf(f) => f.rect,
-            Self::Zone(z) => z.rect,
-        }
-    }
-
-    /// Borrow the inner [`FocusScope`] when the entry is a leaf, else
-    /// `None`. The variant-typed counterpart of
-    /// [`SpatialRegistry::scope`](SpatialRegistry::scope) for callers
-    /// that already hold a [`FocusEntry`].
-    pub fn as_scope(&self) -> Option<&'a FocusScope> {
-        match self {
-            Self::Leaf(f) => Some(*f),
-            Self::Zone(_) => None,
-        }
-    }
-
-    /// Borrow the inner [`FocusZone`] when the entry is a zone, else
-    /// `None`. The variant-typed counterpart of
-    /// [`SpatialRegistry::zone`](SpatialRegistry::zone) for callers
-    /// that already hold a [`FocusEntry`].
-    pub fn as_zone(&self) -> Option<&'a FocusZone> {
-        match self {
-            Self::Zone(z) => Some(*z),
-            Self::Leaf(_) => None,
-        }
-    }
-}
-
-/// Variant-aware view returned by [`SpatialRegistry::children_of_zone`].
-///
-/// Provides the leaf vs container split without exposing the internal
-/// [`RegisteredScope`] enum. Consumers that only need the shared fields
-/// (`fq`, `segment`, `rect`, `parent_zone`) can use the accessor methods;
-/// consumers that need a typed view of one variant pattern-match on the
-/// enum.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ChildScope<'a> {
-    /// A leaf [`FocusScope`] child.
-    Leaf(&'a FocusScope),
-    /// A nested [`FocusZone`] child.
-    Zone(&'a FocusZone),
-}
-
-impl<'a> ChildScope<'a> {
-    /// Canonical FQM of the child, regardless of variant.
-    pub fn fq(&self) -> &FullyQualifiedMoniker {
-        match self {
-            Self::Leaf(f) => &f.fq,
-            Self::Zone(z) => &z.fq,
-        }
-    }
-
-    /// Relative segment of the child, regardless of variant.
-    pub fn segment(&self) -> &SegmentMoniker {
-        match self {
-            Self::Leaf(f) => &f.segment,
-            Self::Zone(z) => &z.segment,
-        }
-    }
-
-    /// Bounding rect of the child, regardless of variant.
-    pub fn rect(&self) -> Rect {
-        match self {
-            Self::Leaf(f) => f.rect,
-            Self::Zone(z) => z.rect,
-        }
-    }
-}
-
-/// Adapter from the internal [`RegisteredScope`] enum to the public
-/// [`ChildScope`] variant-aware view. Crate-private so the internal
-/// enum stays hidden.
-fn child_scope_from_entry(entry: &RegisteredScope) -> ChildScope<'_> {
-    match entry {
-        RegisteredScope::Scope(f) => ChildScope::Leaf(f),
-        RegisteredScope::Zone(z) => ChildScope::Zone(z),
-    }
 }
 
 /// One entry in a batch registration.
 ///
-/// The wire-shape companion to [`FocusScope`] / [`FocusZone`] —
-/// reuses the same fields and the same newtypes so the IPC boundary
-/// can be a single `Vec<RegisterEntry>` payload. The discriminator
-/// uses a `kind` tag with `snake_case` rename so the React side reads
-/// the variant the same way it reads other tagged enums in the kernel.
+/// The wire-shape companion to [`FocusScope`] — reuses the same fields
+/// and the same newtypes so the IPC boundary can be a single
+/// `Vec<RegisterEntry>` payload.
 ///
-/// `last_focused` is intentionally **not** carried on the wire for
-/// the `Zone` variant: registration is the React side's "this scope
-/// just mounted" signal, and `last_focused` is server-owned drill-out
-/// memory that the navigator populates as focus moves. The registry
-/// preserves any existing `last_focused` slot when a zone is
-/// re-registered (the placeholder/real-mount swap), so the lack of a
-/// wire field is correct rather than lossy.
+/// `last_focused` is intentionally **not** carried on the wire:
+/// registration is the React side's "this scope just mounted" signal,
+/// and `last_focused` is server-owned drill-out memory written by the
+/// kernel ([`SpatialRegistry::record_focus`], invoked by
+/// [`super::state::SpatialState::focus`] on every successful focus
+/// transition). The registry preserves any existing `last_focused`
+/// slot when a scope is re-registered (the placeholder/real-mount
+/// swap), so the lack of a wire field is correct rather than lossy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RegisterEntry {
-    /// A leaf focus scope — see [`FocusScope`].
-    Scope {
-        /// Canonical FQM for this mount.
-        fq: FullyQualifiedMoniker,
-        /// Relative segment the consumer declared.
-        segment: SegmentMoniker,
-        /// Bounding rect in viewport coordinates.
-        rect: Rect,
-        /// Owning layer's FQM.
-        layer_fq: FullyQualifiedMoniker,
-        /// Immediate enclosing zone's FQM, if any.
-        parent_zone: Option<FullyQualifiedMoniker>,
-        /// Per-direction overrides.
-        overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-    },
-    /// A navigable container — see [`FocusZone`].
-    Zone {
-        /// Canonical FQM for this mount.
-        fq: FullyQualifiedMoniker,
-        /// Relative segment the consumer declared.
-        segment: SegmentMoniker,
-        /// Bounding rect in viewport coordinates.
-        rect: Rect,
-        /// Owning layer's FQM.
-        layer_fq: FullyQualifiedMoniker,
-        /// Immediate enclosing zone's FQM, if any.
-        parent_zone: Option<FullyQualifiedMoniker>,
-        /// Per-direction overrides.
-        overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-    },
+pub struct RegisterEntry {
+    /// Canonical FQM for this mount.
+    pub fq: FullyQualifiedMoniker,
+    /// Relative segment the consumer declared.
+    pub segment: SegmentMoniker,
+    /// Bounding rect in viewport coordinates.
+    pub rect: Rect,
+    /// Owning layer's FQM.
+    pub layer_fq: FullyQualifiedMoniker,
+    /// Immediate enclosing scope's FQM, if any.
+    pub parent_zone: Option<FullyQualifiedMoniker>,
+    /// Per-direction overrides.
+    pub overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
 }
 
 impl RegisterEntry {
-    /// Read the entry's [`FullyQualifiedMoniker`] regardless of variant.
+    /// Read the entry's [`FullyQualifiedMoniker`].
     pub fn fq(&self) -> &FullyQualifiedMoniker {
-        match self {
-            Self::Scope { fq, .. } | Self::Zone { fq, .. } => fq,
-        }
+        &self.fq
     }
 }
-
-/// Discriminator for the [`BatchRegisterError::KindMismatch`] error
-/// payload. The variant-on-the-wire `kind` tag in [`RegisterEntry`]
-/// uses `snake_case`; this enum is internal to the error surface so
-/// it can stay in PascalCase for ergonomic `match` arms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScopeKind {
-    /// Matches [`RegisterEntry::Scope`] — a leaf [`FocusScope`].
-    Scope,
-    /// Matches [`RegisterEntry::Zone`] — a [`FocusZone`].
-    Zone,
-}
-
-/// Errors produced by [`SpatialRegistry::apply_batch`].
-///
-/// The batch entry point validates kind-stability before mutating any
-/// scope, so a returned error guarantees the registry is unchanged.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BatchRegisterError {
-    /// An entry's variant disagrees with the variant already
-    /// registered under the same FQM.
-    ///
-    /// The placeholder/real-mount swap requires that whoever generates
-    /// the placeholder uses the same FQM **and** the same kind as the
-    /// eventual real mount. A mismatch indicates a bug on the React
-    /// side (e.g. a zone placeholder for a card that mounts as a leaf),
-    /// which the kernel surfaces rather than silently converting types.
-    KindMismatch {
-        /// The offending FQM.
-        fq: FullyQualifiedMoniker,
-        /// Kind currently registered under that FQM.
-        existing_kind: ScopeKind,
-        /// Kind requested by the entry.
-        requested_kind: ScopeKind,
-    },
-}
-
-impl std::fmt::Display for BatchRegisterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::KindMismatch {
-                fq,
-                existing_kind,
-                requested_kind,
-            } => write!(
-                f,
-                "FQM {fq} already registered as {existing_kind:?}; cannot re-register as {requested_kind:?}",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for BatchRegisterError {}
 
 #[cfg(test)]
 mod tests {
@@ -2164,19 +1347,8 @@ mod tests {
         }
     }
 
-    fn focus_scope(fq: &str, layer: &str, parent_zone: Option<&str>) -> FocusScope {
+    fn make_scope(fq: &str, layer: &str, parent_zone: Option<&str>) -> FocusScope {
         FocusScope {
-            fq: FullyQualifiedMoniker::from_string(fq),
-            segment: SegmentMoniker::from_string(fq.rsplit('/').next().unwrap_or(fq)),
-            rect: rect(),
-            layer_fq: FullyQualifiedMoniker::from_string(layer),
-            parent_zone: parent_zone.map(FullyQualifiedMoniker::from_string),
-            overrides: HashMap::new(),
-        }
-    }
-
-    fn zone(fq: &str, layer: &str, parent_zone: Option<&str>) -> FocusZone {
-        FocusZone {
             fq: FullyQualifiedMoniker::from_string(fq),
             segment: SegmentMoniker::from_string(fq.rsplit('/').next().unwrap_or(fq)),
             rect: rect(),
@@ -2187,7 +1359,7 @@ mod tests {
         }
     }
 
-    fn layer(fq: &str, window: &str, parent: Option<&str>) -> FocusLayer {
+    fn make_layer(fq: &str, window: &str, parent: Option<&str>) -> FocusLayer {
         FocusLayer {
             fq: FullyQualifiedMoniker::from_string(fq),
             segment: SegmentMoniker::from_string(fq.rsplit('/').next().unwrap_or(fq)),
@@ -2201,7 +1373,7 @@ mod tests {
     #[test]
     fn register_and_lookup() {
         let mut reg = SpatialRegistry::new();
-        reg.register_scope(focus_scope("/L/k", "/L", None));
+        reg.register_scope(make_scope("/L/k", "/L", None));
         assert!(reg
             .scope(&FullyQualifiedMoniker::from_string("/L/k"))
             .is_some());
@@ -2210,9 +1382,9 @@ mod tests {
     #[test]
     fn ancestor_zones_walks_chain() {
         let mut reg = SpatialRegistry::new();
-        reg.register_zone(zone("/L/outer", "/L", None));
-        reg.register_zone(zone("/L/outer/inner", "/L", Some("/L/outer")));
-        reg.register_scope(focus_scope(
+        reg.register_scope(make_scope("/L/outer", "/L", None));
+        reg.register_scope(make_scope("/L/outer/inner", "/L", Some("/L/outer")));
+        reg.register_scope(make_scope(
             "/L/outer/inner/leaf",
             "/L",
             Some("/L/outer/inner"),
@@ -2230,10 +1402,21 @@ mod tests {
     }
 
     #[test]
+    fn has_children_reflects_registrations() {
+        let mut reg = SpatialRegistry::new();
+        reg.register_scope(make_scope("/L/parent", "/L", None));
+        let parent_fq = FullyQualifiedMoniker::from_string("/L/parent");
+        assert!(!reg.has_children(&parent_fq));
+
+        reg.register_scope(make_scope("/L/parent/child", "/L", Some("/L/parent")));
+        assert!(reg.has_children(&parent_fq));
+    }
+
+    #[test]
     fn root_for_window_finds_window_root() {
         let mut reg = SpatialRegistry::new();
-        reg.push_layer(layer("/win-a", "win-a", None));
-        reg.push_layer(layer("/win-a/ins", "win-a", Some("/win-a")));
+        reg.push_layer(make_layer("/win-a", "win-a", None));
+        reg.push_layer(make_layer("/win-a/ins", "win-a", Some("/win-a")));
 
         let root = reg
             .root_for_window(&WindowLabel::from_string("win-a"))
@@ -2393,6 +1576,7 @@ mod tests {
             rect: r,
             layer_fq: FullyQualifiedMoniker::from_string(layer),
             parent_zone: None,
+            last_focused: None,
             overrides: HashMap::new(),
         }
     }
@@ -2409,12 +1593,10 @@ mod tests {
         events
             .iter()
             .filter(|e| {
-                matches!(
-                    e.op(),
-                    Some("register_scope") | Some("register_zone") | Some("update_rect")
-                ) && (e.field("component").is_some()
-                    || e.field("width").is_some()
-                    || e.field("height").is_some())
+                matches!(e.op(), Some("register_scope") | Some("update_rect"))
+                    && (e.field("component").is_some()
+                        || e.field("width").is_some()
+                        || e.field("height").is_some())
             })
             .collect()
     }

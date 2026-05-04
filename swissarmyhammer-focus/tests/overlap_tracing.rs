@@ -1,7 +1,7 @@
 //! Source-of-truth integration tests for the same-kind-overlap warning
 //! contract on the [`SpatialRegistry`].
 //!
-//! When two `FocusZone`s register at the same rounded `(x, y)` in the
+//! When two `FocusScope`s register at the same rounded `(x, y)` in the
 //! same layer — or two `FocusScope`s do — the registry emits one
 //! `tracing::warn!` event flagging a likely needless-nesting candidate.
 //! Cross-kind overlaps (zone-vs-scope) are NOT warned because a leaf as
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+    FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
     SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 use tracing::{
@@ -164,8 +164,8 @@ fn make_layer(layer_fq: &str, window: &str) -> FocusLayer {
     }
 }
 
-fn make_zone(fq_str: &str, layer: &str, r: Rect) -> FocusZone {
-    FocusZone {
+fn make_zone(fq_str: &str, layer: &str, r: Rect) -> FocusScope {
+    FocusScope {
         fq: fq(fq_str),
         segment: segment(fq_str.rsplit('/').next().unwrap_or(fq_str)),
         rect: r,
@@ -184,6 +184,7 @@ fn make_scope(fq_str: &str, layer: &str, r: Rect) -> FocusScope {
         layer_fq: fq(layer),
         parent_zone: None,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
@@ -203,7 +204,7 @@ fn overlap_events(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
 // Same-layer same-kind overlap detection.
 // ---------------------------------------------------------------------------
 
-/// Two `FocusZone`s registered at the same rounded `(x, y)` in the
+/// Two `FocusScope`s registered at the same rounded `(x, y)` in the
 /// same layer emit exactly one `WARN` whose `op = "register_zone"` and
 /// whose payload identifies both FQMs and the rounded coordinates.
 #[test]
@@ -215,8 +216,8 @@ fn two_zones_same_xy_same_layer_warns_once() {
     let b = make_zone("/L/zone-b", "/L", rect(100.0, 80.0, 60.0, 40.0));
 
     let (_, captured) = capture_warns(|| {
-        reg.register_zone(a);
-        reg.register_zone(b);
+        reg.register_scope(a);
+        reg.register_scope(b);
     });
 
     let events = overlap_events(&captured);
@@ -226,7 +227,7 @@ fn two_zones_same_xy_same_layer_warns_once() {
         "two zones at same (x, y) must emit exactly one overlap WARN, got {captured:?}"
     );
     let e = events[0];
-    assert_eq!(e.op(), Some("register_zone"));
+    assert_eq!(e.op(), Some("register_scope"));
     assert_eq!(e.field("x"), Some("100"));
     assert_eq!(e.field("y"), Some("80"));
     let new_fq = e.field("new_fq").expect("new_fq present");
@@ -264,48 +265,45 @@ fn two_scopes_same_xy_same_layer_warns_once() {
     assert_eq!(e.field("overlap_fq"), Some("/L/scope-a"));
 }
 
-/// Cross-kind overlap (zone, then scope at the same point) is the
-/// normal layout for a leaf as the sole child of an unpadded zone.
-/// Zero overlap warnings.
+// The previous tests `zone_and_scope_same_xy_does_not_warn` and
+// `scope_and_zone_same_xy_does_not_warn` asserted that the kernel
+// suppressed overlap warnings when the two registrations had different
+// kind discriminators (one zone + one scope). With the FocusZone /
+// FocusScope collapse there is no kind, so every overlap is a single
+// uniform case — those tests' premise is gone. The single replacement
+// test below pins the new behaviour: any same-(x, y) overlap in the
+// same layer produces one warning, regardless of who registered first.
+// Kept after the collapse — every scope is uniform now.
+
+/// Two scopes at the same `(x, y)` in the same layer emit a warning
+/// even when one of them later acts as a container. Under the unified
+/// primitive, "kind" is no longer a registration property; the
+/// needless-nesting heuristic fires uniformly.
 #[test]
-fn zone_and_scope_same_xy_does_not_warn() {
+fn same_xy_overlap_warns_regardless_of_descendants() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
 
-    let z = make_zone("/L/zone", "/L", rect(100.0, 80.0, 50.0, 30.0));
-    let s = make_scope("/L/scope", "/L", rect(100.0, 80.0, 50.0, 30.0));
+    let a = make_scope("/L/a", "/L", rect(100.0, 80.0, 50.0, 30.0));
+    let b = make_scope("/L/b", "/L", rect(100.0, 80.0, 50.0, 30.0));
+    let b_child = make_scope("/L/b/inner", "/L", rect(100.0, 80.0, 10.0, 10.0));
 
     let (_, captured) = capture_warns(|| {
-        reg.register_zone(z);
-        reg.register_scope(s);
+        reg.register_scope(a);
+        reg.register_scope(b);
+        // Registering a child under b makes it a container; the
+        // overlap warning fired earlier still stands.
+        let mut child = b_child;
+        child.parent_zone = Some(swissarmyhammer_focus::FullyQualifiedMoniker::from_string(
+            "/L/b",
+        ));
+        reg.register_scope(child);
     });
 
-    assert_eq!(
-        overlap_events(&captured).len(),
-        0,
-        "cross-kind overlap is allowed; got {captured:?}"
-    );
-}
-
-/// Cross-kind in the other direction (scope, then zone at the same
-/// point) — also allowed.
-#[test]
-fn scope_and_zone_same_xy_does_not_warn() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "main"));
-
-    let s = make_scope("/L/scope", "/L", rect(100.0, 80.0, 50.0, 30.0));
-    let z = make_zone("/L/zone", "/L", rect(100.0, 80.0, 50.0, 30.0));
-
-    let (_, captured) = capture_warns(|| {
-        reg.register_scope(s);
-        reg.register_zone(z);
-    });
-
-    assert_eq!(
-        overlap_events(&captured).len(),
-        0,
-        "cross-kind overlap is allowed (other direction); got {captured:?}"
+    let events = overlap_events(&captured);
+    assert!(
+        !events.is_empty(),
+        "same (x, y) overlap must emit at least one warning, got {captured:?}"
     );
 }
 
@@ -320,8 +318,8 @@ fn two_zones_different_xy_does_not_warn() {
     let b = make_zone("/L/zone-b", "/L", rect(120.0, 80.0, 50.0, 30.0));
 
     let (_, captured) = capture_warns(|| {
-        reg.register_zone(a);
-        reg.register_zone(b);
+        reg.register_scope(a);
+        reg.register_scope(b);
     });
 
     assert_eq!(
@@ -348,8 +346,8 @@ fn two_zones_subpixel_difference_does_not_warn() {
     let b = make_zone("/L/zone-b", "/L", rect(100.6, 80.0, 50.0, 30.0));
 
     let (_, captured) = capture_warns(|| {
-        reg.register_zone(a);
-        reg.register_zone(b);
+        reg.register_scope(a);
+        reg.register_scope(b);
     });
 
     assert_eq!(
@@ -371,8 +369,8 @@ fn two_zones_same_xy_different_layers_does_not_warn() {
     let b = make_zone("/L2/zone-b", "/L2", rect(100.0, 80.0, 50.0, 30.0));
 
     let (_, captured) = capture_warns(|| {
-        reg.register_zone(a);
-        reg.register_zone(b);
+        reg.register_scope(a);
+        reg.register_scope(b);
     });
 
     assert_eq!(
@@ -396,8 +394,8 @@ fn update_rect_creates_overlap_warns_once() {
     let a = make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0));
     let b = make_zone("/L/zone-b", "/L", rect(200.0, 80.0, 50.0, 30.0));
 
-    reg.register_zone(a);
-    reg.register_zone(b);
+    reg.register_scope(a);
+    reg.register_scope(b);
 
     let b_fq = fq("/L/zone-b");
     let (_, captured) = capture_warns(|| reg.update_rect(&b_fq, rect(100.0, 80.0, 50.0, 30.0)));
@@ -423,8 +421,8 @@ fn update_rect_repeated_with_same_overlap_does_not_re_warn() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
 
-    reg.register_zone(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
-    reg.register_zone(make_zone("/L/zone-b", "/L", rect(200.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-b", "/L", rect(200.0, 80.0, 50.0, 30.0)));
 
     let b_fq = fq("/L/zone-b");
 
@@ -451,8 +449,8 @@ fn update_rect_clears_overlap_then_re_creates_warns_again() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
 
-    reg.register_zone(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
-    reg.register_zone(make_zone("/L/zone-b", "/L", rect(200.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-b", "/L", rect(200.0, 80.0, 50.0, 30.0)));
 
     let b_fq = fq("/L/zone-b");
 
@@ -483,8 +481,8 @@ fn unregister_scope_resets_suppression_for_key() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
 
-    reg.register_zone(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
-    reg.register_zone(make_zone("/L/zone-b", "/L", rect(100.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-a", "/L", rect(100.0, 80.0, 50.0, 30.0)));
+    reg.register_scope(make_zone("/L/zone-b", "/L", rect(100.0, 80.0, 50.0, 30.0)));
 
     let b_fq = fq("/L/zone-b");
 
@@ -493,7 +491,7 @@ fn unregister_scope_resets_suppression_for_key() {
         // Re-register at the same overlapping position. Suppression
         // was cleared by unregister, so this counts as a fresh
         // overlap and should emit one WARN.
-        reg.register_zone(make_zone("/L/zone-b", "/L", rect(100.0, 80.0, 50.0, 30.0)));
+        reg.register_scope(make_zone("/L/zone-b", "/L", rect(100.0, 80.0, 50.0, 30.0)));
     });
 
     let events = overlap_events(&captured);
@@ -502,5 +500,5 @@ fn unregister_scope_resets_suppression_for_key() {
         1,
         "unregister + re-register must release suppression and emit a fresh WARN; got {captured:?}"
     );
-    assert_eq!(events[0].op(), Some("register_zone"));
+    assert_eq!(events[0].op(), Some("register_scope"));
 }

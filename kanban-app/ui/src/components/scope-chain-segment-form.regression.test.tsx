@@ -1,7 +1,7 @@
 /**
  * Regression tests for the segment-form scope-chain contract.
  *
- * After the path-monikers (FQM) refactor, `<FocusScope>` and `<FocusZone>`
+ * After the path-monikers (FQM) refactor, `<FocusScope>` and `<FocusScope>`
  * briefly wrote the *full FQM* (`/window/perspective:p1/board:b1/task:abc`)
  * into `CommandScope.moniker`. The Rust scope-commands code parses each
  * scope-chain entry with `split_once(':')` to extract an entity type — so
@@ -16,7 +16,7 @@
  *
  * These tests pin the contract at three layers:
  *
- *   1. The leaf `CommandScope` produced by `<FocusScope>` / `<FocusZone>`
+ *   1. The leaf `CommandScope` produced by `<FocusScope>` / `<FocusScope>`
  *      has `.moniker === segment` (not the FQM).
  *   2. The full ancestor chain visible at the leaf is all-segments — every
  *      entry parses as `entity_type:entity_id` via `split_once(':')`.
@@ -45,7 +45,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { FocusScope } from "./focus-scope";
-import { FocusZone } from "./focus-zone";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
@@ -59,7 +58,7 @@ import { asSegment } from "@/types/spatial";
 
 /**
  * Captures the `CommandScope` visible at its mount point so tests can
- * assert against the exact scope object FocusScope/FocusZone produced.
+ * assert against the exact scope object FocusScope/FocusScope produced.
  */
 function CaptureScope({
   out,
@@ -103,16 +102,16 @@ describe("scope chain emits segment-form monikers (regression)", () => {
     expect(captured.current!.moniker).not.toContain("/");
   });
 
-  it("FocusZone.scope.moniker is the segment, not the full FQM", () => {
+  it("FocusScope.scope.moniker is the segment, not the full FQM", () => {
     const captured: { current: CommandScope | null } = { current: null };
 
     render(
       <SpatialFocusProvider>
         <EntityFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <FocusZone moniker={asSegment("ui:toolbar.actions")}>
+            <FocusScope moniker={asSegment("ui:toolbar.actions")}>
               <CaptureScope out={captured} />
-            </FocusZone>
+            </FocusScope>
           </FocusLayer>
         </EntityFocusProvider>
       </SpatialFocusProvider>,
@@ -131,13 +130,13 @@ describe("scope chain emits segment-form monikers (regression)", () => {
         <EntityFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <CommandScopeProvider moniker="view:v1">
-              <FocusZone moniker={asSegment("board:b1")}>
-                <FocusZone moniker={asSegment("column:todo")}>
+              <FocusScope moniker={asSegment("board:b1")}>
+                <FocusScope moniker={asSegment("column:todo")}>
                   <FocusScope moniker={asSegment("task:abc")}>
                     <CaptureScope out={captured} />
                   </FocusScope>
-                </FocusZone>
-              </FocusZone>
+                </FocusScope>
+              </FocusScope>
             </CommandScopeProvider>
           </FocusLayer>
         </EntityFocusProvider>

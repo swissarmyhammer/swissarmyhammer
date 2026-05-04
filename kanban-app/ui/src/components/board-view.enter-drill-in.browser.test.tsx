@@ -231,7 +231,7 @@ async function defaultInvokeImpl(
   // void — undefined is the safe default. drill_in defaults to null
   // (no resolvable child) which is the expected leaf-card path.
   if (cmd === "spatial_drill_in") return null;
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return undefined;
@@ -384,13 +384,6 @@ function renderBoardWithShell() {
   );
 }
 
-/** Pull every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Pull every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -416,12 +409,12 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 /**
  * Find the registered FullyQualifiedMoniker for a given moniker. The
  * board zone, columns, and cards all register via
- * `spatial_register_zone` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`);
+ * `spatial_register_scope` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`);
  * the scope-fallback path is kept for any leaf segment a future test
  * driver might emit.
  */
 function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
-  const zone = registerZoneArgs().find((a) => a.segment === moniker);
+  const zone = registerScopeArgs().find((a) => a.segment === moniker);
   if (zone) return zone.fq as FullyQualifiedMoniker;
   const scope = registerScopeArgs().find((a) => a.segment === moniker);
   return scope?.fq as FullyQualifiedMoniker | undefined;

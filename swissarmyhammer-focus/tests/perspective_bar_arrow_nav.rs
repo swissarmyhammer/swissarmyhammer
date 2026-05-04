@@ -19,7 +19,7 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
     let focused_segment = app
         .registry()
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(app.registry(), from, &focused_segment, dir)
 }
@@ -211,17 +211,18 @@ fn perspective_left_from_leftmost_tab_never_collapses_to_layer_root() {
 // Sanity — fixture has the perspective-bar shape we asserted on.
 // ---------------------------------------------------------------------------
 
-/// The fixture registers exactly three perspective tab leaves inside
-/// `ui:perspective-bar`.
+/// The fixture registers exactly three perspective tab children
+/// inside `ui:perspective-bar`. None of them have further descendants —
+/// they act as leaves under the unified `FocusScope` primitive.
 #[test]
-fn fixture_perspective_bar_has_three_tab_leaves() {
+fn fixture_perspective_bar_has_three_tab_children() {
     let app = RealisticApp::new();
 
     let bar_zone_fq = app.perspective_bar_fq();
 
     let mut tab_segments: Vec<String> = app
         .registry()
-        .leaves_iter()
+        .scopes_iter()
         .filter(|s| s.parent_zone.as_ref() == Some(&bar_zone_fq))
         .map(|s| s.segment.as_str().to_string())
         .collect();
@@ -233,22 +234,20 @@ fn fixture_perspective_bar_has_three_tab_leaves() {
             "perspective_tab:p2".to_string(),
             "perspective_tab:p3".to_string(),
         ],
-        "fixture must register exactly three perspective tab leaves with the production \
+        "fixture must register exactly three perspective tab children with the production \
          perspective_tab:{{id}} segment shape"
     );
 
-    // No zone children inside the perspective bar — the bar holds tab
-    // leaves only.
-    let zone_segments: Vec<String> = app
-        .registry()
-        .zones_iter()
-        .filter(|z| z.parent_zone.as_ref() == Some(&bar_zone_fq))
-        .map(|z| z.segment.as_str().to_string())
-        .collect();
-    assert!(
-        zone_segments.is_empty(),
-        "fixture must register no zone children of ui:perspective-bar; \
-         the Add-perspective button is intentionally non-spatial chrome \
-         (got {zone_segments:?})"
-    );
+    // Each tab acts as a leaf — no further children registered under any
+    // of them.
+    for tab_seg in ["perspective_tab:p1", "perspective_tab:p2", "perspective_tab:p3"] {
+        let tab_fq = swissarmyhammer_focus::FullyQualifiedMoniker::compose(
+            &bar_zone_fq,
+            &swissarmyhammer_focus::SegmentMoniker::from_string(tab_seg),
+        );
+        assert!(
+            !app.registry().has_children(&tab_fq),
+            "{tab_seg} is expected to be a leaf (no registered children)"
+        );
+    }
 }

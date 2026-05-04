@@ -6,14 +6,14 @@
  * remaining scope-not-leaf offenders surfaced by path-prefix
  * enforcement). Mirrors `entity-card.scope-leaf.spatial.test.tsx` for
  * the table-row equivalent: the row's outer focus primitive must be a
- * `<FocusZone renderContainer={false}>`, never a `<FocusScope>`, so
+ * `<FocusScope renderContainer={false}>`, never a `<FocusScope>`, so
  * the per-cell `<FocusScope>` leaves inside the row do not register
  * as path-prefix descendants of an outer Scope.
  *
  * The kernel's three peers are:
  *
  *   - `<FocusLayer>` — modal boundary
- *   - `<FocusZone>` — navigable container, can have children (other zones
+ *   - `<FocusScope>` — navigable container, can have children (other zones
  *     or scopes)
  *   - `<FocusScope>` — leaf in the spatial graph
  *
@@ -23,7 +23,7 @@
  * leaves whose FQMs were path-descendants of the row scope FQM as soon
  * as the row's wrapper started publishing its FQM through
  * `FullyQualifiedMonikerContext.Provider`. Promoting the row to a
- * `<FocusZone renderContainer={false}>` keeps the entity moniker frame
+ * `<FocusScope renderContainer={false}>` keeps the entity moniker frame
  * in the React command-scope chain (so right-click resolves
  * entity-level commands against the row), while the Zone-vs-Scope
  * change lifts the scope-is-leaf restriction on cell descendants.
@@ -32,7 +32,7 @@
  *
  *   1. The row's entity moniker (`task:{id}`) NEVER appears as a
  *      `spatial_register_scope` payload — the row uses a
- *      `<FocusZone renderContainer={false}>` which does not register
+ *      `<FocusScope renderContainer={false}>` which does not register
  *      with the kernel at all (no rect), but more importantly, the
  *      outer wrapper is not a Scope.
  *   2. Per-cell `grid_cell:{di}:{colKey}` `<FocusScope>` leaves DO
@@ -44,8 +44,8 @@
  *      provider).
  *   3. The row label leaf (`row_label:{di}`) registers as a scope and
  *      its `parentZone` resolves to the row's FQM — proving the row
- *      Zone publishes `FocusZoneContext.Provider` so descendants'
- *      `useParentZoneFq()` lands on the row entity, not the
+ *      Zone publishes `FocusScopeContext.Provider` so descendants'
+ *      `useParentFocusScope()` lands on the row entity, not the
  *      surrounding `ui:grid` zone.
  *
  * Mock pattern matches `data-table.row-label-focus.spatial.test.tsx`
@@ -200,7 +200,7 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) fqToSegment.set(a.fq, a.segment);
     return undefined;
@@ -259,10 +259,6 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
   return callsFor("spatial_register_scope");
 }
 
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return callsFor("spatial_register_zone");
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -282,10 +278,10 @@ describe("DataTable row — scope-is-leaf invariant", () => {
   });
 
   it("the row's `task:{id}` segment is NEVER passed to spatial_register_scope", async () => {
-    // The row mounts a `<FocusZone renderContainer={false}>` whose
+    // The row mounts a `<FocusScope renderContainer={false}>` whose
     // `moniker` is the row entity's segment (`task:a`, `task:b`, …).
     // `renderContainer={false}` means the zone does NOT call
-    // `spatial_register_zone` either (no DOM rect to register), but the
+    // `spatial_register_scope` either (no DOM rect to register), but the
     // critical scope-is-leaf assertion is the negative one: the row
     // entity's segment must NEVER be registered as a Scope, because
     // doing so would make every per-cell `<FocusScope>` leaf inside the
@@ -314,7 +310,7 @@ describe("DataTable row — scope-is-leaf invariant", () => {
     // it should not register as a Zone either (no DOM rect). This pins
     // the renderContainer={false} contract — promoting the row to a
     // Zone is purely a context-publishing change.
-    const rowAsZone = registerZoneArgs().find((a) =>
+    const rowAsZone = registerScopeArgs().find((a) =>
       typeof a.segment === "string" &&
       rowEntitySegments.has(a.segment as string),
     );
@@ -327,7 +323,7 @@ describe("DataTable row — scope-is-leaf invariant", () => {
   });
 
   it("per-cell `grid_cell:{di}:{colKey}` leaves nest under the row's FQM", async () => {
-    // The load-bearing test. With the row promoted to a `<FocusZone
+    // The load-bearing test. With the row promoted to a `<FocusScope
     // renderContainer={false}>`, the wrapper publishes its composed FQM
     // through `FullyQualifiedMonikerContext.Provider` even though it
     // renders no DOM. Cell `<FocusScope>` leaves inside the row read
@@ -376,11 +372,11 @@ describe("DataTable row — scope-is-leaf invariant", () => {
 
   it("the row_label leaf's parentZone resolves to the row's FQM", async () => {
     // `<RowSelector>` renders a `<FocusScope moniker="row_label:{di}">`
-    // leaf inside the cell. When the row is a `<FocusZone>` (even with
-    // `renderContainer={false}`), it pushes `FocusZoneContext.Provider`
-    // with its own FQM, so the row label leaf's `useParentZoneFq()`
+    // leaf inside the cell. When the row is a `<FocusScope>` (even with
+    // `renderContainer={false}`), it pushes `FocusScopeContext.Provider`
+    // with its own FQM, so the row label leaf's `useParentFocusScope()`
     // resolves to the row entity's FQM — not the surrounding `ui:grid`
-    // zone. This pins the FocusZoneContext provider in the
+    // zone. This pins the FocusScopeContext provider in the
     // renderContainer={false} short-circuit.
     const entities = { task: twoTasks() };
 
@@ -411,7 +407,7 @@ describe("DataTable row — scope-is-leaf invariant", () => {
     // `defaultInvokeImpl`.
     const parentSegment = fqToSegment.get(parentZone!);
     // The row Zone uses `renderContainer={false}` and so does NOT call
-    // `spatial_register_zone`, so it does NOT appear in `fqToSegment`
+    // `spatial_register_scope`, so it does NOT appear in `fqToSegment`
     // (the map is populated on register, and there's no register call
     // for the row). Pin the FQM-tail shape directly: the row's FQM ends
     // in `/task:a` for row 0 because that's the entity moniker the

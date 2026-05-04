@@ -42,31 +42,32 @@
 //!
 //! Cardinal nav for [`Direction::Up`], [`Direction::Down`],
 //! [`Direction::Left`], and [`Direction::Right`] is **purely
-//! geometric**. Pressing an arrow key picks the registered scope (leaf
-//! or zone, in the same `layer_fq`) whose rect minimises the Android
-//! beam score (`13 * major² + minor²`) across ALL registered scopes in
-//! the layer that:
+//! geometric**. Pressing an arrow key picks the registered scope (in
+//! the same `layer_fq`) whose rect minimises the Android beam score
+//! (`13 * major² + minor²`) across ALL registered scopes in the layer
+//! that:
 //!
 //! 1. Pass the **strict half-plane test** for D — the candidate's
 //!    leading edge in the reverse direction is past the focused entry's
 //!    leading edge in D. For `Down`: `cand.top >= from.bottom`. This
 //!    filters out candidates that are not strictly in the half-plane,
-//!    including containing parent zones.
+//!    including containing parent scopes.
 //! 2. Pass the **in-beam test** for D — the candidate overlaps `from`
 //!    on the cross axis (horizontal overlap for `Up`/`Down`, vertical
 //!    overlap for `Left`/`Right`).
 //! 3. Are not the focused entry itself.
 //!
-//! No structural filtering — `parent_zone` and `is_zone` are tie-breakers
-//! and observability only.
+//! No structural filtering — `parent_zone` and "has children" are
+//! tie-breakers and observability only.
 //!
-//! ## Tie-break: leaves over zones
+//! ## Tie-break: leaves over containers
 //!
 //! When two candidates have equal beam scores, **leaves win over
-//! zones**. This ensures that when the geometric pick would land
-//! equally on a `showFocusBar=false` container and an inner leaf, the
-//! user sees the focus indicator paint on the leaf rather than the
-//! invisible container.
+//! containers** (a leaf is a scope with no registered children; a
+//! container is a scope with at least one). This ensures that when the
+//! geometric pick would land equally on a `showFocusBar=false`
+//! container and an inner leaf, the user sees the focus indicator
+//! paint on the leaf rather than the invisible container.
 //!
 //! ## When the half-plane is empty
 //!
@@ -74,22 +75,6 @@
 //! focused entry is at the visual edge of the layer in direction D.
 //! The kernel returns the focused FQM (stay-put), per the
 //! no-silent-dropout invariant.
-//!
-//! # Why geometric (and not structural)
-//!
-//! The kernel's prior algorithm ran an iter-0 / iter-1 / drill-out
-//! cascade keyed on the focused entry's `parent_zone`. That cascade
-//! lost the user's mental model — "the visually-nearest thing in
-//! direction D" — whenever the visual neighbor lived in a different
-//! sub-tree. Symptoms included `target=None`, `scope_chain=["engine"]`,
-//! and focus collapsing to the layer root when pressing `Left` from the
-//! leftmost perspective tab or `Up` from a board column. The geometric
-//! pick replaces that cascade with a single layer-wide search, fixing
-//! the cross-zone bug class by construction.
-//!
-//! See `swissarmyhammer-focus/README.md` for the prose contract and
-//! `tests/cross_zone_geometric_nav.rs` for the four cross-zone
-//! regression tests.
 //!
 //! # First / Last
 //!
@@ -104,15 +89,14 @@
 //! - **Last child** = the child whose rect is bottommost; ties broken
 //!   by rightmost.
 //! - **Children** = registered scopes whose `parent_zone` is the
-//!   focused scope's FQM. Kind is **not** a filter — leaves and
-//!   sub-zones are equally eligible children.
+//!   focused scope's FQM.
 //!
 //! On a focused leaf (no children) both ops return the focused FQM
 //! (semantic no-op, no log noise) per the no-silent-dropout contract.
 //!
 //! `Direction::First` shares its result with
 //! [`SpatialRegistry::drill_in`]'s cold-start fallback when the
-//! focused zone has no `last_focused` memory — both pick the
+//! focused scope has no `last_focused` memory — both pick the
 //! topmost-then-leftmost child via the shared
 //! [`crate::registry::first_child_by_top_left`] helper, so divergence
 //! is structurally impossible. The
@@ -125,13 +109,12 @@
 //! per-direction `overrides` map short-circuits the children-of-focused
 //! pick entirely.
 //!
-//! See `swissarmyhammer-focus/README.md` → `## First / Last` for the
-//! prose contract.
-//!
 //! [`SpatialRegistry::drill_in`]: crate::registry::SpatialRegistry::drill_in
 
+use std::collections::HashSet;
+
 use crate::registry::{first_child_by_top_left, last_child_by_bottom_right, SpatialRegistry};
-use crate::scope::RegisteredScope;
+use crate::scope::FocusScope;
 use crate::types::{Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker};
 
 /// Pluggable navigation algorithm.
@@ -152,7 +135,7 @@ pub trait NavStrategy: Send + Sync {
     /// - `registry` — the current registry. Strategies typically read
     ///   [`SpatialRegistry::find_by_fq`] for `focused` to discover its
     ///   rect and layer, then iterate
-    ///   [`SpatialRegistry::entries_in_layer`] for candidates.
+    ///   [`SpatialRegistry::scopes_in_layer`] for candidates.
     /// - `focused_fq` — the FQM of the currently focused scope.
     /// - `focused_segment` — the relative segment paired with
     ///   `focused_fq`. Carried for human-readable logs only — the
@@ -182,8 +165,8 @@ pub trait NavStrategy: Send + Sync {
 /// override (rule 0) → layer-wide geometric beam search across all
 /// registered scopes in the focused entry's `layer_fq`. The Android
 /// beam score (`13 * major² + minor²`) selects the visually-nearest
-/// candidate; ties are broken in favor of leaves over zones so the
-/// user sees the focus indicator paint on a visible target.
+/// candidate; ties are broken in favor of leaves over containers so
+/// the user sees the focus indicator paint on a visible target.
 ///
 /// [`Direction::First`] / [`Direction::Last`] focus the focused
 /// scope's children — first by topmost-then-leftmost, last by
@@ -228,7 +211,7 @@ impl NavStrategy for BeamNavStrategy {
         focused_segment: &SegmentMoniker,
         direction: Direction,
     ) -> FullyQualifiedMoniker {
-        let Some(entry) = registry.entry(focused_fq) else {
+        let Some(entry) = registry.find_by_fq(focused_fq) else {
             // Torn state: caller passed an FQM that has no registry
             // entry. Trace the operation and echo the input FQM.
             tracing::error!(
@@ -298,10 +281,10 @@ impl NavStrategy for BeamNavStrategy {
 /// layer teleportation is never allowed, even via override.
 fn check_override(
     registry: &SpatialRegistry,
-    focused: &RegisteredScope,
+    focused: &FocusScope,
     direction: Direction,
 ) -> Option<Option<FullyQualifiedMoniker>> {
-    let entry = focused.overrides().get(&direction)?;
+    let entry = focused.overrides.get(&direction)?;
     match entry {
         // Explicit `None` — block navigation in this direction.
         None => Some(None),
@@ -310,8 +293,8 @@ fn check_override(
         // the override fall through to beam search.
         Some(target) => {
             let target_in_layer = registry
-                .entries_in_layer(focused.layer_fq())
-                .any(|s| s.fq() == target);
+                .scopes_in_layer(&focused.layer_fq)
+                .any(|s| &s.fq == target);
             if target_in_layer {
                 Some(Some(target.clone()))
             } else {
@@ -327,34 +310,42 @@ fn check_override(
 
 /// Run the geometric pick from `focused` in `direction`.
 ///
-/// Iterates every entry in `focused.layer_fq()`, filters out the
+/// Iterates every entry in `focused.layer_fq`, filters out the
 /// focused entry itself, scores via [`score_candidate`], and returns
 /// the candidate with the lowest beam score that passes the strict
 /// half-plane and in-beam tests. Ties are broken by preferring leaves
-/// over zones so the focus indicator paints on a visible surface.
+/// (scopes with no registered children) over containers so the focus
+/// indicator paints on a visible surface.
 ///
 /// When no candidate satisfies both tests, the focused entry is at the
 /// visual edge of the layer in `direction`; the function returns
 /// `focused_fq` (stay-put), per the no-silent-dropout invariant.
 ///
-/// The layer FQM is the absolute boundary — `entries_in_layer` already
+/// The layer FQM is the absolute boundary — `scopes_in_layer` already
 /// scopes by layer, so a candidate from a different layer (e.g. the
 /// inspector layer) never enters the search.
-///
-/// See `swissarmyhammer-focus/README.md` for the prose contract.
 fn geometric_pick(
     reg: &SpatialRegistry,
-    focused: &RegisteredScope,
+    focused: &FocusScope,
     focused_fq: &FullyQualifiedMoniker,
     direction: Direction,
 ) -> FullyQualifiedMoniker {
-    let from_rect = *focused.rect();
+    // Build the "has children" predicate once per pick, not per
+    // candidate. `reg.has_children(fq)` is O(N) over the global scope
+    // table, so calling it inside the candidate loop made the pick
+    // O(N²). Collecting the set of FQMs that appear as some scope's
+    // `parent_zone` (anywhere in the layer) restores O(N).
+    let parent_fqs: HashSet<&FullyQualifiedMoniker> = reg
+        .scopes_in_layer(&focused.layer_fq)
+        .filter_map(|s| s.parent_zone.as_ref())
+        .collect();
+    let from_rect = focused.rect;
     let mut best: Option<BestCandidate<'_>> = None;
-    for cand in reg.entries_in_layer(focused.layer_fq()) {
-        if cand.fq() == focused.fq() {
+    for cand in reg.scopes_in_layer(&focused.layer_fq) {
+        if cand.fq == focused.fq {
             continue;
         }
-        let cand_rect = *cand.rect();
+        let cand_rect = cand.rect;
         if !in_strict_half_plane(&from_rect, &cand_rect, direction) {
             continue;
         }
@@ -365,9 +356,9 @@ fn geometric_pick(
             continue;
         }
         let cand_summary = BestCandidate {
-            fq: cand.fq(),
+            fq: &cand.fq,
             score,
-            is_zone: cand.is_zone(),
+            has_children: parent_fqs.contains(&cand.fq),
         };
         if better_candidate(&best, &cand_summary) {
             best = Some(cand_summary);
@@ -381,22 +372,23 @@ fn geometric_pick(
 
 /// Decision-state for the running best candidate inside
 /// [`geometric_pick`]. Carries the FQM, the beam score, and a flag
-/// indicating whether the candidate is a zone (used for the
-/// leaves-over-zones tie-break).
+/// indicating whether the candidate has registered children (used for
+/// the leaves-over-containers tie-break: a candidate with no children
+/// wins over one with children when their scores tie).
 #[derive(Clone, Copy)]
 struct BestCandidate<'a> {
     fq: &'a FullyQualifiedMoniker,
     score: f64,
-    is_zone: bool,
+    has_children: bool,
 }
 
 /// `true` when `cand` should replace the current best candidate.
 ///
 /// Primary order is the Android beam score: lower is better. When two
-/// candidates have equal scores, the leaf wins over the zone — this is
-/// the leaves-over-zones tie-break that ensures the focus indicator
-/// paints on a visible leaf rather than on a `showFocusBar=false`
-/// container.
+/// candidates have equal scores, the leaf wins over the container
+/// (a leaf is a scope with no registered children) — this ensures the
+/// focus indicator paints on a visible leaf rather than on a
+/// `showFocusBar=false` container.
 fn better_candidate(current: &Option<BestCandidate<'_>>, cand: &BestCandidate<'_>) -> bool {
     match current {
         None => true,
@@ -406,10 +398,11 @@ fn better_candidate(current: &Option<BestCandidate<'_>>, cand: &BestCandidate<'_
             } else if cand.score > cur.score {
                 false
             } else {
-                // Tie on score: prefer a leaf (`!is_zone`) over a zone.
-                // If `cand` is a leaf and `cur` is a zone, replace.
-                // Otherwise keep `cur` (no leaf-tie advantage).
-                !cand.is_zone && cur.is_zone
+                // Tie on score: prefer a leaf (`!has_children`) over a
+                // container (`has_children`). If `cand` is a leaf and
+                // `cur` is a container, replace. Otherwise keep `cur`
+                // (no leaf-tie advantage).
+                !cand.has_children && cur.has_children
             }
         }
     }
@@ -425,7 +418,7 @@ fn better_candidate(current: &Option<BestCandidate<'_>>, cand: &BestCandidate<'_
 /// directions.
 ///
 /// This filter is the kernel's geometric notion of "below / above /
-/// left of / right of" — it excludes containing parent zones (which
+/// left of / right of" — it excludes containing parent scopes (which
 /// extend on both sides of `from` on the major axis) and overlapping
 /// rects from being treated as candidates.
 ///
@@ -456,14 +449,13 @@ fn in_strict_half_plane(from: &Rect, cand: &Rect, direction: Direction) -> bool 
 /// - **Last child** = the child whose rect is bottommost; ties broken
 ///   by rightmost.
 /// - **Children** = registered scopes whose `parent_zone` is
-///   `focused.fq()`.
+///   `focused.fq`.
 ///
-/// Kind is not a filter — both leaves and zones are eligible children.
 /// On a leaf (no children) both ops return `focused_fq` (semantic
 /// no-op, no log noise) per the no-silent-dropout contract.
 ///
 /// `Direction::First` shares its result with [`SpatialRegistry::drill_in`]'s
-/// cold-start fallback when the focused zone has no `last_focused`
+/// cold-start fallback when the focused scope has no `last_focused`
 /// memory — both pick the topmost-then-leftmost child via the shared
 /// [`first_child_by_top_left`] helper, so divergence is structurally
 /// impossible. The `first_matches_drill_in_first_child_fallback` test
@@ -478,11 +470,11 @@ fn in_strict_half_plane(from: &Rect, cand: &Rect, direction: Direction) -> bool 
 #[allow(deprecated)]
 fn edge_command(
     reg: &SpatialRegistry,
-    focused: &RegisteredScope,
+    focused: &FocusScope,
     focused_fq: &FullyQualifiedMoniker,
     direction: Direction,
 ) -> FullyQualifiedMoniker {
-    let children = reg.child_entries_of_zone(focused.fq());
+    let children = reg.children_of(&focused.fq);
     let pick = match direction {
         // First (and the deprecated `RowStart` alias) — topmost; ties
         // broken by leftmost. Shared with `SpatialRegistry::drill_in`'s
@@ -496,7 +488,7 @@ fn edge_command(
         // routes them through `geometric_pick` instead.
         Direction::Up | Direction::Down | Direction::Left | Direction::Right => None,
     };
-    pick.map(|s| s.fq().clone())
+    pick.map(|s| s.fq.clone())
         .unwrap_or_else(|| focused_fq.clone())
 }
 
@@ -671,7 +663,7 @@ fn cross_axis_minor(from: &Rect, cand: &Rect, minor_axis: MinorAxis) -> Pixels {
 mod tests {
     use super::*;
     use crate::layer::FocusLayer;
-    use crate::scope::{FocusScope, FocusZone};
+    use crate::scope::FocusScope;
     use crate::types::{
         FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
     };
@@ -705,32 +697,15 @@ mod tests {
         }
     }
 
-    /// Build a `FocusScope` leaf inside `/L` with the given segment
-    /// and rect. `parent_zone` is configurable.
-    fn make_leaf(
+    /// Build a `FocusScope` inside `/L` with the given segment and
+    /// rect. `parent_zone` is configurable; `last_focused` defaults to
+    /// `None`.
+    fn make_scope(
         segment: &str,
         parent_zone: Option<FullyQualifiedMoniker>,
         r: Rect,
     ) -> FocusScope {
         FocusScope {
-            fq: FullyQualifiedMoniker::from_string(format!("/L/{segment}")),
-            segment: SegmentMoniker::from_string(segment),
-            rect: r,
-            layer_fq: FullyQualifiedMoniker::from_string("/L"),
-            parent_zone,
-            overrides: HashMap::new(),
-        }
-    }
-
-    /// Build a `FocusZone` inside `/L` with the given segment and
-    /// rect. `parent_zone` is configurable; `last_focused` defaults to
-    /// `None`.
-    fn make_zone(
-        segment: &str,
-        parent_zone: Option<FullyQualifiedMoniker>,
-        r: Rect,
-    ) -> FocusZone {
-        FocusZone {
             fq: FullyQualifiedMoniker::from_string(format!("/L/{segment}")),
             segment: SegmentMoniker::from_string(segment),
             rect: r,
@@ -748,7 +723,7 @@ mod tests {
     fn lonely_scope_returns_focused_fq() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
-        let only = make_leaf("k", None, rect_zero());
+        let only = make_scope("k", None, rect_zero());
         let only_fq = only.fq.clone();
         reg.register_scope(only);
 
@@ -771,8 +746,8 @@ mod tests {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
         // Source on the left; one neighbor strictly to the right.
-        let src = make_leaf("src", None, rect(0.0, 0.0, 10.0, 10.0));
-        let neighbor = make_leaf("neighbor", None, rect(20.0, 0.0, 10.0, 10.0));
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let neighbor = make_scope("neighbor", None, rect(20.0, 0.0, 10.0, 10.0));
         let src_fq = src.fq.clone();
         let neighbor_fq = neighbor.fq.clone();
         reg.register_scope(src);
@@ -789,9 +764,9 @@ mod tests {
     fn closer_neighbor_wins() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
-        let src = make_leaf("src", None, rect(0.0, 0.0, 10.0, 10.0));
-        let near = make_leaf("near", None, rect(20.0, 0.0, 10.0, 10.0));
-        let far = make_leaf("far", None, rect(100.0, 0.0, 10.0, 10.0));
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let near = make_scope("near", None, rect(20.0, 0.0, 10.0, 10.0));
+        let far = make_scope("far", None, rect(100.0, 0.0, 10.0, 10.0));
         let src_fq = src.fq.clone();
         let near_fq = near.fq.clone();
         reg.register_scope(src);
@@ -804,22 +779,31 @@ mod tests {
         assert_eq!(result, near_fq, "closer in-beam neighbor must win");
     }
 
-    /// Tied geometry — leaf wins over zone (the leaves-over-zones
-    /// tie-break that ensures the focus indicator paints on a
-    /// visible surface rather than a `showFocusBar=false` container).
+    /// Tied geometry — leaf wins over container (the leaves-over-
+    /// containers tie-break that ensures the focus indicator paints on
+    /// a visible surface rather than a `showFocusBar=false` container).
+    /// A "container" is a scope with at least one registered child.
     #[test]
-    fn tied_distances_leaf_wins_over_zone() {
+    fn tied_distances_leaf_wins_over_container() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
-        let src = make_leaf("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
         // Two candidates at the same rect (geometric tie). One is a
-        // zone, one is a leaf — the leaf must win on the tie-break.
-        let zone_cand = make_zone("zone-cand", None, rect(20.0, 0.0, 10.0, 10.0));
-        let leaf_cand = make_leaf("leaf-cand", None, rect(20.0, 0.0, 10.0, 10.0));
+        // container (has a child); one is a leaf — the leaf must win
+        // on the tie-break.
+        let container_cand = make_scope("container-cand", None, rect(20.0, 0.0, 10.0, 10.0));
+        let container_cand_fq = container_cand.fq.clone();
+        let container_child = make_scope(
+            "container-cand/child",
+            Some(container_cand_fq.clone()),
+            rect(20.0, 0.0, 5.0, 5.0),
+        );
+        let leaf_cand = make_scope("leaf-cand", None, rect(20.0, 0.0, 10.0, 10.0));
         let src_fq = src.fq.clone();
         let leaf_cand_fq = leaf_cand.fq.clone();
         reg.register_scope(src);
-        reg.register_zone(zone_cand);
+        reg.register_scope(container_cand);
+        reg.register_scope(container_child);
         reg.register_scope(leaf_cand);
 
         let strategy = BeamNavStrategy::new();
@@ -827,7 +811,7 @@ mod tests {
         let result = strategy.next(&reg, &src_fq, &focused_segment, Direction::Right);
         assert_eq!(
             result, leaf_cand_fq,
-            "geometric tie must resolve to the leaf, not the zone"
+            "geometric tie must resolve to the leaf (no children), not the container"
         );
     }
 
@@ -835,40 +819,30 @@ mod tests {
     /// than the in-zone candidate. The geometric pick has no
     /// structural filter, so a sibling with a different `parent_zone`
     /// can beat an in-zone sibling on raw distance.
-    ///
-    /// Layout: two child zones at the layer root (with different
-    /// rect placements). The source leaf sits in `zone-left` near its
-    /// right edge; an in-zone sibling sits below `src` (out of the
-    /// Right beam, only reachable via Down); a cross-zone leaf in
-    /// `zone-right` sits next to `src` and matches its y range.
-    /// `zone-right` itself is positioned vertically far away so it
-    /// is NOT in-beam horizontally; only the leaf inside it is.
-    /// The geometric pick lands on the cross-zone leaf because it has
-    /// the lowest beam score among in-beam in-half-plane candidates.
     #[test]
     fn cross_parent_zone_candidate_wins_when_geometrically_nearer() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let zone_left = make_zone("zone-left", None, rect(0.0, 0.0, 100.0, 50.0));
+        let zone_left = make_scope("zone-left", None, rect(0.0, 0.0, 100.0, 50.0));
         // zone-right's vertical extent does not overlap `src` so the
         // zone itself is not an in-beam Right candidate; only the
         // leaf inside it is.
-        let zone_right = make_zone("zone-right", None, rect(200.0, 100.0, 100.0, 50.0));
+        let zone_right = make_scope("zone-right", None, rect(200.0, 100.0, 100.0, 50.0));
         let zone_left_fq = zone_left.fq.clone();
         let zone_right_fq = zone_right.fq.clone();
-        reg.register_zone(zone_left);
-        reg.register_zone(zone_right);
+        reg.register_scope(zone_left);
+        reg.register_scope(zone_right);
 
         // Source in zone-left near its right edge.
-        let src = make_leaf(
+        let src = make_scope(
             "src",
             Some(zone_left_fq.clone()),
             rect(80.0, 10.0, 10.0, 10.0),
         );
         // In-zone sibling — directly below `src` (out of the Right
         // beam because it has no vertical overlap with `src`).
-        let in_zone = make_leaf(
+        let in_zone = make_scope(
             "in-zone-below",
             Some(zone_left_fq),
             rect(80.0, 30.0, 10.0, 10.0),
@@ -876,7 +850,7 @@ mod tests {
         // Cross-zone sibling — slightly past zone-right's left edge,
         // matching `src`'s y. Geometrically the nearest Right
         // candidate even though it has a different `parent_zone`.
-        let cross_zone = make_leaf(
+        let cross_zone = make_scope(
             "cross-zone-near",
             Some(zone_right_fq),
             rect(205.0, 10.0, 10.0, 10.0),
@@ -939,7 +913,7 @@ mod tests {
     fn first_last_on_leaf_returns_focused_self() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
-        let leaf = make_leaf("leaf", None, rect_zero());
+        let leaf = make_scope("leaf", None, rect_zero());
         let leaf_fq = leaf.fq.clone();
         reg.register_scope(leaf);
 
@@ -952,18 +926,18 @@ mod tests {
         }
     }
 
-    /// Focused zone with exactly one child — both `First` and `Last`
+    /// Focused scope with exactly one child — both `First` and `Last`
     /// return that child's FQM.
     #[test]
     fn first_last_on_zone_with_one_child_returns_that_child() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let parent = make_zone("parent", None, rect(0.0, 0.0, 100.0, 100.0));
+        let parent = make_scope("parent", None, rect(0.0, 0.0, 100.0, 100.0));
         let parent_fq = parent.fq.clone();
-        reg.register_zone(parent);
+        reg.register_scope(parent);
 
-        let only = make_leaf("only", Some(parent_fq.clone()), rect(10.0, 10.0, 50.0, 50.0));
+        let only = make_scope("only", Some(parent_fq.clone()), rect(10.0, 10.0, 50.0, 50.0));
         let only_fq = only.fq.clone();
         reg.register_scope(only);
 
@@ -971,7 +945,7 @@ mod tests {
         assert_eq!(run_first_last(&reg, &parent_fq, Direction::Last), only_fq);
     }
 
-    /// Focused zone whose three children sit in a horizontal row —
+    /// Focused scope whose three children sit in a horizontal row —
     /// `First` picks the leftmost (it is also the topmost — top is the
     /// primary key, so leftmost wins on the tie); `Last` picks the
     /// rightmost (bottom is the primary key for `Last`; tied here, so
@@ -981,14 +955,14 @@ mod tests {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let row = make_zone("row", None, rect(0.0, 0.0, 300.0, 50.0));
+        let row = make_scope("row", None, rect(0.0, 0.0, 300.0, 50.0));
         let row_fq = row.fq.clone();
-        reg.register_zone(row);
+        reg.register_scope(row);
 
         // Three children in a horizontal row, all at y=10.
-        let left = make_leaf("left", Some(row_fq.clone()), rect(0.0, 10.0, 50.0, 30.0));
-        let middle = make_leaf("middle", Some(row_fq.clone()), rect(100.0, 10.0, 50.0, 30.0));
-        let right = make_leaf("right", Some(row_fq.clone()), rect(200.0, 10.0, 50.0, 30.0));
+        let left = make_scope("left", Some(row_fq.clone()), rect(0.0, 10.0, 50.0, 30.0));
+        let middle = make_scope("middle", Some(row_fq.clone()), rect(100.0, 10.0, 50.0, 30.0));
+        let right = make_scope("right", Some(row_fq.clone()), rect(200.0, 10.0, 50.0, 30.0));
         let left_fq = left.fq.clone();
         let right_fq = right.fq.clone();
         reg.register_scope(left);
@@ -1007,20 +981,20 @@ mod tests {
         );
     }
 
-    /// Focused zone whose three children sit in a vertical column —
+    /// Focused scope whose three children sit in a vertical column —
     /// `First` picks the topmost; `Last` picks the bottommost.
     #[test]
     fn first_last_on_zone_with_column_of_children() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let col = make_zone("col", None, rect(0.0, 0.0, 50.0, 300.0));
+        let col = make_scope("col", None, rect(0.0, 0.0, 50.0, 300.0));
         let col_fq = col.fq.clone();
-        reg.register_zone(col);
+        reg.register_scope(col);
 
-        let top = make_leaf("top", Some(col_fq.clone()), rect(0.0, 0.0, 50.0, 30.0));
-        let middle = make_leaf("middle", Some(col_fq.clone()), rect(0.0, 100.0, 50.0, 30.0));
-        let bottom = make_leaf("bottom", Some(col_fq.clone()), rect(0.0, 200.0, 50.0, 30.0));
+        let top = make_scope("top", Some(col_fq.clone()), rect(0.0, 0.0, 50.0, 30.0));
+        let middle = make_scope("middle", Some(col_fq.clone()), rect(0.0, 100.0, 50.0, 30.0));
+        let bottom = make_scope("bottom", Some(col_fq.clone()), rect(0.0, 200.0, 50.0, 30.0));
         let top_fq = top.fq.clone();
         let bottom_fq = bottom.fq.clone();
         reg.register_scope(top);
@@ -1039,43 +1013,50 @@ mod tests {
         );
     }
 
-    /// Focused zone with mixed leaves and sub-zone children — both
-    /// `First` and `Last` consider all children regardless of kind.
-    /// The contract is purely geometric: kind is not a filter.
+    /// Focused scope with mixed children (some are containers, some
+    /// are leaves) — both `First` and `Last` consider all children.
+    /// The contract is purely geometric.
     #[test]
-    fn first_last_considers_children_of_any_kind() {
+    fn first_last_considers_children_of_any_shape() {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let parent = make_zone("parent", None, rect(0.0, 0.0, 300.0, 300.0));
+        let parent = make_scope("parent", None, rect(0.0, 0.0, 300.0, 300.0));
         let parent_fq = parent.fq.clone();
-        reg.register_zone(parent);
+        reg.register_scope(parent);
 
-        // Top child is a sub-zone; bottom child is a leaf.
-        let top_child_zone = make_zone(
-            "top-child-zone",
+        // Top child has a sub-child (acts as a container); bottom child
+        // is a leaf.
+        let top_child = make_scope(
+            "top-child",
             Some(parent_fq.clone()),
             rect(0.0, 0.0, 100.0, 50.0),
         );
-        let bottom_child_leaf = make_leaf(
-            "bottom-child-leaf",
+        let top_child_fq = top_child.fq.clone();
+        let top_child_subchild = make_scope(
+            "top-child/sub",
+            Some(top_child_fq.clone()),
+            rect(0.0, 0.0, 10.0, 10.0),
+        );
+        let bottom_child = make_scope(
+            "bottom-child",
             Some(parent_fq.clone()),
             rect(0.0, 200.0, 100.0, 50.0),
         );
-        let top_child_fq = top_child_zone.fq.clone();
-        let bottom_child_fq = bottom_child_leaf.fq.clone();
-        reg.register_zone(top_child_zone);
-        reg.register_scope(bottom_child_leaf);
+        let bottom_child_fq = bottom_child.fq.clone();
+        reg.register_scope(top_child);
+        reg.register_scope(top_child_subchild);
+        reg.register_scope(bottom_child);
 
         assert_eq!(
             run_first_last(&reg, &parent_fq, Direction::First),
             top_child_fq,
-            "First considers any-kind children — sub-zone wins because it is topmost"
+            "First considers any child shape — top child wins because it is topmost"
         );
         assert_eq!(
             run_first_last(&reg, &parent_fq, Direction::Last),
             bottom_child_fq,
-            "Last considers any-kind children — leaf wins because it is bottommost"
+            "Last considers any child shape — bottom child wins because it is bottommost"
         );
     }
 
@@ -1091,12 +1072,12 @@ mod tests {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let row = make_zone("row", None, rect(0.0, 0.0, 300.0, 50.0));
+        let row = make_scope("row", None, rect(0.0, 0.0, 300.0, 50.0));
         let row_fq = row.fq.clone();
-        reg.register_zone(row);
+        reg.register_scope(row);
 
-        let left = make_leaf("left", Some(row_fq.clone()), rect(0.0, 10.0, 50.0, 30.0));
-        let right = make_leaf("right", Some(row_fq.clone()), rect(200.0, 10.0, 50.0, 30.0));
+        let left = make_scope("left", Some(row_fq.clone()), rect(0.0, 10.0, 50.0, 30.0));
+        let right = make_scope("right", Some(row_fq.clone()), rect(200.0, 10.0, 50.0, 30.0));
         let left_fq = left.fq.clone();
         let right_fq = right.fq.clone();
         reg.register_scope(left);
@@ -1124,9 +1105,9 @@ mod tests {
         );
     }
 
-    /// `First` from the focused zone is identical to drill-in's
-    /// first-child fallback when the zone has no `last_focused` memory.
-    /// Both pick the topmost-then-leftmost child.
+    /// `First` from the focused scope is identical to drill-in's
+    /// first-child fallback when the scope has no `last_focused`
+    /// memory. Both pick the topmost-then-leftmost child.
     ///
     /// The two ops now share the same
     /// [`crate::registry::first_child_by_top_left`] helper, so divergence
@@ -1138,14 +1119,14 @@ mod tests {
         let mut reg = SpatialRegistry::new();
         reg.push_layer(make_layer());
 
-        let parent = make_zone("parent", None, rect(0.0, 0.0, 300.0, 300.0));
+        let parent = make_scope("parent", None, rect(0.0, 0.0, 300.0, 300.0));
         let parent_fq = parent.fq.clone();
-        reg.register_zone(parent);
+        reg.register_scope(parent);
 
         // Three children — a clear topmost-leftmost winner.
-        let alpha = make_leaf("alpha", Some(parent_fq.clone()), rect(0.0, 0.0, 50.0, 30.0));
-        let beta = make_leaf("beta", Some(parent_fq.clone()), rect(100.0, 0.0, 50.0, 30.0));
-        let gamma = make_leaf(
+        let alpha = make_scope("alpha", Some(parent_fq.clone()), rect(0.0, 0.0, 50.0, 30.0));
+        let beta = make_scope("beta", Some(parent_fq.clone()), rect(100.0, 0.0, 50.0, 30.0));
+        let gamma = make_scope(
             "gamma",
             Some(parent_fq.clone()),
             rect(0.0, 100.0, 50.0, 30.0),
@@ -1159,7 +1140,7 @@ mod tests {
         let drill_target = reg.drill_in(parent_fq.clone(), &parent_fq);
         assert_eq!(
             first, alpha_fq,
-            "First on zone-with-no-memory must pick topmost-then-leftmost child"
+            "First on scope-with-no-memory must pick topmost-then-leftmost child"
         );
         assert_eq!(
             first, drill_target,

@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
@@ -68,8 +68,8 @@ fn make_zone(
     layer_fq: &str,
     parent_zone: Option<&str>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq: fq(fq_str),
         segment: seg(segment),
         rect: r,
@@ -95,6 +95,7 @@ fn make_leaf(
         layer_fq: fq(layer_fq),
         parent_zone: parent_zone.map(fq),
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
@@ -116,7 +117,7 @@ fn register_zone_keyed_by_fq_moniker() {
         Some("/window"),
     ));
 
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/inspector/field:T1.title",
         "field:T1.title",
         "/window/inspector",
@@ -127,7 +128,7 @@ fn register_zone_keyed_by_fq_moniker() {
     let found = reg
         .find_by_fq(&fq("/window/inspector/field:T1.title"))
         .expect("registered FQM resolves");
-    assert_eq!(found.segment(), &seg("field:T1.title"));
+    assert_eq!(found.segment, seg("field:T1.title"));
 }
 
 // ---------------------------------------------------------------------------
@@ -150,28 +151,28 @@ fn two_zones_same_segment_different_layers_have_distinct_fq_keys() {
     ));
 
     // Board path: /window/board/column:todo/card:T1/field:T1.title
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board",
         "board",
         "/window",
         None,
         rect(0.0, 100.0, 800.0, 600.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board/column:todo",
         "column:todo",
         "/window",
         Some("/window/board"),
         rect(0.0, 100.0, 400.0, 600.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board/column:todo/card:T1",
         "card:T1",
         "/window",
         Some("/window/board/column:todo"),
         rect(0.0, 100.0, 400.0, 100.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board/column:todo/card:T1/field:T1.title",
         "field:T1.title",
         "/window",
@@ -180,7 +181,7 @@ fn two_zones_same_segment_different_layers_have_distinct_fq_keys() {
     ));
 
     // Inspector path: /window/inspector/field:T1.title
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/inspector/field:T1.title",
         "field:T1.title",
         "/window/inspector",
@@ -196,9 +197,9 @@ fn two_zones_same_segment_different_layers_have_distinct_fq_keys() {
         .expect("inspector field FQM resolves");
 
     // Both share the same SegmentMoniker but live at distinct FQMs.
-    assert_eq!(board_field.segment(), &seg("field:T1.title"));
-    assert_eq!(inspector_field.segment(), &seg("field:T1.title"));
-    assert_ne!(board_field.fq(), inspector_field.fq());
+    assert_eq!(board_field.segment, seg("field:T1.title"));
+    assert_eq!(inspector_field.segment, seg("field:T1.title"));
+    assert_ne!(board_field.fq, inspector_field.fq);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +214,7 @@ fn two_zones_same_segment_different_layers_have_distinct_fq_keys() {
 fn find_by_fq_unknown_path_returns_none_and_traces_error() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/window", "window", None));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board",
         "board",
         "/window",
@@ -245,21 +246,21 @@ fn cascade_does_not_cross_layers() {
     ));
 
     // Inspector layer: a panel zone with two field zones stacked vertically.
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/inspector/panel",
         "panel",
         "/window/inspector",
         None,
         rect(900.0, 100.0, 400.0, 400.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/inspector/panel/field:T1.title",
         "field:T1.title",
         "/window/inspector",
         Some("/window/inspector/panel"),
         rect(908.0, 108.0, 384.0, 30.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/inspector/panel/field:T1.status",
         "field:T1.status",
         "/window/inspector",
@@ -268,21 +269,21 @@ fn cascade_does_not_cross_layers() {
     ));
 
     // Window layer: a board with a card holding a same-segment field zone.
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board",
         "board",
         "/window",
         None,
         rect(0.0, 100.0, 800.0, 600.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board/card:T1",
         "card:T1",
         "/window",
         Some("/window/board"),
         rect(8.0, 108.0, 400.0, 100.0),
     ));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/window/board/card:T1/field:T1.title",
         "field:T1.title",
         "/window",
@@ -303,8 +304,8 @@ fn cascade_does_not_cross_layers() {
         .find_by_fq(&result)
         .expect("navigator returns a registered FQM");
     assert_eq!(
-        target.layer_fq(),
-        &fq("/window/inspector"),
+        target.layer_fq,
+        fq("/window/inspector"),
         "Down from inspector field must stay inside the inspector layer; got {:?}",
         result
     );
@@ -372,7 +373,7 @@ fn register_with_duplicate_fq_replaces() {
     let path = "/window/board/card:T1";
 
     // First registration.
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         path,
         "card:T1",
         "/window",
@@ -380,14 +381,14 @@ fn register_with_duplicate_fq_replaces() {
         rect(0.0, 0.0, 100.0, 100.0),
     ));
     let first = reg.find_by_fq(&fq(path)).unwrap();
-    assert_eq!(first.rect().width, Pixels::new(100.0));
+    assert_eq!(first.rect.width, Pixels::new(100.0));
 
     // Second registration at the same FQM with the same structural
     // shape but a different rect — replaces the prior entry silently
     // (no `tracing::error!` since the structural identity matches; the
     // legitimate placeholder→real-mount swap and StrictMode
     // double-mount paths land here every render).
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         path,
         "card:T1",
         "/window",
@@ -396,7 +397,7 @@ fn register_with_duplicate_fq_replaces() {
     ));
     let second = reg.find_by_fq(&fq(path)).unwrap();
     assert_eq!(
-        second.rect().width,
+        second.rect.width,
         Pixels::new(200.0),
         "duplicate FQM registration must replace prior entry"
     );

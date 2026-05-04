@@ -947,7 +947,7 @@ describe("FocusScope", () => {
 
       // The primitive registers via spatial_register_scope (the leaf
       // command) — never as a zone. `<FocusScope>` is the leaf primitive
-      // after the three-peer collapse; containers use `<FocusZone>` directly.
+      // after the three-peer collapse; containers use `<FocusScope>` directly.
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
           "spatial_register_scope",
@@ -955,7 +955,7 @@ describe("FocusScope", () => {
         );
       });
       expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_zone",
+        "spatial_register_scope",
         expect.anything(),
       );
 
@@ -967,7 +967,7 @@ describe("FocusScope", () => {
     it("registers as a leaf scope (never as a zone) — `<FocusScope>` is the leaf primitive", async () => {
       // After collapsing `<Focusable>` into `<FocusScope>`, the latter is
       // always the leaf primitive — there is no `kind="zone"` escape hatch.
-      // Containers that want zone semantics use `<FocusZone>` directly.
+      // Containers that want zone semantics use `<FocusScope>` directly.
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -987,7 +987,7 @@ describe("FocusScope", () => {
         );
       });
       expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_zone",
+        "spatial_register_scope",
         expect.anything(),
       );
 

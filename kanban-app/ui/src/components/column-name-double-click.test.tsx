@@ -5,7 +5,7 @@
  *
  * After the refactor, the column-name surface is registered exactly
  * once — by the inner `<Field>` component as a
- * `<FocusZone moniker="field:column:<id>.name">`. `<Field>` always wraps
+ * `<FocusScope moniker="field:column:<id>.name">`. `<Field>` always wraps
  * itself in `<Inspectable>` (which dispatches `ui.inspect` on
  * double-click), so the question this test pins is: does double-clicking
  * the column name still enter edit mode without dispatching an inspector
@@ -105,7 +105,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -120,7 +120,7 @@ function makeColumn(id = "col-1", name = "To Do"): Entity {
 
 /**
  * Mount a `<ColumnView>` in the production-shaped provider stack,
- * wrapped in a parent `ui:board` `<FocusZone>` so the column has a real
+ * wrapped in a parent `ui:board` `<FocusScope>` so the column has a real
  * parent zone — mirroring its role inside `<BoardView>`.
  */
 function renderColumnInBoard(ui: React.ReactElement, column: Entity) {
@@ -132,7 +132,7 @@ function renderColumnInBoard(ui: React.ReactElement, column: Entity) {
             <EntityStoreProvider entities={{ column: [column] }}>
               <TooltipProvider>
                 <ActiveBoardPathProvider value="/test/board">
-                  <FocusZone moniker={asSegment("ui:board")}>{ui}</FocusZone>
+                  <FocusScope moniker={asSegment("ui:board")}>{ui}</FocusScope>
                 </ActiveBoardPathProvider>
               </TooltipProvider>
             </EntityStoreProvider>

@@ -35,7 +35,11 @@ use super::types::{FullyQualifiedMoniker, LayerName, SegmentMoniker, WindowLabel
 /// `last_focused` is the drill-out / fallback memory: when a layer is
 /// dismissed (palette closed, dialog accepted), the navigator restores
 /// focus to the layer's parent and consults the parent's `last_focused`
-/// to land somewhere meaningful.
+/// to land somewhere meaningful. Populated by the kernel as focus
+/// moves — see [`super::registry::SpatialRegistry::record_focus`],
+/// invoked by [`super::state::SpatialState::focus`] (and any other code
+/// path that mutates the per-window focus slot) on every successful
+/// focus transition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FocusLayer {
     /// Canonical FQM for this layer mount.
@@ -55,8 +59,10 @@ pub struct FocusLayer {
     /// cross windows by accident.
     pub window_label: WindowLabel,
     /// Drill-out / fallback memory: most recently focused scope inside
-    /// this layer, keyed by FQM. Populated by the navigator when focus
-    /// changes within the layer; consulted on layer dismissal to restore
-    /// focus.
+    /// this layer, keyed by FQM. Populated by the kernel as focus moves
+    /// — [`super::registry::SpatialRegistry::record_focus`] writes this
+    /// slot for every layer ancestor of a newly focused FQM. Consulted
+    /// on layer dismissal to restore focus to a meaningful target in
+    /// the parent layer.
     pub last_focused: Option<FullyQualifiedMoniker>,
 }

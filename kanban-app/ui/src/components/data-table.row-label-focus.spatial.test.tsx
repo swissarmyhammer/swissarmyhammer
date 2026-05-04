@@ -292,7 +292,7 @@ async function defaultInvokeImpl(
   if (cmd === "get_undo_state") return { can_undo: false, can_redo: false };
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) fqToSegment.set(a.fq, a.segment);
     return undefined;
@@ -361,7 +361,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // (the spatial path was taken in both rows). The `{di}` suffix is
     // kept for self-describing segments and for parity with the
     // `grid_cell:{di}:{colKey}` convention; the row's outer
-    // `<FocusZone renderContainer={false}>` now publishes a distinct
+    // `<FocusScope renderContainer={false}>` now publishes a distinct
     // FQM per row through `FullyQualifiedMonikerContext`, so the
     // composed leaf FQMs are unique even before the suffix is
     // considered.
@@ -487,7 +487,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     expect(dispatchArgs.cmd).toBe("entity.archive");
     // The scope chain must include `task:a` — that's the row's entity
     // moniker, contributed by the row's outer
-    // `<FocusZone moniker={asSegment("task:a")} renderContainer={false}>`
+    // `<FocusScope moniker={asSegment("task:a")} renderContainer={false}>`
     // frame the row label leaf is mounted inside (the wrapper pushes
     // `task:a` into the React command-scope chain even though it
     // doesn't itself register with the kernel). This is the
@@ -514,8 +514,8 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // across rows and `useFocusClaim`'s registry lookup missed.
     //
     // Fixed upstream by commit 1b6c4950d (data-table row promoted
-    // from FocusScope to FocusZone with renderContainer={false}). The
-    // FocusZone publishes the row's FQM through context, so each
+    // from FocusScope to FocusScope with renderContainer={false}). The
+    // FocusScope publishes the row's FQM through context, so each
     // row_label leaf now composes a unique FQM and the click →
     // spatial_focus(fq) → focus-changed → useFocusClaim path lands.
     //

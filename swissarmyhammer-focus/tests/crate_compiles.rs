@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
     BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, FocusLayer, FocusScope,
-    FocusZone, FullyQualifiedMoniker, LayerName, NavStrategy, NoopSink, Pixels, RecordingSink,
+    FullyQualifiedMoniker, LayerName, NavStrategy, NoopSink, Pixels, RecordingSink,
     Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
@@ -45,8 +45,9 @@ fn every_public_type_is_constructible_or_referenced() {
         layer_fq: FullyQualifiedMoniker::from_string("/L"),
         parent_zone: None,
         overrides: HashMap::new(),
+        last_focused: None,
     };
-    let _zone = FocusZone {
+    let _zone = FocusScope {
         fq: FullyQualifiedMoniker::from_string("/L/z"),
         segment: SegmentMoniker::from_string("z"),
         rect: _rect,

@@ -7,7 +7,7 @@
  * inspector layer simplification, which removed the per-panel zone and
  * let cross-panel nav fall through to iter 0 across all field zones at
  * the layer root). Updated for card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`: each
- * inspector body is now wrapped in an entity-keyed `<FocusZone>`, so
+ * inspector body is now wrapped in an entity-keyed `<FocusScope>`, so
  * cardinal nav from a field looks like:
  *
  *   1. Iter 0 — peers within the same entity zone. ArrowLeft from the

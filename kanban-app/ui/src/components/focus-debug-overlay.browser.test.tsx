@@ -4,7 +4,7 @@
  * Covers four assertions:
  *
  *   1. When `<FocusDebugProvider enabled>` wraps the tree, every
- *      `<FocusLayer>` / `<FocusZone>` / `<FocusScope>` mounts a
+ *      `<FocusLayer>` / `<FocusScope>` / `<FocusScope>` mounts a
  *      `[data-debug=…]` element with the `border-dashed` class and a
  *      hover-revealed tooltip that mentions the primitive's name /
  *      moniker.
@@ -66,7 +66,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Imports — after mocks
 // ---------------------------------------------------------------------------
 
-import { FocusZone } from "./focus-zone";
 import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
 import { FocusDebugOverlay, type FocusDebugKind } from "./focus-debug-overlay";
@@ -113,7 +112,7 @@ async function flushFrame() {
  * Direct-mount harness for `<FocusDebugOverlay>`. Renders a fixed-position
  * host `<div>` at the supplied rect and mounts the overlay against a ref to
  * that host. Lets the overlay tests exercise the component in isolation —
- * no `<FocusLayer>` / `<FocusZone>` machinery, no spatial-focus IPC.
+ * no `<FocusLayer>` / `<FocusScope>` machinery, no spatial-focus IPC.
  *
  * The host div carries `data-testid="overlay-host"` so tests can grab it to
  * mutate dimensions later (used by the dimension-change rerender test).
@@ -257,9 +256,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
-              <FocusZone moniker={asSegment("ui:test")}>
+              <FocusScope moniker={asSegment("ui:test")}>
                 <span>zone-content</span>
-              </FocusZone>
+              </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
         </FocusDebugProvider>,
@@ -347,11 +346,11 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
         <FocusDebugProvider enabled={false}>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
-              <FocusZone moniker={asSegment("ui:test")}>
+              <FocusScope moniker={asSegment("ui:test")}>
                 <FocusScope moniker={asSegment("ui:test.leaf")}>
                   <span>content</span>
                 </FocusScope>
-              </FocusZone>
+              </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
         </FocusDebugProvider>,
@@ -370,11 +369,11 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
       withTooltipProvider(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <FocusZone moniker={asSegment("ui:test")}>
+            <FocusScope moniker={asSegment("ui:test")}>
               <FocusScope moniker={asSegment("ui:test.leaf")}>
                 <span>content</span>
               </FocusScope>
-            </FocusZone>
+            </FocusScope>
           </FocusLayer>
         </SpatialFocusProvider>,
       ),
@@ -391,7 +390,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // Mount the zone at a fixed position so the overlay's label has
     // predictable coordinates. The zone's `<div>` directly carries the
     // fixed-position style so its rect is exactly (100, 200) — note
-    // `<FocusZone>` already merges `relative` into the className, but
+    // `<FocusScope>` already merges `relative` into the className, but
     // the inline `position: fixed` style overrides that for layout
     // (the merged class ends up unused; that's acceptable for a test).
     const { container, unmount } = render(
@@ -399,7 +398,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
-              <FocusZone
+              <FocusScope
                 moniker={asSegment("ui:positioned")}
                 style={{
                   position: "fixed",
@@ -410,7 +409,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
                 }}
               >
                 <span>positioned</span>
-              </FocusZone>
+              </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
         </FocusDebugProvider>,
@@ -437,11 +436,11 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
-              <FocusZone moniker={asSegment("ui:zone-test")}>
+              <FocusScope moniker={asSegment("ui:zone-test")}>
                 <FocusScope moniker={asSegment("ui:scope-test")}>
                   <span>nested</span>
                 </FocusScope>
-              </FocusZone>
+              </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
         </FocusDebugProvider>,

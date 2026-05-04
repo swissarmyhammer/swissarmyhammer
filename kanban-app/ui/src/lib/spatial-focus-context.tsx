@@ -117,12 +117,22 @@ export interface SpatialFocusActions {
   /**
    * Invoke `spatial_register_scope` with the FQM-keyed kernel record:
    * canonical FQM, declared segment, viewport rect, owning layer FQM,
-   * optional enclosing zone FQM, and per-direction overrides.
+   * optional enclosing scope FQM, and per-direction overrides.
    *
-   * Mirrors `FocusScope` on the Rust side — the leaf primitive. Pass
-   * `null` for `parentZone` when the leaf is registered directly under
-   * the layer root, and an empty object for `overrides` when the leaf
-   * has no per-direction special cases.
+   * Mirrors [`FocusScope`] on the Rust side — the single registered
+   * primitive. Whether the scope plays a leaf or a navigable-container
+   * role is determined at runtime by whether anything else is
+   * registered under it; the wire shape is the same for both. Pass
+   * `null` for `parentZone` when the scope is registered directly
+   * under the layer root, and an empty object for `overrides` when
+   * the scope has no per-direction special cases.
+   *
+   * `last_focused` is server-owned drill-out memory and is **not**
+   * carried on the wire — registration is the React side's "this scope
+   * just mounted" signal. The kernel preserves any existing
+   * `last_focused` slot when a scope is re-registered (the
+   * placeholder/real-mount swap), so the lack of a wire field is
+   * correct rather than lossy.
    *
    * `sampledAtMs` is the `performance.now()` timestamp captured at the
    * exact callsite that called `getBoundingClientRect()` to produce
@@ -136,26 +146,6 @@ export interface SpatialFocusActions {
    * threaded through.
    */
   registerScope: (
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layerFq: FullyQualifiedMoniker,
-    parentZone: FullyQualifiedMoniker | null,
-    overrides: FocusOverrides,
-    sampledAtMs?: number,
-  ) => Promise<void>;
-  /**
-   * Invoke `spatial_register_zone` with the FQM-keyed kernel record.
-   *
-   * Mirrors `FocusZone` on the Rust side. Same parameter shape as
-   * `registerScope`; the difference is the `Zone` variant in the
-   * registry, which owns a `last_focused` slot for drill-out / fallback
-   * memory. The slot is always initialized to `None` on register — the
-   * navigator populates it as focus moves through the zone.
-   *
-   * See `registerScope` for the `sampledAtMs` contract.
-   */
-  registerZone: (
     fq: FullyQualifiedMoniker,
     segment: SegmentMoniker,
     rect: Rect,
@@ -420,31 +410,6 @@ function buildSpatialFocusActions(
     });
   };
 
-  const registerZone: SpatialFocusActions["registerZone"] = async (
-    fq,
-    segment,
-    rect,
-    layerFq,
-    parentZone,
-    overrides,
-    sampledAtMs,
-  ) => {
-    validateAndLogRect(
-      "register_zone",
-      fq,
-      rect,
-      sampledAtMs ?? performance.now(),
-    );
-    await invoke("spatial_register_zone", {
-      fq,
-      segment,
-      rect,
-      layerFq,
-      parentZone,
-      overrides,
-    });
-  };
-
   const unregisterScope: SpatialFocusActions["unregisterScope"] = async (
     fq,
   ) => {
@@ -517,7 +482,6 @@ function buildSpatialFocusActions(
     focus,
     clearFocus,
     registerScope,
-    registerZone,
     unregisterScope,
     updateRect,
     navigate,
@@ -557,7 +521,7 @@ export function useSpatialFocusActions(): SpatialFocusActions {
  * the caller.
  *
  * Use from primitives that should silently degrade outside the spatial-nav
- * stack (e.g. `<FocusZone>` mounted in a unit test without a
+ * stack (e.g. `<FocusScope>` mounted in a unit test without a
  * `<SpatialFocusProvider>` wrapper). The strict variant
  * `useSpatialFocusActions` is still the right choice anywhere the absence
  * of the provider is a contract violation rather than a tolerated state.

@@ -49,7 +49,7 @@
  *   - `mockListen` records every `listen("focus-changed", cb)` callback
  *     so `fireFocusChanged(key)` can drive the React tree as if the Rust
  *     kernel had emitted a `focus-changed` event.
- *   - `<Field>` is mocked with a thin `<FocusZone>` wrapper so the
+ *   - `<Field>` is mocked with a thin `<FocusScope>` wrapper so the
  *     percent-complete field's spatial registration runs against the
  *     same primitives production uses, without pulling in the entity
  *     store and field registries.
@@ -167,17 +167,17 @@ vi.mock("@/lib/schema-context", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// `<Field>` mock — wraps a `<FocusZone>` with the production moniker
+// `<Field>` mock — wraps a `<FocusScope>` with the production moniker
 // shape so the percent-complete field zone registers against the spatial
 // graph without pulling in the full entity store and field registries.
 // The wrapper preserves the production contract (the field IS a
-// `<FocusZone>` whose moniker is `field:{type}:{id}.{name}`) so the
+// `<FocusScope>` whose moniker is `field:{type}:{id}.{name}`) so the
 // indicator-render assertion runs against the same primitives the user
 // hits at runtime.
 // ---------------------------------------------------------------------------
 
 vi.mock("@/components/fields/field", async () => {
-  const { FocusZone } = await import("@/components/focus-zone");
+  const { FocusScope } = await import("@/components/focus-scope");
   const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
@@ -187,9 +187,9 @@ vi.mock("@/components/fields/field", async () => {
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
       return (
-        <FocusZone moniker={moniker} showFocusBar>
+        <FocusScope moniker={moniker} showFocusBar>
           <span data-testid="field-percent">{String(props.entityId)}</span>
-        </FocusZone>
+        </FocusScope>
       );
     },
   };
@@ -265,13 +265,6 @@ function renderNavBar() {
   );
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -338,7 +331,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const zone = registerZoneArgs().find(
+    const zone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(zone, "board-selector zone must register").toBeDefined();
@@ -434,8 +427,8 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
   // -------------------------------------------------------------------------
   // 4. Indicator renders on the percent-complete field zone.
   //
-  // The field zone is registered via `spatial_register_zone` (it's a
-  // `<FocusZone>`, not a `<FocusScope>`). Its moniker is
+  // The field zone is registered via `spatial_register_scope` (it's a
+  // `<FocusScope>`, not a `<FocusScope>`). Its moniker is
   // `field:board:b1.percent_complete`. The mocked `<Field>` opts in to
   // `showFocusBar` so the indicator mounts when the zone is focused —
   // matching the production wiring that lets the per-field bar tell the
@@ -446,7 +439,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const zone = registerZoneArgs().find(
+    const zone = registerScopeArgs().find(
       (a) => a.segment === "field:board:b1.percent_complete",
     );
     expect(

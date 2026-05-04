@@ -77,7 +77,7 @@
  *   - `get_ui_state` → fixture ui-state with active perspective
  *   - `list_entity_types` / `get_entity_schema` → fixture schemas
  *
- * Spatial invokes (`spatial_register_zone`, `spatial_register_focusable`,
+ * Spatial invokes (`spatial_register_scope`, `spatial_register_focusable`,
  * `spatial_register_layer`, `spatial_focus`, `spatial_navigate`,
  * `spatial_drill_in`, `spatial_drill_out`, `spatial_unregister_scope`,
  * `spatial_update_rect`) are routed through the shadow-registry
@@ -466,13 +466,6 @@ function spatialDrillCalls(direction: "in" | "out"): Array<{ fq: FullyQualifiedM
     .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
-/** Pull every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Pull every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -652,7 +645,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       await flushAppMount();
 
       // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the active perspective
-      // mounts `<FocusZone perspective_tab:default>` with an inner
+      // mounts `<FocusScope perspective_tab:default>` with an inner
       // `<FocusScope perspective_tab.name:default>` leaf. A real user click
       // on the visible tab name lands on the inner leaf — that is the
       // realistic user path. The wrapping zone's onClick still calls
@@ -1167,7 +1160,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
     });
 
     // Note: a former `dblclick on the view container chrome…` test was
-    // removed when the redundant `ui:view` `<FocusZone>` was deleted from
+    // removed when the redundant `ui:view` `<FocusScope>` was deleted from
     // `view-container.tsx`. The view chrome rect is now owned by the
     // surrounding `ui:perspective` zone (covered above as
     // `dblclick on the perspective bar background…` and the perspective
@@ -1266,7 +1259,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Walks the captured `spatial_register_*` calls and asserts the
   // app-shaped registry has the right structural shape:
   //
-  //   - `task:*` is always `spatial_register_zone` (zone container),
+  //   - `task:*` is always `spatial_register_scope` (zone container),
   //     never scope. Cards hold focusable atoms (drag handle, Field
   //     rows, inspect button) so they are zones by the kernel's
   //     three-peer contract — see card
@@ -1296,12 +1289,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // And every fixture task DID register as a zone.
       for (const t of E2E_TASKS) {
         const taskMoniker = `task:${t.id}`;
-        const zoneReg = registerZoneArgs().find(
+        const zoneReg = registerScopeArgs().find(
           (a) => a.segment === taskMoniker,
         );
         expect(
           zoneReg,
-          `${taskMoniker} must register via spatial_register_zone`,
+          `${taskMoniker} must register via spatial_register_scope`,
         ).toBeTruthy();
       }
 
@@ -1312,7 +1305,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const boardZone = registerZoneArgs().find(
+      const boardZone = registerScopeArgs().find(
         (a) => a.segment === "ui:board",
       );
       expect(
@@ -1323,10 +1316,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       for (const colId of ["TODO", "DOING", "DONE"]) {
         const moniker = `column:${colId}`;
-        const colZone = registerZoneArgs().find((a) => a.segment === moniker);
+        const colZone = registerScopeArgs().find((a) => a.segment === moniker);
         expect(
           colZone,
-          `${moniker} must register via spatial_register_zone`,
+          `${moniker} must register via spatial_register_scope`,
         ).toBeTruthy();
         expect(
           colZone!.parentZone,
@@ -1367,7 +1360,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // the board entity has SOMETHING in the registry.
       const boardReg =
         registerScopeArgs().find((a) => a.segment === E2E_BOARD_MONIKER) ??
-        registerZoneArgs().find((a) => a.segment === E2E_BOARD_MONIKER);
+        registerScopeArgs().find((a) => a.segment === E2E_BOARD_MONIKER);
       expect(
         boardReg,
         `${E2E_BOARD_MONIKER} must register on App mount`,
@@ -1389,13 +1382,13 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // the cleanup: no `ui:view` zone is registered, and the
       // `board:<id>` zone's `parent_zone` is the `ui:perspective`
       // chrome zone's fq.
-      const viewZone = registerZoneArgs().find((a) => a.segment === "ui:view");
+      const viewZone = registerScopeArgs().find((a) => a.segment === "ui:view");
       expect(
         viewZone,
         "no ui:view chrome zone may register — it was deleted as redundant",
       ).toBeUndefined();
 
-      const perspectiveZone = registerZoneArgs().find(
+      const perspectiveZone = registerScopeArgs().find(
         (a) => a.segment === "ui:perspective",
       );
       expect(
@@ -1403,12 +1396,12 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         "ui:perspective zone must register so the view body can hang off it",
       ).toBeTruthy();
 
-      const boardEntityZone = registerZoneArgs().find(
+      const boardEntityZone = registerScopeArgs().find(
         (a) => a.segment === E2E_BOARD_MONIKER,
       );
       expect(
         boardEntityZone,
-        `${E2E_BOARD_MONIKER} must register as a zone (the Inspectable+FocusZone wrapper around ui:board)`,
+        `${E2E_BOARD_MONIKER} must register as a zone (the Inspectable+FocusScope wrapper around ui:board)`,
       ).toBeTruthy();
       expect(
         boardEntityZone!.parentZone,

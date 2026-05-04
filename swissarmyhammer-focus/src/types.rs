@@ -18,7 +18,7 @@
 //! The kernel uses **one** identifier shape per primitive — the
 //! [`FullyQualifiedMoniker`]. The path through the focus hierarchy
 //! IS the spatial key. Consumers declare a relative [`SegmentMoniker`]
-//! when constructing a `<FocusLayer>` / `<FocusZone>` / `<FocusScope>`
+//! when constructing a `<FocusLayer>` / `<FocusScope>`
 //! and the FQM is composed by parent/child nesting on the consumer side
 //! before being passed to the kernel.
 //!

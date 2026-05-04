@@ -2,14 +2,14 @@
  * Browser-mode test for `<EntityCard>`'s spatial-nav behaviour.
  *
  * Pinned shape (after card `01KQJDYJ4SDKK2G8FTAQ348ZHG`): the card body
- * wraps in `<FocusZone moniker="task:{id}">` — a navigable container,
+ * wraps in `<FocusScope moniker="task:{id}">` — a navigable container,
  * NOT a leaf. Cards hold multiple focusable atoms (drag handle, the
  * `<Field>` rows with their own zones and pill leaves, inspect button)
  * and so are zones by the kernel's three-peer contract.
  *
  * Pre-card history: the card body was a `<FocusScope>` because of an
  * earlier kernel cross-zone-nav workaround. That shape silently
- * degraded the spatial graph — Scopes do not push `FocusZoneContext`
+ * degraded the spatial graph — Scopes do not push `FocusScopeContext`
  * so the inner Field zones picked the column zone as their
  * `parent_zone`, making fields siblings of the card instead of
  * descendants. The path-prefix branch of the scope-is-leaf invariant
@@ -20,9 +20,9 @@
  * `nav-bar.scope-leaf.spatial.test.tsx`.
  *
  * Each visible field inside the card renders through `<Field>`, which
- * is itself a `<FocusZone moniker="field:task:{id}.{name}">`. With the
- * card now a `<FocusZone>`, those field zones nest under the card zone
- * via `FocusZoneContext` — the kernel sees fields as descendants of
+ * is itself a `<FocusScope moniker="field:task:{id}.{name}">`. With the
+ * card now a `<FocusScope>`, those field zones nest under the card zone
+ * via `FocusScopeContext` — the kernel sees fields as descendants of
  * cards, which restores `last_focused` memory at the card level and
  * makes drill-in / drill-out work field → card → column → board.
  * Multi-value fields (badge-list assignees / tags) render one
@@ -434,13 +434,6 @@ async function fireFocusChanged({
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -466,8 +459,8 @@ function unregisterScopeCalls(): Array<{ fq: FullyQualifiedMoniker }> {
  * Render the card wrapped in the production-shaped spatial-nav stack.
  *
  * Mirrors the provider tree `App.tsx` mounts: `<SpatialFocusProvider>`
- * + `<FocusLayer>` so the card's `<FocusZone>` registers via
- * `spatial_register_zone`; `<EntityFocusProvider>` so the entity-focus
+ * + `<FocusLayer>` so the card's `<FocusScope>` registers via
+ * `spatial_register_scope`; `<EntityFocusProvider>` so the entity-focus
  * scope registry and `setFocus` chrome work; the schema / store / field-
  * update / UI-state providers because the schema-driven field dispatch
  * inside the card reads from all four.
@@ -517,11 +510,11 @@ describe("EntityCard — browser spatial behaviour", () => {
   // ---------------------------------------------------------------------
   // #1 Registration
   // ---------------------------------------------------------------------
-  it("registers the card body as a FocusZone with moniker task:{id} (test #1)", async () => {
+  it("registers the card body as a FocusScope with moniker task:{id} (test #1)", async () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     );
     expect(cardZone).toBeTruthy();
@@ -531,7 +524,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     // and from the layer root in this isolated harness.
     expect(cardZone!.segment).toMatch(/^task:[A-Za-z0-9-]+$/);
     expect(cardZone!.layerFq).toBeTruthy();
-    // In this isolated harness the card has no surrounding `<FocusZone>`,
+    // In this isolated harness the card has no surrounding `<FocusScope>`,
     // so its `parentZone` is null. In production the card is wrapped by
     // a `column:` zone and that zone's key flows through here.
     expect(cardZone!.parentZone).toBeNull();
@@ -567,7 +560,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { container, unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
     const cardKey = cardZone.fq as FullyQualifiedMoniker;
@@ -598,7 +591,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
     const cardKey = cardZone.fq as FullyQualifiedMoniker;
@@ -662,7 +655,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     expect(cardBody).not.toBeNull();
     expect(cardBody.onkeydown).toBeNull();
 
-    // Sanity: the card's outer FocusZone div also has no keydown handler.
+    // Sanity: the card's outer FocusScope div also has no keydown handler.
     const cardZoneNode = container.querySelector(
       `[data-segment='task:task-1']`,
     ) as HTMLElement;
@@ -741,7 +734,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
     const cardKey = cardZone.fq as FullyQualifiedMoniker;
@@ -786,23 +779,23 @@ describe("EntityCard — browser spatial behaviour", () => {
   // the contract one leaf type at a time.
   // ---------------------------------------------------------------------
   describe("per-leaf clicks", () => {
-    it("the title field is a FocusZone with moniker field:task:{id}.title sibling-parented to the card's parent zone", async () => {
+    it("the title field is a FocusScope with moniker field:task:{id}.title sibling-parented to the card's parent zone", async () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const titleZone = registerZoneArgs().find(
+      const titleZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.title",
       );
       expect(titleZone).toBeTruthy();
 
-      // The card is a `<FocusZone>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
-      // so it pushes a `FocusZoneContext.Provider`. The field zone
+      // The card is a `<FocusScope>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
+      // so it pushes a `FocusScopeContext.Provider`. The field zone
       // therefore sees the card as its enclosing zone and registers
       // `parentZone = cardZone.fq` — fields are *children* of the card
       // zone, not siblings of the card under a column. This restores
       // the spatial topology that the previous Scope wrapper silently
       // broke.
-      const cardZone = registerZoneArgs().find(
+      const cardZone = registerScopeArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
       expect(titleZone!.parentZone).toBe(cardZone.fq);
@@ -820,10 +813,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardZone = registerZoneArgs().find(
+      const cardZone = registerScopeArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
-      const titleZone = registerZoneArgs().find(
+      const titleZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.title",
       )!;
 
@@ -853,7 +846,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, queryByTestId, unmount } = renderCard();
       await flushSetup();
 
-      const titleZone = registerZoneArgs().find(
+      const titleZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.title",
       )!;
 
@@ -888,7 +881,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       await flushSetup();
 
       // The tags field zone is registered.
-      const tagsZone = registerZoneArgs().find(
+      const tagsZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.tags",
       );
       expect(tagsZone).toBeTruthy();
@@ -919,10 +912,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardZone = registerZoneArgs().find(
+      const cardZone = registerScopeArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
-      const tagsZone = registerZoneArgs().find(
+      const tagsZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.tags",
       )!;
       const bugTag = registerScopeArgs().find(
@@ -999,7 +992,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const assigneesZone = registerZoneArgs().find(
+      const assigneesZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.assignees",
       );
       expect(assigneesZone).toBeTruthy();
@@ -1030,10 +1023,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardZone = registerZoneArgs().find(
+      const cardZone = registerScopeArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
-      const assigneesZone = registerZoneArgs().find(
+      const assigneesZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.assignees",
       )!;
       const alice = registerScopeArgs().find(
@@ -1103,14 +1096,14 @@ describe("EntityCard — browser spatial behaviour", () => {
       unmount();
     });
 
-    it("the status field is a nested FocusZone with moniker field:task:{id}.status", async () => {
+    it("the status field is a nested FocusScope with moniker field:task:{id}.status", async () => {
       // Status is a single-value text field, the same shape as title.
       // Pinning a separate test is belt-and-suspenders for the user-
       // reported regression list, which calls out status explicitly.
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const statusZone = registerZoneArgs().find(
+      const statusZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.status",
       );
       expect(statusZone).toBeTruthy();
@@ -1127,10 +1120,10 @@ describe("EntityCard — browser spatial behaviour", () => {
       const { container, unmount } = renderCard();
       await flushSetup();
 
-      const cardZone = registerZoneArgs().find(
+      const cardZone = registerScopeArgs().find(
         (a) => a.segment === "task:task-1",
       )!;
-      const statusZone = registerZoneArgs().find(
+      const statusZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.status",
       )!;
 

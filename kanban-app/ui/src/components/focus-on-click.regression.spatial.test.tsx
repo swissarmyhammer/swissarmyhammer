@@ -52,7 +52,7 @@
  *     ships (see the trailing comment near the task-card section).
  *   - **Inspector field row** (`field:task:<id>.<name>`).
  *   - ~~Inspector panel background~~ — removed in card
- *     `01KQCTJY1QZ710A05SE975GHNR`. The `<FocusZone moniker="panel:*">`
+ *     `01KQCTJY1QZ710A05SE975GHNR`. The `<FocusScope moniker="panel:*">`
  *     wrap was deleted; the inspector body renders directly inside
  *     `<SlidePanel>` and field zones at the layer root carry their own
  *     click contracts.
@@ -233,7 +233,7 @@ import { NavBar } from "./nav-bar";
 import { EntityCard } from "./entity-card";
 import { Field } from "./fields/field";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -345,7 +345,7 @@ const TAG_SCHEMA = {
 
 /**
  * Column schema — needed so the column-name `<Field>` resolves a
- * `nameFieldDef` and renders its `<FocusZone>` (moniker
+ * `nameFieldDef` and renders its `<FocusScope>` (moniker
  * `field:column:<id>.name`). Without this the header falls back to a
  * bare `<span>` and the column-name field-zone test cannot find its
  * registration.
@@ -459,13 +459,6 @@ async function fireFocusChanged({
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -486,7 +479,7 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
  * fails with actionable context instead of a cryptic `undefined`.
  */
 function findRegistration(moniker: string): Record<string, unknown> {
-  const all = [...registerZoneArgs(), ...registerScopeArgs()];
+  const all = [...registerScopeArgs(), ...registerScopeArgs()];
   const reg = all.find((r) => r.segment === moniker);
   if (!reg) {
     const seen = all.map((r) => String(r.moniker)).join(", ");
@@ -590,7 +583,7 @@ async function assertClickProducesIndicator({
 }
 
 /**
- * Variant of [`assertClickProducesIndicator`] for `<FocusZone>` wrappers
+ * Variant of [`assertClickProducesIndicator`] for `<FocusScope>` wrappers
  * that intentionally ship `showFocusBar={false}` — their inner leaves
  * own the visible focus signal, so the wrapper itself must NOT mount a
  * `<FocusIndicator>` even when claimed. The data-focused attribute
@@ -719,9 +712,9 @@ function renderColumnInBoard(column: Entity, tasks: Entity[]) {
           <EntityFocusProvider>
             <FieldUpdateProvider>
               <UIStateProvider>
-                <FocusZone moniker={asSegment("ui:board")}>
+                <FocusScope moniker={asSegment("ui:board")}>
                   <ColumnView column={column} tasks={tasks} />
-                </FocusZone>
+                </FocusScope>
               </UIStateProvider>
             </FieldUpdateProvider>
           </EntityFocusProvider>
@@ -875,7 +868,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       // Capture the registered key for the leaf BEFORE we clear the
       // invoke mock — `findRegistration` reads from the mock's call log.
       // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN)
-      // the per-tab wrapper is a `<FocusZone perspective_tab:{id}>` and
+      // the per-tab wrapper is a `<FocusScope perspective_tab:{id}>` and
       // the click-target leaf is the inner
       // `<FocusScope perspective_tab.name:{id}>` that wraps the
       // `TabButton`.
@@ -980,7 +973,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
       // Synthesize a click whose target is the bar wrapper itself, NOT a
       // tab inside it. Dispatching directly on the bar node sets the
-      // event's target to the bar — `<FocusZone>`'s click handler reads
+      // event's target to the bar — `<FocusScope>`'s click handler reads
       // `e.target` only to skip editable surfaces; everything else flows
       // through to `focus(barKey)`.
       fireEvent.click(barNode!);
@@ -1114,7 +1107,7 @@ describe("focus-on-click regression suite (every component class)", () => {
   // -------------------------------------------------------------------------
   // Toolbar action — production has no toolbar component today. The
   // architectural guard (`focus-architecture.guards.node.test.ts`, Guard A)
-  // already requires every `ui:` prefix to register as `<FocusZone>` or
+  // already requires every `ui:` prefix to register as `<FocusScope>` or
   // `<FocusScope>`, so the registration shape is pinned. When a toolbar
   // ships, add a `describe("toolbar action", …)` block here that follows
   // the same `assertClickProducesIndicator` pattern used by the navbar
@@ -1238,7 +1231,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       const { container, unmount } = renderColumnInBoard(column, tasks);
       await flushSetup();
 
-      // The column body is the registered `<FocusZone>` host; clicking
+      // The column body is the registered `<FocusScope>` host; clicking
       // it directly lands the event on the zone's outer div.
       const moniker = `column:${COLUMN_ID_A}`;
       await assertClickProducesIndicator({
@@ -1255,7 +1248,7 @@ describe("focus-on-click regression suite (every component class)", () => {
   // Column name field zone — moniker `field:column:<id>.name`.
   //
   // The column-name surface is registered exactly once — by the inner
-  // `<Field>` component as a `<FocusZone moniker="field:column:<id>.name">`.
+  // `<Field>` component as a `<FocusScope moniker="field:column:<id>.name">`.
   // The previous synthetic `<FocusScope moniker="column:<id>.name">` wrap
   // is gone (collapsed into the inner Field zone) — this test pins the
   // post-refactor moniker.
@@ -1304,7 +1297,7 @@ describe("focus-on-click regression suite (every component class)", () => {
 
   // -------------------------------------------------------------------------
   // Inspector panel background was deleted in card
-  // `01KQCTJY1QZ710A05SE975GHNR` — the `<FocusZone moniker="panel:*">`
+  // `01KQCTJY1QZ710A05SE975GHNR` — the `<FocusScope moniker="panel:*">`
   // wrap is gone and the inspector body renders directly inside
   // `<SlidePanel>`. Field zones at the inspector layer root carry their
   // own click contracts (covered by the `<Field>` test above and by

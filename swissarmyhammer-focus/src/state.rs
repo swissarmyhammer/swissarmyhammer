@@ -8,7 +8,7 @@
 //!   window A do not perturb window B's slot.
 //!
 //! Everything else — the segment bound to an FQM, the window the FQM
-//! lives in, the rect, the layer / zone hierarchy — lives in
+//! lives in, the rect, the layer / scope hierarchy — lives in
 //! [`SpatialRegistry`] and is read on demand. There is no per-FQM
 //! "entry" map on `SpatialState`: a single source of truth (the
 //! registry) eliminates the drift surface that an earlier dual-store
@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::registry::SpatialRegistry;
-use super::scope::RegisteredScope;
+use super::scope::FocusScope;
 use super::types::{
     pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
@@ -75,7 +75,7 @@ pub struct FocusChangedEvent {
     pub next_segment: Option<SegmentMoniker>,
 }
 
-/// Result of a zone-aware focus fallback computation.
+/// Result of a scope-aware focus fallback computation.
 ///
 /// Produced by [`SpatialState::resolve_fallback`] when the focused entry
 /// is about to be unregistered. Each "found" variant carries the resolved
@@ -89,12 +89,13 @@ pub struct FocusChangedEvent {
 /// about the precise rule that applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FallbackResolution {
-    /// Target is a sibling of the lost entry in the same zone (rule 1).
+    /// Target is a sibling of the lost entry in the same parent scope
+    /// (rule 1).
     FallbackSiblingInZone(FullyQualifiedMoniker, SegmentMoniker),
-    /// Target is the parent zone's `last_focused` slot, still
+    /// Target is the parent scope's `last_focused` slot, still
     /// registered (rule 2 preferred).
     FallbackParentZoneLastFocused(FullyQualifiedMoniker, SegmentMoniker),
-    /// Target is the nearest entry in an ancestor zone, used when the
+    /// Target is the nearest entry in an ancestor scope, used when the
     /// preferred `last_focused` is stale or absent (rule 2 fallback).
     FallbackParentZoneNearest(FullyQualifiedMoniker, SegmentMoniker),
     /// Target is the ancestor layer's `last_focused` slot, still
@@ -118,62 +119,32 @@ pub enum FallbackResolution {
 /// origins; ties break by `top` then `left` so the choice is
 /// deterministic on identical-position rects (a common pattern in tests
 /// and in placeholder grids). Returns `None` when no candidate exists.
-///
-/// When `prefer_variant` is `Some`, candidates of that variant
-/// (Leaf or Zone) are preferred over the other; the cheapest available
-/// match wins within the preferred variant before any candidate of the
-/// other variant is considered. This implements the spec's "prefer
-/// matching variant" hint — losing a leaf prefers a leaf as the
-/// fallback target, losing a zone prefers a zone. When `None`, all
-/// candidates are ranked together.
 fn nearest_in_zone(
     registry: &SpatialRegistry,
     layer_fq: &FullyQualifiedMoniker,
     zone_fq: &Option<FullyQualifiedMoniker>,
     lost_fq: &FullyQualifiedMoniker,
     origin_rect: Rect,
-    prefer_variant: Option<ScopeVariant>,
 ) -> Option<(FullyQualifiedMoniker, SegmentMoniker)> {
-    let candidates: Vec<&RegisteredScope> = registry
-        .entries_in_layer(layer_fq)
-        .filter(|s| s.fq() != lost_fq)
+    let candidates: Vec<&FocusScope> = registry
+        .scopes_in_layer(layer_fq)
+        .filter(|s| &s.fq != lost_fq)
         .filter(|s| match zone_fq {
-            Some(zk) => s.parent_zone() == Some(zk),
-            None => s.parent_zone().is_none(),
+            Some(zk) => s.parent_zone.as_ref() == Some(zk),
+            None => s.parent_zone.is_none(),
         })
         .collect();
-
-    if let Some(preferred) = prefer_variant {
-        let matches_preferred = |s: &&RegisteredScope| match preferred {
-            ScopeVariant::Scope => s.is_scope(),
-            ScopeVariant::Zone => s.is_zone(),
-        };
-        if let Some(best) = candidates
-            .iter()
-            .copied()
-            .filter(matches_preferred)
-            .min_by(|a, b| {
-                let da = squared_distance(origin_rect, *a.rect());
-                let db = squared_distance(origin_rect, *b.rect());
-                pixels_cmp(da, db)
-                    .then(pixels_cmp(a.rect().top(), b.rect().top()))
-                    .then(pixels_cmp(a.rect().left(), b.rect().left()))
-            })
-        {
-            return Some((best.fq().clone(), best.segment().clone()));
-        }
-    }
 
     candidates
         .into_iter()
         .min_by(|a, b| {
-            let da = squared_distance(origin_rect, *a.rect());
-            let db = squared_distance(origin_rect, *b.rect());
+            let da = squared_distance(origin_rect, a.rect);
+            let db = squared_distance(origin_rect, b.rect);
             pixels_cmp(da, db)
-                .then(pixels_cmp(a.rect().top(), b.rect().top()))
-                .then(pixels_cmp(a.rect().left(), b.rect().left()))
+                .then(pixels_cmp(a.rect.top(), b.rect.top()))
+                .then(pixels_cmp(a.rect.left(), b.rect.left()))
         })
-        .map(|s| (s.fq().clone(), s.segment().clone()))
+        .map(|s| (s.fq.clone(), s.segment.clone()))
 }
 
 /// Pick the nearest entry in `layer_fq`, regardless of `parent_zone`,
@@ -184,9 +155,7 @@ fn nearest_in_zone(
 /// any live scope in the ancestor layer — not just bare leaves at the
 /// layer root. "Nearest" uses the same Euclidean-square distance and
 /// tie-break ordering as [`nearest_in_zone`] so the cascade reads
-/// consistently. Variant preference is intentionally not exposed here
-/// because rule 4 does not apply it (see the spec on
-/// [`SpatialState::resolve_fallback`]).
+/// consistently.
 fn nearest_in_layer(
     registry: &SpatialRegistry,
     layer_fq: &FullyQualifiedMoniker,
@@ -194,29 +163,16 @@ fn nearest_in_layer(
     origin_rect: Rect,
 ) -> Option<(FullyQualifiedMoniker, SegmentMoniker)> {
     registry
-        .entries_in_layer(layer_fq)
-        .filter(|s| s.fq() != lost_fq)
+        .scopes_in_layer(layer_fq)
+        .filter(|s| &s.fq != lost_fq)
         .min_by(|a, b| {
-            let da = squared_distance(origin_rect, *a.rect());
-            let db = squared_distance(origin_rect, *b.rect());
+            let da = squared_distance(origin_rect, a.rect);
+            let db = squared_distance(origin_rect, b.rect);
             pixels_cmp(da, db)
-                .then(pixels_cmp(a.rect().top(), b.rect().top()))
-                .then(pixels_cmp(a.rect().left(), b.rect().left()))
+                .then(pixels_cmp(a.rect.top(), b.rect.top()))
+                .then(pixels_cmp(a.rect.left(), b.rect.left()))
         })
-        .map(|s| (s.fq().clone(), s.segment().clone()))
-}
-
-/// Variant tag for [`nearest_in_zone`]'s "prefer matching variant" knob.
-///
-/// Tag-only counterpart of the internal [`RegisteredScope`] variants so
-/// the resolver can carry "what variant did we lose?" through nested
-/// borrows without holding a reference into the registry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScopeVariant {
-    /// A leaf (`RegisteredScope::Scope`).
-    Scope,
-    /// A zone (`RegisteredScope::Zone`).
-    Zone,
+        .map(|s| (s.fq.clone(), s.segment.clone()))
 }
 
 /// Squared Euclidean distance between two rect origins, in
@@ -236,11 +192,11 @@ fn squared_distance(a: Rect, b: Rect) -> Pixels {
 /// candidate the fallback resolver returns.
 fn same_window(
     registry: &SpatialRegistry,
-    scope: &RegisteredScope,
+    scope: &FocusScope,
     expected_window: &WindowLabel,
 ) -> bool {
     registry
-        .layer(scope.layer_fq())
+        .layer(&scope.layer_fq)
         .map(|l| &l.window_label == expected_window)
         .unwrap_or(false)
 }
@@ -272,9 +228,20 @@ impl SpatialState {
     /// belongs to.
     ///
     /// The window and segment are derived from `registry`: a scope's
-    /// owning window is `registry.layer(scope.layer_fq()).window_label`,
-    /// and its segment is `scope.segment()`. The registry is the single
+    /// owning window is `registry.layer(scope.layer_fq).window_label`,
+    /// and its segment is `scope.segment`. The registry is the single
     /// source of truth — no entry mirror lives on `SpatialState`.
+    ///
+    /// On a successful focus transition this method also calls
+    /// [`SpatialRegistry::record_focus`] so every scope ancestor and
+    /// every layer ancestor of the new focus has its `last_focused`
+    /// slot updated to `fq`. That walk is what makes the
+    /// [`FallbackResolution::FallbackParentZoneLastFocused`] and
+    /// [`FallbackResolution::FallbackParentLayerLastFocused`] cascade
+    /// arms reachable in production — when the focused scope is later
+    /// unregistered, the resolver consults the recorded slots to land
+    /// the user back on a meaningful target. This is why `registry` is
+    /// borrowed mutably here: focus is the trigger for the writer.
     ///
     /// Returns `None` when:
     /// - `fq` is not registered in `registry` (the caller's
@@ -286,13 +253,13 @@ impl SpatialState {
     ///   adapters do not emit redundant `focus-changed` events).
     pub fn focus(
         &mut self,
-        registry: &SpatialRegistry,
+        registry: &mut SpatialRegistry,
         fq: FullyQualifiedMoniker,
     ) -> Option<FocusChangedEvent> {
-        let entry = registry.entry(&fq)?;
-        let layer = registry.layer(entry.layer_fq())?;
+        let entry = registry.find_by_fq(&fq)?;
+        let layer = registry.layer(&entry.layer_fq)?;
         let window = layer.window_label.clone();
-        let segment = entry.segment().clone();
+        let segment = entry.segment.clone();
 
         let prev_fq = self.focus_by_window.get(&window).cloned();
         if prev_fq.as_ref() == Some(&fq) {
@@ -300,6 +267,11 @@ impl SpatialState {
         }
 
         self.focus_by_window.insert(window.clone(), fq.clone());
+        // Record the new focus on every ancestor scope and every
+        // ancestor layer of `fq`. This is the kernel writer for
+        // `FocusScope::last_focused` and `FocusLayer::last_focused`;
+        // see `SpatialRegistry::record_focus` for the walk semantics.
+        registry.record_focus(&fq);
         Some(FocusChangedEvent {
             window_label: window,
             prev_fq,
@@ -309,12 +281,12 @@ impl SpatialState {
     }
 
     /// React to a scope being unregistered from the registry, computing
-    /// a zone-aware focus fallback.
+    /// a scope-aware focus fallback.
     ///
     /// Adapters call this **before** `SpatialRegistry::unregister_scope`
     /// so the lost entry's metadata (`layer_fq`, `parent_zone`, owning
     /// window) is still readable. The resolver walks outward through
-    /// the zone tree, then up the layer tree, looking for a live
+    /// the scope tree, then up the layer tree, looking for a live
     /// candidate; the search is bounded by the lost entry's
     /// [`WindowLabel`] so fallback never crosses windows. See
     /// [`Self::resolve_fallback`] for the precise rule cascade and the
@@ -333,9 +305,14 @@ impl SpatialState {
     /// If `fq` is **not** focused in any window, this is a no-op
     /// returning `None` — `unregister_scope` for an unfocused entry has
     /// nothing to do at the focus-state layer.
+    ///
+    /// On a successful fallback transition, this method also calls
+    /// [`SpatialRegistry::record_focus`] on the new FQM so `last_focused`
+    /// slots track the recovered focus — the same write hook
+    /// [`Self::focus`] runs. This is why `registry` is taken by `&mut`.
     pub fn handle_unregister(
         &mut self,
-        registry: &SpatialRegistry,
+        registry: &mut SpatialRegistry,
         fq: &FullyQualifiedMoniker,
     ) -> Option<FocusChangedEvent> {
         // Owning window is found by walking `focus_by_window` for a value
@@ -366,6 +343,13 @@ impl SpatialState {
             | FallbackResolution::FallbackParentLayerLastFocused(next_fq, next_segment)
             | FallbackResolution::FallbackParentLayerNearest(next_fq, next_segment) => {
                 self.focus_by_window.insert(window.clone(), next_fq.clone());
+                // Mirror `Self::focus`: any code path that mutates
+                // `focus_by_window` to a new FQM also records the new
+                // focus on the registry so the `last_focused` slots
+                // stay in sync. The fallback target's ancestors get
+                // the recorded path; the lost entry's slot is moot
+                // (the caller unregisters it next).
+                registry.record_focus(&next_fq);
                 Some(FocusChangedEvent {
                     window_label: window,
                     prev_fq: Some(fq.clone()),
@@ -376,14 +360,14 @@ impl SpatialState {
         }
     }
 
-    /// Compute the zone-aware focus fallback for `lost_fq`.
+    /// Compute the scope-aware focus fallback for `lost_fq`.
     ///
     /// Pure registry query — does not mutate any focus state. The lost
     /// entry **must still be registered** so the resolver can read its
     /// `parent_zone`, `layer_fq`, and owning window. Adapters call this
     /// before calling [`SpatialRegistry::unregister_scope`].
     ///
-    /// The resolution walks outward through the zone tree, then up the
+    /// The resolution walks outward through the scope tree, then up the
     /// layer tree, in priority order (see `FallbackResolution` for the
     /// rule cascade).
     ///
@@ -410,19 +394,14 @@ impl SpatialState {
         // If the lost FQM is already gone, we have no metadata to drive
         // the walk; degrade to NoFocus. Adapters that want a meaningful
         // fallback must call this before `unregister_scope`.
-        let (lost_layer, lost_parent_zone, lost_rect, lost_variant) = {
-            let Some(lost) = registry.entry(lost_fq) else {
+        let (lost_layer, lost_parent_zone, lost_rect) = {
+            let Some(lost) = registry.find_by_fq(lost_fq) else {
                 return FallbackResolution::NoFocus;
             };
             (
-                lost.layer_fq().clone(),
-                lost.parent_zone().cloned(),
-                *lost.rect(),
-                if lost.is_zone() {
-                    ScopeVariant::Zone
-                } else {
-                    ScopeVariant::Scope
-                },
+                lost.layer_fq.clone(),
+                lost.parent_zone.clone(),
+                lost.rect,
             )
         };
 
@@ -434,7 +413,7 @@ impl SpatialState {
 
         let mut current_zone = lost_parent_zone.clone();
 
-        // ── Phase 1: zone-tree walk inside the lost layer.
+        // ── Phase 1: scope-tree walk inside the lost layer.
         //
         // At each level, candidates are scopes in the current layer
         // whose `parent_zone == current_zone`. The lost FQM itself is
@@ -444,28 +423,27 @@ impl SpatialState {
         //
         // The first iteration of the loop is rule 1 — `current_zone`
         // is the lost entry's *own* `parent_zone`, so we look for a
-        // direct sibling and apply the variant preference. Subsequent
-        // iterations are rule 2 — we have walked up to an ancestor
-        // zone, so the ancestor's `last_focused` is consulted first
-        // and variant preference is dropped.
+        // direct sibling. Subsequent iterations are rule 2 — we have
+        // walked up to an ancestor scope, so the ancestor's
+        // `last_focused` is consulted first.
         let mut is_first_iteration = true;
         loop {
             let on_lost_zone = is_first_iteration;
-            // Rule 2's "preferred" step: consult the *ancestor* zone's
+            // Rule 2's "preferred" step: consult the *ancestor* scope's
             // `last_focused`. Only applies on iterations 2+ (the lost
-            // entry's own zone is rule 1, sibling-only). At the layer
-            // root (`current_zone is None`) there is no enclosing zone
+            // entry's own scope is rule 1, sibling-only). At the layer
+            // root (`current_zone is None`) there is no enclosing scope
             // to consult, so this step is also skipped.
             if !on_lost_zone {
                 if let Some(zone_fq) = &current_zone {
-                    if let Some(zone) = registry.zone(zone_fq) {
-                        if let Some(remembered) = &zone.last_focused {
+                    if let Some(parent) = registry.find_by_fq(zone_fq) {
+                        if let Some(remembered) = &parent.last_focused {
                             if remembered != lost_fq {
-                                if let Some(scope) = registry.entry(remembered) {
+                                if let Some(scope) = registry.find_by_fq(remembered) {
                                     if same_window(registry, scope, &lost_window) {
                                         return FallbackResolution::FallbackParentZoneLastFocused(
-                                            scope.fq().clone(),
-                                            scope.segment().clone(),
+                                            scope.fq.clone(),
+                                            scope.segment.clone(),
                                         );
                                     }
                                 }
@@ -477,26 +455,12 @@ impl SpatialState {
 
             // Pick the nearest live sibling in this zone (or, when
             // current_zone is None, the nearest scope directly under the
-            // layer root). On the first iteration only, prefer the variant
-            // matching the lost entry so a deleted leaf resolves to a leaf
-            // and a deleted zone resolves to a zone when both are
-            // available siblings. On rule 2 (ancestor zones) the spec
-            // calls for "the nearest entry" without any variant filter.
-            let prefer = if on_lost_zone {
-                Some(lost_variant)
-            } else {
-                None
-            };
-            if let Some((next_fq, next_segment)) = nearest_in_zone(
-                registry,
-                &lost_layer,
-                &current_zone,
-                lost_fq,
-                lost_rect,
-                prefer,
-            ) {
-                // First iteration: same zone as the lost entry → rule 1.
-                // Subsequent iterations: zone above the (now empty) one
+            // layer root).
+            if let Some((next_fq, next_segment)) =
+                nearest_in_zone(registry, &lost_layer, &current_zone, lost_fq, lost_rect)
+            {
+                // First iteration: same scope as the lost entry → rule 1.
+                // Subsequent iterations: scope above the (now empty) one
                 // the lost entry was in → rule 2 nearest.
                 let resolution = if on_lost_zone {
                     FallbackResolution::FallbackSiblingInZone(next_fq, next_segment)
@@ -506,23 +470,25 @@ impl SpatialState {
                 return resolution;
             }
 
-            // Move up one zone. If we were already at the layer root
-            // (`current_zone == None`), exit the zone-tree phase.
+            // Move up one scope. If we were already at the layer root
+            // (`current_zone == None`), exit the scope-tree phase.
             let Some(zone_fq) = current_zone else {
                 break;
             };
-            let parent = registry.zone(&zone_fq).and_then(|z| z.parent_zone.clone());
+            let parent = registry
+                .find_by_fq(&zone_fq)
+                .and_then(|z| z.parent_zone.clone());
             current_zone = parent;
             is_first_iteration = false;
         }
 
         // ── Phase 2: layer-tree walk.
         //
-        // The lost entry's layer has no remaining live scopes (any zone
-        // walk would have returned). Walk `layer.parent`, bounded by the
-        // window: a layer whose `window_label` differs from the lost
-        // entry's window is an invariant violation, but we treat it as
-        // a barrier and stop rather than crossing.
+        // The lost entry's layer has no remaining live scopes (any
+        // scope walk would have returned). Walk `layer.parent`, bounded
+        // by the window: a layer whose `window_label` differs from the
+        // lost entry's window is an invariant violation, but we treat
+        // it as a barrier and stop rather than crossing.
         let mut current_layer_parent = registry.layer(&lost_layer).and_then(|l| l.parent.clone());
         while let Some(parent_layer_fq) = current_layer_parent {
             let Some(parent_layer) = registry.layer(&parent_layer_fq) else {
@@ -537,11 +503,11 @@ impl SpatialState {
             // Prefer the layer's `last_focused` if still registered.
             if let Some(remembered) = &parent_layer.last_focused {
                 if remembered != lost_fq {
-                    if let Some(scope) = registry.entry(remembered) {
+                    if let Some(scope) = registry.find_by_fq(remembered) {
                         if same_window(registry, scope, &lost_window) {
                             return FallbackResolution::FallbackParentLayerLastFocused(
-                                scope.fq().clone(),
-                                scope.segment().clone(),
+                                scope.fq.clone(),
+                                scope.segment.clone(),
                             );
                         }
                     }
@@ -550,10 +516,10 @@ impl SpatialState {
 
             // Otherwise pick the nearest live scope **anywhere** in the
             // ancestor layer. Rule 4 is layer-scoped, not zone-scoped:
-            // a leaf nested inside an ancestor zone is just as valid a
-            // fallback target as a leaf hanging directly under the
+            // a scope nested inside an ancestor scope is just as valid a
+            // fallback target as a scope hanging directly under the
             // layer root, so the candidate set ignores `parent_zone`
-            // entirely. Variant preference does not apply at this rule.
+            // entirely.
             if let Some((next_fq, next_segment)) =
                 nearest_in_layer(registry, &parent_layer.fq, lost_fq, lost_rect)
             {
@@ -602,7 +568,7 @@ impl SpatialState {
     /// [`NavStrategy`]: crate::navigate::NavStrategy
     pub fn navigate_with(
         &mut self,
-        registry: &SpatialRegistry,
+        registry: &mut SpatialRegistry,
         strategy: &dyn crate::navigate::NavStrategy,
         from: FullyQualifiedMoniker,
         direction: Direction,
@@ -614,7 +580,7 @@ impl SpatialState {
         // input FQM with a tracing::error!), but at the
         // `navigate_with` boundary we read the focused segment from
         // the registry, which requires a real entry.
-        let focused_segment = registry.entry(&from)?.segment().clone();
+        let focused_segment = registry.find_by_fq(&from)?.segment.clone();
 
         let target_fq = strategy.next(registry, &from, &focused_segment, direction);
         // The strategy speaks in FQMs already — they ARE the registry
@@ -689,7 +655,7 @@ mod tests {
         }
     }
 
-    /// Build a single-layer registry with one focus scope leaf bound to
+    /// Build a single-layer registry with one focus scope bound to
     /// `(window, segment)` at `fq`.
     fn registry_with_scope(window: &str, layer: &str, fq: &str, segment: &str) -> SpatialRegistry {
         let mut reg = SpatialRegistry::new();
@@ -707,6 +673,7 @@ mod tests {
             rect: rect_zero(),
             layer_fq: FullyQualifiedMoniker::from_string(layer),
             parent_zone: None,
+            last_focused: None,
             overrides: HashMap::new(),
         });
         reg
@@ -714,12 +681,12 @@ mod tests {
 
     #[test]
     fn focus_returns_event_with_window_and_segment() {
-        let registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
+        let mut registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
         let mut state = SpatialState::new();
         let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
         let event = state
-            .focus(&registry, fq.clone())
+            .focus(&mut registry, fq.clone())
             .expect("focus emits an event");
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
         assert_eq!(event.prev_fq, None);
@@ -732,20 +699,20 @@ mod tests {
 
     #[test]
     fn focus_unknown_fq_is_noop() {
-        let registry = SpatialRegistry::new();
+        let mut registry = SpatialRegistry::new();
         let mut state = SpatialState::new();
         assert!(state
-            .focus(&registry, FullyQualifiedMoniker::from_string("/ghost"))
+            .focus(&mut registry, FullyQualifiedMoniker::from_string("/ghost"))
             .is_none());
     }
 
     #[test]
     fn focus_same_fq_twice_emits_once() {
-        let registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
+        let mut registry = registry_with_scope("main", "/L", "/L/k1", "task:01");
         let mut state = SpatialState::new();
         let fq = FullyQualifiedMoniker::from_string("/L/k1");
 
-        assert!(state.focus(&registry, fq.clone()).is_some());
-        assert!(state.focus(&registry, fq).is_none());
+        assert!(state.focus(&mut registry, fq.clone()).is_some());
+        assert!(state.focus(&mut registry, fq).is_none());
     }
 }

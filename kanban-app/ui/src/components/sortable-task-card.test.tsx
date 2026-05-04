@@ -107,7 +107,7 @@ function makeEntity(): Entity {
 
 let currentEntity: Entity = makeEntity();
 
-/** Render the card inside the full spatial-focus stack so the card mounts as a real `<FocusZone>`. */
+/** Render the card inside the full spatial-focus stack so the card mounts as a real `<FocusScope>`. */
 function renderCard(ui: React.ReactElement) {
   return render(
     <TooltipProvider>
@@ -142,10 +142,10 @@ describe("DraggableTaskCard", () => {
     currentEntity = makeEntity();
   });
 
-  it("registers the card body as a FocusZone with the entity moniker", async () => {
+  it("registers the card body as a FocusScope with the entity moniker", async () => {
     await renderWith(<DraggableTaskCard entity={currentEntity} />);
     const zoneCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_register_zone")
+      .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>);
     expect(zoneCalls.find((a) => a.segment === "task:task-7")).toBeTruthy();
   });

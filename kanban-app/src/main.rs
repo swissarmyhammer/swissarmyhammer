@@ -74,7 +74,6 @@ fn run_app(app_state: AppState) {
             commands::create_window,
             commands::save_dropped_file,
             commands::spatial_register_scope,
-            commands::spatial_register_zone,
             commands::spatial_register_batch,
             commands::spatial_unregister_scope,
             commands::spatial_update_rect,

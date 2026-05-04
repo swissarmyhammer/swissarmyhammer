@@ -7,7 +7,7 @@
  * replaces.
  *
  * Files under guard:
- *   - `grid-view.tsx` — wraps the grid body in `<FocusZone moniker="ui:grid">`,
+ *   - `grid-view.tsx` — wraps the grid body in `<FocusScope moniker="ui:grid">`,
  *     derives the cursor from the focused moniker via `resolveCursorFromFocus`,
  *     and no longer threads pull-based predicate machinery (`buildCellPredicates`,
  *     `cellMonikerMap`, `claimPredicates`, `ClaimPredicate`).
@@ -63,8 +63,8 @@ describe("GridView source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("wraps the grid body via FocusZone with moniker ui:grid", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:grid"\)/);
+  it("wraps the grid body via FocusScope with moniker ui:grid", () => {
+    expect(SRC).toMatch(/<FocusScope\s+moniker=\{asSegment\("ui:grid"\)/);
   });
 
   it("uses the asSegment brand helper from @/types/spatial", () => {

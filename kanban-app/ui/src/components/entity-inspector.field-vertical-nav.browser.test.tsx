@@ -3,7 +3,7 @@
  * inspector field zones works end-to-end" contract.
  *
  * Source of truth for card `01KQ9ZJHRXCY8Z5YT6RF4SG6EK` (bug 2). The
- * inspector panel is a `<FocusZone>` containing a stack of field zones.
+ * inspector panel is a `<FocusScope>` containing a stack of field zones.
  * Beam-search "down" from one field zone must pick the next field zone
  * by rect; "up" must pick the previous one. The kernel-side beam search
  * is covered by Rust unit tests; this file pins the React-side wiring:
@@ -17,7 +17,7 @@
  *      world current.
  *   4. When the kernel resolves the navigation to a new moniker, the
  *      entity-focus bridge mirrors it into the moniker store and the
- *      `<FocusZone>` for the next field flips its `data-focused`
+ *      `<FocusScope>` for the next field flips its `data-focused`
  *      attribute to "true".
  *
  * Mock pattern follows `entity-inspector.spatial-nav.test.tsx` and
@@ -234,10 +234,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -353,10 +353,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     );
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
     );
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(
@@ -436,10 +436,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     );
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
-    const bodyZone = registerZoneArgs().find(
+    const bodyZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.body",
     );
     expect(tagsZone).toBeTruthy();
@@ -501,7 +501,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     );
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
     );
     expect(titleZone).toBeTruthy();
@@ -514,7 +514,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     await flushSetup();
 
     // Scroll the inspector-body wrapper. The rect-on-scroll listener
-    // installed by every `<FocusZone>` (`useTrackRectOnAncestorScroll`)
+    // installed by every `<FocusScope>` (`useTrackRectOnAncestorScroll`)
     // walks up to find scrollable ancestors and subscribes; scrolling
     // any of them calls `spatial_update_rect(key, rect)` for the
     // descendant zone(s). Use the `data-testid="scroller"` wrapper to
@@ -577,7 +577,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
   // field into view, then settles focus on that field.
   //
   // The kernel's beam search drives the geometry decision; the
-  // `<FocusZone>`'s `scrollIntoView` effect fires when the
+  // `<FocusScope>`'s `scrollIntoView` effect fires when the
   // entity-focus store reports it as directly focused. So once the
   // kernel resolves "down" to the body field and emits
   // `focus-changed` with that moniker, the body zone calls
@@ -592,10 +592,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     );
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
-    const bodyZone = registerZoneArgs().find(
+    const bodyZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.body",
     );
     expect(tagsZone).toBeTruthy();

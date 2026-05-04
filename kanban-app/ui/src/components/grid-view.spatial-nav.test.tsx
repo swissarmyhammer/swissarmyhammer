@@ -3,13 +3,13 @@
  *
  * Mounts the grid inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the conditional
- * `<GridSpatialZone>` lights up its `<FocusZone moniker={asSegment("ui:grid")}>`
+ * `<GridSpatialZone>` lights up its `<FocusScope moniker={asSegment("ui:grid")}>`
  * branch, and the per-cell `<GridCellFocusable>` lights up its `<FocusScope>`
  * leaf branch (after the architecture-fix card collapsed the leaf primitive
  * onto `<FocusScope>`). The Tauri `invoke` and `listen` boundaries are mocked at
  * the module level so we can:
  *
- *   - Inspect every `spatial_register_zone` / `spatial_register_scope` call
+ *   - Inspect every `spatial_register_scope` / `spatial_register_scope` call
  *     each primitive makes on mount.
  *   - Drive synthetic `focus-changed` payloads through the captured `listen`
  *     callback to simulate the Rust kernel asserting focus on a specific
@@ -234,13 +234,6 @@ async function defaultInvokeImpl(
   return undefined;
 }
 
-/** Collect every `spatial_register_zone` call payload. */
-function registerZoneCalls(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` call payload. */
 function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -333,7 +326,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const calls = registerZoneCalls();
+    const calls = registerScopeCalls();
     const gridZones = calls.filter((c) => c.segment === "ui:grid");
     expect(gridZones.length).toBe(1);
 
@@ -399,7 +392,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const zoneCalls = registerZoneCalls();
+    const zoneCalls = registerScopeCalls();
     const gridZone = zoneCalls.find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.fq as string;
@@ -414,9 +407,9 @@ describe("GridView (spatial-nav)", () => {
     expect(cellFocusables.length).toBeGreaterThan(0);
 
     // Every cell focusable must point its parentZone at the row Zone
-    // — the row mounts a `<FocusZone moniker={asSegment(entityMk)}
+    // — the row mounts a `<FocusScope moniker={asSegment(entityMk)}
     // renderContainer={false}>` which publishes its FQM via
-    // `FocusZoneContext.Provider`. Cell `useParentZoneFq()` therefore
+    // `FocusScopeContext.Provider`. Cell `useParentFocusScope()` therefore
     // resolves to the row, not the surrounding `ui:grid` zone. The
     // composed shape is `<gridZoneKey>/task:<id>`. The row Zone uses
     // `renderContainer={false}` and so does NOT register a rect with
@@ -447,7 +440,7 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     // Capture the bar key + the target cell's key from the registration calls.
-    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
+    const gridZone = registerScopeCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.fq;
 
@@ -513,7 +506,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
+    const gridZone = registerScopeCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.fq as FullyQualifiedMoniker;
 
@@ -667,7 +660,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid")!;
+    const gridZone = registerScopeCalls().find((c) => c.segment === "ui:grid")!;
     const gridZoneKey = gridZone.fq as FullyQualifiedMoniker;
     const cellRegistrations = registerScopeCalls().filter(
       (c) =>
@@ -680,9 +673,9 @@ describe("GridView (spatial-nav)", () => {
     //   - a non-empty FullyQualifiedMoniker (the argument `spatial_navigate` would receive)
     //   - the canonical `grid_cell:R:K` moniker
     //   - `parentZone` pointing at the row Zone (a path-descendant of
-    //     the `ui:grid` zone — the row's outer `<FocusZone
+    //     the `ui:grid` zone — the row's outer `<FocusScope
     //     renderContainer={false}>` publishes its FQM through
-    //     `FocusZoneContext`, so `useParentZoneFq()` lands on the row
+    //     `FocusScopeContext`, so `useParentFocusScope()` lands on the row
     //     entity rather than skipping past it to `ui:grid`). Beam
     //     search still stays inside the grid because the row is itself
     //     a path-descendant of `ui:grid`.
@@ -712,7 +705,7 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     // Snapshot the keys we expect to be unregistered.
-    const gridZone = registerZoneCalls().find((c) => c.segment === "ui:grid");
+    const gridZone = registerScopeCalls().find((c) => c.segment === "ui:grid");
     expect(gridZone).toBeTruthy();
     const gridZoneKey = gridZone!.fq;
 
@@ -739,7 +732,7 @@ describe("GridView (spatial-nav)", () => {
 
     // The grid zone key reaches `spatial_unregister_scope`. (The Rust
     // kernel deletes both `Zone` and `Scope` entries through the same
-    // command — there is no separate `spatial_unregister_zone`.)
+    // command — there is no separate `spatial_unregister_scope`.)
     expect(unregisterKeys).toContain(gridZoneKey);
 
     // Every cell key reaches `spatial_unregister_scope`.
@@ -883,7 +876,7 @@ describe("GridView (spatial-nav)", () => {
     await flushSetup();
 
     // Snapshot the registration count after the initial mount.
-    const initialZoneRegistrations = registerZoneCalls().length;
+    const initialZoneRegistrations = registerScopeCalls().length;
     const initialScopeRegistrations = registerScopeCalls().length;
     expect(initialScopeRegistrations).toBeGreaterThanOrEqual(6);
 
@@ -896,7 +889,7 @@ describe("GridView (spatial-nav)", () => {
     });
     await flushSetup();
 
-    const afterRerenderZoneRegistrations = registerZoneCalls().length;
+    const afterRerenderZoneRegistrations = registerScopeCalls().length;
     const afterRerenderScopeRegistrations = registerScopeCalls().length;
 
     expect(afterRerenderZoneRegistrations).toBe(initialZoneRegistrations);

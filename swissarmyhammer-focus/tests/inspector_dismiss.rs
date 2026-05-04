@@ -128,7 +128,7 @@ fn drill_out_panel_with_no_inspector_layer_does_not_collapse_to_window() {
     use std::collections::HashMap;
 
     use swissarmyhammer_focus::{
-        FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+        FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
         SegmentMoniker, WindowLabel,
     };
 
@@ -156,7 +156,7 @@ fn drill_out_panel_with_no_inspector_layer_does_not_collapse_to_window() {
     };
     let board_fq =
         FullyQualifiedMoniker::compose(&window_fq, &SegmentMoniker::from_string("ui:board"));
-    reg.register_zone(FocusZone {
+    reg.register_scope(FocusScope {
         fq: board_fq.clone(),
         segment: SegmentMoniker::from_string("ui:board"),
         rect: board_rect,
@@ -179,6 +179,7 @@ fn drill_out_panel_with_no_inspector_layer_does_not_collapse_to_window() {
         layer_fq: window_fq,
         parent_zone: Some(board_fq.clone()),
         overrides: HashMap::new(),
+        last_focused: None,
     });
 
     // Drill-out from the board zone — the topmost board-side scope —

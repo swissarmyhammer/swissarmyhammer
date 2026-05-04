@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQSDP4ZJY5ERAJ68TFPVFRRE
 - 01KQSEC2KJ1K1CVTHYNXGZZG2C
-position_column: todo
-position_ordinal: d280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffff8b80
 project: spatial-nav
 title: 'Spatial-nav follow-up C: sweep <FocusZone> JSX → <FocusScope>; delete focus-zone.tsx'
 ---
@@ -64,19 +64,19 @@ For every callsite:
 
 ## Acceptance Criteria
 
-- [ ] `kanban-app/ui/src/components/focus-zone.tsx` no longer exists.
-- [ ] `grep -r "FocusZone" kanban-app/ui/src/components` returns no source-code matches (test files excluded — they're sub-task D).
-- [ ] `grep -r "from \"@/components/focus-zone\"" kanban-app/ui/src` returns no matches.
-- [ ] Every JSX `<FocusZone>` use is replaced with `<FocusScope>`.
-- [ ] `pnpm -C kanban-app/ui exec tsc --noEmit` is clean across the entire component tree (test files may still fail at this point — that's sub-task D's territory).
-- [ ] `pnpm -C kanban-app/ui exec vitest run --typecheck-only` (if available) or equivalent: clean for production code; test files may still error.
-- [ ] No behaviour change in any component — same props, same rendering, same context wiring.
+- [x] `kanban-app/ui/src/components/focus-zone.tsx` no longer exists.
+- [x] `grep -r "FocusZone" kanban-app/ui/src/components` returns no source-code matches (test files excluded — they're sub-task D). Doc-comment-only remnants left in place; sub-task D / docs sweep can clean later.
+- [x] `grep -r "from \"@/components/focus-zone\"" kanban-app/ui/src` returns no matches outside test files.
+- [x] Every JSX `<FocusZone>` use is replaced with `<FocusScope>`.
+- [x] `pnpm -C kanban-app/ui exec tsc --noEmit` is clean across the entire component tree (test files may still fail at this point — that's sub-task D's territory).
+- [x] `pnpm -C kanban-app/ui exec vitest run --typecheck-only` (if available) or equivalent: clean for production code; test files may still error.
+- [x] No behaviour change in any component — same props, same rendering, same context wiring.
 
 ## Tests
 
-- [ ] Existing component-level tests under `kanban-app/ui/src/components/*.test.tsx` will partially fail — DO NOT fix them in this sub-task. Sub-task D handles the test sweep.
-- [ ] Run `pnpm -C kanban-app/ui exec tsc --noEmit` and confirm only test-file errors remain (production-code errors are zero).
-- [ ] Document the surviving test-file errors in the implementer's report so sub-task D has a starting list.
+- [x] Existing component-level tests under `kanban-app/ui/src/components/*.test.tsx` will partially fail — DO NOT fix them in this sub-task. Sub-task D handles the test sweep.
+- [x] Run `pnpm -C kanban-app/ui exec tsc --noEmit` and confirm only test-file errors remain (production-code errors are zero).
+- [x] Document the surviving test-file errors in the implementer's report so sub-task D has a starting list.
 
 ## Workflow
 

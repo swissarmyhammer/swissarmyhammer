@@ -3,7 +3,7 @@
  *
  * Source of truth for acceptance of card `01KQ20Q2PNNR9VMES60QQSVXTS`
  * (NavBar: wrap as zone, strip legacy keyboard nav). The bar wraps its row
- * in a `<FocusZone moniker="ui:navbar">` and each actionable child in a
+ * in a `<FocusScope moniker="ui:navbar">` and each actionable child in a
  * `<FocusScope>` leaf with a `ui:navbar.{name}` moniker. This file exercises
  * the click → `spatial_focus` → `focus-changed` → React state →
  * `<FocusIndicator>` chain end-to-end so a regression in any link surfaces
@@ -132,8 +132,8 @@ vi.mock("@/lib/schema-context", () => ({
   }),
 }));
 
-// Mock the Field component with a thin `<FocusZone>` wrapper that
-// preserves the production contract: the field IS a `<FocusZone>` whose
+// Mock the Field component with a thin `<FocusScope>` wrapper that
+// preserves the production contract: the field IS a `<FocusScope>` whose
 // moniker is `field:{type}:{id}.{name}` (see
 // `kanban-app/ui/src/components/fields/field.tsx`). The wrapper lets the
 // percent-complete field register against the spatial graph from these
@@ -144,7 +144,7 @@ vi.mock("@/lib/schema-context", () => ({
 // the field as a plain span (the historic shape) would silently skip
 // the zone registration and let a zero-rect bug pass.
 vi.mock("@/components/fields/field", async () => {
-  const { FocusZone } = await import("@/components/focus-zone");
+  const { FocusScope } = await import("@/components/focus-scope");
   const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
@@ -154,9 +154,9 @@ vi.mock("@/components/fields/field", async () => {
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
       return (
-        <FocusZone moniker={moniker}>
+        <FocusScope moniker={moniker}>
           <span data-testid="field-percent">{String(props.entityId)}</span>
-        </FocusZone>
+        </FocusScope>
       );
     },
   };
@@ -229,13 +229,6 @@ function renderNavBar() {
       </FocusLayer>
     </SpatialFocusProvider>,
   );
-}
-
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
 }
 
 /** Collect every `spatial_register_scope` invocation argument bag. */
@@ -317,7 +310,7 @@ describe("NavBar — browser spatial behaviour", () => {
     const { container, unmount } = renderNavBar();
     await flushSetup();
 
-    const zone = registerZoneArgs().find(
+    const zone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(zone).toBeDefined();
@@ -398,7 +391,7 @@ describe("NavBar — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const zone = registerZoneArgs().find(
+    const zone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
@@ -535,7 +528,7 @@ describe("NavBar — browser spatial behaviour", () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const zone = registerZoneArgs().find(
+    const zone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     )!;
 
@@ -562,7 +555,7 @@ describe("NavBar — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
-    const navbarZone = registerZoneArgs().find(
+    const navbarZone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar",
     )!;
     const node = container.querySelector(
@@ -624,20 +617,20 @@ describe("NavBar — browser spatial behaviour", () => {
   // -------------------------------------------------------------------------
   // Field-as-zone integration
   //
-  // The percent-complete `<Field>` is itself a `<FocusZone>` keyed by
+  // The percent-complete `<Field>` is itself a `<FocusScope>` keyed by
   // `field:board:{id}.percent_complete` (see `fields/field.tsx`). Its
   // zone registration is the responsibility of the Field-as-zone card
   // and is verified by that card's tests. From the navbar's side, the
   // verification is structural: the navbar zone publishes its
-  // FullyQualifiedMoniker via `FocusZoneContext`, so any nested `<FocusZone>` (such
+  // FullyQualifiedMoniker via `FocusScopeContext`, so any nested `<FocusScope>` (such
   // as the Field) reads that key as its `parent_zone`.
   //
   // This test confirms the navbar end of the contract: a nested
-  // `<FocusZone>` rendered as a child of the navbar registers with the
+  // `<FocusScope>` rendered as a child of the navbar registers with the
   // navbar zone's key as its `parent_zone`. We don't unmock `<Field>`
   // here (it pulls in the entity store and field registries) — the
   // shape of the contract is what matters. A regression that drops the
-  // navbar's `<FocusZone>` (collapsing it back to a plain `<header>`)
+  // navbar's `<FocusScope>` (collapsing it back to a plain `<header>`)
   // would surface here because the inner zone's `parentZone` would be
   // `null` instead of the navbar's key.
   //
@@ -652,26 +645,26 @@ describe("NavBar — browser spatial behaviour", () => {
     // Use the existing render helper (mock `<Field>` is harmless because
     // we're injecting a separate zone via children, not via Field).
     // The mock for Field is module-level so we can't unmock it for one
-    // test; instead we render the real `<FocusZone>` directly as a
+    // test; instead we render the real `<FocusScope>` directly as a
     // sibling of the navbar's leaves to assert the context propagation.
     //
     // We rely on `renderNavBar` for the spatial provider stack. The
-    // navbar zone's `FocusZoneContext.Provider` wraps every child the
-    // navbar renders, so any `<FocusZone>` we mount as a descendant of
+    // navbar zone's `FocusScopeContext.Provider` wraps every child the
+    // navbar renders, so any `<FocusScope>` we mount as a descendant of
     // <NavBar /> would inherit it. Here we use a child fixture that
     // registers a known moniker; if the parent context were missing the
     // moniker would land at the layer root (parentZone === null).
     const { unmount } = renderNavBar();
     await flushSetup();
 
-    const navbarZone = registerZoneArgs().find(
+    const navbarZone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar",
     );
     expect(navbarZone).toBeDefined();
 
     // The navbar zone's moniker must be registered as a layer-root zone
     // (parentZone === null) so descendant zones — like the
-    // percent-complete Field — discover it through `useParentZoneFq()`
+    // percent-complete Field — discover it through `useParentFocusScope()`
     // and register their own `parent_zone` against the navbar zone's
     // key. The Field-as-zone card asserts the descendant side; this
     // assertion locks in the navbar's role as the parent that
@@ -696,7 +689,7 @@ describe("NavBar — browser spatial behaviour", () => {
   //
   // This test mounts `<NavBar>` in the production provider stack and
   // snapshots the rect each navbar entry passes to
-  // `spatial_register_zone` / `spatial_register_scope`. None must be
+  // `spatial_register_scope` / `spatial_register_scope`. None must be
   // zero-width or zero-height: a zero rect would silently break beam
   // search and leave the user unable to navigate, exactly the symptom
   // the card is fixing.
@@ -708,7 +701,7 @@ describe("NavBar — browser spatial behaviour", () => {
   //   - the percent-complete field **zone**
   //     (`field:board:b1.percent_complete`)
   //
-  // The Field mock above registers a real `<FocusZone>` so the field's
+  // The Field mock above registers a real `<FocusScope>` so the field's
   // rect appears in the assertion alongside the leaves; mocking it as
   // a plain span would silently skip this regression guard.
   // -------------------------------------------------------------------------
@@ -726,7 +719,7 @@ describe("NavBar — browser spatial behaviour", () => {
       return rect.width > 0 && rect.height > 0;
     };
 
-    const navbarZoneEntries = registerZoneArgs().filter(
+    const navbarZoneEntries = registerScopeArgs().filter(
       (a) => a.segment === "ui:navbar",
     );
     expect(navbarZoneEntries.length).toBeGreaterThan(0);
@@ -738,7 +731,7 @@ describe("NavBar — browser spatial behaviour", () => {
       ).toBe(true);
     }
 
-    const fieldZoneEntries = registerZoneArgs().filter(
+    const fieldZoneEntries = registerScopeArgs().filter(
       (a) => a.segment === "field:board:b1.percent_complete",
     );
     expect(
@@ -754,8 +747,8 @@ describe("NavBar — browser spatial behaviour", () => {
     }
 
     // The board-selector is now registered as a zone (multi-leaf surface),
-    // not a leaf scope; check it under registerZoneArgs.
-    const boardSelectorZoneEntries = registerZoneArgs().filter(
+    // not a leaf scope; check it under registerScopeArgs.
+    const boardSelectorZoneEntries = registerScopeArgs().filter(
       (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(

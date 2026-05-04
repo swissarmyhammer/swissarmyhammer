@@ -5,13 +5,13 @@
  * The architectural rule is: one focus indicator visual (the cursor-bar),
  * rendered in one component. An earlier card slipped a second `"ring"`
  * variant past review and threaded a `focusIndicatorVariant` prop through
- * `<FocusScope>` and `<FocusZone>`. The user rejected that — every variant
+ * `<FocusScope>` and `<FocusScope>`. The user rejected that — every variant
  * is a chance for two consumers to pick differently and produce inconsistent
  * UX. This file pins the post-deletion state:
  *
  *   1. **Type-level** — `<FocusIndicator variant=... />` and
  *      `<FocusScope focusIndicatorVariant=... />` and
- *      `<FocusZone focusIndicatorVariant=... />` no longer compile.
+ *      `<FocusScope focusIndicatorVariant=... />` no longer compile.
  *   2. **Runtime: bar everywhere** — driving focus to each navbar leaf
  *      mounts a `<FocusIndicator>` whose className is the bar signature
  *      (`-left-2 w-1 bg-primary`), never the historic ring (`inset-0
@@ -162,7 +162,6 @@ import { NavBar } from "./nav-bar";
 import { FocusLayer } from "./focus-layer";
 import { FocusIndicator } from "./focus-indicator";
 import { FocusScope } from "./focus-scope";
-import { FocusZone } from "./focus-zone";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
   asSegment,
@@ -326,7 +325,7 @@ describe("FocusIndicator — single variant contract", () => {
   it("the variant prop is rejected at compile time", () => {
     // `<FocusIndicator variant="ring" />` MUST NOT compile — the variant
     // prop is gone from FocusIndicatorProps. Same for the
-    // `focusIndicatorVariant` prop on `<FocusScope>` and `<FocusZone>`.
+    // `focusIndicatorVariant` prop on `<FocusScope>` and `<FocusScope>`.
     // These ts-expect-error directives are the test: TypeScript fails the
     // build if any of them stops being an error (i.e. the prop comes back).
     const _indicator = (
@@ -346,13 +345,13 @@ describe("FocusIndicator — single variant contract", () => {
       </FocusScope>
     );
     const _zone = (
-      <FocusZone
+      <FocusScope
         moniker={asSegment("ui:test")}
         // @ts-expect-error focusIndicatorVariant prop has been removed.
         focusIndicatorVariant="ring"
       >
         <span>x</span>
-      </FocusZone>
+      </FocusScope>
     );
     expect(_indicator).toBeTruthy();
     expect(_scope).toBeTruthy();

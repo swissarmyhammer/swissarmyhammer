@@ -173,7 +173,7 @@ function capturedItemScopes(): string[][] {
 /**
  * Render the tab bar inside a `window:main` ancestor scope so the
  * captured chain is realistic. Wraps in the spatial provider stack
- * since `PerspectiveTabBar` mounts a `<FocusZone>` and the
+ * since `PerspectiveTabBar` mounts a `<FocusScope>` and the
  * no-spatial-context fallback was removed in card
  * `01KQPVA127YMJ8D7NB6M824595`.
  */
@@ -230,7 +230,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     expect(chain).toBeDefined();
     // Innermost first: perspective_tab:p2 → perspective:p2 → window:main.
     // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) `perspective_tab:<id>`
-    // comes from the `<FocusZone>` wrapper, not the inner FocusScope leaf
+    // comes from the `<FocusScope>` wrapper, not the inner FocusScope leaf
     // (which is `perspective_tab.name:<id>`). chain[0] still resolves to
     // `perspective_tab:p2` because `useContextMenu` is captured at
     // `PerspectiveTab`'s render scope — outside the inner
@@ -270,7 +270,7 @@ describe("PerspectiveTabBar right-click scope chain", () => {
     const chains = capturedItemScopes();
     expect(chains.length).toBeGreaterThan(0);
     for (const chain of chains) {
-      // Innermost: perspective_tab:p1 (the `<FocusZone>` wrapper, NOT the
+      // Innermost: perspective_tab:p1 (the `<FocusScope>` wrapper, NOT the
       // inner `<FocusScope perspective_tab.name:p1>` leaf — `useContextMenu`
       // is captured outside that inner leaf) → perspective:p1 (the
       // surrounding `<CommandScopeProvider>`).

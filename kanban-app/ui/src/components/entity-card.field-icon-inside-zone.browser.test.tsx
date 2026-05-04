@@ -1,6 +1,6 @@
 /**
  * Browser-mode tests pinning the "card field icons live inside the field's
- * `<FocusZone>`" contract. Mirrors the inspector path pinned by
+ * `<FocusScope>`" contract. Mirrors the inspector path pinned by
  * `field.with-icon.browser.test.tsx`.
  *
  * Before this migration, `<CardField>` rendered a `<CardFieldIcon>` as a
@@ -231,10 +231,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -247,7 +247,7 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
 
 /**
  * Render a single `<EntityCard>` inside the production-shaped provider
- * stack, including the spatial-nav stack (so `<FocusZone>` registers and
+ * stack, including the spatial-nav stack (so `<FocusScope>` registers and
  * click-to-focus dispatches `spatial_focus`).
  */
 function renderCard(entity: Entity) {
@@ -280,7 +280,7 @@ function renderCard(entity: Entity) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("EntityCard — field icon lives inside the field's <FocusZone>", () => {
+describe("EntityCard — field icon lives inside the field's <FocusScope>", () => {
   beforeEach(() => {
     activeSchema = TASK_SCHEMA;
     mockInvoke.mockClear();
@@ -295,7 +295,7 @@ describe("EntityCard — field icon lives inside the field's <FocusZone>", () =>
 
   // -------------------------------------------------------------------------
   // #1: The icon for a card field must be a descendant of the field's
-  //     `<FocusZone>` wrapper — not a sibling. Pre-migration this fails
+  //     `<FocusScope>` wrapper — not a sibling. Pre-migration this fails
   //     because `<CardFieldIcon>` rendered as a sibling of `<Field>`.
   // -------------------------------------------------------------------------
 
@@ -343,7 +343,7 @@ describe("EntityCard — field icon lives inside the field's <FocusZone>", () =>
     const { container, unmount } = renderCard(makeTask({ tags: ["bug"] }));
     await flushSetup();
 
-    const zoneArgs = registerZoneArgs().find(
+    const zoneArgs = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(
@@ -389,7 +389,7 @@ describe("EntityCard — field icon lives inside the field's <FocusZone>", () =>
     const { container, unmount } = renderCard(makeTask({ tags: ["bug"] }));
     await flushSetup();
 
-    const zoneArgs = registerZoneArgs().find(
+    const zoneArgs = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(zoneArgs).toBeTruthy();
@@ -427,7 +427,7 @@ describe("EntityCard — field icon lives inside the field's <FocusZone>", () =>
     const { container, unmount } = renderCard(makeTask({ tags: ["bug"] }));
     await flushSetup();
 
-    const zoneArgs = registerZoneArgs().find(
+    const zoneArgs = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(zoneArgs).toBeTruthy();

@@ -102,8 +102,8 @@ describe("validateRect", () => {
     expect(result.preLayoutTransient).toBe(true);
   });
 
-  it("treats both-zero rect on register_zone as a pre-layout transient warning", () => {
-    const result = validateRect("register_zone", rect(0, 0, 0, 0), 100, 105);
+  it("treats both-zero rect on register_scope as a pre-layout transient warning", () => {
+    const result = validateRect("register_scope", rect(0, 0, 0, 0), 100, 105);
     expect(result.errors).toEqual([]);
     expect(result.warnings.length).toBeGreaterThanOrEqual(1);
     expect(result.warnings[0]).toMatch(/zero dimension/);
@@ -298,7 +298,7 @@ describe("validateAndLogRect", () => {
 
   it("logs nothing for a clean rect when enabled = true", () => {
     const result = validateAndLogRect(
-      "register_zone",
+      "register_scope",
       asFq("/window/z"),
       plausibleRect(),
       performance.now(),
@@ -356,7 +356,7 @@ describe("validateAndLogRect", () => {
       /* enabled */ true,
     );
     validateAndLogRect(
-      "register_zone",
+      "register_scope",
       asFq("/window/a"),
       rect(0, 0, 0, 0),
       performance.now(),

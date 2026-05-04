@@ -24,7 +24,7 @@ import {
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import {
   useFullyQualifiedMoniker,
@@ -1093,7 +1093,7 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   // `useFullyQualifiedMoniker()`.
   return (
     <Inspectable moniker={asSegment(board.board.moniker)}>
-      <FocusZone
+      <FocusScope
         moniker={asSegment(board.board.moniker)}
         showFocusBar={false}
         className="flex flex-col flex-1 min-h-0 relative"
@@ -1105,7 +1105,7 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
             scrollContainerRef={scrollContainerRef}
           />
         </BoardSpatialZone>
-      </FocusZone>
+      </FocusScope>
     </Inspectable>
   );
 }
@@ -1220,12 +1220,12 @@ function BoardSpatialZone({ children }: BoardSpatialZoneProps) {
   // `kanban-app/ui/src/components/perspective-view.spatial.test.tsx`
   // for the matching contract on the perspective zone.
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:board")}
       showFocusBar={false}
       className="flex flex-1 min-h-0"
     >
       {children}
-    </FocusZone>
+    </FocusScope>
   );
 }

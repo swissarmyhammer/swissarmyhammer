@@ -4,7 +4,7 @@
  *
  * `<Inspectable>` is the single source of the double-click → `ui.inspect`
  * dispatch in the codebase. After card 01KQ7K7KZNR3EHS9SY0XY79NYE the
- * spatial-nav primitives `<FocusScope>` and `<FocusZone>` are pure
+ * spatial-nav primitives `<FocusScope>` and `<FocusScope>` are pure
  * spatial: they no longer carry an `inspectOnDoubleClick` prop and never
  * call `useDispatchCommand("ui.inspect")`. Inspect lives here.
  *
@@ -18,7 +18,7 @@
  *   4. `<FocusScope>` alone does NOT register a `ui.inspect` dispatch
  *      handler (regression guard for the dispatch hook leaking back
  *      into the primitive).
- *   5. Symmetric for `<FocusZone>`.
+ *   5. Symmetric for `<FocusScope>`.
  *   6. Real-world `<EntityCard>` opt-in.
  *   7. Real-world `<ColumnView>` opt-in.
  *   8. Inner button stops propagation contract.
@@ -89,7 +89,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 // Spy patch for `useDispatchCommand` — capture which preset command IDs
 // are registered. Tests #4 and #5 rely on this to assert that
-// `<FocusScope>` / `<FocusZone>` (used outside of an `<Inspectable>`)
+// `<FocusScope>` / `<FocusScope>` (used outside of an `<Inspectable>`)
 // never register `useDispatchCommand("ui.inspect")`.
 //
 // We swap the real module for a thin wrapper that records every call's
@@ -116,7 +116,6 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
 
 import { Inspectable } from "./inspectable";
 import { FocusScope } from "./focus-scope";
-import { FocusZone } from "./focus-zone";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -312,17 +311,17 @@ describe("Inspectable — core dispatch contract", () => {
   });
 
   // -------------------------------------------------------------------------
-  // #5: Symmetric — <FocusZone> alone does NOT register either
+  // #5: Symmetric — <FocusScope> alone does NOT register either
   // -------------------------------------------------------------------------
 
-  it("<FocusZone> outside any <Inspectable> never registers useDispatchCommand(ui.inspect)", async () => {
+  it("<FocusScope> outside any <Inspectable> never registers useDispatchCommand(ui.inspect)", async () => {
     useDispatchSpy.calls = [];
 
     const { unmount } = render(
       withSpatialStack(
-        <FocusZone moniker={asSegment("ui:perspective-bar")}>
+        <FocusScope moniker={asSegment("ui:perspective-bar")}>
           <div>x</div>
-        </FocusZone>,
+        </FocusScope>,
       ),
     );
     await flushSetup();

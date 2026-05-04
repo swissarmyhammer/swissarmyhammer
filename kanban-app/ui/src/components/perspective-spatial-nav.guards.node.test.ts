@@ -7,16 +7,24 @@
  * replaces.
  *
  * Files under guard:
- *   - `perspective-tab-bar.tsx` — registers as `ui:perspective-bar` zone;
- *     each tab is a `perspective_tab:{id}` FocusZone wrapper containing
- *     `perspective_tab.name:{id}` (and, when rendered, the
- *     `perspective_tab.filter:{id}` / `perspective_tab.group:{id}` icon
- *     button) FocusScope leaves.
- *   - `perspective-container.tsx` — registers as `ui:perspective` zone with
- *     the canonical `flex flex-col flex-1 min-h-0 min-w-0` layout.
- *   - `view-container.tsx` — does NOT register a `ui:view` zone. The
+ *   - `perspective-tab-bar.tsx` — registers as `ui:perspective-bar`
+ *     scope-with-children; each tab is a `perspective_tab:{id}`
+ *     FocusScope wrapper containing `perspective_tab.name:{id}` (and,
+ *     when rendered, the `perspective_tab.filter:{id}` /
+ *     `perspective_tab.group:{id}` icon button) FocusScope leaves.
+ *   - `perspective-container.tsx` — registers as `ui:perspective`
+ *     scope-with-children with the canonical
+ *     `flex flex-col flex-1 min-h-0 min-w-0` layout.
+ *   - `view-container.tsx` — does NOT register a `ui:view` scope. The
  *     redundant viewport-sized chrome wrapper was deleted because it
- *     overlapped the inner `ui:board` / `ui:grid` zone for the same rect.
+ *     overlapped the inner `ui:board` / `ui:grid` scope-with-children
+ *     for the same rect.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed
+ * `<FocusZone>` and `<FocusScope>` into a single primitive, "scope" in
+ * these guards refers to the unified `<FocusScope>` — a scope with no
+ * children behaves as a leaf, a scope with children behaves as a
+ * navigable container.
  *
  * Node-only because they read source files from disk; lives under the
  * `*.node.test.ts` suffix recognised by `vite.config.ts`.
@@ -56,19 +64,23 @@ describe("PerspectiveTabBar source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("wraps the tab-bar root via FocusZone with moniker ui:perspective-bar", () => {
+  it("wraps the tab-bar root via FocusScope with moniker ui:perspective-bar", () => {
     expect(SRC).toMatch(
-      /<FocusZone\s+moniker=\{asSegment\("ui:perspective-bar"\)/,
+      /<FocusScope\s+moniker=\{asSegment\("ui:perspective-bar"\)/,
     );
   });
 
-  it("wraps each tab in FocusZone with moniker perspective_tab:${id}", () => {
-    // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the per-tab wrapper is a
-    // `<FocusZone>` rather than a `<FocusScope>` leaf — promoting it lets the
-    // inner Pressable-based icon buttons mount their own FocusScope leaves
-    // without violating the kernel's `scope-not-leaf` rule.
+  it("wraps each tab in FocusScope with moniker perspective_tab:${id}", () => {
+    // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the per-tab
+    // wrapper is a scope-with-children rather than a leaf — promoting
+    // it lets the inner Pressable-based icon buttons mount their own
+    // leaf FocusScopes without violating the kernel's `scope-not-leaf`
+    // rule. After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` both shapes
+    // are the same `<FocusScope>` primitive; the guard's intent is
+    // structural ("the per-tab scope contains inner leaves"), not
+    // primitive-name-based.
     expect(SRC).toMatch(
-      /<FocusZone\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
+      /<FocusScope\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
     );
   });
 
@@ -120,11 +132,11 @@ describe("PerspectiveContainer source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("wraps the perspective body in FocusZone with moniker ui:perspective", () => {
-    expect(SRC).toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:perspective"\)/);
+  it("wraps the perspective body in FocusScope with moniker ui:perspective", () => {
+    expect(SRC).toMatch(/<FocusScope\s+moniker=\{asSegment\("ui:perspective"\)/);
   });
 
-  it("preserves the flex chain via className on the perspective zone", () => {
+  it("preserves the flex chain via className on the perspective scope", () => {
     expect(SRC).toMatch(/flex\s+flex-col\s+flex-1\s+min-h-0\s+min-w-0/);
   });
 
@@ -153,20 +165,24 @@ describe("ViewContainer source-level guards", () => {
     expect(SRC).not.toMatch(/['"]keydown['"]/);
   });
 
-  it("does NOT wrap the rendered view in a FocusZone with moniker ui:view", () => {
-    // The redundant `ui:view` chrome zone overlapped the inner view's own
-    // viewport-sized zone (`ui:board` / `ui:grid`) for the same rect. It
-    // was deleted to remove the no-op graph hop. Regression: keep the
-    // source free of any `<FocusZone moniker={asSegment("ui:view")}>`.
-    expect(SRC).not.toMatch(/<FocusZone\s+moniker=\{asSegment\("ui:view"\)/);
+  it("does NOT wrap the rendered view in a FocusScope with moniker ui:view", () => {
+    // The redundant `ui:view` chrome scope overlapped the inner view's
+    // own viewport-sized scope (`ui:board` / `ui:grid`) for the same
+    // rect. It was deleted to remove the no-op graph hop. Regression:
+    // keep the source free of any `<FocusScope moniker={asSegment("ui:view")}>`.
+    expect(SRC).not.toMatch(/<FocusScope\s+moniker=\{asSegment\("ui:view"\)/);
   });
 
-  it("does NOT import the FocusZone primitive (no spatial zone is mounted here)", () => {
-    // After the wrapper deletion, view-container.tsx has no `<FocusZone>`
+  it("does NOT import the FocusScope primitive (no spatial scope is mounted here)", () => {
+    // After the wrapper deletion, view-container.tsx has no `<FocusScope>`
     // at all — its only spatial-related responsibility is the
     // `<CommandScopeProvider moniker={`view:${viewId}`}>` frame. Pin the
-    // import absence so a follow-up that re-introduces a zone is forced
+    // import absence so a follow-up that re-introduces a scope is forced
     // to update this guard explicitly.
-    expect(SRC).not.toMatch(/from\s+["']@\/components\/focus-zone["']/);
+    //
+    // Parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed `<FocusZone>`
+    // into `<FocusScope>`; the canonical import path is now
+    // `@/components/focus-scope`.
+    expect(SRC).not.toMatch(/from\s+["']@\/components\/focus-scope["']/);
   });
 });

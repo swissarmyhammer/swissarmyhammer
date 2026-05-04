@@ -98,7 +98,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { ColumnView } from "./column-view";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import {
   SpatialFocusProvider,
   useSpatialFocusActions,
@@ -316,9 +316,9 @@ function renderColumn(
                           overflowX: "hidden",
                         }}
                       >
-                        <FocusZone moniker={asSegment("ui:board")}>
+                        <FocusScope moniker={asSegment("ui:board")}>
                           <ColumnView column={column} tasks={tasks} />
-                        </FocusZone>
+                        </FocusScope>
                       </div>
                     </ActiveBoardPathProvider>
                   </TooltipProvider>
@@ -386,7 +386,7 @@ function renderColumnStrip(opts: {
                           flexDirection: "row",
                         }}
                       >
-                        <FocusZone moniker={asSegment("ui:board")}>
+                        <FocusScope moniker={asSegment("ui:board")}>
                           <div
                             style={{
                               display: "flex",
@@ -416,7 +416,7 @@ function renderColumnStrip(opts: {
                               </div>
                             ))}
                           </div>
-                        </FocusZone>
+                        </FocusScope>
                       </div>
                     </ActiveBoardPathProvider>
                   </TooltipProvider>

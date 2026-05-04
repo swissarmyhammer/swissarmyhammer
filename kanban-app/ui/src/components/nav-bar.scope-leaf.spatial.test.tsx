@@ -6,13 +6,13 @@
  * nav-bar/toolbar misuse). The kernel's three peers are:
  *
  *   - `<FocusLayer>` — modal boundary
- *   - `<FocusZone>` — navigable container, can have children (other zones
+ *   - `<FocusScope>` — navigable container, can have children (other zones
  *     or scopes)
  *   - `<FocusScope>` — leaf in the spatial graph
  *
  * Wrapping a multi-leaf surface (e.g. the `<BoardSelector>` with its
  * editable name `<Field>`, dropdown trigger, and tear-off button) in a
- * `<FocusScope>` instead of a `<FocusZone>` confuses the kernel's beam
+ * `<FocusScope>` instead of a `<FocusScope>` confuses the kernel's beam
  * search and breaks zone `last_focused` memory. The Rust kernel logs
  * `scope-not-leaf` on every offending registration (see
  * `swissarmyhammer-focus/tests/scope_is_leaf.rs`); this React-side test
@@ -21,7 +21,7 @@
  * Mock pattern matches `nav-bar.spatial-nav.test.tsx` — the React
  * component cannot observe the Rust-side `tracing::error!` directly,
  * but it can prove that the component dispatches
- * `spatial_register_zone` (not `spatial_register_scope`) for the
+ * `spatial_register_scope` (not `spatial_register_scope`) for the
  * board-selector segment.
  */
 
@@ -138,7 +138,7 @@ vi.mock("@/lib/schema-context", () => ({
 
 // Mock <Field> as a plain span — this test only cares about the
 // navbar's own registrations, not the Field's. Skipping the Field's
-// FocusZone here narrows the test to the structural assertion: the
+// FocusScope here narrows the test to the structural assertion: the
 // navbar's `ui:navbar.board-selector` segment must be a zone.
 vi.mock("@/components/fields/field", () => ({
   Field: (props: Record<string, unknown>) => (
@@ -182,12 +182,6 @@ function renderNavBar() {
       </FocusLayer>
     </SpatialFocusProvider>,
   );
-}
-
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
 }
 
 function registerScopeArgs(): Array<Record<string, unknown>> {
@@ -246,7 +240,7 @@ describe("NavBar — scope-is-leaf invariant", () => {
 
   it("registers ui:navbar.board-selector as a zone, not a scope", async () => {
     // The kernel rejects a `<FocusScope>` whose subtree contains
-    // further `<FocusScope>` or `<FocusZone>` registrations as
+    // further `<FocusScope>` or `<FocusScope>` registrations as
     // `scope-not-leaf` (see swissarmyhammer-focus/tests/scope_is_leaf.rs).
     // The board-selector houses an editable name `<Field>` (zone), a
     // dropdown trigger, and a tear-off button — three navigable
@@ -254,7 +248,7 @@ describe("NavBar — scope-is-leaf invariant", () => {
     const { unmount } = renderNavBar();
     await flushSetup();
 
-    const asZone = registerZoneArgs().find(
+    const asZone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.board-selector",
     );
     expect(
@@ -277,7 +271,7 @@ describe("NavBar — scope-is-leaf invariant", () => {
     const { unmount } = renderNavBar();
     await flushSetup();
 
-    const zoneArgs = registerZoneArgs();
+    const zoneArgs = registerScopeArgs();
     const navbarZone = zoneArgs.find((a) => a.segment === "ui:navbar");
     expect(navbarZone, "navbar zone must register").toBeDefined();
 

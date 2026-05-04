@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
@@ -56,8 +56,8 @@ fn make_layer(layer_fq: &str, window: &str) -> FocusLayer {
     }
 }
 
-fn make_zone(fq_str: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusZone {
-    FocusZone {
+fn make_zone(fq_str: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
+    FocusScope {
         fq: fq(fq_str),
         segment: segment(fq_str.rsplit('/').next().unwrap_or(fq_str)),
         rect: r,
@@ -76,6 +76,7 @@ fn make_scope(fq_str: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> 
         layer_fq: fq(layer),
         parent_zone: parent_zone.map(fq),
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
@@ -92,7 +93,7 @@ fn make_scope(fq_str: &str, layer: &str, parent_zone: Option<&str>, r: Rect) -> 
 fn nav_with_mixed_coordinate_systems_does_not_panic() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/L/parent",
         "/L",
         None,
@@ -142,8 +143,8 @@ fn nav_with_mixed_coordinate_systems_does_not_panic() {
             .find_by_fq(&target)
             .expect("nav target must resolve in registry");
         assert_eq!(
-            entry.layer_fq(),
-            &fq("/L"),
+            entry.layer_fq,
+            fq("/L"),
             "nav must stay within the layer even with mixed-coord rects"
         );
     }
@@ -154,7 +155,7 @@ fn nav_with_mixed_coordinate_systems_does_not_panic() {
         let entry = reg
             .find_by_fq(&target)
             .expect("nav target must resolve in registry");
-        assert_eq!(entry.layer_fq(), &fq("/L"));
+        assert_eq!(entry.layer_fq, fq("/L"));
     }
 }
 
@@ -165,7 +166,7 @@ fn nav_with_mixed_coordinate_systems_does_not_panic() {
 fn registration_with_bad_rects_does_not_panic() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/L/parent",
         "/L",
         None,
@@ -211,7 +212,7 @@ fn registration_with_bad_rects_does_not_panic() {
         let entry = reg
             .find_by_fq(&target)
             .expect("nav target must resolve in registry");
-        assert_eq!(entry.layer_fq(), &fq("/L"));
+        assert_eq!(entry.layer_fq, fq("/L"));
     }
 }
 
@@ -223,7 +224,7 @@ fn registration_with_bad_rects_does_not_panic() {
 fn validate_coordinate_consistency_is_observability_only() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(make_layer("/L", "main"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         "/L/parent",
         "/L",
         None,

@@ -51,7 +51,7 @@
  * converted the card body from `<FocusScope kind="zone">` (a zone —
  * sibling-zones-only nav) to `<FocusScope>` (a leaf — falling through
  * to the cross-zone leaf fallback), and the column body from leaf-
- * style to `<FocusZone>`. The browser tests below pinned the post-fix
+ * style to `<FocusScope>`. The browser tests below pinned the post-fix
  * wiring shape (registry audit + JS-shadow-navigator round-trip) so
  * the regression could not return silently.
  *
@@ -92,7 +92,7 @@
  *
  * Two responsibilities of the harness:
  *
- *   1. Capture every `spatial_register_zone` / `spatial_register_scope`
+ *   1. Capture every `spatial_register_scope` / `spatial_register_scope`
  *      call (plus `spatial_register_batch` for off-screen scope
  *      placeholders). The captured records are the JS shadow registry
  *      the navigator runs against.
@@ -502,13 +502,6 @@ function renderBoardWithShell() {
 // Capture helpers — read records out of the captured `mockInvoke` calls.
 // ---------------------------------------------------------------------------
 
-/** Pull every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Pull every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -540,11 +533,11 @@ function findRegisterRecord(
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];
-    if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
       const r = c[1] as Record<string, unknown>;
       if (r && r.segment === moniker) {
         return {
-          kind: cmd === "spatial_register_zone" ? "zone" : "scope",
+          kind: cmd === "spatial_register_scope" ? "zone" : "scope",
           record: r,
         };
       }
@@ -609,7 +602,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    // Each task must register exactly once via `spatial_register_zone`
+    // Each task must register exactly once via `spatial_register_scope`
     // (i.e. as a navigable container), NOT via
     // `spatial_register_scope`. The card holds multiple focusable
     // atoms (drag handle, Field rows, inspect button), so it is a
@@ -628,17 +621,17 @@ describe("BoardView — cross-column spatial navigation", () => {
       const zoneRec = findRegisterRecord(taskMoniker);
       expect(
         zoneRec,
-        `${taskMoniker} must register via spatial_register_zone`,
+        `${taskMoniker} must register via spatial_register_scope`,
       ).toBeTruthy();
       expect(zoneRec!.kind).toBe("zone");
     }
 
-    // Each column must register via `spatial_register_zone`, with a
+    // Each column must register via `spatial_register_scope`, with a
     // parent_zone that resolves to the `ui:board` zone the board view
     // mounts. This pins the column-as-zone shape the kernel test
     // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
     // (the unified-cascade successor to the old rule-2 test) assumes.
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
     expect(
       boardZone,
       "ui:board zone must register so columns can hang off it",
@@ -647,10 +640,10 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     for (const colId of ["colA", "colB", "colC"]) {
       const moniker = `column:${colId}`;
-      const colZone = registerZoneArgs().find((a) => a.segment === moniker);
+      const colZone = registerScopeArgs().find((a) => a.segment === moniker);
       expect(
         colZone,
-        `${moniker} must register via spatial_register_zone`,
+        `${moniker} must register via spatial_register_scope`,
       ).toBeTruthy();
       expect(
         colZone!.parentZone,
@@ -666,7 +659,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     for (const [taskId, columnId] of taskColumnById) {
       const taskMoniker = `task:${taskId}`;
       const colMoniker = `column:${columnId}`;
-      const colZone = registerZoneArgs().find(
+      const colZone = registerScopeArgs().find(
         (a) => a.segment === colMoniker,
       )!;
       const taskRec = findRegisterRecord(taskMoniker)!;
@@ -680,7 +673,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     // the same `layer_key`. A second layer would fragment the shadow
     // registry and make `leaves_in_layer` exclude half the candidates.
     const layerKeys = new Set<unknown>();
-    for (const a of registerZoneArgs()) layerKeys.add(a.layerFq);
+    for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
     for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
     for (const e of registerBatchEntries()) layerKeys.add(e.layer_fq);
     expect(
@@ -704,7 +697,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    for (const a of registerZoneArgs()) {
+    for (const a of registerScopeArgs()) {
       expect(
         a.overrides,
         `${String(a.moniker)} zone register must have empty overrides`,
@@ -730,7 +723,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // Test #7 — Card body is a leaf, not a zone (architectural guard)
   //
   // Re-asserts the card-as-leaf invariant from a different angle: the
-  // `task:<id>` moniker must NEVER appear in a `spatial_register_zone`
+  // `task:<id>` moniker must NEVER appear in a `spatial_register_scope`
   // call. The architecture-fix card `01KQ5PP55SAAVJ0V3HDJ1DGNBY`
   // converted the card body from `<FocusScope kind="zone">` to
   // `<FocusScope>`; this test guards against a regression that would
@@ -740,11 +733,11 @@ describe("BoardView — cross-column spatial navigation", () => {
   // column's zone, breaking cross-column horizontal nav.
   // -------------------------------------------------------------------------
 
-  it("task:<id> never registers via spatial_register_zone (test #7)", async () => {
+  it("task:<id> never registers via spatial_register_scope (test #7)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const taskZoneCalls = registerZoneArgs().filter((a) =>
+    const taskZoneCalls = registerScopeArgs().filter((a) =>
       String(a.moniker).startsWith("task:"),
     );
     expect(

@@ -1,7 +1,7 @@
 import { Info, Search } from "lucide-react";
 import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { Pressable } from "@/components/pressable";
 import {
   Tooltip,
@@ -76,7 +76,7 @@ export function NavBar() {
   const { isBusy } = useCommandBusy();
 
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:navbar")}
       showFocusBar={false}
       role="banner"
@@ -91,7 +91,7 @@ export function NavBar() {
         keeps the kernel's scope-is-leaf invariant intact — see
         `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
       */}
-      <FocusZone
+      <FocusScope
         moniker={asSegment("ui:navbar.board-selector")}
         showFocusBar={false}
       >
@@ -104,7 +104,7 @@ export function NavBar() {
           boardEntity={board?.board}
           showTearOff
         />
-      </FocusZone>
+      </FocusScope>
       {board && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -184,6 +184,6 @@ export function NavBar() {
           <div className="h-full w-1/3 bg-primary animate-indeterminate" />
         </div>
       )}
-    </FocusZone>
+    </FocusScope>
   );
 }

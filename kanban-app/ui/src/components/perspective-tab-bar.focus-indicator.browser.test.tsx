@@ -295,7 +295,7 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
  * Find the registered `FullyQualifiedMoniker` for the per-tab name leaf.
  *
  * After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the
- * per-tab `<FocusZone perspective_tab:{id}>` wrapper uses
+ * per-tab `<FocusScope perspective_tab:{id}>` wrapper uses
  * `showFocusBar={false}` and the visible focus indicator lives on the
  * inner `<FocusScope perspective_tab.name:{id}>` leaf — that is the leaf
  * the user "lands on" when they navigate to a tab. So the focus-indicator
@@ -503,14 +503,14 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     // Snapshot the count of p1 wrapper-zone register calls. After
     // activation, the count must NOT grow — the wrapping
-    // `<FocusZone perspective_tab:p1>` (and its inner name leaf) must
+    // `<FocusScope perspective_tab:p1>` (and its inner name leaf) must
     // not unmount + remount. After the iteration-2 reshape the wrapper
-    // is registered via `spatial_register_zone`, so we walk the zone
+    // is registered via `spatial_register_scope`, so we walk the zone
     // call list instead of the scope call list.
     function p1ZoneRegisterCount(): number {
       return mockInvoke.mock.calls.filter(
         (c) =>
-          c[0] === "spatial_register_zone" &&
+          c[0] === "spatial_register_scope" &&
           (c[1] as { segment?: string }).segment === "perspective_tab:p1",
       ).length;
     }
@@ -537,7 +537,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     const afterActivationCount = p1ZoneRegisterCount();
     expect(
       afterActivationCount,
-      "activating a tab must NOT remount its <FocusZone> wrapper — the FullyQualifiedMoniker stays stable",
+      "activating a tab must NOT remount its <FocusScope> wrapper — the FullyQualifiedMoniker stays stable",
     ).toBe(beforeActivationCount);
 
     // The same wrapper still reports `data-focused="true"` and the

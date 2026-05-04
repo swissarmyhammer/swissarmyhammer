@@ -11,7 +11,7 @@
  *
  * After the fix, every `<Inspectable>` wrapper contributes its own
  * scope-level `entity.inspect` `CommandDef` keyed to Space. Because
- * `<Field>` (`fields/field.tsx`) wraps its `<FocusZone>` in
+ * `<Field>` (`fields/field.tsx`) wraps its `<FocusScope>` in
  * `<Inspectable moniker={field:<type>:<id>.<name>}>`, every field row
  * carries the binding regardless of which layer it is rendered in.
  *
@@ -196,10 +196,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -295,9 +295,9 @@ describe("Inspector field — Space → ui.inspect", () => {
     const { unmount } = renderInspector();
     await flushSetup();
 
-    // Find the title field's `<FocusZone>` registration so we know
+    // Find the title field's `<FocusScope>` registration so we know
     // the FullyQualifiedMoniker to drive into `focus-changed`.
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
     );
     expect(

@@ -99,7 +99,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 import { ColumnView } from "./column-view";
 import { FocusLayer } from "./focus-layer";
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -247,7 +247,7 @@ async function flushScroll() {
 }
 
 /**
- * Pull every `spatial_register_zone` (and legacy `spatial_register_scope`,
+ * Pull every `spatial_register_scope` (and legacy `spatial_register_scope`,
  * for placeholder rows) invocation argument bag for tasks. Returns a
  * `(moniker → key)` map so the test can convert visible `data-moniker`
  * attributes to the kernel-side keys for assertion.
@@ -262,7 +262,7 @@ function taskMonikerToKey(): Map<string, FullyQualifiedMoniker> {
   for (const [cmd, args] of mockInvoke.mock.calls) {
     if (
       cmd !== "spatial_register_scope" &&
-      cmd !== "spatial_register_zone"
+      cmd !== "spatial_register_scope"
     ) {
       continue;
     }
@@ -377,9 +377,9 @@ function renderColumn(column: Entity, tasks: Entity[]) {
                           overflowX: "hidden",
                         }}
                       >
-                        <FocusZone moniker={asSegment("ui:board")}>
+                        <FocusScope moniker={asSegment("ui:board")}>
                           <ColumnView column={column} tasks={tasks} />
-                        </FocusZone>
+                        </FocusScope>
                       </div>
                     </ActiveBoardPathProvider>
                   </TooltipProvider>
@@ -486,7 +486,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
       // briefly register a card as a scope, so accept both.
       if (
         cmd !== "spatial_register_scope" &&
-        cmd !== "spatial_register_zone"
+        cmd !== "spatial_register_scope"
       ) {
         continue;
       }

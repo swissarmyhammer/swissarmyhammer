@@ -15,7 +15,7 @@
  *
  * This file pins:
  *
- *   1. The perspective zone registers via `spatial_register_zone` with the
+ *   1. The perspective zone registers via `spatial_register_scope` with the
  *      `ui:perspective` moniker and unregisters on unmount.
  *   2. The inner view zone (`ui:board` here, since the active view is
  *      `BoardView`) registers with `parentZone === ui:perspective.fq`.
@@ -251,7 +251,7 @@ async function fireFocusChanged({
  * Render the perspective + view containers wrapped in the production-shaped
  * spatial-nav stack. Both containers are mounted because the user's drill-out
  * scenario needs the perspective zone present too — we want to verify the
- * view zone publishes its key into `FocusZoneContext` so the perspective zone
+ * view zone publishes its key into `FocusScopeContext` so the perspective zone
  * can be the chain's parent.
  */
 function renderViewStack() {
@@ -268,10 +268,10 @@ function renderViewStack() {
   );
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -314,11 +314,11 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, unmount } = renderViewStack();
     await flushSetup();
 
-    // Regression: no `<FocusZone moniker={asSegment("ui:view")}>` is
+    // Regression: no `<FocusScope moniker={asSegment("ui:view")}>` is
     // mounted by `view-container.tsx` anymore. Its rect overlapped the
     // inner view's own viewport-sized zone (`ui:board` / `ui:grid`); the
     // wrapper added no semantic value and was deleted.
-    const viewZone = registerZoneArgs().find((a) => a.segment === "ui:view");
+    const viewZone = registerScopeArgs().find((a) => a.segment === "ui:view");
     expect(viewZone).toBeUndefined();
     expect(container.querySelector("[data-segment='ui:view']")).toBeNull();
 
@@ -328,7 +328,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // mounts. (View bodies are mocked out in this file; their parent-zone
     // assertion lives in `board-view.spatial-nav.test.tsx` and the
     // end-to-end test.)
-    const perspectiveZone = registerZoneArgs().find(
+    const perspectiveZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective",
     );
     expect(perspectiveZone).toBeTruthy();
@@ -350,7 +350,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, queryByTestId, unmount } = renderViewStack();
     await flushSetup();
 
-    const perspectiveZone = registerZoneArgs().find(
+    const perspectiveZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective",
     )!;
     const node = container.querySelector(
@@ -387,7 +387,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, unmount } = renderViewStack();
     await flushSetup();
 
-    const perspectiveZone = registerZoneArgs().find(
+    const perspectiveZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective",
     )!;
     const node = container.querySelector(
@@ -420,7 +420,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { unmount } = renderViewStack();
     await flushSetup();
 
-    const perspectiveZone = registerZoneArgs().find(
+    const perspectiveZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective",
     )!;
     const expectedKey = perspectiveZone.fq as FullyQualifiedMoniker;
@@ -442,7 +442,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     const { container, queryByTestId, unmount } = renderViewStack();
     await flushSetup();
 
-    const perspectiveZone = registerZoneArgs().find(
+    const perspectiveZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective",
     )!;
     const node = container.querySelector(

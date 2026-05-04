@@ -2156,9 +2156,8 @@ pub async fn show_context_menu(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use swissarmyhammer_focus::{
-    BatchRegisterError, BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope,
-    FocusZone, FullyQualifiedMoniker, LayerName, Rect, RegisterEntry, SegmentMoniker,
-    SpatialRegistry, SpatialState, WindowLabel,
+    BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope, FullyQualifiedMoniker,
+    LayerName, Rect, RegisterEntry, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Tauri event name for spatial focus changes — mirrors the listener
@@ -2214,10 +2213,19 @@ fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), 
 // canonical order, dispatch to one of these helpers, and emit the resulting
 // `FocusChangedEvent` (when any) on the calling window.
 
-/// Register a [`FocusScope`] leaf into `registry`.
+/// Register a [`FocusScope`] into `registry`.
 ///
 /// Pulled out of [`spatial_register_scope`] so unit tests can exercise
 /// the same body without constructing a Tauri runtime.
+///
+/// `last_focused` is intentionally **not** taken from the wire —
+/// registration is the React side's "this scope just mounted" signal,
+/// and `last_focused` is server-owned drill-out memory that the
+/// navigator populates as focus moves. The kernel's
+/// [`SpatialRegistry::register_scope`] preserves any existing
+/// `last_focused` slot when a scope is re-registered (the
+/// placeholder/real-mount swap), so we always pass `None` here and
+/// let the kernel handle preservation.
 #[allow(clippy::too_many_arguments)]
 fn spatial_register_scope_inner(
     registry: &mut SpatialRegistry,
@@ -2234,34 +2242,7 @@ fn spatial_register_scope_inner(
         rect,
         layer_fq,
         parent_zone,
-        overrides,
-    });
-}
-
-/// Register a [`FocusZone`] container into `registry`.
-///
-/// Preserves any existing `last_focused` slot so a placeholder→real-mount
-/// re-register doesn't lose drill-out memory. Mirrors `apply_batch`'s
-/// preservation logic so the single-entry path stays symmetric with the
-/// batch path.
-#[allow(clippy::too_many_arguments)]
-fn spatial_register_zone_inner(
-    registry: &mut SpatialRegistry,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layer_fq: FullyQualifiedMoniker,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-) {
-    let last_focused = registry.zone(&fq).and_then(|z| z.last_focused.clone());
-    registry.register_zone(FocusZone {
-        fq,
-        segment,
-        rect,
-        layer_fq,
-        parent_zone,
-        last_focused,
+        last_focused: None,
         overrides,
     });
 }
@@ -2287,16 +2268,16 @@ fn spatial_unregister_scope_inner(
 ///
 /// Pulled out of [`spatial_register_batch`] so unit tests can drive the
 /// same code path against `&mut SpatialRegistry` without spinning up a
-/// Tauri runtime. The batch path is atomic at the registry boundary —
-/// `SpatialRegistry::apply_batch` validates every entry's kind-stability
-/// before mutating any scope, so a returned error guarantees the registry
-/// is unchanged. Errors are stringified at this layer because the wire
-/// boundary speaks `Result<(), String>`.
+/// Tauri runtime. After the kernel's scope/zone collapse there is a
+/// single registered primitive type, so the batch path is now
+/// infallible at the registry boundary — every entry is applied via
+/// [`SpatialRegistry::register_scope`] in input order, and per-FQM
+/// `last_focused` preservation is handled by the kernel.
 fn spatial_register_batch_inner(
     registry: &mut SpatialRegistry,
     entries: Vec<RegisterEntry>,
-) -> Result<(), BatchRegisterError> {
-    registry.apply_batch(entries)
+) {
+    registry.apply_batch(entries);
 }
 
 /// Push a layer into the registry under the given owning window.
@@ -2322,14 +2303,20 @@ fn spatial_push_layer_inner(
     });
 }
 
-/// Register a `<FocusScope>` leaf with the spatial registry.
+/// Register a `<FocusScope>` with the spatial registry.
 ///
-/// Mirrors [`FocusScope`] on the kernel side. `parent_zone` is `None` when
-/// the leaf sits directly under its layer root; `overrides` is empty when
-/// the leaf has no per-direction special cases. Replacing a registration
-/// with the same key is intentionally allowed (idempotent re-mount); the
-/// kernel preserves the per-key overwrite semantics described on
-/// `SpatialRegistry::register_scope`.
+/// Mirrors [`FocusScope`] on the kernel side. `parent_zone` is `None`
+/// when the scope sits directly under its layer root; `overrides` is
+/// empty when the scope has no per-direction special cases. Whether the
+/// scope plays a leaf or a navigable-container role is determined at
+/// runtime by whether anything else is registered under it — there is
+/// no separate zone primitive on the wire.
+///
+/// Replacing a registration with the same key is intentionally allowed
+/// (idempotent re-mount); the kernel's per-key overwrite semantics
+/// preserve any existing `last_focused` slot so a placeholder→real-mount
+/// swap does not lose drill-out memory accumulated while the placeholder
+/// was live.
 ///
 /// Returns `Ok(())` on success. Registration is purely structural — no
 /// `focus-changed` event is emitted.
@@ -2360,63 +2347,21 @@ pub async fn spatial_register_scope(
     Ok(())
 }
 
-/// Register a `<FocusZone>` container with the spatial registry.
-///
-/// Mirrors `FocusZone` on the kernel side. `last_focused` is **not** taken
-/// from the wire — registration is the React side's "this scope just
-/// mounted" signal, and `last_focused` is server-owned drill-out memory
-/// that the navigator populates as focus moves. The kernel preserves any
-/// existing `last_focused` slot when a zone is re-registered (the
-/// placeholder/real-mount swap).
-///
-/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
-/// registration does not move focus.
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn spatial_register_zone(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layer_fq: FullyQualifiedMoniker,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-) -> Result<(), String> {
-    with_spatial(&state, |registry, _spatial_state| {
-        spatial_register_zone_inner(
-            registry,
-            fq,
-            segment,
-            rect,
-            layer_fq,
-            parent_zone,
-            overrides,
-        );
-    })
-    .await;
-    Ok(())
-}
-
 /// Register a batch of [`RegisterEntry`] values in one Tauri invoke.
 ///
 /// The React-side virtualizer ships a `Vec<RegisterEntry>` for off-screen
 /// rows whenever the visible window changes — twenty placeholder mounts
 /// collapse into a single IPC round-trip and a single registry lock,
-/// rather than twenty independent `spatial_register_scope` /
-/// `spatial_register_zone` calls.
+/// rather than twenty independent `spatial_register_scope` calls.
 ///
-/// Atomic at the registry boundary: `SpatialRegistry::apply_batch`
-/// validates every entry's kind-stability before mutating any scope,
-/// so a [`BatchRegisterError`] response guarantees no entry was applied.
-/// Zone entries that target an already-registered key preserve the
-/// existing `last_focused` slot — the placeholder→real-mount swap path
-/// must not lose drill-out memory accumulated while the placeholder
-/// was live.
+/// After the kernel's scope/zone collapse the batch path is infallible:
+/// every entry is applied via [`SpatialRegistry::register_scope`] in
+/// input order, and the kernel preserves any existing `last_focused`
+/// slot per FQM so the placeholder→real-mount swap does not lose
+/// drill-out memory.
 ///
 /// Returns `Ok(())` on success. No `focus-changed` event is emitted —
-/// registration does not move focus. On kind-mismatch, returns the
-/// stringified error (the wire boundary speaks `Result<(), String>`).
+/// registration does not move focus.
 #[tauri::command]
 pub async fn spatial_register_batch(
     _window: Window,
@@ -2424,10 +2369,10 @@ pub async fn spatial_register_batch(
     entries: Vec<RegisterEntry>,
 ) -> Result<(), String> {
     with_spatial(&state, |registry, _spatial_state| {
-        spatial_register_batch_inner(registry, entries)
+        spatial_register_batch_inner(registry, entries);
     })
-    .await
-    .map_err(|e| e.to_string())
+    .await;
+    Ok(())
 }
 
 /// Unregister a previously-registered scope.
@@ -3248,7 +3193,7 @@ mod spatial_command_tests {
         );
 
         let event = state
-            .focus(&registry, fq.clone())
+            .focus(&mut registry, fq.clone())
             .expect("focus emits an event for a freshly registered scope");
 
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
@@ -3278,60 +3223,61 @@ mod spatial_command_tests {
         assert_eq!(scope.parent_zone, None);
     }
 
-    /// Registering a zone with the same FQM as a previous zone preserves
-    /// any existing `last_focused` slot — the kernel's placeholder/real-
-    /// mount swap requires drill-out memory to survive a re-register.
-    /// Verifies the inner helper applies the same preservation logic that
-    /// `apply_batch` uses for zones.
+    /// Re-registering a scope at the same FQM preserves any existing
+    /// `last_focused` slot — the kernel's placeholder/real-mount swap
+    /// requires drill-out memory to survive a re-register. Verifies the
+    /// inner helper passes `last_focused: None` on the wire and lets the
+    /// kernel's per-FQM preservation logic in `register_scope` carry the
+    /// previous value forward.
     #[test]
-    fn spatial_register_zone_preserves_last_focused() {
+    fn spatial_register_scope_preserves_last_focused() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
 
-        let zone_fq = compose_fq(&layer, "ui:zone");
-        let leaf_fq = compose_fq(&zone_fq, "ui:leaf");
-        spatial_register_zone_inner(
+        let parent_fq = compose_fq(&layer, "ui:parent");
+        let child_fq = compose_fq(&parent_fq, "ui:child");
+        spatial_register_scope_inner(
             &mut registry,
-            zone_fq.clone(),
-            SegmentMoniker::from_string("ui:zone"),
+            parent_fq.clone(),
+            SegmentMoniker::from_string("ui:parent"),
             rect_at(0.0, 0.0, 100.0, 100.0),
             layer.clone(),
             None,
             HashMap::new(),
         );
 
-        // Reach into the registry to set `last_focused` directly — that's
-        // what the navigator would do as focus moves through the zone.
-        // Re-register the zone and assert the slot survives.
-        {
-            // Use a fresh inserted zone with a populated last_focused via
-            // a new FocusZone — emulates the navigator's mutation.
-            registry.register_zone(FocusZone {
-                fq: zone_fq.clone(),
-                segment: SegmentMoniker::from_string("ui:zone"),
-                rect: rect_at(0.0, 0.0, 100.0, 100.0),
-                layer_fq: layer.clone(),
-                parent_zone: None,
-                last_focused: Some(leaf_fq.clone()),
-                overrides: HashMap::new(),
-            });
-        }
+        // Populate `last_focused` directly on the registered scope —
+        // emulates the navigator's mutation as focus moves through the
+        // parent's descendants. (The kernel currently never originates
+        // a write here, but the register path must preserve any value
+        // an external mutator placed.)
+        registry.register_scope(FocusScope {
+            fq: parent_fq.clone(),
+            segment: SegmentMoniker::from_string("ui:parent"),
+            rect: rect_at(0.0, 0.0, 100.0, 100.0),
+            layer_fq: layer.clone(),
+            parent_zone: None,
+            last_focused: Some(child_fq.clone()),
+            overrides: HashMap::new(),
+        });
 
-        // Re-register through the inner helper — the real wire path.
-        spatial_register_zone_inner(
+        // Re-register through the inner helper — the real wire path. The
+        // helper passes `last_focused: None`; `register_scope` must carry
+        // the prior value forward.
+        spatial_register_scope_inner(
             &mut registry,
-            zone_fq.clone(),
-            SegmentMoniker::from_string("ui:zone"),
+            parent_fq.clone(),
+            SegmentMoniker::from_string("ui:parent"),
             rect_at(0.0, 0.0, 200.0, 200.0),
             layer,
             None,
             HashMap::new(),
         );
 
-        let zone = registry.zone(&zone_fq).expect("zone still registered");
+        let scope = registry.scope(&parent_fq).expect("scope still registered");
         assert_eq!(
-            zone.last_focused.as_ref(),
-            Some(&leaf_fq),
+            scope.last_focused.as_ref(),
+            Some(&child_fq),
             "re-register should preserve last_focused for placeholder/real-mount swap"
         );
     }
@@ -3367,7 +3313,7 @@ mod spatial_command_tests {
         );
 
         // Focus k1, then unregister it — fallback should pick k2.
-        state.focus(&registry, k1.clone()).expect("focus k1");
+        state.focus(&mut registry, k1.clone()).expect("focus k1");
 
         let event = spatial_unregister_scope_inner(&mut registry, &mut state, &k1)
             .expect("unregistering the focused scope must produce a focus-changed event");
@@ -3435,10 +3381,10 @@ mod spatial_command_tests {
             rect_at(0.0, 20.0, 10.0, 10.0),
         );
 
-        state.focus(&registry, top.clone()).expect("focus top");
+        state.focus(&mut registry, top.clone()).expect("focus top");
         let strategy = BeamNavStrategy::new();
         let event = state
-            .navigate_with(&registry, &strategy, top.clone(), Direction::Down)
+            .navigate_with(&mut registry, &strategy, top.clone(), Direction::Down)
             .expect("Down from top hits bottom");
 
         assert_eq!(event.prev_fq, Some(top));
@@ -3508,30 +3454,32 @@ mod spatial_command_tests {
     }
 
     /// `spatial_register_batch_inner` applies a vector of `RegisterEntry`
-    /// values atomically. The wire path is
+    /// values. The wire path is
     /// `spatial_register_batch` → `spatial_register_batch_inner` →
     /// `SpatialRegistry::apply_batch`; this test exercises the inner half
     /// to prove the adapter forwards the call without mutating the
-    /// payload.
+    /// payload. After the kernel's scope/zone collapse the batch path
+    /// has a single primitive type, so every entry is registered through
+    /// `register_scope` in input order.
     #[test]
     fn spatial_register_batch_inner_registers_all_entries() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
 
-        let z1 = compose_fq(&layer, "task:01");
-        let k1 = compose_fq(&layer, "ui:button");
+        let s1 = compose_fq(&layer, "task:01");
+        let s2 = compose_fq(&layer, "ui:button");
 
         let entries = vec![
-            RegisterEntry::Zone {
-                fq: z1.clone(),
+            RegisterEntry {
+                fq: s1.clone(),
                 segment: SegmentMoniker::from_string("task:01"),
                 rect: rect_at(0.0, 0.0, 10.0, 10.0),
                 layer_fq: layer.clone(),
                 parent_zone: None,
                 overrides: HashMap::new(),
             },
-            RegisterEntry::Scope {
-                fq: k1.clone(),
+            RegisterEntry {
+                fq: s2.clone(),
                 segment: SegmentMoniker::from_string("ui:button"),
                 rect: rect_at(20.0, 0.0, 10.0, 10.0),
                 layer_fq: layer,
@@ -3540,52 +3488,9 @@ mod spatial_command_tests {
             },
         ];
 
-        spatial_register_batch_inner(&mut registry, entries).expect("batch apply succeeds");
+        spatial_register_batch_inner(&mut registry, entries);
 
-        assert!(registry.is_registered(&z1), "zone entry registered");
-        assert!(registry.is_registered(&k1), "leaf scope entry registered");
-    }
-
-    /// A kind-mismatch (zone entry for an FQM already registered as a
-    /// leaf scope) bubbles up as `BatchRegisterError::KindMismatch` and
-    /// leaves the registry unchanged. Verifies the inner helper does not
-    /// silently swallow the error — the Tauri command stringifies it for
-    /// the wire, so the kernel error must reach the helper boundary.
-    #[test]
-    fn spatial_register_batch_inner_returns_kind_mismatch_error() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (existing, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "ui:button",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-
-        // Try to re-register the same FQM as a zone — must fail kind-stability.
-        let entries = vec![RegisterEntry::Zone {
-            fq: existing.clone(),
-            segment: SegmentMoniker::from_string("ui:button"),
-            rect: rect_at(0.0, 0.0, 10.0, 10.0),
-            layer_fq: layer,
-            parent_zone: None,
-            overrides: HashMap::new(),
-        }];
-
-        let result = spatial_register_batch_inner(&mut registry, entries);
-        assert!(
-            matches!(result, Err(BatchRegisterError::KindMismatch { .. })),
-            "kind-mismatch must surface as BatchRegisterError",
-        );
-        // Registry unchanged — the original leaf scope still wins, and
-        // the zone accessor returns `None` because the kind never flipped.
-        assert!(
-            registry.scope(&existing).is_some(),
-            "original leaf entry preserved",
-        );
-        assert!(
-            registry.zone(&existing).is_none(),
-            "kind preserved on rejected batch",
-        );
+        assert!(registry.is_registered(&s1), "first batch entry registered");
+        assert!(registry.is_registered(&s2), "second batch entry registered");
     }
 }

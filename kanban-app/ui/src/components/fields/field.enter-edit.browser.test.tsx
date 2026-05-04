@@ -211,10 +211,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -348,7 +348,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     });
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
     );
     expect(
@@ -410,7 +410,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     });
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
     );
     expect(titleZone).toBeTruthy();
@@ -516,7 +516,7 @@ describe("Field — Enter on focused field zone enters edit mode", () => {
     });
     await flushSetup();
 
-    const idZone = registerZoneArgs().find(
+    const idZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.id",
     );
     expect(idZone).toBeTruthy();

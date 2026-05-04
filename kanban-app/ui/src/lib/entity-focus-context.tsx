@@ -19,7 +19,7 @@
  *
  * The scope registry is still keyed by string (the entity-scope chain
  * uses `parent.moniker` walks), but the value used at every callsite is
- * the FQM string — `<FocusZone moniker="card:T1">` mounted under
+ * the FQM string — `<FocusScope moniker="card:T1">` mounted under
  * `/window/board/column:todo` registers the FQM
  * `/window/board/column:todo/card:T1` in both the kernel and the
  * entity-focus registry.

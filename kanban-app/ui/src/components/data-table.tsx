@@ -25,7 +25,6 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
-import { FocusZone } from "@/components/focus-zone";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useInspectOnDoubleClick } from "@/components/inspectable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
@@ -641,7 +640,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
     // directly and attaches the resulting handler to its `<tr>`.
     // Both paths share the same hook, so Guard A continues to hold
     // (the inspect dispatch site is still `inspectable.tsx`).
-    <FocusZone
+    <FocusScope
       moniker={asSegment(entityMk)}
       renderContainer={false}
     >
@@ -682,7 +681,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
           );
         })}
       </EntityRow>
-    </FocusZone>
+    </FocusScope>
   );
 });
 

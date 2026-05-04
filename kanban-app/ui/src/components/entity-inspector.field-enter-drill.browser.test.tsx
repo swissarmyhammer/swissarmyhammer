@@ -247,7 +247,7 @@ async function defaultInvokeImpl(
     return focusedMoniker;
   }
   if (cmd === "spatial_navigate") return null;
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_zone") {
+  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
     const a = (args ?? {}) as { fq?: string; segment?: string };
     if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
     return undefined;
@@ -353,10 +353,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -491,7 +491,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     );
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(tagsZone, "tags field zone must register").toBeTruthy();
@@ -712,7 +712,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     );
     await flushSetup();
 
-    const nameZone = registerZoneArgs().find(
+    const nameZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.name",
     );
     expect(nameZone).toBeTruthy();
@@ -780,7 +780,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     );
     await flushSetup();
 
-    const idZone = registerZoneArgs().find(
+    const idZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.id",
     );
     expect(idZone).toBeTruthy();
@@ -832,7 +832,7 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     );
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(tagsZone, "tags field zone must register").toBeTruthy();

@@ -9,7 +9,7 @@ import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { FocusLayer } from "@/components/focus-layer";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import type { Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
@@ -355,7 +355,7 @@ function InspectorPanel({
 
   return (
     <SlidePanel open={true} onClose={onClose} style={style}>
-      <FocusZone moniker={entityZoneSegment}>{body}</FocusZone>
+      <FocusScope moniker={entityZoneSegment}>{body}</FocusScope>
     </SlidePanel>
   );
 }

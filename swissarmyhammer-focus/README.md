@@ -1,9 +1,8 @@
 # swissarmyhammer-focus
 
 Headless spatial-navigation kernel for keyboard focus across 2-D
-layouts. Generic and domain-free — nothing in here knows about kanban
-tasks, columns, or any other application concept. Identities are
-`FullyQualifiedMoniker` paths produced by the consumer (the path
+layouts. Generic and domain-free — nothing in here knows about any other application concept. 
+Identities are `FullyQualifiedMoniker` paths produced by the consumer (the path
 through the focus hierarchy); the kernel only sees rectangles, layers,
 and zones.
 

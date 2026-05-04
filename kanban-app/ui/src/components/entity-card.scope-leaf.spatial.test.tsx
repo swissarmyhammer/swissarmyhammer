@@ -6,15 +6,15 @@
  * audit). The kernel's three peers are:
  *
  *   - `<FocusLayer>` — modal boundary
- *   - `<FocusZone>` — navigable container, can have children (other zones
+ *   - `<FocusScope>` — navigable container, can have children (other zones
  *     or scopes)
  *   - `<FocusScope>` — leaf in the spatial graph
  *
  * The previous card-as-`<FocusScope>` shape was a kernel "leaf" with no
  * tracked children — but the React tree composed `<Field>` zones inside
- * it whose `parent_zone` (read via `useParentZoneFq()`) skipped the
+ * it whose `parent_zone` (read via `useParentFocusScope()`) skipped the
  * Scope and pointed at the column zone, because `<FocusScope>` does not
- * push `FocusZoneContext.Provider`. The kernel saw fields as siblings
+ * push `FocusScopeContext.Provider`. The kernel saw fields as siblings
  * of cards under the column rather than as descendants of cards. The
  * path-prefix branch of `swissarmyhammer-focus`'s
  * `warn_forward_scope_ancestors` (in `registry.rs`) catches this shape
@@ -22,8 +22,8 @@
  * of a registered Scope's FQM is a `scope-not-leaf` violation.
  *
  * This file pins:
- *   1. The card body registers as a `<FocusZone>` (segment matches
- *      `^task:` and the call lands on `spatial_register_zone`, NOT on
+ *   1. The card body registers as a `<FocusScope>` (segment matches
+ *      `^task:` and the call lands on `spatial_register_scope`, NOT on
  *      `spatial_register_scope`).
  *   2. The inspect-button is an inner leaf scope
  *      (`card.inspect:{id}` segment, registered via
@@ -201,12 +201,6 @@ async function flushSetup() {
   });
 }
 
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_register_scope")
@@ -263,7 +257,7 @@ describe("EntityCard — scope-is-leaf invariant", () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const asZone = registerZoneArgs().find(
+    const asZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     );
     expect(
@@ -308,7 +302,7 @@ describe("EntityCard — scope-is-leaf invariant", () => {
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
 
@@ -329,17 +323,17 @@ describe("EntityCard — scope-is-leaf invariant", () => {
 
   it("inner <Field> zones nest under the card zone (parent_zone = card)", async () => {
     // Field zones inside the card body register their parent_zone via
-    // useParentZoneFq(), which walks FocusZoneContext. With the card now
-    // a <FocusZone>, that context push lands on the card's FQM — fields
+    // useParentFocusScope(), which walks FocusScopeContext. With the card now
+    // a <FocusScope>, that context push lands on the card's FQM — fields
     // are children of the card in the spatial graph, not siblings.
     const { unmount } = renderCard();
     await flushSetup();
 
-    const cardZone = registerZoneArgs().find(
+    const cardZone = registerScopeArgs().find(
       (a) => a.segment === "task:task-1",
     )!;
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.title",
     );
     expect(titleZone, "title field must register as a zone").toBeDefined();

@@ -117,7 +117,7 @@ import { asSegment } from "@/types/spatial";
 /**
  * Renders PerspectiveTabBar inside the required providers. The spatial
  * provider stack (`SpatialFocusProvider` + `FocusLayer`) is required
- * since `PerspectiveTabBar` mounts `<FocusZone>` / `<FocusScope>` and
+ * since `PerspectiveTabBar` mounts `<FocusScope>` / `<FocusScope>` and
  * the no-spatial-context fallback was removed in card
  * `01KQPVA127YMJ8D7NB6M824595`.
  */
@@ -781,8 +781,8 @@ describe("PerspectiveTabBar", () => {
       });
 
       // Collect the rect for each perspective tab from the
-      // `spatial_register_zone` invocation argument bag. After the
-      // iteration-2 reshape the per-tab wrapper is a `<FocusZone>`, not
+      // `spatial_register_scope` invocation argument bag. After the
+      // iteration-2 reshape the per-tab wrapper is a `<FocusScope>`, not
       // a `<FocusScope>` leaf — the rect lives on the zone now and the
       // inner name / filter / group leaves are smaller children inside
       // it.
@@ -794,7 +794,7 @@ describe("PerspectiveTabBar", () => {
       };
       const tabRects = new Map<string, RectArg>();
       for (const call of mockInvoke.mock.calls) {
-        if (call[0] !== "spatial_register_zone") continue;
+        if (call[0] !== "spatial_register_scope") continue;
         const args = call[1] as { segment: string; rect: RectArg };
         if (typeof args?.segment !== "string") continue;
         if (!args.segment.startsWith("perspective_tab:")) continue;

@@ -270,9 +270,9 @@ function renderBoardWithShell() {
   );
 }
 
-function registerZoneArgs(): Array<Record<string, unknown>> {
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -309,7 +309,7 @@ describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
    * Seeds focus on the middle column so "first" and "last" map to
    * distinct monikers. The middle column zone is registered by
    * `<ColumnView>` under the board zone — we look it up by segment from
-   * the recorded `spatial_register_zone` IPCs.
+   * the recorded `spatial_register_scope` IPCs.
    *
    * @param keymapMode `"vim"` for `0` / `$`, `"cua"` for `Mod+Home` /
    *                   `Mod+End`. Drives `get_ui_state`'s `keymap_mode`
@@ -343,7 +343,7 @@ describe("BoardView — column-extreme keys dispatch spatial_navigate", () => {
     // bridge mirrors the focused moniker into the entity-focus store —
     // without it the keybinding handler can't resolve scope-level
     // bindings.
-    const middleColumn = registerZoneArgs().find(
+    const middleColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-doing",
     );
     expect(middleColumn, "middle column zone must register").toBeTruthy();

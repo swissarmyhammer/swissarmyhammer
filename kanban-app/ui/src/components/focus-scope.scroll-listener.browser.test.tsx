@@ -1,8 +1,8 @@
 /**
  * Browser-mode unit tests for the ancestor-scroll listener inside
- * `<FocusZone>` (and shared with `<FocusScope>`).
+ * `<FocusScope>` (and shared with `<FocusScope>`).
  *
- * Background: `<FocusZone>` registers its bounding rect with the Rust
+ * Background: `<FocusScope>` registers its bounding rect with the Rust
  * spatial registry on mount and refreshes it via a `ResizeObserver` when
  * its own box changes size. `ResizeObserver` does NOT fire when an
  * ancestor scrolls — so a card inside a scrolling column would keep its
@@ -66,7 +66,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // Imports — after mocks
 // ---------------------------------------------------------------------------
 
-import { FocusZone } from "./focus-zone";
+import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import {
@@ -79,7 +79,7 @@ import {
 
 /**
  * Flush microtasks so the register effects scheduled in `useEffect`
- * have run and their `spatial_register_zone` calls have landed in
+ * have run and their `spatial_register_scope` calls have landed in
  * `mockInvoke`. Two ticks: first lets the effect callbacks run, second
  * lets any Promise-resolution-driven follow-on (e.g. listen-attach)
  * settle.
@@ -107,13 +107,13 @@ async function flushScroll() {
   });
 }
 
-/** Pull the most recent `spatial_register_zone` argument bag. */
-function lastRegisterZoneArgs() {
+/** Pull the most recent `spatial_register_scope` argument bag. */
+function lastRegisterScopeArgs() {
   const calls = mockInvoke.mock.calls.filter(
-    (c) => c[0] === "spatial_register_zone",
+    (c) => c[0] === "spatial_register_scope",
   );
   if (calls.length === 0) {
-    throw new Error("expected spatial_register_zone call");
+    throw new Error("expected spatial_register_scope call");
   }
   return calls[calls.length - 1][1] as {
     fq: string;
@@ -141,7 +141,7 @@ function updateRectCalls(): Array<{
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("<FocusZone> — ancestor scroll listener", () => {
+describe("<FocusScope> — ancestor scroll listener", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
   });
@@ -169,9 +169,9 @@ describe("<FocusZone> — ancestor scroll listener", () => {
             }}
           >
             <div style={{ height: "1000px", padding: "20px" }}>
-              <FocusZone moniker={asSegment("ui:tracked-zone")}>
+              <FocusScope moniker={asSegment("ui:tracked-zone")}>
                 <span style={{ display: "block", padding: "20px" }}>zone</span>
-              </FocusZone>
+              </FocusScope>
             </div>
           </div>
         </FocusLayer>
@@ -179,7 +179,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     );
     await flushSetup();
 
-    const initial = lastRegisterZoneArgs();
+    const initial = lastRegisterScopeArgs();
     const initialKey = initial.fq;
     const initialY = initial.rect.y;
 
@@ -227,11 +227,11 @@ describe("<FocusZone> — ancestor scroll listener", () => {
                 style={{ height: "200px", overflowY: "auto" }}
               >
                 <div style={{ height: "1000px", padding: "20px" }}>
-                  <FocusZone moniker={asSegment("ui:nested-zone")}>
+                  <FocusScope moniker={asSegment("ui:nested-zone")}>
                     <span style={{ display: "block", padding: "20px" }}>
                       nested
                     </span>
-                  </FocusZone>
+                  </FocusScope>
                 </div>
               </div>
             </div>
@@ -241,7 +241,7 @@ describe("<FocusZone> — ancestor scroll listener", () => {
     );
     await flushSetup();
 
-    const initial = lastRegisterZoneArgs();
+    const initial = lastRegisterScopeArgs();
     const initialKey = initial.fq;
     const initialY = initial.rect.y;
 
@@ -295,9 +295,9 @@ describe("<FocusZone> — ancestor scroll listener", () => {
             style={{ height: "200px", overflowY: "auto" }}
           >
             <div style={{ height: "1000px" }}>
-              <FocusZone moniker={asSegment("ui:cleanup-zone")}>
+              <FocusScope moniker={asSegment("ui:cleanup-zone")}>
                 <span style={{ display: "block", padding: "20px" }}>x</span>
-              </FocusZone>
+              </FocusScope>
             </div>
           </div>
         </FocusLayer>

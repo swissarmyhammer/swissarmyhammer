@@ -144,7 +144,6 @@ vi.mock("@/components/window-container", () => ({
 
 import { BadgeListDisplay } from "./badge-list-display";
 import { FocusScope } from "@/components/focus-scope";
-import { FocusZone } from "@/components/focus-zone";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
@@ -222,13 +221,6 @@ async function fireFocusChanged({
     for (const handler of handlers) handler({ payload });
     await Promise.resolve();
   });
-}
-
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
 }
 
 /** Collect every `spatial_register_scope` invocation argument bag. */
@@ -323,7 +315,7 @@ function RefNavHarness({
  * Render `BadgeListDisplay` inside the production-shaped spatial-nav
  * stack so each pill's `<FocusScope>` registers via
  * `spatial_register_scope` and subscribes to per-key claims. The parent
- * `<FocusZone>` mirrors the real `<Field>` zone that wraps the display
+ * `<FocusScope>` mirrors the real `<Field>` zone that wraps the display
  * in production. `mode` is parameterised so tests can pin both compact
  * (card body) and full (inspector row) variants.
  */
@@ -341,14 +333,14 @@ function SpatialHarness({
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
           <TooltipProvider>
-            <FocusZone moniker={asSegment(parentMoniker)}>
+            <FocusScope moniker={asSegment(parentMoniker)}>
               <BadgeListDisplay
                 field={tagField}
                 value={values}
                 entity={taskEntity}
                 mode={mode}
               />
-            </FocusZone>
+            </FocusScope>
           </TooltipProvider>
         </EntityFocusProvider>
       </FocusLayer>
@@ -473,7 +465,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     );
     await flushSetup();
 
-    const fieldZone = registerZoneArgs().find(
+    const fieldZone = registerScopeArgs().find(
       (a) => a.segment === "field:tags",
     );
     expect(fieldZone).toBeTruthy();

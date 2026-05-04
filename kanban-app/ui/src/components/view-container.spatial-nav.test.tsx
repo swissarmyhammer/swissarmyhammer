@@ -1,7 +1,7 @@
 /**
  * Spatial-nav regression tests for `<ViewContainer>`.
  *
- * The `ui:view` `<FocusZone>` wrapper was deleted because its rect exactly
+ * The `ui:view` `<FocusScope>` wrapper was deleted because its rect exactly
  * overlapped the inner view's own zone (`ui:board` for `<BoardView>`,
  * `ui:grid` for `<GridView>`). It added no semantic value to the spatial
  * graph and just inserted an extra hop the cascade had to traverse. These
@@ -11,7 +11,7 @@
  * Mounts the container inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`). The Tauri
  * `invoke` boundary is mocked at the module level so we can inspect every
- * `spatial_register_zone` call ViewContainer's subtree makes on mount.
+ * `spatial_register_scope` call ViewContainer's subtree makes on mount.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -156,10 +156,10 @@ function renderWithSpatialStack() {
   );
 }
 
-/** Collect every `spatial_register_zone` call in the order they happened. */
-function registerZoneCalls(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` call in the order they happened. */
+function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -188,8 +188,8 @@ describe("ViewContainer (spatial-nav)", () => {
     // inner view's own zone (`ui:board` / `ui:grid`) for the same rect.
     // Nothing in `view-container.tsx`'s subtree (the bare ViewContainer
     // itself, not the inner view bodies that are mocked here) should call
-    // `spatial_register_zone` with `segment === "ui:view"`.
-    const calls = registerZoneCalls();
+    // `spatial_register_scope` with `segment === "ui:view"`.
+    const calls = registerScopeCalls();
     const viewZone = calls.find((c) => c.segment === "ui:view");
     expect(viewZone).toBeUndefined();
 

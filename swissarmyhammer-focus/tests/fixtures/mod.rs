@@ -35,8 +35,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName, Pixels, Rect,
-    SegmentMoniker, SpatialRegistry, WindowLabel,
+    FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker,
+    SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -134,15 +134,17 @@ fn make_layer(
     }
 }
 
-/// Build a [`FocusZone`] with empty overrides and no `last_focused`.
+/// Build a [`FocusScope`] container with empty overrides and no
+/// `last_focused`. Whether it ends up acting as a leaf or a navigable
+/// container is decided by whether anything else registers under it.
 fn make_zone(
     fq: FullyQualifiedMoniker,
     segment: &str,
     layer_fq: FullyQualifiedMoniker,
     parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -153,7 +155,9 @@ fn make_zone(
     }
 }
 
-/// Build a [`FocusScope`] leaf with empty overrides.
+/// Build a [`FocusScope`] leaf with empty overrides. Identical shape
+/// to [`make_zone`] — the kernel decides leaf vs container at runtime
+/// based on whether anything else registers under this FQM.
 fn make_leaf(
     fq: FullyQualifiedMoniker,
     segment: &str,
@@ -167,6 +171,7 @@ fn make_leaf(
         rect: r,
         layer_fq,
         parent_zone,
+        last_focused: None,
         overrides: HashMap::new(),
     }
 }
@@ -472,7 +477,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
     let navbar_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:navbar"));
 
     // ui:navbar — full-width strip across the top.
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         navbar_fq.clone(),
         "ui:navbar",
         win.clone(),
@@ -502,7 +507,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
     ));
     // Percent-complete field zone — a `<FocusZone>` peer of the navbar
     // leaves.
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         FullyQualifiedMoniker::compose(
             &navbar_fq,
             &SegmentMoniker::from_string("field:board:b1.percent_complete"),
@@ -530,7 +535,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
     // (40 px) captured by [`LEFT_NAV_WIDTH`].
     let left_nav_fq =
         FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:left-nav"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         left_nav_fq.clone(),
         "ui:left-nav",
         win.clone(),
@@ -570,7 +575,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
     // the right of `ui:left-nav`. Width = viewport minus the LeftNav.
     let pbar_fq =
         FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:perspective-bar"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         pbar_fq.clone(),
         "ui:perspective-bar",
         win.clone(),
@@ -628,7 +633,7 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
 fn register_board_and_columns(reg: &mut SpatialRegistry) {
     let win = window_layer_fq();
     let board_fq = FullyQualifiedMoniker::compose(&win, &SegmentMoniker::from_string("ui:board"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         board_fq.clone(),
         "ui:board",
         win.clone(),
@@ -650,7 +655,7 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
         );
 
         // Column zone — child of the board.
-        reg.register_zone(make_zone(
+        reg.register_scope(make_zone(
             col_fq.clone(),
             &col_seg,
             win.clone(),
@@ -665,7 +670,7 @@ fn register_board_and_columns(reg: &mut SpatialRegistry) {
         // surface (the synthetic outer `<FocusScope>` was collapsed in
         // card 01KQAWVDS931PADB0559F2TVCS).
         let col_name_seg = column_name_segment(i);
-        reg.register_zone(make_zone(
+        reg.register_scope(make_zone(
             FullyQualifiedMoniker::compose(
                 &col_fq,
                 &SegmentMoniker::from_string(col_name_seg.clone()),
@@ -707,7 +712,7 @@ fn register_inspector(reg: &mut SpatialRegistry) {
     let inspector_x = VIEWPORT_WIDTH - 400.0;
     let panel_fq =
         FullyQualifiedMoniker::compose(&inspector, &SegmentMoniker::from_string("panel:task:T1A"));
-    reg.register_zone(make_zone(
+    reg.register_scope(make_zone(
         panel_fq.clone(),
         "panel:task:T1A",
         inspector.clone(),
@@ -723,7 +728,7 @@ fn register_inspector(reg: &mut SpatialRegistry) {
     ];
     for (i, segment) in field_specs.iter().enumerate() {
         let row_top = BOARD_TOP + 8.0 + (i as f64) * 56.0;
-        reg.register_zone(make_zone(
+        reg.register_scope(make_zone(
             FullyQualifiedMoniker::compose(&panel_fq, &SegmentMoniker::from_string(*segment)),
             segment,
             inspector.clone(),

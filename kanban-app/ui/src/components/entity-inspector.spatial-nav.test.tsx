@@ -6,7 +6,7 @@
  * `01KNQXYC4...` (architecture fix) landed, the inspector's structural
  * shape is:
  *
- *   ↳ `<FocusZone moniker="field:{type}:{id}.{name}">`   (per row, owned by `<Field>`)
+ *   ↳ `<FocusScope moniker="field:{type}:{id}.{name}">`   (per row, owned by `<Field>`)
  *       ↳ display content — single-value: bare; badge-list: one
  *         `<FocusScope moniker="{type}:{id}">` per pill leaf
  *
@@ -20,7 +20,7 @@
  * The mocking pattern follows `entity-card.spatial.test.tsx` and
  * `inspectors-container.spatial-nav.test.tsx`:
  *   - `vi.hoisted` builds an invoke / listen mock pair the test owns.
- *   - The Tauri mocks capture `spatial_register_zone` /
+ *   - The Tauri mocks capture `spatial_register_scope` /
  *     `spatial_register_scope` payloads so we know which `FullyQualifiedMoniker`
  *     each zone and pill owns.
  *   - The `listen("focus-changed", cb)` mock records the React-side
@@ -293,13 +293,6 @@ async function fireFocusChanged({
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
-    .map((c) => c[1] as Record<string, unknown>);
-}
-
 /** Collect every `spatial_register_scope` invocation argument bag. */
 function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -318,8 +311,8 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
  * Render the inspector wrapped in the production-shaped spatial-nav stack.
  *
  * Mirrors the provider tree `App.tsx` mounts: `<SpatialFocusProvider>`
- * + `<FocusLayer>` so each `<Field>`'s `<FocusZone>` and each pill's
- * `<FocusScope>` register via `spatial_register_zone` /
+ * + `<FocusLayer>` so each `<Field>`'s `<FocusScope>` and each pill's
+ * `<FocusScope>` register via `spatial_register_scope` /
  * `spatial_register_scope`; `<EntityFocusProvider>` so the entity-focus
  * scope registry and `setFocus` chrome work; the schema / store /
  * field-update / UI-state / command-scope providers because the
@@ -382,7 +375,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     const { container, unmount } = renderInspector();
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.title",
     );
     expect(titleZone).toBeTruthy();
@@ -405,7 +398,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     const { container, unmount } = renderInspector();
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.tags",
     );
     expect(tagsZone).toBeTruthy();
@@ -447,7 +440,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     const { container, unmount } = renderInspector();
     await flushSetup();
 
-    const titleZone = registerZoneArgs().find(
+    const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.title",
     )!;
     const titleNode = container.querySelector(
@@ -492,7 +485,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     );
     await flushSetup();
 
-    const progressZone = registerZoneArgs().find(
+    const progressZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.progress",
     )!;
     const progressNode = container.querySelector(
@@ -566,7 +559,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     const { container, unmount } = renderInspector();
     await flushSetup();
 
-    const tagsZone = registerZoneArgs().find(
+    const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.tags",
     )!;
     const bugPill = registerScopeArgs().find(

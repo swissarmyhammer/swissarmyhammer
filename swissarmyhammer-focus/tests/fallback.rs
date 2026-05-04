@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FallbackResolution, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker, LayerName,
+    FallbackResolution, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
     Pixels, Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
@@ -67,10 +67,11 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer),
         parent_zone,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
-/// Build a [`FocusZone`] with optional `last_focused` and parent zone.
+/// Build a [`FocusScope`] with optional `last_focused` and parent zone.
 fn zone(
     fq: FullyQualifiedMoniker,
     segment: &str,
@@ -78,8 +79,8 @@ fn zone(
     parent_zone: Option<FullyQualifiedMoniker>,
     last_focused: Option<FullyQualifiedMoniker>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -121,7 +122,7 @@ fn fallback_returns_sibling_in_zone() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None, None));
     let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",
@@ -156,7 +157,7 @@ fn fallback_returns_sibling_in_zone() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
@@ -186,7 +187,7 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
     // The lost entry's zone has a `last_focused` slot pointing at
     // "remembered" — but rule 1 should ignore it and pick the nearest
     // sibling instead.
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",
@@ -227,7 +228,7 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
@@ -247,6 +248,14 @@ fn fallback_prefers_sibling_over_lost_zone_last_focused() {
 
 /// When the lost entry's zone empties, fallback walks up to the parent
 /// zone and uses its `last_focused` if still registered.
+///
+/// Note: the test pre-populates `outer.last_focused = remembered_fq` to
+/// describe the fallback-tree shape directly, but
+/// [`SpatialState::focus`] (the kernel writer) would overwrite that
+/// slot if invoked on `lost_fq` because focusing `lost` walks up
+/// outer's ancestor chain. The test therefore drives the resolver
+/// directly without staging focus through `state.focus`; the hand-
+/// populated slot is the resolver-input under test.
 #[test]
 fn fallback_returns_parent_zone_last_focused() {
     let mut reg = SpatialRegistry::new();
@@ -255,7 +264,7 @@ fn fallback_returns_parent_zone_last_focused() {
     let remembered_fq =
         FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:remembered"));
     // Outer zone with last_focused pointing at "remembered".
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         outer_fq.clone(),
         "ui:outer",
         "/L",
@@ -266,7 +275,7 @@ fn fallback_returns_parent_zone_last_focused() {
     let inner_fq =
         FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:inner"));
     // Inner zone (about to empty when "lost" is unregistered).
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         inner_fq.clone(),
         "ui:inner",
         "/L",
@@ -302,10 +311,11 @@ fn fallback_returns_parent_zone_last_focused() {
         rect(300.0, 300.0, 10.0, 10.0),
     ));
 
-    let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    let state = SpatialState::new();
 
-    // Resolve before unregister so the lost entry's metadata is readable.
+    // Resolve directly against the hand-populated registry; the
+    // resolver is a pure registry query that does not depend on any
+    // `focus_by_window` state.
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
         FallbackResolution::FallbackParentZoneLastFocused(fq, segment) => {
@@ -334,7 +344,7 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
     reg.push_layer(layer("/L", "L", "main", None, None));
     let outer_fq = fq_in_layer("/L", "ui:outer");
     let ghost_fq = FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ghost"));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         outer_fq.clone(),
         "ui:outer",
         "/L",
@@ -346,7 +356,7 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
         FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:inner"));
     // Inner zone positioned far from the lost rect so it does not
     // beat `near` on distance once rule 2's nearest scan runs.
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         inner_fq.clone(),
         "ui:inner",
         "/L",
@@ -382,7 +392,7 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
@@ -401,6 +411,14 @@ fn fallback_returns_parent_zone_nearest_when_last_focused_stale() {
 /// When the layer root has no remaining entries, fallback walks
 /// `layer.parent` and uses that layer's `last_focused` if still
 /// registered.
+///
+/// Note: the test pre-populates `root.last_focused = root_leaf_fq` to
+/// describe the fallback-tree shape directly, but
+/// [`SpatialState::focus`] (the kernel writer) would overwrite that
+/// slot if invoked on `lost_fq` because focusing `lost` walks up
+/// root's layer-ancestor chain. The test therefore drives the resolver
+/// directly without staging focus through `state.focus`; the hand-
+/// populated slot is the resolver-input under test.
 #[test]
 fn fallback_returns_parent_layer_last_focused() {
     let mut reg = SpatialRegistry::new();
@@ -433,9 +451,11 @@ fn fallback_returns_parent_layer_last_focused() {
         rect(20.0, 20.0, 10.0, 10.0),
     ));
 
-    let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    let state = SpatialState::new();
 
+    // Resolve directly against the hand-populated registry; the
+    // resolver is a pure registry query that does not depend on any
+    // `focus_by_window` state.
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
         FallbackResolution::FallbackParentLayerLastFocused(fq, segment) => {
@@ -477,7 +497,7 @@ fn fallback_returns_parent_layer_nearest_includes_zone_nested_leaves() {
     // this test guards against was the candidate set being limited to
     // `parent_zone is None`).
     let root_zone_fq = fq_in_layer("/root", "ui:root-zone");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         root_zone_fq.clone(),
         "ui:root-zone",
         "/root",
@@ -496,7 +516,7 @@ fn fallback_returns_parent_layer_nearest_includes_zone_nested_leaves() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     match resolution {
@@ -528,7 +548,7 @@ fn fallback_returns_no_focus_at_lone_window_root() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     assert!(
@@ -581,7 +601,7 @@ fn fallback_never_crosses_window_boundary() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let resolution = state.resolve_fallback(&reg, &lost_fq);
     assert!(
@@ -603,7 +623,7 @@ fn handle_unregister_emits_event_with_fallback_target() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None, None));
     let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         zone_fq.clone(),
         "ui:zone",
         "/L",
@@ -630,10 +650,10 @@ fn handle_unregister_emits_event_with_fallback_target() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let event = state
-        .handle_unregister(&reg, &lost_fq)
+        .handle_unregister(&mut reg, &lost_fq)
         .expect("handle_unregister emits an event when the focused FQM is unregistered");
 
     assert_eq!(event.window_label, WindowLabel::from_string("main"));
@@ -668,10 +688,10 @@ fn handle_unregister_clears_focus_when_no_fallback() {
     ));
 
     let mut state = SpatialState::new();
-    state.focus(&reg, lost_fq.clone()).expect("focus lost");
+    state.focus(&mut reg, lost_fq.clone()).expect("focus lost");
 
     let event = state
-        .handle_unregister(&reg, &lost_fq)
+        .handle_unregister(&mut reg, &lost_fq)
         .expect("handle_unregister emits a clear event when there is no fallback");
 
     assert_eq!(event.window_label, WindowLabel::from_string("main"));
@@ -706,11 +726,11 @@ fn handle_unregister_unfocused_fq_is_noop() {
 
     let mut state = SpatialState::new();
     state
-        .focus(&reg, focused_fq.clone())
+        .focus(&mut reg, focused_fq.clone())
         .expect("focus focused");
 
     assert!(
-        state.handle_unregister(&reg, &other_fq).is_none(),
+        state.handle_unregister(&mut reg, &other_fq).is_none(),
         "unregistering an unfocused FQM emits nothing",
     );
     // Focus slot still points at "focused".

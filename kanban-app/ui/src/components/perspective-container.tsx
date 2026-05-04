@@ -31,7 +31,7 @@ import { usePerspectives } from "@/lib/perspective-context";
 import { evaluateSort } from "@/lib/perspective-eval";
 import { CommandScopeProvider, useActiveBoardPath } from "@/lib/command-scope";
 import { useRefreshEntities } from "@/components/rust-engine-container";
-import { FocusZone } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { asSegment } from "@/types/spatial";
@@ -159,7 +159,7 @@ function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
     return <>{children}</>;
   }
   return (
-    <FocusZone
+    <FocusScope
       moniker={asSegment("ui:perspective")}
       // Viewport-sized chrome zone — a visible focus bar around the entire
       // perspective body would frame the whole window and add no signal.
@@ -170,6 +170,6 @@ function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
       className="flex flex-col flex-1 min-h-0 min-w-0"
     >
       {children}
-    </FocusZone>
+    </FocusScope>
   );
 }

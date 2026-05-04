@@ -6,7 +6,8 @@ import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
-import { FocusZone, useParentZoneFq } from "@/components/focus-zone";
+import { FocusScope } from "@/components/focus-scope";
+import { useParentFocusScope } from "@/components/focus-scope-context";
 import { Inspectable } from "@/components/inspectable";
 import { Pressable } from "@/components/pressable";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
@@ -308,7 +309,6 @@ interface PlaceholderRegistrationInputs {
  * `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
  */
 interface ScopeRegisterEntry {
-  kind: "scope";
   fq: FullyQualifiedMoniker;
   segment: string;
   rect: { x: number; y: number; width: number; height: number };
@@ -397,7 +397,6 @@ function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
         if (!fq) continue;
         wantPlaceholder.set(task.id, fq);
         offScreen.push({
-          kind: "scope",
           fq,
           segment: task.moniker,
           rect: {
@@ -582,7 +581,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   // this for every entity-monikered zone.
   return (
     <Inspectable moniker={asSegment(columnMoniker)}>
-      <FocusZone
+      <FocusScope
         moniker={asSegment(columnMoniker)}
         className="flex flex-col flex-1 min-h-0 min-w-[24em] max-w-[48em] shrink-0"
       >
@@ -596,7 +595,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
           setEditingName={setEditingName}
           setFocus={setFocus}
         />
-      </FocusZone>
+      </FocusScope>
     </Inspectable>
   );
 });
@@ -969,7 +968,7 @@ function VirtualColumn(props: VirtualColumnProps) {
   // outer `<FocusScope>` wrap untouched (the FocusScope wrap was rewritten
   // when `FocusScopeBody` was removed).
   const layerFq = useOptionalEnclosingLayerFq();
-  const parentZone = useParentZoneFq();
+  const parentZone = useParentFocusScope();
   const columnFq = useOptionalFullyQualifiedMoniker();
   const taskFqs = useTaskPlaceholderFqs(tasks, columnFq);
   const visibleIndices = useVisibleIndexSet(virtualizer, tasks.length);

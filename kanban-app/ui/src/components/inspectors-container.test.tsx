@@ -5,7 +5,7 @@ import { render, fireEvent, act } from "@testing-library/react";
 // Tauri API mocks — must come before component imports.
 //
 // `mockInvoke` is hoisted so the SpatialFocusProvider's invoke calls
-// (`spatial_push_layer`, `spatial_pop_layer`, `spatial_register_zone`, …)
+// (`spatial_push_layer`, `spatial_pop_layer`, `spatial_register_scope`, …)
 // flow through it and tests can assert against them.
 // ---------------------------------------------------------------------------
 
@@ -212,10 +212,10 @@ function poppedLayers() {
     .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
-/** Pull every `spatial_register_zone` registration. */
+/** Pull every `spatial_register_scope` registration. */
 function registeredZones() {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map(
       (c) =>
         c[1] as {
@@ -390,7 +390,7 @@ describe("InspectorsContainer", () => {
   //
   // The container mounts a single `<FocusLayer name="inspector">` when the
   // panel stack is non-empty. Per card `01KQCTJY1QZ710A05SE975GHNR`, the
-  // per-panel `<FocusZone moniker="panel:*">` was deleted — the inspector
+  // per-panel `<FocusScope moniker="panel:*">` was deleted — the inspector
   // body now renders directly inside `<SlidePanel>` and field zones
   // register at the layer root. These tests pin the layer-level wiring
   // (push when stack non-empty, pop when stack empties); the field-zone

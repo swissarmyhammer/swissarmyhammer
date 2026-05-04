@@ -64,11 +64,11 @@ describe("BoardView source-level guards", () => {
     }
   });
 
-  it('wraps the board content in <FocusZone moniker={asSegment("ui:board")}>', () => {
+  it('wraps the board content in <FocusScope moniker={asSegment("ui:board")}>', () => {
     const src = readBoardViewSource();
     // Look for the literal pattern that anchors the board zone. The exact
     // moniker token must be `"ui:board"` — using a different string would
     // miss the moniker convention.
-    expect(src).toMatch(/<FocusZone\s+moniker={asSegment\("ui:board"\)/);
+    expect(src).toMatch(/<FocusScope\s+moniker={asSegment\("ui:board"\)/);
   });
 });

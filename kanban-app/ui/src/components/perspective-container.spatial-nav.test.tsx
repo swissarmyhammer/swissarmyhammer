@@ -4,9 +4,9 @@
  * Mounts the container inside the production-shaped provider stack
  * (`<SpatialFocusProvider>` + `<FocusLayer name="window">`) so the
  * conditional `<PerspectiveSpatialZone>` lights up its
- * `<FocusZone moniker={asSegment("ui:perspective")}>` branch. The Tauri
+ * `<FocusScope moniker={asSegment("ui:perspective")}>` branch. The Tauri
  * `invoke` boundary is mocked so we can inspect the
- * `spatial_register_zone` calls the zone makes on mount.
+ * `spatial_register_scope` calls the zone makes on mount.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -108,10 +108,10 @@ function renderWithSpatialStack(children: React.ReactNode = null) {
   );
 }
 
-/** Collect every `spatial_register_zone` call in order. */
-function registerZoneCalls(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` call in order. */
+function registerScopeCalls(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -136,7 +136,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     );
     await flushSetup();
 
-    const calls = registerZoneCalls();
+    const calls = registerScopeCalls();
     const perspectiveZone = calls.find((c) => c.segment === "ui:perspective");
     expect(perspectiveZone).toBeTruthy();
     expect(perspectiveZone?.parentZone).toBeNull();
@@ -192,7 +192,7 @@ describe("PerspectiveContainer (spatial-nav)", () => {
     unmount();
   });
 
-  it("does not wrap in FocusZone when no SpatialFocusProvider is present", () => {
+  it("does not wrap in FocusScope when no SpatialFocusProvider is present", () => {
     // The narrow provider tree (used by the existing test suite) must keep
     // the zone wrapper out of the DOM so it doesn't disrupt layout assertions.
     const { container } = render(

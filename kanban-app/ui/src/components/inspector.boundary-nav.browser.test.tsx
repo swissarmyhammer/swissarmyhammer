@@ -7,7 +7,7 @@
  * `parentZone === null` so iter 0 + iter 1 found nothing and the
  * cascade echoed the focused moniker). Updated for card
  * `01KQFCQ9QMQKCDYVWGTXSVK5PZ`: each inspector now wraps its body in
- * an entity-keyed `<FocusZone>`, so field zones register with
+ * an entity-keyed `<FocusScope>`, so field zones register with
  * `parentZone === <entity zone FQM>`. The kernel cascade then runs:
  *
  *   - Iter 0 (same-kind peers sharing `parentZone === entity zone`):

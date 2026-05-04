@@ -519,7 +519,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
       );
       const expectedMinPx = 24 * rootFontSize;
 
-      // Every column FocusZone carries data-segment="column:<id>" — select
+      // Every column FocusScope carries data-segment="column:<id>" — select
       // by the stable segment attribute rather than by Tailwind class names.
       // The synthetic `column:<id>.name` wrapper has been collapsed into the
       // inner `<Field>` zone (which carries `field:column:<id>.name`), so a

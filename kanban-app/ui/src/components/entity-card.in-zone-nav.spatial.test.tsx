@@ -234,11 +234,11 @@ function findRegisterRecord(
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];
-    if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
       const r = c[1] as Record<string, unknown>;
       if (r && r.segment === moniker) {
         return {
-          kind: cmd === "spatial_register_zone" ? "zone" : "scope",
+          kind: cmd === "spatial_register_scope" ? "zone" : "scope",
           record: r,
         };
       }

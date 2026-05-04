@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FocusZone, FullyQualifiedMoniker,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
     LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
@@ -62,10 +62,11 @@ fn leaf(
         layer_fq: FullyQualifiedMoniker::from_string(layer_fq),
         parent_zone,
         overrides: HashMap::new(),
+        last_focused: None,
     }
 }
 
-/// Build a `FocusZone` with the given identity, rect, layer, and
+/// Build a `FocusScope` with the given identity, rect, layer, and
 /// optional parent zone.
 fn zone(
     fq: FullyQualifiedMoniker,
@@ -73,8 +74,8 @@ fn zone(
     layer_fq: &str,
     parent_zone: Option<FullyQualifiedMoniker>,
     r: Rect,
-) -> FocusZone {
-    FocusZone {
+) -> FocusScope {
+    FocusScope {
         fq,
         segment: SegmentMoniker::from_string(segment),
         rect: r,
@@ -110,7 +111,7 @@ fn nav(
 ) -> FullyQualifiedMoniker {
     let focused_segment = reg
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| {
             let s = from.as_str().rsplit('/').next().unwrap_or("");
             SegmentMoniker::from_string(s)
@@ -192,7 +193,7 @@ fn rule_1_within_zone_down_picks_sibling_leaf() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -227,7 +228,7 @@ fn rule_1_within_zone_up_picks_sibling_leaf() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -261,7 +262,7 @@ fn rule_1_aligned_candidate_beats_closer_diagonal() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -310,14 +311,14 @@ fn cross_zone_right_drills_into_next_column_leftmost_leaf() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
@@ -353,14 +354,14 @@ fn cross_zone_left_drills_into_previous_column_rightmost_leaf() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
@@ -402,7 +403,7 @@ fn cross_zone_realistic_board_right_from_card_in_a_lands_on_card_in_b() {
     reg.push_layer(layer("/L", "L", "main", None));
 
     let board_fq = fq_in_layer("/L", "board");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         board_fq.clone(),
         "board",
         "/L",
@@ -412,14 +413,14 @@ fn cross_zone_realistic_board_right_from_card_in_a_lands_on_card_in_b() {
 
     let col_a_fq = fq_in_zone(&board_fq, "column:A");
     let col_b_fq = fq_in_zone(&board_fq, "column:B");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col_a_fq.clone(),
         "column:A",
         "/L",
         Some(board_fq.clone()),
         rect(0.0, 0.0, 300.0, 400.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col_b_fq.clone(),
         "column:B",
         "/L",
@@ -512,14 +513,14 @@ fn iter_0_preferred_over_iter_1_when_in_zone_match_exists() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
@@ -589,21 +590,21 @@ fn zone_nav_right_picks_sibling_zone() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         fq_in_layer("/L", "col2"),
         "col2",
         "/L",
@@ -633,14 +634,14 @@ fn zone_nav_up_finds_leaf_above_via_geometric_pick() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
@@ -676,14 +677,14 @@ fn zone_nav_right_returns_nearest_scope_regardless_of_kind() {
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
     let col1_fq = fq_in_layer("/L", "col1");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col0_fq.clone(),
         "col0",
         "/L",
         None,
         rect(0.0, 0.0, 100.0, 200.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col1_fq.clone(),
         "col1",
         "/L",
@@ -720,7 +721,7 @@ fn inspector_pill_a_to_pill_b_in_zone() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let group_fq = fq_in_layer("/L", "group");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         group_fq.clone(),
         "group",
         "/L",
@@ -756,14 +757,14 @@ fn cross_zone_inspector_down_drills_into_next_row_topmost_leaf() {
     reg.push_layer(layer("/L", "L", "main", None));
     let row1_fq = fq_in_layer("/L", "row1");
     let row2_fq = fq_in_layer("/L", "row2");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         row1_fq.clone(),
         "row1",
         "/L",
         None,
         rect(0.0, 0.0, 200.0, 50.0),
     ));
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         row2_fq.clone(),
         "row2",
         "/L",
@@ -829,7 +830,7 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
         .enumerate()
         .map(|(i, col)| {
             let col_fq = fq_in_layer("/L", col);
-            reg.register_zone(zone(
+            reg.register_scope(zone(
                 col_fq.clone(),
                 col,
                 "/L",
@@ -846,7 +847,7 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
         let mut col_cards = Vec::new();
         for (j, card) in ["card_a", "card_b"].iter().enumerate() {
             let card_fq = fq_in_zone(col_fq, card);
-            reg.register_zone(zone(
+            reg.register_scope(zone(
                 card_fq.clone(),
                 card,
                 "/L",
@@ -953,7 +954,7 @@ fn first_on_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -1003,7 +1004,7 @@ fn last_on_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -1048,7 +1049,7 @@ fn first_on_zone_picks_topmost_leftmost_child() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -1094,7 +1095,7 @@ fn first_on_topmost_leftmost_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -1131,7 +1132,7 @@ fn last_on_bottommost_rightmost_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         card_fq.clone(),
         "card",
         "/L",
@@ -1239,7 +1240,7 @@ fn nav_down_uses_current_rect_not_stale_rect() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let col_fq = fq_in_layer("/L", "col");
-    reg.register_zone(zone(
+    reg.register_scope(zone(
         col_fq.clone(),
         "col",
         "/L",

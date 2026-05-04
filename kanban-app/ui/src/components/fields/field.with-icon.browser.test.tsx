@@ -1,5 +1,5 @@
 /**
- * Browser-mode tests pinning the "icon lives inside the field's `<FocusZone>`"
+ * Browser-mode tests pinning the "icon lives inside the field's `<FocusScope>`"
  * contract introduced by card `01KQ9ZJHRXCY8Z5YT6RF4SG6EK`.
  *
  * The fix moved the inspector row's leftmost-icon decoration *into*
@@ -214,10 +214,10 @@ async function flushSetup() {
   });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -333,7 +333,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     );
     expect(
       fieldZone,
-      "the field's <FocusZone> wrapper must be in the DOM",
+      "the field's <FocusScope> wrapper must be in the DOM",
     ).not.toBeNull();
 
     // Tooltip-trigger span = the `<FieldIconBadge>`'s outer node — the
@@ -389,7 +389,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     });
     await flushSetup();
 
-    const fieldZone = registerZoneArgs().find(
+    const fieldZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(fieldZone).toBeTruthy();
@@ -428,7 +428,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     });
     await flushSetup();
 
-    const fieldZone = registerZoneArgs().find(
+    const fieldZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(fieldZone).toBeTruthy();
@@ -468,7 +468,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     });
     await flushSetup();
 
-    const zoneArgs = registerZoneArgs().find(
+    const zoneArgs = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
     expect(zoneArgs).toBeTruthy();

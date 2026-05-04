@@ -327,7 +327,7 @@ describe("EntityCard", () => {
   describe("field icon tooltips", () => {
     // After card 01KQAWV9C5F8Y3AA0KDDHHRRN1, card fields render through
     // `<Field withIcon />` (matching the inspector path). The icon badge is
-    // `<FieldIconBadge>` rendered *inside* the field's `<FocusZone>` — its
+    // `<FieldIconBadge>` rendered *inside* the field's `<FocusScope>` — its
     // outer span carries `data-slot="tooltip-trigger"` (set by Radix's
     // `<TooltipTrigger asChild>`) and the description text lives in the
     // separately-mounted `<TooltipContent>` rather than as `aria-label` on
@@ -649,22 +649,22 @@ describe("EntityCard", () => {
 
   /**
    * Tests that mount the card inside the full spatial-focus stack so the
-   * underlying `<FocusZone>` primitive registers with the Rust-side
+   * underlying `<FocusScope>` primitive registers with the Rust-side
    * spatial graph via the mocked `invoke`.
    *
-   * The card body is a `<FocusZone>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
+   * The card body is a `<FocusScope>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
    * NOT a `<FocusScope>`. The card holds multiple focusable atoms (drag
    * handle, the `<Field>` rows with their own zones and pill leaves,
    * inspect button) and so is a zone by the kernel's three-peer
    * contract. The previous Scope shape silently broke the spatial
    * topology — Field zones rendered inside the card had `parent_zone`
-   * skip the Scope (because Scopes don't push `FocusZoneContext`) and
+   * skip the Scope (because Scopes don't push `FocusScopeContext`) and
    * point at the column zone instead, so the kernel saw fields as
    * siblings of cards rather than descendants. The path-prefix branch
    * of the kernel's scope-is-leaf invariant catches that shape directly
    * — see `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
    */
-  describe("spatial registration as a FocusZone", () => {
+  describe("spatial registration as a FocusScope", () => {
     /** Render with the full spatial-focus + focus-layer stack. */
     function renderCardWithSpatial(ui: React.ReactElement) {
       return render(
@@ -694,11 +694,11 @@ describe("EntityCard", () => {
       return result;
     }
 
-    it("registers the card body as a FocusZone with the entity moniker", async () => {
+    it("registers the card body as a FocusScope with the entity moniker", async () => {
       currentEntity = makeEntity();
       await renderWithSpatial(<EntityCard entity={currentEntity} />);
       const zoneCalls = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_register_zone")
+        .filter((c) => c[0] === "spatial_register_scope")
         .map((c) => c[1] as Record<string, unknown>);
       expect(zoneCalls.find((a) => a.segment === "task:task-1")).toBeTruthy();
     });
@@ -722,12 +722,12 @@ describe("EntityCard", () => {
       ).toBeUndefined();
     });
 
-    it("the card zone's parent_zone follows the enclosing FocusZone (null when none, here the layer root)", async () => {
-      // The card is a zone (`<FocusZone>`). Its own `parentZone` is
-      // whatever `useParentZoneFq()` returns at the call site. In this
-      // isolated harness there is no surrounding `<FocusZone>`, so the
+    it("the card zone's parent_zone follows the enclosing FocusScope (null when none, here the layer root)", async () => {
+      // The card is a zone (`<FocusScope>`). Its own `parentZone` is
+      // whatever `useParentFocusScope()` returns at the call site. In this
+      // isolated harness there is no surrounding `<FocusScope>`, so the
       // card's parent zone is null. In production the card is wrapped
-      // by a `column:` `<FocusZone>` and that zone's spatial key flows
+      // by a `column:` `<FocusScope>` and that zone's spatial key flows
       // through here — pinning the column-as-parent contract that the
       // unified cascade's iter-1 escalation relies on (iter 1 reads the
       // card's `parentZone` to find the neighbouring column zone for
@@ -735,7 +735,7 @@ describe("EntityCard", () => {
       currentEntity = makeEntity();
       await renderWithSpatial(<EntityCard entity={currentEntity} />);
       const cardZone = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_register_zone")
+        .filter((c) => c[0] === "spatial_register_scope")
         .map((c) => c[1] as Record<string, unknown>)
         .find((a) => a.segment === "task:task-1");
       expect(cardZone).toBeTruthy();

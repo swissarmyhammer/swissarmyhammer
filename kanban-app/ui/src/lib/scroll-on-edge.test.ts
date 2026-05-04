@@ -420,7 +420,6 @@ describe("runNavWithScrollOnEdge", () => {
       focus: todo("focus") as unknown as SpatialFocusActions["focus"],
       clearFocus: todo("clearFocus") as unknown as SpatialFocusActions["clearFocus"],
       registerScope: todo("registerScope") as unknown as SpatialFocusActions["registerScope"],
-      registerZone: todo("registerZone") as unknown as SpatialFocusActions["registerZone"],
       unregisterScope: todo(
         "unregisterScope",
       ) as unknown as SpatialFocusActions["unregisterScope"],

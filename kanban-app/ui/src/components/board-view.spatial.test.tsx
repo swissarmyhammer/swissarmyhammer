@@ -7,7 +7,7 @@
  * render a visible focus bar around the entire viewport. This file pins
  * every contract `BoardSpatialZone` carries:
  *
- *   1. Registration via `spatial_register_zone` with moniker `ui:board`.
+ *   1. Registration via `spatial_register_scope` with moniker `ui:board`.
  *   2. Click on the board chrome → `spatial_focus(boardKey)` with
  *      stop-propagation so the click does not bubble up to a window-root
  *      ancestor and does not leak down into a column zone.
@@ -248,7 +248,7 @@ async function defaultInvokeImpl(
  *   1. `<UIStateProvider>` fetches `get_ui_state` and waits for the
  *      promise to resolve.
  *   2. The spatial primitives' `useEffect` register hooks fire after
- *      paint and call `spatial_register_zone` / `spatial_register_scope`.
+ *      paint and call `spatial_register_scope` / `spatial_register_scope`.
  *   3. `<KeybindingHandler>`'s `listen("menu-command", …)` and
  *      `listen("context-menu-command", …)` resolve.
  *   4. The virtualizer in `<ColumnView>` measures its container and
@@ -347,10 +347,10 @@ function renderBoardWithShell() {
   );
 }
 
-/** Pull every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Pull every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -405,7 +405,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board");
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
     expect(boardZone).toBeTruthy();
     expect(typeof boardZone!.fq).toBe("string");
     expect(boardZone!.layerFq).toBeTruthy();
@@ -415,7 +415,7 @@ describe("BoardView — browser spatial behaviour", () => {
     // outer zone is what carries the `<Inspectable>` wrapper for
     // double-click → inspector dispatch; the inner chrome zone is
     // pure-spatial.
-    const boardEntityZone = registerZoneArgs().find((a) =>
+    const boardEntityZone = registerScopeArgs().find((a) =>
       typeof a.segment === "string" &&
       (a.segment as string).startsWith("board:"),
     );
@@ -432,7 +432,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
@@ -446,7 +446,7 @@ describe("BoardView — browser spatial behaviour", () => {
 
     const focusCalls = spatialFocusCalls();
     // Exactly one `spatial_focus` for the board key — `e.stopPropagation()`
-    // inside `<FocusZone>`'s click handler keeps the event from bubbling
+    // inside `<FocusScope>`'s click handler keeps the event from bubbling
     // up to a window-root ancestor and ensures only this zone's key is
     // sent. The card description's regression note: clicking the board
     // chrome must not also fire `spatial_focus` for an inner column
@@ -467,7 +467,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, queryByTestId, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
@@ -514,7 +514,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.up/down/left/right`'s execute
@@ -579,7 +579,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed focus so `nav.right`/`nav.left`'s execute closures see a
@@ -620,12 +620,12 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     // Capture the column key BEFORE clearing the mock — the column
     // registered during mount and that record lives in
     // `mockInvoke.mock.calls` until we clear it.
-    const todoColumn = registerZoneArgs().find(
+    const todoColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-todo",
     );
     expect(todoColumn).toBeTruthy();
@@ -683,7 +683,7 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
@@ -700,7 +700,7 @@ describe("BoardView — browser spatial behaviour", () => {
 
     // Exercise mount + click + a focus claim — the three lifecycle
     // points where legacy code would have called the banned commands.
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
       "[data-segment='ui:board']",
@@ -733,21 +733,21 @@ describe("BoardView — browser spatial behaviour", () => {
     // this test pins is "when the kernel does route up, the React tree
     // mirrors the new focus end-to-end across the full chain."
     //
-    // Note: the card is a `<FocusZone>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`)
+    // Note: the card is a `<FocusScope>` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`)
     // — every register IPC for cards, columns, and the board lives in
-    // `registerZoneArgs()`. Drill-out from a focused atom inside the
+    // `registerScopeArgs()`. Drill-out from a focused atom inside the
     // card lands on the card zone first, then the column zone, then
     // the board chrome zone, then the window-root layer.
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerZoneArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
-    const todoColumn = registerZoneArgs().find(
+    const todoColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-todo",
     )!;
     const todoColumnKey = todoColumn.fq as FullyQualifiedMoniker;
-    const t1Card = registerZoneArgs().find((a) => a.segment === "task:t1");
+    const t1Card = registerScopeArgs().find((a) => a.segment === "task:t1");
     expect(t1Card, "task:t1 zone should be registered").toBeTruthy();
     const t1CardKey = t1Card!.fq as FullyQualifiedMoniker;
 

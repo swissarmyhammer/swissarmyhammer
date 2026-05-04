@@ -28,7 +28,7 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
     let focused_segment = app
         .registry()
         .find_by_fq(from)
-        .map(|e| e.segment().clone())
+        .map(|e| e.segment.clone())
         .unwrap_or_else(|| panic!("nav called with unregistered FQM {from:?}"));
     BeamNavStrategy::new().next(app.registry(), from, &focused_segment, dir)
 }
@@ -56,7 +56,7 @@ fn navbar_right_from_board_selector_lands_on_inspect() {
 /// sibling, regardless of kind.
 ///
 /// Under the any-kind iter-0 sibling rule, the percent-complete field
-/// zone (a `<FocusZone>` inside `ui:navbar`) is a peer of the leaf
+/// zone (a `<FocusScope>` inside `ui:navbar`) is a peer of the leaf
 /// scopes around it. `inspect` (right edge x=296) sees percent (left
 /// x=304) as the geometrically closest Right candidate, beating
 /// `search` (left x=1200) on distance.
@@ -173,40 +173,31 @@ fn navbar_right_from_rightmost_leaf_stays_put_at_visual_edge() {
 // Sanity — fixture has the navbar shape we asserted on.
 // ---------------------------------------------------------------------------
 
-/// The fixture registers four entries inside `ui:navbar`: three leaves
-/// and one field zone.
+/// The fixture registers four entries inside `ui:navbar`. Under the
+/// unified `FocusScope` primitive, the kernel does not distinguish
+/// leaves from containers at registration time — what matters is that
+/// the four expected children are present.
 #[test]
-fn fixture_navbar_has_three_leaves_and_one_field_zone() {
+fn fixture_navbar_has_four_children() {
     let app = RealisticApp::new();
 
     let navbar_zone_fq = app.navbar_fq();
 
-    let mut leaf_segments: Vec<String> = app
+    let mut child_segments: Vec<String> = app
         .registry()
-        .leaves_iter()
+        .scopes_iter()
         .filter(|s| s.parent_zone.as_ref() == Some(&navbar_zone_fq))
         .map(|s| s.segment.as_str().to_string())
         .collect();
-    leaf_segments.sort();
+    child_segments.sort();
     assert_eq!(
-        leaf_segments,
+        child_segments,
         vec![
+            "field:board:b1.percent_complete".to_string(),
             "ui:navbar.board-selector".to_string(),
             "ui:navbar.inspect".to_string(),
             "ui:navbar.search".to_string(),
         ],
-        "fixture must register exactly three navbar leaves with the production segments"
-    );
-
-    let zone_segments: Vec<String> = app
-        .registry()
-        .zones_iter()
-        .filter(|z| z.parent_zone.as_ref() == Some(&navbar_zone_fq))
-        .map(|z| z.segment.as_str().to_string())
-        .collect();
-    assert_eq!(
-        zone_segments,
-        vec!["field:board:b1.percent_complete".to_string()],
-        "fixture must register the percent-complete field as a zone child of ui:navbar"
+        "fixture must register exactly four navbar children with the production segments"
     );
 }

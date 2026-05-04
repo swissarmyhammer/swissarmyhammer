@@ -4,7 +4,7 @@
  * replacing the boolean prop with the `<Inspectable>` wrapper).
  *
  * Background: double-clicking a perspective tab used to open the inspector
- * because every `<FocusScope>` / `<FocusZone>` unconditionally dispatched
+ * because every `<FocusScope>` / `<FocusScope>` unconditionally dispatched
  * `ui.inspect` on double-click. Perspectives are not entities, so that was
  * an architectural mismatch. The first fix made the dispatch opt-in via
  * an `inspectOnDoubleClick` boolean prop on the primitives; the second
@@ -231,10 +231,10 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
     .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
-/** Collect every `spatial_register_zone` invocation argument bag. */
-function registerZoneArgs(): Array<Record<string, unknown>> {
+/** Collect every `spatial_register_scope` invocation argument bag. */
+function registerScopeArgs(): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_zone")
+    .filter((c) => c[0] === "spatial_register_scope")
     .map((c) => c[1] as Record<string, unknown>);
 }
 
@@ -358,7 +358,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     // clicks on the tab land on the inner `perspective_tab.name:{id}`
     // leaf — that is the `<FocusScope>` whose click handler dispatches
     // `spatial_focus`. The outer `perspective_tab:{id}` is now a
-    // `<FocusZone>` (not a leaf scope) and the inner FocusScope's
+    // `<FocusScope>` (not a leaf scope) and the inner FocusScope's
     // `stopPropagation` keeps the click from bubbling.
     const nameLeaf = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
@@ -391,7 +391,7 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
     const { unmount } = renderBar();
     await flushSetup();
 
-    const barZone = registerZoneArgs().find(
+    const barZone = registerScopeArgs().find(
       (a) => a.segment === "ui:perspective-bar",
     );
     expect(barZone).toBeTruthy();

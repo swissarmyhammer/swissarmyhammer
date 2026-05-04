@@ -20,9 +20,12 @@
  *   - `inspector.edit / editEnter / exitEdit` commands stay deleted
  *     (`field.edit / field.editEnter` cover the semantics).
  *
- * The guards explicitly *permit* a single `<FocusZone>` import — the
- * entity-zone wrap inside `<InspectorPanel>` from card
+ * The guards explicitly *permit* a single `<FocusScope>` import — the
+ * entity-scope wrap inside `<InspectorPanel>` from card
  * `01KQFCQ9QMQKCDYVWGTXSVK5PZ` is the only legitimate consumer.
+ * Imported from `@/components/focus-scope` after parent task
+ * `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed `<FocusZone>` and
+ * `<FocusScope>` into a single primitive.
  *
  * Node-only because they read the source file from disk; lives under
  * the `*.node.test.ts` suffix recognized by `vite.config.ts`.
@@ -81,36 +84,41 @@ describe("InspectorsContainer source-level guards", () => {
     // Two stacked deletions stay pinned here:
     //
     //   - Card `01KQCTJY1QZ710A05SE975GHNR` deleted the per-panel
-    //     `<FocusZone moniker="panel:type:id">` wrap.
+    //     `<FocusScope moniker="panel:type:id">` wrap.
     //   - Card `01KQFCQ9QMQKCDYVWGTXSVK5PZ` reintroduced a per-entity
-    //     `<FocusZone>`, but keyed by the **entity moniker itself**
+    //     `<FocusScope>`, but keyed by the **entity moniker itself**
     //     (e.g. `task:abc`), NOT a `panel:*` prefix. The entity moniker
     //     is the natural identity; the panel is just chrome.
     //
     // The guard therefore forbids `panel:*` template literals while
-    // allowing a `<FocusZone>` element so the entity-zone wrap can
+    // allowing a `<FocusScope>` element so the entity-zone wrap can
     // live in this file. Doc comments may still mention `panel:*` in
     // migration context.
     const code = readCodeOnly();
     expect(code).not.toMatch(/panel:\$\{/);
   });
 
-  it("permits a single FocusZone import (the entity-zone wrap from card 01KQFCQ9QMQKCDYVWGTXSVK5PZ)", () => {
-    // The entity-zone wrap added in card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`
-    // imports `<FocusZone>` and uses it inside `<InspectorPanel>`. This
-    // guard confirms exactly one `<FocusZone>` element appears in code
-    // (a regression to multi-zone or panel-zone shapes would surface as
-    // a count mismatch).
+  it("permits a single FocusScope import (the entity-scope wrap from card 01KQFCQ9QMQKCDYVWGTXSVK5PZ)", () => {
+    // The entity-scope wrap added in card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`
+    // imports `<FocusScope>` and uses it inside `<InspectorPanel>`. This
+    // guard confirms exactly one `<FocusScope>` element appears in code
+    // (a regression to multi-scope or panel-scope shapes would surface
+    // as a count mismatch).
+    //
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed
+    // `<FocusZone>` and `<FocusScope>` into a single primitive, the
+    // import lives at `@/components/focus-scope` rather than the
+    // legacy `focus-zone` path.
     const code = readCodeOnly();
-    const matches = code.match(/<FocusZone\b/g) ?? [];
+    const matches = code.match(/<FocusScope\b/g) ?? [];
     expect(
       matches.length,
-      "expected exactly one <FocusZone> in inspectors-container.tsx — the entity-zone wrap inside <InspectorPanel>",
+      "expected exactly one <FocusScope> in inspectors-container.tsx — the entity-scope wrap inside <InspectorPanel>",
     ).toBe(1);
-    // The import must come from `@/components/focus-zone` (the
+    // The import must come from `@/components/focus-scope` (the
     // production primitive), not from a renamed bridge or wrapper.
     expect(code).toMatch(
-      /import\s*\{\s*FocusZone\s*\}\s*from\s*"@\/components\/focus-zone"/,
+      /import\s*\{\s*FocusScope\s*\}\s*from\s*"@\/components\/focus-scope"/,
     );
   });
 
@@ -118,7 +126,7 @@ describe("InspectorsContainer source-level guards", () => {
     const code = readCodeOnly();
     // The bridge was deleted in card 01KQCTJY1QZ710A05SE975GHNR and
     // stays deleted under card 01KQFCQ9QMQKCDYVWGTXSVK5PZ — the
-    // entity-zone wrap is a direct `<FocusZone>` in this file, not a
+    // entity-zone wrap is a direct `<FocusScope>` in this file, not a
     // bridge component.
     expect(code).not.toMatch(/InspectorFocusBridge/);
     expect(code).not.toMatch(/inspector-focus-bridge/);

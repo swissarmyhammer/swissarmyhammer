@@ -122,29 +122,28 @@ describe("focus-decoration architecture", () => {
   it("the only component that renders the focus visual is <FocusIndicator>", () => {
     // The canonical visible focus decoration lives in `<FocusIndicator>`
     // (`components/focus-indicator.tsx`). Production callers compose the
-    // indicator from the three peer primitives (`<FocusScope>` and
-    // `<FocusZone>`); any other production source rendering its own focus
-    // bar / focus highlight is a duplicate decorator and a regression.
+    // indicator from the unified spatial primitive `<FocusScope>` only;
+    // any other production source rendering its own focus bar / focus
+    // highlight is a duplicate decorator and a regression.
     //
-    // After the three-peer collapse, `<FocusScope>` is the leaf primitive
-    // (it absorbed what the legacy `<Focusable>` used to do). The
-    // transitional re-export at `focusable.tsx` was deleted in card
-    // `01KQ5PSMYE3Q60SV8270S6K819`; `<FocusScope>` is the only leaf
-    // primitive, and it composes `<FocusIndicator>` directly.
+    // After the single-primitive collapse (parent task
+    // `01KQSDP4ZJY5ERAJ68TFPVFRRE`), `<FocusScope>` is the only spatial
+    // primitive: a scope with no children behaves as a leaf, a scope
+    // with children behaves as a navigable container. The legacy
+    // `<FocusZone>` / `<Focusable>` peers were folded into it.
     //
     // The check has two parts:
     //
-    //   1. Only the spatial primitives are allowed to render
+    //   1. Only the spatial primitive is allowed to render
     //      `<FocusIndicator>`. Any other call site reintroduces the
     //      multi-decorator antipattern.
     //
-    //   2. Both spatial primitives MUST render `<FocusIndicator>` —
-    //      otherwise their visual contracts diverge and a regression that
-    //      deletes the bar from one branch ships silently.
+    //   2. The spatial primitive MUST render `<FocusIndicator>` —
+    //      otherwise a regression that deletes the bar from the
+    //      primitive ships silently.
     const tsxFiles = walkSources(SRC_ROOT, [".tsx", ".ts"]);
     const allowedCallers = new Set([
       "components/focus-scope.tsx",
-      "components/focus-zone.tsx",
     ]);
 
     // Strip line and block comments so a doc reference like
@@ -175,8 +174,8 @@ describe("focus-decoration architecture", () => {
       );
     }
 
-    // Both spatial primitives must compose the indicator. Without this
-    // assertion a future edit could delete the indicator from `<FocusZone>`
+    // The spatial primitive must compose the indicator. Without this
+    // assertion a future edit could delete the indicator from `<FocusScope>`
     // and the suite would still be green except for one inspector test.
     for (const requiredCaller of allowedCallers) {
       const fullPath = resolve(SRC_ROOT, requiredCaller);
@@ -244,8 +243,8 @@ describe("focus-decoration architecture", () => {
   });
 
   it("the focusIndicatorVariant prop is fully removed from production code", () => {
-    // The lower-cased prop name was threaded through `<FocusScope>`,
-    // `<FocusZone>`, and consumer call sites (the navbar). All references
+    // The lower-cased prop name was threaded through `<FocusScope>`
+    // and consumer call sites (the navbar). All references
     // must be deleted from production code along with the type. Test
     // files are excluded for the same reason as the type guard above —
     // the `@ts-expect-error` test deliberately writes the dead literal.
@@ -276,9 +275,8 @@ describe("focus-decoration architecture", () => {
   // `perspective_tab:`, `cell:*`, `grid_cell:*`) is not. The dispatch
   // route from a double-click to the `ui.inspect` command lives in
   // exactly one component: `<Inspectable>` (`inspectable.tsx`). The
-  // spatial primitives `<FocusScope>` and `<FocusZone>` are pure
-  // spatial-nav infrastructure and never call
-  // `useDispatchCommand("ui.inspect")`.
+  // spatial primitive `<FocusScope>` is pure spatial-nav infrastructure
+  // and never calls `useDispatchCommand("ui.inspect")`.
   //
   // Three guards keep this honest:
   //
@@ -292,10 +290,10 @@ describe("focus-decoration architecture", () => {
   //     JSX hit has a prefix in ENTITY_PREFIXES — chrome cannot
   //     accidentally be wrapped in `<Inspectable>`.
   //
-  //   - Guard C: every entity-prefixed `<FocusScope>` / `<FocusZone>`
-  //     JSX hit has a matching `<Inspectable>` element (with the same
-  //     moniker substring) in the same file — so an entity-zone
-  //     wrapper cannot be added without its `<Inspectable>` partner.
+  //   - Guard C: every entity-prefixed `<FocusScope>` JSX hit has a
+  //     matching `<Inspectable>` element (with the same moniker
+  //     substring) in the same file — so an entity-scope wrapper
+  //     cannot be added without its `<Inspectable>` partner.
   //
   // Test files are excluded from the walks so synthetic test fixtures do
   // not trip the guards.
@@ -462,13 +460,13 @@ describe("focus-decoration architecture", () => {
     }
   });
 
-  it("Guard C: every entity-prefixed <FocusScope> / <FocusZone> has a sibling <Inspectable> in the same file", () => {
+  it("Guard C: every entity-prefixed <FocusScope> has a sibling <Inspectable> in the same file", () => {
     // Walks every `*.tsx` source file under `src/`, finds every
-    // `<FocusScope ... >` / `<FocusZone ... >` JSX hit whose `moniker`
-    // literal starts with an `ENTITY_PREFIXES` entry, and asserts the
-    // same file contains an `<Inspectable>` element with a matching
-    // moniker substring. This catches "someone added a new entity
-    // wrapper but forgot the `<Inspectable>`".
+    // `<FocusScope ... >` JSX hit whose `moniker` literal starts with
+    // an `ENTITY_PREFIXES` entry, and asserts the same file contains
+    // an `<Inspectable>` element with a matching moniker substring.
+    // This catches "someone added a new entity wrapper but forgot the
+    // `<Inspectable>`".
     //
     // The match is on the moniker prefix-and-tail substring rather
     // than the full literal so that a `<FocusScope moniker="task:01">`
@@ -481,27 +479,27 @@ describe("focus-decoration architecture", () => {
     //
     // The escape hatch `// inspect:exempt` (within 3 lines above the
     // JSX opener) is preserved for the rare case where an
-    // entity-prefixed `<FocusScope>` / `<FocusZone>` cannot be paired
-    // with an `<Inspectable>` in the same file. Today no production
-    // call site needs the carve-out — the column-name synthetic leaf
+    // entity-prefixed `<FocusScope>` cannot be paired with an
+    // `<Inspectable>` in the same file. Today no production call
+    // site needs the carve-out — the column-name synthetic leaf
     // (`column:<id>.name`) was the only consumer and it was collapsed
-    // into the inner `<Field>` zone (`fields/field.tsx` already wraps
-    // in `<Inspectable>`). The mechanism stays in place for any future
-    // synthetic-moniker case. The `data-table.tsx` row case is handled
-    // differently: the row `<FocusZone renderContainer={false}>`
-    // doesn't render a host element, so DOM rules prevent wrapping in
-    // `<Inspectable>`. The inspect dispatch lives directly on the row's
-    // `<tr>` via the `useInspectOnDoubleClick` hook (still in
-    // `inspectable.tsx`). That row `<FocusZone>` carries
-    // `renderContainer={false}` and is therefore exempt from this
-    // guard — the runtime DOM never renders an element to attach
-    // `onDoubleClick` to anyway.
+    // into the inner `<Field>` scope-with-children (`fields/field.tsx`
+    // already wraps in `<Inspectable>`). The mechanism stays in place
+    // for any future synthetic-moniker case. The `data-table.tsx` row
+    // case is handled differently: the row
+    // `<FocusScope renderContainer={false}>` doesn't render a host
+    // element, so DOM rules prevent wrapping in `<Inspectable>`. The
+    // inspect dispatch lives directly on the row's `<tr>` via the
+    // `useInspectOnDoubleClick` hook (still in `inspectable.tsx`).
+    // That row `<FocusScope>` carries `renderContainer={false}` and
+    // is therefore exempt from this guard — the runtime DOM never
+    // renders an element to attach `onDoubleClick` to anyway.
 
     /**
-     * Match a JSX element opener `<FocusScope ... >` or `<FocusZone ... >`
-     * and capture the component name + attribute block.
+     * Match a JSX element opener `<FocusScope ... >` and capture the
+     * component name + attribute block.
      */
-    const PRIMITIVE_RE = /<(FocusScope|FocusZone)\b([\s\S]*?)(\/>|>)/g;
+    const PRIMITIVE_RE = /<(FocusScope)\b([\s\S]*?)(\/>|>)/g;
 
     const MONIKER_RE = /moniker=\{\s*asSegment\(\s*[`"']([^`"']+)[`"']/;
 
@@ -600,7 +598,7 @@ describe("focus-decoration architecture", () => {
 
     if (offenders.length > 0) {
       throw new Error(
-        `Every entity-prefixed <FocusScope>/<FocusZone> must be\n` +
+        `Every entity-prefixed <FocusScope> must be\n` +
           `paired with an <Inspectable> in the same file (the wrapper owns\n` +
           `the double-click → ui.inspect dispatch). Offending call sites:\n` +
           offenders
@@ -625,7 +623,7 @@ describe("focus-decoration architecture", () => {
 
   it("entity-card.tsx does NOT define a CardFieldIcon symbol (card uses <Field withIcon />)", () => {
     // The local `CardFieldIcon` helper was a sibling-icon render path
-    // that placed the icon OUTSIDE the field's `<FocusZone>`. The card
+    // that placed the icon OUTSIDE the field's `<FocusScope>`. The card
     // now renders through `<Field withIcon />`, which puts the icon
     // INSIDE the zone (matching the inspector). Re-introducing
     // `CardFieldIcon` resurrects the parallel render path and the
@@ -637,7 +635,7 @@ describe("focus-decoration architecture", () => {
         `entity-card.tsx must not define or reference CardFieldIcon — the card\n` +
           `field icon now renders inside <Field withIcon />, matching the\n` +
           `inspector. Re-introducing CardFieldIcon resurrects the parallel\n` +
-          `render path that put the icon outside the field's <FocusZone>.`,
+          `render path that put the icon outside the field's <FocusScope>.`,
       );
     }
   });
