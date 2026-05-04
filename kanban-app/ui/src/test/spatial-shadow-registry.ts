@@ -158,8 +158,15 @@ export interface RectLike {
   height: number;
 }
 
-/** Shadow-registry kind: leaf (`scope`) or zone. */
-export type ShadowKind = "scope" | "zone";
+/**
+ * Shadow-registry kind. After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE`
+ * collapsed the legacy split primitives into a single `<FocusScope>`,
+ * every registered entry is a `"scope"`. The string literal type is
+ * preserved (rather than dropped entirely) so existing test fixtures
+ * that carry a `kind` field still typecheck — but only the `"scope"`
+ * variant is ever produced in practice.
+ */
+export type ShadowKind = "scope";
 
 /** One entry in the JS shadow registry mirroring the kernel's `RegisteredScope`. */
 export interface ShadowEntry {
@@ -228,19 +235,20 @@ export function rectFromWire(r: unknown): RectLike {
  *
  * The cascade has three observable outcomes:
  *
- *   1. **Iter 0** — any-kind in-zone peer match at the focused entry's
- *      level. Within a parent FocusZone, child FocusScope leaves and
- *      child FocusZone containers are siblings (the kernel's sibling
- *      rule).
- *   2. **Iter 1** — same-kind peer match at the parent's level (after
- *      escalation, with a layer-boundary guard). Same-kind here
- *      restricts to zones because the parent IS a zone — structural,
- *      not a kind policy.
- *   3. **Drill-out** — return the parent zone itself when neither
+ *   1. **Iter 0** — peer match at the focused scope's level. All
+ *      registered scopes sharing a `parent_zone` are siblings.
+ *   2. **Iter 1** — peer match at the parent scope's level (after
+ *      escalation, with a layer-boundary guard).
+ *   3. **Drill-out** — return the parent scope itself when neither
  *      iter finds a peer. Returns `null` only when the focused entry
- *      sits at the very root of its layer with no parent zone.
+ *      sits at the very root of its layer with no parent scope.
  *
- * See `swissarmyhammer-focus/README.md` for the prose contract.
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, the cascade no longer
+ * filters on a kind discriminator — every registered entry is a scope,
+ * and structural shape (container vs leaf) is determined by whether the
+ * scope has child scopes. See `swissarmyhammer-focus/README.md` for
+ * the prose contract.
  *
  * Returns the FQM of the next focus target, or `null` when the
  * navigator declines to navigate.
@@ -253,8 +261,9 @@ export function navigateInShadow(
   const from = registry.get(fromFq);
   if (!from) return null;
 
-  // Iter 0: ANY-KIND peers sharing from.parentZone — zones and scopes
-  // are siblings under a parent zone.
+  // Iter 0: peers sharing from.parentZone — under the unified primitive
+  // every registered entry is a scope, so any sibling under the same
+  // parent counts.
   const iter0 = beamAmongInZoneAnyKind(
     registry,
     from.layerFq,
@@ -266,37 +275,40 @@ export function navigateInShadow(
   if (iter0) return iter0;
 
   // Escalate. The layer-boundary guard refuses to cross layer FQMs —
-  // an inspector layer's panel zone never lifts focus into the window
+  // an inspector layer's panel scope never lifts focus into the window
   // layer that hosts ui:board.
   if (from.parentZone === null) return null;
   const parent = registry.get(from.parentZone);
   if (!parent) return null;
   if (parent.layerFq !== from.layerFq) return null;
-  if (parent.kind !== "zone") return null; // parent of any scope must be a zone
 
-  // Iter 1: same-kind peers of the parent zone sharing its parentZone.
-  // The parent IS always a zone, so this is the sibling-zone beam.
+  // Iter 1: peers of the parent scope sharing its parent_zone. After
+  // the single-primitive collapse there is no kind filter — every
+  // registered entry is a scope, so any sibling of the parent is a
+  // valid candidate.
   const iter1 = beamAmongSiblings(
     registry,
     parent.layerFq,
     parent.rect,
     parent.parentZone,
     parent.fq,
-    "zone",
     direction,
   );
   if (iter1) return iter1;
 
-  // Drill-out fallback: return the parent zone itself.
+  // Drill-out fallback: return the parent scope itself.
   return { nextFq: parent.fq, nextSegment: parent.segment };
 }
 
 /**
- * Beam-search ANY-KIND candidates sharing `fromParent` (excluding
- * `fromFq`), filtered by `layer`. Matches `beam_among_in_zone_any_kind`
- * in the Rust kernel — this is the iter-0 helper. The sibling rule
- * applies: child FocusScope leaves and child FocusZone containers are
- * peers under the same parent zone.
+ * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
+ * filtered by `layer`. Matches `beam_among_in_zone_any_kind` in the
+ * Rust kernel — this is the iter-0 helper.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, every registered
+ * entry is a scope; the kernel and this simulator filter only by
+ * layer membership and shared `parentZone`.
  */
 function beamAmongInZoneAnyKind(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,
@@ -320,12 +332,14 @@ function beamAmongInZoneAnyKind(
 }
 
 /**
- * Beam-search candidates of the named kind sharing `fromParent`
- * (excluding `fromFq`), filtered by `layer`. Matches
- * `beam_among_siblings` in the Rust kernel — used by iter 1, where
- * the parent IS a zone and its peers are zones by construction. Iter
- * 0 must NOT use this helper; it must use `beamAmongInZoneAnyKind`
- * instead.
+ * Beam-search candidates sharing `fromParent` (excluding `fromFq`),
+ * filtered by `layer`. Matches `beam_among_siblings` in the Rust
+ * kernel — used by iter 1.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, the kind filter was
+ * removed: every registered entry is a scope, so any sibling of the
+ * parent is a valid candidate.
  */
 function beamAmongSiblings(
   registry: Map<FullyQualifiedMoniker, ShadowEntry>,
@@ -333,13 +347,11 @@ function beamAmongSiblings(
   fromRect: RectLike,
   fromParent: FullyQualifiedMoniker | null,
   fromFq: FullyQualifiedMoniker,
-  expectKind: ShadowKind,
   direction: Direction,
 ): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
   const candidates: ShadowEntry[] = [];
   for (const e of registry.values()) {
     if (
-      e.kind === expectKind &&
       e.layerFq === layer &&
       e.parentZone === fromParent &&
       e.fq !== fromFq
@@ -525,8 +537,8 @@ export type DefaultInvokeImpl = (
 
 /**
  * Install a `mockInvoke` implementation that:
- *   - records every `spatial_register_zone` / `spatial_register_scope`
- *     call into a JS shadow registry,
+ *   - records every `spatial_register_scope` call into a JS shadow
+ *     registry,
  *   - drops entries on `spatial_unregister_scope`,
  *   - refreshes rects on `spatial_update_rect`,
  *   - on `spatial_navigate(focusedFq, direction)` runs the in-test
@@ -551,10 +563,10 @@ export function installShadowNavigator(
   const currentFocus: { fq: FullyQualifiedMoniker | null } = { fq: null };
 
   mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
-    if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope") {
       const a = (args ?? {}) as Record<string, unknown>;
       const entry: ShadowEntry = {
-        kind: cmd === "spatial_register_zone" ? "zone" : "scope",
+        kind: "scope",
         fq: a.fq as FullyQualifiedMoniker,
         segment: a.segment as SegmentMoniker,
         rect: rectFromWire(a.rect),
@@ -567,15 +579,14 @@ export function installShadowNavigator(
     }
     if (cmd === "spatial_register_batch") {
       // `entries: Vec<RegisterEntry>` — the column-view virtualizer batches
-      // off-screen scope placeholders through this command. Each entry has
-      // a `kind` discriminator that maps onto the same shadow shape.
+      // off-screen scope placeholders through this command. After the
+      // single-primitive collapse there is no `kind` discriminator on
+      // batch entries; every entry is a scope.
       const a = (args ?? {}) as Record<string, unknown>;
       const entries = (a.entries ?? []) as Array<Record<string, unknown>>;
       for (const e of entries) {
-        const kind: ShadowKind =
-          (e.kind as string) === "zone" ? "zone" : "scope";
         const entry: ShadowEntry = {
-          kind,
+          kind: "scope",
           fq: e.fq as FullyQualifiedMoniker,
           segment: e.segment as SegmentMoniker,
           rect: rectFromWire(e.rect),
@@ -694,7 +705,7 @@ export function installShadowNavigator(
       // a segment that isn't currently mounted.
       for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
         const [cmd, args] = mockInvoke.mock.calls[i];
-        if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
+        if (cmd === "spatial_register_scope") {
           const a = (args ?? {}) as Record<string, unknown>;
           if (a.segment === segment) return a.fq as FullyQualifiedMoniker;
         } else if (cmd === "spatial_register_batch") {

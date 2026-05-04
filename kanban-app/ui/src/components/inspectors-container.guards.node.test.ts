@@ -24,8 +24,8 @@
  * entity-scope wrap inside `<InspectorPanel>` from card
  * `01KQFCQ9QMQKCDYVWGTXSVK5PZ` is the only legitimate consumer.
  * Imported from `@/components/focus-scope` after parent task
- * `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed `<FocusZone>` and
- * `<FocusScope>` into a single primitive.
+ * `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy container
+ * primitive and `<FocusScope>` into a single primitive.
  *
  * Node-only because they read the source file from disk; lives under
  * the `*.node.test.ts` suffix recognized by `vite.config.ts`.
@@ -105,10 +105,10 @@ describe("InspectorsContainer source-level guards", () => {
     // (a regression to multi-scope or panel-scope shapes would surface
     // as a count mismatch).
     //
-    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed
-    // `<FocusZone>` and `<FocusScope>` into a single primitive, the
-    // import lives at `@/components/focus-scope` rather than the
-    // legacy `focus-zone` path.
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy container primitive and `<FocusScope>` into a single
+    // primitive, the import lives at `@/components/focus-scope`
+    // rather than the legacy zone-prefixed path.
     const code = readCodeOnly();
     const matches = code.match(/<FocusScope\b/g) ?? [];
     expect(

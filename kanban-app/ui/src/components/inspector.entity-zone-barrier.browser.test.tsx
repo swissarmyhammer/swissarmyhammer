@@ -552,20 +552,22 @@ describe("Inspector entity-zone barrier — multi-inspector cardinal nav", () =>
       expect(sim.findBySegment("task:TB")).toBeDefined();
     });
 
-    // Find the per-entity zones by their declared segment moniker —
-    // the entity moniker itself, NOT a `panel:*` prefix.
+    // Find the per-entity scopes by their declared segment moniker —
+    // the entity moniker itself, NOT a `panel:*` prefix. After parent
+    // task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split
+    // primitives into a single `<FocusScope>`, the per-entity wrap
+    // registers via `spatial_register_scope`; the scope-with-children
+    // shape is established by the field scopes parented at it.
     const entityZoneA = sim.findBySegment("task:TA");
     const entityZoneB = sim.findBySegment("task:TB");
     expect(
       entityZoneA,
-      "inspector A must register a zone keyed by entity moniker `task:TA`",
+      "inspector A must register a scope keyed by entity moniker `task:TA`",
     ).toBeDefined();
     expect(
       entityZoneB,
-      "inspector B must register a zone keyed by entity moniker `task:TB`",
+      "inspector B must register a scope keyed by entity moniker `task:TB`",
     ).toBeDefined();
-    expect(entityZoneA!.kind).toBe("zone");
-    expect(entityZoneB!.kind).toBe("zone");
 
     // Both per-entity zones live at the inspector layer root, so their
     // own parentZone is null.

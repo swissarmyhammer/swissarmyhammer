@@ -932,7 +932,7 @@ describe("FocusScope", () => {
    * mounting `<FocusScope>` without `<FocusLayer>` now throws.
    */
   describe("spatial-context registration", () => {
-    it("registers via spatial_register_scope as a leaf when wrapped in <FocusLayer>", async () => {
+    it("registers via spatial_register_scope when wrapped in <FocusLayer>", async () => {
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -945,29 +945,30 @@ describe("FocusScope", () => {
         </SpatialFocusProvider>,
       );
 
-      // The primitive registers via spatial_register_scope (the leaf
-      // command) — never as a zone. `<FocusScope>` is the leaf primitive
-      // after the three-peer collapse; containers use `<FocusScope>` directly.
+      // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+      // legacy split primitives into a single `<FocusScope>`, the only
+      // registration command is `spatial_register_scope`. A scope with
+      // no children behaves as a leaf; a scope with children behaves as
+      // a navigable container.
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith(
           "spatial_register_scope",
           expect.objectContaining({ segment: "task:abc" }),
         );
       });
-      expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_scope",
-        expect.anything(),
-      );
 
       // The primitive's div carries data-moniker
       const node = container.querySelector("[data-segment='task:abc']");
       expect(node).not.toBeNull();
     });
 
-    it("registers as a leaf scope (never as a zone) — `<FocusScope>` is the leaf primitive", async () => {
-      // After collapsing `<Focusable>` into `<FocusScope>`, the latter is
-      // always the leaf primitive — there is no `kind="zone"` escape hatch.
-      // Containers that want zone semantics use `<FocusScope>` directly.
+    it("registers via spatial_register_scope regardless of moniker prefix", async () => {
+      // Pre-collapse this test asserted that `column:` monikers
+      // registered as zones while `task:` monikers registered as leaves.
+      // Under the unified primitive there is one registration command
+      // (`spatial_register_scope`); structural shape is determined by
+      // whether the scope has child scopes, not by the moniker prefix or
+      // a kind discriminator.
       const { container } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -986,10 +987,6 @@ describe("FocusScope", () => {
           expect.objectContaining({ segment: "column:doing" }),
         );
       });
-      expect(invoke).not.toHaveBeenCalledWith(
-        "spatial_register_scope",
-        expect.anything(),
-      );
 
       const node = container.querySelector("[data-segment='column:doing']");
       expect(node).not.toBeNull();

@@ -347,7 +347,10 @@ describe("validateAndLogRect", () => {
 
   it("logs the pre-layout-transient warning per distinct (op, fq) pair", () => {
     // The dedup key is `(op, fq)` so a different op tag or a different
-    // FQM is a fresh first occurrence.
+    // FQM is a fresh first occurrence. The validator's `RectValidationOp`
+    // union still recognises `register_zone` (a legacy alias preserved
+    // for callers that have not yet migrated); using it alongside
+    // `register_scope` exercises the (op, fq) compound key.
     validateAndLogRect(
       "register_scope",
       asFq("/window/a"),
@@ -356,7 +359,7 @@ describe("validateAndLogRect", () => {
       /* enabled */ true,
     );
     validateAndLogRect(
-      "register_scope",
+      "register_zone",
       asFq("/window/a"),
       rect(0, 0, 0, 0),
       performance.now(),

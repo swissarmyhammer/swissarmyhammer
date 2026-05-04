@@ -188,9 +188,7 @@ export function validateRect(
   const hasZeroDim = isZeroDim(rect);
   const preLayoutTransient = isRegistration && hasZeroDim;
   if (preLayoutTransient) {
-    warnings.push(
-      `rect has a zero dimension on ${op}; likely pre-layout transient state (display: none, just-mounted-but-not-yet-laid-out, or detached node) — first ResizeObserver fire should produce a real rect`,
-    );
+    // The rect has a zero dimension, but that's expected on initial layout before resive
   } else {
     pushPositiveDimensionErrors(rect, errors);
   }

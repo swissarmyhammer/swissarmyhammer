@@ -552,14 +552,17 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
     const { container, unmount } = renderApp();
     await flushAppMount();
 
-    // At least one zone overlay must exist somewhere in the rendered
-    // tree — the chrome zones (`ui:nav-bar`, `ui:board`, etc.) all
+    // At least one scope overlay must exist somewhere in the rendered
+    // tree — the chrome scopes (`ui:nav-bar`, `ui:board`, etc.) all
     // mount under `<FocusDebugProvider enabled>` and so must each
-    // render their `[data-debug="zone"]` decorator.
-    const zoneOverlays = container.querySelectorAll('[data-debug="zone"]');
+    // render their `[data-debug="scope"]` decorator. After parent
+    // task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split
+    // primitives into a single `<FocusScope>`, every spatial-primitive
+    // overlay carries `data-debug="scope"`.
+    const scopeOverlays = container.querySelectorAll('[data-debug="scope"]');
     expect(
-      zoneOverlays.length,
-      "App must mount <FocusDebugProvider enabled> so zone overlays render",
+      scopeOverlays.length,
+      "App must mount <FocusDebugProvider enabled> so scope overlays render",
     ).toBeGreaterThan(0);
 
     unmount();
@@ -1274,19 +1277,20 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // =========================================================================
 
   describe("Family 8 — Registry shape audit", () => {
-    it("task:* monikers register as zone (container), never as scope", async () => {
+    it("task:* monikers register via spatial_register_scope", async () => {
+      // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+      // legacy split primitives into a single `<FocusScope>`, every
+      // spatial primitive registers via `spatial_register_scope`; the
+      // structural distinction between a container (a scope with
+      // child scopes) and a leaf is no longer signalled by a separate
+      // registration command. Cards are scope-with-children — they
+      // hold the drag handle, Field rows, and inspect button — but
+      // that shape is now established by the field-row scopes
+      // parented at the card scope, not by a kind discriminator.
       const { unmount } = renderApp();
       await flushAppMount();
 
-      const taskScopeCalls = registerScopeArgs().filter((a) =>
-        String(a.segment).startsWith("task:"),
-      );
-      expect(
-        taskScopeCalls,
-        "no task:* moniker may register as a scope — cards are zones",
-      ).toEqual([]);
-
-      // And every fixture task DID register as a zone.
+      // Every fixture task registered via `spatial_register_scope`.
       for (const t of E2E_TASKS) {
         const taskMoniker = `task:${t.id}`;
         const zoneReg = registerScopeArgs().find(

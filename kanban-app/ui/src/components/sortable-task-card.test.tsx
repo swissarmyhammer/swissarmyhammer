@@ -150,22 +150,13 @@ describe("DraggableTaskCard", () => {
     expect(zoneCalls.find((a) => a.segment === "task:task-7")).toBeTruthy();
   });
 
-  it("does not register the card root as a FocusScope (the card is a zone, not a leaf)", async () => {
-    // Cards register as zones because they hold multiple focusable
-    // atoms (drag handle, Field rows, inspect button). The kernel's
-    // path-prefix scope-is-leaf invariant fires
-    // `scope-not-leaf` whenever a Scope's FQM is a strict prefix of
-    // any registered descendant — exactly the shape the previous
-    // card-as-Scope wrapper produced. See
-    // `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
-    await renderWith(<DraggableTaskCard entity={currentEntity} />);
-    const scopeCalls = mockInvoke.mock.calls
-      .filter((c) => c[0] === "spatial_register_scope")
-      .map((c) => c[1] as Record<string, unknown>);
-    expect(
-      scopeCalls.find((a) => a.segment === "task:task-7"),
-    ).toBeUndefined();
-  });
+  // Pre-collapse this file also pinned that the card root registered via
+  // the legacy zone command but NOT via the leaf-scope command. After
+  // parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` unified the primitives into
+  // a single `<FocusScope>` driven by `spatial_register_scope`, the
+  // negative half of that pair became vacuous — there is no second
+  // command to be absent on. The positive half (the card body registers
+  // with `task:task-7`) is covered by the preceding test.
 
   it("renders the drag handle button", async () => {
     const { container } = await renderWith(

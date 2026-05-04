@@ -20,11 +20,11 @@
  *     overlapped the inner `ui:board` / `ui:grid` scope-with-children
  *     for the same rect.
  *
- * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed
- * `<FocusZone>` and `<FocusScope>` into a single primitive, "scope" in
- * these guards refers to the unified `<FocusScope>` — a scope with no
- * children behaves as a leaf, a scope with children behaves as a
- * navigable container.
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+ * legacy container primitive and `<FocusScope>` into a single
+ * primitive, "scope" in these guards refers to the unified
+ * `<FocusScope>` — a scope with no children behaves as a leaf, a
+ * scope with children behaves as a navigable container.
  *
  * Node-only because they read source files from disk; lives under the
  * `*.node.test.ts` suffix recognised by `vite.config.ts`.
@@ -74,10 +74,11 @@ describe("PerspectiveTabBar source-level guards", () => {
     // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the per-tab
     // wrapper is a scope-with-children rather than a leaf — promoting
     // it lets the inner Pressable-based icon buttons mount their own
-    // leaf FocusScopes without violating the kernel's `scope-not-leaf`
-    // rule. After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` both shapes
-    // are the same `<FocusScope>` primitive; the guard's intent is
-    // structural ("the per-tab scope contains inner leaves"), not
+    // leaf FocusScopes without violating the legacy "scope cannot
+    // also act as a leaf" rule. After parent task
+    // `01KQSDP4ZJY5ERAJ68TFPVFRRE` both shapes are the same
+    // `<FocusScope>` primitive; the guard's intent is structural
+    // ("the per-tab scope contains inner leaves"), not
     // primitive-name-based.
     expect(SRC).toMatch(
       /<FocusScope\s+moniker=\{asSegment\(`perspective_tab:\$\{id\}`\)/,
@@ -180,9 +181,9 @@ describe("ViewContainer source-level guards", () => {
     // import absence so a follow-up that re-introduces a scope is forced
     // to update this guard explicitly.
     //
-    // Parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed `<FocusZone>`
-    // into `<FocusScope>`; the canonical import path is now
-    // `@/components/focus-scope`.
+    // Parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+    // container primitive into `<FocusScope>`; the canonical import
+    // path is now `@/components/focus-scope`.
     expect(SRC).not.toMatch(/from\s+["']@\/components\/focus-scope["']/);
   });
 });

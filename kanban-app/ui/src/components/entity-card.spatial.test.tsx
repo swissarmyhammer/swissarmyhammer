@@ -533,25 +533,14 @@ describe("EntityCard — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("does not register the card root as a FocusScope (the card is a zone, not a leaf) (test #1b)", async () => {
-    // Cards register as zones because they hold multiple focusable
-    // atoms (drag handle, Field rows, inspect button). A `<FocusScope>`
-    // wrapper would violate the kernel's scope-is-leaf invariant —
-    // the path-prefix branch of `swissarmyhammer-focus`'s
-    // `warn_forward_scope_ancestors` fires
-    // `scope-not-leaf` when a Scope's FQM is a strict prefix of any
-    // registered descendant's FQM, exactly as the previous card-as-Scope
-    // shape produced.
-    const { unmount } = renderCard();
-    await flushSetup();
-
-    const scopeCalls = registerScopeArgs().filter(
-      (a) => a.segment === "task:task-1",
-    );
-    expect(scopeCalls).toEqual([]);
-
-    unmount();
-  });
+  // Pre-collapse this file pinned that the card root registered via the
+  // legacy zone command but NOT via the leaf-scope command. After parent
+  // task `01KQSDP4ZJY5ERAJ68TFPVFRRE` unified the primitives into a
+  // single `<FocusScope>` driven by `spatial_register_scope`, the
+  // negative half of that pair became vacuous — there is no second
+  // command to be absent on. The positive half (the card registers as a
+  // FocusScope with `task:task-1`) is covered by the preceding test
+  // (#1).
 
   // ---------------------------------------------------------------------
   // #2 Click → focus

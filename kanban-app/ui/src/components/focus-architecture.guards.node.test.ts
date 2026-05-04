@@ -130,7 +130,7 @@ describe("focus-decoration architecture", () => {
     // `01KQSDP4ZJY5ERAJ68TFPVFRRE`), `<FocusScope>` is the only spatial
     // primitive: a scope with no children behaves as a leaf, a scope
     // with children behaves as a navigable container. The legacy
-    // `<FocusZone>` / `<Focusable>` peers were folded into it.
+    // container and `<Focusable>` peers were folded into it.
     //
     // The check has two parts:
     //

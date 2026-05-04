@@ -250,14 +250,20 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     document.body.innerHTML = "";
   });
 
-  it("zone_renders_debug_overlay_when_debug_on", async () => {
+  it("focusscope_renders_debug_overlay_when_debug_on", async () => {
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy split primitives into a single `<FocusScope>`, every
+    // spatial primitive composes the debug overlay with `kind="scope"`.
+    // The test was previously paired (zone + scope variants) when the
+    // legacy split primitives produced two distinct `data-debug`
+    // values.
     const { container, unmount } = render(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
               <FocusScope moniker={asSegment("ui:test")}>
-                <span>zone-content</span>
+                <span>scope-content</span>
               </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
@@ -267,7 +273,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     await flushSetup();
     await flushFrame();
 
-    const overlay = container.querySelector('[data-debug="zone"]');
+    const overlay = container.querySelector('[data-debug="scope"]');
     expect(overlay).toBeTruthy();
 
     // Border element is the first child span — assert `border-dashed`
@@ -279,7 +285,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // The label (now a tooltip) carries the moniker. Read it via the
     // handle's `aria-label`, which mirrors the tooltip content
     // verbatim — deterministic without a hover round-trip.
-    expect(readOverlayLabel(container, "zone")).toContain("ui:test");
+    expect(readOverlayLabel(container, "scope")).toContain("ui:test");
 
     unmount();
   });
@@ -421,25 +427,29 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // been committed back into React state and rendered into the DOM.
     await flushFrame();
 
-    const overlay = container.querySelector('[data-debug="zone"]');
+    const overlay = container.querySelector('[data-debug="scope"]');
     expect(overlay).toBeTruthy();
     // The (x,y) coordinates live in the tooltip — assert via the
     // handle's `aria-label`, which mirrors the tooltip text exactly.
-    expect(readOverlayLabel(container, "zone")).toContain("100,200");
+    expect(readOverlayLabel(container, "scope")).toContain("100,200");
 
     unmount();
   });
 
   it("overlay_kind_classes_are_distinct", async () => {
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy split primitives into a single `<FocusScope>`, the only
+    // overlay kinds the production tree composes are `"layer"` (from
+    // `<FocusLayer>`) and `"scope"` (from `<FocusScope>`). The
+    // distinction between them must remain colour-coded so nested
+    // primitives are visually distinguishable.
     const { container, unmount } = render(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
             <FocusLayer name={asSegment("window")}>
-              <FocusScope moniker={asSegment("ui:zone-test")}>
-                <FocusScope moniker={asSegment("ui:scope-test")}>
-                  <span>nested</span>
-                </FocusScope>
+              <FocusScope moniker={asSegment("ui:scope-test")}>
+                <span>scope-content</span>
               </FocusScope>
             </FocusLayer>
           </SpatialFocusProvider>
@@ -450,30 +460,22 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     await flushFrame();
 
     const layerOverlay = container.querySelector('[data-debug="layer"]');
-    const zoneOverlay = container.querySelector('[data-debug="zone"]');
     const scopeOverlay = container.querySelector('[data-debug="scope"]');
     expect(layerOverlay).toBeTruthy();
-    expect(zoneOverlay).toBeTruthy();
     expect(scopeOverlay).toBeTruthy();
 
     // Each overlay's first-child border span must carry a colour class
     // unique to its kind. Read the className strings and assert each
     // contains the expected colour token.
     const layerBorder = layerOverlay!.querySelector("span")!.className;
-    const zoneBorder = zoneOverlay!.querySelector("span")!.className;
     const scopeBorder = scopeOverlay!.querySelector("span")!.className;
 
     expect(layerBorder).toContain("border-red-500/70");
-    expect(zoneBorder).toContain("border-blue-500/70");
     expect(scopeBorder).toContain("border-emerald-500/70");
 
     // And those tokens must NOT cross-pollinate.
-    expect(layerBorder).not.toContain("border-blue-500/70");
     expect(layerBorder).not.toContain("border-emerald-500/70");
-    expect(zoneBorder).not.toContain("border-red-500/70");
-    expect(zoneBorder).not.toContain("border-emerald-500/70");
     expect(scopeBorder).not.toContain("border-red-500/70");
-    expect(scopeBorder).not.toContain("border-blue-500/70");
 
     unmount();
   });

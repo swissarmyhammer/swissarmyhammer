@@ -224,23 +224,24 @@ function ensureTestCardCss(): void {
 }
 
 /**
- * Pull the most recent register record for a moniker from the
- * captured invoke calls. Prefers zone over scope when both exist
- * (deduping idempotent re-registers). Returns `null` if not found.
+ * Pull the most recent register record for a moniker from the captured
+ * invoke calls. Returns `null` if not found.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, every spatial primitive
+ * registers via `spatial_register_scope`; this helper records the most
+ * recent argument bag for the requested moniker.
  */
 function findRegisterRecord(
   moniker: string,
-): { kind: "zone" | "scope"; record: Record<string, unknown> } | null {
+): Record<string, unknown> | null {
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];
-    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope") {
       const r = c[1] as Record<string, unknown>;
       if (r && r.segment === moniker) {
-        return {
-          kind: cmd === "spatial_register_scope" ? "zone" : "scope",
-          record: r,
-        };
+        return r;
       }
     }
   }
@@ -344,18 +345,16 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
     const inspectLeaf = findRegisterRecord("card.inspect:task-1");
     expect(
       inspectLeaf,
-      "card.inspect:{id} must register as a leaf scope",
+      "card.inspect:{id} must register as a FocusScope",
     ).toBeTruthy();
-    expect(inspectLeaf!.kind).toBe("scope");
-    const inspectFq = inspectLeaf!.record.fq as FullyQualifiedMoniker;
+    const inspectFq = inspectLeaf!.fq as FullyQualifiedMoniker;
 
     const titleZone = findRegisterRecord("field:task:task-1.title");
     expect(
       titleZone,
-      "field:task:task-1.title must register as a zone",
+      "field:task:task-1.title must register as a FocusScope",
     ).toBeTruthy();
-    expect(titleZone!.kind).toBe("zone");
-    const titleFq = titleZone!.record.fq as FullyQualifiedMoniker;
+    const titleFq = titleZone!.fq as FullyQualifiedMoniker;
 
     // Seed focus on the inspect leaf so `nav.left`'s execute closure
     // sees its FQM as the focused key.
@@ -424,11 +423,11 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
 
     const inspectLeaf = findRegisterRecord("card.inspect:task-1");
     expect(inspectLeaf).toBeTruthy();
-    const inspectFq = inspectLeaf!.record.fq as FullyQualifiedMoniker;
+    const inspectFq = inspectLeaf!.fq as FullyQualifiedMoniker;
 
     const cardZone = findRegisterRecord("task:task-1");
-    expect(cardZone, "task:{id} must register as the card zone").toBeTruthy();
-    const cardFq = cardZone!.record.fq as FullyQualifiedMoniker;
+    expect(cardZone, "task:{id} must register as the card scope").toBeTruthy();
+    const cardFq = cardZone!.fq as FullyQualifiedMoniker;
     const cardFqStr = String(cardFq);
 
     // Seed focus on the inspect leaf.

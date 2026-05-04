@@ -128,7 +128,7 @@ function readZIndex(el: Element): number {
 function getOverlayUnder(
   container: HTMLElement,
   testId: string,
-  kind: "layer" | "zone" | "scope",
+  kind: "layer" | "scope",
 ): HTMLElement {
   const host = container.querySelector(`[data-testid="${testId}"]`);
   if (!host) throw new Error(`host with data-testid="${testId}" not found`);
@@ -197,7 +197,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     await flushSetup();
     await flushFrame();
 
-    const columnOverlay = getOverlayUnder(container, "column-host", "zone");
+    const columnOverlay = getOverlayUnder(container, "column-host", "scope");
     const z = readZIndex(columnOverlay);
     expect(Number.isFinite(z)).toBe(true);
     expect(z).toBeLessThan(20);
@@ -233,7 +233,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     await flushSetup();
     await flushFrame();
 
-    const panelOverlay = getOverlayUnder(container, "panel-host", "zone");
+    const panelOverlay = getOverlayUnder(container, "panel-host", "scope");
     const z = readZIndex(panelOverlay);
     expect(Number.isFinite(z)).toBe(true);
     expect(z).toBeGreaterThan(30);
@@ -416,8 +416,8 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     await flushSetup();
     await flushFrame();
 
-    const inspectorOverlay = getOverlayUnder(container, "panel-host", "zone");
-    const paletteOverlay = getOverlayUnder(container, "palette-host", "zone");
+    const inspectorOverlay = getOverlayUnder(container, "panel-host", "scope");
+    const paletteOverlay = getOverlayUnder(container, "palette-host", "scope");
 
     const inspectorZ = readZIndex(inspectorOverlay);
     const paletteZ = readZIndex(paletteOverlay);
@@ -433,7 +433,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
   it("layer_kind_overlay_reads_its_own_layer_tier", async () => {
     // The `kind="layer"` overlay is rendered by `<FocusLayer>` itself
     // (see `focus-layer.tsx`'s debug-mode wrapper) and reads the same
-    // `FocusLayerZTierContext` value that descendant `kind="zone"` and
+    // `FocusLayerZTierContext` value that descendant `kind="scope"` and
     // `kind="scope"` overlays read. The other tests in this suite
     // exercise the zone path; this one closes the gap on the
     // layer-kind overlay so a regression that decoupled the layer's
@@ -501,7 +501,7 @@ describe("<FocusDebugOverlay> — layer-aware z-index", () => {
     await flushSetup();
     await flushFrame();
 
-    const customOverlay = getOverlayUnder(container, "custom-host", "zone");
+    const customOverlay = getOverlayUnder(container, "custom-host", "scope");
     const z = readZIndex(customOverlay);
     // inspector tier 30 → custom tier 30 + 20 = 50 → overlay 50 + 5 = 55.
     expect(z).toBe(55);

@@ -1,19 +1,19 @@
 /**
  * Absence guard for the deprecated `<Focusable>` re-export shim.
  *
- * Background: the spatial-nav kernel originally exposed four React peers
- * — `<Focusable>` (leaf), `<FocusZone>` (container), `<FocusLayer>`
- * (modal boundary), and a composite `<FocusScope>`. Card
- * `01KQ5PP55SAAVJ0V3HDJ1DGNBY` collapsed that into three peers
- * (`<FocusScope>` became the leaf primitive; `<Focusable>` aliased to
- * it as a transitional re-export). Card `01KQ5PSMYE3Q60SV8270S6K819`
- * physically deleted the shim once every per-component card had
- * migrated its imports.
+ * Background: the spatial-nav kernel originally exposed four React
+ * peers — a leaf primitive, a container primitive, a modal boundary,
+ * and a composite. Card `01KQ5PP55SAAVJ0V3HDJ1DGNBY` collapsed that
+ * into three peers (`<FocusScope>` became the leaf primitive;
+ * `<Focusable>` aliased to it as a transitional re-export). Card
+ * `01KQ5PSMYE3Q60SV8270S6K819` physically deleted the shim once every
+ * per-component card had migrated its imports.
  *
- * Parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` then folded `<FocusZone>`
- * into `<FocusScope>` as well — leaving exactly two React peers:
- * `<FocusLayer>` (modal boundary) and `<FocusScope>` (the unified
- * spatial primitive — leaf when childless, container when not).
+ * Parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` then folded the legacy
+ * container primitive into `<FocusScope>` as well — leaving exactly
+ * two React peers: `<FocusLayer>` (modal boundary) and `<FocusScope>`
+ * (the unified spatial primitive — leaf when childless, container
+ * when not).
  *
  * This guard pins the deletion against a future regression where
  * someone re-adds `kanban-app/ui/src/components/focusable.tsx` (or a

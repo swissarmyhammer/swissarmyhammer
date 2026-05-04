@@ -291,11 +291,12 @@ describe("NavBar", () => {
   it("registers ui:navbar.board-selector as a FocusScope child of the navbar zone", async () => {
     // The board-selector houses multiple focusable surfaces (editable name
     // Field, dropdown trigger, tear-off button), so it registers as a
-    // FocusScope-with-children container rather than a leaf scope. The
-    // kernel enforces the leaf-must-have-no-children invariant (see
-    // swissarmyhammer-focus/tests/scope_is_leaf.rs); a leaf FocusScope
-    // here would log `scope-not-leaf` because its subtree contains
-    // other FocusScopes.
+    // FocusScope-with-children container. After parent task
+    // `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split primitives
+    // into a single `<FocusScope>`, every spatial primitive registers
+    // through the same `spatial_register_scope` IPC; the structural
+    // distinction between a container and a leaf is whether the scope
+    // has child scopes, not a separate registration command.
     mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
 
@@ -311,13 +312,6 @@ describe("NavBar", () => {
     );
     expect(boardSelectorZone).toBeDefined();
     expect(boardSelectorZone!.parentZone).toBe(navbarZone!.fq);
-
-    // It must NOT be registered as a scope.
-    const focusableCalls = callsFor("spatial_register_scope");
-    const asLeaf = focusableCalls.find(
-      (c) => c.segment === "ui:navbar.board-selector",
-    );
-    expect(asLeaf).toBeUndefined();
   });
 
   it("registers ui:navbar.inspect as a FocusScope child only when a board is loaded", async () => {

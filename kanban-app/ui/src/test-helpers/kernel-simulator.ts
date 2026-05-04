@@ -25,9 +25,9 @@
  *     order.
  *   - `spatial_pop_layer(fq)` — drops the layer; downstream queries
  *     will not find it.
- *   - `spatial_register_zone` / `spatial_register_scope` — appends a
- *     `RegistrationRecord` with the captured rect, layer FQM, parent
- *     zone, kind ("zone" or "scope"), and overrides.
+ *   - `spatial_register_scope` — appends a `RegistrationRecord` with
+ *     the captured rect, layer FQM, parent zone, and overrides. After
+ *     the single-primitive collapse every registered entry is a scope.
  *   - `spatial_unregister_scope(fq)` — drops the registration.
  *   - `spatial_update_rect(fq, rect)` — refreshes the live rect for an
  *     existing registration (the registration order remains intact).
@@ -233,9 +233,9 @@ export function installKernelSimulator(
       layers.delete(a.fq as FullyQualifiedMoniker);
       return undefined;
     }
-    if (cmd === "spatial_register_zone" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope") {
       const record: RegistrationRecord = {
-        kind: cmd === "spatial_register_zone" ? "zone" : "scope",
+        kind: "scope",
         fq: a.fq as FullyQualifiedMoniker,
         segment: a.segment as SegmentMoniker,
         layerFq: a.layerFq as FullyQualifiedMoniker,

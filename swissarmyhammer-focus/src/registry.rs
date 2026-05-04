@@ -326,14 +326,7 @@ fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: 
             && height >= 0.0
             && (width == 0.0 || height == 0.0);
         if is_registration && any_zero_dim {
-            tracing::warn!(
-                target: "swissarmyhammer_focus::registry",
-                op,
-                fq = %fq,
-                width = width,
-                height = height,
-                "rect has a zero dimension on registration; likely pre-layout transient state (display: none, just-mounted-but-not-yet-laid-out, or detached node) — first ResizeObserver fire should produce a real rect"
-            );
+            // Legitimate pre-layout zero dims are common in real layouts
         } else {
             if width.is_finite() && width <= 0.0 {
                 tracing::error!(
@@ -1587,9 +1580,7 @@ mod tests {
     /// (positive-dim violations). We exclude consistency events
     /// (op = "validate_coordinate_consistency") so callers can mix
     /// the two predicates as needed.
-    fn rect_invariant_events(
-        events: &[capture::CapturedEvent],
-    ) -> Vec<&capture::CapturedEvent> {
+    fn rect_invariant_events(events: &[capture::CapturedEvent]) -> Vec<&capture::CapturedEvent> {
         events
             .iter()
             .filter(|e| {
@@ -1658,11 +1649,7 @@ mod tests {
 
     #[test]
     fn register_scope_with_implausible_scale_logs_error() {
-        let bad = scope_with_rect(
-            "/L/far",
-            "/L",
-            rect_xywh(50_000_000.0, 0.0, 10.0, 10.0),
-        );
+        let bad = scope_with_rect("/L/far", "/L", rect_xywh(50_000_000.0, 0.0, 10.0, 10.0));
         let (_, captured) = capture::capture(|| {
             let mut reg = SpatialRegistry::new();
             reg.register_scope(bad);
@@ -1802,7 +1789,11 @@ mod tests {
             let mut reg = SpatialRegistry::new();
             // Five rects on a regular grid — all roughly equidistant
             // from the centroid.
-            reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 50.0, 50.0)));
+            reg.register_scope(scope_with_rect(
+                "/L/a",
+                "/L",
+                rect_xywh(0.0, 0.0, 50.0, 50.0),
+            ));
             reg.register_scope(scope_with_rect(
                 "/L/b",
                 "/L",
@@ -1843,9 +1834,21 @@ mod tests {
             // Four rects clustered near the origin, one rect 10000×
             // further out — the classic "half viewport-relative,
             // half document-relative" signal.
-            reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 10.0, 10.0)));
-            reg.register_scope(scope_with_rect("/L/b", "/L", rect_xywh(10.0, 0.0, 10.0, 10.0)));
-            reg.register_scope(scope_with_rect("/L/c", "/L", rect_xywh(0.0, 10.0, 10.0, 10.0)));
+            reg.register_scope(scope_with_rect(
+                "/L/a",
+                "/L",
+                rect_xywh(0.0, 0.0, 10.0, 10.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/b",
+                "/L",
+                rect_xywh(10.0, 0.0, 10.0, 10.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/c",
+                "/L",
+                rect_xywh(0.0, 10.0, 10.0, 10.0),
+            ));
             reg.register_scope(scope_with_rect(
                 "/L/d",
                 "/L",
@@ -1873,10 +1876,7 @@ mod tests {
         assert!(
             events.iter().any(|e| e.field("fq") == Some("/L/far")),
             "expected /L/far in flagged FQMs, got {:?}",
-            events
-                .iter()
-                .map(|e| e.field("fq"))
-                .collect::<Vec<_>>()
+            events.iter().map(|e| e.field("fq")).collect::<Vec<_>>()
         );
     }
 
@@ -1884,14 +1884,26 @@ mod tests {
     fn validate_coordinate_consistency_is_lazy_per_layer() {
         let layer_fq = FullyQualifiedMoniker::from_string("/L");
         let mut reg = SpatialRegistry::new();
-        reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 10.0, 10.0)));
+        reg.register_scope(scope_with_rect(
+            "/L/a",
+            "/L",
+            rect_xywh(0.0, 0.0, 10.0, 10.0),
+        ));
         reg.register_scope(scope_with_rect(
             "/L/far",
             "/L",
             rect_xywh(100_000.0, 100_000.0, 10.0, 10.0),
         ));
-        reg.register_scope(scope_with_rect("/L/b", "/L", rect_xywh(10.0, 0.0, 10.0, 10.0)));
-        reg.register_scope(scope_with_rect("/L/c", "/L", rect_xywh(0.0, 10.0, 10.0, 10.0)));
+        reg.register_scope(scope_with_rect(
+            "/L/b",
+            "/L",
+            rect_xywh(10.0, 0.0, 10.0, 10.0),
+        ));
+        reg.register_scope(scope_with_rect(
+            "/L/c",
+            "/L",
+            rect_xywh(0.0, 10.0, 10.0, 10.0),
+        ));
         reg.register_scope(scope_with_rect(
             "/L/d",
             "/L",

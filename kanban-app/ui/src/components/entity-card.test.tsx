@@ -703,24 +703,13 @@ describe("EntityCard", () => {
       expect(zoneCalls.find((a) => a.segment === "task:task-1")).toBeTruthy();
     });
 
-    it("does not register the card root as a FocusScope — the card is a zone, not a leaf", async () => {
-      // Cards register as zones because they hold multiple focusable
-      // atoms (drag handle, Field rows, inspect button). A
-      // `<FocusScope>` wrapper would violate the kernel's scope-is-leaf
-      // invariant — the path-prefix branch of `swissarmyhammer-focus`'s
-      // `warn_forward_scope_ancestors` (in `registry.rs`) fires
-      // `scope-not-leaf` when a Scope's FQM is a strict prefix of any
-      // registered descendant's FQM, exactly as the previous
-      // card-as-Scope shape produced.
-      currentEntity = makeEntity();
-      await renderWithSpatial(<EntityCard entity={currentEntity} />);
-      const scopeCalls = mockInvoke.mock.calls
-        .filter((c) => c[0] === "spatial_register_scope")
-        .map((c) => c[1] as Record<string, unknown>);
-      expect(
-        scopeCalls.find((a) => a.segment === "task:task-1"),
-      ).toBeUndefined();
-    });
+    // Pre-collapse this file pinned that the card root registered via
+    // the legacy zone command but NOT via the leaf-scope command. After
+    // parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` unified the primitives
+    // into a single `<FocusScope>` driven by `spatial_register_scope`,
+    // the negative half of that pair became vacuous — there is no
+    // second command to be absent on. The positive half (the card body
+    // registers with `task:task-1`) is covered by the preceding test.
 
     it("the card zone's parent_zone follows the enclosing FocusScope (null when none, here the layer root)", async () => {
       // The card is a zone (`<FocusScope>`). Its own `parentZone` is

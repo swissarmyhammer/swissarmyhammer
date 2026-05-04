@@ -26,11 +26,7 @@ import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
-import {
-  useFullyQualifiedMoniker,
-  useOptionalFullyQualifiedMoniker,
-} from "@/components/fully-qualified-moniker-context";
-import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import {
   useOptionalSpatialFocusActions,
   type SpatialFocusActions,
@@ -1068,29 +1064,20 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // The outer wrapper carries the real `board:<id>` entity moniker.
-  // The `<Inspectable>` wrapper owns inspector dispatch on double-click;
-  // the spatial primitive `<FocusZone>` stays pure-spatial. The inner
-  // `ui:board` chrome zone (in `BoardSpatialZone`) is NOT wrapped in
-  // `<Inspectable>` — only this entity wrapper is — so a double-click
-  // on the board surface inspects the board.
+  // The wrapper carries the real `board:<id>` entity moniker. The
+  // `<Inspectable>` wrapper owns inspector dispatch on double-click;
+  // the spatial primitive `<FocusScope>` stays pure-spatial.
   //
-  // The outer wrapper registers as a `<FocusZone>` because its React
-  // subtree contains `<BoardSpatialZone>` (a `<FocusZone>`) plus every
-  // column zone, card zone, and field zone inside the board. A
-  // `<FocusScope>` here would violate the kernel's path-prefix
-  // scope-is-leaf invariant (every descendant FQM begins with the board
-  // moniker's FQM) — see
-  // `swissarmyhammer-focus/tests/scope_is_leaf.rs`. `showFocusBar={false}`
-  // because `<BoardSpatialZone>` already owns the visible board chrome
-  // and a focus rectangle around the entire viewport would be visual
-  // noise.
+  // `showFocusBar={false}` because the board fills the viewport and a
+  // focus rectangle around the entire content area would be visual
+  // noise. Sized inner containers (columns, cards, fields) keep
+  // `showFocusBar={true}` because they are bounded boxes whose users
+  // need a visible "here is focus" hint; viewport-sized chrome scopes
+  // (board, perspective, navbar) suppress it.
   //
-  // Action commands and focus dispatch live INSIDE `BoardSpatialZone`
-  // because the FQM composition for `card:<id>` targets requires the
-  // board zone's FQM (`<board-fq>/ui:board`) — only descendants of the
-  // `<FocusZone moniker="ui:board">` see that FQM via
-  // `useFullyQualifiedMoniker()`.
+  // BoardSpatialBody runs inside this FocusScope so its
+  // `useFullyQualifiedMoniker()` reads the board entity FQ — that is
+  // the parent FQ for column / card / field composition.
   return (
     <Inspectable moniker={asSegment(board.board.moniker)}>
       <FocusScope
@@ -1098,13 +1085,11 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
         showFocusBar={false}
         className="flex flex-col flex-1 min-h-0 relative"
       >
-        <BoardSpatialZone>
-          <BoardSpatialBody
-            layout={layout}
-            dragDrop={dragDrop}
-            scrollContainerRef={scrollContainerRef}
-          />
-        </BoardSpatialZone>
+        <BoardSpatialBody
+          layout={layout}
+          dragDrop={dragDrop}
+          scrollContainerRef={scrollContainerRef}
+        />
       </FocusScope>
     </Inspectable>
   );
@@ -1118,17 +1103,18 @@ interface BoardSpatialBodyProps {
 }
 
 /**
- * Render the board content inside the `ui:board` zone.
+ * Render the board content inside the `board:<id>` entity scope.
  *
  * Mounts the action-command provider, seeds initial focus, and wires
- * `useAddTaskHandler` against the board zone FQM. Lives one level
- * deeper than `BoardView` so its hooks read the board zone FQM via
+ * `useAddTaskHandler` against the board's FQM. Lives one level
+ * deeper than `BoardView` so its hooks read the board's FQM via
  * `useFullyQualifiedMoniker()` — which is the FQ context at this
- * depth (the ancestor `<FocusZone moniker="ui:board">` provides it).
+ * depth (the ancestor `<FocusScope moniker={board.moniker}>` provides
+ * it).
  *
  * Production trees always mount inside the spatial-nav stack, so the
- * board zone FQM is guaranteed to be present. Pre-spatial-nav unit
- * tests that mount only `<EntityFocusProvider>` will throw from
+ * board FQM is guaranteed to be present. Pre-spatial-nav unit tests
+ * that mount only `<EntityFocusProvider>` will throw from
  * `useFullyQualifiedMoniker()` — which is correct: those tests never
  * exercise the board action commands or initial-focus seeding.
  */
@@ -1182,50 +1168,3 @@ function BoardSpatialBody({
   );
 }
 
-/** Props for `BoardSpatialZone`. */
-interface BoardSpatialZoneProps {
-  children: React.ReactNode;
-}
-
-/**
- * Wrap the board content in a `<FocusZone moniker={asSegment("ui:board")}>`
- * when the surrounding tree mounts the spatial-nav stack.
- *
- * `<FocusZone>` itself tolerates a missing `<FocusLayer>` ancestor by
- * falling back to a plain `<div>` (post-architecture-fix behaviour), but
- * that fallback still emits a `data-moniker="ui:board"` attribute. The
- * board's pre-spatial-nav unit tests assert there is no `ui:board`
- * marker on the DOM when they mount only `<EntityFocusProvider>` etc.,
- * so we shortcut the wrap entirely when the provider stack is absent —
- * existing tests stay green, and production (which always mounts the
- * providers) takes the zone-emitting branch unchanged.
- */
-function BoardSpatialZone({ children }: BoardSpatialZoneProps) {
-  const layerFq = useOptionalEnclosingLayerFq();
-  const actions = useOptionalSpatialFocusActions();
-  const parentFq = useOptionalFullyQualifiedMoniker();
-  if (!layerFq || !actions || !parentFq) {
-    return <>{children}</>;
-  }
-  // The board fills the viewport — drawing a focus rectangle around the
-  // entire board body would be visually noisy, so `showFocusBar={false}`
-  // suppresses the visible `<FocusIndicator>` here. The zone still
-  // registers, still flips its `data-focused` attribute on focus claim,
-  // and still owns drill-in/out + click-to-focus through the spatial-nav
-  // graph — only the visible bar is muted. Sized container zones
-  // (column, card, field row) keep `showFocusBar={true}` because they
-  // are bounded boxes whose users need a visible "here is focus" hint;
-  // viewport-sized chrome zones (board, perspective, navbar) suppress
-  // it for the same reason. See
-  // `kanban-app/ui/src/components/perspective-view.spatial.test.tsx`
-  // for the matching contract on the perspective zone.
-  return (
-    <FocusScope
-      moniker={asSegment("ui:board")}
-      showFocusBar={false}
-      className="flex flex-1 min-h-0"
-    >
-      {children}
-    </FocusScope>
-  );
-}

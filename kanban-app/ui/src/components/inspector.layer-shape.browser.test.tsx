@@ -337,14 +337,21 @@ describe("Inspector entity-zone barrier — kernel-state shape", () => {
     unmount();
   });
 
-  it("registers a ZONE for the entity moniker (task:T1) — not a scope, no InspectorFocusBridge", async () => {
-    // The entity moniker IS a zone now, registered via
+  it("registers a per-entity FocusScope for the entity moniker (task:T1) — no InspectorFocusBridge", async () => {
+    // The entity moniker registers via
     // `<FocusScope moniker={asSegment(\`${type}:${id}\`)}>` in
     // `<InspectorPanel>` (card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`). The
-    // deleted `<InspectorFocusBridge>` would have registered the
-    // entity moniker as a leaf scope (`<FocusScope>`); the bridge
-    // stays deleted, so the only registration matching `task:T1` is
-    // the new entity zone.
+    // deleted `<InspectorFocusBridge>` stays deleted, so the only
+    // registration matching `task:T1` is the per-entity FocusScope
+    // wrapping the field stack.
+    //
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy split primitives into a single `<FocusScope>`, every
+    // spatial primitive registers via `spatial_register_scope`; the
+    // structural distinction between a container ("a scope with
+    // children") and a leaf ("a scope with no children") is whether
+    // the scope's subtree contains further scopes, not a separate
+    // kind discriminator.
     const sim = installKernelSimulator(
       mockInvoke,
       listeners,
@@ -361,16 +368,23 @@ describe("Inspector entity-zone barrier — kernel-state shape", () => {
     const entityRegistration = sim.findBySegment("task:T1");
     expect(
       entityRegistration,
-      "the entity moniker must register — it is the per-inspector zone wrap",
+      "the entity moniker must register — it is the per-inspector scope wrap",
     ).toBeDefined();
     expect(
-      entityRegistration!.kind,
-      "the entity moniker registers as a zone (FocusScope), not a scope (FocusScope)",
-    ).toBe("zone");
-    expect(
       entityRegistration!.parentZone,
-      "the entity zone registers at the inspector layer root (parentZone === null)",
+      "the entity scope registers at the inspector layer root (parentZone === null)",
     ).toBeNull();
+
+    // Structural shape: the entity scope must be a scope-with-children
+    // — at least one `field:task:T1.*` scope registers under it. This
+    // is the unified-primitive equivalent of the prior "registers as
+    // a zone" assertion.
+    const fields = sim.findBySegmentPrefix("field:task:T1.");
+    expect(
+      fields.length,
+      "the entity scope must contain at least one child field scope (scope-with-children shape)",
+    ).toBeGreaterThan(0);
+
     unmount();
   });
 
@@ -397,12 +411,8 @@ describe("Inspector entity-zone barrier — kernel-state shape", () => {
     const entityZone = sim.findBySegment("task:T1");
     expect(
       entityZone,
-      "the per-entity zone must register before field-parent assertions run",
+      "the per-entity scope must register before field-parent assertions run",
     ).toBeDefined();
-    expect(
-      entityZone!.kind,
-      "the entity moniker registers as a zone, not a leaf scope",
-    ).toBe("zone");
 
     const fields = sim.findBySegmentPrefix("field:task:T1.");
     expect(

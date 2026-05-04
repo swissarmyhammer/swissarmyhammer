@@ -522,24 +522,25 @@ function registerBatchEntries(): Array<Record<string, unknown>> {
 }
 
 /**
- * Find the most recent register record for a moniker — preferring zone
- * registrations when both are present (the ARCHITECTURE-FIX card pinned
- * the cards as scope/leaf, columns and ui:board as zone). Returns null
- * when the moniker never registered.
+ * Find the most recent register record for a moniker. Returns null when
+ * the moniker never registered.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, every spatial primitive
+ * registers via `spatial_register_scope`; this helper walks both the
+ * direct registration command and the batch-register payload to find
+ * the most recent record for the requested moniker.
  */
 function findRegisterRecord(
   moniker: string,
-): { kind: "zone" | "scope"; record: Record<string, unknown> } | null {
+): Record<string, unknown> | null {
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];
-    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
+    if (cmd === "spatial_register_scope") {
       const r = c[1] as Record<string, unknown>;
       if (r && r.segment === moniker) {
-        return {
-          kind: cmd === "spatial_register_scope" ? "zone" : "scope",
-          record: r,
-        };
+        return r;
       }
     } else if (cmd === "spatial_register_batch") {
       const a = (c[1] ?? {}) as Record<string, unknown>;
@@ -547,19 +548,15 @@ function findRegisterRecord(
       for (let j = entries.length - 1; j >= 0; j--) {
         const e = entries[j];
         if (e.segment === moniker) {
-          const k = (e.kind as string) === "zone" ? "zone" : "scope";
           // Batch entries use `layer_key` / `parent_zone` snake_case;
           // normalise to the camelCase shape the rest of the test reads.
           return {
-            kind: k,
-            record: {
-              fq: e.fq,
-              segment: e.segment,
-              rect: e.rect,
-              layerFq: e.layer_fq,
-              parentZone: e.parent_zone,
-              overrides: e.overrides ?? {},
-            },
+            fq: e.fq,
+            segment: e.segment,
+            rect: e.rect,
+            layerFq: e.layer_fq,
+            parentZone: e.parent_zone,
+            overrides: e.overrides ?? {},
           };
         }
       }
@@ -598,43 +595,36 @@ describe("BoardView — cross-column spatial navigation", () => {
   // wrong `parent_zone`, or columns spread across multiple layers.
   // -------------------------------------------------------------------------
 
-  it("registers tasks as zones with parent_zone matching their column zone (test #5)", async () => {
+  it("registers tasks as scope-with-children with parent_zone matching their column scope (test #5)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    // Each task must register exactly once via `spatial_register_scope`
-    // (i.e. as a navigable container), NOT via
-    // `spatial_register_scope`. The card holds multiple focusable
-    // atoms (drag handle, Field rows, inspect button), so it is a
-    // zone by the kernel's three-peer contract. The previous
-    // card-as-Scope shape violated the path-prefix scope-is-leaf
-    // invariant — see `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
+    // Each task registers via `spatial_register_scope`. After parent
+    // task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split
+    // primitives into a single `<FocusScope>`, the structural
+    // distinction between a container and a leaf is whether the scope
+    // has child scopes — not a separate registration command. The
+    // card holds multiple focusable atoms (drag handle, Field rows,
+    // inspect button), so it registers as a scope-with-children.
     for (const taskId of taskColumnById.keys()) {
       const taskMoniker = `task:${taskId}`;
-      const scopeCalls = registerScopeArgs().filter(
-        (a) => a.segment === taskMoniker,
-      );
+      const taskRec = findRegisterRecord(taskMoniker);
       expect(
-        scopeCalls,
-        `${taskMoniker} must NOT register via spatial_register_scope`,
-      ).toEqual([]);
-      const zoneRec = findRegisterRecord(taskMoniker);
-      expect(
-        zoneRec,
+        taskRec,
         `${taskMoniker} must register via spatial_register_scope`,
       ).toBeTruthy();
-      expect(zoneRec!.kind).toBe("zone");
     }
 
-    // Each column must register via `spatial_register_scope`, with a
-    // parent_zone that resolves to the `ui:board` zone the board view
-    // mounts. This pins the column-as-zone shape the kernel test
+    // Each column registers via `spatial_register_scope` with a
+    // parent_zone that resolves to the `ui:board` scope the board view
+    // mounts. This pins the column-as-scope-with-children shape the
+    // kernel test
     // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
     // (the unified-cascade successor to the old rule-2 test) assumes.
     const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
     expect(
       boardZone,
-      "ui:board zone must register so columns can hang off it",
+      "ui:board scope must register so columns can hang off it",
     ).toBeTruthy();
     const boardKey = boardZone!.fq as FullyQualifiedMoniker;
 
@@ -647,14 +637,14 @@ describe("BoardView — cross-column spatial navigation", () => {
       ).toBeTruthy();
       expect(
         colZone!.parentZone,
-        `${moniker}'s parent_zone must equal the ui:board zone key`,
+        `${moniker}'s parent_zone must equal the ui:board scope key`,
       ).toBe(boardKey);
     }
 
-    // Every task's parent_zone must equal its enclosing column zone's
+    // Every task's parent_zone must equal its enclosing column scope's
     // key. This is the cascade's iter-0 predicate — when it fails,
     // in-zone peer search sees no siblings (the cards are parented at
-    // the wrong zone) and the cascade misroutes vertical nav to the
+    // the wrong scope) and the cascade misroutes vertical nav to the
     // wrong column.
     for (const [taskId, columnId] of taskColumnById) {
       const taskMoniker = `task:${taskId}`;
@@ -664,8 +654,8 @@ describe("BoardView — cross-column spatial navigation", () => {
       )!;
       const taskRec = findRegisterRecord(taskMoniker)!;
       expect(
-        taskRec.record.parentZone,
-        `${taskMoniker}'s parent_zone must equal its column zone (${colMoniker})`,
+        taskRec.parentZone,
+        `${taskMoniker}'s parent_zone must equal its column scope (${colMoniker})`,
       ).toBe(colZone.fq);
     }
 
@@ -673,7 +663,6 @@ describe("BoardView — cross-column spatial navigation", () => {
     // the same `layer_key`. A second layer would fragment the shadow
     // registry and make `leaves_in_layer` exclude half the candidates.
     const layerKeys = new Set<unknown>();
-    for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
     for (const a of registerScopeArgs()) layerKeys.add(a.layerFq);
     for (const e of registerBatchEntries()) layerKeys.add(e.layer_fq);
     expect(
@@ -700,12 +689,6 @@ describe("BoardView — cross-column spatial navigation", () => {
     for (const a of registerScopeArgs()) {
       expect(
         a.overrides,
-        `${String(a.moniker)} zone register must have empty overrides`,
-      ).toEqual({});
-    }
-    for (const a of registerScopeArgs()) {
-      expect(
-        a.overrides,
         `${String(a.moniker)} scope register must have empty overrides`,
       ).toEqual({});
     }
@@ -720,33 +703,17 @@ describe("BoardView — cross-column spatial navigation", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test #7 — Card body is a leaf, not a zone (architectural guard)
+  // Test #7 — DELETED.
   //
-  // Re-asserts the card-as-leaf invariant from a different angle: the
-  // `task:<id>` moniker must NEVER appear in a `spatial_register_scope`
-  // call. The architecture-fix card `01KQ5PP55SAAVJ0V3HDJ1DGNBY`
-  // converted the card body from `<FocusScope kind="zone">` to
-  // `<FocusScope>`; this test guards against a regression that would
-  // turn it back into a zone — in which case the unified cascade's
-  // iter-1 escalation from a card-internal leaf would land on a
-  // sibling card zone inside the same column rather than the next
-  // column's zone, breaking cross-column horizontal nav.
+  // Pre-collapse this test asserted that `task:<id>` monikers never
+  // registered via the legacy zone command (cards were leaves, columns
+  // were zones). After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` unified
+  // the primitives into a single `<FocusScope>` driven by
+  // `spatial_register_scope`, the assertion is vacuous — there is no
+  // separate registration command to be absent on. The structural
+  // invariant the test was protecting (cards as scope-with-children
+  // parented at their column scope) is asserted by Test #5.
   // -------------------------------------------------------------------------
-
-  it("task:<id> never registers via spatial_register_scope (test #7)", async () => {
-    const { unmount } = renderBoardWithShell();
-    await flushSetup();
-
-    const taskZoneCalls = registerScopeArgs().filter((a) =>
-      String(a.moniker).startsWith("task:"),
-    );
-    expect(
-      taskZoneCalls,
-      "no task:* moniker may register as a zone — cards must be leaves",
-    ).toEqual([]);
-
-    unmount();
-  });
 
   // -------------------------------------------------------------------------
   // Test #8 — No greedy `board:<id>` leaf interferes with cross-column nav
@@ -770,7 +737,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A");
     expect(task1A, "task:1A must register before nav fires").toBeTruthy();
-    const task1AKey = task1A!.record.fq as FullyQualifiedMoniker;
+    const task1AKey = task1A!.fq as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.right`'s execute closure sees
     // task:1A's key as the focused key. Without this, the global nav
@@ -821,7 +788,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.fq as FullyQualifiedMoniker;
+    const task1AKey = task1A.fq as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
       next_fq: task1AKey,
@@ -870,7 +837,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_fq: task1A.record.fq as FullyQualifiedMoniker,
+      next_fq: task1A.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1A"),
     });
 
@@ -898,7 +865,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1B = findRegisterRecord("task:1B")!;
     await harness.fireFocusChanged({
-      next_fq: task1B.record.fq as FullyQualifiedMoniker,
+      next_fq: task1B.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1B"),
     });
 
@@ -931,7 +898,7 @@ describe("BoardView — cross-column spatial navigation", () => {
 
     const task1A = findRegisterRecord("task:1A")!;
     await harness.fireFocusChanged({
-      next_fq: task1A.record.fq as FullyQualifiedMoniker,
+      next_fq: task1A.fq as FullyQualifiedMoniker,
       next_segment: asSegment("task:1A"),
     });
 
@@ -977,7 +944,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
-    const task1AKey = task1A.record.fq as FullyQualifiedMoniker;
+    const task1AKey = task1A.fq as FullyQualifiedMoniker;
 
     await harness.fireFocusChanged({
       next_fq: task1AKey,

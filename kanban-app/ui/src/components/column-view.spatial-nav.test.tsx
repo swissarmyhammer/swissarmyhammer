@@ -194,29 +194,15 @@ function renderColumnInBoard(ui: React.ReactElement) {
   );
 }
 
-/** Pull every `spatial_register_scope` call as a typed record. */
-function registeredZones(): Array<{
-  fq: string;
-  segment: string;
-  rect: unknown;
-  layerFq: string;
-  parentZone: string | null;
-}> {
-  return mockInvoke.mock.calls
-    .filter((c) => c[0] === "spatial_register_scope")
-    .map(
-      (c) =>
-        c[1] as {
-          fq: string;
-          segment: string;
-          rect: unknown;
-          layerFq: string;
-          parentZone: string | null;
-        },
-    );
-}
-
-/** Pull every `spatial_register_scope` call as a typed record. */
+/**
+ * Pull every `spatial_register_scope` call as a typed record.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, every spatial primitive
+ * registers via `spatial_register_scope`. The legacy helpers
+ * `registeredZones` / `registeredScopes` (which used to filter on a
+ * separate zone command) now alias to the same single-source helper.
+ */
 function registeredScopes(): Array<{
   fq: string;
   segment: string;
@@ -238,6 +224,9 @@ function registeredScopes(): Array<{
     );
 }
 
+/** Legacy alias kept while call sites are migrated. */
+const registeredZones = registeredScopes;
+
 /** Pull every `spatial_unregister_scope` call's `fq` argument. */
 function unregisteredScopeKeys(): string[] {
   return mockInvoke.mock.calls
@@ -247,12 +236,16 @@ function unregisteredScopeKeys(): string[] {
 
 /**
  * Shape of one entry inside a `spatial_register_batch` invoke. Mirrors
- * the Rust `RegisterEntry::Scope` variant the column ships across the
- * IPC boundary — task placeholders register with `kind: "scope"` to
- * match the on-screen card kind (cards are leaves).
+ * the Rust `RegisterEntry` record the column ships across the IPC
+ * boundary.
+ *
+ * After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy
+ * split primitives into a single `<FocusScope>`, batch entries no
+ * longer carry a `kind` discriminator — every spatial primitive is a
+ * scope, so the kernel-side `RegisterEntry` enum collapsed to a single
+ * variant.
  */
 interface BatchScopeEntry {
-  kind: string;
   fq: string;
   segment: string;
   rect: { x: number; y: number; width: number; height: number };
@@ -366,14 +359,17 @@ describe("ColumnView (spatial-nav)", () => {
     unmount();
   });
 
-  it("registers each task card as a zone parented at the column zone", async () => {
-    // Cards register as `<FocusScope>` containers — NOT scopes —
-    // because they hold multiple focusable atoms (drag handle, Field
-    // rows, inspect button). The card's `parentZone` is the enclosing
-    // column's zone key so the kernel groups cards by column for
-    // cross-column nav. The previous card-as-Scope shape violated the
-    // kernel's path-prefix scope-is-leaf invariant — see
-    // `swissarmyhammer-focus/tests/scope_is_leaf.rs`.
+  it("registers each task card as a FocusScope parented at the column scope", async () => {
+    // Cards register as `<FocusScope>` containers because they hold
+    // multiple focusable atoms (drag handle, Field rows, inspect
+    // button). The card's `parentZone` is the enclosing column's scope
+    // key so the kernel groups cards by column for cross-column nav.
+    //
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy split primitives into a single `<FocusScope>`, every
+    // spatial primitive registers via `spatial_register_scope`; the
+    // structural distinction between a container and a leaf is whether
+    // the scope has child scopes, not a separate registration command.
     const tasks = [makeTask("t1"), makeTask("t2")];
     const { unmount } = renderColumnInBoard(
       <ColumnView column={makeColumn("col-doing")} tasks={tasks} />,
@@ -389,18 +385,8 @@ describe("ColumnView (spatial-nav)", () => {
       const taskZone = registeredZones().find(
         (z) => z.segment === `task:${id}`,
       );
-      expect(taskZone, `task:${id} zone registered`).toBeTruthy();
+      expect(taskZone, `task:${id} scope registered`).toBeTruthy();
       expect(taskZone!.parentZone).toBe(columnZone!.fq);
-
-      // And no `task:${id}` is registered as a scope — the card is a
-      // zone, never a scope (path-prefix scope-is-leaf invariant).
-      const taskScope = registeredScopes().find(
-        (s) => s.segment === `task:${id}`,
-      );
-      expect(
-        taskScope,
-        `task:${id} must NOT be registered as a scope`,
-      ).toBeUndefined();
     }
 
     unmount();
@@ -439,12 +425,15 @@ describe("ColumnView (spatial-nav)", () => {
     // Above the virtualization threshold (25), the column delegates to
     // TanStack Virtual which mounts only the visible window. Off-screen
     // rows have no real-mounted primitives, so the column registers
-    // placeholder leaves via `spatial_register_batch` so the spatial
+    // placeholder entries via `spatial_register_batch` so the spatial
     // graph has candidate rectangles for nav.down past the visible
-    // window. Placeholders register with `kind: "scope"` to match the
-    // on-screen card's `<FocusScope>` kind — kind-stability is required
-    // so the kernel can overwrite the placeholder with the real-mount
-    // entry without disturbing the registry shape.
+    // window.
+    //
+    // After parent task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the
+    // legacy split primitives into a single `<FocusScope>`, batch
+    // entries no longer carry a `kind` discriminator — every spatial
+    // primitive is a scope, so the kernel-side `RegisterEntry` enum
+    // collapsed to a single variant.
     const N = 60;
     const tasks: Entity[] = [];
     for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
@@ -481,16 +470,15 @@ describe("ColumnView (spatial-nav)", () => {
       (c) => c[0] === "spatial_register_batch",
     );
 
-    // Sanity-check the wire shape — entries are an array of scope-kind
-    // RegisterEntry records with newtyped fields. Cards are leaves
-    // (`<FocusScope>`), so their placeholder companions ship as
-    // `kind: "scope"` too — matching the kind the real-mount uses.
+    // Sanity-check the wire shape — entries are an array of
+    // RegisterEntry records with newtyped fields. After the
+    // single-primitive collapse there is no `kind` discriminator: every
+    // entry is a scope.
     const lastBatch = batchCalls[batchCalls.length - 1];
     const args = lastBatch[1] as { entries: unknown[] };
     expect(Array.isArray(args.entries)).toBe(true);
     expect(args.entries.length).toBeGreaterThan(0);
     const first = args.entries[0] as {
-      kind: string;
       fq: string;
       segment: string;
       rect: { x: number; y: number; width: number; height: number };
@@ -498,7 +486,6 @@ describe("ColumnView (spatial-nav)", () => {
       parent_zone: string | null;
       overrides: Record<string, unknown>;
     };
-    expect(first.kind).toBe("scope");
     expect(typeof first.fq).toBe("string");
     expect(first.segment).toMatch(/^task:/);
     expect(typeof first.rect.x).toBe("number");
