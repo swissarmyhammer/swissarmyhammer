@@ -1,6 +1,8 @@
 import {
+  createContext,
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -40,8 +42,10 @@ import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { FocusScope } from "@/components/focus-scope";
 import { Pressable } from "@/components/pressable";
+import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
+import { useFocusActions } from "@/lib/entity-focus-context";
 import { asSegment } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 
@@ -268,6 +272,7 @@ export function PerspectiveTabBar() {
         <FilterFormulaBarFocusable
           key={activePerspective.id}
           perspectiveId={activePerspective.id}
+          editorRef={filterEditorRef}
         >
           <FilterFormulaBar
             ref={filterEditorRef}
@@ -501,43 +506,124 @@ function PerspectiveTabFocusable({
  * `<FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>` when
  * the spatial-nav stack is mounted; otherwise fall through.
  *
- * Without this leaf the kernel's beam-search has no scope to land on for
- * the formula bar — it would skip the editor entirely on `nav.left` /
- * `nav.right`. The per-perspective segment matches the
- * `key={activePerspective.id}` remount on the outer component so the kernel
- * sees a distinct leaf per perspective and runs through a clean
- * unregister → register cycle when the active perspective switches, rather
- * than aliasing across perspectives via a shared moniker.
+ * Without this scope the kernel's beam-search has no target to land on
+ * for the formula bar — it would skip the editor entirely on `nav.left`
+ * / `nav.right`. The per-perspective segment matches the
+ * `key={activePerspective.id}` remount on the outer component so the
+ * kernel sees a distinct scope per perspective and runs through a clean
+ * unregister → register cycle when the active perspective switches.
+ *
+ * # Drill-in / drill-out via the existing nav.drillIn / nav.drillOut
+ *
+ * When the spatial focus is on `filter_editor:${id}`, pressing Enter
+ * fires the global `nav.drillIn` keybinding. We register a per-scope
+ * `filter_editor.drillIn` CommandDef with `keys: { Enter }` that
+ * shadows the global handler and focuses the inner CM6 editor.
+ *
+ * When the inner CM6 editor has DOM focus and the user presses
+ * Escape, CM6's own keymap (already wired in
+ * `useFilterEditorExtensions` via `buildSubmitCancelExtensions`) calls
+ * the editor's `onClose` callback. We route `onClose` through
+ * `FilterFormulaBar` so it lands here as the drill-out handler:
+ * blur the contenteditable and `setFocus(filterFq)` to put kernel
+ * focus back on this scope. Same `nav.drillOut` concept as
+ * everywhere else, just routed through CM6's existing cancel path
+ * (the global `nav.drillOut: Escape` doesn't fire while CM6 has DOM
+ * focus because the keybinding handler short-circuits on editable
+ * surfaces).
  *
  * `<FocusScope>`'s click handler skips clicks landing on `INPUT`,
  * `TEXTAREA`, `SELECT`, or `[contenteditable]` (focus-scope.tsx
  * `handleClick`), which preserves the existing
  * `onClick={() => editorRef.current?.focus()}` behaviour on the bar's
- * interior — clicks on the CM6 contenteditable surface route through to the
- * editor's own caret placement instead of being intercepted by the leaf.
- *
- * Same conditional pattern as `PerspectiveBarSpatialZone` and
- * `PerspectiveTabFocusable` — the strict primitive contract is preserved
- * for production while keeping the existing narrow-provider tests passing.
+ * interior — clicks on the CM6 contenteditable surface route through
+ * to the editor's own caret placement instead of being intercepted by
+ * the scope.
  */
 function FilterFormulaBarFocusable({
   perspectiveId,
+  editorRef,
   children,
 }: {
   perspectiveId: string;
+  editorRef: React.RefObject<FilterEditorHandle | null>;
   children: ReactNode;
 }) {
   const layerKey = useOptionalEnclosingLayerFq();
   const actions = useOptionalSpatialFocusActions();
+
+  const drillCommands = useMemo<readonly CommandDef[]>(
+    () => [
+      {
+        id: "filter_editor.drillIn",
+        name: "Edit Filter",
+        keys: { cua: "Enter", vim: "Enter", emacs: "Enter" },
+        execute: () => {
+          editorRef.current?.focus();
+        },
+      },
+    ],
+    [editorRef],
+  );
+
   if (!layerKey || !actions) {
     return <>{children}</>;
   }
   return (
-    <FocusScope moniker={asSegment(`filter_editor:${perspectiveId}`)}>
-      {children}
+    <FocusScope
+      moniker={asSegment(`filter_editor:${perspectiveId}`)}
+      commands={drillCommands}
+    >
+      <FilterEditorDrillOutWiring>{children}</FilterEditorDrillOutWiring>
     </FocusScope>
   );
 }
+
+/**
+ * Inner wrapper rendered INSIDE `<FocusScope>` so it can read the
+ * filter-editor scope's composed FQM via `useFullyQualifiedMoniker()`
+ * and provide the `nav.drillOut` semantics (Escape from CM6 → blur +
+ * refocus the spatial scope).
+ *
+ * Receives the existing children unchanged but passes a stable
+ * `onEditorEscape` callback through React context (via
+ * `FilterEditorEscapeContext`) so `FilterFormulaBar`'s descendant CM6
+ * editor can wire it as its `onClose` without prop-drilling through
+ * every intermediate component.
+ */
+function FilterEditorDrillOutWiring({ children }: { children: ReactNode }) {
+  const filterFq = useFullyQualifiedMoniker();
+  const { setFocus } = useFocusActions();
+  const onEditorEscape = useCallback(() => {
+    // Drop DOM focus from the CM6 contenteditable so the cursor stops
+    // blinking visually — the kernel's spatial focus update alone
+    // doesn't move DOM focus.
+    if (
+      typeof document !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+    ) {
+      document.activeElement.blur();
+    }
+    setFocus(filterFq);
+  }, [filterFq, setFocus]);
+  return (
+    <FilterEditorEscapeContext.Provider value={onEditorEscape}>
+      {children}
+    </FilterEditorEscapeContext.Provider>
+  );
+}
+
+/**
+ * Carries the filter-editor scope's "Escape from inside CM6" handler
+ * down to the descendant `<FilterEditor>` without prop-drilling.
+ *
+ * Wired by `FilterEditorDrillOutWiring` (which sits inside the
+ * `filter_editor:${id}` `<FocusScope>` so it can compose the scope's
+ * FQM). Consumed by `FilterFormulaBar` to pass as `onClose` to
+ * `<FilterEditor>` — that callback fires from CM6's existing
+ * Escape-cancel keymap.
+ */
+const FilterEditorEscapeContext = createContext<(() => void) | null>(null);
 
 // ---------------------------------------------------------------------------
 // Add-perspective button
@@ -967,6 +1053,13 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
       [],
     );
 
+    // CM6's existing Escape-cancel keymap calls `onClose`. When the
+    // surrounding `<FilterFormulaBarFocusable>` is mounted, that
+    // callback drills-out to the spatial scope (blur + setFocus). When
+    // we are mounted bare in narrow tests, the context is null and
+    // Escape is a CM6-internal no-op as before.
+    const onEditorEscape = useContext(FilterEditorEscapeContext);
+
     return (
       <div
         data-testid="filter-formula-bar"
@@ -981,6 +1074,7 @@ const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
           ref={editorRef}
           filter={filter ?? ""}
           perspectiveId={perspectiveId}
+          onClose={onEditorEscape ?? undefined}
         />
       </div>
     );
