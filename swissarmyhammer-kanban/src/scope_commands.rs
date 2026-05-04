@@ -744,15 +744,7 @@ fn emit_cross_cutting_commands(
                 .is_some_and(|p| p.from == ParamSource::Target)
         })
         .count();
-    tracing::debug!(
-        scope_moniker = %moniker,
-        entity_type = %entity_type,
-        entity_moniker = %entity_moniker,
-        scope_chain_len = scope_chain.len(),
-        registry_total = all_registry_cmds.len(),
-        target_primary_count,
-        "emit_cross_cutting_commands: entering pass"
-    );
+
     // Collect matches into a local vec first so we can sort by
     // (context_menu_group, context_menu_order, id) before emitting. Pushing
     // straight into `result` would inherit the HashMap-iteration order of
@@ -791,12 +783,6 @@ fn emit_cross_cutting_commands(
     for p in pending {
         push_dedup(seen, result, p.cmd);
     }
-    tracing::debug!(
-        scope_moniker = %moniker,
-        entity_type = %entity_type,
-        matched,
-        "emit_cross_cutting_commands: pass complete"
-    );
 }
 
 /// One entry in the sort buffer for `emit_cross_cutting_commands`.
