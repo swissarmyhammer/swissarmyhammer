@@ -357,14 +357,20 @@ interface ScopedPerspectiveTabProps {
  *
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  *
- * The tab's render also goes through `<PerspectiveTabFocusable>`, which mounts
- * a `<FocusZone moniker={asSegment(`perspective_tab:${id}`)} showFocusBar={false}>`
- * wrapper when the spatial-nav stack is mounted. Each tab is therefore a
- * sibling zone inside the surrounding `ui:perspective-bar` zone, and the
- * interactive controls inside the tab — name, filter icon, group icon — are
- * `<FocusScope>` leaves at `perspective_tab.name:{id}`,
- * `perspective_tab.filter:{id}`, and `perspective_tab.group:{id}`. See
- * `PerspectiveTabFocusable` below for the structural rationale.
+ * The tab's render also goes through `<PerspectiveTabFocusable>`, which
+ * mounts a `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}
+ * showFocusBar={false}>` wrapper when the spatial-nav stack is mounted.
+ * Each tab is itself the focusable spatial-nav target — there is no
+ * inner `perspective_tab.name` leaf because that would register at the
+ * exact same rect as the outer wrapper and trip the kernel's
+ * needless-nesting warning. Enter on a focused tab triggers rename via
+ * the `ui.entity.startRename` command this component registers, which
+ * shadows the global `nav.drillIn: Enter` on the perspective scope.
+ *
+ * The filter icon and group icon to the right of the name remain as
+ * Pressable leaves (`perspective_tab.filter:{id}`,
+ * `perspective_tab.group:{id}`) because they have distinct rects from
+ * the tab name and are independently navigable.
  *
  * Per-tab rename binding: every perspective tab — active or inactive —
  * registers a `ui.entity.startRename` `CommandDef` whose `keys` block
@@ -441,30 +447,28 @@ function ScopedPerspectiveTab({
 }
 
 /**
- * Wrap a perspective tab in `<FocusZone moniker={asSegment(`perspective_tab:${id}`)}>`
+ * Wrap a perspective tab in `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>`
  * when the spatial-nav stack is mounted; otherwise fall through.
  *
- * # Why a zone, not a leaf
+ * # Single scope, no inner name leaf
  *
- * Pre-iteration the tab wrapper was a `<FocusScope>` leaf with the
- * `<TabButton>`, `<FilterFocusButton>`, and `<GroupPopoverButton>`
- * rendered as plain `<button>` children inside it. Migrating the
- * inner controls to `<Pressable>` (which mounts its own
- * `<FocusScope>` leaf) creates a Scope-inside-Scope violation that the
- * kernel's iteration-3 `scope-not-leaf` enforcement detects.
+ * The tab IS the focusable target — clicking anywhere on the tab area
+ * focuses `perspective_tab:${id}`, and Enter triggers rename via the
+ * `ui.entity.startRename` command on the surrounding `perspective:${id}`
+ * CommandScope (which shadows the global `nav.drillIn: Enter`). There is
+ * no inner `perspective_tab.name` FocusScope because it would register
+ * at the same rect as this wrapper and trigger the kernel's
+ * needless-nesting warning.
  *
- * The fix mirrors entity-card's iteration-2 reshape (card
- * `01KQJDYJ4SDKK2G8FTAQ348ZHG`): promote the wrapper to `<FocusZone>`
- * and wrap each interactive child in its own `<FocusScope>` leaf —
- * `perspective_tab.name:{id}` for the name button,
- * `perspective_tab.filter:{id}` for the filter icon (via Pressable),
- * `perspective_tab.group:{id}` for the group icon (via Pressable).
- * `showFocusBar={false}` because the inner leaves carry the focus
- * signal — no visible bar across the whole tab is wanted.
+ * The two icon affordances on an active tab — `<FilterFocusButton>` and
+ * `<GroupPopoverButton>` — are Pressables, so they mount their own
+ * inner FocusScope leaves (`perspective_tab.filter:${id}`,
+ * `perspective_tab.group:${id}`). These have distinct rects from the
+ * tab name and are independently navigable.
  *
- * Same conditional pattern as `PerspectiveBarSpatialZone` —
- * the strict primitive contract is preserved for production while
- * keeping the test surface narrow.
+ * `showFocusBar={false}` because the focused tab is signalled by the
+ * existing active/inactive border styling — a separate focus rectangle
+ * across the whole tab would be visual noise.
  *
  * See also: `ScopedPerspectiveTab` above — it explains how this wrapper
  * composes with the `<CommandScopeProvider moniker="perspective:{id}">`
@@ -636,20 +640,33 @@ function PerspectiveTab({
     [getSchema, entityType],
   );
 
+  // The TabButton is rendered as a plain `<button>` — NOT wrapped in its
+  // own FocusScope. The outer `<FocusScope moniker={`perspective_tab:${id}`}>`
+  // (PerspectiveTabFocusable) already covers the same rect: an inactive tab
+  // is just the name text plus padding, so an inner `perspective_tab.name`
+  // leaf would register at the exact same (x, y) and trigger the kernel's
+  // needless-nesting warning. Enter on a focused tab triggers rename via
+  // the `ui.entity.startRename` command registered by `ScopedPerspectiveTab`'s
+  // CommandScopeProvider — that binding shadows the global `nav.drillIn:
+  // Enter`, so the focused-component-knows-it's-focused contract holds via
+  // command-scope chain resolution, not a separate inner scope.
+  //
+  // FilterFocusButton and GroupPopoverButton remain Pressables (each owns
+  // its own inner FocusScope leaf) because they live to the right of the
+  // tab name and have distinct rects — they are independently navigable
+  // with arrow keys, separate visible focus targets.
   return (
     <div className="inline-flex items-center">
-      <FocusScope moniker={asSegment(`perspective_tab.name:${id}`)}>
-        <TabButton
-          name={name}
-          isActive={isActive}
-          isRenaming={isRenaming}
-          onSelect={onSelect}
-          onDoubleClick={onDoubleClick}
-          onContextMenu={handleContextMenu}
-          onRenameCommit={onRenameCommit}
-          onRenameCancel={onRenameCancel}
-        />
-      </FocusScope>
+      <TabButton
+        name={name}
+        isActive={isActive}
+        isRenaming={isRenaming}
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onContextMenu={handleContextMenu}
+        onRenameCommit={onRenameCommit}
+        onRenameCancel={onRenameCancel}
+      />
       {isActive && (
         <FilterFocusButton
           perspectiveId={id}
