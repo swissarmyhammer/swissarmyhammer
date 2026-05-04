@@ -63,7 +63,7 @@
 //! intentionally separate: focus state mutates frequently (every
 //! keystroke), structural data mutates only on mount / unmount / resize.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -379,6 +379,170 @@ fn warn_overlap(payload: OverlapWarn<'_>) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Coordinate-system invariant checks (debug-only, observability-only).
+// ---------------------------------------------------------------------------
+
+/// Maximum absolute coordinate that the kernel still considers
+/// "plausibly viewport-relative". 1e6 px is two orders of magnitude
+/// beyond any real desktop layout (8K display = 7680 px wide), so any
+/// coordinate beyond this bound is almost certainly document-relative
+/// (a unit error or a wrong coordinate system) and beam search would
+/// silently mis-rank it against legitimate viewport-relative siblings.
+///
+/// Mirrors the same bound on the TS-side validator
+/// (`kanban-app/ui/src/lib/rect-validation.ts::LARGE_COORD_BOUND`).
+const LARGE_COORD_BOUND: f64 = 1_000_000.0;
+
+/// Multiplier used by [`SpatialRegistry::validate_coordinate_consistency`]
+/// to decide that a single rect is suspiciously far from the layer's
+/// median. When a rect's distance from the centroid is greater than
+/// this multiple of the median distance, the registry emits a
+/// `WARN`-level event flagging a likely coordinate-system mismatch
+/// (e.g. half the layer registered with viewport-relative rects, the
+/// other half with document-relative rects).
+///
+/// Chosen at 10× because production layouts have ~uniform rect
+/// distribution: the bottom card in a column is at most 5× further
+/// from the centroid than the top card. 10× is loose enough to ignore
+/// legitimate spread while still catching the order-of-magnitude
+/// mismatch a coordinate-system bug introduces.
+const COORDINATE_CONSISTENCY_MULTIPLIER: f64 = 10.0;
+
+/// Validate that `rect` is well-formed before insertion / update.
+///
+/// In `cfg(debug_assertions)` builds, emits one `tracing::error!` per
+/// detected violation:
+///
+/// - **Non-finite coordinates** — `NaN`, `+Infinity`, `-Infinity`. These
+///   break beam search distance math (every comparison short-circuits
+///   to `Equal` via `pixels_cmp`).
+/// - **Non-positive dimensions** — `width <= 0` or `height <= 0`. The
+///   handling depends on the op:
+///
+///   - On `"register_scope"` / `"register_zone"` (initial registration),
+///     a zero in either dimension is treated as a *pre-layout transient*:
+///     `getBoundingClientRect()` legitimately returns rects with zero
+///     dims for `display: none`, just-mounted-but-not-yet-laid-out, and
+///     detached nodes (and in test environments, jsdom-style flex/grid
+///     containers commonly produce `width × 0` zones until the first
+///     layout pass). That's not a coordinate-system bug — it's "the
+///     registration `useEffect` ran before the first layout pass."
+///     Downgrades to a single `tracing::warn!` and continues.
+///   - On `"update_rect"`, a zero in either dimension is a real error.
+///     Update fires from `ResizeObserver` and the ancestor-scroll
+///     listener, both of which run only after layout — a zero dim at
+///     this point means a persistent broken rect, not a transient one.
+///
+///   Negative dims always stay in the error path: `getBoundingClientRect()`
+///   never returns a negative width or height, so a negative dim is a
+///   different bug class than "not laid out yet".
+/// - **Implausible scale** — coordinates outside `[-1e6, 1e6]`. A rect
+///   at `(50000, 50000)` is almost certainly document-relative
+///   (`offsetTop` / `offsetLeft` instead of `getBoundingClientRect()`)
+///   and would silently mis-rank against viewport-relative siblings.
+///
+/// In release builds, this function is a no-op — the validator is
+/// observability, not enforcement, and the kernel must remain
+/// best-effort for unknown / torn input. The TS-side validator
+/// (`rect-validation.ts`) catches the same violations earlier in dev
+/// mode, so the kernel-side check is the safety net for IPC adapters
+/// or test fixtures that bypass the React tree.
+///
+/// `op` is the caller op tag (`"register_scope"`, `"register_zone"`,
+/// `"update_rect"`) — used as a structured tracing field so log
+/// readers can correlate the event back to the IPC adapter, AND as the
+/// dispatch key for the registration vs update zero-dim handling
+/// described above.
+fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: &Rect) {
+    #[cfg(debug_assertions)]
+    {
+        let components = [
+            ("x", rect.x.value()),
+            ("y", rect.y.value()),
+            ("width", rect.width.value()),
+            ("height", rect.height.value()),
+        ];
+
+        for (name, value) in components {
+            if !value.is_finite() {
+                tracing::error!(
+                    target: "swissarmyhammer_focus::registry",
+                    op,
+                    fq = %fq,
+                    component = name,
+                    value = format!("{value}"),
+                    "rect component is not finite; expected a real-valued pixel from getBoundingClientRect()"
+                );
+            }
+        }
+
+        let width = rect.width.value();
+        let height = rect.height.value();
+        let is_registration = matches!(op, "register_scope" | "register_zone");
+        // Pre-layout transient: at least one dim is exactly zero, both
+        // are finite, neither is negative, AND we're on the registration
+        // path. Surface as a single warning. On `update_rect`, fall
+        // through to the per-component error path because layout has
+        // already run by the time `ResizeObserver` / scroll fires.
+        let any_zero_dim = width.is_finite()
+            && height.is_finite()
+            && width >= 0.0
+            && height >= 0.0
+            && (width == 0.0 || height == 0.0);
+        if is_registration && any_zero_dim {
+            tracing::warn!(
+                target: "swissarmyhammer_focus::registry",
+                op,
+                fq = %fq,
+                width = width,
+                height = height,
+                "rect has a zero dimension on registration; likely pre-layout transient state (display: none, just-mounted-but-not-yet-laid-out, or detached node) — first ResizeObserver fire should produce a real rect"
+            );
+        } else {
+            if width.is_finite() && width <= 0.0 {
+                tracing::error!(
+                    target: "swissarmyhammer_focus::registry",
+                    op,
+                    fq = %fq,
+                    width = width,
+                    "rect width must be > 0; zero-size rect breaks beam search distance math"
+                );
+            }
+            if height.is_finite() && height <= 0.0 {
+                tracing::error!(
+                    target: "swissarmyhammer_focus::registry",
+                    op,
+                    fq = %fq,
+                    height = height,
+                    "rect height must be > 0; zero-size rect breaks beam search distance math"
+                );
+            }
+        }
+
+        for (name, value) in components {
+            if value.is_finite() && value.abs() > LARGE_COORD_BOUND {
+                tracing::error!(
+                    target: "swissarmyhammer_focus::registry",
+                    op,
+                    fq = %fq,
+                    component = name,
+                    value,
+                    bound = LARGE_COORD_BOUND,
+                    "rect component outside plausible viewport range; likely document-relative coordinates instead of viewport-relative"
+                );
+            }
+        }
+    }
+
+    // In release builds, suppress the unused-arguments lint without
+    // touching the call sites.
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (op, fq, rect);
+    }
+}
+
 /// Headless store for spatial scopes and layers.
 ///
 /// See module docs for the threading model and the split between scopes
@@ -414,6 +578,29 @@ pub struct SpatialRegistry {
     /// overlapping position emits a fresh warning rather than being
     /// silently swallowed by stale state.
     overlap_warn_partner: HashMap<FullyQualifiedMoniker, FullyQualifiedMoniker>,
+    /// Set of layer FQMs whose coordinate consistency has already been
+    /// validated by [`SpatialRegistry::validate_coordinate_consistency`].
+    /// The check is O(n) over the layer's scopes and is meant to run
+    /// **once per layer** — typically on the first nav into the layer
+    /// — rather than on every registration. Tracking the validated
+    /// set here keeps the call site (the navigator) cheap on the
+    /// steady-state hot path.
+    ///
+    /// Re-validation is triggered by clearing this set; in practice
+    /// the registry resets the entry when the layer is removed via
+    /// [`SpatialRegistry::remove_layer`], when a scope is registered or
+    /// updated in the layer (`register_scope`, `register_zone`,
+    /// `update_rect`), or when a scope is unregistered from the layer
+    /// (`unregister_scope`). A re-mounted layer is therefore
+    /// re-validated on its next first nav.
+    ///
+    /// `push_layer` is **intentionally not** an invalidator: re-pushing
+    /// a layer (StrictMode double-mount, palette open/close cycles, IPC
+    /// re-batch) does not move any scope rects, so the cached validation
+    /// result remains valid. Adding `push_layer` to the invalidator set
+    /// would re-walk the layer on every benign re-push without surfacing
+    /// any new mismatch.
+    validated_layers: HashSet<FullyQualifiedMoniker>,
 }
 
 impl SpatialRegistry {
@@ -505,6 +692,15 @@ impl SpatialRegistry {
     ///
     /// [`warn_backward_scope_descendants`]: Self::warn_backward_scope_descendants
     pub fn register_scope(&mut self, f: FocusScope) {
+        // Coordinate-system invariant check (debug-only, observability-
+        // only). See `validate_rect_invariants` for the contract; logs
+        // and continues on bad input so the registry stays consistent.
+        validate_rect_invariants("register_scope", &f.fq, &f.rect);
+        // A new registration in this layer invalidates any prior
+        // coordinate-consistency validation; clear the slot so the
+        // next nav into the layer re-runs the consistency walk.
+        self.validated_layers.remove(&f.layer_fq);
+
         let shape_unchanged = self
             .scopes
             .get(&f.fq)
@@ -592,6 +788,13 @@ impl SpatialRegistry {
     ///
     /// [`register_scope`]: SpatialRegistry::register_scope
     pub fn register_zone(&mut self, z: FocusZone) {
+        // Coordinate-system invariant check (debug-only). Mirrors the
+        // call in [`register_scope`].
+        validate_rect_invariants("register_zone", &z.fq, &z.rect);
+        // Invalidate the coordinate-consistency cache for this layer
+        // so the next nav re-walks the (possibly larger) layer scopes.
+        self.validated_layers.remove(&z.layer_fq);
+
         let shape_unchanged = self
             .scopes
             .get(&z.fq)
@@ -822,6 +1025,13 @@ impl SpatialRegistry {
     /// suppression state. See
     /// [`overlap_warn_partner`](Self#structfield.overlap_warn_partner).
     pub fn unregister_scope(&mut self, fq: &FullyQualifiedMoniker) {
+        // Invalidate the coordinate-consistency cache for the affected
+        // layer before the entry leaves the map — a future nav into
+        // the same layer should re-validate the (now smaller) scope set
+        // rather than skip the walk on a stale "already validated" bit.
+        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq().clone()) {
+            self.validated_layers.remove(&layer_fq);
+        }
         self.scopes.remove(fq);
         self.overlap_warn_partner.remove(fq);
     }
@@ -837,10 +1047,151 @@ impl SpatialRegistry {
     /// persists — `update_rect` fires every animation frame during
     /// scroll-tracking, so without the gate every frame would re-emit.
     pub fn update_rect(&mut self, fq: &FullyQualifiedMoniker, rect: Rect) {
+        // Coordinate-system invariant check (debug-only). Validates
+        // before the mutation so a bad rect surfaces in the log even
+        // if the FQM is unknown (in which case the mutation is
+        // dropped anyway, but the bug at the caller still gets logged).
+        validate_rect_invariants("update_rect", fq, &rect);
+
+        // Invalidate the consistency cache for the affected layer so
+        // a coordinate-system mismatch newly introduced by this
+        // update is caught on the next nav. We look the layer up via
+        // the entry rather than have the caller pass it — a moved
+        // entry stays in its layer.
+        if let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq().clone()) {
+            self.validated_layers.remove(&layer_fq);
+        }
+
         if let Some(scope) = self.scopes.get_mut(fq) {
             *scope.rect_mut() = rect;
         }
         self.check_overlap_warning("update_rect", fq);
+    }
+
+    /// Lazy coordinate-system smoke check for a layer.
+    ///
+    /// Walks every scope in `layer_fq`'s layer, computes the centroid
+    /// of all rect centers, and emits one `tracing::warn!` per scope
+    /// whose distance to the centroid is more than
+    /// `COORDINATE_CONSISTENCY_MULTIPLIER` × the median distance.
+    /// That magnitude jump is a strong signal of a coordinate-system
+    /// mismatch — half the layer registered with viewport-relative
+    /// rects, the other half registered with document-relative rects.
+    /// Production layouts cluster at one to two orders of magnitude
+    /// of spread; the 10× bound is loose enough to ignore that and
+    /// still catch the bug class.
+    ///
+    /// **Lazy**: the first call per layer runs the walk; subsequent
+    /// calls return immediately until the layer is mutated (a
+    /// `register_scope`, `register_zone`, `update_rect`,
+    /// `unregister_scope`, or `remove_layer` clears the cache and
+    /// the next call re-walks). The intended call site is the
+    /// navigator's first nav into the layer, where the registry is
+    /// stable and the walk is paid for once per user session.
+    ///
+    /// **Observability-only**: emits log events but never panics, never
+    /// returns an error, never refuses to compute. A coordinate-system
+    /// mismatch is a programmer bug — the kernel logs it and continues
+    /// to compute (possibly wrong) nav, on the same best-effort
+    /// principle as the rest of the validators in this module.
+    ///
+    /// No-op when the layer has fewer than two scopes (no possible
+    /// mismatch) or when the FQM is not a registered layer.
+    pub fn validate_coordinate_consistency(&mut self, layer_fq: &FullyQualifiedMoniker) {
+        if self.validated_layers.contains(layer_fq) {
+            return;
+        }
+        // Mark the layer as validated up front so a re-entrant call
+        // (unlikely in practice) cannot infinite-loop.
+        self.validated_layers.insert(layer_fq.clone());
+
+        // Collect (fq, center_x, center_y) for every scope in the
+        // layer. Centroid-based distance ignores rect size, which is
+        // the right axis for the coordinate-system check: a rect at
+        // `(50000, 50000)` looks wrong even when its width matches
+        // its peers'.
+        let centers: Vec<(FullyQualifiedMoniker, f64, f64)> = self
+            .scopes
+            .values()
+            .filter(|s| s.layer_fq() == layer_fq)
+            .map(|s| {
+                let r = s.rect();
+                let cx = r.left().value() + r.width.value() / 2.0;
+                let cy = r.top().value() + r.height.value() / 2.0;
+                (s.fq().clone(), cx, cy)
+            })
+            .collect();
+
+        if centers.len() < 2 {
+            return;
+        }
+
+        // Use the **median** of x and y as the "centroid" rather than
+        // the mean — the mean is dragged toward an outlier (a rect
+        // 100000 px away pulls the centroid halfway out, then sits
+        // "near" it by the resulting metric), defeating the whole
+        // point of the check. The median position stays anchored to
+        // the bulk of the rects, so a coordinate-system mismatch
+        // shows up as a single rect very far from the median position.
+        let mut xs: Vec<f64> = centers.iter().map(|(_, x, _)| *x).collect();
+        let mut ys: Vec<f64> = centers.iter().map(|(_, _, y)| *y).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // Approximate / quickselect-style median: pick the upper-middle
+        // element for even-sized arrays rather than averaging the two
+        // middles. The textbook median would be `(xs[n/2 - 1] + xs[n/2])
+        // / 2` for even `n`, but the goal here is a robust scale
+        // estimate for the outlier-detection metric below — not a
+        // statistically pure summary — and the off-by-half-a-rect
+        // difference is irrelevant against the 10× multiplier the metric
+        // applies. The same convention is used for `ys` and
+        // `sorted_distances` below.
+        let centroid_x = xs[xs.len() / 2];
+        let centroid_y = ys[ys.len() / 2];
+
+        let mut distances: Vec<(FullyQualifiedMoniker, f64)> = centers
+            .into_iter()
+            .map(|(fq, cx, cy)| {
+                let dx = cx - centroid_x;
+                let dy = cy - centroid_y;
+                (fq, (dx * dx + dy * dy).sqrt())
+            })
+            .collect();
+
+        // Median distance — a robust scale estimate that is not
+        // skewed by one outlier the way the mean would be.
+        let mut sorted_distances: Vec<f64> = distances.iter().map(|(_, d)| *d).collect();
+        sorted_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted_distances[sorted_distances.len() / 2];
+
+        // A median of zero means every rect is at the centroid (all
+        // entries share one coordinate); any non-zero distance is
+        // technically infinite ratio. Skip the walk in that
+        // degenerate case — the alternative would emit a warning
+        // for every entry that happens to be the slightest bit
+        // off-center, which is noise.
+        if median <= f64::EPSILON {
+            return;
+        }
+
+        let bound = median * COORDINATE_CONSISTENCY_MULTIPLIER;
+        // Stable iteration order makes log output deterministic; the
+        // `HashMap`'s iteration order is not, so we sort by FQM here.
+        distances.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+        for (fq, distance) in distances {
+            if distance > bound {
+                tracing::warn!(
+                    target: "swissarmyhammer_focus::registry",
+                    op = "validate_coordinate_consistency",
+                    layer = %layer_fq,
+                    fq = %fq,
+                    distance,
+                    median,
+                    bound,
+                    "scope rect is far from layer centroid; likely coordinate-system mismatch (mixed viewport-relative and document-relative rects?)"
+                );
+            }
+        }
     }
 
     /// Detect a same-kind overlap for the entry at `fq` and emit
@@ -1163,16 +1514,13 @@ impl SpatialRegistry {
             }
         }
 
-        // Cold-start fallback: first child by rect top-left. Tie-break on
-        // `left()` so two rows at the same `top` produce a deterministic
-        // winner. Borrows from the registry; only the chosen FQM is
-        // cloned out. When the zone has no children at all, echo the
-        // focused FQM so the caller's no-descent fall-through fires.
-        self.child_entries_of_zone(&zone.fq)
-            .min_by(|a, b| {
-                pixels_cmp(a.rect().top(), b.rect().top())
-                    .then(pixels_cmp(a.rect().left(), b.rect().left()))
-            })
+        // Cold-start fallback: first child by rect top-left, via the
+        // shared `first_child_by_top_left` helper. The navigator's
+        // `Direction::First` edge command calls the same helper, so
+        // drill-in's cold-start pick and `nav.first` cannot drift apart.
+        // When the zone has no children at all, echo the focused FQM so
+        // the caller's no-descent fall-through fires.
+        first_child_by_top_left(self.child_entries_of_zone(&zone.fq))
             .map(|s| s.fq().clone())
             .unwrap_or_else(|| focused_fq.clone())
     }
@@ -1313,6 +1661,9 @@ impl SpatialRegistry {
     /// state remains consistent without a GC pass.
     pub fn remove_layer(&mut self, fq: &FullyQualifiedMoniker) {
         self.layers.remove(fq);
+        // Drop the consistency-validated bit so a remounted layer is
+        // re-validated on its next first nav.
+        self.validated_layers.remove(fq);
     }
 
     /// Borrow a layer by FQM.
@@ -1506,6 +1857,48 @@ impl SpatialRegistry {
 
         Ok(())
     }
+}
+
+/// Pick the topmost-then-leftmost child from `children`.
+///
+/// Compares `rect().top()`, breaking ties on `rect().left()`. This is
+/// the canonical "first child" ordering shared by:
+///
+/// - [`SpatialRegistry::drill_in`]'s cold-start fallback (when the
+///   target zone has no `last_focused` memory).
+/// - The navigator's `Direction::First` edge command
+///   (`navigate::edge_command`), and the deprecated
+///   `Direction::RowStart` alias that routes through the same arm.
+///
+/// Both call sites previously carried verbatim copies of the same
+/// `min_by` comparator. Centralising the ordering here means
+/// behavioural drift between drill-in and `nav.first` is impossible by
+/// construction — the two ops cannot diverge unless they stop calling
+/// this helper.
+pub(crate) fn first_child_by_top_left<'a>(
+    children: impl Iterator<Item = &'a RegisteredScope>,
+) -> Option<&'a RegisteredScope> {
+    children.min_by(|a, b| {
+        pixels_cmp(a.rect().top(), b.rect().top())
+            .then(pixels_cmp(a.rect().left(), b.rect().left()))
+    })
+}
+
+/// Pick the bottommost-then-rightmost child from `children`.
+///
+/// The mirror of [`first_child_by_top_left`]: compares
+/// `rect().bottom()`, breaking ties on `rect().right()`. Comparing
+/// bottoms (rather than tops) means a child whose top sits higher than
+/// a sibling's but whose bottom extends below still wins. Used by the
+/// navigator's `Direction::Last` edge command, and by the deprecated
+/// `Direction::RowEnd` alias that routes through the same arm.
+pub(crate) fn last_child_by_bottom_right<'a>(
+    children: impl Iterator<Item = &'a RegisteredScope>,
+) -> Option<&'a RegisteredScope> {
+    children.max_by(|a, b| {
+        pixels_cmp(a.rect().bottom(), b.rect().bottom())
+            .then(pixels_cmp(a.rect().right(), b.rect().right()))
+    })
 }
 
 /// Public variant-aware view over a registered scope, returned by
@@ -1846,5 +2239,523 @@ mod tests {
             .root_for_window(&WindowLabel::from_string("win-a"))
             .unwrap();
         assert_eq!(root.fq, FullyQualifiedMoniker::from_string("/win-a"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Coordinate-system validators (debug-only, observability-only).
+    // ---------------------------------------------------------------------
+
+    /// Tracing capture utility for the validator tests.
+    ///
+    /// Records every event at or above `Level::WARN` (which includes
+    /// the `tracing::error!` calls in the rect-invariant validator and
+    /// the `tracing::warn!` call in the coordinate-consistency walk),
+    /// returning the structured field rendering of each one. Mirrors
+    /// the per-test `capture_warns` helper in
+    /// `tests/overlap_tracing.rs` but keeps the layer machinery local
+    /// so the unit-test module owns a single copy.
+    mod capture {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use tracing::{
+            field::{Field, Visit},
+            span::Attributes,
+            Event, Id, Level, Subscriber,
+        };
+        use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
+
+        /// One captured event with its structured fields rendered to
+        /// strings. The visitor below stores everything by name; tests
+        /// look up specific keys (`op`, `fq`, `component`, …) to
+        /// assert on contract details.
+        #[derive(Debug, Default, Clone)]
+        pub(super) struct CapturedEvent {
+            pub(super) level: Option<Level>,
+            pub(super) message: String,
+            pub(super) fields: HashMap<String, String>,
+        }
+
+        impl CapturedEvent {
+            pub(super) fn op(&self) -> Option<&str> {
+                self.fields.get("op").map(String::as_str)
+            }
+
+            pub(super) fn field(&self, name: &str) -> Option<&str> {
+                self.fields.get(name).map(String::as_str)
+            }
+
+            /// Returns `true` when the event was logged with the
+            /// caller-supplied op tag, regardless of severity.
+            pub(super) fn is_op(&self, op: &str) -> bool {
+                self.op() == Some(op)
+            }
+        }
+
+        struct FieldVisitor<'a> {
+            fields: &'a mut HashMap<String, String>,
+            message: &'a mut String,
+        }
+
+        impl<'a> Visit for FieldVisitor<'a> {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                if field.name() == "message" {
+                    self.message.push_str(value);
+                } else {
+                    self.fields
+                        .insert(field.name().to_string(), value.to_string());
+                }
+            }
+            fn record_i64(&mut self, field: &Field, value: i64) {
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
+            }
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
+            }
+            fn record_f64(&mut self, field: &Field, value: f64) {
+                self.fields
+                    .insert(field.name().to_string(), format!("{value}"));
+            }
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.fields
+                    .insert(field.name().to_string(), value.to_string());
+            }
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.message.push_str(&format!("{value:?}"));
+                } else {
+                    self.fields
+                        .insert(field.name().to_string(), format!("{value:?}"));
+                }
+            }
+        }
+
+        struct CapturingLayer {
+            events: Arc<Mutex<Vec<CapturedEvent>>>,
+        }
+
+        impl<S> Layer<S> for CapturingLayer
+        where
+            S: Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+                let level = *event.metadata().level();
+                if level > Level::WARN {
+                    return;
+                }
+                let mut captured = CapturedEvent {
+                    level: Some(level),
+                    ..CapturedEvent::default()
+                };
+                let mut visitor = FieldVisitor {
+                    fields: &mut captured.fields,
+                    message: &mut captured.message,
+                };
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(captured);
+            }
+
+            fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
+        }
+
+        /// Run `f` under a tracing subscriber that captures WARN/ERROR
+        /// events into a `Vec<CapturedEvent>`. Returns the captured
+        /// events plus whatever `f` returned.
+        pub(super) fn capture<F, R>(f: F) -> (R, Vec<CapturedEvent>)
+        where
+            F: FnOnce() -> R,
+        {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let layer = CapturingLayer {
+                events: events.clone(),
+            };
+            let subscriber = tracing_subscriber::registry().with(layer);
+            let result = tracing::subscriber::with_default(subscriber, f);
+            let captured = events.lock().unwrap().clone();
+            (result, captured)
+        }
+    }
+
+    fn rect_xywh(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect {
+            x: Pixels::new(x),
+            y: Pixels::new(y),
+            width: Pixels::new(w),
+            height: Pixels::new(h),
+        }
+    }
+
+    fn scope_with_rect(fq: &str, layer: &str, r: Rect) -> FocusScope {
+        FocusScope {
+            fq: FullyQualifiedMoniker::from_string(fq),
+            segment: SegmentMoniker::from_string(fq.rsplit('/').next().unwrap_or(fq)),
+            rect: r,
+            layer_fq: FullyQualifiedMoniker::from_string(layer),
+            parent_zone: None,
+            overrides: HashMap::new(),
+        }
+    }
+
+    /// Filter captured events down to rect-invariant validator events
+    /// only — every such event carries either a `component` field
+    /// (finite / scale violations) or a `width`/`height` field
+    /// (positive-dim violations). We exclude consistency events
+    /// (op = "validate_coordinate_consistency") so callers can mix
+    /// the two predicates as needed.
+    fn rect_invariant_events(
+        events: &[capture::CapturedEvent],
+    ) -> Vec<&capture::CapturedEvent> {
+        events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.op(),
+                    Some("register_scope") | Some("register_zone") | Some("update_rect")
+                ) && (e.field("component").is_some()
+                    || e.field("width").is_some()
+                    || e.field("height").is_some())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn register_scope_with_negative_width_logs_error() {
+        let bad = scope_with_rect("/L/x", "/L", rect_xywh(0.0, 0.0, -10.0, 10.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(bad);
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| e.is_op("register_scope") && e.field("width").is_some())
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "expected at least one error for negative width, got {captured:?}"
+        );
+        assert_eq!(events[0].level, Some(tracing::Level::ERROR));
+        assert_eq!(events[0].field("fq"), Some("/L/x"));
+    }
+
+    #[test]
+    fn register_scope_with_infinite_y_logs_error() {
+        let bad = scope_with_rect("/L/y", "/L", rect_xywh(0.0, f64::INFINITY, 10.0, 10.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(bad);
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("register_scope")
+                    && e.field("component") == Some("y")
+                    && e.message.contains("not finite")
+            })
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "expected at least one finite-violation error for y, got {captured:?}"
+        );
+        assert_eq!(events[0].level, Some(tracing::Level::ERROR));
+    }
+
+    #[test]
+    fn register_scope_with_sane_rect_logs_no_validator_event() {
+        let good = scope_with_rect("/L/ok", "/L", rect_xywh(100.0, 80.0, 50.0, 30.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(good);
+        });
+        let bad = rect_invariant_events(&captured);
+        assert!(
+            bad.is_empty(),
+            "expected no rect-invariant events for sane rect, got {bad:?}"
+        );
+    }
+
+    #[test]
+    fn register_scope_with_implausible_scale_logs_error() {
+        let bad = scope_with_rect(
+            "/L/far",
+            "/L",
+            rect_xywh(50_000_000.0, 0.0, 10.0, 10.0),
+        );
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(bad);
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("register_scope")
+                    && e.field("component") == Some("x")
+                    && e.message.contains("plausible viewport range")
+            })
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "expected error for implausible x coordinate, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn register_scope_with_zero_dim_warns_not_errors() {
+        // `getBoundingClientRect()` returns rects with zero dims for
+        // `display: none`, just-mounted-but-not-yet-laid-out, and
+        // detached nodes (in test environments, jsdom-style flex/grid
+        // containers commonly produce `width × 0` zones too). On
+        // registration that is not a coordinate-system bug — it's "the
+        // registration `useEffect` ran before the first layout pass."
+        // The validator surfaces this as a `tracing::warn!` and
+        // continues, keeping the error channel clean for real bugs.
+        let transient = scope_with_rect("/L/transient", "/L", rect_xywh(0.0, 0.0, 100.0, 0.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(transient);
+        });
+        let errors: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("register_scope")
+                    && e.level == Some(tracing::Level::ERROR)
+                    && (e.field("width").is_some() || e.field("height").is_some())
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "expected no width/height errors for zero-dim register, got {errors:?}"
+        );
+        let warnings: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("register_scope")
+                    && e.level == Some(tracing::Level::WARN)
+                    && e.message.contains("zero dimension")
+            })
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "expected one pre-layout-transient warning, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn register_scope_with_both_zero_rect_warns_not_errors() {
+        // The full structural pre-layout case: both dims are zero. Same
+        // result as the partial-zero case on registration — single
+        // warning, no error.
+        let transient = scope_with_rect("/L/zero", "/L", rect_xywh(0.0, 0.0, 0.0, 0.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(transient);
+        });
+        let errors: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("register_scope")
+                    && e.level == Some(tracing::Level::ERROR)
+                    && (e.field("width").is_some() || e.field("height").is_some())
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "expected no width/height errors for 0x0 register, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn update_rect_with_zero_dim_logs_error_not_transient_warning() {
+        // `update_rect` runs from ResizeObserver / ancestor-scroll, both
+        // of which fire only after layout. A zero dim at this point is
+        // a real bug — the kernel will record a persistent broken rect.
+        let good = scope_with_rect("/L/post", "/L", rect_xywh(10.0, 10.0, 100.0, 100.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(good);
+            reg.update_rect(
+                &FullyQualifiedMoniker::from_string("/L/post"),
+                rect_xywh(10.0, 10.0, 100.0, 0.0),
+            );
+        });
+        let errors: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.is_op("update_rect")
+                    && e.level == Some(tracing::Level::ERROR)
+                    && e.field("height").is_some()
+            })
+            .collect();
+        assert!(
+            !errors.is_empty(),
+            "expected an error for zero-height update_rect, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn update_rect_with_bad_rect_logs_error() {
+        let good = scope_with_rect("/L/m", "/L", rect_xywh(10.0, 10.0, 20.0, 20.0));
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            reg.register_scope(good);
+            reg.update_rect(
+                &FullyQualifiedMoniker::from_string("/L/m"),
+                rect_xywh(0.0, 0.0, -1.0, 20.0),
+            );
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| e.is_op("update_rect") && e.field("width").is_some())
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "expected update_rect to log on negative width, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn validate_coordinate_consistency_with_uniform_rects_does_not_warn() {
+        let layer_fq = FullyQualifiedMoniker::from_string("/L");
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            // Five rects on a regular grid — all roughly equidistant
+            // from the centroid.
+            reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 50.0, 50.0)));
+            reg.register_scope(scope_with_rect(
+                "/L/b",
+                "/L",
+                rect_xywh(100.0, 0.0, 50.0, 50.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/c",
+                "/L",
+                rect_xywh(0.0, 100.0, 50.0, 50.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/d",
+                "/L",
+                rect_xywh(100.0, 100.0, 50.0, 50.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/e",
+                "/L",
+                rect_xywh(50.0, 50.0, 50.0, 50.0),
+            ));
+            reg.validate_coordinate_consistency(&layer_fq);
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| e.is_op("validate_coordinate_consistency"))
+            .collect();
+        assert!(
+            events.is_empty(),
+            "expected no consistency warnings for uniform rects, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn validate_coordinate_consistency_with_one_far_outlier_warns() {
+        let layer_fq = FullyQualifiedMoniker::from_string("/L");
+        let (_, captured) = capture::capture(|| {
+            let mut reg = SpatialRegistry::new();
+            // Four rects clustered near the origin, one rect 10000×
+            // further out — the classic "half viewport-relative,
+            // half document-relative" signal.
+            reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 10.0, 10.0)));
+            reg.register_scope(scope_with_rect("/L/b", "/L", rect_xywh(10.0, 0.0, 10.0, 10.0)));
+            reg.register_scope(scope_with_rect("/L/c", "/L", rect_xywh(0.0, 10.0, 10.0, 10.0)));
+            reg.register_scope(scope_with_rect(
+                "/L/d",
+                "/L",
+                rect_xywh(10.0, 10.0, 10.0, 10.0),
+            ));
+            reg.register_scope(scope_with_rect(
+                "/L/far",
+                "/L",
+                rect_xywh(100_000.0, 100_000.0, 10.0, 10.0),
+            ));
+            reg.validate_coordinate_consistency(&layer_fq);
+        });
+        let events: Vec<_> = captured
+            .iter()
+            .filter(|e| e.is_op("validate_coordinate_consistency"))
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "expected consistency warning for the far outlier, got {captured:?}"
+        );
+        // The far rect should be the one flagged; depending on
+        // centroid math the other rects might also be flagged when
+        // the far rect drags the centroid heavily. At minimum the
+        // outlier itself must appear.
+        assert!(
+            events.iter().any(|e| e.field("fq") == Some("/L/far")),
+            "expected /L/far in flagged FQMs, got {:?}",
+            events
+                .iter()
+                .map(|e| e.field("fq"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn validate_coordinate_consistency_is_lazy_per_layer() {
+        let layer_fq = FullyQualifiedMoniker::from_string("/L");
+        let mut reg = SpatialRegistry::new();
+        reg.register_scope(scope_with_rect("/L/a", "/L", rect_xywh(0.0, 0.0, 10.0, 10.0)));
+        reg.register_scope(scope_with_rect(
+            "/L/far",
+            "/L",
+            rect_xywh(100_000.0, 100_000.0, 10.0, 10.0),
+        ));
+        reg.register_scope(scope_with_rect("/L/b", "/L", rect_xywh(10.0, 0.0, 10.0, 10.0)));
+        reg.register_scope(scope_with_rect("/L/c", "/L", rect_xywh(0.0, 10.0, 10.0, 10.0)));
+        reg.register_scope(scope_with_rect(
+            "/L/d",
+            "/L",
+            rect_xywh(10.0, 10.0, 10.0, 10.0),
+        ));
+
+        // First call walks the layer.
+        let (_, first) = capture::capture(|| {
+            reg.validate_coordinate_consistency(&layer_fq);
+        });
+        let first_events: Vec<_> = first
+            .iter()
+            .filter(|e| e.is_op("validate_coordinate_consistency"))
+            .collect();
+        assert!(!first_events.is_empty(), "first call should walk and warn");
+
+        // Second call is a no-op until the layer is mutated.
+        let (_, second) = capture::capture(|| {
+            reg.validate_coordinate_consistency(&layer_fq);
+        });
+        let second_events: Vec<_> = second
+            .iter()
+            .filter(|e| e.is_op("validate_coordinate_consistency"))
+            .collect();
+        assert!(
+            second_events.is_empty(),
+            "second call without mutation should be a no-op, got {second_events:?}"
+        );
+
+        // Mutation invalidates the cache: a fresh register_scope
+        // resets the slot, and the next call re-walks.
+        reg.register_scope(scope_with_rect(
+            "/L/e",
+            "/L",
+            rect_xywh(20.0, 20.0, 10.0, 10.0),
+        ));
+        let (_, third) = capture::capture(|| {
+            reg.validate_coordinate_consistency(&layer_fq);
+        });
+        let third_events: Vec<_> = third
+            .iter()
+            .filter(|e| e.is_op("validate_coordinate_consistency"))
+            .collect();
+        assert!(
+            !third_events.is_empty(),
+            "post-mutation call should re-walk and warn, got {third_events:?}"
+        );
     }
 }

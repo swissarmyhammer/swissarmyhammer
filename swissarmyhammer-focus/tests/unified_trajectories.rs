@@ -43,92 +43,71 @@ fn nav(app: &RealisticApp, from: &FullyQualifiedMoniker, dir: Direction) -> Full
 // Trajectory A — vertical traversal up the entity stack.
 // ---------------------------------------------------------------------------
 
-/// Trajectory A: from `task:T1A`, repeated `Up` walks
-/// `T1A → field:column:TODO.name → column:TODO → perspective_tab:p1
-/// → ui:navbar.board-selector → ui:navbar (echoed at layer root)`.
+/// Trajectory A: from `task:T1A`, repeated `Up` under the geometric
+/// pick walks across zone boundaries directly to the visually-nearest
+/// in-beam scope:
+/// `T1A → field:column:TODO.name → perspective_tab:p2 →
+/// navbar.board-selector → echo (stay-put at top edge)`.
 ///
-/// Under the any-kind iter-0 sibling rule (`zones and scopes are
-/// siblings under a parent zone`), the column-name field zone above
-/// `task:T1A` is a valid Up candidate even though it is a zone and
-/// the focused entry is a leaf — both share `column:TODO` as their
-/// `parent_zone`. The walk visits the column-name zone first, then
-/// drills out to the column zone, then escalates through the chrome
-/// peers at the layer root with cross-zone drill-in landing on each
-/// destination's natural child for `Up` (the bottommost leaf, with
-/// leftmost as tie-break).
+/// Pre-fix the structural cascade drilled out to the column zone
+/// after the column-name field zone, then escalated through
+/// peer-zone landings with a cross-zone drill-in step. Under the
+/// geometric pick the user reaches the visually-nearest scope
+/// directly — column-name → perspective-tab (skipping the column
+/// zone wrapper), and perspective-tab → navbar leaf (skipping the
+/// navbar zone wrapper).
 #[test]
-fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_tab_to_navbar_leaf()
-{
+fn geometric_trajectory_a_up_walks_card_to_column_name_to_perspective_tab_to_navbar_leaf() {
     let app = RealisticApp::new();
 
-    // Step 1: T1A → field:column:TODO.name (any-kind in-zone Up peer
-    // at iter 0 — the column-name field zone above task:T1A is a
-    // sibling under `column:TODO`).
+    // Step 1: T1A → field:column:TODO.name (the column-name field
+    // zone above task:T1A is the visually-nearest in-beam Up scope).
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
         app.column_name_fq(0),
-        "Up from task:T1A must land on field:column:TODO.name (any-kind \
-         in-zone sibling — both share column:TODO as their parent_zone, \
-         and iter 0 picks the geometrically best candidate of any kind)"
+        "Up from task:T1A must land on field:column:TODO.name — the \
+         visually-nearest in-beam Up scope under the geometric pick."
     );
 
-    // Step 2: field:column:TODO.name → column:TODO (drill out — there
-    // is no Up peer of the column-name zone in column:TODO at iter 0,
-    // and iter 1 finds no peer-zone of column:TODO above it at
-    // ui:board's level; the cascade falls back to the parent zone).
-    // Drill-out does NOT trigger drill-in.
+    // Step 2: field:column:TODO.name → perspective_tab:p2 — the
+    // perspective tab whose center_x (232) is closest to the
+    // column-name's center_x (260) wins on minor-axis distance. The
+    // geometric pick reaches across structural boundaries directly
+    // without a column-zone drill-out step.
     let from = app.column_name_fq(0);
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.column_fq(0),
-        "Up from field:column:TODO.name must drill out to column:TODO \
-         (no Up peer at iter 0 inside column:TODO; iter 1 finds no \
-         peer-zone of column:TODO above; cascade returns the parent zone). \
-         Drill-out does not trigger drill-in."
+        app.perspective_tab_p2_fq(),
+        "Up from field:column:TODO.name must land on perspective_tab:p2 \
+         under the geometric pick (closest center_x match); pre-fix the \
+         structural cascade drilled out to column:TODO first."
     );
 
-    // Step 3: column:TODO → perspective_tab:p1 (peer match at iter 1
-    // after escalation, then cross-zone drill-in into
-    // ui:perspective-bar's natural Up child — the bottommost leaf,
-    // with leftmost as tie-break — lands on perspective_tab:p1).
-    let from = app.column_fq(0);
-    assert_eq!(
-        nav(&app, &from, Direction::Up),
-        app.perspective_tab_p1_fq(),
-        "Up from column:TODO must drill into ui:perspective-bar's natural \
-         Up child (bottommost leaf, tie-broken leftmost): perspective_tab:p1"
-    );
-
-    // Step 4: perspective_tab:p1 → ui:navbar.board-selector (iter 1
-    // escalates to ui:perspective-bar, finds ui:navbar as the Up
-    // peer at the layer root, drills into ui:navbar's natural Up
-    // child — the bottommost leaf, tie-broken leftmost — which is
-    // ui:navbar.board-selector).
+    // Step 3: perspective_tab:p1 → ui:navbar.board-selector. Pick
+    // p1 explicitly here so the test exercises the
+    // perspective-tab → navbar-leaf trajectory at the leftmost tab.
     let from = app.perspective_tab_p1_fq();
     assert_eq!(
         nav(&app, &from, Direction::Up),
         app.navbar_board_selector_fq(),
-        "Up from perspective_tab:p1 must drill into ui:navbar's natural \
-         Up child (bottommost leaf, tie-broken leftmost): ui:navbar.board-selector"
+        "Up from perspective_tab:p1 must land on ui:navbar.board-selector \
+         (the closest in-beam Up scope by center_x match)."
     );
 
-    // Step 5: ui:navbar.board-selector → ui:navbar (drill out — no
-    // Up peer inside ui:navbar at iter 0; iter 1 from ui:navbar's
-    // grandparent finds no Up peer at the layer root; cascade falls
-    // back to ui:navbar). Drill-out does not trigger drill-in.
+    // Step 4: ui:navbar.board-selector → echo. The board-selector
+    // leaf sits at the very top of the layer (y=8); nothing is
+    // strictly above it in the Up half-plane. The geometric pick
+    // stays put per the no-silent-dropout contract.
     let from = app.navbar_board_selector_fq();
     assert_eq!(
         nav(&app, &from, Direction::Up),
-        app.navbar_fq(),
-        "Up from ui:navbar.board-selector must drill out to ui:navbar \
-         (no Up peer at iter 0; iter 1 finds no peer-zone of ui:navbar \
-         above at the layer root; cascade returns the parent zone)"
+        from,
+        "Up from ui:navbar.board-selector stays put — nothing strictly \
+         above in the layer's Up half-plane."
     );
 
-    // Step 6: ui:navbar → ui:navbar (no peer, no parent zone).
-    // Under the no-silent-dropout contract the cascade echoes the
-    // focused FQM rather than returning None.
+    // Step 5: ui:navbar → echo. No peer, no parent zone.
     let from = app.navbar_fq();
     assert_eq!(
         nav(&app, &from, Direction::Up),
@@ -141,35 +120,31 @@ fn unified_trajectory_a_up_walks_card_to_column_name_to_column_to_perspective_ta
 // Trajectory B — cross-column horizontal navigation.
 // ---------------------------------------------------------------------------
 
-/// Trajectory B: `nav("task:T1A", Right) == field:column:DOING.name`
-/// — iter 1 finds `column:DOING` as the Right peer of `column:TODO`,
-/// then cross-zone drill-in descends into `column:DOING`'s natural
-/// `Right` child (leftmost child with topmost tie-break, here the
-/// column-name field zone).
+/// Trajectory B (geometric): `nav("task:T1A", Right) == task:T1B` —
+/// the visually-adjacent card directly to the right at the same y.
+/// Under the geometric pick the cross-column nav lands on the
+/// matching-row card, not on the column-name header above. Pre-fix
+/// the structural cascade drilled into `column:DOING`'s natural
+/// child via a cross-zone drill-in step that no longer exists.
 #[test]
-fn unified_trajectory_b_right_from_card_in_column_a_drills_into_column_doing_name() {
+fn geometric_trajectory_b_right_from_card_lands_on_card_in_next_column() {
     let app = RealisticApp::new();
 
-    // Right from T1A → field:column:DOING.name (cross-zone drill-in
-    // resolves to the leftmost child of column:DOING, tie-broken
-    // topmost).
+    // Right from T1A → T1B (matching y range, in-beam Right).
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.column_name_fq(1),
-        "Right from task:T1A must drill into column:DOING's natural Right child \
-         (leftmost child, tie-broken topmost): field:column:DOING.name"
+        app.card_fq(1, 1),
+        "Right from task:T1A must land on task:T1B — the visually-adjacent \
+         card in the next column."
     );
 
-    // Mirror: Left from T1B → field:column:TODO.name (cross-zone
-    // drill-in resolves to the rightmost child of column:TODO,
-    // tie-broken topmost).
+    // Mirror: Left from T1B → T1A (symmetric).
     let from = app.card_fq(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        app.column_name_fq(0),
-        "Left from task:T1B must drill into column:TODO's natural Left child \
-         (rightmost child, tie-broken topmost): field:column:TODO.name"
+        app.card_fq(1, 0),
+        "Left from task:T1B must land on task:T1A symmetrically."
     );
 }
 
@@ -177,17 +152,26 @@ fn unified_trajectory_b_right_from_card_in_column_a_drills_into_column_doing_nam
 // Trajectory C — left from leftmost card.
 // ---------------------------------------------------------------------------
 
-/// Trajectory C: `nav("task:T1A", Left) == column:TODO`.
+/// Trajectory C (geometric): `nav("task:T1A", Left)` lands inside
+/// `ui:left-nav` — the LeftNav sidebar visible to the left of the
+/// board. This is the cross-zone bug class fix; pre-fix the
+/// structural cascade returned `column:TODO` (the parent zone).
 #[test]
-fn unified_trajectory_c_left_from_leftmost_card_drills_out_to_column_zone() {
+fn geometric_trajectory_c_left_from_leftmost_card_lands_in_left_nav() {
     let app = RealisticApp::new();
 
     let from = app.card_fq(1, 0);
-    assert_eq!(
-        nav(&app, &from, Direction::Left),
-        app.column_fq(0),
-        "Left from task:T1A in the leftmost column must drill out to column:TODO \
-         (no peer at any level; the cascade returns the parent zone rather than echoing)"
+    let result = nav(&app, &from, Direction::Left);
+    let acceptable = [
+        app.left_nav_fq(),
+        app.view_button_grid_fq(),
+        app.view_button_list_fq(),
+    ];
+    assert!(
+        acceptable.contains(&result),
+        "Left from task:T1A in the leftmost column must land inside \
+         ui:left-nav under the geometric pick. Got {result:?}; expected \
+         one of {acceptable:?}.",
     );
 }
 
@@ -218,16 +202,17 @@ fn unified_trajectory_d_down_between_inspector_field_zones_with_layer_boundary_g
         "Down from field:task:T1A.status must land on field:task:T1A.assignees (peer below)"
     );
 
-    // Step 3: assignees → panel:task:T1A (drill out — panel has no
-    // siblings within the inspector layer, so the cascade returns the
-    // parent zone itself).
+    // Step 3: assignees → echo (stay-put). The inspector layer has
+    // nothing strictly below the assignees field — the panel zone
+    // wraps assignees and fails the strict half-plane test. Under
+    // the geometric pick this is the visual-edge stay-put path.
     let from = app.inspector_field_assignees_fq();
     let result_fq = nav(&app, &from, Direction::Down);
     assert_eq!(
-        result_fq,
-        app.inspector_panel_fq(),
-        "Down from field:task:T1A.assignees must drill out to panel:task:T1A \
-         (no peer at any inspector-layer level; cascade returns the parent zone)"
+        result_fq, from,
+        "Down from field:task:T1A.assignees stays put — the inspector \
+         layer has nothing strictly below in the Down half-plane (the \
+         panel zone wraps assignees and fails the strict test)."
     );
 
     // Layer-boundary guard. The result above must NOT be any FQM

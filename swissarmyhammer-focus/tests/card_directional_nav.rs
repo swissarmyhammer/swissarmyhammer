@@ -69,18 +69,25 @@ fn down_from_t2a_lands_on_t3a() {
     );
 }
 
-/// Pressing `down` from the bottom card in a column has no in-zone
-/// peer below; the unified cascade escalates to `column:TODO` and
-/// finds no zone peer below either. The cascade falls back to the
-/// parent zone via drill-out and returns `column:TODO`.
+/// Pressing `down` from the bottom card has nothing strictly in the
+/// Down half-plane in the layer — the column zone, the board zone,
+/// and other columns all extend above T3A's bottom edge or share it,
+/// so the strict half-plane test filters them out. The geometric
+/// pick stays put per the no-silent-dropout contract.
+///
+/// Pre-fix the structural cascade drilled out to `column:TODO`. The
+/// new behaviour is correct: T3A is the visually bottom-most thing
+/// in this region, so pressing Down has no real target.
 #[test]
-fn down_from_t3a_drills_out_to_column_zone() {
+fn down_from_t3a_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
     let from = app.card_fq(3, 0);
     assert_eq!(
         nav(&app, &from, Direction::Down),
-        app.column_fq(0),
-        "down from task:T3A (bottom card) must drill out to column:TODO under the unified cascade"
+        from,
+        "down from task:T3A (bottom card) has nothing strictly in the Down \
+         half-plane — the geometric pick stays put per the no-silent-dropout \
+         contract."
     );
 }
 
@@ -132,47 +139,52 @@ fn up_from_t1a_lands_on_column_name_zone() {
 // Right — horizontal advance into the next column.
 // ---------------------------------------------------------------------------
 
-/// Pressing `right` from the top card in column TODO advances onto
-/// column DOING and drills into its natural leaf in the search
-/// direction — for `Right`, the leftmost child of column DOING (with
-/// ties broken topmost). Both column-name field zone and cards share
-/// the same left edge, so the topmost child wins: the column-name
-/// field zone above the cards.
+/// Pressing `right` from the top card in column TODO lands on the
+/// top card in column DOING — the visually-adjacent card directly to
+/// the right. T1A and T1B share the same y range, so T1B is in-beam
+/// for `Right`; geometrically T1B's leading edge (left=488) and
+/// matching y range produce a much smaller minor-axis distance than
+/// the column-name field zone (which sits ABOVE T1A's row, so it is
+/// out of beam) or the column zone (which has its center far below).
 ///
-/// The cross-zone drill-in landed in card
-/// `01KQPW1FTYFWTDMW6ESM5ABGJQ` — iter 1 still finds `column:DOING`
-/// as the right peer of `column:TODO`, but the cascade no longer
-/// stops at the destination zone. Drilling in produces a leaf the
-/// focus indicator can paint on regardless of whether the
-/// destination zone has `showFocusBar={false}`.
+/// Under the geometric-pick contract this is the natural keyboard-
+/// as-mouse answer: pressing Right from a card lands on the next
+/// card in the next column rather than on the column header. Pre-fix
+/// the structural cascade drilled into `column:DOING`'s natural
+/// child via a cross-zone drill-in step that no longer exists.
 #[test]
-fn right_from_t1a_lands_on_column_doing_name_field() {
+fn right_from_t1a_lands_on_t1b() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.column_name_fq(1),
-        "right from task:T1A must drill into column:DOING's natural child for the \
-         `Right` direction — the leftmost child, with topmost as tie-break (the \
-         column-name field zone). Pre-drill-in this stopped at column:DOING; the \
-         new contract resolves cross-zone landings to a leaf so the focus \
-         indicator paints regardless of the destination zone's `showFocusBar`."
+        app.card_fq(1, 1),
+        "right from task:T1A must land on task:T1B — the visually-adjacent \
+         card to the right under the geometric pick. Both share the same y \
+         range, so T1B is in-beam and beats the column-name zone (out of \
+         beam) and the column zone (further by minor-axis distance)."
     );
 }
 
-/// Pressing `right` from any card in the rightmost column has no
-/// in-zone peer; the unified cascade escalates to `column:DONE` and
-/// finds no zone peer right of it. The cascade drills out and returns
-/// `column:DONE`.
+/// Pressing `right` from any card in the rightmost column has
+/// nothing strictly in the layer's Right half-plane — the column
+/// zones, the board zone, and the navbar/perspective bar all share
+/// the same right edge or extend leftward. Under the geometric-pick
+/// contract this is the "stay-put at the visual edge" path.
+///
+/// Pre-fix the structural cascade drilled out to `column:DONE`. The
+/// new behaviour is correct: T1C is the visually rightmost focusable
+/// thing in its row.
 #[test]
-fn right_from_t1c_drills_out_to_column_done_zone() {
+fn right_from_t1c_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 2);
     assert_eq!(
         nav(&app, &from, Direction::Right),
-        app.column_fq(2),
-        "right from task:T1C (rightmost column) must drill out to column:DONE under the unified \
-         cascade"
+        from,
+        "right from task:T1C (rightmost column) has nothing strictly in the \
+         Right half-plane — the geometric pick stays put per the \
+         no-silent-dropout contract."
     );
 }
 
@@ -180,43 +192,53 @@ fn right_from_t1c_drills_out_to_column_done_zone() {
 // Left — horizontal retreat into the previous column.
 // ---------------------------------------------------------------------------
 
-/// Pressing `left` from the top card in column DOING retreats onto
-/// column TODO and drills into its natural leaf for the search
-/// direction — for `Left`, the rightmost child (ties broken topmost).
-/// All children of `column:TODO` share the same right edge
-/// (`col_width - 8` from the column's left), so the topmost wins:
-/// the column-name field zone at the top of the column.
+/// Pressing `left` from the top card in column DOING lands on the
+/// top card in column TODO — the visually-adjacent card directly to
+/// the left. Symmetric to `right_from_t1a_lands_on_t1b`.
 ///
-/// The cross-zone drill-in landed in card
-/// `01KQPW1FTYFWTDMW6ESM5ABGJQ` — iter 1 still picks `column:TODO`
-/// as the left peer of `column:DOING`, but the cascade now resolves
-/// cross-zone landings to a leaf so the focus indicator paints.
+/// Under the geometric pick this is the natural keyboard-as-mouse
+/// answer. Pre-fix the structural cascade drilled into `column:TODO`'s
+/// natural child via a cross-zone drill-in step that no longer
+/// exists.
 #[test]
-fn left_from_t1b_lands_on_column_todo_name_field() {
+fn left_from_t1b_lands_on_t1a() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 1);
     assert_eq!(
         nav(&app, &from, Direction::Left),
-        app.column_name_fq(0),
-        "left from task:T1B must drill into column:TODO's natural child for the \
-         `Left` direction — the rightmost child, with topmost as tie-break (the \
-         column-name field zone). Symmetric to the `Right` drill-in test."
+        app.card_fq(1, 0),
+        "left from task:T1B must land on task:T1A — the visually-adjacent \
+         card to the left under the geometric pick. Symmetric to \
+         `right_from_t1a_lands_on_t1b`."
     );
 }
 
-/// Pressing `left` from any card in the leftmost column has no
-/// in-zone peer; the unified cascade escalates to `column:TODO` and
-/// finds no zone peer to its left. The cascade drills out and returns
-/// `column:TODO`.
+/// Pressing `left` from the top card in the leftmost column lands
+/// inside `ui:left-nav` — the LeftNav sidebar visible to the left of
+/// the board. Under the geometric pick the LeftNav zone (and its
+/// view-button leaves) are the only scopes strictly in the Left
+/// half-plane that are also in-beam vertically.
+///
+/// This is the cross-zone bug class the redesign fixes — pressing
+/// Left from a leftmost card lands on the visually-adjacent surface
+/// across structural boundaries. Pre-fix the structural cascade
+/// drilled out to `column:TODO` (the parent zone) because the
+/// LeftNav was unreachable through the iter-0/iter-1 ladder.
 #[test]
-fn left_from_t1a_drills_out_to_column_todo_zone() {
+fn left_from_t1a_lands_in_left_nav() {
     let app = RealisticApp::new();
     let from = app.card_fq(1, 0);
-    assert_eq!(
-        nav(&app, &from, Direction::Left),
-        app.column_fq(0),
-        "left from task:T1A (leftmost column) must drill out to column:TODO under the unified \
-         cascade — the kernel never returns None when a parent zone exists in the same layer"
+    let result = nav(&app, &from, Direction::Left);
+    let acceptable = [
+        app.left_nav_fq(),
+        app.view_button_grid_fq(),
+        app.view_button_list_fq(),
+    ];
+    assert!(
+        acceptable.contains(&result),
+        "left from task:T1A (leftmost column) must land inside ui:left-nav \
+         under the geometric pick. Got {result:?}; expected one of \
+         {acceptable:?}.",
     );
 }
 

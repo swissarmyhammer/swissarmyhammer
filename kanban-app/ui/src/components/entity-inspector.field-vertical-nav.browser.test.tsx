@@ -386,13 +386,21 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     // `spatial_navigate(focusedKey, "down")`. The kernel resolves the
     // beam search and (in production) emits `focus-changed` for the
     // next zone — that side is covered by Rust tests. Here we pin
-    // the React side: the IPC fires with the focused key and direction
-    // "down".
+    // the React side: the first IPC fires with the focused key and
+    // direction "down".
+    //
+    // The default mock-invoke does not simulate a kernel response, so
+    // the React-side scroll-on-edge fall-through (see
+    // `lib/scroll-on-edge.ts`) treats the dispatch as stay-put and
+    // re-dispatches once after the scroller's `overflow-y: auto` is
+    // detected with travel left. Both calls carry the same payload —
+    // we pin the first call's contents and accept the retry as part
+    // of the new contract.
     const navCalls = spatialNavigateCalls();
     expect(
       navCalls.length,
-      "ArrowDown on a focused field zone must dispatch spatial_navigate exactly once",
-    ).toBe(1);
+      "ArrowDown on a focused field zone must dispatch spatial_navigate at least once",
+    ).toBeGreaterThanOrEqual(1);
     expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 
@@ -550,8 +558,14 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
+    // First IPC carries the focused key + "down" direction. The
+    // scroll-on-edge fall-through in `lib/scroll-on-edge.ts` may
+    // re-dispatch after detecting that the scroller still has travel
+    // left (the default mock does not simulate a kernel response, so
+    // the React side reads stay-put). Both calls carry the same
+    // payload; we pin the first.
     const navCalls = spatialNavigateCalls();
-    expect(navCalls.length).toBe(1);
+    expect(navCalls.length).toBeGreaterThanOrEqual(1);
     expect(navCalls[0].focusedFq).toBe(titleZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 
@@ -604,8 +618,12 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
+    // First IPC carries the tags key + "down". The scroll-on-edge
+    // fall-through may re-dispatch when the scroller still has
+    // travel left; both calls carry the same payload — we pin the
+    // first.
     const navCalls = spatialNavigateCalls();
-    expect(navCalls.length).toBe(1);
+    expect(navCalls.length).toBeGreaterThanOrEqual(1);
     expect(navCalls[0].focusedFq).toBe(tagsZone!.fq);
     expect(navCalls[0].direction).toBe("down");
 

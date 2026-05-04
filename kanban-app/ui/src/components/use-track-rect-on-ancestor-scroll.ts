@@ -63,8 +63,18 @@ interface Rect {
 /**
  * The subset of `SpatialFocusActions["updateRect"]` this hook needs. Kept
  * narrow so callers do not have to import the full action shape.
+ *
+ * `sampledAtMs` mirrors the optional third argument on
+ * `SpatialFocusActions["updateRect"]` — the dev-mode rect validator
+ * uses it to detect stale samples (a rect captured before an unobserved
+ * scroll). This hook captures `performance.now()` immediately after
+ * `getBoundingClientRect()` and threads it through.
  */
-type UpdateRect = (fq: FullyQualifiedMoniker, rect: Rect) => Promise<void>;
+type UpdateRect = (
+  fq: FullyQualifiedMoniker,
+  rect: Rect,
+  sampledAtMs?: number,
+) => Promise<void>;
 
 /**
  * Walk an element's parent chain and return every scrollable ancestor.
@@ -156,12 +166,24 @@ export function useTrackRectOnAncestorScroll(
         const live = nodeRef.current;
         if (!live || !live.isConnected) return;
         const r = live.getBoundingClientRect();
-        updateRect(fq, {
-          x: asPixels(r.x),
-          y: asPixels(r.y),
-          width: asPixels(r.width),
-          height: asPixels(r.height),
-        }).catch((err) =>
+        // Capture the sample timestamp immediately after the rect read
+        // so the dev-mode staleness check (`rect-validation.ts`) can
+        // detect rects that age between sample and IPC dispatch. The
+        // rAF-throttled scroll path is the most likely place for that
+        // age to be measurable: the scroll fires, the next frame samples,
+        // and a hostile schedule can stretch the queued IPC by another
+        // frame.
+        const sampledAtMs = performance.now();
+        updateRect(
+          fq,
+          {
+            x: asPixels(r.x),
+            y: asPixels(r.y),
+            width: asPixels(r.width),
+            height: asPixels(r.height),
+          },
+          sampledAtMs,
+        ).catch((err) =>
           console.error(
             "[useTrackRectOnAncestorScroll] updateRect failed",
             err,

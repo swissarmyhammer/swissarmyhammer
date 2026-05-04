@@ -132,6 +132,9 @@ fn nav(
 // ---------------------------------------------------------------------------
 
 /// FQM helpers for the card-shaped fixture.
+#[allow(dead_code)] // `card` is exposed for future tests; the
+                    // post-geometric-pick suite no longer asserts
+                    // landings on the parent zone directly.
 struct CardFixture {
     reg: SpatialRegistry,
     drag: FullyQualifiedMoniker,
@@ -378,18 +381,26 @@ fn up_from_tags_zone_lands_on_title_zone() {
 // of the parent enter the search.
 // ---------------------------------------------------------------------------
 
-/// `Right` from the inspect leaf at x=20 (rightmost in the top row of
-/// the card) misses iter 0 and escalates. Iter 1 looks at the card's
-/// peers — the `peer-zone` is below, not to the right, so iter 1 also
-/// misses, and the cascade drills out to the card itself.
+/// `Right` from the inspect leaf at x=20-28 (rightmost in the top row
+/// of the card) has nothing strictly in the Right half-plane — the
+/// card zone wraps around inspect (its right edge at x=100 is in the
+/// half-plane, but its left edge at x=0 fails the strict-half-plane
+/// test for Right since cand.left=0 < from.right=28); peer-zone is
+/// below, not right.
+///
+/// Under the geometric pick this is the "stay-put at the visual
+/// edge" path. Pre-fix the structural cascade escalated to iter 1
+/// and then drilled out to the card; that drill-out semantics is
+/// gone under the geometric algorithm.
 #[test]
-fn right_from_rightmost_in_row_drills_out_to_card_when_no_iter1_peer_right() {
+fn right_from_rightmost_in_row_stays_put_at_visual_edge() {
     let f = build_card_fixture();
     let landing = nav(&f.reg, &f.inspect, Direction::Right);
     assert_eq!(
-        landing, f.card,
-        "Right from inspect leaf has no in-zone Right peer (it's the rightmost) — \
-         iter 0 misses, iter 1 has no Right peer of the card at the layer root \
-         (peer-zone is below, not right), and the cascade drills out to the card"
+        landing, f.inspect,
+        "Right from inspect leaf has nothing strictly in the Right half-plane \
+         (the card zone wraps around inspect; the peer zone is below, not \
+         right), so the geometric pick stays put per the no-silent-dropout \
+         contract."
     );
 }

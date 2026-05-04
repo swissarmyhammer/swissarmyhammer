@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQQSXM2PEYR1WAQ7QXW3B8ME
-position_column: todo
-position_ordinal: cf80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffff8280
 project: spatial-nav
 title: 'Spatial-nav #1: geometric cardinal pick replaces structural cascade'
 ---
@@ -55,14 +55,14 @@ When the half-plane is empty (focused at the visual edge of the layer), return `
 
 ## Acceptance Criteria
 
-- [ ] `BeamNavStrategy::next` for cardinal directions runs `geometric_pick`; the iter-0 / iter-1 / drill-out cascade is gone.
-- [ ] All four cross-zone regression tests in `cross_zone_geometric_nav.rs` pass.
-- [ ] Existing tests pass unchanged OR are updated with documented rationale.
-- [ ] No-silent-dropout: `next` always returns a `FullyQualifiedMoniker`, never `None`, never `target=None` in the IPC, never collapses to engine root.
-- [ ] Layer boundary respected: no candidate from a different `layer_fq` is considered.
-- [ ] `navOverride` walls / redirects still run as rule 0.
-- [ ] README "## The cascade" section rewritten to describe geometric model.
-- [ ] `cargo test -p swissarmyhammer-focus` passes.
+- [x] `BeamNavStrategy::next` for cardinal directions runs `geometric_pick`; the iter-0 / iter-1 / drill-out cascade is gone.
+- [x] All four cross-zone regression tests in `cross_zone_geometric_nav.rs` pass.
+- [x] Existing tests pass unchanged OR are updated with documented rationale.
+- [x] No-silent-dropout: `next` always returns a `FullyQualifiedMoniker`, never `None`, never `target=None` in the IPC, never collapses to engine root.
+- [x] Layer boundary respected: no candidate from a different `layer_fq` is considered.
+- [x] `navOverride` walls / redirects still run as rule 0.
+- [x] README "## The cascade" section rewritten to describe geometric model.
+- [x] `cargo test -p swissarmyhammer-focus` passes.
 
 ## Workflow
 

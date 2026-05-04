@@ -649,8 +649,7 @@ describe("GridView (spatial-nav)", () => {
   // `grid-spatial-nav.guards.node.test.ts`). The keystroke path is the
   // global keymap pipeline in `<AppShell>`: `nav.up` / `nav.down` /
   // `nav.left` / `nav.right` (mapped to `j/k/h/l`, arrows) plus
-  // `nav.first` / `nav.last` / `nav.rowstart` / `nav.rowend` (Home /
-  // End / PageUp / PageDown).
+  // `nav.first` / `nav.last` (Home / End).
   //
   // The cell-side precondition the grid CAN guarantee — and that the
   // follow-up will rely on — is that each cell registers a stable

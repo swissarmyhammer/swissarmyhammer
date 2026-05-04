@@ -20,10 +20,12 @@
 //! peer-zone level) restricts candidates to zones — that's structural,
 //! not a kind policy, because the parent IS a zone.
 //!
-//! Edge commands ([`Direction::First`], [`Direction::Last`],
-//! [`Direction::RowStart`], [`Direction::RowEnd`]) keep level-bounded
-//! same-kind semantics — `Home` in a row of cells means "first cell",
-//! not "row container".
+//! [`Direction::First`] / [`Direction::Last`] focus the focused
+//! scope's children — first by topmost-then-leftmost, last by
+//! bottommost-then-rightmost. Kind is not a filter. On a focused leaf
+//! they return the focused FQM (no children → no-op). The deprecated
+//! `Direction::RowStart` / `Direction::RowEnd` aliases route through
+//! the same path during the one-release deprecation window.
 //!
 //! See the crate README (`swissarmyhammer-focus/README.md`) for the
 //! prose contract with diagrams, the anti-pattern callout against

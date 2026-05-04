@@ -138,7 +138,7 @@ fn navbar_left_walks_symmetric_path() {
 /// Pressing `Right` from the rightmost leaf `ui:navbar.search` drills
 /// out to `ui:navbar`.
 #[test]
-fn navbar_right_from_rightmost_leaf_drills_out_to_navbar() {
+fn navbar_right_from_rightmost_leaf_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
     let from = app.navbar_search_fq();
     let result = nav(&app, &from, Direction::Right);
@@ -146,7 +146,6 @@ fn navbar_right_from_rightmost_leaf_drills_out_to_navbar() {
     // No-bounce-back: the answer must not be any previous navbar
     // entry.
     let forbidden = [
-        app.navbar_search_fq(),
         app.navbar_inspect_fq(),
         app.navbar_board_selector_fq(),
         app.navbar_percent_field_fq(),
@@ -155,14 +154,18 @@ fn navbar_right_from_rightmost_leaf_drills_out_to_navbar() {
         !forbidden.contains(&result),
         "Right from ui:navbar.search must not bounce back to a navbar entry, got {result:?}",
     );
-    // Pin the specific drill-out outcome under the unified cascade.
+    // Under the geometric pick the navbar zone wraps around search,
+    // so its right edge is at viewport width minus margin — but its
+    // left edge is at 0, failing the strict half-plane test for
+    // Right. Nothing strictly to the right of search exists in the
+    // layer; the geometric pick stays put.
     assert_eq!(
-        result,
-        app.navbar_fq(),
-        "Right from ui:navbar.search must drill out to ui:navbar — iter 0 finds no \
-         leaf peer right of search, iter 1's parent ui:navbar has no Right peer at \
-         the layer root, and the cascade falls back to the parent zone itself rather \
-         than returning None or bouncing back"
+        result, from,
+        "Right from ui:navbar.search has nothing strictly in the Right \
+         half-plane (the navbar zone wraps around search and fails the \
+         strict half-plane test; no other layer-root scope sits right of \
+         search). The geometric pick stays put per the no-silent-dropout \
+         contract."
     );
 }
 

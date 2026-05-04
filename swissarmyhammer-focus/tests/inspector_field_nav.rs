@@ -100,28 +100,29 @@ fn up_from_field_2_lands_on_field_1() {
 // Drill-out — Down past the bottom field returns the panel FQM.
 // ---------------------------------------------------------------------------
 
-/// Pressing Down from the bottom field has no in-beam peer and no
-/// sibling panel below — the cascade returns the panel zone's FQM
-/// via drill-out.
+/// Pressing Down from the bottom field of the inspector panel has
+/// nothing strictly in the Down half-plane — the panel zone wraps
+/// around the assignees field, so under the strict half-plane test
+/// (`cand.top >= from.bottom`) the panel doesn't qualify; the
+/// inspector layer has no other registered scopes below the
+/// assignees field. Under the geometric-pick contract this is the
+/// "stay-put at the visual edge" path.
+///
+/// Pre-fix the structural cascade drilled out and returned the panel
+/// zone's FQM. The new geometric algorithm has no drill-out
+/// semantics — the cardinal-nav return is the visually-nearest scope
+/// in the Down half-plane, or the focused FQM when that half-plane
+/// is empty.
 #[test]
-fn down_from_last_field_returns_panel_fq_via_drill_out() {
+fn down_from_last_field_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
-    let target = nav(&app, &app.inspector_field_assignees_fq(), Direction::Down);
+    let from = app.inspector_field_assignees_fq();
+    let target = nav(&app, &from, Direction::Down);
     assert_eq!(
-        target,
-        app.inspector_panel_fq(),
-        "down from field:task:T1A.assignees must return panel:task:T1A via \
-         drill-out: iter 0 misses (no field below), iter 1 has no sibling \
-         panels in the inspector layer, cascade falls through to drill-out \
-         and returns the parent zone's FQM. The architectural contract \
-         guarantees this is NOT the focused field's own FQM."
-    );
-    assert_ne!(
-        target,
-        app.inspector_field_assignees_fq(),
-        "drill-out at the bottom of the inspector must not echo the focused \
-         field's FQM — that would be the silent-no-motion regression \
-         the architectural fix in 01KQAW97R9XTCNR1PJAWYSKBC7 eliminated"
+        target, from,
+        "Down from field:task:T1A.assignees has nothing strictly in the \
+         Down half-plane in the inspector layer — the geometric pick stays \
+         put per the no-silent-dropout contract."
     );
 }
 
@@ -129,24 +130,25 @@ fn down_from_last_field_returns_panel_fq_via_drill_out() {
 // Up off the top field — symmetric drill-out edge.
 // ---------------------------------------------------------------------------
 
-/// Pressing Up from the top field has no in-beam peer above, and the
-/// cascade escalates to the panel which has no sibling panels — the
-/// cascade returns the panel zone's FQM via drill-out.
+/// Pressing Up from the top field has nothing strictly in the Up
+/// half-plane — the panel zone wraps around the title field (its top
+/// edge is above the title's top, but the panel rect *contains* the
+/// title rect so the strict half-plane test rejects it). Under the
+/// geometric-pick contract this is the "stay-put at the visual edge"
+/// path.
+///
+/// Pre-fix the structural cascade drilled out and returned the panel
+/// zone's FQM. The new geometric algorithm has no drill-out
+/// semantics for cardinal directions.
 #[test]
-fn up_from_first_field_returns_panel_fq_via_drill_out() {
+fn up_from_first_field_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
-    let target = nav(&app, &app.inspector_field_title_fq(), Direction::Up);
+    let from = app.inspector_field_title_fq();
+    let target = nav(&app, &from, Direction::Up);
     assert_eq!(
-        target,
-        app.inspector_panel_fq(),
-        "up from field:task:T1A.title must return panel:task:T1A via \
-         drill-out: iter 0 misses (no field above), iter 1 has no sibling \
-         panels in the inspector layer, cascade falls through to drill-out"
-    );
-    assert_ne!(
-        target,
-        app.inspector_field_title_fq(),
-        "drill-out at the top of the inspector must not echo the focused \
-         field's FQM"
+        target, from,
+        "Up from field:task:T1A.title has nothing strictly in the Up \
+         half-plane in the inspector layer — the geometric pick stays \
+         put per the no-silent-dropout contract."
     );
 }

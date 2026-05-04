@@ -50,6 +50,7 @@ import type {
   Rect,
   SegmentMoniker,
 } from "@/types/spatial";
+import { validateAndLogRect } from "@/lib/rect-validation";
 
 // ---------------------------------------------------------------------------
 // Claim registry — per-FQM callbacks
@@ -122,6 +123,17 @@ export interface SpatialFocusActions {
    * `null` for `parentZone` when the leaf is registered directly under
    * the layer root, and an empty object for `overrides` when the leaf
    * has no per-direction special cases.
+   *
+   * `sampledAtMs` is the `performance.now()` timestamp captured at the
+   * exact callsite that called `getBoundingClientRect()` to produce
+   * `rect`. The dev-mode validator uses it to detect stale rects (a
+   * rect sampled before an unobserved scroll). Callers that just
+   * sampled the rect should call `performance.now()` immediately
+   * after; callers that don't have a meaningful timestamp may pass
+   * `performance.now()` at the IPC boundary, but doing so makes the
+   * staleness check a no-op. Optional — defaults to `performance.now()`
+   * at the IPC boundary for legacy callers that have not yet been
+   * threaded through.
    */
   registerScope: (
     fq: FullyQualifiedMoniker,
@@ -130,6 +142,7 @@ export interface SpatialFocusActions {
     layerFq: FullyQualifiedMoniker,
     parentZone: FullyQualifiedMoniker | null,
     overrides: FocusOverrides,
+    sampledAtMs?: number,
   ) => Promise<void>;
   /**
    * Invoke `spatial_register_zone` with the FQM-keyed kernel record.
@@ -139,6 +152,8 @@ export interface SpatialFocusActions {
    * registry, which owns a `last_focused` slot for drill-out / fallback
    * memory. The slot is always initialized to `None` on register — the
    * navigator populates it as focus moves through the zone.
+   *
+   * See `registerScope` for the `sampledAtMs` contract.
    */
   registerZone: (
     fq: FullyQualifiedMoniker,
@@ -147,6 +162,7 @@ export interface SpatialFocusActions {
     layerFq: FullyQualifiedMoniker,
     parentZone: FullyQualifiedMoniker | null,
     overrides: FocusOverrides,
+    sampledAtMs?: number,
   ) => Promise<void>;
   /** Invoke `spatial_unregister_scope` for the given FQM. */
   unregisterScope: (fq: FullyQualifiedMoniker) => Promise<void>;
@@ -154,8 +170,14 @@ export interface SpatialFocusActions {
    * Invoke `spatial_update_rect` to refresh the bounding rect of a
    * registered scope. Call from a ResizeObserver on the underlying DOM
    * node; no-op on the Rust side if the FQM is unknown.
+   *
+   * See `registerScope` for the `sampledAtMs` contract.
    */
-  updateRect: (fq: FullyQualifiedMoniker, rect: Rect) => Promise<void>;
+  updateRect: (
+    fq: FullyQualifiedMoniker,
+    rect: Rect,
+    sampledAtMs?: number,
+  ) => Promise<void>;
   /** Invoke `spatial_navigate` from `focusedFq` in `direction`. */
   navigate: (
     focusedFq: FullyQualifiedMoniker,
@@ -374,7 +396,20 @@ function buildSpatialFocusActions(
     layerFq,
     parentZone,
     overrides,
+    sampledAtMs,
   ) => {
+    // The staleness check is meaningful only when the caller threads
+    // `performance.now()` through from the same callsite that ran
+    // `getBoundingClientRect()`. A missing timestamp falls back to the
+    // adapter-boundary `performance.now()` (the legacy behaviour) — that
+    // makes the staleness check a no-op for legacy callers but keeps the
+    // adapter usable from contexts that have no rect-sample timing.
+    validateAndLogRect(
+      "register_scope",
+      fq,
+      rect,
+      sampledAtMs ?? performance.now(),
+    );
     await invoke("spatial_register_scope", {
       fq,
       segment,
@@ -392,7 +427,14 @@ function buildSpatialFocusActions(
     layerFq,
     parentZone,
     overrides,
+    sampledAtMs,
   ) => {
+    validateAndLogRect(
+      "register_zone",
+      fq,
+      rect,
+      sampledAtMs ?? performance.now(),
+    );
     await invoke("spatial_register_zone", {
       fq,
       segment,
@@ -409,7 +451,17 @@ function buildSpatialFocusActions(
     await invoke("spatial_unregister_scope", { fq });
   };
 
-  const updateRect: SpatialFocusActions["updateRect"] = async (fq, rect) => {
+  const updateRect: SpatialFocusActions["updateRect"] = async (
+    fq,
+    rect,
+    sampledAtMs,
+  ) => {
+    validateAndLogRect(
+      "update_rect",
+      fq,
+      rect,
+      sampledAtMs ?? performance.now(),
+    );
     await invoke("spatial_update_rect", { fq, rect });
   };
 

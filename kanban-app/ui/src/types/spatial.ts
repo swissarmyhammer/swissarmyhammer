@@ -213,15 +213,18 @@ export function fqLastSegment(fq: FullyQualifiedMoniker): SegmentMoniker {
  * string literal — that is what this union encodes.
  *
  * The four cardinal arrows (`up`/`down`/`left`/`right`) drive the
- * Android-style beam-search algorithm. The four edge commands jump to
- * the boundaries of the active scope:
+ * Android-style beam-search algorithm. The two edge commands focus
+ * the focused scope's first / last child:
  *
- * - `first` / `last` — topmost-leftmost / bottommost-rightmost
- *   candidate at the focused level (in-zone for leaves, sibling-zone
- *   for zones).
- * - `rowstart` / `rowend` — leftmost / rightmost candidate whose
- *   vertical extent overlaps the focused rect (start / end of the
- *   focused row).
+ * - `first` / `last` — topmost-then-leftmost / bottommost-then-rightmost
+ *   child of the focused scope. On a leaf (no children) the focused FQM
+ *   is echoed (semantic no-op).
+ *
+ * The pre-redesign `"rowstart"` / `"rowend"` members were dropped — the
+ * user model has no separate "first in row" concept, so they collapse
+ * onto `first` / `last`. The Rust kernel keeps the variants behind
+ * `#[deprecated]` for one release; new TypeScript code must use
+ * `"first"` / `"last"` only.
  *
  * Drill-in / drill-out are separate commands, not directions.
  */
@@ -231,9 +234,7 @@ export type Direction =
   | "left"
   | "right"
   | "first"
-  | "last"
-  | "rowstart"
-  | "rowend";
+  | "last";
 
 // ---------------------------------------------------------------------------
 // Wire payloads

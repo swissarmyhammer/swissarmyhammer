@@ -29,6 +29,7 @@ import {
   type FullyQualifiedMoniker,
 } from "@/types/spatial";
 import { triggerStartRename } from "@/components/perspective-tab-bar";
+import { runNavWithScrollOnEdge } from "@/lib/scroll-on-edge";
 
 /**
  * Identity-stable `SegmentMoniker` for the command-palette overlay layer.
@@ -292,10 +293,7 @@ function buildNavCommands(
     name: spec.name,
     keys: spec.keys,
     execute: async () => {
-      const actions = spatialActionsRef.current;
-      const fq = actions.focusedFq();
-      if (fq === null) return;
-      await actions.navigate(fq, spec.direction);
+      await runNavWithScrollOnEdge(spatialActionsRef.current, spec.direction);
     },
   }));
 }

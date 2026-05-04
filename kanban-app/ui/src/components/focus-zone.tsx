@@ -436,6 +436,10 @@ function SpatialFocusZoneBody({
 
     const overrides: FocusOverrides = navOverrideRef.current ?? {};
     const initialRect = node.getBoundingClientRect();
+    // Capture `performance.now()` adjacent to the rect read so the
+    // dev-mode staleness check (`rect-validation.ts`) can detect rects
+    // that age between sample and IPC dispatch.
+    const initialSampledAtMs = performance.now();
     registerZone(
       fq,
       segment,
@@ -448,18 +452,24 @@ function SpatialFocusZoneBody({
       layerFq,
       parentZone,
       overrides,
+      initialSampledAtMs,
     ).catch((err) => console.error("[FocusZone] register failed", err));
 
     const observer = new ResizeObserver(() => {
       const node = ref.current;
       if (!node) return;
       const r = node.getBoundingClientRect();
-      updateRect(fq, {
-        x: asPixels(r.x),
-        y: asPixels(r.y),
-        width: asPixels(r.width),
-        height: asPixels(r.height),
-      }).catch((err) => console.error("[FocusZone] updateRect failed", err));
+      const sampledAtMs = performance.now();
+      updateRect(
+        fq,
+        {
+          x: asPixels(r.x),
+          y: asPixels(r.y),
+          width: asPixels(r.width),
+          height: asPixels(r.height),
+        },
+        sampledAtMs,
+      ).catch((err) => console.error("[FocusZone] updateRect failed", err));
     });
     observer.observe(node);
 

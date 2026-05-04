@@ -263,11 +263,26 @@ fn nav_with_wall_override_returns_focused_fq_no_trace() {
     );
 }
 
-/// A scope whose `parent_zone` references an unregistered FQM is in
-/// torn state. The cascade echoes the focused FQM AND emits
-/// exactly one `ERROR` event with `op = "nav"`.
+/// A scope whose `parent_zone` references an unregistered FQM was
+/// previously torn-state for `nav` because the structural cascade
+/// dereferenced `parent_zone` during its escalation step. Under the
+/// geometric pick `parent_zone` is no longer consulted by cardinal
+/// nav — the algorithm iterates layer entries by rect and ignores
+/// `parent_zone` entirely. Stale `parent_zone` references therefore
+/// do NOT produce an ERROR event from `BeamNavStrategy::next` any
+/// more.
+///
+/// The behaviour is still correct: the focused entry has no Right
+/// neighbor in this fixture (it sits alone at the layer root with
+/// only the orphan parent reference), so the geometric pick stays
+/// put and echoes the focused FQM. The torn parent reference is now
+/// observable via the registry's structural validators
+/// (`scope_is_leaf`, `path_monikers`) rather than the navigation
+/// path. The `drill_out` op still surfaces torn parent refs because
+/// it explicitly walks the parent chain — see
+/// `drill_out_torn_parent_returns_focused_fq_and_traces_error`.
 #[test]
-fn nav_with_torn_parent_returns_focused_fq_and_traces_error() {
+fn nav_with_torn_parent_no_longer_traces_under_geometric_pick() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer_node("/L", "L", "main", None));
     // `src` claims `parent_zone = orphan-zone`, but no zone is
@@ -288,13 +303,17 @@ fn nav_with_torn_parent_returns_focused_fq_and_traces_error() {
     let (result, captured) =
         capture_errors(|| strategy.next(&reg, &src_fq, &segment, Direction::Right));
 
-    assert_eq!(result, src_fq, "torn parent ref echoes the focused FQM");
+    assert_eq!(
+        result, src_fq,
+        "torn parent ref still echoes the focused FQM (semantic stay-put: \
+         no Right candidate in the layer)"
+    );
     assert_eq!(
         captured.len(),
-        1,
-        "torn parent ref must emit exactly one ERROR event, got {captured:?}"
+        0,
+        "geometric-pick nav does not consult parent_zone, so a torn \
+         parent ref is not a nav error any more (got {captured:?})"
     );
-    assert_eq!(captured[0].op(), Some("nav"));
 }
 
 /// An unknown focused FQM is torn state — the cascade can't even read

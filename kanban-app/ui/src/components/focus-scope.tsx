@@ -335,6 +335,11 @@ function SpatialFocusScopeBody({
 
     const overrides: FocusOverrides = navOverrideRef.current ?? {};
     const initialRect = node.getBoundingClientRect();
+    // Capture `performance.now()` adjacent to the rect read so the
+    // dev-mode staleness check (`rect-validation.ts`) can compare
+    // against the validator's `nowMs` and surface rects that age
+    // between sample and IPC dispatch.
+    const initialSampledAtMs = performance.now();
     registerSpatialScope(
       fq,
       segment,
@@ -347,18 +352,24 @@ function SpatialFocusScopeBody({
       layerFq,
       parentZone,
       overrides,
+      initialSampledAtMs,
     ).catch((err) => console.error("[FocusScope] register failed", err));
 
     const observer = new ResizeObserver(() => {
       const node = ref.current;
       if (!node) return;
       const r = node.getBoundingClientRect();
-      updateRect(fq, {
-        x: asPixels(r.x),
-        y: asPixels(r.y),
-        width: asPixels(r.width),
-        height: asPixels(r.height),
-      }).catch((err) => console.error("[FocusScope] updateRect failed", err));
+      const sampledAtMs = performance.now();
+      updateRect(
+        fq,
+        {
+          x: asPixels(r.x),
+          y: asPixels(r.y),
+          width: asPixels(r.width),
+          height: asPixels(r.height),
+        },
+        sampledAtMs,
+      ).catch((err) => console.error("[FocusScope] updateRect failed", err));
     });
     observer.observe(node);
 

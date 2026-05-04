@@ -111,25 +111,39 @@ impl FullyQualifiedMoniker {
 
 /// Navigation direction passed to `spatial_navigate`.
 ///
-/// Includes the four cardinal arrows plus four "edge" commands that
-/// jump to the boundaries of the active scope:
+/// Includes the four cardinal arrows plus the two "first / last"
+/// commands that focus the children of the focused scope:
 ///
-/// - [`Direction::First`] / [`Direction::Last`] jump to the topmost-leftmost
-///   / bottommost-rightmost candidate at the focused level (in-zone for
-///   leaves, sibling-zone for zones). Wired to Home / End style keymap
-///   entries on the React side.
-/// - [`Direction::RowStart`] / [`Direction::RowEnd`] jump to the leftmost
-///   / rightmost candidate whose vertical extent overlaps the focused
-///   rect — i.e. the start / end of the focused row. Wired to
-///   Cmd-Left / Cmd-Right style keymap entries.
+/// - [`Direction::First`] / [`Direction::Last`] focus the focused
+///   scope's first / last child. **First child** = topmost; ties
+///   broken by leftmost. **Last child** = bottommost; ties broken by
+///   rightmost. Children = registered scopes whose `parent_zone` is
+///   the focused scope's FQM. Kind is **not** a filter — leaves and
+///   sub-zones are equally eligible. On a focused leaf (no children)
+///   both ops return the focused FQM (semantic no-op). Wired to Home
+///   / End style keymap entries on the React side.
 ///
-/// Drill-in / drill-out are **separate commands** (see the corresponding
-/// task card), not directions.
+///   `Direction::First` shares its result with [`drill_in`]'s
+///   cold-start fallback when the focused zone has no `last_focused`
+///   memory — both pick the topmost-then-leftmost child.
+///
+/// `Direction::RowStart` / `Direction::RowEnd` are **deprecated
+/// aliases** for `First` / `Last`, kept on the enum for one release
+/// so wire-format consumers can migrate. The user model has no
+/// separate "first in row" concept — the focused scope IS the row, so
+/// "first in row" and "first child" collapse to the same operation.
+/// New code must use `Direction::First` / `Direction::Last`.
+///
+/// Drill-in / drill-out are **separate commands** (see the
+/// corresponding task card), not directions.
 ///
 /// Serializes to lower-case identifiers (`"up"`, `"down"`, `"left"`,
-/// `"right"`, `"first"`, `"last"`, `"rowstart"`, `"rowend"`) so the
-/// TypeScript side can mirror the variants as a string-literal union
-/// without bridging glue.
+/// `"right"`, `"first"`, `"last"`) so the TypeScript side can mirror
+/// the variants as a string-literal union without bridging glue. The
+/// deprecated `RowStart` / `RowEnd` variants serialize as `"rowstart"`
+/// / `"rowend"` for the same one-release wire-compat window.
+///
+/// [`drill_in`]: crate::registry::SpatialRegistry::drill_in
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
@@ -141,15 +155,27 @@ pub enum Direction {
     Left,
     /// Move toward increasing screen-x (visually rightward).
     Right,
-    /// Jump to the topmost-leftmost candidate at the focused level.
+    /// Focus the focused scope's first child — topmost; ties broken
+    /// by leftmost. On a leaf (no children) returns the focused FQM
+    /// (no-op). Children = registered scopes whose `parent_zone` is
+    /// the focused FQM; kind is not a filter.
     First,
-    /// Jump to the bottommost-rightmost candidate at the focused level.
+    /// Focus the focused scope's last child — bottommost; ties broken
+    /// by rightmost. On a leaf (no children) returns the focused FQM
+    /// (no-op). Children = registered scopes whose `parent_zone` is
+    /// the focused FQM; kind is not a filter.
     Last,
-    /// Jump to the leftmost candidate whose vertical extent overlaps
-    /// the focused rect.
+    /// Deprecated alias for `Direction::First`. The focused scope IS
+    /// the row, so "first in row" and "first child" are the same
+    /// operation. Kept on the enum for one release so wire-format
+    /// consumers can migrate; new code must use `Direction::First`.
+    #[deprecated(since = "0.12.11", note = "use Direction::First")]
     RowStart,
-    /// Jump to the rightmost candidate whose vertical extent overlaps
-    /// the focused rect.
+    /// Deprecated alias for `Direction::Last`. The focused scope IS
+    /// the row, so "last in row" and "last child" are the same
+    /// operation. Kept on the enum for one release so wire-format
+    /// consumers can migrate; new code must use `Direction::Last`.
+    #[deprecated(since = "0.12.11", note = "use Direction::Last")]
     RowEnd,
 }
 
@@ -162,7 +188,16 @@ impl fmt::Display for Direction {
             Self::Right => f.write_str("right"),
             Self::First => f.write_str("first"),
             Self::Last => f.write_str("last"),
+            // The deprecated `RowStart` / `RowEnd` variants must keep
+            // their `Display` arms during the one-release deprecation
+            // window — `Display` is exhaustive on `Self` and external
+            // wire consumers may still send these strings until they
+            // migrate. `#[allow(deprecated)]` acknowledges the
+            // implementation continues to support the variants it has
+            // marked deprecated.
+            #[allow(deprecated)]
             Self::RowStart => f.write_str("rowstart"),
+            #[allow(deprecated)]
             Self::RowEnd => f.write_str("rowend"),
         }
     }

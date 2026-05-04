@@ -94,39 +94,29 @@ fn up_from_topmost_card_is_consistent_across_columns() {
 // Down — zone-origin cardinal nav from the column zone.
 // ---------------------------------------------------------------------------
 
-/// Pressing `Down` from the column zone drills out to `ui:board`.
+/// Pressing `Down` from the column zone has nothing strictly in the
+/// Down half-plane — the column zone shares its bottom edge with
+/// `ui:board` and with the other column zones (`column:TODO.bottom ==
+/// ui:board.bottom == 900`), so under the strict half-plane test no
+/// candidate qualifies. The geometric pick echoes the focused FQM
+/// (stay-put).
 ///
-/// Under the unified cascade, cardinal nav from a zone searches sibling
-/// zones at the same level (iter 0) and then escalates to the parent
-/// (iter 1). The column-name field zone and the card scopes are
-/// **descendants** of `column:TODO`, not siblings — so they do not enter
-/// the cardinal-nav search. With no Down peer at the column-zone level
-/// inside `ui:board`, the cascade falls back to the parent (`ui:board`).
-///
-/// This is the symmetric counterpart to the navbar's percent-complete
-/// precedent: `Down` from a parent zone does not drill into children;
-/// children are reached via `Enter` (the React adapter's drill-in).
-/// The user-facing experience: arrow keys move *between* peer zones,
-/// `Enter` moves *into* a zone's descendants.
-///
-/// If a future tweak adds a "drill into column zone via Down" rule, this
-/// assertion must change — and a follow-up must justify the cascade
-/// change rather than smuggling it into the redundancy-collapse fix.
+/// Pre-fix the structural cascade escalated to `ui:board` and drilled
+/// out. The new behaviour is correct: `column:TODO` is at the visual
+/// bottom of the layer in this fixture, so pressing Down has no real
+/// target. The user reaches the column's descendants via `Enter`
+/// (drill in), not via `Down`.
 #[test]
-fn down_from_column_zone_drills_out_to_board() {
+fn down_from_column_zone_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
     let from = app.column_fq(0);
     let landing = nav(&app, &from, Direction::Down);
 
     assert_eq!(
-        landing,
-        app.board_fq(),
-        "Down from column:TODO must drill out to ui:board. Cardinal nav \
-         from a zone searches sibling zones, not descendants — the \
-         column-name field zone and the card scopes are children of \
-         column:TODO, so they do not satisfy the same-level peer search. \
-         With no Down peer at ui:board's level the cascade falls back to \
-         the parent zone (ui:board itself). The user reaches the \
-         column-name zone via `Enter` (drill in), not via `Down`."
+        landing, from,
+        "Down from column:TODO has no scope strictly in the Down half-plane \
+         (the column shares its bottom edge with ui:board and the other \
+         columns), so the geometric pick stays put per the no-silent- \
+         dropout contract."
     );
 }

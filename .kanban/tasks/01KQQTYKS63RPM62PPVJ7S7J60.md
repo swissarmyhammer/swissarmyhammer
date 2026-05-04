@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KQQSXM2PEYR1WAQ7QXW3B8ME
-position_column: todo
-position_ordinal: d180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffff8380
 project: spatial-nav
 title: 'Spatial-nav #3: nav.drillOut = focus parent'
 ---
@@ -43,13 +43,37 @@ This is likely a no-op refactor — current `drill_out` may already do this. Aud
 - **Existing test `swissarmyhammer-focus/tests/inspector_dismiss.rs`** — confirm Escape from inspector content still drills out then falls through to dismiss the inspector layer. Update if behaviour changed.
 - Run `cargo test -p swissarmyhammer-focus inspector_dismiss drill_out` and confirm green.
 
+## Audit findings
+
+`drill_out` lives in `swissarmyhammer-focus/src/registry.rs` (not `navigate.rs`). The current implementation already matches the contract exactly:
+
+1. Returns `parent_zone` when present.
+2. Returns `focused_fq` when `parent_zone == None` (layer-root edge), no trace.
+3. Returns `focused_fq` with `tracing::error!(op = "drill_out", ...)` when the input FQM is unknown.
+4. Returns `focused_fq` with `tracing::error!(op = "drill_out", ...)` when `parent_zone` references an unregistered FQM (torn state).
+
+It does NOT consult sibling zones, geometric scoring, overrides, or last-focused memory. No simplification needed — this is a verify-and-document task.
+
+All four cases the design lists (and the three the task body lists, plus the torn-parent_zone subcase) are already pinned by tests:
+
+- `tests/drill.rs::drill_out_focusable_returns_parent_zone_fq`
+- `tests/drill.rs::drill_out_zone_returns_parent_zone_fq`
+- `tests/drill.rs::drill_out_at_layer_root_returns_focused_fq`
+- `tests/drill.rs::drill_out_unknown_fq_echoes_focused_fq`
+- `tests/no_silent_none.rs::drill_out_layer_root_returns_focused_fq_no_trace`
+- `tests/no_silent_none.rs::drill_out_torn_parent_returns_focused_fq_and_traces_error`
+- `tests/no_silent_none.rs::drill_out_unknown_fq_returns_focused_fq_and_traces_error`
+- `tests/inspector_dismiss.rs` (3 tests covering panel-zone echo, field-inside-panel walks one hop, no-inspector-layer guard)
+
+The React glue at `kanban-app/ui/src/components/app-shell.tsx::buildDrillCommands` (currently around line 379) checks `result === focusedFq` and dispatches `app.dismiss` when equal — verified, no changes.
+
 ## Acceptance Criteria
 
-- [ ] `nav.drillOut` returns the focused scope's `parent_zone` when present.
-- [ ] At layer root, returns focused FQM; React glue dispatches `app.dismiss`.
-- [ ] `inspector_dismiss.rs` integration tests pass.
-- [ ] README "## Drill out" section captures the contract.
-- [ ] `cargo test -p swissarmyhammer-focus` passes.
+- [x] `nav.drillOut` returns the focused scope's `parent_zone` when present.
+- [x] At layer root, returns focused FQM; React glue dispatches `app.dismiss`.
+- [x] `inspector_dismiss.rs` integration tests pass.
+- [x] README "## Drill out" section captures the contract.
+- [x] `cargo test -p swissarmyhammer-focus` passes.
 
 ## Workflow
 

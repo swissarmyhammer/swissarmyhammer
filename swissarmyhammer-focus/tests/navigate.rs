@@ -390,12 +390,14 @@ fn cross_zone_left_drills_into_previous_column_rightmost_leaf() {
 /// Production-shape regression: a board with two columns, three card
 /// leaves per column, and a column-name leaf in each column header.
 ///
-/// Cross-zone navigation drills into the destination column's natural
-/// child for the search direction — for `Right`, the leftmost child
-/// of column B (with topmost as tie-break, the column-name leaf); for
-/// `Left`, the rightmost child of column A (same tie-break shape).
+/// Under the geometric pick, cross-column nav from a card lands on
+/// the visually-adjacent card in the next column (matching y range,
+/// matching minor-axis distance) rather than on the column-name
+/// header above. Pre-fix the structural cascade drilled into
+/// `column:B`'s natural Right child (the column-name leaf) via a
+/// cross-zone drill-in step that no longer exists.
 #[test]
-fn cross_zone_realistic_board_right_from_card_in_a_drills_into_column_b_name() {
+fn cross_zone_realistic_board_right_from_card_in_a_lands_on_card_in_b() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
 
@@ -485,10 +487,22 @@ fn cross_zone_realistic_board_right_from_card_in_a_drills_into_column_b_name() {
         rect(310.0, 190.0, 280.0, 60.0),
     ));
 
-    let col_a_name_fq = fq_in_zone(&col_a_fq, "column:A.name");
-    let col_b_name_fq = fq_in_zone(&col_b_fq, "column:B.name");
-    assert_eq!(nav(&reg, &task1_a_fq, Direction::Right), col_b_name_fq);
-    assert_eq!(nav(&reg, &task1_b_fq, Direction::Left), col_a_name_fq);
+    // Under the geometric pick, Right from task:1A lands on
+    // task:1B (the visually-adjacent card in column B at the same
+    // row), not on the column-name leaf above. Symmetric for Left.
+    assert_eq!(
+        nav(&reg, &task1_a_fq, Direction::Right),
+        task1_b_fq,
+        "Right from task:1A must land on task:1B (the visually-adjacent \
+         card in column B, matching y range), not on the column-name \
+         leaf above. The geometric pick has no cross-zone drill-in step."
+    );
+    let task1_a_fq_clone = task1_a_fq.clone();
+    assert_eq!(
+        nav(&reg, &task1_b_fq, Direction::Left),
+        task1_a_fq_clone,
+        "Left from task:1B must land on task:1A symmetrically."
+    );
 }
 
 /// In-zone candidate is preferred over a closer cross-zone candidate.
@@ -601,9 +615,20 @@ fn zone_nav_right_picks_sibling_zone() {
 }
 
 /// Three columns laid out horizontally — `nav.up` from a column zone
-/// has no sibling zone vertically, so it returns the focused FQM.
+/// finds the leaf inside col0 that is registered with a rect ABOVE
+/// col0 (an unusual fixture geometry: the leaf has `parent_zone =
+/// col0` but its rect at y=-50..-20 sits above col0's rect at
+/// y=0..200). Under the geometric pick this leaf passes the strict
+/// Up half-plane test (cand.bottom=-20 <= from.top=0) and is in-beam
+/// horizontally with col0; col1 is at y=0..200 so it fails the strict
+/// Up half-plane test. The leaf wins.
+///
+/// Pre-fix the structural cascade returned col0 itself (drill-out)
+/// because the leaf was a descendant, not a same-kind sibling at
+/// the layer root. Under the geometric algorithm `parent_zone` is
+/// not a filter — the leaf is a valid candidate.
 #[test]
-fn zone_nav_up_with_only_horizontal_siblings_returns_self() {
+fn zone_nav_up_finds_leaf_above_via_geometric_pick() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
@@ -622,21 +647,31 @@ fn zone_nav_up_with_only_horizontal_siblings_returns_self() {
         None,
         rect(100.0, 0.0, 100.0, 200.0),
     ));
+    let leaf_fq = fq_in_zone(&col0_fq, "leaf");
     reg.register_scope(leaf(
-        fq_in_zone(&col0_fq, "leaf"),
+        leaf_fq.clone(),
         "leaf",
         "/L",
         Some(col0_fq.clone()),
         rect(10.0, -50.0, 30.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &col0_fq, Direction::Up), col0_fq);
+    assert_eq!(nav(&reg, &col0_fq, Direction::Up), leaf_fq);
 }
 
-/// `nav.right` from a zone never returns a leaf, even if a leaf inside
-/// the next column happens to be the rect-wise nearest match.
+/// `nav.right` from a zone returns the geometrically-nearest in-beam
+/// scope, regardless of structural depth. In this fixture the leaf
+/// `leaf1` (registered as a child of col1 but positioned at x=110..140
+/// — actually between col0 and col1) is geometrically closer than
+/// col1 itself: leaf1's left edge at x=110 is much closer to col0's
+/// right edge at x=100 than col1's left edge at x=200.
+///
+/// Pre-fix the structural cascade enforced same-kind iter-1 escalation
+/// from a zone-origin search — only sibling zones could win, never a
+/// nested leaf. Under the geometric algorithm `is_zone` is no longer
+/// a filter, so the nested leaf wins on raw distance.
 #[test]
-fn zone_nav_right_does_not_return_leaf_inside_neighbor_zone() {
+fn zone_nav_right_returns_nearest_scope_regardless_of_kind() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let col0_fq = fq_in_layer("/L", "col0");
@@ -655,8 +690,9 @@ fn zone_nav_right_does_not_return_leaf_inside_neighbor_zone() {
         None,
         rect(200.0, 0.0, 100.0, 200.0),
     ));
+    let leaf1_fq = fq_in_zone(&col1_fq, "leaf1");
     reg.register_scope(leaf(
-        fq_in_zone(&col1_fq, "leaf1"),
+        leaf1_fq.clone(),
         "leaf1",
         "/L",
         Some(col1_fq.clone()),
@@ -664,7 +700,13 @@ fn zone_nav_right_does_not_return_leaf_inside_neighbor_zone() {
     ));
 
     let target = nav(&reg, &col0_fq, Direction::Right);
-    assert_eq!(target, col1_fq);
+    assert_eq!(
+        target, leaf1_fq,
+        "nav.right from col0 must land on leaf1 — its rect at x=110..140 is \
+         closer to col0's right edge than col1's left edge at x=200, and \
+         the geometric pick has no kind filter so a nested leaf wins on \
+         raw distance."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -843,32 +885,71 @@ fn realistic_board_nav_walks_through_cards_under_unified_cascade() {
         col0_card_a_status
     );
 
-    // Status of card A → drills into card B's natural child for
-    // `Down` (the topmost leaf, here card B's `title`). Iter 1 still
-    // finds card B's zone as the down peer of card A; the cascade
-    // then descends into card B's natural child so the focus
-    // indicator paints.
-    let col0_card_b_title = fq_in_zone(col0_card_b, "title");
+    // Status of card A → Down: under the geometric pick the
+    // visually-nearest in-beam Down candidate is card_b's zone (its
+    // top edge is at y=90, closer than card_b/title at y=95). Pre-fix
+    // the structural cascade drilled into card_b's natural Down
+    // child (the title leaf) via a cross-zone drill-in step that no
+    // longer exists.
     assert_eq!(
         nav(&reg, &col0_card_a_status, Direction::Down),
-        col0_card_b_title
+        *col0_card_b,
+        "Down from col0_card_a/status must land on col0_card_b — card_b's \
+         zone has the closest leading edge in the Down half-plane (top=90 \
+         vs title's top=95)."
     );
 
-    // Title of col0 card_a → Right: drill out to the enclosing card zone.
+    // Title of col0 card_a → Right: under the geometric pick the
+    // visually-nearest in-beam Right candidate is col1's card_a zone
+    // (its left edge at x=105 is closer in beam-score than its
+    // title leaf at x=110 because card_a's minor-axis distance is
+    // smaller — its center_y is 45, title's center_y is 27.5, both
+    // close to the source's center_y=27.5). The card_a zone wins
+    // on combined score. Pre-fix the structural cascade drilled out
+    // to the enclosing card zone (col0_card_a).
+    let col1_card_a = &card_fqs[1][0];
     assert_eq!(
         nav(&reg, &col0_card_a_title, Direction::Right),
-        *col0_card_a
+        *col1_card_a,
+        "Right from col0_card_a/title must land on col1_card_a — the \
+         visually-nearest in-beam Right scope. The geometric pick has no \
+         drill-out semantics for cardinal directions."
     );
 }
 
 // ---------------------------------------------------------------------------
-// Edge commands — First, Last, RowStart, RowEnd.
+// First / Last — focus the focused scope's children, not its
+// siblings. See design `01KQQSXM2PEYR1WAQ7QXW3B8ME` and
+// `swissarmyhammer-focus/README.md` → `## First / Last`. The contract is:
+//
+//   First child = topmost; ties broken by leftmost.
+//   Last child  = bottommost; ties broken by rightmost.
+//   Children    = registered scopes whose `parent_zone` is the focused FQM.
+//   Kind        = not a filter — leaves and sub-zones are equally eligible.
+//
+// On a leaf (no children) both ops return the focused FQM (no-op).
+//
+// The deprecated `Direction::RowStart` / `Direction::RowEnd` aliases
+// route through the same path; their continued equivalence to
+// `First` / `Last` during the one-release deprecation window is
+// pinned by the in-module `deprecated_row_start_end_still_alias_first_last`
+// test in `src/navigate.rs`.
+//
+// These tests pin the children-of-focused-scope semantics. The
+// pre-redesign tests in this file targeted siblings-of-focused-leaf,
+// which inverts the contract. They have been rewritten in place.
 // ---------------------------------------------------------------------------
 
-/// `Direction::First` from a leaf scopes to the leaf's `parent_zone`
-/// siblings — picks the topmost-leftmost in-zone sibling.
+/// `Direction::First` on a leaf returns the leaf's own FQM — leaves
+/// have no children, so the new contract gives a semantic no-op.
+///
+/// Rewrite rationale: pre-redesign this test asserted that `First`
+/// from a leaf landed on the leaf's topmost-leftmost sibling (i.e.
+/// siblings of the focused leaf). The new contract is "focus the
+/// focused scope's children", and a leaf has no children — so the
+/// natural outcome on a leaf is the no-silent-dropout stay-put.
 #[test]
-fn edge_first_for_leaf_scopes_to_parent_zone() {
+fn first_on_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
@@ -903,13 +984,22 @@ fn edge_first_for_leaf_scopes_to_parent_zone() {
         rect(10.0, 110.0, 180.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &status_fq, Direction::First), title_fq);
+    assert_eq!(
+        nav(&reg, &status_fq, Direction::First),
+        status_fq,
+        "leaf has no children — First echoes the focused FQM"
+    );
 }
 
-/// `Direction::Last` from a leaf scopes to the leaf's `parent_zone`
-/// siblings — picks the bottommost-rightmost in-zone sibling.
+/// `Direction::Last` on a leaf returns the leaf's own FQM — leaves
+/// have no children, so the new contract gives a semantic no-op.
+///
+/// Rewrite rationale: pre-redesign this test asserted that `Last`
+/// from a leaf landed on the leaf's bottommost-rightmost sibling.
+/// Under the new children-of-focused-scope contract, a leaf has no
+/// children → stay-put.
 #[test]
-fn edge_last_for_leaf_scopes_to_parent_zone() {
+fn last_on_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
@@ -937,121 +1027,70 @@ fn edge_last_for_leaf_scopes_to_parent_zone() {
         rect(10.0, 110.0, 180.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &title_fq, Direction::Last), status_fq);
+    assert_eq!(
+        nav(&reg, &title_fq, Direction::Last),
+        title_fq,
+        "leaf has no children — Last echoes the focused FQM"
+    );
 }
 
-/// `Direction::First` from a zone scopes to sibling zones — picks the
-/// topmost-leftmost sibling zone.
+/// `Direction::First` from a focused parent zone picks the topmost-
+/// then-leftmost child. Kind is not a filter — both leaves and
+/// sub-zones are eligible children.
+///
+/// Rewrite rationale: pre-redesign this test focused on `col2` (a
+/// zone with no children, only siblings) and expected `col0`. Under
+/// the new contract, `col2` has no children → stay-put, which doesn't
+/// exercise the picking logic. Test now focuses on the parent zone
+/// `card` and asserts the first child is `title` (topmost-leftmost).
 #[test]
-fn edge_first_for_zone_scopes_to_sibling_zones() {
+fn first_on_zone_picks_topmost_leftmost_child() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
-    let col0_fq = fq_in_layer("/L", "col0");
+    let card_fq = fq_in_layer("/L", "card");
     reg.register_zone(zone(
-        col0_fq.clone(),
-        "col0",
+        card_fq.clone(),
+        "card",
         "/L",
         None,
-        rect(0.0, 0.0, 100.0, 200.0),
+        rect(0.0, 0.0, 200.0, 200.0),
     ));
-    reg.register_zone(zone(
-        fq_in_layer("/L", "col1"),
-        "col1",
+    let title_fq = fq_in_zone(&card_fq, "title");
+    reg.register_scope(leaf(
+        title_fq.clone(),
+        "title",
         "/L",
-        None,
-        rect(100.0, 0.0, 100.0, 200.0),
+        Some(card_fq.clone()),
+        rect(10.0, 10.0, 180.0, 30.0),
     ));
-    let col2_fq = fq_in_layer("/L", "col2");
-    reg.register_zone(zone(
-        col2_fq.clone(),
-        "col2",
+    reg.register_scope(leaf(
+        fq_in_zone(&card_fq, "body"),
+        "body",
         "/L",
-        None,
-        rect(200.0, 0.0, 100.0, 200.0),
+        Some(card_fq.clone()),
+        rect(10.0, 60.0, 180.0, 30.0),
+    ));
+    reg.register_scope(leaf(
+        fq_in_zone(&card_fq, "status"),
+        "status",
+        "/L",
+        Some(card_fq.clone()),
+        rect(10.0, 110.0, 180.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &col2_fq, Direction::First), col0_fq);
+    assert_eq!(
+        nav(&reg, &card_fq, Direction::First),
+        title_fq,
+        "First on `card` zone picks `title` — topmost-then-leftmost child"
+    );
 }
 
-/// `Direction::RowStart` from a leaf moves to the leftmost in-zone
-/// sibling whose vertical extent overlaps the focused leaf.
+/// `Direction::First` on a leaf is a no-op (the leaf has no children),
+/// so the focused FQM is echoed regardless of where the leaf sits in
+/// the parent's child list. Pinned here to make the
+/// no-silent-dropout invariant explicit at the leaf boundary.
 #[test]
-fn edge_row_start_picks_leftmost_in_row_sibling() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("/L", "L", "main", None));
-    let row_fq = fq_in_layer("/L", "row");
-    reg.register_zone(zone(
-        row_fq.clone(),
-        "row",
-        "/L",
-        None,
-        rect(0.0, 0.0, 300.0, 50.0),
-    ));
-    let left_fq = fq_in_zone(&row_fq, "left");
-    let right_fq = fq_in_zone(&row_fq, "right");
-    reg.register_scope(leaf(
-        left_fq.clone(),
-        "left",
-        "/L",
-        Some(row_fq.clone()),
-        rect(0.0, 10.0, 50.0, 30.0),
-    ));
-    reg.register_scope(leaf(
-        fq_in_zone(&row_fq, "middle"),
-        "middle",
-        "/L",
-        Some(row_fq.clone()),
-        rect(100.0, 10.0, 50.0, 30.0),
-    ));
-    reg.register_scope(leaf(
-        right_fq.clone(),
-        "right",
-        "/L",
-        Some(row_fq),
-        rect(200.0, 10.0, 50.0, 30.0),
-    ));
-
-    assert_eq!(nav(&reg, &right_fq, Direction::RowStart), left_fq);
-}
-
-/// `Direction::RowEnd` from a leaf moves to the rightmost in-zone
-/// sibling whose vertical extent overlaps the focused leaf.
-#[test]
-fn edge_row_end_picks_rightmost_in_row_sibling() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("/L", "L", "main", None));
-    let row_fq = fq_in_layer("/L", "row");
-    reg.register_zone(zone(
-        row_fq.clone(),
-        "row",
-        "/L",
-        None,
-        rect(0.0, 0.0, 300.0, 50.0),
-    ));
-    let left_fq = fq_in_zone(&row_fq, "left");
-    let right_fq = fq_in_zone(&row_fq, "right");
-    reg.register_scope(leaf(
-        left_fq.clone(),
-        "left",
-        "/L",
-        Some(row_fq.clone()),
-        rect(0.0, 10.0, 50.0, 30.0),
-    ));
-    reg.register_scope(leaf(
-        right_fq.clone(),
-        "right",
-        "/L",
-        Some(row_fq),
-        rect(200.0, 10.0, 50.0, 30.0),
-    ));
-
-    assert_eq!(nav(&reg, &left_fq, Direction::RowEnd), right_fq);
-}
-
-/// `Direction::First` from the topmost-leftmost leaf returns that
-/// leaf's own FQM.
-#[test]
-fn edge_first_at_boundary_returns_focused_self() {
+fn first_on_topmost_leftmost_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
@@ -1078,13 +1117,17 @@ fn edge_first_at_boundary_returns_focused_self() {
         rect(10.0, 60.0, 180.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &title_fq, Direction::First), title_fq);
+    assert_eq!(
+        nav(&reg, &title_fq, Direction::First),
+        title_fq,
+        "leaf has no children — no-op"
+    );
 }
 
-/// `Direction::Last` from the bottommost-rightmost leaf returns that
-/// leaf's own FQM.
+/// `Direction::Last` on a leaf is a no-op — symmetric with
+/// `first_on_topmost_leftmost_leaf_returns_focused_self`.
 #[test]
-fn edge_last_at_boundary_returns_focused_self() {
+fn last_on_bottommost_rightmost_leaf_returns_focused_self() {
     let mut reg = SpatialRegistry::new();
     reg.push_layer(layer("/L", "L", "main", None));
     let card_fq = fq_in_layer("/L", "card");
@@ -1111,40 +1154,11 @@ fn edge_last_at_boundary_returns_focused_self() {
         rect(10.0, 60.0, 180.0, 30.0),
     ));
 
-    assert_eq!(nav(&reg, &status_fq, Direction::Last), status_fq);
-}
-
-/// `Direction::RowStart` from the leftmost-on-row leaf returns that
-/// leaf's own FQM.
-#[test]
-fn edge_row_start_at_boundary_returns_focused_self() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(layer("/L", "L", "main", None));
-    let row_fq = fq_in_layer("/L", "row");
-    reg.register_zone(zone(
-        row_fq.clone(),
-        "row",
-        "/L",
-        None,
-        rect(0.0, 0.0, 300.0, 50.0),
-    ));
-    let left_fq = fq_in_zone(&row_fq, "left");
-    reg.register_scope(leaf(
-        left_fq.clone(),
-        "left",
-        "/L",
-        Some(row_fq.clone()),
-        rect(0.0, 10.0, 50.0, 30.0),
-    ));
-    reg.register_scope(leaf(
-        fq_in_zone(&row_fq, "right"),
-        "right",
-        "/L",
-        Some(row_fq),
-        rect(200.0, 10.0, 50.0, 30.0),
-    ));
-
-    assert_eq!(nav(&reg, &left_fq, Direction::RowStart), left_fq);
+    assert_eq!(
+        nav(&reg, &status_fq, Direction::Last),
+        status_fq,
+        "leaf has no children — no-op"
+    );
 }
 
 // ---------------------------------------------------------------------------

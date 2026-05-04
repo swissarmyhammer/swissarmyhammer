@@ -90,10 +90,18 @@ fn perspective_left_walks_symmetric_path() {
 // Right from the rightmost tab — drill-out per unified policy.
 // ---------------------------------------------------------------------------
 
-/// Pressing `Right` from the rightmost tab `perspective_tab:p3` drills
-/// out to `ui:perspective-bar`.
+/// Pressing `Right` from the rightmost tab `perspective_tab:p3` has
+/// nothing strictly in the Right half-plane within the perspective
+/// bar, and `ui:perspective-bar` itself fails the strict half-plane
+/// test (its left edge starts before p3 — the bar wraps p3). Under
+/// the geometric pick this is the "stay-put at the visual edge"
+/// path.
+///
+/// Pre-fix the structural cascade drilled out to `ui:perspective-bar`.
+/// The new behaviour is correct: p3 is the rightmost focusable thing
+/// in the perspective row.
 #[test]
-fn perspective_right_from_rightmost_tab_drills_out_to_perspective_bar() {
+fn perspective_right_from_rightmost_tab_stays_put_at_visual_edge() {
     let app = RealisticApp::new();
     let from = app.perspective_tab_p3_fq();
     let result = nav(&app, &from, Direction::Right);
@@ -102,21 +110,18 @@ fn perspective_right_from_rightmost_tab_drills_out_to_perspective_bar() {
     let forbidden = [
         app.perspective_tab_p1_fq(),
         app.perspective_tab_p2_fq(),
-        app.perspective_tab_p3_fq(),
     ];
     assert!(
         !forbidden.contains(&result),
         "Right from perspective_tab:p3 must not bounce back to a previous tab, got {result:?}",
     );
 
-    // Pin the specific drill-out outcome under the unified cascade.
     assert_eq!(
-        result,
-        app.perspective_bar_fq(),
-        "Right from perspective_tab:p3 must drill out to ui:perspective-bar — iter 0 \
-         finds no leaf peer right of p3, iter 1's parent ui:perspective-bar has no \
-         Right peer at the layer root, and the cascade falls back to the parent zone \
-         itself rather than returning None or bouncing back"
+        result, from,
+        "Right from perspective_tab:p3 has nothing strictly in the Right \
+         half-plane (the perspective bar wraps p3, failing the strict \
+         half-plane test). The geometric pick stays put per the \
+         no-silent-dropout contract."
     );
 }
 

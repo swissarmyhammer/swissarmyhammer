@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ce80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffff8180
 project: spatial-nav
 title: 'DESIGN: Spatial nav — keyboard-as-mouse cardinal + drill / first / last on Scope primitive'
 ---
