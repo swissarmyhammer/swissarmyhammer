@@ -1,7 +1,7 @@
 /**
  * `<FocusIndicator>` — the single visible focus decorator.
  *
- * Renders a 1px dotted border in the design-system primary color *inside*
+ * Renders a 1px dashed border in the design-system primary color *inside*
  * the host's box when `focused` is true; renders nothing when `focused`
  * is false. The host primitive must establish a containing block (the
  * spatial primitives mark themselves `position: relative` so this works
@@ -52,7 +52,7 @@ export const FocusIndicator = memo(function FocusIndicator({
     <span
       data-testid="focus-indicator"
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 border border-dotted border-primary rounded-[inherit]"
+      className="pointer-events-none absolute inset-0 border border-dashed border-primary rounded-[inherit] animate-pulse"
     />
   );
 });

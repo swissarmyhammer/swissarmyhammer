@@ -148,8 +148,8 @@ vi.mock("@/components/fields/field", async () => {
   const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
-      const fieldName = (props.fieldDef as { field_name?: string })
-        ?.field_name ?? "unknown";
+      const fieldName =
+        (props.fieldDef as { field_name?: string })?.field_name ?? "unknown";
       const moniker = asSegment(
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
@@ -173,7 +173,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -466,13 +466,13 @@ describe("NavBar — browser spatial behaviour", () => {
   //
   // The bar leaves wrap small icon buttons (24x24). The `<FocusIndicator>`
   // paints a 1px dotted border *inside* the host's box (`absolute inset-0
-  // border border-dotted border-primary`), so it traces each focused
+  // border border-dashed border-primary`), so it traces each focused
   // leaf's bounding box exactly without needing layout-side gap or
   // padding to make room for the decoration. There is no second visual
   // variant — one indicator, dotted inset everywhere.
   // -------------------------------------------------------------------------
 
-  it("renders the dotted-inset border (not a ring) on the inspect leaf when focused", async () => {
+  it("renders the dashed-inset border (not a ring) on the inspect leaf when focused", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -486,12 +486,12 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const indicator = queryByTestId("focus-indicator")!;
-    // Dotted-inset signature: `absolute inset-0 border border-dotted
+    // Dotted-inset signature: `absolute inset-0 border border-dashed
     // border-primary rounded-[inherit]`, NOT a `ring-2` outline. The
     // historic ring variant is gone — there is one and only one visual.
     expect(indicator.className).toContain("inset-0");
     expect(indicator.className).toContain("border");
-    expect(indicator.className).toContain("border-dotted");
+    expect(indicator.className).toContain("border-dashed");
     expect(indicator.className).toContain("border-primary");
     expect(indicator.className).not.toContain("-left-2");
     expect(indicator.className).not.toContain("w-1");
@@ -500,7 +500,7 @@ describe("NavBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("renders the dotted-inset border (not a ring) on the search leaf when focused", async () => {
+  it("renders the dashed-inset border (not a ring) on the search leaf when focused", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -515,7 +515,7 @@ describe("NavBar — browser spatial behaviour", () => {
     });
     const indicator = queryByTestId("focus-indicator")!;
     expect(indicator.className).toContain("inset-0");
-    expect(indicator.className).toContain("border-dotted");
+    expect(indicator.className).toContain("border-dashed");
     expect(indicator.className).not.toContain("-left-2");
 
     unmount();
@@ -713,9 +713,7 @@ describe("NavBar — browser spatial behaviour", () => {
 
     /** Predicate: the entry's rect is positive on both axes. */
     const isPositiveRect = (entry: Record<string, unknown>): boolean => {
-      const rect = entry.rect as
-        | { width: number; height: number }
-        | undefined;
+      const rect = entry.rect as { width: number; height: number } | undefined;
       if (!rect) return false;
       return rect.width > 0 && rect.height > 0;
     };

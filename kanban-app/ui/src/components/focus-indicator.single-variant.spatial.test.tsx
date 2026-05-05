@@ -2,7 +2,7 @@
  * Browser-mode test that pins the single-variant `<FocusIndicator>`
  * contract end-to-end.
  *
- * The architectural rule is: one focus indicator visual (the dotted
+ * The architectural rule is: one focus indicator visual (the dashed
  * border inside the host's box), rendered in one component. An earlier
  * card slipped a second `"ring"` variant past review and threaded a
  * `focusIndicatorVariant` prop through `<FocusScope>`. The user rejected
@@ -12,9 +12,9 @@
  *   1. **Type-level** — `<FocusIndicator variant=... />` and
  *      `<FocusScope focusIndicatorVariant=... />` and
  *      `<FocusScope focusIndicatorVariant=... />` no longer compile.
- *   2. **Runtime: dotted border everywhere** — driving focus to each
+ *   2. **Runtime: dashed border everywhere** — driving focus to each
  *      navbar leaf mounts a `<FocusIndicator>` whose className is the
- *      dotted-inset signature (`absolute inset-0 border border-dotted
+ *      dashed-inset signature (`absolute inset-0 border border-dashed
  *      border-primary`), never the historic ring (`ring-2`) or the
  *      legacy cursor-bar (`-left-2 w-1 bg-primary`).
  *   3. **Runtime: indicator visible on a nav button** — the focused
@@ -168,7 +168,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -180,7 +180,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 /**
  * Tailwind utility shim — the Vitest browser harness doesn't compile
  * Tailwind CSS, so the focus indicator's `inset-0`, `border`,
- * `border-dotted`, `border-primary`, `absolute` and `position: relative`
+ * `border-dashed`, `border-primary`, `absolute` and `position: relative`
  * (on the host) classes resolve to no styling and
  * `getBoundingClientRect()` returns 0×0. The shim translates the handful
  * of Tailwind utilities the indicator and its host actually depend on
@@ -203,7 +203,7 @@ const TAILWIND_SHIM = `
 .w-4 { width: 1rem; }
 .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
 .border { border-width: 1px; border-style: solid; }
-.border-dotted { border-style: dotted; }
+.border-dashed { border-style: dashed; }
 .border-primary { border-color: oklch(0.205 0 0); }
 .ml-auto { margin-left: auto; }
 `;
@@ -364,7 +364,7 @@ describe("FocusIndicator — single variant contract", () => {
   // 2. Runtime: focused indicator is the bar everywhere
   // -------------------------------------------------------------------------
 
-  it("each navbar leaf renders the dotted-inset signature when focused — never a bar or ring", async () => {
+  it("each navbar leaf renders the dashed-inset signature when focused — never a bar or ring", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -373,10 +373,7 @@ describe("FocusIndicator — single variant contract", () => {
     // name `<Field>` zone) own the visible focus signal. The kernel's
     // scope-is-leaf invariant rejects a `<FocusScope>` wrapping further
     // focus primitives — see swissarmyhammer-focus/tests/scope_is_leaf.rs.
-    const monikers = [
-      "ui:navbar.inspect",
-      "ui:navbar.search",
-    ] as const;
+    const monikers = ["ui:navbar.inspect", "ui:navbar.search"] as const;
 
     for (const moniker of monikers) {
       const leaf = registerScopeArgs().find((a) => a.segment === moniker);
@@ -394,7 +391,7 @@ describe("FocusIndicator — single variant contract", () => {
       expect(cls).toContain("absolute");
       expect(cls).toContain("inset-0");
       expect(cls).toContain("border");
-      expect(cls).toContain("border-dotted");
+      expect(cls).toContain("border-dashed");
       expect(cls).toContain("border-primary");
       expect(cls).toContain("rounded-[inherit]");
       // The legacy cursor-bar tokens are gone.
@@ -422,7 +419,7 @@ describe("FocusIndicator — single variant contract", () => {
   it("the focused nav button's indicator has a non-zero bounding rect inside the viewport", async () => {
     // The historic failure was "the bar lives in `gap` dead space and is
     // invisible" — typically meaning either the bar's bounding rect was
-    // 0×0 or its left edge fell outside the viewport. The dotted-inset
+    // 0×0 or its left edge fell outside the viewport. The dashed-inset
     // redesign places the indicator at `inset-0` *inside* the host's box,
     // so the indicator's rect inherits the host's bounding rect by
     // construction; this test still asserts width > 0, height > 0, and
@@ -440,10 +437,7 @@ describe("FocusIndicator — single variant contract", () => {
     // `ui:navbar.board-selector` is a zone (multi-leaf surface), not a
     // leaf — see comment above. Only the leaf monikers are exercised
     // here.
-    const monikers = [
-      "ui:navbar.inspect",
-      "ui:navbar.search",
-    ] as const;
+    const monikers = ["ui:navbar.inspect", "ui:navbar.search"] as const;
 
     for (const moniker of monikers) {
       const leaf = registerScopeArgs().find((a) => a.segment === moniker)!;

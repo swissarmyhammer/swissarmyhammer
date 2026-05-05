@@ -432,7 +432,14 @@ function dispatchCalls(): Array<{
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "dispatch_command")
-    .map((c) => c[1] as { cmd: string; args?: Record<string, unknown>; target?: string });
+    .map(
+      (c) =>
+        c[1] as {
+          cmd: string;
+          args?: Record<string, unknown>;
+          target?: string;
+        },
+    );
 }
 
 /** Filter dispatchCalls() to those with `cmd === target`. */
@@ -452,14 +459,21 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
 }
 
 /** Capture every `spatial_navigate` call's args. */
-function spatialNavigateCalls(): Array<{ focusedFq: FullyQualifiedMoniker; direction: string }> {
+function spatialNavigateCalls(): Array<{
+  focusedFq: FullyQualifiedMoniker;
+  direction: string;
+}> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+    .map(
+      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+    );
 }
 
 /** Capture every `spatial_drill_in` / `spatial_drill_out` call's args. */
-function spatialDrillCalls(direction: "in" | "out"): Array<{ fq: FullyQualifiedMoniker }> {
+function spatialDrillCalls(
+  direction: "in" | "out",
+): Array<{ fq: FullyQualifiedMoniker }> {
   const cmd = direction === "in" ? "spatial_drill_in" : "spatial_drill_out";
   return mockInvoke.mock.calls
     .filter((c) => c[0] === cmd)
@@ -598,7 +612,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       const t1Node = container.querySelector(
         "[data-segment='task:T1']",
       ) as HTMLElement | null;
-      expect(t1Node, "task:T1 DOM node must exist after bootstrap").not.toBeNull();
+      expect(
+        t1Node,
+        "task:T1 DOM node must exist after bootstrap",
+      ).not.toBeNull();
 
       // Reset the invoke spy so we measure only the click's IPC.
       mockInvoke.mockClear();
@@ -612,7 +629,10 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         const focused = container.querySelector(
           "[data-segment='task:T1'][data-focused='true']",
         );
-        expect(focused, "task:T1 must carry data-focused=true after click").not.toBeNull();
+        expect(
+          focused,
+          "task:T1 must carry data-focused=true after click",
+        ).not.toBeNull();
       });
 
       // Single-focus invariant: only ONE element in the document has
@@ -683,9 +703,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       });
 
       // Single-focus invariant.
-      expect(
-        document.querySelectorAll("[data-focused='true']").length,
-      ).toBe(1);
+      expect(document.querySelectorAll("[data-focused='true']").length).toBe(1);
 
       // The focus call's key matches the registered name-leaf key — and the
       // outer zone's key is NOT also reported, because the leaf stops the
@@ -727,9 +745,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       });
 
       // Single-focus invariant.
-      expect(
-        document.querySelectorAll("[data-focused='true']").length,
-      ).toBe(1);
+      expect(document.querySelectorAll("[data-focused='true']").length).toBe(1);
 
       unmount();
     });
@@ -1177,8 +1193,8 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Family 7 — Single focus indicator, no ring variant
   //
   // Pins `01KQ7G7SCN7ZQD4TFGP5EH4FFX`: every `<FocusIndicator>` carries
-  // the dotted-inset class signature (`pointer-events-none absolute
-  // inset-0 border border-dotted border-primary`) and none carries
+  // the dashed-inset class signature (`pointer-events-none absolute
+  // inset-0 border border-dashed border-primary`) and none carries
   // `ring-2` or the legacy cursor-bar tokens (`-left-2`, `w-1`,
   // `bg-primary`). The architectural guard in
   // `focus-architecture.guards.node.test.ts` prevents the variant prop
@@ -1187,7 +1203,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // =========================================================================
 
   describe("Family 7 — Single focus indicator, no ring variant", () => {
-    it("every rendered focus indicator carries the dotted-inset class signature, none uses ring/cursor-bar variants", async () => {
+    it("every rendered focus indicator carries the dashed-inset class signature, none uses ring/cursor-bar variants", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1220,7 +1236,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       for (const ind of indicators) {
         const className = ind.className;
         // Dotted-inset signature: pointer-events-none, absolute,
-        // inset-0, border, border-dotted, border-primary.
+        // inset-0, border, border-dashed, border-primary.
         expect(
           /\bpointer-events-none\b/.test(className),
           `indicator must carry pointer-events-none (got ${className})`,
@@ -1234,8 +1250,8 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           `indicator must carry inset-0 (got ${className})`,
         ).toBe(true);
         expect(
-          /\bborder-dotted\b/.test(className),
-          `indicator must carry border-dotted (got ${className})`,
+          /\bborder-dashed\b/.test(className),
+          `indicator must carry border-dashed (got ${className})`,
         ).toBe(true);
         expect(
           /\bborder-primary\b/.test(className),

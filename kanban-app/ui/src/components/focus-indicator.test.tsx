@@ -1,7 +1,7 @@
 /**
  * Tests for `<FocusIndicator>` — the single visible focus decorator.
  *
- * The component is intentionally minimal: render a dotted border inside
+ * The component is intentionally minimal: render a dashed border inside
  * the host's box when `focused` is true, render nothing when `focused`
  * is false. Visual styling is a Tailwind-class concern; these tests pin
  * the contract that:
@@ -11,10 +11,10 @@
  *     duplicate focus event (the host element is what gets focus).
  *   - It carries `pointer-events-none` so it never intercepts a click.
  *   - It paints at `absolute inset-0` inside the host, with a 1px
- *     dotted border in the primary color. There is no second variant —
+ *     dashed border in the primary color. There is no second variant —
  *     one indicator visual, period.
  *   - It inherits the host's border-radius so cards / pills with
- *     rounded corners get a matching dotted outline.
+ *     rounded corners get a matching dashed outline.
  */
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
@@ -49,17 +49,17 @@ describe("<FocusIndicator>", () => {
     );
   });
 
-  it("paints inside the host's box as a dotted border in the primary color", () => {
+  it("paints inside the host's box as a dashed border in the primary color", () => {
     // The single visual contract: `absolute inset-0` so the decoration
-    // traces the host's bounding box exactly, with `border border-dotted
-    // border-primary` for the 1px dotted outline. There is no second
+    // traces the host's bounding box exactly, with `border border-dashed
+    // border-primary` for the 1px dashed outline. There is no second
     // variant.
     const { getByTestId } = render(<FocusIndicator focused={true} />);
     const cls = getByTestId("focus-indicator").className;
     expect(cls).toMatch(/\babsolute\b/);
     expect(cls).toMatch(/\binset-0\b/);
     expect(cls).toMatch(/\bborder\b/);
-    expect(cls).toMatch(/\bborder-dotted\b/);
+    expect(cls).toMatch(/\bborder-dashed\b/);
     expect(cls).toMatch(/\bborder-primary\b/);
     // The legacy cursor-bar tokens are gone — the indicator no longer
     // lives outside the host's box, no longer paints a solid stripe,
@@ -84,7 +84,7 @@ describe("<FocusIndicator>", () => {
   it("paints inside an overflow:hidden ancestor without being clipped", () => {
     // Regression for the family of "focus indicator clipped by
     // overflow: hidden" bugs (e.g. the toolbar `truncate` wrapper
-    // around board.name and percent_complete). With the dotted-inset
+    // around board.name and percent_complete). With the dashed-inset
     // redesign the indicator lives at `absolute inset-0` inside the
     // host, so it occupies the host's content box exactly — by
     // construction it cannot fall outside any ancestor that contains
@@ -101,7 +101,7 @@ describe("<FocusIndicator>", () => {
       .absolute { position: absolute; }
       .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
       .border { border-width: 1px; border-style: solid; }
-      .border-dotted { border-style: dotted; }
+      .border-dashed { border-style: dashed; }
     `;
     document.head.appendChild(styleEl);
 

@@ -481,7 +481,7 @@ describe("EntityCard — field icon lives inside the field's <FocusScope>", () =
     // border tokens — pin the contract that it paints inside the zone's
     // box as an outline tracing the wrapper, not outside it.
     expect(indicator!.className).toContain("inset-0");
-    expect(indicator!.className).toContain("border-dotted");
+    expect(indicator!.className).toContain("border-dashed");
     expect(indicator!.className).toContain("border-primary");
     // Indicator and the icon's flex-row ancestor are siblings inside the
     // zone — neither contains the other.

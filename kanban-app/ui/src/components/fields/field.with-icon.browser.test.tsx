@@ -104,7 +104,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -520,7 +520,7 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     // border tokens — pin the contract that it paints inside the zone's
     // box as an outline tracing the wrapper.
     expect(indicator!.className).toContain("inset-0");
-    expect(indicator!.className).toContain("border-dotted");
+    expect(indicator!.className).toContain("border-dashed");
     expect(indicator!.className).toContain("border-primary");
     // The icon badge sits inside the flex row's first slot; verify its
     // inner flex-row ancestor is a sibling (within the zone) of the
