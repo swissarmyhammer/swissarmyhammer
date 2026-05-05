@@ -84,7 +84,7 @@ Review in progressive layers. Do not skip layers — each catches different clas
 
 **Layer 4: Security** — Input validated and sanitized? Injection risks (SQL, command, XSS, template)? Secrets handled safely? Auth checks in place? Error messages safe?
 
-**Layer 5: Naming, Clarity, Simplicity** — Names descriptive without being verbose? Code understandable without explanation? Comments explain "why", not "what"? Stale comments or TODOs?
+**Layer 5: Naming, Clarity, Simplicity** — Names descriptive without being verbose? Code understandable without explanation? Comments explain "why", not "what"? Stale comments or TODOs? **Doc comments** must state the current contract, not history — flag any `///` that uses *previously / used to / legacy / now / was added for*, references a task/PR/issue id, restates the signature, walks internal dispatch branches, lists callers, or runs longer than the budget (1 sentence default for fns, 3 hard ceiling). See the `doc-comments` skill for the full rule set and rewrite process.
 
 **Layer 6: Performance** (when relevant) — O(n^2) or worse on large data? Unnecessary allocations in hot paths? N+1 queries? Resource cleanup in all paths?
 
