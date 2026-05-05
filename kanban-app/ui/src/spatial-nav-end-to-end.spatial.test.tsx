@@ -1177,15 +1177,17 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   // Family 7 — Single focus indicator, no ring variant
   //
   // Pins `01KQ7G7SCN7ZQD4TFGP5EH4FFX`: every `<FocusIndicator>` carries
-  // the bar class signature (`pointer-events-none absolute -left-2 …`)
-  // and none carries `inset-0` or `ring-2`. The architectural guard in
+  // the dotted-inset class signature (`pointer-events-none absolute
+  // inset-0 border border-dotted border-primary`) and none carries
+  // `ring-2` or the legacy cursor-bar tokens (`-left-2`, `w-1`,
+  // `bg-primary`). The architectural guard in
   // `focus-architecture.guards.node.test.ts` prevents the variant prop
   // / type from existing in production source; this family checks the
   // RUNTIME DOM as a complementary contract.
   // =========================================================================
 
   describe("Family 7 — Single focus indicator, no ring variant", () => {
-    it("every rendered focus indicator carries the bar class signature, none uses ring/inset variants", async () => {
+    it("every rendered focus indicator carries the dotted-inset class signature, none uses ring/cursor-bar variants", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
@@ -1217,7 +1219,8 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
 
       for (const ind of indicators) {
         const className = ind.className;
-        // Bar signature: pointer-events-none, absolute, -left-2.
+        // Dotted-inset signature: pointer-events-none, absolute,
+        // inset-0, border, border-dotted, border-primary.
         expect(
           /\bpointer-events-none\b/.test(className),
           `indicator must carry pointer-events-none (got ${className})`,
@@ -1227,13 +1230,21 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
           `indicator must carry absolute (got ${className})`,
         ).toBe(true);
         expect(
-          /-left-2\b/.test(className),
-          `indicator must carry -left-2 (got ${className})`,
-        ).toBe(true);
-        // Banned: inset-0 (ring around whole element) and ring-2.
-        expect(
           /\binset-0\b/.test(className),
-          `indicator must NOT carry inset-0 (got ${className})`,
+          `indicator must carry inset-0 (got ${className})`,
+        ).toBe(true);
+        expect(
+          /\bborder-dotted\b/.test(className),
+          `indicator must carry border-dotted (got ${className})`,
+        ).toBe(true);
+        expect(
+          /\bborder-primary\b/.test(className),
+          `indicator must carry border-primary (got ${className})`,
+        ).toBe(true);
+        // Banned: legacy cursor-bar tokens and the ring variant.
+        expect(
+          /-left-2\b/.test(className),
+          `indicator must NOT carry -left-2 (got ${className})`,
         ).toBe(false);
         expect(
           /\bring-2\b/.test(className),
@@ -1248,7 +1259,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       );
       for (const ind of containerIndicators) {
         const className = ind.className;
-        expect(/\binset-0\b/.test(className)).toBe(false);
+        expect(/-left-2\b/.test(className)).toBe(false);
         expect(/\bring-2\b/.test(className)).toBe(false);
       }
 

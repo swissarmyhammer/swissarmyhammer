@@ -464,18 +464,15 @@ describe("NavBar — browser spatial behaviour", () => {
   // -------------------------------------------------------------------------
   // Single-variant focus indicator
   //
-  // The bar leaves wrap small icon buttons (24x24) inside a `gap-2` flex
-  // row. The `<FocusIndicator>` cursor-bar paints a 4px-wide stripe 8px
-  // to the LEFT of its host (`-left-2 w-1`); the navbar's `gap-2` gives
-  // the bar exactly the room it needs to land in the gap between
-  // siblings, immediately to the right of the previous sibling and
-  // pointing at the focused button — the same column-strip pattern
-  // `<PerspectiveTabBar>` ships. There is no second visual variant: the
-  // architectural contract is one indicator, and the layout makes that
-  // single indicator legible on the navbar.
+  // The bar leaves wrap small icon buttons (24x24). The `<FocusIndicator>`
+  // paints a 1px dotted border *inside* the host's box (`absolute inset-0
+  // border border-dotted border-primary`), so it traces each focused
+  // leaf's bounding box exactly without needing layout-side gap or
+  // padding to make room for the decoration. There is no second visual
+  // variant — one indicator, dotted inset everywhere.
   // -------------------------------------------------------------------------
 
-  it("renders the cursor-bar (not a ring) on the inspect leaf when focused", async () => {
+  it("renders the dotted-inset border (not a ring) on the inspect leaf when focused", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -489,18 +486,21 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const indicator = queryByTestId("focus-indicator")!;
-    // Bar signature: a `-left-2 w-1` stripe, NOT an `inset-0 ring-2`
-    // outline. The historic ring variant is gone — there is one and only
-    // one visual.
-    expect(indicator.className).toContain("-left-2");
-    expect(indicator.className).toContain("w-1");
-    expect(indicator.className).not.toContain("inset-0");
+    // Dotted-inset signature: `absolute inset-0 border border-dotted
+    // border-primary rounded-[inherit]`, NOT a `ring-2` outline. The
+    // historic ring variant is gone — there is one and only one visual.
+    expect(indicator.className).toContain("inset-0");
+    expect(indicator.className).toContain("border");
+    expect(indicator.className).toContain("border-dotted");
+    expect(indicator.className).toContain("border-primary");
+    expect(indicator.className).not.toContain("-left-2");
+    expect(indicator.className).not.toContain("w-1");
     expect(indicator.className).not.toContain("ring-2");
 
     unmount();
   });
 
-  it("renders the cursor-bar (not a ring) on the search leaf when focused", async () => {
+  it("renders the dotted-inset border (not a ring) on the search leaf when focused", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -514,13 +514,14 @@ describe("NavBar — browser spatial behaviour", () => {
       expect(queryByTestId("focus-indicator")).not.toBeNull();
     });
     const indicator = queryByTestId("focus-indicator")!;
-    expect(indicator.className).toContain("-left-2");
-    expect(indicator.className).not.toContain("inset-0");
+    expect(indicator.className).toContain("inset-0");
+    expect(indicator.className).toContain("border-dotted");
+    expect(indicator.className).not.toContain("-left-2");
 
     unmount();
   });
 
-  it("does not mount a cursor-bar on the board-selector zone (leaves own the indicator)", async () => {
+  it("does not mount a focus indicator on the board-selector zone (leaves own the indicator)", async () => {
     // The board-selector zone uses `showFocusBar={false}` so the visible
     // bar is owned by inner leaves (dropdown trigger, tear-off button,
     // editable name Field). Confirm the zone-level focus claim does NOT

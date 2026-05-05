@@ -33,22 +33,8 @@ import { asSegment } from "@/types/spatial";
  *
  * # Focus indicator layout
  *
- * The single `<FocusIndicator>` cursor-bar paints a 4px-wide vertical stripe
- * 8px to the LEFT of its host (`-left-2 w-1`). For that stripe to read as
- * "this nav button has focus" the bar needs room to live without colliding
- * with the previous sibling — the failure mode the historic ring variant
- * was reaching for. The layout addresses that here without a second variant:
- *
- *   - The row uses `gap-2` (8px between siblings), which matches the bar's
- *     `-left-2` offset. The bar lands in the gap immediately to the right
- *     of the previous sibling, visually pointing at the focused button —
- *     the same pattern `<PerspectiveTabBar>` ships.
- *   - The row's `px-4` provides 16px of left padding before the leftmost
- *     leaf, well over the 8px the bar needs to remain on-screen.
- *   - Each leaf wraps its child in a `<FocusScope>` with no extra padding —
- *     the cursor-bar lives at `-left-2` outside the wrapper's box, in the
- *     gap region, exactly the way every other column-strip consumer lays
- *     it out.
+ * `<FocusIndicator>` paints a dotted border inside the host's box; no
+ * special gap or padding is required to make room for it.
  *
  * # Zone-level focus
  *

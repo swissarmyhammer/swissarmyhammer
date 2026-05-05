@@ -11,19 +11,19 @@
  *      primitive's per-key claim subscription fired on the right key).
  *   2. A `<FocusIndicator>` (`[data-testid="focus-indicator"]`) is
  *      rendered as a descendant of that wrapper (the React state from
- *      step 1 reached the indicator's render path and the bar mounted).
+ *      step 1 reached the indicator's render path and the indicator mounted).
  *
  * Both halves of the wiring must hold for the user to see the visible
- * cursor-bar on a focused navbar entry. Splitting them lets a regression
+ * focus indicator on a focused navbar entry. Splitting them lets a regression
  * point at the right seam:
  *
- *   - Only `data-focused` flips → render-side bug (e.g. the bar's
+ *   - Only `data-focused` flips → render-side bug (e.g. the indicator's
  *     mounting effect was removed, or `<FocusIndicator>` was tree-
  *     shaken out of the build).
  *   - Neither flips → subscription bug (e.g. the leaf's `useFocusClaim`
  *     subscription was scoped to the wrong window or layer, or the
  *     event payload's `next_fq` didn't match the registered key).
- *   - Both flip but no `<FocusIndicator>` mounts → visible-bar wiring
+ *   - Both flip but no `<FocusIndicator>` mounts → visible-indicator wiring
  *     bug (e.g. `showFocusBar` was forced to `false` somewhere).
  *
  * # Test cases

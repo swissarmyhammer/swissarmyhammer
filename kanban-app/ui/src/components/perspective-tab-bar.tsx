@@ -237,16 +237,9 @@ export function PerspectiveTabBar() {
   return (
     <PerspectiveBarSpatialZone>
       {/*
-        Left: scrollable perspective tabs + add button.
-
-        `pl-2` and `gap-2` are load-bearing — each tab is a `<FocusScope>`
-        leaf and `<FocusIndicator>` paints an absolutely-positioned bar at
-        `-left-2` (8px) of its host. The inner `overflow-x-auto` clips
-        anything that overflows horizontally, so without `pl-2` the
-        leftmost tab's indicator is clipped (and without `gap-2` the
-        indicator on tabs 2..N would overlap the previous tab). Same
-        pattern as the board's column strip — see `BoardDndWrapper` in
-        `board-view.tsx` for the analogous `overflow-x-auto pl-2`.
+        Left: scrollable perspective tabs + add button. `<FocusIndicator>`
+        paints inside each tab's box, so no special gap or padding is
+        required to make room for it.
       */}
       <div className="flex items-center gap-2 overflow-x-auto shrink-0 max-w-[60%] pl-2">
         {filteredPerspectives.map((p) => (

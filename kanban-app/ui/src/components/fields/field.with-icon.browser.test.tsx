@@ -8,9 +8,10 @@
  *   1. Clicking the icon dispatches `spatial_focus` for the field zone
  *      (it bubbles to the zone's click handler — the icon is now a
  *      descendant of the zone wrapper, not a sibling).
- *   2. The visible `<FocusIndicator>` (`-left-2` from the zone wrapper's
- *      left edge) paints to the LEFT of the icon, not between the icon
- *      and the content — they share one containing block now.
+ *   2. The visible `<FocusIndicator>` (an `absolute inset-0` dotted
+ *      border inside the zone wrapper) traces the zone's bounding box
+ *      around both the icon and the content — they share one
+ *      containing block now.
  *   3. Every existing `<Field>` callsite that does NOT opt in via
  *      `withIcon={true}` continues to render exactly as before.
  *
@@ -452,15 +453,17 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
   });
 
   // -------------------------------------------------------------------------
-  // #5: The `<FocusIndicator>` paints to the LEFT of the icon.
+  // #5: The `<FocusIndicator>` paints inside the field zone wrapper.
   //
   // The indicator is a child of the field zone wrapper (not of the
-  // inner flex row), positioned with `-left-2` relative to the wrapper.
-  // The icon is the first content child inside that same wrapper. So
-  // visually the indicator sits to the icon's left.
+  // inner flex row), positioned with `absolute inset-0` so its dotted
+  // border traces the wrapper's bounds — surrounding both the icon and
+  // the content. The icon is the first content child inside that same
+  // wrapper. The indicator and the icon's flex-row ancestor are
+  // siblings inside the zone; neither contains the other.
   // -------------------------------------------------------------------------
 
-  it("focus_indicator_paints_to_left_of_icon", async () => {
+  it("focus_indicator_paints_inside_field_zone", async () => {
     const { container, unmount } = renderField({
       field: TAGS_FIELD,
       entity: makeTask({ tags: [] }),
@@ -502,9 +505,9 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
     // zone as their nearest containing block. Walk down from the zone:
     // the indicator must be a direct or nested child of the zone (not
     // of the icon, not of the content), AND the icon's flex-row
-    // ancestor must also be a child of the zone. The `-left-2`
-    // utility on the indicator places it visually to the left of the
-    // entire flex-row container, including the icon.
+    // ancestor must also be a child of the zone. The `absolute inset-0`
+    // dotted-border indicator traces the wrapper's bounds and
+    // surrounds the entire flex-row container, including the icon.
     expect(
       fieldZone.contains(indicator),
       "focus indicator must live inside the field zone wrapper",
@@ -513,15 +516,16 @@ describe("Field — withIcon prop renders the icon inside the focus zone", () =>
       fieldZone.contains(iconBadge),
       "icon badge must live inside the field zone wrapper",
     ).toBe(true);
-    // The indicator's class string carries `-left-2` (the offset used
-    // by `<FocusIndicator>`) — pin the contract that it's positioned
-    // outside the zone's left padding.
-    expect(indicator!.className).toContain("-left-2");
-    // The icon must NOT carry a leftward offset that would push it
-    // past the indicator. The icon badge sits inside the flex row's
-    // first slot; verify its inner flex-row ancestor is a sibling
-    // (within the zone) of the indicator, so the indicator's
-    // `-left-2` resolves outside the icon's left edge.
+    // The indicator's class string carries `inset-0` and the dotted
+    // border tokens — pin the contract that it paints inside the zone's
+    // box as an outline tracing the wrapper.
+    expect(indicator!.className).toContain("inset-0");
+    expect(indicator!.className).toContain("border-dotted");
+    expect(indicator!.className).toContain("border-primary");
+    // The icon badge sits inside the flex row's first slot; verify its
+    // inner flex-row ancestor is a sibling (within the zone) of the
+    // indicator. The indicator overlays the row from inset-0 without
+    // containing or being contained by the row.
     let flexRow: HTMLElement | null = iconBadge!.parentElement;
     while (
       flexRow &&

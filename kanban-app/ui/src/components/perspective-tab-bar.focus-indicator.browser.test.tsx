@@ -15,7 +15,7 @@
  *      step 1 reached the indicator's render path).
  *
  * Both halves of the wiring must hold for the user to see the visible
- * cursor-bar on a focused perspective tab. Splitting them lets a
+ * focus indicator on a focused perspective tab. Splitting them lets a
  * regression point at the right seam:
  *
  *   - Only `data-focused` flips → render-side bug (e.g. the indicator
@@ -24,7 +24,7 @@
  *   - Neither flips → subscription bug (e.g. the leaf's `useFocusClaim`
  *     subscription was scoped to the wrong layer, or the event payload's
  *     `next_fq` didn't match the registered key).
- *   - Both flip but no `<FocusIndicator>` mounts → visible-bar wiring
+ *   - Both flip but no `<FocusIndicator>` mounts → visible-indicator wiring
  *     bug (e.g. `showFocusBar` was forced to `false` somewhere on the
  *     leaf).
  *
@@ -410,7 +410,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // items-center">` (see `perspective-tab-bar.tsx` `PerspectiveTab`)
   // and the wrapper has `position: relative` from the `<FocusScope>`
   // primitive's className merge — so the absolutely-positioned
-  // indicator's `-left-2` placement still resolves against the
+  // indicator's `inset-0` placement still resolves against the
   // wrapper, not the surrounding bar.
   // -------------------------------------------------------------------------
 

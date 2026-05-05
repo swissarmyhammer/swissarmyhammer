@@ -235,16 +235,16 @@ export interface FieldProps {
    */
   handleEvents?: boolean;
   /**
-   * When true, the inner `<FocusZone>` shows its own visible focus bar.
-   * Defaults to false so grid-cell consumers — which already wrap each
-   * field in a `<FocusScope>` cursor-ring — don't double up on
-   * indicators. Consumers without an enclosing focus chrome opt in by
-   * passing `<Field showFocusBar />`: inspector rows (the row fills the
-   * panel and the per-row bar is the user's only cue), card fields
-   * (the card-zone bar fires on the card itself, so the per-field bar
-   * tells the user which atom of the card carries focus). See the file
-   * header for the full taxonomy of consumers and why each one opts in
-   * or out.
+   * When true, the inner `<FocusZone>` shows its own visible focus
+   * indicator. Defaults to false so grid-cell consumers — which already
+   * wrap each field in a `<FocusScope>` — don't double up on indicators.
+   * Consumers without an enclosing focus chrome opt in by passing
+   * `<Field showFocusBar />`: inspector rows (the row fills the panel
+   * and the per-row indicator is the user's only cue), card fields
+   * (the card-zone indicator fires on the card itself, so the per-field
+   * indicator tells the user which atom of the card carries focus). See
+   * the file header for the full taxonomy of consumers and why each one
+   * opts in or out.
    */
   showFocusBar?: boolean;
   /**
@@ -262,9 +262,9 @@ export interface FieldProps {
    * which:
    *   1. Clicking the icon dispatches `spatial_focus` for the field
    *      zone — the icon is now part of the zone's click target.
-   *   2. The visible `<FocusIndicator>` (`-left-2` from the zone's
-   *      left edge) paints to the LEFT of the icon, not between the
-   *      icon and the content.
+   *   2. The visible `<FocusIndicator>` paints inside the zone's box
+   *      as a dotted border, surrounding both the icon and the content
+   *      rather than appearing between them.
    *   3. Every existing `<Field>` callsite that doesn't opt in via
    *      `withIcon={true}` continues to render exactly as before —
    *      backwards-compatible by default.
@@ -593,10 +593,10 @@ export function Field({
   // wrapper, and the focus indicator all share the zone's containing
   // block — so a click on the icon dispatches `spatial_focus` for the
   // field's zone (it bubbles to the zone's click handler) and the
-  // `<FocusIndicator>`'s `-left-2` offset paints to the LEFT of the
-  // icon. Without `withIcon` we render `inner` bare, identical to every
-  // pre-existing callsite (grid cells, card cells, navbar percent-
-  // complete, …).
+  // `<FocusIndicator>`'s dotted-inset border traces the zone's bounds,
+  // surrounding both the icon and the content. Without `withIcon` we
+  // render `inner` bare, identical to every pre-existing callsite (grid
+  // cells, card cells, navbar percent-complete, …).
   let zoneChildren: ReactNode = inner;
   if (withIcon) {
     const { Icon, tip } = resolveFieldIconAndTip(fieldDef, value);

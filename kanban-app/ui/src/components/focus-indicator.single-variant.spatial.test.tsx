@@ -2,25 +2,26 @@
  * Browser-mode test that pins the single-variant `<FocusIndicator>`
  * contract end-to-end.
  *
- * The architectural rule is: one focus indicator visual (the cursor-bar),
- * rendered in one component. An earlier card slipped a second `"ring"`
- * variant past review and threaded a `focusIndicatorVariant` prop through
- * `<FocusScope>` and `<FocusScope>`. The user rejected that — every variant
- * is a chance for two consumers to pick differently and produce inconsistent
- * UX. This file pins the post-deletion state:
+ * The architectural rule is: one focus indicator visual (the dotted
+ * border inside the host's box), rendered in one component. An earlier
+ * card slipped a second `"ring"` variant past review and threaded a
+ * `focusIndicatorVariant` prop through `<FocusScope>`. The user rejected
+ * that — every variant is a chance for two consumers to pick differently
+ * and produce inconsistent UX. This file pins the post-deletion state:
  *
  *   1. **Type-level** — `<FocusIndicator variant=... />` and
  *      `<FocusScope focusIndicatorVariant=... />` and
  *      `<FocusScope focusIndicatorVariant=... />` no longer compile.
- *   2. **Runtime: bar everywhere** — driving focus to each navbar leaf
- *      mounts a `<FocusIndicator>` whose className is the bar signature
- *      (`-left-2 w-1 bg-primary`), never the historic ring (`inset-0
- *      ring-2`).
- *   3. **Runtime: bar visible on a nav button** — the focused leaf's
- *      indicator has a non-zero bounding rect with `left >= 0`. This is
- *      the assertion that catches the historic "the bar lives in `gap`
- *      dead space and is invisible" failure mode that motivated the ring
- *      variant in the first place.
+ *   2. **Runtime: dotted border everywhere** — driving focus to each
+ *      navbar leaf mounts a `<FocusIndicator>` whose className is the
+ *      dotted-inset signature (`absolute inset-0 border border-dotted
+ *      border-primary`), never the historic ring (`ring-2`) or the
+ *      legacy cursor-bar (`-left-2 w-1 bg-primary`).
+ *   3. **Runtime: indicator visible on a nav button** — the focused
+ *      leaf's indicator has a non-zero bounding rect with `left >= 0`.
+ *      Inside-the-host placement removes the historic "the bar lives in
+ *      `gap` dead space and is invisible" failure mode by construction;
+ *      this test still asserts visibility as a behavioural pin.
  *   4. **Architecture: one indicator per focused entity** — at any moment
  *      the document holds exactly one `[data-testid="focus-indicator"]`
  *      element, the runtime symmetric of the source-level guard in
@@ -178,11 +179,12 @@ const WINDOW_LAYER_NAME = asSegment("window");
 
 /**
  * Tailwind utility shim — the Vitest browser harness doesn't compile
- * Tailwind CSS, so the focus indicator's `w-1`, `-left-2`, `top-0.5`,
- * `bottom-0.5`, `absolute` and `position: relative` (on the host) classes
- * resolve to no styling and `getBoundingClientRect()` returns 0×0. The
- * shim translates the handful of Tailwind utilities the bar and its host
- * actually depend on into raw CSS so the bar gets a real bounding rect.
+ * Tailwind CSS, so the focus indicator's `inset-0`, `border`,
+ * `border-dotted`, `border-primary`, `absolute` and `position: relative`
+ * (on the host) classes resolve to no styling and
+ * `getBoundingClientRect()` returns 0×0. The shim translates the handful
+ * of Tailwind utilities the indicator and its host actually depend on
+ * into raw CSS so the indicator gets a real bounding rect.
  *
  * The shim is opt-in (called explicitly by the rect test) because adding
  * arbitrary Tailwind classes globally would taint the className-string
@@ -199,10 +201,10 @@ const TAILWIND_SHIM = `
 .p-1 { padding: 0.25rem; }
 .h-4 { height: 1rem; }
 .w-4 { width: 1rem; }
-.w-1 { width: 0.25rem; }
-.-left-2 { left: -0.5rem; }
-.top-0\\.5 { top: 0.125rem; }
-.bottom-0\\.5 { bottom: 0.125rem; }
+.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+.border { border-width: 1px; border-style: solid; }
+.border-dotted { border-style: dotted; }
+.border-primary { border-color: oklch(0.205 0 0); }
 .ml-auto { margin-left: auto; }
 `;
 
@@ -362,7 +364,7 @@ describe("FocusIndicator — single variant contract", () => {
   // 2. Runtime: focused indicator is the bar everywhere
   // -------------------------------------------------------------------------
 
-  it("each navbar leaf renders the bar signature when focused — never a ring", async () => {
+  it("each navbar leaf renders the dotted-inset signature when focused — never a bar or ring", async () => {
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();
 
@@ -388,15 +390,18 @@ describe("FocusIndicator — single variant contract", () => {
 
       const indicator = queryByTestId("focus-indicator")!;
       const cls = indicator.className;
-      // Bar signature — the only allowed visual.
-      expect(cls).toContain("-left-2");
-      expect(cls).toContain("top-0.5");
-      expect(cls).toContain("bottom-0.5");
-      expect(cls).toContain("w-1");
-      expect(cls).toContain("rounded-full");
-      expect(cls).toContain("bg-primary");
+      // Dotted-inset signature — the only allowed visual.
+      expect(cls).toContain("absolute");
+      expect(cls).toContain("inset-0");
+      expect(cls).toContain("border");
+      expect(cls).toContain("border-dotted");
+      expect(cls).toContain("border-primary");
+      expect(cls).toContain("rounded-[inherit]");
+      // The legacy cursor-bar tokens are gone.
+      expect(cls).not.toContain("-left-2");
+      expect(cls).not.toContain("w-1");
+      expect(cls).not.toContain("bg-primary");
       // The historic ring variant is gone.
-      expect(cls).not.toContain("inset-0");
       expect(cls).not.toContain("ring-2");
       expect(cls).not.toContain("ring-ring");
 
@@ -417,17 +422,17 @@ describe("FocusIndicator — single variant contract", () => {
   it("the focused nav button's indicator has a non-zero bounding rect inside the viewport", async () => {
     // The historic failure was "the bar lives in `gap` dead space and is
     // invisible" — typically meaning either the bar's bounding rect was
-    // 0×0 or its left edge fell outside the viewport. This test asserts
-    // both conditions hold for each navbar leaf: width > 0, height > 0,
-    // and `left >= 0`. The layout fix (bar at `-left-2`, navbar `gap-2`,
-    // navbar `px-4` providing room for the leftmost leaf) must keep the
-    // single cursor-bar genuinely visible without resorting to a variant.
+    // 0×0 or its left edge fell outside the viewport. The dotted-inset
+    // redesign places the indicator at `inset-0` *inside* the host's box,
+    // so the indicator's rect inherits the host's bounding rect by
+    // construction; this test still asserts width > 0, height > 0, and
+    // `left >= 0` as a behavioural pin against future regressions.
     //
     // The Vitest browser harness doesn't compile Tailwind, so we inject a
-    // tiny CSS shim that translates the bar's utility classes (and the
-    // navbar layout classes the host primitives depend on) into raw
-    // properties. Without it `w-1` resolves to nothing and the rect is
-    // 0×0 even when the architecture is correct.
+    // tiny CSS shim that translates the indicator's utility classes (and
+    // the navbar layout classes the host primitives depend on) into raw
+    // properties. Without it `inset-0` and `border` resolve to nothing
+    // and the rect is 0×0 even when the architecture is correct.
     installTailwindShim();
     const { queryByTestId, unmount } = renderNavBar();
     await flushSetup();

@@ -214,7 +214,7 @@ describe("focus-decoration architecture", () => {
   it("the FocusIndicatorVariant type is fully removed from production code", () => {
     // `FocusIndicatorVariant` was a short-lived type that gated a `"ring"`
     // visual variant of the focus indicator. The user explicitly rejected
-    // a second indicator visual — there is one cursor-bar, period.
+    // a second indicator visual — there is one focus indicator, period.
     // Any remaining reference in shipped production sources resurrects
     // that variant surface and reintroduces the multi-decorator
     // antipattern.

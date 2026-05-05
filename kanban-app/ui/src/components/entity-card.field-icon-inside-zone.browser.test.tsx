@@ -419,11 +419,12 @@ describe("EntityCard — field icon lives inside the field's <FocusScope>", () =
   // -------------------------------------------------------------------------
   // #4: When the field zone is focused, the `<FocusIndicator>` is a
   //     descendant of the field zone wrapper, the icon badge is also a
-  //     descendant, and the indicator's `-left-2` offset positions it
-  //     to the LEFT of the icon (not between icon and content).
+  //     descendant, and the indicator paints inside the zone's box as a
+  //     dotted border tracing the wrapper's bounds — surrounding both
+  //     the icon and the content rather than living outside the box.
   // -------------------------------------------------------------------------
 
-  it("focus_indicator_paints_to_left_of_icon_in_card", async () => {
+  it("focus_indicator_paints_inside_field_zone_in_card", async () => {
     const { container, unmount } = renderCard(makeTask({ tags: ["bug"] }));
     await flushSetup();
 
@@ -476,10 +477,12 @@ describe("EntityCard — field icon lives inside the field's <FocusScope>", () =
       fieldZone!.contains(iconBadge),
       "icon badge must live inside the field zone wrapper",
     ).toBe(true);
-    // The indicator's class string carries `-left-2` — pin the contract
-    // that it's positioned outside the zone's left padding (i.e. left
-    // of the icon).
-    expect(indicator!.className).toContain("-left-2");
+    // The indicator's class string carries `inset-0` and the dotted
+    // border tokens — pin the contract that it paints inside the zone's
+    // box as an outline tracing the wrapper, not outside it.
+    expect(indicator!.className).toContain("inset-0");
+    expect(indicator!.className).toContain("border-dotted");
+    expect(indicator!.className).toContain("border-primary");
     // Indicator and the icon's flex-row ancestor are siblings inside the
     // zone — neither contains the other.
     let flexRow: HTMLElement | null = iconBadge!.parentElement;

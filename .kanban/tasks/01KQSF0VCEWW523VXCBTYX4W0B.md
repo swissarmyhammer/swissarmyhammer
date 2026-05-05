@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KQQTXDHP3XBHZ8G40AC4FG4D
 position_column: todo
-position_ordinal: d580
+position_ordinal: '7e80'
 project: spatial-nav
 title: nav.left from column collapses focus to engine root after geometric pick landed
 ---

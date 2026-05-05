@@ -260,9 +260,8 @@ interface FieldRowProps {
  * `01KQ5QB6F4MTD35GBTARJH4JEW`). The icon — when the field has one — now
  * renders *inside* that `<FocusZone>` via `<Field withIcon />`, so a
  * click on the icon dispatches `spatial_focus` for the field zone and
- * the focus bar paints to the LEFT of the icon (the indicator's
- * `-left-2` offset is relative to the zone wrapper, which now contains
- * the icon as its leftmost child).
+ * the focus indicator paints inside the zone wrapper, surrounding both
+ * the icon and the content as a single dotted outline.
  *
  * The row's outer `<div>` carries the `data-testid` so existing test
  * selectors continue to find it; everything visible (icon, content,
