@@ -88,4 +88,4 @@ This task depends on the macro-based aggregator (prior task) so the focus crate 
 
 ## Workflow
 
-- Use `/tdd` — write the focus-crate `nav_yaml_registers_all_eight_commands` test first; watch it fail; create `nav.yaml` and `builtin_yaml_sources()`; wire focus into the app's `compose_registry![]`; re-run.
+- Use `/tdd` — write the focus-crate `nav_yaml_registers_all_eight_commands` test first; watch it fail; create `nav.yaml` and `builtin_yaml_sources()`; wire focus into the app's `compose_registry![]`; re-run. #nav-jump
