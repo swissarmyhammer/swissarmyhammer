@@ -1,8 +1,8 @@
 ---
 assignees:
 - wballard
-position_column: todo
-position_ordinal: d180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffa680
 project: spatial-nav
 title: 'spatial-nav redesign step 2: add NavSnapshot / SnapshotScope types and helpers in Rust'
 ---

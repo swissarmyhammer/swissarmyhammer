@@ -289,7 +289,7 @@ mod tests {
     //! documented", not "every kernel decision is covered".
 
     use super::*;
-    use crate::types::{Pixels, SegmentMoniker};
+    use crate::types::Pixels;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tracing::{
@@ -485,9 +485,18 @@ mod tests {
     fn nav_snapshot_json_uses_snake_case_field_names() {
         let snapshot = snapshot_for("/L", vec![scope("/L/zone", None)]);
         let json = serde_json::to_string(&snapshot).expect("serialize");
-        assert!(json.contains("\"layer_fq\":"), "json missing layer_fq: {json}");
-        assert!(json.contains("\"parent_zone\":"), "json missing parent_zone: {json}");
-        assert!(json.contains("\"nav_override\":"), "json missing nav_override: {json}");
+        assert!(
+            json.contains("\"layer_fq\":"),
+            "json missing layer_fq: {json}"
+        );
+        assert!(
+            json.contains("\"parent_zone\":"),
+            "json missing parent_zone: {json}"
+        );
+        assert!(
+            json.contains("\"nav_override\":"),
+            "json missing nav_override: {json}"
+        );
     }
 
     /// `IndexedSnapshot::get` returns the scope whose FQM matches and
@@ -495,10 +504,7 @@ mod tests {
     /// builds in `new`.
     #[test]
     fn indexed_snapshot_get_returns_matching_scope() {
-        let snap = snapshot_for(
-            "/L",
-            vec![scope("/L/a", None), scope("/L/b", Some("/L/a"))],
-        );
+        let snap = snapshot_for("/L", vec![scope("/L/a", None), scope("/L/b", Some("/L/a"))]);
         let idx = IndexedSnapshot::new(&snap);
 
         let a = idx
@@ -552,7 +558,10 @@ mod tests {
             .parent_zone_chain(&FullyQualifiedMoniker::from_string("/L/root/zone/leaf"))
             .map(|s| s.fq.as_str().to_string())
             .collect();
-        assert_eq!(walked, vec!["/L/root/zone".to_string(), "/L/root".to_string()]);
+        assert_eq!(
+            walked,
+            vec!["/L/root/zone".to_string(), "/L/root".to_string()]
+        );
     }
 
     /// When the starting FQM is not in the snapshot the iterator is
@@ -579,10 +588,7 @@ mod tests {
     fn parent_zone_chain_breaks_on_cycle_and_logs_error() {
         let snap = snapshot_for(
             "/L",
-            vec![
-                scope("/L/a", Some("/L/b")),
-                scope("/L/b", Some("/L/a")),
-            ],
+            vec![scope("/L/a", Some("/L/b")), scope("/L/b", Some("/L/a"))],
         );
 
         let (walked, captured) = capture(|| {
@@ -592,10 +598,12 @@ mod tests {
                 .collect::<Vec<_>>()
         });
 
-        // Walk visits b, then a (the cycle revisit), then breaks.
-        // The cycle revisit is NOT yielded — the guard catches it
-        // before the lookup, so the walk yields `b` once and stops.
-        assert_eq!(walked, vec!["/L/b".to_string()]);
+        // Starting at `a`, the iterator yields `b` (a's
+        // parent_zone), then `a` (b's parent_zone — first re-entry,
+        // not yet flagged as the cycle since `a` hasn't been
+        // yielded yet), then catches the revisit when `a`'s
+        // parent_zone names `b` again. The guard logs and stops.
+        assert_eq!(walked, vec!["/L/b".to_string(), "/L/a".to_string()]);
 
         let cycle_events: Vec<_> = captured
             .iter()
@@ -607,7 +615,7 @@ mod tests {
             "expected one cycle event, got {captured:?}"
         );
         assert_eq!(cycle_events[0].level, Some(Level::ERROR));
-        assert_eq!(cycle_events[0].field("cycle_fq"), Some("/L/a"));
+        assert_eq!(cycle_events[0].field("cycle_fq"), Some("/L/b"));
         assert!(
             cycle_events[0]
                 .message
@@ -658,16 +666,5 @@ mod tests {
                 .count(),
             0
         );
-    }
-
-    /// `SegmentMoniker` is referenced by the test imports for clarity
-    /// even though no test currently constructs one — pinning the
-    /// import here keeps the typecheck honest if the helpers grow a
-    /// segment-keyed accessor later. (This `_` binding does not
-    /// suppress the unused-import lint by itself; the call below
-    /// does.)
-    #[test]
-    fn _segment_moniker_type_is_in_scope() {
-        let _ = SegmentMoniker::from_string("noop");
     }
 }

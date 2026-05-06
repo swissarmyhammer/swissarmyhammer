@@ -95,6 +95,7 @@ pub mod navigate;
 pub mod observer;
 pub mod registry;
 pub mod scope;
+pub mod snapshot;
 pub mod state;
 pub mod types;
 
@@ -103,6 +104,7 @@ pub use navigate::{BeamNavStrategy, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
 pub use registry::{RegisterEntry, SpatialRegistry};
 pub use scope::FocusScope;
+pub use snapshot::{FocusOverrides, IndexedSnapshot, NavSnapshot, SnapshotScope};
 pub use state::{FallbackResolution, FocusChangedEvent, SpatialState};
 pub use types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
