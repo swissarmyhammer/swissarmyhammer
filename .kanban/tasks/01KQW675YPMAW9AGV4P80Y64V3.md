@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KQW643TXM5YFKRZTNB8JPVVC
-position_column: todo
-position_ordinal: d380
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffa880
 project: spatial-nav
 title: 'spatial-nav redesign step 4: adapt resolve_fallback to walk snapshot when provided'
 ---

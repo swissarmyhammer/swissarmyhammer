@@ -2259,7 +2259,7 @@ fn spatial_unregister_scope_inner(
     spatial_state: &mut SpatialState,
     fq: &FullyQualifiedMoniker,
 ) -> Option<FocusChangedEvent> {
-    let event = spatial_state.handle_unregister(registry, fq);
+    let event = spatial_state.handle_unregister(registry, fq, None);
     registry.unregister_scope(fq);
     event
 }

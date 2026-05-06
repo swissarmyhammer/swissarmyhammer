@@ -105,7 +105,7 @@ pub use observer::{FocusEventSink, NoopSink, RecordingSink};
 pub use registry::{RegisterEntry, SpatialRegistry};
 pub use scope::FocusScope;
 pub use snapshot::{FocusOverrides, IndexedSnapshot, NavSnapshot, SnapshotScope};
-pub use state::{FallbackResolution, FocusChangedEvent, SpatialState};
+pub use state::{FallbackResolution, FocusChangedEvent, LostFocusContext, SpatialState};
 pub use types::{
     Direction, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker, WindowLabel,
 };

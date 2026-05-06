@@ -178,7 +178,7 @@ fn unregister_of_focused_fq_clears_only_that_windows_focus() {
     state.focus(&mut reg, b_fq.clone()).expect("focus b");
 
     let event = state
-        .handle_unregister(&mut reg, &a_fq)
+        .handle_unregister(&mut reg, &a_fq, None)
         .expect("unregistering the focused FQM emits a clear event");
 
     assert_eq!(event.window_label, WindowLabel::from_string("window-a"));
@@ -210,7 +210,7 @@ fn unregister_of_unfocused_fq_emits_no_event() {
         .focus(&mut reg, focused.clone())
         .expect("focus focused");
 
-    assert!(state.handle_unregister(&mut reg, &other).is_none());
+    assert!(state.handle_unregister(&mut reg, &other, None).is_none());
     assert_eq!(
         state.focused_in(&WindowLabel::from_string("main")),
         Some(&focused),
