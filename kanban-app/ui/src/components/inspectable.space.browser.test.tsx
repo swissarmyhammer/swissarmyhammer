@@ -105,11 +105,7 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import {
-  asFq,
-  asSegment,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asFq, asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -192,9 +188,12 @@ async function defaultInvokeImpl(
     const fq = a.fq ?? null;
     let moniker: string | null = null;
     for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) { moniker = s; break; }
+      if (k === fq) {
+        moniker = s;
+        break;
+      }
     }
-    
+
     if (fq) {
       const prev = currentFocusKey.key;
       currentFocusKey.key = fq;

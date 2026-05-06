@@ -103,7 +103,7 @@ import {
   asFq,
   asSegment,
   type FocusChangedPayload,
-  type FullyQualifiedMoniker
+  type FullyQualifiedMoniker,
 } from "@/types/spatial";
 import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, EntitySchema } from "@/types/kanban";
@@ -274,9 +274,12 @@ async function defaultInvokeImpl(
     const fq = a.fq ?? null;
     let moniker: string | null = null;
     for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) { moniker = s; break; }
+      if (k === fq) {
+        moniker = s;
+        break;
+      }
     }
-    
+
     if (fq) {
       const prev = currentFocusKey.key;
       currentFocusKey.key = fq;
@@ -600,7 +603,8 @@ describe("GridView -- single-focus-visual on a focused cell", () => {
       (c) => (c[1] as { segment?: string })?.segment === targetMoniker,
     );
     expect(targetRegistration).toBeTruthy();
-    const targetKey = (targetRegistration![1] as { fq: FullyQualifiedMoniker }).fq;
+    const targetKey = (targetRegistration![1] as { fq: FullyQualifiedMoniker })
+      .fq;
 
     await act(async () => {
       const payload: FocusChangedPayload = {

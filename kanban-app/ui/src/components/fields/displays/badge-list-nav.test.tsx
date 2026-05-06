@@ -17,7 +17,7 @@
  *    dispatch `spatial_focus` for that pill's `FullyQualifiedMoniker`, and when
  *    the kernel echoes a matching `focus-changed` event the per-pill
  *    `useFocusClaim` subscription mounts a visible `<FocusIndicator>`.
- *    The earlier `MentionView` revision hard-suppressed `showFocusBar`
+ *    The earlier `MentionView` revision hard-suppressed `showFocus`
  *    in `mode="compact"`; this block exercises both modes so any
  *    re-introduction of that suppression surfaces here.
  *
@@ -470,9 +470,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     );
     expect(fieldZone).toBeTruthy();
 
-    const bugPill = registerScopeArgs().find(
-      (a) => a.segment === "tag:tag-1",
-    );
+    const bugPill = registerScopeArgs().find((a) => a.segment === "tag:tag-1");
     expect(bugPill).toBeTruthy();
 
     mockInvoke.mockClear();
@@ -500,9 +498,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     );
     await flushSetup();
 
-    const bugPill = registerScopeArgs().find(
-      (a) => a.segment === "tag:tag-1",
-    )!;
+    const bugPill = registerScopeArgs().find((a) => a.segment === "tag:tag-1")!;
     const pillNode = container.querySelector(
       "[data-segment='tag:tag-1']",
     ) as HTMLElement;
@@ -524,12 +520,12 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
   });
 
   it("focus claim mounts <FocusIndicator> on a pill in mode=compact (regression: MentionView used to hard-suppress this)", async () => {
-    // Pre-fix, `MentionView` set `showFocusBar={false}` for every pill
+    // Pre-fix, `MentionView` set `showFocus={false}` for every pill
     // when `mode === "compact"`. That broke the entity-card flow:
     // clicking an assignee or tag pill on a card body produced no
-    // visible focus feedback. The fix: stop overriding showFocusBar
+    // visible focus feedback. The fix: stop overriding showFocus
     // based on mode — pills default to showing the bar in both modes,
-    // and explicit `showFocusBar={false}` from a caller still wins.
+    // and explicit `showFocus={false}` from a caller still wins.
     const { container } = render(
       <SpatialHarness
         values={["bugfix", "feature", "docs"]}
@@ -539,9 +535,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     );
     await flushSetup();
 
-    const bugPill = registerScopeArgs().find(
-      (a) => a.segment === "tag:tag-1",
-    )!;
+    const bugPill = registerScopeArgs().find((a) => a.segment === "tag:tag-1")!;
     const pillNode = container.querySelector(
       "[data-segment='tag:tag-1']",
     ) as HTMLElement;
@@ -576,12 +570,8 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     );
     await flushSetup();
 
-    const pillA = registerScopeArgs().find(
-      (a) => a.segment === "tag:tag-1",
-    )!;
-    const pillB = registerScopeArgs().find(
-      (a) => a.segment === "tag:tag-2",
-    )!;
+    const pillA = registerScopeArgs().find((a) => a.segment === "tag:tag-1")!;
+    const pillB = registerScopeArgs().find((a) => a.segment === "tag:tag-2")!;
 
     const aNode = container.querySelector(
       "[data-segment='tag:tag-1']",
@@ -598,9 +588,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
     expect(
       aNode.querySelector("[data-testid='focus-indicator']"),
     ).not.toBeNull();
-    expect(
-      bNode.querySelector("[data-testid='focus-indicator']"),
-    ).toBeNull();
+    expect(bNode.querySelector("[data-testid='focus-indicator']")).toBeNull();
 
     // Step 2: focus moves to pill B. A's indicator must unmount; B's
     // must mount.
@@ -609,9 +597,7 @@ describe("BadgeListDisplay pill click → visible focus indicator", () => {
       next_fq: pillB.fq as FullyQualifiedMoniker,
       next_segment: asSegment("tag:tag-2"),
     });
-    expect(
-      aNode.querySelector("[data-testid='focus-indicator']"),
-    ).toBeNull();
+    expect(aNode.querySelector("[data-testid='focus-indicator']")).toBeNull();
     expect(
       bNode.querySelector("[data-testid='focus-indicator']"),
     ).not.toBeNull();

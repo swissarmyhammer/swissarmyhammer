@@ -314,7 +314,8 @@ function PerspectiveBarSpatialZone({ children }: { children: ReactNode }) {
       // for its tab leaves; the leaves themselves render the visible bar
       // when claimed. `data-focused` still flips on the wrapper for e2e
       // selectors / debugging.
-      showFocusBar={false}
+      // showFocus=false: viewport-spanning bar chrome; tab leaves own the visible focus signal.
+      showFocus={false}
       className={PERSPECTIVE_BAR_LAYOUT}
     >
       {children}
@@ -356,14 +357,16 @@ interface ScopedPerspectiveTabProps {
  * Extracted from the PerspectiveTabBar map to keep the parent component concise.
  *
  * The tab's render also goes through `<PerspectiveTabFocusable>`, which
- * mounts a `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}
- * showFocusBar={false}>` wrapper when the spatial-nav stack is mounted.
- * Each tab is itself the focusable spatial-nav target — there is no
- * inner `perspective_tab.name` leaf because that would register at the
- * exact same rect as the outer wrapper and trip the kernel's
- * needless-nesting warning. Enter on a focused tab triggers rename via
- * the `ui.entity.startRename` command this component registers, which
- * shadows the global `nav.drillIn: Enter` on the perspective scope.
+ * mounts a `<FocusScope moniker={asSegment(`perspective_tab:${id}`)}>`
+ * wrapper when the spatial-nav stack is mounted. The wrapper inherits
+ * `<FocusScope>`'s default `showFocus={true}` so the dashed-border
+ * indicator paints on the focused tab. Each tab is itself the focusable
+ * spatial-nav target — there is no inner `perspective_tab.name` leaf
+ * because that would register at the exact same rect as the outer
+ * wrapper and trip the kernel's needless-nesting warning. Enter on a
+ * focused tab triggers rename via the `ui.entity.startRename` command
+ * this component registers, which shadows the global `nav.drillIn:
+ * Enter` on the perspective scope.
  *
  * The filter icon and group icon to the right of the name remain as
  * Pressable leaves (`perspective_tab.filter:{id}`,
@@ -464,9 +467,11 @@ function ScopedPerspectiveTab({
  * `perspective_tab.group:${id}`). These have distinct rects from the
  * tab name and are independently navigable.
  *
- * `showFocusBar={false}` because the focused tab is signalled by the
- * existing active/inactive border styling — a separate focus rectangle
- * across the whole tab would be visual noise.
+ * The wrapper inherits `<FocusScope>`'s default `showFocus={true}` so
+ * the dashed focus indicator paints on the focused tab — the visible
+ * indicator is the user-facing signal that arrow nav landed here. The
+ * existing active/inactive border styling reflects which tab is the
+ * active perspective, which is orthogonal to focus.
  *
  * See also: `ScopedPerspectiveTab` above — it explains how this wrapper
  * composes with the `<CommandScopeProvider moniker="perspective:{id}">`
@@ -485,10 +490,7 @@ function PerspectiveTabFocusable({
     return <>{children}</>;
   }
   return (
-    <FocusScope
-      moniker={asSegment(`perspective_tab:${id}`)}
-      showFocusBar={false}
-    >
+    <FocusScope moniker={asSegment(`perspective_tab:${id}`)}>
       {children}
     </FocusScope>
   );
@@ -993,7 +995,10 @@ function FilterFocusButton({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <Filter className="h-3 w-3" fill={hasFilter ? "currentColor" : "none"} />
+        <Filter
+          className="h-3 w-3"
+          fill={hasFilter ? "currentColor" : "none"}
+        />
       </button>
     </Pressable>
   );

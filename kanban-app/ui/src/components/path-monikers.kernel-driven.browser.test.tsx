@@ -80,7 +80,10 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { FocusLayer } from "./focus-layer";
 import { FocusScope } from "./focus-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { EntityFocusProvider, useFocusActions } from "@/lib/entity-focus-context";
+import {
+  EntityFocusProvider,
+  useFocusActions,
+} from "@/lib/entity-focus-context";
 import {
   useFullyQualifiedMoniker,
   useOptionalFullyQualifiedMoniker,
@@ -175,9 +178,7 @@ describe("path-monikers — kernel-driven contract", () => {
     await flushSetup();
 
     expect(captured).not.toBeNull();
-    expect(captured!).toBe(
-      "/window/ui:board/column:c1/card:T1/field:title",
-    );
+    expect(captured!).toBe("/window/ui:board/column:c1/card:T1/field:title");
 
     unmount();
   });
@@ -201,9 +202,7 @@ describe("path-monikers — kernel-driven contract", () => {
     // React swallows render-time errors and surfaces them through the
     // error boundary chain. We capture them via a console.error spy +
     // `expect(() => render(...)).toThrow()` style.
-    const errorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => {
         render(<Probe />);
@@ -283,9 +282,7 @@ describe("path-monikers — kernel-driven contract", () => {
     // Passing a `SegmentMoniker` must be a TS compile error. We assert
     // via `@ts-expect-error` — if the type check ever loosens (allowing
     // segments), the directive becomes unused and TS fails the build.
-    let setFocusFn:
-      | ((fq: FullyQualifiedMoniker | null) => void)
-      | null = null;
+    let setFocusFn: ((fq: FullyQualifiedMoniker | null) => void) | null = null;
     function Probe() {
       const { setFocus } = useFocusActions();
       setFocusFn = setFocus;

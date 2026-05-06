@@ -320,11 +320,7 @@ function beamAmongInZoneAnyKind(
 ): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
   const candidates: ShadowEntry[] = [];
   for (const e of registry.values()) {
-    if (
-      e.layerFq === layer &&
-      e.parentZone === fromParent &&
-      e.fq !== fromFq
-    ) {
+    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
       candidates.push(e);
     }
   }
@@ -351,11 +347,7 @@ function beamAmongSiblings(
 ): { nextFq: FullyQualifiedMoniker; nextSegment: SegmentMoniker } | null {
   const candidates: ShadowEntry[] = [];
   for (const e of registry.values()) {
-    if (
-      e.layerFq === layer &&
-      e.parentZone === fromParent &&
-      e.fq !== fromFq
-    ) {
+    if (e.layerFq === layer && e.parentZone === fromParent && e.fq !== fromFq) {
       candidates.push(e);
     }
   }
@@ -769,4 +761,3 @@ export function setupSpatialHarness(opts?: {
     fireFocusChanged,
   };
 }
-

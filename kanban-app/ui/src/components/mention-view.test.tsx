@@ -114,9 +114,7 @@ import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 import { FocusLayer } from "@/components/focus-layer";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures

@@ -124,6 +124,7 @@ import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { PerspectivesContainer } from "./perspectives-container";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusLayer } from "./focus-layer";
 import { asSegment } from "@/types/spatial";
 
@@ -181,11 +182,13 @@ function renderTabBarWithWindowScope() {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>
-          <CommandScopeProvider moniker="window:main">
-            <PerspectiveTabBar />
-          </CommandScopeProvider>
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <CommandScopeProvider moniker="window:main">
+              <PerspectiveTabBar />
+            </CommandScopeProvider>
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -339,17 +342,19 @@ describe("PerspectivesContainer view-body scope", () => {
     return render(
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
-          <TooltipProvider delayDuration={100}>
-            <CommandScopeProvider moniker="window:main">
-              <PerspectivesContainer>
-                {/* Attach a passthrough onContextMenu via the real useContextMenu
-                    hook by delegating to a child component. Keeping the hook
-                    call inside the child means it reads the scope chain that
-                    PerspectivesContainer's `ActivePerspectiveScope` injected. */}
-                <ViewBodyWithContextMenu testId={bodyTestId} />
-              </PerspectivesContainer>
-            </CommandScopeProvider>
-          </TooltipProvider>
+          <EntityFocusProvider>
+            <TooltipProvider delayDuration={100}>
+              <CommandScopeProvider moniker="window:main">
+                <PerspectivesContainer>
+                  {/* Attach a passthrough onContextMenu via the real useContextMenu
+                      hook by delegating to a child component. Keeping the hook
+                      call inside the child means it reads the scope chain that
+                      PerspectivesContainer's `ActivePerspectiveScope` injected. */}
+                  <ViewBodyWithContextMenu testId={bodyTestId} />
+                </PerspectivesContainer>
+              </CommandScopeProvider>
+            </TooltipProvider>
+          </EntityFocusProvider>
         </FocusLayer>
       </SpatialFocusProvider>,
     );

@@ -267,7 +267,7 @@ interface FieldRowProps {
  * selectors continue to find it; everything visible (icon, content,
  * focus indicator) lives inside the field zone underneath.
  *
- * `showFocusBar={true}` is passed through to Field so the inspector row
+ * `showFocus={true}` is passed through to Field so the inspector row
  * keeps its visible focus bar — the inspector is one of the surfaces
  * where each row IS a focusable item in its own right.
  *
@@ -318,7 +318,7 @@ function FieldRow({
         onEdit={editState.handleEdit}
         onDone={editState.handleDone}
         onCancel={editState.handleCancel}
-        showFocusBar
+        showFocus
         withIcon={showLabel || hasIcon}
       />
     </div>

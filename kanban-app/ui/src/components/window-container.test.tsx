@@ -93,9 +93,7 @@ import {
 } from "./window-container";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
 const WINDOW_LAYER_NAME = asSegment("window");

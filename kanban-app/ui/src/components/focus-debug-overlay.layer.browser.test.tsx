@@ -325,8 +325,7 @@ describe("<FocusLayer> debug wrapper — viewport-sized geometry", () => {
     // `pointer-events: auto` (the original 0×0 bug-fix attempt that
     // broke clicks), the overlay would land on top here.
     const topmost = stack[0];
-    const isPanelOrDescendant =
-      topmost === target || target!.contains(topmost);
+    const isPanelOrDescendant = topmost === target || target!.contains(topmost);
     const isLayerDebugOverlay =
       topmost instanceof HTMLElement &&
       topmost.getAttribute("data-debug") === "layer";

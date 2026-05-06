@@ -33,16 +33,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { FocusLayer } from "./focus-layer";
-import {
-  LayerFqContext,
-  useEnclosingLayerFq,
-} from "./layer-fq-context";
+import { LayerFqContext, useEnclosingLayerFq } from "./layer-fq-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import {
-  asFq,
-  asSegment,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asFq, asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 /** Microtask flush so the provider's `listen()` setup completes. */
 async function flushSetup() {
@@ -131,7 +124,12 @@ describe("<FocusLayer>", () => {
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
       .map(
-        (c) => c[1] as { fq: FullyQualifiedMoniker; name: string; parent: FullyQualifiedMoniker | null },
+        (c) =>
+          c[1] as {
+            fq: FullyQualifiedMoniker;
+            name: string;
+            parent: FullyQualifiedMoniker | null;
+          },
       );
     expect(pushes).toHaveLength(2);
     expect(outerKey).not.toBeNull();
@@ -150,10 +148,7 @@ describe("<FocusLayer>", () => {
     const { unmount } = render(
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
-          <FocusLayer
-            name={asSegment("dialog")}
-            parentLayerFq={explicitParent}
-          >
+          <FocusLayer name={asSegment("dialog")} parentLayerFq={explicitParent}>
             {null}
           </FocusLayer>
         </FocusLayer>
@@ -163,7 +158,9 @@ describe("<FocusLayer>", () => {
 
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
-      .map((c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null });
+      .map(
+        (c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null },
+      );
     // The inner ("dialog") layer should ignore the ancestor context.
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBe(explicitParent);
@@ -185,7 +182,9 @@ describe("<FocusLayer>", () => {
 
     const pushes = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_push_layer")
-      .map((c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null });
+      .map(
+        (c) => c[1] as { name: string; parent: FullyQualifiedMoniker | null },
+      );
     const dialog = pushes.find((p) => p.name === "dialog")!;
     expect(dialog.parent).toBeNull();
 
@@ -319,10 +318,7 @@ describe("<FocusLayer> overlay scenarios", () => {
     // the portal — the dialog's React parent is NOT the window layer).
     const dialog = render(
       <SpatialFocusProvider>
-        <FocusLayer
-          name={asSegment("dialog")}
-          parentLayerFq={openerLayerKey}
-        >
+        <FocusLayer name={asSegment("dialog")} parentLayerFq={openerLayerKey}>
           {null}
         </FocusLayer>
       </SpatialFocusProvider>,
@@ -400,10 +396,7 @@ describe("<FocusLayer> overlay scenarios", () => {
       windowLayerKey = useEnclosingLayerFq();
       if (!open) return null;
       return (
-        <FocusLayer
-          name={asSegment("palette")}
-          parentLayerFq={windowLayerKey}
-        >
+        <FocusLayer name={asSegment("palette")} parentLayerFq={windowLayerKey}>
           {null}
         </FocusLayer>
       );

@@ -166,7 +166,8 @@ function PerspectiveSpatialZone({ children }: { children: ReactNode }) {
       // The zone exists so the navigator can drill *into* it from the bar
       // and remember a last-focused inner leaf; the leaves it contains
       // (board columns, grid cells, etc.) render their own indicator.
-      showFocusBar={false}
+      // showFocus=false: viewport-sized chrome; inner board / grid leaves own focus.
+      showFocus={false}
       className="flex flex-col flex-1 min-h-0 min-w-0"
     >
       {children}

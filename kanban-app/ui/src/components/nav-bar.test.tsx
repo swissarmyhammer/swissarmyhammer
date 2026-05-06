@@ -102,9 +102,7 @@ vi.mock("@/components/fields/field", () => ({
 import { NavBar } from "./nav-bar";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 /** Identity-stable layer name for the test window root, matches App.tsx. */
 const WINDOW_LAYER_NAME = asSegment("window");
@@ -255,10 +253,16 @@ describe("NavBar", () => {
   // -------------------------------------------------------------------------
   // Spatial-nav wiring
   //
-  // The nav bar mounts as `<FocusScope moniker="ui:navbar">` with each
-  // actionable child registered as a `<FocusScope>` leaf whose `parent_zone`
-  // is the navbar zone. These tests assert the structural wiring — the
-  // spatial-graph contract the rest of the app relies on for arrow nav.
+  // The nav bar is a plain `<div role="banner">` — NOT a `<FocusScope>`.
+  // Each actionable child registers its own `<FocusScope>` leaf with a
+  // `ui:navbar.{name}` moniker, and those leaves register as **peer
+  // top-level scopes** under the surrounding `<FocusLayer name="window">`
+  // — siblings of `ui:left-nav` and `ui:perspective-bar`. The outer
+  // `<FocusScope moniker="ui:navbar">` wrapper used to swallow clicks on
+  // bar whitespace and beam-search candidates arriving from below; with
+  // the wrapper gone, the inner leaves become first-class hit-test
+  // targets and beam-search candidates. See the `nav-bar.tsx` docstring
+  // for the full rationale.
   // -------------------------------------------------------------------------
 
   /** Filter mock invoke calls to those whose first arg matches `cmd`. */
@@ -269,34 +273,33 @@ describe("NavBar", () => {
   }
 
   it("exposes the implicit banner landmark for screen readers", () => {
-    // Replacing the previous <header> with <FocusScope> (a <div>) used to drop
-    // the implicit `role="banner"` landmark — losing the top-of-page anchor
-    // that screen-reader users navigate to. The FocusScope now forwards
-    // `role="banner"`; this test guards against that regression.
+    // The bar uses a plain `<div role="banner">` so the screen-reader
+    // landmark survives the removal of the outer `<FocusScope>` wrapper.
     renderNavBar();
     expect(screen.getByRole("banner")).toBeTruthy();
   });
 
-  it("registers as a FocusScope with moniker ui:navbar at the layer root", async () => {
+  it("does NOT register an outer ui:navbar FocusScope wrapper", async () => {
+    // Regression guard for the focus-swallowing bug: an outer
+    // `<FocusScope moniker="ui:navbar">` covering the whole row would
+    // hit-test before its inner leaves and silently steal click /
+    // beam-search focus that belongs to the leaves. The bar must stay a
+    // plain `<div role="banner">` so the leaves are reached directly.
     renderNavBar();
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_scope");
     const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
-    expect(navbarZone).toBeDefined();
-    expect(navbarZone!.parentZone).toBeNull();
-    expect(navbarZone!.layerFq).toBeTruthy();
+    expect(navbarZone).toBeUndefined();
   });
 
-  it("registers ui:navbar.board-selector as a FocusScope child of the navbar zone", async () => {
+  it("registers ui:navbar.board-selector as a peer top-level FocusScope under the window layer", async () => {
     // The board-selector houses multiple focusable surfaces (editable name
     // Field, dropdown trigger, tear-off button), so it registers as a
-    // FocusScope-with-children container. After parent task
-    // `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split primitives
-    // into a single `<FocusScope>`, every spatial primitive registers
-    // through the same `spatial_register_scope` IPC; the structural
-    // distinction between a container and a leaf is whether the scope
-    // has child scopes, not a separate registration command.
+    // FocusScope-with-children container. With the outer `ui:navbar`
+    // wrapper removed, `parentZone` is null — the selector is a peer of
+    // `ui:left-nav` and `ui:perspective-bar` directly under the window
+    // layer.
     mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
 
@@ -304,30 +307,25 @@ describe("NavBar", () => {
     await flushSetup();
 
     const zoneCalls = callsFor("spatial_register_scope");
-    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
-    expect(navbarZone).toBeDefined();
-
     const boardSelectorZone = zoneCalls.find(
       (c) => c.segment === "ui:navbar.board-selector",
     );
     expect(boardSelectorZone).toBeDefined();
-    expect(boardSelectorZone!.parentZone).toBe(navbarZone!.fq);
+    expect(boardSelectorZone!.parentZone).toBeNull();
+    expect(boardSelectorZone!.layerFq).toBeTruthy();
   });
 
-  it("registers ui:navbar.inspect as a FocusScope child only when a board is loaded", async () => {
+  it("registers ui:navbar.inspect as a peer top-level FocusScope only when a board is loaded", async () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
     renderNavBar();
     await flushSetup();
 
-    const zoneCalls = callsFor("spatial_register_scope");
-    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
-    expect(navbarZone).toBeDefined();
-
     const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.inspect");
     expect(leaf).toBeDefined();
-    expect(leaf!.parentZone).toBe(navbarZone!.fq);
+    expect(leaf!.parentZone).toBeNull();
+    expect(leaf!.layerFq).toBeTruthy();
   });
 
   it("does not register ui:navbar.inspect when no board is loaded", async () => {
@@ -342,18 +340,15 @@ describe("NavBar", () => {
     ).toBeUndefined();
   });
 
-  it("registers ui:navbar.search as a FocusScope child of the navbar zone", async () => {
+  it("registers ui:navbar.search as a peer top-level FocusScope under the window layer", async () => {
     renderNavBar();
     await flushSetup();
-
-    const zoneCalls = callsFor("spatial_register_scope");
-    const navbarZone = zoneCalls.find((c) => c.segment === "ui:navbar");
-    expect(navbarZone).toBeDefined();
 
     const focusableCalls = callsFor("spatial_register_scope");
     const leaf = focusableCalls.find((c) => c.segment === "ui:navbar.search");
     expect(leaf).toBeDefined();
-    expect(leaf!.parentZone).toBe(navbarZone!.fq);
+    expect(leaf!.parentZone).toBeNull();
+    expect(leaf!.layerFq).toBeTruthy();
   });
 
   it("regression: does not attach a global keydown listener for legacy nav", () => {

@@ -584,7 +584,7 @@ async function assertClickProducesIndicator({
 
 /**
  * Variant of [`assertClickProducesIndicator`] for `<FocusScope>` wrappers
- * that intentionally ship `showFocusBar={false}` — their inner leaves
+ * that intentionally ship `showFocus={false}` — their inner leaves
  * own the visible focus signal, so the wrapper itself must NOT mount a
  * `<FocusIndicator>` even when claimed. The data-focused attribute
  * still flips so e2e selectors and debug tooling can observe the
@@ -648,7 +648,7 @@ async function assertClickProducesZoneFocusWithoutIndicator({
   ) as HTMLElement | null;
   expect(
     indicator,
-    `<FocusIndicator> must NOT mount on the zone wrapper '${moniker}' (showFocusBar={false})`,
+    `<FocusIndicator> must NOT mount on the zone wrapper '${moniker}' (showFocus={false})`,
   ).toBeNull();
 }
 
@@ -737,9 +737,11 @@ function renderPerspectiveBar() {
   return render(
     withSpatialStack(
       <SchemaProvider>
-        <UIStateProvider>
-          <PerspectiveTabBar />
-        </UIStateProvider>
+        <EntityFocusProvider>
+          <UIStateProvider>
+            <PerspectiveTabBar />
+          </UIStateProvider>
+        </EntityFocusProvider>
       </SchemaProvider>,
     ),
   );
@@ -788,7 +790,7 @@ function renderInspectorFieldRow(entity: Entity, fieldName: string) {
                   entityId={entity.id}
                   mode="full"
                   editing={false}
-                  showFocusBar
+                  showFocus
                 />
               </UIStateProvider>
             </FieldUpdateProvider>
@@ -851,7 +853,7 @@ describe("focus-on-click regression suite (every component class)", () => {
   // would not catch that class of regression.
   // -------------------------------------------------------------------------
   describe("perspective tab", () => {
-    it("clicking a perspective tab focuses it and renders the indicator", async () => {
+    it("clicking a perspective tab focuses the tab wrapper and renders the indicator", async () => {
       mockPerspectivesValue = {
         perspectives: [
           { id: "p1", name: "Sprint", view: "board" },
@@ -865,14 +867,13 @@ describe("focus-on-click regression suite (every component class)", () => {
       const { container, unmount } = renderPerspectiveBar();
       await flushSetup();
 
-      // Capture the registered key for the leaf BEFORE we clear the
-      // invoke mock — `findRegistration` reads from the mock's call log.
-      // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN)
-      // the per-tab wrapper is a `<FocusScope perspective_tab:{id}>` and
-      // the click-target leaf is the inner
-      // `<FocusScope perspective_tab.name:{id}>` that wraps the
-      // `TabButton`.
-      const moniker = "perspective_tab.name:p1";
+      // Capture the registered key for the tab wrapper BEFORE we clear
+      // the invoke mock — `findRegistration` reads from the mock's call
+      // log. The outer `perspective_tab:{id}` `<FocusScope>` is itself
+      // the focusable target (its onClick dispatches `spatial_focus`)
+      // and inherits `<FocusScope>`'s default `showFocus={true}` so a
+      // `<FocusIndicator>` paints on focus.
+      const moniker = "perspective_tab:p1";
       const tabRegistration = findRegistration(moniker);
       const tabKey = tabRegistration.fq as FullyQualifiedMoniker;
 
@@ -908,7 +909,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       ).toBe(1);
       expect(
         focusCalls[0].fq,
-        "spatial_focus key must match the perspective tab's registered key",
+        "spatial_focus key must match the perspective tab wrapper's registered key",
       ).toBe(tabKey);
 
       // Negative guard: the click must not bubble to the perspective bar
@@ -926,12 +927,15 @@ describe("focus-on-click regression suite (every component class)", () => {
         expect(tabNode!.getAttribute("data-focused")).toBe("true");
       });
 
+      // The `<FocusIndicator>` must mount inside the focused tab
+      // wrapper — the wrapper inherits `showFocus={true}` so the
+      // dashed-border indicator paints on focus.
       const indicator = tabNode!.querySelector(
         "[data-testid='focus-indicator']",
       ) as HTMLElement | null;
       expect(
         indicator,
-        "<FocusIndicator> must mount inside the focused perspective tab",
+        "<FocusIndicator> must mount inside the focused perspective tab wrapper",
       ).not.toBeNull();
       expect(tabNode!.contains(indicator!)).toBe(true);
 
@@ -962,7 +966,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       const barRegistration = findRegistration("ui:perspective-bar");
       const barKey = barRegistration.fq as FullyQualifiedMoniker;
 
-      // The bar carries `showFocusBar={false}` (it's viewport-spanning
+      // The bar carries `showFocus={false}` (it's viewport-spanning
       // chrome — see `PerspectiveBarSpatialZone` in
       // `perspective-tab-bar.tsx`), so we only assert the click → focus
       // dispatch and `data-focused` flip. The visible indicator lives on
@@ -991,7 +995,7 @@ describe("focus-on-click regression suite (every component class)", () => {
         expect(barNode!.getAttribute("data-focused")).toBe("true");
       });
 
-      // Per `PerspectiveBarSpatialZone`'s `showFocusBar={false}`, no
+      // Per `PerspectiveBarSpatialZone`'s `showFocus={false}`, no
       // visible bar mounts on the bar wrapper itself — its focus is
       // signalled to e2e selectors via `data-focused` only and the
       // visible signal lives on the focused tab leaf instead.
@@ -1000,7 +1004,7 @@ describe("focus-on-click regression suite (every component class)", () => {
       );
       expect(
         indicator,
-        "ui:perspective-bar opts out of the visible bar (showFocusBar=false)",
+        "ui:perspective-bar opts out of the visible bar (showFocus=false)",
       ).toBeNull();
 
       unmount();
@@ -1056,10 +1060,14 @@ describe("focus-on-click regression suite (every component class)", () => {
       const { container, unmount } = renderNavBar();
       await flushSetup();
 
+      // No `parentMonikers` to guard against — the navbar's inner scopes
+      // are peer top-level scopes (the outer `ui:navbar` wrapper was
+      // removed because it swallowed clicks and beam-search hits). See
+      // `nav-bar.tsx`'s docstring for the focus-swallowing rationale.
       await assertClickProducesIndicator({
         container,
         moniker: "ui:navbar.search",
-        parentMonikers: ["ui:navbar"],
+        parentMonikers: [],
       });
 
       unmount();
@@ -1073,10 +1081,13 @@ describe("focus-on-click regression suite (every component class)", () => {
       // board. The hoisted `mockBoardData.mockReturnValue(NAV_BOARD)`
       // above guarantees that for every test in this describe block, so
       // the leaf is reliably present.
+      //
+      // No `parentMonikers` — the navbar's inner scopes are peer
+      // top-level scopes; see the search test above.
       await assertClickProducesIndicator({
         container,
         moniker: "ui:navbar.inspect",
-        parentMonikers: ["ui:navbar"],
+        parentMonikers: [],
       });
 
       unmount();
@@ -1085,19 +1096,19 @@ describe("focus-on-click regression suite (every component class)", () => {
     it("clicking ui:navbar.board-selector focuses the zone but renders no indicator on the wrapper", async () => {
       // The board-selector is a zone (multi-leaf surface), not a leaf —
       // its inner leaves (dropdown trigger, tear-off button, editable
-      // name `<Field>` zone) own the visible focus signal. The kernel's
-      // scope-is-leaf invariant rejects a `<FocusScope>` wrapping
-      // further focus primitives — see
-      // swissarmyhammer-focus/tests/scope_is_leaf.rs. The zone uses
-      // `showFocusBar={false}` so the data-focused attribute flips on
-      // the wrapper but no `<FocusIndicator>` mounts on it.
+      // name `<Field>` zone) own the visible focus signal. The zone uses
+      // `showFocus={false}` so the data-focused attribute flips on the
+      // wrapper but no `<FocusIndicator>` mounts on it.
+      //
+      // No `parentMonikers` — the navbar's inner scopes are peer
+      // top-level scopes; see the search test above.
       const { container, unmount } = renderNavBar();
       await flushSetup();
 
       await assertClickProducesZoneFocusWithoutIndicator({
         container,
         moniker: "ui:navbar.board-selector",
-        parentMonikers: ["ui:navbar"],
+        parentMonikers: [],
       });
 
       unmount();

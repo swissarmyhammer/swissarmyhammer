@@ -629,9 +629,7 @@ describe("useEntityFocus (compat shim)", () => {
       const focus = useEntityFocus();
       // Shape check — every action plus the moniker must be present.
       onActions(focus);
-      return (
-        <span data-testid="moniker">{focus.focusedFq ?? "null"}</span>
-      );
+      return <span data-testid="moniker">{focus.focusedFq ?? "null"}</span>;
     }
 
     let actions: ReturnType<typeof useFocusActions> | null = null;

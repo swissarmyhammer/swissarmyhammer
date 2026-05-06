@@ -66,7 +66,7 @@ describe("ColumnView source-level guards", () => {
     expect(src).not.toMatch(/['"]keydown['"]/);
   });
 
-  it('wraps the column body in <FocusScope moniker={asSegment(...)}>', () => {
+  it("wraps the column body in <FocusScope moniker={asSegment(...)}>", () => {
     const src = readColumnViewSource();
     // The column registers as a navigable zone in the spatial graph; its
     // moniker is computed from `column.moniker`, so we look for the

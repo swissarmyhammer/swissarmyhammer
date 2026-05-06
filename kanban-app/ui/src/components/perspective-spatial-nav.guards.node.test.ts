@@ -85,15 +85,16 @@ describe("PerspectiveTabBar source-level guards", () => {
     );
   });
 
-  it("wraps the tab name button in FocusScope with moniker perspective_tab.name:${id}", () => {
-    // Companion to the per-tab zone guard: the inner `<TabButton>` is itself
-    // wrapped in a `<FocusScope perspective_tab.name:${id}>` leaf so the
-    // visible name target is keyboard-focusable. Beam-search lands here for
-    // `nav.up` / `nav.down` between tabs, and the focus indicator anchors to
-    // this leaf rather than the wrapping zone.
-    expect(SRC).toMatch(
-      /<FocusScope\s+moniker=\{asSegment\(`perspective_tab\.name:\$\{id\}`\)/,
-    );
+  it("does NOT wrap the tab name button in a redundant perspective_tab.name FocusScope", () => {
+    // Post-`8789dcc15`, the inner `perspective_tab.name:${id}` FocusScope
+    // was dropped because it sat at the exact same rect as the outer
+    // `perspective_tab:${id}` wrapper (an inactive tab's only content is
+    // the name button — same x, y, width, height). The outer
+    // `perspective_tab` is itself the focusable target now; Enter-on-focus
+    // routes through the existing `ui.entity.startRename` CommandDef. A
+    // regression that re-introduces the inner scope would re-create the
+    // needless-nesting warning the kernel emits for overlapping rects.
+    expect(SRC).not.toMatch(/asSegment\(`perspective_tab\.name:\$\{id\}`\)/);
   });
 
   it("wraps the filter formula bar in FocusScope with moniker filter_editor:${activePerspectiveId}", () => {
@@ -134,7 +135,9 @@ describe("PerspectiveContainer source-level guards", () => {
   });
 
   it("wraps the perspective body in FocusScope with moniker ui:perspective", () => {
-    expect(SRC).toMatch(/<FocusScope\s+moniker=\{asSegment\("ui:perspective"\)/);
+    expect(SRC).toMatch(
+      /<FocusScope\s+moniker=\{asSegment\("ui:perspective"\)/,
+    );
   });
 
   it("preserves the flex chain via className on the perspective scope", () => {

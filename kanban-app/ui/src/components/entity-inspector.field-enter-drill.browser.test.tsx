@@ -126,7 +126,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -224,8 +224,7 @@ async function defaultInvokeImpl(
   if (cmd === "dispatch_command") return undefined;
   if (cmd === "spatial_drill_in") {
     const key = (args as { fq?: string })?.fq ?? "";
-    const focusedMoniker =
-      (args as { focusedFq?: string })?.focusedFq ?? "";
+    const focusedMoniker = (args as { focusedFq?: string })?.focusedFq ?? "";
     // Under the no-silent-dropout contract the kernel echoes the
     // focused moniker when there's nothing to descend into. Test
     // entries with non-null values mean "drill walked to a child" —
@@ -242,8 +241,7 @@ async function defaultInvokeImpl(
   if (cmd === "spatial_drill_out") {
     // Same echo contract for drill-out — the layer-root edge returns
     // the focused moniker so the React side dispatches app.dismiss.
-    const focusedMoniker =
-      (args as { focusedFq?: string })?.focusedFq ?? "";
+    const focusedMoniker = (args as { focusedFq?: string })?.focusedFq ?? "";
     return focusedMoniker;
   }
   if (cmd === "spatial_navigate") return null;
@@ -272,9 +270,12 @@ async function defaultInvokeImpl(
     const fq = a.fq ?? null;
     let moniker: string | null = null;
     for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) { moniker = s; break; }
+      if (k === fq) {
+        moniker = s;
+        break;
+      }
     }
-    
+
     if (fq) {
       const prev = currentFocusKey.key;
       currentFocusKey.key = fq;
@@ -606,7 +607,9 @@ describe("EntityInspector — Enter on a focused field zone (drill-in vs. edit)"
     // `spatial_navigate(focusedKey, "right")` for the bug pill's key.
     const navCalls = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_navigate")
-      .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+      .map(
+        (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+      );
     expect(navCalls.length).toBe(1);
     expect(navCalls[0].focusedFq).toBe(bugPill!.fq);
     expect(navCalls[0].direction).toBe("right");

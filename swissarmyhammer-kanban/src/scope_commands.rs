@@ -732,19 +732,6 @@ fn emit_cross_cutting_commands(
     result: &mut Vec<ResolvedCommand>,
 ) {
     let scope_prefixed = format!("entity:{entity_type}");
-    // Pre-count target-primary commands so the entry trace records how many
-    // candidates this pass sees before per-command filtering — mirrors the
-    // shape of `emit_entity_add`'s entry diagnostic (scope size + candidate
-    // count).
-    let target_primary_count = all_registry_cmds
-        .iter()
-        .filter(|c| {
-            c.params
-                .first()
-                .is_some_and(|p| p.from == ParamSource::Target)
-        })
-        .count();
-
     // Collect matches into a local vec first so we can sort by
     // (context_menu_group, context_menu_order, id) before emitting. Pushing
     // straight into `result` would inherit the HashMap-iteration order of
@@ -779,7 +766,6 @@ fn emit_cross_cutting_commands(
             b.cmd.id.as_str(),
         ))
     });
-    let matched = pending.len();
     for p in pending {
         push_dedup(seen, result, p.cmd);
     }

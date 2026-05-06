@@ -96,8 +96,10 @@ import { type CommandDef } from "@/lib/command-scope";
 import type { SegmentMoniker } from "@/types/spatial";
 
 /** Public props for `<Pressable>`. */
-export interface PressableProps
-  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> {
+export interface PressableProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "onClick"
+> {
   /**
    * Relative `SegmentMoniker` for the spatial-nav leaf this Pressable
    * registers — composed under the parent FQM by the enclosing
@@ -200,8 +202,8 @@ export const Pressable = forwardRef<HTMLButtonElement, PressableProps>(
     // ours, not replace it. Composing here keeps both the parent
     // slot's handler (e.g. tooltip dismiss-on-click) and our own
     // `onPress` firing on every click.
-    const { onClick: rawOuterOnClick, ...restWithoutClick } = rest as
-      ButtonHTMLAttributes<HTMLButtonElement>;
+    const { onClick: rawOuterOnClick, ...restWithoutClick } =
+      rest as ButtonHTMLAttributes<HTMLButtonElement>;
     const outerOnClick = rawOuterOnClick as
       | ((e: ReactMouseEvent<HTMLButtonElement>) => void)
       | undefined;
@@ -223,10 +225,7 @@ export const Pressable = forwardRef<HTMLButtonElement, PressableProps>(
     // Slot.Root (it would land on whatever underlying element a parent
     // slot picks). Render `<button type="button">` only on the
     // non-asChild path.
-    const buttonProps =
-      asChild === true
-        ? {}
-        : { type: "button" as const };
+    const buttonProps = asChild === true ? {} : { type: "button" as const };
 
     return (
       <FocusScope moniker={moniker} commands={pressCommands}>

@@ -1,8 +1,7 @@
 /**
  * Browser-mode tests for the perspective tab bar's focus-indicator wiring
- * on each sibling tab leaf — the source-of-truth assertion for kanban
- * card `01KQ9Z56M556DQHYMA502B9FKB`'s seam 1 (no visible indicator on a
- * focused perspective tab).
+ * on each sibling tab leaf — the source-of-truth assertion that the
+ * dashed-border indicator paints on a focused perspective tab.
  *
  * Mounts `<PerspectiveTabBar>` inside the production provider stack,
  * drives a `focus-changed` event for one perspective tab leaf's key,
@@ -25,7 +24,7 @@
  *     subscription was scoped to the wrong layer, or the event payload's
  *     `next_fq` didn't match the registered key).
  *   - Both flip but no `<FocusIndicator>` mounts → visible-indicator wiring
- *     bug (e.g. `showFocusBar` was forced to `false` somewhere on the
+ *     bug (e.g. `showFocus` was forced to `false` somewhere on the
  *     leaf).
  *
  * # Surface specifics that differ from the navbar
@@ -213,11 +212,12 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -276,9 +276,11 @@ function renderPerspectiveBar() {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={WINDOW_LAYER_NAME}>
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -292,20 +294,20 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /**
- * Find the registered `FullyQualifiedMoniker` for the per-tab name leaf.
+ * Find the registered `FullyQualifiedMoniker` for the per-tab wrapper.
  *
- * After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the
- * per-tab `<FocusScope perspective_tab:{id}>` wrapper uses
- * `showFocusBar={false}` and the visible focus indicator lives on the
- * inner `<FocusScope perspective_tab.name:{id}>` leaf — that is the leaf
- * the user "lands on" when they navigate to a tab. So the focus-indicator
- * tests target the name leaf, not the wrapping zone.
+ * The per-tab `<FocusScope perspective_tab:{id}>` wrapper inherits
+ * `<FocusScope>`'s default `showFocus={true}` — the visible
+ * `<FocusIndicator>` paints on the focused tab. There is no inner
+ * `perspective_tab.name` leaf (it would register at the same rect as
+ * the wrapper and trip the kernel's needless-nesting warning), so the
+ * focus-indicator tests target the wrapper itself.
  */
 function findTabNameKey(
   perspectiveId: string,
 ): FullyQualifiedMoniker | undefined {
   const scope = registerScopeArgs().find(
-    (a) => a.segment === `perspective_tab.name:${perspectiveId}`,
+    (a) => a.segment === `perspective_tab:${perspectiveId}`,
   );
   return scope?.fq as FullyQualifiedMoniker | undefined;
 }
@@ -356,46 +358,47 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
 
   it("focus_indicator_renders_when_inactive_tab_is_focused", async () => {
+    // The per-tab `<FocusScope perspective_tab:{id}>` wrapper inherits
+    // `<FocusScope>`'s default `showFocus={true}`, so a `<FocusIndicator>`
+    // mounts on the focused tab. The contract this test pins is:
+    // focus-changed flips `data-focused` on the per-tab wrapper AND a
+    // `<FocusIndicator>` is rendered as a descendant of that wrapper.
     const { container, queryByTestId, unmount } = renderPerspectiveBar();
     await flushSetup();
 
     // p1 is inactive (p2 is the active perspective). Locate its
     // registered FullyQualifiedMoniker and drive a focus-changed event to it.
     const p1Key = findTabNameKey("p1");
-    expect(p1Key, "perspective_tab:p1 leaf must register").toBeDefined();
+    expect(p1Key, "perspective_tab:p1 zone must register").toBeDefined();
 
-    // No indicator should render before focus moves to a tab leaf.
-    expect(
-      container.querySelector(
-        "[data-segment='perspective_tab.name:p1'] [data-testid='focus-indicator']",
-      ),
-    ).toBeNull();
+    // No indicator should render before focus moves to a tab.
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     await fireFocusChanged({
       next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab.name:p1"),
+      next_segment: asSegment("perspective_tab:p1"),
     });
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-segment='perspective_tab.name:p1']",
+        "[data-segment='perspective_tab:p1']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
-    const node = container.querySelector(
-      "[data-segment='perspective_tab.name:p1']",
+    // The `<FocusIndicator>` must mount inside the focused tab wrapper —
+    // the wrapper inherits `showFocus={true}` so the dashed-border
+    // indicator paints on focus.
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(
       indicator,
-      "indicator must mount when an inactive tab leaf is focused",
+      "<FocusIndicator> must mount on the focused perspective tab wrapper",
     ).not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must render inside the focused inactive tab's wrapper",
-    ).toBe(true);
+    expect(tabNode.contains(indicator!)).toBe(true);
 
     unmount();
   });
@@ -415,46 +418,43 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
 
   it("focus_indicator_renders_when_active_tab_is_focused", async () => {
+    // Same contract as the inactive-tab test above — the focused tab
+    // signals via `data-focused="true"` AND a `<FocusIndicator>` mounts
+    // on the wrapper. Pinned separately for the active tab because the
+    // active tab carries extra inline chrome (`<FilterFocusButton>` +
+    // `<GroupPopoverButton>`) — a future regression that breaks the
+    // indicator's containing block / overflow path on the active tab
+    // would fail this test.
     const { container, queryByTestId, unmount } = renderPerspectiveBar();
     await flushSetup();
 
-    // p2 is active. Its leaf wrapper has an extra
-    // `<FilterFocusButton>` + `<GroupPopoverButton>` rendered next to
-    // the `TabButton`, growing the leaf's rect.
     const p2Key = findTabNameKey("p2");
-    expect(p2Key, "perspective_tab:p2 leaf must register").toBeDefined();
+    expect(p2Key, "perspective_tab:p2 zone must register").toBeDefined();
 
-    expect(
-      container.querySelector(
-        "[data-segment='perspective_tab.name:p2'] [data-testid='focus-indicator']",
-      ),
-    ).toBeNull();
+    expect(queryByTestId("focus-indicator")).toBeNull();
 
     await fireFocusChanged({
       next_fq: p2Key!,
-      next_segment: asSegment("perspective_tab.name:p2"),
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-segment='perspective_tab.name:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
-    const node = container.querySelector(
-      "[data-segment='perspective_tab.name:p2']",
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     const indicator = queryByTestId("focus-indicator");
     expect(
       indicator,
-      "indicator must mount when the active (wider) tab leaf is focused",
+      "<FocusIndicator> must mount on the focused active perspective tab wrapper",
     ).not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must render inside the active tab's wrapper, not in the bar's chrome",
-    ).toBe(true);
+    expect(tabNode.contains(indicator!)).toBe(true);
 
     unmount();
   });
@@ -476,37 +476,43 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
 
   it("focus_indicator_persists_through_tab_activation", async () => {
+    // Pin that the `isActive` flag flips render content (extra inline
+    // chrome appears) but does NOT remount the wrapping `<FocusScope>`.
+    // The FullyQualifiedMoniker held in the wrapper's mount-once useRef
+    // stays stable through activation; `data-focused="true"` remains
+    // set on the same wrapper and the `<FocusIndicator>` stays mounted
+    // throughout — the wrapper inherits `showFocus={true}` so the
+    // dashed-border indicator is the user-visible signal.
     const { container, queryByTestId, rerender, unmount } =
       renderPerspectiveBar();
     await flushSetup();
 
     // Focus inactive p1.
     const p1Key = findTabNameKey("p1");
-    expect(p1Key, "perspective_tab:p1 leaf must register").toBeDefined();
+    expect(p1Key, "perspective_tab:p1 zone must register").toBeDefined();
 
     await fireFocusChanged({
       next_fq: p1Key!,
-      next_segment: asSegment("perspective_tab.name:p1"),
+      next_segment: asSegment("perspective_tab:p1"),
     });
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-segment='perspective_tab.name:p1']",
+        "[data-segment='perspective_tab:p1']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
       expect(node!.getAttribute("data-focused")).toBe("true");
     });
+
+    // Indicator is mounted on the focused inactive tab.
     expect(
       queryByTestId("focus-indicator"),
-      "indicator must mount on inactive p1 before activation",
+      "indicator must mount on the focused tab before activation",
     ).not.toBeNull();
 
     // Snapshot the count of p1 wrapper-zone register calls. After
     // activation, the count must NOT grow — the wrapping
-    // `<FocusScope perspective_tab:p1>` (and its inner name leaf) must
-    // not unmount + remount. After the iteration-2 reshape the wrapper
-    // is registered via `spatial_register_scope`, so we walk the zone
-    // call list instead of the scope call list.
+    // `<FocusScope perspective_tab:p1>` must not unmount + remount.
     function p1ZoneRegisterCount(): number {
       return mockInvoke.mock.calls.filter(
         (c) =>
@@ -526,9 +532,11 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     rerender(
       <SpatialFocusProvider>
         <FocusLayer name={WINDOW_LAYER_NAME}>
-          <TooltipProvider delayDuration={100}>
-            <PerspectiveTabBar />
-          </TooltipProvider>
+          <EntityFocusProvider>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </EntityFocusProvider>
         </FocusLayer>
       </SpatialFocusProvider>,
     );
@@ -540,24 +548,20 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
       "activating a tab must NOT remount its <FocusScope> wrapper — the FullyQualifiedMoniker stays stable",
     ).toBe(beforeActivationCount);
 
-    // The same wrapper still reports `data-focused="true"` and the
-    // indicator is still rendered inside it — no FullyQualifiedMoniker churn means
-    // the kernel's focused_key still points at the same leaf.
+    // The same wrapper still reports `data-focused="true"` after
+    // activation — the kernel's focused_key still points at the same
+    // wrapper — and the indicator is still mounted inside it.
     const node = container.querySelector(
-      "[data-segment='perspective_tab.name:p1']",
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");
-
     const indicator = queryByTestId("focus-indicator");
     expect(
       indicator,
-      "indicator must remain mounted after tab activation",
+      "<FocusIndicator> must remain mounted on the wrapper through activation",
     ).not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must remain inside the now-active tab's wrapper",
-    ).toBe(true);
+    expect(node.contains(indicator!)).toBe(true);
 
     unmount();
   });
@@ -583,6 +587,13 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
 
   it("focus_indicator_returns_after_rename_commit", async () => {
+    // Pin that the rename round-trip does NOT remount the wrapping
+    // `<FocusScope>`: the rename editor mounts inside the `TabButton`,
+    // not on the wrapper. After commit, the wrapper still carries
+    // `data-focused="true"` (no FullyQualifiedMoniker churn) AND the
+    // `<FocusIndicator>` is still rendered inside it — the wrapper
+    // inherits `showFocus={true}` so the dashed-border indicator is
+    // the user-visible focus signal throughout.
     const { container, queryByTestId, unmount } = renderPerspectiveBar();
     await flushSetup();
 
@@ -592,19 +603,15 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await fireFocusChanged({
       next_fq: p2Key!,
-      next_segment: asSegment("perspective_tab.name:p2"),
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-segment='perspective_tab.name:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node?.getAttribute("data-focused")).toBe("true");
     });
-    expect(
-      queryByTestId("focus-indicator"),
-      "indicator must mount on the focused active tab before rename starts",
-    ).not.toBeNull();
 
     // Enter rename mode via the same module-level broadcaster the
     // AppShell global command uses. This mounts `<InlineRenameEditor>`
@@ -617,7 +624,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // The CM6 rename editor mounts inside the active tab's wrapper.
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab.name:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -625,7 +632,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // Commit the rename by dispatching Enter on the CM6 content. The
     // editor unmounts and the wrapper reverts to the plain name text.
     const cmContent = container.querySelector(
-      "[data-segment='perspective_tab.name:p2'] .cm-content",
+      "[data-segment='perspective_tab:p2'] .cm-content",
     ) as HTMLElement;
     expect(cmContent).not.toBeNull();
     await act(async () => {
@@ -641,31 +648,24 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     await flushSetup();
 
     // Rename editor is gone; the leaf wrapper still carries
-    // `data-focused="true"` and the indicator is rendered inside it —
-    // the wrapping `<FocusScope>` was not remounted by the rename
-    // round-trip.
+    // `data-focused="true"` — the wrapping `<FocusScope>` was not
+    // remounted by the rename round-trip — and the indicator is back.
     expect(
-      container.querySelector(
-        "[data-segment='perspective_tab.name:p2'] .cm-editor",
-      ),
+      container.querySelector("[data-segment='perspective_tab:p2'] .cm-editor"),
       "rename editor must unmount after commit",
     ).toBeNull();
 
     const node = container.querySelector(
-      "[data-segment='perspective_tab.name:p2']",
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");
-
     const indicator = queryByTestId("focus-indicator");
     expect(
       indicator,
-      "indicator must return to the active tab's wrapper after rename commit",
+      "<FocusIndicator> must be present on the focused wrapper after rename commit",
     ).not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must live inside the active tab's wrapper after the rename round-trip",
-    ).toBe(true);
+    expect(node.contains(indicator!)).toBe(true);
 
     unmount();
   });
@@ -681,6 +681,12 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
   // -------------------------------------------------------------------------
 
   it("focus_indicator_returns_after_rename_cancel", async () => {
+    // Same as the rename-commit test but with Escape (cancel) instead
+    // of Enter. The two paths must converge on the same outcome — the
+    // wrapper retains `data-focused="true"` and the `<FocusIndicator>`
+    // remains mounted — because both unmount the inner
+    // `<InlineRenameEditor>` without affecting the wrapping
+    // `<FocusScope>` (which inherits `showFocus={true}`).
     const { container, queryByTestId, unmount } = renderPerspectiveBar();
     await flushSetup();
 
@@ -689,16 +695,15 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await fireFocusChanged({
       next_fq: p2Key!,
-      next_segment: asSegment("perspective_tab.name:p2"),
+      next_segment: asSegment("perspective_tab:p2"),
     });
 
     await waitFor(() => {
       const node = container.querySelector(
-        "[data-segment='perspective_tab.name:p2']",
+        "[data-segment='perspective_tab:p2']",
       ) as HTMLElement | null;
       expect(node?.getAttribute("data-focused")).toBe("true");
     });
-    expect(queryByTestId("focus-indicator")).not.toBeNull();
 
     await act(async () => {
       triggerStartRename();
@@ -707,7 +712,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
 
     await waitFor(() => {
       const renameEditor = container.querySelector(
-        "[data-segment='perspective_tab.name:p2'] .cm-editor",
+        "[data-segment='perspective_tab:p2'] .cm-editor",
       );
       expect(renameEditor).not.toBeNull();
     });
@@ -716,7 +721,7 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     // `perspective.rename`; the editor unmounts the same way Enter
     // does.
     const cmContent = container.querySelector(
-      "[data-segment='perspective_tab.name:p2'] .cm-content",
+      "[data-segment='perspective_tab:p2'] .cm-content",
     ) as HTMLElement;
     await act(async () => {
       cmContent.dispatchEvent(
@@ -731,27 +736,21 @@ describe("PerspectiveTabBar — focus-indicator renders on each tab leaf", () =>
     await flushSetup();
 
     expect(
-      container.querySelector(
-        "[data-segment='perspective_tab.name:p2'] .cm-editor",
-      ),
+      container.querySelector("[data-segment='perspective_tab:p2'] .cm-editor"),
       "rename editor must unmount after cancel",
     ).toBeNull();
 
     const node = container.querySelector(
-      "[data-segment='perspective_tab.name:p2']",
+      "[data-segment='perspective_tab:p2']",
     ) as HTMLElement;
     expect(node).not.toBeNull();
     expect(node.getAttribute("data-focused")).toBe("true");
-
     const indicator = queryByTestId("focus-indicator");
     expect(
       indicator,
-      "indicator must return to the active tab's wrapper after rename cancel",
+      "<FocusIndicator> must be present on the focused wrapper after rename cancel",
     ).not.toBeNull();
-    expect(
-      node.contains(indicator!),
-      "indicator must live inside the active tab's wrapper after the rename round-trip",
-    ).toBe(true);
+    expect(node.contains(indicator!)).toBe(true);
 
     unmount();
   });

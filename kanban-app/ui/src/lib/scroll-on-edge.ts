@@ -160,11 +160,13 @@ export function canScrollFurther(
 
   if (axis === "y") {
     const max = el.scrollHeight - el.clientHeight;
-    if (direction === "down") return el.scrollTop < max - SCROLL_EDGE_EPSILON_PX;
+    if (direction === "down")
+      return el.scrollTop < max - SCROLL_EDGE_EPSILON_PX;
     return el.scrollTop > SCROLL_EDGE_EPSILON_PX;
   }
   const max = el.scrollWidth - el.clientWidth;
-  if (direction === "right") return el.scrollLeft < max - SCROLL_EDGE_EPSILON_PX;
+  if (direction === "right")
+    return el.scrollLeft < max - SCROLL_EDGE_EPSILON_PX;
   return el.scrollLeft > SCROLL_EDGE_EPSILON_PX;
 }
 

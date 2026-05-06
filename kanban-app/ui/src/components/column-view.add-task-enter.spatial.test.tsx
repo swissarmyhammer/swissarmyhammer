@@ -54,8 +54,7 @@ const COLUMN_SCHEMA = {
 };
 
 function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
-  if (cmd === "list_entity_types")
-    return Promise.resolve(["column", "task"]);
+  if (cmd === "list_entity_types") return Promise.resolve(["column", "task"]);
   if (cmd === "get_entity_schema") return Promise.resolve(COLUMN_SCHEMA);
   if (cmd === "list_commands_for_scope") return Promise.resolve([]);
   if (cmd === "get_undo_state")
@@ -303,9 +302,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
     ).toHaveBeenCalledTimes(1);
     expect(onAddTask).toHaveBeenCalledWith("col-doing");
 
-    const focusCalls = spatialFocusCalls().filter(
-      (c) => c.fq === columnFq,
-    );
+    const focusCalls = spatialFocusCalls().filter((c) => c.fq === columnFq);
     expect(
       focusCalls.length,
       "Enter must seed focus to the column FQM exactly once",
@@ -348,9 +345,7 @@ describe("ColumnView add-task button — Enter activates onAddTask via Pressable
     // least one focus call rather than exactly one — mirroring today's
     // behavior. The Enter path above asserts exactly-once because there
     // is no native click bubble in the keyboard pathway.
-    const focusCalls = spatialFocusCalls().filter(
-      (c) => c.fq === columnFq,
-    );
+    const focusCalls = spatialFocusCalls().filter((c) => c.fq === columnFq);
     expect(focusCalls.length).toBeGreaterThanOrEqual(1);
   });
 });

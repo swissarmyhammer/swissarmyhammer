@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
     BeamNavStrategy, Direction, FocusChangedEvent, FocusEventSink, FocusLayer, FocusScope,
-    FullyQualifiedMoniker, LayerName, NavStrategy, NoopSink, Pixels, RecordingSink,
-    Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    FullyQualifiedMoniker, LayerName, NavStrategy, NoopSink, Pixels, RecordingSink, Rect,
+    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Touch every public type so the import block above is not dead code.

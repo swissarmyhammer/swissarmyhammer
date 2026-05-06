@@ -100,6 +100,7 @@ export function BoardSelector({
             onEdit={() => setEditingName(true)}
             onDone={() => setEditingName(false)}
             onCancel={() => setEditingName(false)}
+            showFocus
           />
         ) : (
           <span className="text-sm cursor-text truncate">{displayName}</span>

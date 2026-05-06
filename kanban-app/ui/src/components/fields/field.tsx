@@ -19,24 +19,24 @@
  * focus directly — the editor is NOT a `<FocusScope>`, so spatial nav
  * stays out of the way during editing.
  *
- * The zone defaults to `showFocusBar={false}`. The default exists for
+ * The zone defaults to `showFocus={false}`. The default exists for
  * grid-cell consumers — they wrap each `<Field>` in their own
  * `<FocusScope>` that already renders a cursor ring around the cell, so
  * a second indicator at the field zone would be redundant. Every other
- * consumer opts in by passing `showFocusBar={true}` when they want the
+ * consumer opts in by passing `showFocus={true}` when they want the
  * inner field zone to advertise focus:
  *   - The inspector row (`EntityInspector` → `FieldRow` → `<Field
- *     showFocusBar />`). Inspector rows fill the panel width and have
+ *     showFocus />`). Inspector rows fill the panel width and have
  *     no enclosing focus chrome, so the per-row bar is the user's only
  *     focus cue at the row level.
  *   - The card body (`EntityCard` → `CardField` → `<Field
- *     showFocusBar />`). Card fields render inside a card-zone bar,
+ *     showFocus />`). Card fields render inside a card-zone bar,
  *     but the per-field bar is still the user's only cue for which
  *     atom of the card carries focus (title vs. status vs. tags)
  *     — the card-zone bar fires on the card itself, not on its
  *     descendants. Badge-list pill leaves inside these card fields
  *     advertise their own focus through `MentionView`'s `<FocusScope>`
- *     default of `showFocusBar={true}`.
+ *     default of `showFocus={true}`.
  *   - The nav-bar's `<Field>` per-pill children, when their parent
  *     does not already mount a focus indicator.
  *
@@ -239,14 +239,14 @@ export interface FieldProps {
    * indicator. Defaults to false so grid-cell consumers — which already
    * wrap each field in a `<FocusScope>` — don't double up on indicators.
    * Consumers without an enclosing focus chrome opt in by passing
-   * `<Field showFocusBar />`: inspector rows (the row fills the panel
+   * `<Field showFocus />`: inspector rows (the row fills the panel
    * and the per-row indicator is the user's only cue), card fields
    * (the card-zone indicator fires on the card itself, so the per-field
    * indicator tells the user which atom of the card carries focus). See
    * the file header for the full taxonomy of consumers and why each one
    * opts in or out.
    */
-  showFocusBar?: boolean;
+  showFocus?: boolean;
   /**
    * When true, render a tooltip-wrapped lucide icon as the leftmost
    * child *inside* the `<FocusZone>`. The icon resolves from
@@ -273,6 +273,31 @@ export interface FieldProps {
    * `FieldRow`) is currently the only consumer that opts in.
    */
   withIcon?: boolean;
+  /**
+   * When false, omits the inner `<FocusScope>` wrapper so the field's
+   * `field:{type}:{id}.{name}` moniker does NOT register as a scope in
+   * the spatial-nav kernel. The `<Inspectable>` wrapper (which owns the
+   * double-click → `ui.inspect` dispatch and the Space keybinding) is
+   * preserved.
+   *
+   * Defaults to true.
+   *
+   * The grid-cell case ({@link file://../data-table.tsx GridCellFocusable})
+   * passes `register={false}` because each cell already wraps the
+   * `<Field>` in its own `grid_cell:R:K` `<FocusScope>` leaf. The
+   * kernel's scope-is-leaf invariant rejects nested scopes — when both
+   * the cell scope AND the field scope register, the cell scope is
+   * dropped as `scope-not-leaf` (logged to `just logs`) and the cell
+   * disappears from the spatial registry, so beam search and
+   * click-focus lose their target. Suppressing the inner field scope
+   * leaves the cell scope as the sole leaf, which is what the cursor /
+   * beam search expects.
+   *
+   * Inspector rows and card fields keep the default (`true`) — they
+   * have no enclosing `<FocusScope>`, so the field scope is the only
+   * one in the subtree and registers cleanly.
+   */
+  register?: boolean;
 }
 
 /**
@@ -456,8 +481,9 @@ export function Field({
   onDone,
   onCancel,
   handleEvents = true,
-  showFocusBar = false,
+  showFocus = false,
   withIcon = false,
+  register = true,
 }: FieldProps) {
   const value = useFieldValue(entityType, entityId, fieldDef.name);
   const entity = useEntityStore().getEntity(entityType, entityId);
@@ -615,17 +641,30 @@ export function Field({
   // primitive `<FocusZone>` stays pure-spatial. Per the architectural
   // guard (`focus-architecture.guards.node.test.ts`, Guards B + C),
   // every entity zone — including `field:` — must be wrapped.
+  //
+  // When `register={false}` (the grid-cell case), the inner
+  // `<FocusScope>` is omitted so the field's moniker does not register
+  // as a scope. The enclosing `grid_cell:R:K` `<FocusScope>` is the
+  // sole leaf in that subtree, which is what the kernel's
+  // scope-is-leaf invariant requires (a registered `<FocusScope>`
+  // cannot contain another). The `<Inspectable>` wrapper is kept so
+  // double-click → field inspect and the Space keybinding stay wired
+  // — both are independent of the spatial registration.
   const fmk = asSegment(fieldMoniker(entityType, entityId, fieldDef.name));
   return (
     <Inspectable moniker={fmk}>
-      <FocusScope
-        moniker={fmk}
-        handleEvents={handleEvents}
-        showFocusBar={showFocusBar}
-        commands={editCommands}
-      >
-        {zoneChildren}
-      </FocusScope>
+      {register ? (
+        <FocusScope
+          moniker={fmk}
+          handleEvents={handleEvents}
+          showFocus={showFocus}
+          commands={editCommands}
+        >
+          {zoneChildren}
+        </FocusScope>
+      ) : (
+        zoneChildren
+      )}
     </Inspectable>
   );
 }

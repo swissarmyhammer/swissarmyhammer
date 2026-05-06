@@ -28,8 +28,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
-    LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
+    NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------

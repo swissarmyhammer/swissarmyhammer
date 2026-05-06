@@ -474,7 +474,16 @@ fn edge_command(
     focused_fq: &FullyQualifiedMoniker,
     direction: Direction,
 ) -> FullyQualifiedMoniker {
-    let children = reg.children_of(&focused.fq);
+    // Vim G / gg semantics: jump to first/last sibling within the focused
+    // scope's parent zone — `children_of(focused.parent_zone)`. When the
+    // focused scope has no parent zone (e.g. it IS a layer root), fall
+    // back to drilling into its own children. Without this fallback, a
+    // focused leaf (inspector field, card field) would have an empty
+    // children set and the command would no-op.
+    let children = match focused.parent_zone.as_ref() {
+        Some(parent) => reg.children_of(parent),
+        None => reg.children_of(&focused.fq),
+    };
     let pick = match direction {
         // First (and the deprecated `RowStart` alias) — topmost; ties
         // broken by leftmost. Shared with `SpatialRegistry::drill_in`'s
@@ -736,7 +745,10 @@ mod tests {
             Direction::Right,
         ] {
             let result = strategy.next(&reg, &only_fq, &focused_segment, d);
-            assert_eq!(result, only_fq, "lonely scope must echo focused FQM for {d:?}");
+            assert_eq!(
+                result, only_fq,
+                "lonely scope must echo focused FQM for {d:?}"
+            );
         }
     }
 
@@ -937,7 +949,11 @@ mod tests {
         let parent_fq = parent.fq.clone();
         reg.register_scope(parent);
 
-        let only = make_scope("only", Some(parent_fq.clone()), rect(10.0, 10.0, 50.0, 50.0));
+        let only = make_scope(
+            "only",
+            Some(parent_fq.clone()),
+            rect(10.0, 10.0, 50.0, 50.0),
+        );
         let only_fq = only.fq.clone();
         reg.register_scope(only);
 
@@ -961,7 +977,11 @@ mod tests {
 
         // Three children in a horizontal row, all at y=10.
         let left = make_scope("left", Some(row_fq.clone()), rect(0.0, 10.0, 50.0, 30.0));
-        let middle = make_scope("middle", Some(row_fq.clone()), rect(100.0, 10.0, 50.0, 30.0));
+        let middle = make_scope(
+            "middle",
+            Some(row_fq.clone()),
+            rect(100.0, 10.0, 50.0, 30.0),
+        );
         let right = make_scope("right", Some(row_fq.clone()), rect(200.0, 10.0, 50.0, 30.0));
         let left_fq = left.fq.clone();
         let right_fq = right.fq.clone();
@@ -1125,7 +1145,11 @@ mod tests {
 
         // Three children — a clear topmost-leftmost winner.
         let alpha = make_scope("alpha", Some(parent_fq.clone()), rect(0.0, 0.0, 50.0, 30.0));
-        let beta = make_scope("beta", Some(parent_fq.clone()), rect(100.0, 0.0, 50.0, 30.0));
+        let beta = make_scope(
+            "beta",
+            Some(parent_fq.clone()),
+            rect(100.0, 0.0, 50.0, 30.0),
+        );
         let gamma = make_scope(
             "gamma",
             Some(parent_fq.clone()),

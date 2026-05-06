@@ -114,7 +114,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -184,9 +184,7 @@ async function defaultInvokeImpl(
     // tests below never set up children for the field zones they
     // exercise — drill-in must echo the focused FQM so the closure's
     // compare-to-focused fall-through opens the editor.
-    return (
-      (args as { focusedFq?: string } | undefined)?.focusedFq ?? null
-    );
+    return (args as { focusedFq?: string } | undefined)?.focusedFq ?? null;
   }
   return undefined;
 }

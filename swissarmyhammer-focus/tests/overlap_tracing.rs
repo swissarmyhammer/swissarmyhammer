@@ -30,8 +30,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
-    SegmentMoniker, SpatialRegistry, WindowLabel,
+    FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker,
+    SpatialRegistry, WindowLabel,
 };
 use tracing::{
     field::{Field, Visit},

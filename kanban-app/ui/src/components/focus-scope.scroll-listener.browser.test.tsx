@@ -69,9 +69,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { FocusScope } from "./focus-scope";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers

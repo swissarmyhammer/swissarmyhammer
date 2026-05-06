@@ -88,9 +88,12 @@ function defaultInvoke(cmd: string, args?: unknown): Promise<unknown> {
     const fq = a.fq ?? null;
     let moniker: string | null = null;
     for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) { moniker = s; break; }
+      if (k === fq) {
+        moniker = s;
+        break;
+      }
     }
-    
+
     if (fq) {
       const prev = currentFocusKey.key;
       currentFocusKey.key = fq;
@@ -163,10 +166,7 @@ import {
   useEntityFocus,
 } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import {
-  asFq,
-  asSegment,
-} from "@/types/spatial";
+import { asFq, asSegment } from "@/types/spatial";
 import { useAvailableCommands } from "@/lib/command-scope";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -640,9 +640,7 @@ describe("AppShell", () => {
       (c: unknown[]) => c[0] === "spatial_drill_in",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).fq).toBe(
-      asFq("k:zone"),
-    );
+    expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:zone"));
   });
 
   it("nav.drillIn dispatches ui.setFocus when the kernel returns a SegmentMoniker", async () => {
@@ -738,9 +736,7 @@ describe("AppShell", () => {
       (c: unknown[]) => c[0] === "spatial_drill_out",
     );
     expect(drillCall).toBeTruthy();
-    expect((drillCall![1] as Record<string, unknown>).fq).toBe(
-      asFq("k:leaf"),
-    );
+    expect((drillCall![1] as Record<string, unknown>).fq).toBe(asFq("k:leaf"));
 
     // Non-null result → setFocus, no app.dismiss.
     const setFocusCall = mockInvoke.mock.calls.find(

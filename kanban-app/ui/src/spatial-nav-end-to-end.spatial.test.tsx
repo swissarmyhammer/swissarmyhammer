@@ -663,41 +663,35 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("clicking a perspective tab name focuses the name leaf inside that tab", async () => {
+    it("clicking a perspective tab focuses the tab wrapper", async () => {
       const { container, unmount } = renderApp();
       await flushAppMount();
 
-      // Post-reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN) the active perspective
-      // mounts `<FocusScope perspective_tab:default>` with an inner
-      // `<FocusScope perspective_tab.name:default>` leaf. A real user click
-      // on the visible tab name lands on the inner leaf — that is the
-      // realistic user path. The wrapping zone's onClick still calls
-      // `focus(zone_fq)`, but the leaf calls `stopPropagation` so only one
-      // `spatial_focus` reaches IPC. Mirrors `perspective-bar.spatial.test.tsx`
-      // test #3 ("clicking a tab dispatches exactly one spatial_focus for the
-      // name leaf").
-      const nameLeafKey = harness.getRegisteredFqBySegment(
-        "perspective_tab.name:default",
+      // Post-`8789dcc15`, the inner `perspective_tab.name:{id}`
+      // FocusScope was dropped because it sat at the same rect as the
+      // outer `perspective_tab:{id}` wrapper. A real user click on the
+      // visible tab name lands on the outer wrapper — that is the only
+      // FocusScope on the tab now, and its onClick dispatches
+      // `spatial_focus(perspective_tab:{id})`.
+      const tabKey = harness.getRegisteredFqBySegment(
+        "perspective_tab:default",
       );
-      expect(
-        nameLeafKey,
-        "perspective_tab.name:default must register",
-      ).not.toBeNull();
+      expect(tabKey, "perspective_tab:default must register").not.toBeNull();
 
-      const nameNode = container.querySelector(
-        "[data-segment='perspective_tab.name:default']",
+      const tabNode = container.querySelector(
+        "[data-segment='perspective_tab:default']",
       ) as HTMLElement | null;
       expect(
-        nameNode,
-        "perspective_tab.name:default DOM node must exist",
+        tabNode,
+        "perspective_tab:default DOM node must exist",
       ).not.toBeNull();
 
       mockInvoke.mockClear();
-      fireEvent.click(nameNode!);
+      fireEvent.click(tabNode!);
 
       await waitFor(() => {
         const focused = container.querySelector(
-          "[data-segment='perspective_tab.name:default'][data-focused='true']",
+          "[data-segment='perspective_tab:default'][data-focused='true']",
         );
         expect(focused).not.toBeNull();
       });
@@ -705,16 +699,9 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       // Single-focus invariant.
       expect(document.querySelectorAll("[data-focused='true']").length).toBe(1);
 
-      // The focus call's key matches the registered name-leaf key — and the
-      // outer zone's key is NOT also reported, because the leaf stops the
-      // click from bubbling to the wrapping zone's onClick.
+      // The focus call's key matches the registered tab wrapper key.
       const focusCalls = spatialFocusCalls();
-      expect(focusCalls.some((c) => c.fq === nameLeafKey!)).toBe(true);
-      const zoneKey = harness.getRegisteredFqBySegment(
-        "perspective_tab:default",
-      );
-      expect(zoneKey, "perspective_tab:default must register").not.toBeNull();
-      expect(focusCalls.find((c) => c.fq === zoneKey!)).toBeUndefined();
+      expect(focusCalls.some((c) => c.fq === tabKey!)).toBe(true);
 
       unmount();
     });
@@ -1156,12 +1143,18 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("dblclick on the nav-bar zone background does NOT dispatch ui.inspect", async () => {
+    it("dblclick on the nav-bar background does NOT dispatch ui.inspect", async () => {
+      // The nav bar is a plain `<div role="banner">` — not a `<FocusScope>`
+      // — so there is no `[data-segment='ui:navbar']` element to query
+      // (the outer wrapper was removed because it swallowed clicks and
+      // beam-search hits; see `nav-bar.tsx`'s docstring). We hit-test
+      // against the banner landmark instead, which is the same row the
+      // user actually sees.
       const { container, unmount } = renderApp();
       await flushAppMount();
 
       const navNode = container.querySelector(
-        "[data-segment='ui:navbar']",
+        "[role='banner']",
       ) as HTMLElement | null;
       expect(navNode).not.toBeNull();
 
@@ -1332,16 +1325,22 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       unmount();
     });
 
-    it("each column:* carries parent_zone === ui:board's zone key", async () => {
+    it("each column:* carries parent_zone === board:{id}'s zone key", async () => {
       const { unmount } = renderApp();
       await flushAppMount();
 
+      // Post-`8232b25cc`, columns hang directly off the `board:{id}`
+      // entity scope (the redundant `ui:board` chrome scope was
+      // dropped). The entity scope is the only board-level scope in
+      // the registry now.
       const boardZone = registerScopeArgs().find(
-        (a) => a.segment === "ui:board",
+        (a) =>
+          typeof a.segment === "string" &&
+          (a.segment as string).startsWith("board:"),
       );
       expect(
         boardZone,
-        "ui:board zone must register so columns can hang off it",
+        "board:{id} entity zone must register so columns can hang off it",
       ).toBeTruthy();
       const boardKey = boardZone!.fq as FullyQualifiedMoniker;
 
@@ -1354,7 +1353,7 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
         ).toBeTruthy();
         expect(
           colZone!.parentZone,
-          `${moniker}'s parent_zone must equal ui:board's key`,
+          `${moniker}'s parent_zone must equal board:{id}'s key`,
         ).toBe(boardKey);
       }
 

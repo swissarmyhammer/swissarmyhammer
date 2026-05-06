@@ -25,10 +25,7 @@ import {
   runNavWithScrollOnEdge,
 } from "./scroll-on-edge";
 import { asFq } from "@/types/spatial";
-import type {
-  Direction,
-  FullyQualifiedMoniker,
-} from "@/types/spatial";
+import type { Direction, FullyQualifiedMoniker } from "@/types/spatial";
 import type { SpatialFocusActions } from "@/lib/spatial-focus-context";
 
 // ---------------------------------------------------------------------------
@@ -415,19 +412,29 @@ describe("runNavWithScrollOnEdge", () => {
         throw new Error(`${name} should not be called by scroll-on-edge`);
       });
     return {
-      registerClaim: todo("registerClaim") as unknown as SpatialFocusActions["registerClaim"],
+      registerClaim: todo(
+        "registerClaim",
+      ) as unknown as SpatialFocusActions["registerClaim"],
       hasClaim: todo("hasClaim") as unknown as SpatialFocusActions["hasClaim"],
       focus: todo("focus") as unknown as SpatialFocusActions["focus"],
-      clearFocus: todo("clearFocus") as unknown as SpatialFocusActions["clearFocus"],
-      registerScope: todo("registerScope") as unknown as SpatialFocusActions["registerScope"],
+      clearFocus: todo(
+        "clearFocus",
+      ) as unknown as SpatialFocusActions["clearFocus"],
+      registerScope: todo(
+        "registerScope",
+      ) as unknown as SpatialFocusActions["registerScope"],
       unregisterScope: todo(
         "unregisterScope",
       ) as unknown as SpatialFocusActions["unregisterScope"],
-      updateRect: todo("updateRect") as unknown as SpatialFocusActions["updateRect"],
+      updateRect: todo(
+        "updateRect",
+      ) as unknown as SpatialFocusActions["updateRect"],
       navigate: vi.fn(async (fq, direction) => {
         state.calls.push({ fq, direction });
       }),
-      pushLayer: todo("pushLayer") as unknown as SpatialFocusActions["pushLayer"],
+      pushLayer: todo(
+        "pushLayer",
+      ) as unknown as SpatialFocusActions["pushLayer"],
       popLayer: todo("popLayer") as unknown as SpatialFocusActions["popLayer"],
       drillIn: todo("drillIn") as unknown as SpatialFocusActions["drillIn"],
       drillOut: todo("drillOut") as unknown as SpatialFocusActions["drillOut"],

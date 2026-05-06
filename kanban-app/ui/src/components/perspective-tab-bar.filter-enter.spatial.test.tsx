@@ -13,7 +13,7 @@
  *
  * The migration:
  *   1. Promotes `PerspectiveTabFocusable` from `<FocusScope>` to
- *      `<FocusScope>` with `showFocusBar={false}` (entity-card
+ *      `<FocusScope>` with `showFocus={false}` (entity-card
  *      iteration-2 reshape precedent).
  *   2. Wraps the existing `<TabButton>` in an inner
  *      `<FocusScope perspective_tab.name:{id}>` leaf so the name button

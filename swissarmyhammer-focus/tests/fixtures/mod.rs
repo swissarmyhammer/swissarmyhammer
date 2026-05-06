@@ -551,20 +551,14 @@ fn register_window_chrome(reg: &mut SpatialRegistry) {
     // Mirrors `ScopedViewButton` in production — each declares
     // `<FocusScope moniker={asSegment("view:" + view.id)}>`.
     reg.register_scope(make_leaf(
-        FullyQualifiedMoniker::compose(
-            &left_nav_fq,
-            &SegmentMoniker::from_string("view:grid"),
-        ),
+        FullyQualifiedMoniker::compose(&left_nav_fq, &SegmentMoniker::from_string("view:grid")),
         "view:grid",
         win.clone(),
         Some(left_nav_fq.clone()),
         rect(4.0, NAVBAR_HEIGHT + 8.0, LEFT_NAV_WIDTH - 8.0, 24.0),
     ));
     reg.register_scope(make_leaf(
-        FullyQualifiedMoniker::compose(
-            &left_nav_fq,
-            &SegmentMoniker::from_string("view:list"),
-        ),
+        FullyQualifiedMoniker::compose(&left_nav_fq, &SegmentMoniker::from_string("view:list")),
         "view:list",
         win.clone(),
         Some(left_nav_fq),

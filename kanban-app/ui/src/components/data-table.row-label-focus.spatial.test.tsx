@@ -160,10 +160,7 @@ function seedTask(id: string, title: string, status: string): Entity {
 
 /** Two tasks per the task spec — `task:a` and `task:b`. */
 function twoTasks(): Entity[] {
-  return [
-    seedTask("a", "Alpha", "todo"),
-    seedTask("b", "Beta", "doing"),
-  ];
+  return [seedTask("a", "Alpha", "todo"), seedTask("b", "Beta", "doing")];
 }
 
 /**
@@ -305,7 +302,7 @@ async function defaultInvokeImpl(
   if (cmd === "spatial_focus") {
     const a = (args ?? {}) as { fq?: string };
     const fq = a.fq ?? null;
-    const segment = fq ? fqToSegment.get(fq) ?? null : null;
+    const segment = fq ? (fqToSegment.get(fq) ?? null) : null;
     if (fq) emitFocusChanged(fq, segment);
     return undefined;
   }
@@ -382,9 +379,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // Each registration carries a distinct FQM (one per row). That's
     // what the spatial kernel uses to differentiate the two leaves
     // when arrow-key beam-search picks a target.
-    const rowLabelFqs = rowLabelRegs.map(
-      (c) => (c[1] as { fq: string }).fq,
-    );
+    const rowLabelFqs = rowLabelRegs.map((c) => (c[1] as { fq: string }).fq);
     expect(new Set(rowLabelFqs).size).toBe(2);
   });
 
@@ -428,9 +423,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     // The leaf is wrapped by the row selector cell — that's where the
     // visible focus indicator paints around (the cell stays a `<td>`
     // and the leaf div sits inside it).
-    const rowSelector = focusedLeaf!.closest(
-      "[data-testid='row-selector']",
-    );
+    const rowSelector = focusedLeaf!.closest("[data-testid='row-selector']");
     expect(rowSelector).not.toBeNull();
     expect(rowSelector!.tagName).toBe("TD");
   });
@@ -440,9 +433,7 @@ describe("RowSelector — row-label focus leaf (spatial path)", () => {
     const entities = { task: twoTasks() };
 
     await act(async () => {
-      render(
-        <GridHarness entities={entities} dispatchRef={dispatchRef} />,
-      );
+      render(<GridHarness entities={entities} dispatchRef={dispatchRef} />);
     });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));

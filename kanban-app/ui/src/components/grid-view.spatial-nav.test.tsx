@@ -137,7 +137,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -493,7 +493,7 @@ describe("GridView (spatial-nav)", () => {
   // -------------------------------------------------------------------------
 
   it("focus claim on the grid zone flips data-focused but renders no FocusIndicator", async () => {
-    // The grid zone uses `showFocusBar={false}` because a focus bar around
+    // The grid zone uses `showFocus={false}` because a focus bar around
     // the entire grid body would be visual noise — every cell already has
     // its own bar that drives the visible focus decoration. The
     // `data-focused` attribute still flips so e2e selectors and debugging
@@ -522,7 +522,7 @@ describe("GridView (spatial-nav)", () => {
     });
 
     // `data-focused` flips on the zone but no `<FocusIndicator>` is
-    // mounted on it (zone-suppressed via `showFocusBar={false}`). The
+    // mounted on it (zone-suppressed via `showFocus={false}`). The
     // grid's status bar / scroll container have no FocusIndicator either.
     await waitFor(() => {
       expect(gridNode!.getAttribute("data-focused")).not.toBeNull();
@@ -623,9 +623,8 @@ describe("GridView (spatial-nav)", () => {
     // updates the entity-focus store. Use `waitFor` to allow React to
     // commit the derived state.
     await waitFor(() => {
-      const ringedCells = result.container.querySelectorAll(
-        "[data-cell-cursor]",
-      );
+      const ringedCells =
+        result.container.querySelectorAll("[data-cell-cursor]");
       expect(ringedCells.length).toBe(1);
       expect(
         (ringedCells[0] as HTMLElement).getAttribute("data-cell-cursor"),

@@ -128,9 +128,8 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import {
-  asSegment
-} from "@/types/spatial";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,9 +147,11 @@ function renderWithSpatialStack() {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -301,5 +302,4 @@ describe("PerspectiveTabBar (spatial-nav)", () => {
 
     unmount();
   });
-
 });

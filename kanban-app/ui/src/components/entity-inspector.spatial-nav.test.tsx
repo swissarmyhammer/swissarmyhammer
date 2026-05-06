@@ -113,7 +113,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -318,7 +318,10 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
  * field-update / UI-state / command-scope providers because the
  * schema-driven field dispatch reads from all five.
  */
-function renderInspector(entity: Entity = makeTask({ title: "Hello", tags: ["bug", "ui"] }), tagEntities: Entity[] = makeTags()) {
+function renderInspector(
+  entity: Entity = makeTask({ title: "Hello", tags: ["bug", "ui"] }),
+  tagEntities: Entity[] = makeTags(),
+) {
   return render(
     <CommandBusyProvider>
       <SpatialFocusProvider>
@@ -513,7 +516,7 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
     // The leaf-shape regression the card explicitly calls out: a tag
     // pill in the inspector must show the focus bar when its key
     // becomes the focused key. Before this card landed, MentionView
-    // hard-suppressed `showFocusBar` for compact-mode pills; the
+    // hard-suppressed `showFocus` for compact-mode pills; the
     // inspector renders pills in `mode="full"` so it was unaffected,
     // but the entity-card's `mode="compact"` path is what was broken
     // for users. We pin the inspector path here and rely on the

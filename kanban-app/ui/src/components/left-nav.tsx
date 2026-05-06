@@ -1,9 +1,6 @@
 import { icons, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
-import {
-  CommandScopeProvider,
-  useDispatchCommand,
-} from "@/lib/command-scope";
+import { CommandScopeProvider, useDispatchCommand } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import { cn } from "@/lib/utils";
@@ -51,7 +48,8 @@ export function LeftNav() {
   return (
     <FocusScope
       moniker={asSegment("ui:left-nav")}
-      showFocusBar={false}
+      // showFocus=false: viewport-spanning sidebar chrome; the inner view buttons own the visible focus signal.
+      showFocus={false}
       role="navigation"
       className="flex flex-col items-center gap-1 py-2 pl-3 pr-1 border-r bg-muted/30 w-10 shrink-0"
     >

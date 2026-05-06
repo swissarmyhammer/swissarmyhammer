@@ -285,7 +285,7 @@ function renderField(props: {
                           entityId={props.entity.id}
                           mode="full"
                           editing={false}
-                          showFocusBar
+                          showFocus
                           withIcon={props.withIcon}
                         />
                       </CommandScopeProvider>

@@ -562,7 +562,7 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   // register `parentZone = column-zone-key` via `FocusZoneContext`, so beam
   // search treats the column's children as in-zone candidates.
   //
-  // `showFocusBar` defaults to `true`. The column is a sized, distinct entity
+  // `showFocus` defaults to `true`. The column is a sized, distinct entity
   // — when the user clicks its body or drills out from a card with Escape,
   // they need a visible indicator on the column itself. Container zones that
   // are viewport-sized chrome (board, perspective, view, navbar) suppress the
@@ -636,7 +636,7 @@ function ColumnNameField({
       </span>
     );
   }
-  // `showFocusBar` opts the field zone into rendering its own
+  // `showFocus` opts the field zone into rendering its own
   // `<FocusIndicator>`. The column header has no enclosing focus
   // chrome around just the name surface (the column body's own bar
   // sits on the column zone, not on its descendants), so the field
@@ -654,7 +654,7 @@ function ColumnNameField({
       onEdit={() => setEditingName(true)}
       onDone={() => setEditingName(false)}
       onCancel={() => setEditingName(false)}
-      showFocusBar
+      showFocus
     />
   );
 }

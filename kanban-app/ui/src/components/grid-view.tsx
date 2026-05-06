@@ -244,11 +244,7 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const focusCell = useCallback(
     (cellSegment: string) => {
       const parsed = parseGridCellMoniker(cellSegment);
-      if (
-        parsed === null ||
-        parsed.row < 0 ||
-        parsed.row >= entities.length
-      ) {
+      if (parsed === null || parsed.row < 0 || parsed.row >= entities.length) {
         focusCellSegment(asSegment(cellSegment));
         return;
       }
@@ -341,7 +337,9 @@ interface GridExtremeContext {
  *
  * @param fq - The fully-qualified moniker to walk one level up.
  */
-function fqDropLastSegment(fq: FullyQualifiedMoniker): FullyQualifiedMoniker | null {
+function fqDropLastSegment(
+  fq: FullyQualifiedMoniker,
+): FullyQualifiedMoniker | null {
   const idx = fq.lastIndexOf("/");
   if (idx <= 0) return null;
   return asFq(fq.slice(0, idx));
@@ -943,7 +941,8 @@ function GridSpatialZone({ children }: { children: ReactNode }) {
       // `data-focused` attribute on the zone still flips so e2e selectors
       // and debugging tooling can observe the zone-level claim; only the
       // visible bar is suppressed.
-      showFocusBar={false}
+      // showFocus=false: viewport-filling grid; per-cell indicators own focus.
+      showFocus={false}
       className="flex-1 flex flex-col min-h-0"
     >
       {children}

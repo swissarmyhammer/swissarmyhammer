@@ -213,8 +213,7 @@ function useInitialFocusTarget(
       const taskIds = baseLayout.get(col.id) ?? [];
       if (taskIds.length > 0) {
         const firstId = taskIds[0];
-        const taskSegment =
-          taskMap.get(firstId)?.moniker ?? `task:${firstId}`;
+        const taskSegment = taskMap.get(firstId)?.moniker ?? `task:${firstId}`;
         return {
           columnSegment: asSegment(col.moniker),
           leafSegment: asSegment(taskSegment),
@@ -1068,10 +1067,10 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   // `<Inspectable>` wrapper owns inspector dispatch on double-click;
   // the spatial primitive `<FocusScope>` stays pure-spatial.
   //
-  // `showFocusBar={false}` because the board fills the viewport and a
+  // `showFocus={false}` because the board fills the viewport and a
   // focus rectangle around the entire content area would be visual
   // noise. Sized inner containers (columns, cards, fields) keep
-  // `showFocusBar={true}` because they are bounded boxes whose users
+  // `showFocus={true}` because they are bounded boxes whose users
   // need a visible "here is focus" hint; viewport-sized chrome scopes
   // (board, perspective, navbar) suppress it.
   //
@@ -1082,7 +1081,8 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
     <Inspectable moniker={asSegment(board.board.moniker)}>
       <FocusScope
         moniker={asSegment(board.board.moniker)}
-        showFocusBar={false}
+        // showFocus=false: board zone fills the viewport; inner columns / cards / fields advertise focus.
+        showFocus={false}
         className="flex flex-col flex-1 min-h-0 relative"
       >
         <BoardSpatialBody
@@ -1167,4 +1167,3 @@ function BoardSpatialBody({
     </CommandScopeProvider>
   );
 }
-

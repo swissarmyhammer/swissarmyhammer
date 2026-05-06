@@ -64,11 +64,19 @@ describe("BoardView source-level guards", () => {
     }
   });
 
-  it('wraps the board content in <FocusScope moniker={asSegment("ui:board")}>', () => {
+  it("wraps the board content in <FocusScope moniker={asSegment(board.board.moniker)}>", () => {
     const src = readBoardViewSource();
-    // Look for the literal pattern that anchors the board zone. The exact
-    // moniker token must be `"ui:board"` — using a different string would
-    // miss the moniker convention.
-    expect(src).toMatch(/<FocusScope\s+moniker={asSegment\("ui:board"\)/);
+    // Post-`8232b25cc`, the redundant `ui:board` chrome scope was
+    // dropped. The board content now mounts directly under the outer
+    // `<FocusScope moniker={asSegment(board.board.moniker)}>` (i.e.
+    // the `board:<id>` entity scope). Pin that the entity-moniker
+    // wrapping is still in place.
+    expect(src).toMatch(
+      /<FocusScope\s+moniker={asSegment\(board\.board\.moniker\)}/,
+    );
+    // And the dropped `ui:board` chrome must stay gone — a regression
+    // that re-introduces it would re-create the same-rect overlap warning
+    // that motivated its removal.
+    expect(src).not.toMatch(/asSegment\("ui:board"\)/);
   });
 });

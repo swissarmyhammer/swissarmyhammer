@@ -122,7 +122,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -256,9 +256,12 @@ async function defaultInvokeImpl(
     const fq = a.fq ?? null;
     let moniker: string | null = null;
     for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) { moniker = s; break; }
+      if (k === fq) {
+        moniker = s;
+        break;
+      }
     }
-    
+
     if (fq) {
       const prev = currentFocusKey.key;
       currentFocusKey.key = fq;
@@ -450,10 +453,7 @@ describe("BoardView — Enter drills in, not inspect", () => {
 
     // Cards register as zones — find the first task's zone key.
     const cardKey = keyForMoniker("task:t1");
-    expect(
-      cardKey,
-      "the first card must register a spatial zone",
-    ).toBeTruthy();
+    expect(cardKey, "the first card must register a spatial zone").toBeTruthy();
 
     // Drive a focus-changed event so the entity-focus store reflects
     // the card moniker. `extractScopeBindings` reads the focused

@@ -1669,15 +1669,17 @@ mod tests {
     }
 
     #[test]
-    fn register_scope_with_zero_dim_warns_not_errors() {
+    fn register_scope_with_zero_dim_emits_no_error_or_warning() {
         // `getBoundingClientRect()` returns rects with zero dims for
         // `display: none`, just-mounted-but-not-yet-laid-out, and
         // detached nodes (in test environments, jsdom-style flex/grid
         // containers commonly produce `width × 0` zones too). On
         // registration that is not a coordinate-system bug — it's "the
         // registration `useEffect` ran before the first layout pass."
-        // The validator surfaces this as a `tracing::warn!` and
-        // continues, keeping the error channel clean for real bugs.
+        // The validator falls through silently in this case (the
+        // companion TS-side validator was de-noised in the same way);
+        // the channel stays completely clean for the registration →
+        // first-layout transition.
         let transient = scope_with_rect("/L/transient", "/L", rect_xywh(0.0, 0.0, 100.0, 0.0));
         let (_, captured) = capture::capture(|| {
             let mut reg = SpatialRegistry::new();
@@ -1704,8 +1706,8 @@ mod tests {
             })
             .collect();
         assert!(
-            !warnings.is_empty(),
-            "expected one pre-layout-transient warning, got {captured:?}"
+            warnings.is_empty(),
+            "expected no pre-layout-transient warning (de-noised), got {warnings:?}"
         );
     }
 

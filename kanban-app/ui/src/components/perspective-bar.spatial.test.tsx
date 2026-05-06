@@ -163,11 +163,12 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -215,9 +216,11 @@ function renderBar(): ReturnType<typeof render> {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -228,7 +231,9 @@ function withSpatialStack(children: ReactNode) {
   return (
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>{children}</TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>
   );
@@ -326,9 +331,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // tab wrapper is a `<FocusScope>` with `perspective_tab.name`,
     // `perspective_tab.filter`, and `perspective_tab.group` leaves
     // inside it. Mirror entity-card iteration 2.
-    const tabZones = registerScopeArgs().filter((a) =>
-      isTabMoniker(a.segment),
-    );
+    const tabZones = registerScopeArgs().filter((a) => isTabMoniker(a.segment));
     const monikers = tabZones.map((a) => a.segment as string).sort();
     expect(monikers).toEqual(["perspective_tab:p1", "perspective_tab:p2"]);
 
@@ -344,75 +347,75 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("clicking a tab dispatches exactly one spatial_focus for the name leaf (test #3)", async () => {
+  it("clicking a tab dispatches exactly one spatial_focus for the tab zone (test #3)", async () => {
     const { container, unmount } = renderBar();
     await flushSetup();
 
-    // Capture the bar's key plus the p1 name leaf's key from the
-    // registration calls. After the reshape, clicking inside the tab
-    // lands on the name leaf — that is the inner `<FocusScope>` whose
-    // click handler dispatches `spatial_focus`. The outer
-    // `perspective_tab:p1` zone's click handler also fires, but the
-    // FocusScope leaf calls `stopPropagation` so only one
-    // `spatial_focus` reaches IPC.
+    // Post-`8789dcc15`, the inner `perspective_tab.name:{id}` FocusScope
+    // was dropped — the outer `perspective_tab:{id}` is itself the
+    // focusable target. Clicking anywhere on the tab dispatches
+    // `spatial_focus(perspective_tab:{id})` from the outer wrapper.
     const barZone = registerScopeArgs().find((a) => isBarMoniker(a.segment))!;
-    const p1NameLeaf = registerScopeArgs().find(
-      (a) => a.segment === "perspective_tab.name:p1",
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
     )!;
 
     // Reset invoke before the click so we measure only the click's IPC.
     mockInvoke.mockClear();
 
-    const nameNode = container.querySelector(
-      "[data-segment='perspective_tab.name:p1']",
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
-    expect(nameNode).not.toBeNull();
+    expect(tabNode).not.toBeNull();
 
-    fireEvent.click(nameNode!);
+    fireEvent.click(tabNode!);
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].fq).toBe(p1NameLeaf.fq);
-    // The bar zone key must NOT also receive a focus call — the leaf
-    // stops propagation so the click does not bubble to the wrapping zone.
+    expect(focusCalls[0].fq).toBe(p1Tab.fq);
+    // The bar zone key must NOT also receive a focus call — the tab
+    // stops propagation so the click does not bubble to the wrapping bar.
     expect(focusCalls.find((c) => c.fq === barZone.fq)).toBeUndefined();
 
     unmount();
   });
 
-  it("focus claim mounts the FocusIndicator inside the focused tab name leaf (test #4)", async () => {
+  it("focus claim flips data-focused on the tab wrapper and mounts the FocusIndicator (test #4)", async () => {
     const { container, queryByTestId, unmount } = renderBar();
     await flushSetup();
 
-    // After the reshape the name leaf carries the focus indicator —
-    // the outer tab zone has `showFocusBar={false}` because the inner
-    // leaves carry the focus signal.
-    const p1NameLeaf = registerScopeArgs().find(
-      (a) => a.segment === "perspective_tab.name:p1",
+    // The outer `perspective_tab:{id}` wrapper inherits `<FocusScope>`'s
+    // default `showFocus={true}` — focused tabs paint a
+    // `<FocusIndicator>` (dashed-border inset) and the `data-focused`
+    // attribute flips for e2e selectors / debugging tooling.
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
     )!;
 
     // No indicator before the focus claim.
     expect(queryByTestId("focus-indicator")).toBeNull();
 
-    await fireFocusChanged({ next_fq: p1NameLeaf.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
 
-    // After the claim flips, the indicator renders inside the matching leaf.
-    await waitFor(() => {
-      expect(queryByTestId("focus-indicator")).not.toBeNull();
-    });
-    const nameNode = container.querySelector(
-      "[data-segment='perspective_tab.name:p1']",
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement;
-    const indicator = queryByTestId("focus-indicator")!;
-    // The indicator's host must be the focused name leaf — not a sibling.
-    expect(nameNode.contains(indicator)).toBe(true);
-    expect(nameNode.getAttribute("data-focused")).not.toBeNull();
+    await waitFor(() => {
+      expect(tabNode.getAttribute("data-focused")).not.toBeNull();
+    });
+
+    // The `<FocusIndicator>` mounts inside the focused tab wrapper —
+    // the wrapper's default `showFocus={true}` paints the dashed-border
+    // indicator on focus.
+    const indicator = queryByTestId("focus-indicator");
+    expect(indicator).not.toBeNull();
+    expect(tabNode.contains(indicator!)).toBe(true);
 
     unmount();
   });
 
   it("focus claim on the bar zone flips data-focused but renders no indicator (test #5)", async () => {
-    // Container zones use `showFocusBar={false}` so the visible bar around
+    // Container zones use `showFocus={false}` so the visible bar around
     // the entire row would be visual noise. The data-focused attribute
     // still flips so e2e selectors and debugging tooling can observe the
     // claim, but no `<FocusIndicator>` mounts.
@@ -458,9 +461,7 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     // unregistration also flows through `spatial_unregister_scope` (the
     // shared kernel sink), so the test's invariant — every registered
     // tab key gets a corresponding unregister call — still holds.
-    const tabZones = registerScopeArgs().filter((a) =>
-      isTabMoniker(a.segment),
-    );
+    const tabZones = registerScopeArgs().filter((a) => isTabMoniker(a.segment));
     expect(tabZones.length).toBeGreaterThanOrEqual(2);
     const tabKeys = tabZones.map((a) => a.fq as FullyQualifiedMoniker);
 
@@ -577,9 +578,11 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     rerender(
       <SpatialFocusProvider>
         <FocusLayer name={asSegment("window")}>
-          <TooltipProvider delayDuration={100}>
-            <PerspectiveTabBar />
-          </TooltipProvider>
+          <EntityFocusProvider>
+            <TooltipProvider delayDuration={100}>
+              <PerspectiveTabBar />
+            </TooltipProvider>
+          </EntityFocusProvider>
         </FocusLayer>
       </SpatialFocusProvider>,
     );
@@ -597,51 +600,64 @@ describe("PerspectiveTabBar — browser spatial behaviour", () => {
     unmount();
   });
 
-  it("only the focused tab's FocusIndicator is mounted at any time", async () => {
-    // Belt-and-suspenders for #4: when focus moves between tab name
-    // leaves, the indicator must follow — exactly one indicator at a
-    // time, anchored to the focused leaf. This exercises both the
-    // `next_fq` and `prev_fq` sides of the focus-changed payload.
-    //
-    // After the iteration-2 reshape, the indicator-bearing leaves are
-    // `perspective_tab.name:{id}` rather than the wrapping
-    // `perspective_tab:{id}` zone (which uses
-    // `showFocusBar={false}`).
-    const { container, queryByTestId, unmount } = withSpatialStackRendered();
+  it("focus follows the kernel's claim across perspective tabs (indicator follows data-focused)", async () => {
+    // Belt-and-suspenders for #4: when focus moves between perspective
+    // tab wrappers, `data-focused="true"` and the `<FocusIndicator>`
+    // must follow exactly one wrapper at a time. The wrapper inherits
+    // `showFocus={true}` so the dashed-border indicator paints on
+    // whichever tab currently holds spatial focus.
+    const { container, queryAllByTestId, unmount } = withSpatialStackRendered();
     await flushSetup();
 
-    const p1NameLeaf = registerScopeArgs().find(
-      (a) => a.segment === "perspective_tab.name:p1",
+    const p1Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p1",
     )!;
-    const p2NameLeaf = registerScopeArgs().find(
-      (a) => a.segment === "perspective_tab.name:p2",
+    const p2Tab = registerScopeArgs().find(
+      (a) => a.segment === "perspective_tab:p2",
     )!;
 
-    await fireFocusChanged({ next_fq: p1NameLeaf.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({ next_fq: p1Tab.fq as FullyQualifiedMoniker });
     await waitFor(() => {
-      const indicator = queryByTestId("focus-indicator");
-      expect(indicator).not.toBeNull();
       const p1 = container.querySelector(
-        "[data-segment='perspective_tab.name:p1']",
-      );
-      expect(p1!.contains(indicator!)).toBe(true);
+        "[data-segment='perspective_tab:p1']",
+      ) as HTMLElement;
+      expect(p1.getAttribute("data-focused")).not.toBeNull();
     });
+    // The indicator mounts inside p1 — exactly one indicator on the
+    // bar at a time.
+    {
+      const p1Node = container.querySelector(
+        "[data-segment='perspective_tab:p1']",
+      ) as HTMLElement;
+      const indicators = queryAllByTestId("focus-indicator");
+      expect(indicators.length).toBe(1);
+      expect(p1Node.contains(indicators[0])).toBe(true);
+    }
 
-    // Move the claim from p1 → p2.
+    // Move the claim from p1 → p2. The previously focused wrapper
+    // loses its data-focused attribute and its indicator; the next gains both.
     await fireFocusChanged({
-      prev_fq: p1NameLeaf.fq as FullyQualifiedMoniker,
-      next_fq: p2NameLeaf.fq as FullyQualifiedMoniker,
+      prev_fq: p1Tab.fq as FullyQualifiedMoniker,
+      next_fq: p2Tab.fq as FullyQualifiedMoniker,
     });
     await waitFor(() => {
-      const indicators = container.querySelectorAll(
-        "[data-testid='focus-indicator']",
-      );
-      expect(indicators.length).toBe(1);
+      const p1 = container.querySelector(
+        "[data-segment='perspective_tab:p1']",
+      ) as HTMLElement;
       const p2 = container.querySelector(
-        "[data-segment='perspective_tab.name:p2']",
-      );
-      expect(p2!.contains(indicators[0])).toBe(true);
+        "[data-segment='perspective_tab:p2']",
+      ) as HTMLElement;
+      expect(p1.getAttribute("data-focused")).toBeNull();
+      expect(p2.getAttribute("data-focused")).not.toBeNull();
     });
+    {
+      const p2Node = container.querySelector(
+        "[data-segment='perspective_tab:p2']",
+      ) as HTMLElement;
+      const indicators = queryAllByTestId("focus-indicator");
+      expect(indicators.length).toBe(1);
+      expect(p2Node.contains(indicators[0])).toBe(true);
+    }
 
     unmount();
   });

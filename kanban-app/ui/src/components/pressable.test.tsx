@@ -135,7 +135,12 @@ import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  TooltipProvider,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { asSegment } from "@/types/spatial";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -258,9 +263,7 @@ describe("Pressable", () => {
     );
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === "test:enter",
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === "test:enter");
     expect(leaf, "Pressable must register as a FocusScope leaf").toBeDefined();
 
     await fireFocusChangedTo(leaf!.fq as string, "test:enter");
@@ -288,9 +291,7 @@ describe("Pressable", () => {
     );
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === "test:space",
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === "test:space");
     expect(leaf).toBeDefined();
 
     await fireFocusChangedTo(leaf!.fq as string, "test:space");
@@ -327,9 +328,7 @@ describe("Pressable", () => {
 
     expect(onPress).not.toHaveBeenCalled();
 
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === "test:disabled",
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === "test:disabled");
     expect(leaf).toBeDefined();
 
     await fireFocusChangedTo(leaf!.fq as string, "test:disabled");
@@ -376,9 +375,7 @@ describe("Pressable", () => {
 
     onPress.mockClear();
 
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === "test:aschild",
-    );
+    const leaf = registerScopeArgs().find((a) => a.segment === "test:aschild");
     expect(leaf).toBeDefined();
 
     await fireFocusChangedTo(leaf!.fq as string, "test:aschild");
@@ -407,10 +404,11 @@ describe("Pressable", () => {
     );
     await flushSetup();
 
-    const leaf = registerScopeArgs().find(
-      (a) => a.segment === "test:register",
-    );
-    expect(leaf, "Pressable must register a FocusScope leaf with its segment").toBeDefined();
+    const leaf = registerScopeArgs().find((a) => a.segment === "test:register");
+    expect(
+      leaf,
+      "Pressable must register a FocusScope leaf with its segment",
+    ).toBeDefined();
     expect(typeof leaf!.fq).toBe("string");
   });
 });

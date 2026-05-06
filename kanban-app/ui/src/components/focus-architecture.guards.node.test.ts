@@ -142,9 +142,7 @@ describe("focus-decoration architecture", () => {
     //      otherwise a regression that deletes the bar from the
     //      primitive ships silently.
     const tsxFiles = walkSources(SRC_ROOT, [".tsx", ".ts"]);
-    const allowedCallers = new Set([
-      "components/focus-scope.tsx",
-    ]);
+    const allowedCallers = new Set(["components/focus-scope.tsx"]);
 
     // Strip line and block comments so a doc reference like
     // `// renders <FocusIndicator>` doesn't trip the JSX detector. The

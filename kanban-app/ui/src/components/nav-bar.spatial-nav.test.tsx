@@ -2,10 +2,11 @@
  * Browser-mode test for the nav bar's spatial-nav behaviour.
  *
  * Source of truth for acceptance of card `01KQ20Q2PNNR9VMES60QQSVXTS`
- * (NavBar: wrap as zone, strip legacy keyboard nav). The bar wraps its row
- * in a `<FocusScope moniker="ui:navbar">` and each actionable child in a
- * `<FocusScope>` leaf with a `ui:navbar.{name}` moniker. This file exercises
- * the click → `spatial_focus` → `focus-changed` → React state →
+ * (NavBar: wrap as zone, strip legacy keyboard nav). The bar is a plain
+ * `<div role="banner">` and each actionable child is a `<FocusScope>` leaf
+ * with a `ui:navbar.{name}` moniker, registered as a peer top-level scope
+ * under the surrounding window `<FocusLayer>`. This file exercises the
+ * click → `spatial_focus` → `focus-changed` → React state →
  * `<FocusIndicator>` chain end-to-end so a regression in any link surfaces
  * here.
  *
@@ -382,7 +383,7 @@ describe("NavBar — browser spatial behaviour", () => {
   });
 
   it("focus claim on the board-selector zone flips data-focused but renders no indicator", async () => {
-    // The board-selector is a zone with `showFocusBar={false}` — its inner
+    // The board-selector is a zone with `showFocus={false}` — its inner
     // leaves (the dropdown trigger and tear-off button registered by
     // <BoardSelector>, plus the editable name `<Field>` zone) own the
     // visible focus signal. The data-focused attribute still flips so
@@ -522,7 +523,7 @@ describe("NavBar — browser spatial behaviour", () => {
   });
 
   it("does not mount a focus indicator on the board-selector zone (leaves own the indicator)", async () => {
-    // The board-selector zone uses `showFocusBar={false}` so the visible
+    // The board-selector zone uses `showFocus={false}` so the visible
     // bar is owned by inner leaves (dropdown trigger, tear-off button,
     // editable name Field). Confirm the zone-level focus claim does NOT
     // mount the indicator.
@@ -544,33 +545,31 @@ describe("NavBar — browser spatial behaviour", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Zone-level focus
+  // No outer ui:navbar FocusScope wrapper
   // -------------------------------------------------------------------------
 
-  it("focus claim on the navbar zone flips data-focused but renders no indicator", async () => {
-    // The navbar zone has `showFocusBar={false}` because a focus bar around
-    // the entire viewport-spanning row would be visual noise — the leaves
-    // own visible focus. The data-focused attribute still flips so e2e
-    // selectors and debugging tooling can observe the claim, but no
-    // `<FocusIndicator>` mounts on the zone itself.
-    const { container, queryByTestId, unmount } = renderNavBar();
+  it("does NOT register an outer ui:navbar FocusScope wrapper", async () => {
+    // Regression guard: a viewport-spanning `<FocusScope moniker="ui:navbar">`
+    // around the bar swallows clicks landing on bar whitespace AND beam-search
+    // candidates arriving from below — focus resolves to the parent rather
+    // than to any inner leaf, so clicks on the board-name field, arrow-nav
+    // from the left-nav, and arrow-nav from the perspective-bar all fail to
+    // reach the inner leaves. The bar must stay a plain `<div role="banner">`.
+    const { container, unmount } = renderNavBar();
     await flushSetup();
 
     const navbarZone = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar",
-    )!;
-    const node = container.querySelector(
-      "[data-segment='ui:navbar']",
-    ) as HTMLElement;
-    expect(node).not.toBeNull();
-    expect(node.getAttribute("data-focused")).toBeNull();
+    );
+    expect(
+      navbarZone,
+      "ui:navbar wrapper must not register — see nav-bar.tsx docstring for the focus-swallowing rationale",
+    ).toBeUndefined();
 
-    await fireFocusChanged({ next_fq: navbarZone.fq as FullyQualifiedMoniker });
-
-    await waitFor(() => {
-      expect(node.getAttribute("data-focused")).not.toBeNull();
-    });
-    expect(queryByTestId("focus-indicator")).toBeNull();
+    expect(
+      container.querySelector("[data-segment='ui:navbar']"),
+      "no DOM element should carry data-segment='ui:navbar' — only inner leaves",
+    ).toBeNull();
 
     unmount();
   });
@@ -616,62 +615,42 @@ describe("NavBar — browser spatial behaviour", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Field-as-zone integration
+  // Inner scopes register as peer top-level scopes under the window layer
   //
-  // The percent-complete `<Field>` is itself a `<FocusScope>` keyed by
-  // `field:board:{id}.percent_complete` (see `fields/field.tsx`). Its
-  // zone registration is the responsibility of the Field-as-zone card
-  // and is verified by that card's tests. From the navbar's side, the
-  // verification is structural: the navbar zone publishes its
-  // FullyQualifiedMoniker via `FocusScopeContext`, so any nested `<FocusScope>` (such
-  // as the Field) reads that key as its `parent_zone`.
-  //
-  // This test confirms the navbar end of the contract: a nested
-  // `<FocusScope>` rendered as a child of the navbar registers with the
-  // navbar zone's key as its `parent_zone`. We don't unmock `<Field>`
-  // here (it pulls in the entity store and field registries) — the
-  // shape of the contract is what matters. A regression that drops the
-  // navbar's `<FocusScope>` (collapsing it back to a plain `<header>`)
-  // would surface here because the inner zone's `parentZone` would be
-  // `null` instead of the navbar's key.
-  //
-  // This complements the existing navbar test
-  // ("registers ui:navbar.board-selector as a FocusScope child of the
-  // navbar zone") which exercises the leaf side of the parent-zone
-  // chain. Together they pin both shapes: leaves AND nested zones see
-  // the navbar as their parent.
+  // With the outer `<FocusScope moniker="ui:navbar">` wrapper removed, the
+  // bar's inner scopes (`ui:navbar.board-selector`, `ui:navbar.inspect`,
+  // `ui:navbar.search`, and the percent-complete `<Field>` zone) register
+  // as peer top-level scopes under the surrounding `<FocusLayer>`, just
+  // like `ui:left-nav` and `ui:perspective-bar`. Their `parentZone` is
+  // `null` and their `layerFq` points at the window layer. This is what
+  // lets beam-search treat them as first-class navigation candidates from
+  // peer chrome (left-nav, perspective-bar) without going through a
+  // viewport-spanning parent that swallows hits.
   // -------------------------------------------------------------------------
 
-  it("nested zones read the navbar zone's FullyQualifiedMoniker as their parent_zone", async () => {
-    // Use the existing render helper (mock `<Field>` is harmless because
-    // we're injecting a separate zone via children, not via Field).
-    // The mock for Field is module-level so we can't unmock it for one
-    // test; instead we render the real `<FocusScope>` directly as a
-    // sibling of the navbar's leaves to assert the context propagation.
-    //
-    // We rely on `renderNavBar` for the spatial provider stack. The
-    // navbar zone's `FocusScopeContext.Provider` wraps every child the
-    // navbar renders, so any `<FocusScope>` we mount as a descendant of
-    // <NavBar /> would inherit it. Here we use a child fixture that
-    // registers a known moniker; if the parent context were missing the
-    // moniker would land at the layer root (parentZone === null).
+  it("every inner navbar scope registers as a peer top-level scope (parentZone null) under the window layer", async () => {
     const { unmount } = renderNavBar();
     await flushSetup();
 
-    const navbarZone = registerScopeArgs().find(
-      (a) => a.segment === "ui:navbar",
-    );
-    expect(navbarZone).toBeDefined();
+    const innerSegments = [
+      "ui:navbar.board-selector",
+      "ui:navbar.inspect",
+      "ui:navbar.search",
+      "field:board:b1.percent_complete",
+    ] as const;
 
-    // The navbar zone's moniker must be registered as a layer-root zone
-    // (parentZone === null) so descendant zones — like the
-    // percent-complete Field — discover it through `useParentFocusScope()`
-    // and register their own `parent_zone` against the navbar zone's
-    // key. The Field-as-zone card asserts the descendant side; this
-    // assertion locks in the navbar's role as the parent that
-    // descendant zones can find.
-    expect(navbarZone!.parentZone).toBeNull();
-    expect(navbarZone!.fq).toBeTruthy();
+    for (const segment of innerSegments) {
+      const reg = registerScopeArgs().find((a) => a.segment === segment);
+      expect(reg, `${segment} must register`).toBeDefined();
+      expect(
+        reg!.parentZone,
+        `${segment} must register as a peer top-level scope (parentZone === null), not under a removed ui:navbar wrapper`,
+      ).toBeNull();
+      expect(
+        reg!.layerFq,
+        `${segment} must publish a layerFq pointing at the window layer`,
+      ).toBeTruthy();
+    }
 
     unmount();
   });
@@ -690,17 +669,19 @@ describe("NavBar — browser spatial behaviour", () => {
   //
   // This test mounts `<NavBar>` in the production provider stack and
   // snapshots the rect each navbar entry passes to
-  // `spatial_register_scope` / `spatial_register_scope`. None must be
-  // zero-width or zero-height: a zero rect would silently break beam
-  // search and leave the user unable to navigate, exactly the symptom
-  // the card is fixing.
+  // `spatial_register_scope`. None must be zero-width or zero-height: a
+  // zero rect would silently break beam search and leave the user unable
+  // to navigate, exactly the symptom the card is fixing.
   //
-  // Coverage spans:
-  //   - the navbar zone itself (`ui:navbar`)
-  //   - each navbar leaf (`ui:navbar.board-selector`,
-  //     `ui:navbar.inspect`, `ui:navbar.search`)
-  //   - the percent-complete field **zone**
-  //     (`field:board:b1.percent_complete`)
+  // Coverage spans the inner peer-top-level scopes the navbar publishes:
+  //   - `ui:navbar.board-selector`
+  //   - `ui:navbar.inspect`
+  //   - `ui:navbar.search`
+  //   - `field:board:b1.percent_complete` (the percent-complete field zone)
+  //
+  // The outer `ui:navbar` wrapper was deliberately removed — it used to
+  // swallow clicks and beam-search hits — so this test no longer checks
+  // a wrapper rect.
   //
   // The Field mock above registers a real `<FocusScope>` so the field's
   // rect appears in the assertion alongside the leaves; mocking it as
@@ -718,65 +699,24 @@ describe("NavBar — browser spatial behaviour", () => {
       return rect.width > 0 && rect.height > 0;
     };
 
-    const navbarZoneEntries = registerScopeArgs().filter(
-      (a) => a.segment === "ui:navbar",
-    );
-    expect(navbarZoneEntries.length).toBeGreaterThan(0);
-    for (const entry of navbarZoneEntries) {
-      const rect = entry.rect as { width: number; height: number };
-      expect(
-        isPositiveRect(entry),
-        `ui:navbar zone rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height}); a zero rect silently breaks beam search`,
-      ).toBe(true);
-    }
-
-    const fieldZoneEntries = registerScopeArgs().filter(
-      (a) => a.segment === "field:board:b1.percent_complete",
-    );
-    expect(
-      fieldZoneEntries.length,
-      "percent-complete field zone must register inside the navbar",
-    ).toBeGreaterThan(0);
-    for (const entry of fieldZoneEntries) {
-      const rect = entry.rect as { width: number; height: number };
-      expect(
-        isPositiveRect(entry),
-        `field:board:b1.percent_complete zone rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height})`,
-      ).toBe(true);
-    }
-
-    // The board-selector is now registered as a zone (multi-leaf surface),
-    // not a leaf scope; check it under registerScopeArgs.
-    const boardSelectorZoneEntries = registerScopeArgs().filter(
-      (a) => a.segment === "ui:navbar.board-selector",
-    );
-    expect(
-      boardSelectorZoneEntries.length,
-      "ui:navbar.board-selector zone must register at first paint",
-    ).toBeGreaterThan(0);
-    for (const entry of boardSelectorZoneEntries) {
-      const rect = entry.rect as { width: number; height: number };
-      expect(
-        isPositiveRect(entry),
-        `ui:navbar.board-selector zone rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height}); a zero rect silently breaks beam search`,
-      ).toBe(true);
-    }
-
-    const navbarLeafMonikers = [
+    const innerSegments = [
+      "ui:navbar.board-selector",
       "ui:navbar.inspect",
       "ui:navbar.search",
+      "field:board:b1.percent_complete",
     ] as const;
-    for (const moniker of navbarLeafMonikers) {
-      const entries = registerScopeArgs().filter((a) => a.segment === moniker);
+
+    for (const segment of innerSegments) {
+      const entries = registerScopeArgs().filter((a) => a.segment === segment);
       expect(
         entries.length,
-        `${moniker} leaf must register at first paint`,
+        `${segment} must register at first paint`,
       ).toBeGreaterThan(0);
       for (const entry of entries) {
         const rect = entry.rect as { width: number; height: number };
         expect(
           isPositiveRect(entry),
-          `${moniker} leaf rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height}); a zero rect silently breaks beam search and leaves the user unable to arrow-navigate to this leaf`,
+          `${segment} rect must be non-zero at first paint (got width=${rect?.width}, height=${rect?.height}); a zero rect silently breaks beam search and leaves the user unable to arrow-navigate to this entry`,
         ).toBe(true);
       }
     }

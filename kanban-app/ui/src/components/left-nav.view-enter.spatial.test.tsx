@@ -307,16 +307,13 @@ describe("LeftNav view button — Enter activates view.set via Pressable", () =>
       await Promise.resolve();
     });
 
-    const setCalls = dispatchCommandCalls().filter(
-      (c) => c.cmd === "view.set",
-    );
+    const setCalls = dispatchCommandCalls().filter((c) => c.cmd === "view.set");
     expect(
       setCalls.length,
       "Enter on the focused view leaf must dispatch view.set exactly once",
     ).toBe(1);
-    expect(
-      setCalls[0].args,
-      "view.set must carry view_id in args",
-    ).toEqual({ view_id: "v1" });
+    expect(setCalls[0].args, "view.set must carry view_id in args").toEqual({
+      view_id: "v1",
+    });
   });
 });

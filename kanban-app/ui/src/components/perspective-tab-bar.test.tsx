@@ -111,6 +111,7 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusLayer } from "./focus-layer";
 import { asSegment } from "@/types/spatial";
 
@@ -119,15 +120,20 @@ import { asSegment } from "@/types/spatial";
  * provider stack (`SpatialFocusProvider` + `FocusLayer`) is required
  * since `PerspectiveTabBar` mounts `<FocusScope>` / `<FocusScope>` and
  * the no-spatial-context fallback was removed in card
- * `01KQPVA127YMJ8D7NB6M824595`.
+ * `01KQPVA127YMJ8D7NB6M824595`. `<EntityFocusProvider>` is required
+ * because `FilterEditorDrillOutWiring` (mounted by the filter editor's
+ * surrounding `<FocusScope>`) calls `useFocusActions()` to dispatch
+ * focus changes when the editor's drill-out fires.
  */
 function renderTabBar(delayDuration = 100) {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={delayDuration}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={delayDuration}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -757,17 +763,20 @@ describe("PerspectiveTabBar", () => {
       // Lazy-import to avoid pulling the spatial-nav stack into the simpler
       // tests above (and to keep this rect-regression block self-contained).
       const { FocusLayer } = await import("./focus-layer");
-      const { SpatialFocusProvider } = await import(
-        "@/lib/spatial-focus-context"
-      );
+      const { SpatialFocusProvider } =
+        await import("@/lib/spatial-focus-context");
+      const { EntityFocusProvider: EFP } =
+        await import("@/lib/entity-focus-context");
       const { asSegment } = await import("@/types/spatial");
 
       const { unmount } = render(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <TooltipProvider delayDuration={100}>
-              <PerspectiveTabBar />
-            </TooltipProvider>
+            <EFP>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EFP>
           </FocusLayer>
         </SpatialFocusProvider>,
       );

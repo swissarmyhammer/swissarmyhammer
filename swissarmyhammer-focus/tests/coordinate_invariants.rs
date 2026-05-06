@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker,
-    LayerName, NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
+    BeamNavStrategy, Direction, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
+    NavStrategy, Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,12 @@ fn nav_with_mixed_coordinate_systems_does_not_panic() {
     let strategy = BeamNavStrategy;
 
     // Drive every cardinal direction from a viewport-relative leaf.
-    for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+    for dir in [
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
+    ] {
         let target = strategy.next(&reg, &fq("/L/parent/a"), &segment("a"), dir);
         // The no-silent-dropout contract: every nav must return a
         // valid FQM in the same layer (or stay-put on the focused
@@ -150,7 +155,12 @@ fn nav_with_mixed_coordinate_systems_does_not_panic() {
     }
 
     // Drive every cardinal direction from a document-relative leaf.
-    for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+    for dir in [
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
+    ] {
         let target = strategy.next(&reg, &fq("/L/parent/c"), &segment("c"), dir);
         let entry = reg
             .find_by_fq(&target)
@@ -207,7 +217,12 @@ fn registration_with_bad_rects_does_not_panic() {
     // Even with three pathological siblings, nav from the sane leaf
     // returns a valid FQM in the same layer — the no-silent-dropout
     // contract holds.
-    for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+    for dir in [
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
+    ] {
         let target = strategy.next(&reg, &fq("/L/parent/ok"), &segment("ok"), dir);
         let entry = reg
             .find_by_fq(&target)

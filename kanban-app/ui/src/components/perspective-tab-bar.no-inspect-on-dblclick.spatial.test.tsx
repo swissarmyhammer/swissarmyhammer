@@ -183,10 +183,8 @@ vi.mock("@/lib/ui-state-context", () => ({
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { FocusLayer } from "./focus-layer";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
-import {
-  asSegment,
-  type FullyQualifiedMoniker
-} from "@/types/spatial";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,9 +207,11 @@ function renderBar(): ReturnType<typeof render> {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -350,34 +350,33 @@ describe("PerspectiveTabBar — perspective is NOT an entity (regression)", () =
   // Test 3 — Single-click still focuses (regression guard for focus path)
   // -------------------------------------------------------------------------
 
-  it("single-click on a tab name still dispatches spatial_focus for THAT name leaf's key", async () => {
+  it("single-click on a tab still dispatches spatial_focus for THAT tab's key", async () => {
     const { container, unmount } = renderBar();
     await flushSetup();
 
-    // After the iteration-2 reshape (card 01KQQSVS4EBKKFN5SS7MW5P8CN)
-    // clicks on the tab land on the inner `perspective_tab.name:{id}`
-    // leaf — that is the `<FocusScope>` whose click handler dispatches
-    // `spatial_focus`. The outer `perspective_tab:{id}` is now a
-    // `<FocusScope>` (not a leaf scope) and the inner FocusScope's
-    // `stopPropagation` keeps the click from bubbling.
-    const nameLeaf = mockInvoke.mock.calls
+    // Post-`8789dcc15`, the inner `perspective_tab.name:{id}` FocusScope
+    // was dropped because it sat at the same rect as the outer
+    // `perspective_tab:{id}` wrapper. The outer `perspective_tab:{id}`
+    // is itself the focus target now — its onClick dispatches
+    // `spatial_focus(perspective_tab:{id})`.
+    const tabZone = mockInvoke.mock.calls
       .filter((c) => c[0] === "spatial_register_scope")
       .map((c) => c[1] as Record<string, unknown>)
-      .find((r) => r.segment === "perspective_tab.name:p1");
-    expect(nameLeaf).toBeTruthy();
+      .find((r) => r.segment === "perspective_tab:p1");
+    expect(tabZone).toBeTruthy();
 
-    const nameNode = container.querySelector(
-      "[data-segment='perspective_tab.name:p1']",
+    const tabNode = container.querySelector(
+      "[data-segment='perspective_tab:p1']",
     ) as HTMLElement | null;
-    expect(nameNode).not.toBeNull();
+    expect(tabNode).not.toBeNull();
 
     mockInvoke.mockClear();
 
-    fireEvent.click(nameNode!);
+    fireEvent.click(tabNode!);
 
     const focusCalls = spatialFocusCalls();
     expect(focusCalls).toHaveLength(1);
-    expect(focusCalls[0].fq).toBe(nameLeaf!.fq);
+    expect(focusCalls[0].fq).toBe(tabZone!.fq);
 
     unmount();
   });

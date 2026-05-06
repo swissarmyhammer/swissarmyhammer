@@ -24,7 +24,7 @@
  *     subscription was scoped to the wrong window or layer, or the
  *     event payload's `next_fq` didn't match the registered key).
  *   - Both flip but no `<FocusIndicator>` mounts → visible-indicator wiring
- *     bug (e.g. `showFocusBar` was forced to `false` somewhere).
+ *     bug (e.g. `showFocus` was forced to `false` somewhere).
  *
  * # Test cases
  *
@@ -181,13 +181,13 @@ vi.mock("@/components/fields/field", async () => {
   const { asSegment } = await import("@/types/spatial");
   return {
     Field: (props: Record<string, unknown>) => {
-      const fieldName = (props.fieldDef as { field_name?: string })
-        ?.field_name ?? "unknown";
+      const fieldName =
+        (props.fieldDef as { field_name?: string })?.field_name ?? "unknown";
       const moniker = asSegment(
         `field:${props.entityType}:${props.entityId}.${fieldName}`,
       );
       return (
-        <FocusScope moniker={moniker} showFocusBar>
+        <FocusScope moniker={moniker} showFocus>
           <span data-testid="field-percent">{String(props.entityId)}</span>
         </FocusScope>
       );
@@ -207,7 +207,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -365,7 +365,10 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     const leaf = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.inspect",
     );
-    expect(leaf, "inspect leaf must register when board is loaded").toBeDefined();
+    expect(
+      leaf,
+      "inspect leaf must register when board is loaded",
+    ).toBeDefined();
 
     expect(queryByTestId("focus-indicator")).toBeNull();
 
@@ -430,7 +433,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
   // The field zone is registered via `spatial_register_scope` (it's a
   // `<FocusScope>`, not a `<FocusScope>`). Its moniker is
   // `field:board:b1.percent_complete`. The mocked `<Field>` opts in to
-  // `showFocusBar` so the indicator mounts when the zone is focused —
+  // `showFocus` so the indicator mounts when the zone is focused —
   // matching the production wiring that lets the per-field bar tell the
   // user which atom of the row carries focus.
   // -------------------------------------------------------------------------
@@ -519,9 +522,14 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     const firstInspect = registerScopeArgs().find(
       (a) => a.segment === "ui:navbar.inspect",
     );
-    expect(firstInspect, "inspect leaf must register on first mount").toBeDefined();
+    expect(
+      firstInspect,
+      "inspect leaf must register on first mount",
+    ).toBeDefined();
 
-    await fireFocusChanged({ next_fq: firstInspect!.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({
+      next_fq: firstInspect!.fq as FullyQualifiedMoniker,
+    });
     await waitFor(() => {
       const node = container.querySelector(
         "[data-segment='ui:navbar.inspect']",
@@ -584,7 +592,9 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
     // The kernel emits `focus-changed` with `next_fq = remounted.fq`,
     // and the new leaf's `useFocusClaim` subscription should fire,
     // mounting the indicator on the new wrapper.
-    await fireFocusChanged({ next_fq: remountedInspect.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({
+      next_fq: remountedInspect.fq as FullyQualifiedMoniker,
+    });
 
     await waitFor(() => {
       const node = container.querySelector(

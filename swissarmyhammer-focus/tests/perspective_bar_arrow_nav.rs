@@ -107,10 +107,7 @@ fn perspective_right_from_rightmost_tab_stays_put_at_visual_edge() {
     let result = nav(&app, &from, Direction::Right);
 
     // No-bounce-back: result must not be any previous perspective tab.
-    let forbidden = [
-        app.perspective_tab_p1_fq(),
-        app.perspective_tab_p2_fq(),
-    ];
+    let forbidden = [app.perspective_tab_p1_fq(), app.perspective_tab_p2_fq()];
     assert!(
         !forbidden.contains(&result),
         "Right from perspective_tab:p3 must not bounce back to a previous tab, got {result:?}",
@@ -240,7 +237,11 @@ fn fixture_perspective_bar_has_three_tab_children() {
 
     // Each tab acts as a leaf — no further children registered under any
     // of them.
-    for tab_seg in ["perspective_tab:p1", "perspective_tab:p2", "perspective_tab:p3"] {
+    for tab_seg in [
+        "perspective_tab:p1",
+        "perspective_tab:p2",
+        "perspective_tab:p3",
+    ] {
         let tab_fq = swissarmyhammer_focus::FullyQualifiedMoniker::compose(
             &bar_zone_fq,
             &swissarmyhammer_focus::SegmentMoniker::from_string(tab_seg),

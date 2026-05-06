@@ -24,8 +24,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FallbackResolution, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
-    Pixels, Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    FallbackResolution, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Build a `Rect` from raw `f64` coordinates.
@@ -119,10 +119,8 @@ fn writer_makes_parent_zone_last_focused_reachable() {
         rect(0.0, 0.0, 500.0, 500.0),
     ));
 
-    let remembered_fq = FullyQualifiedMoniker::compose(
-        &outer_fq,
-        &SegmentMoniker::from_string("ui:remembered"),
-    );
+    let remembered_fq =
+        FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:remembered"));
     reg.register_scope(scope(
         remembered_fq.as_ref(),
         "ui:remembered",
@@ -134,10 +132,8 @@ fn writer_makes_parent_zone_last_focused_reachable() {
     // A *closer* sibling that would win on `FallbackParentZoneNearest`.
     // Its presence proves the resolver picked `remembered` via
     // `last_focused` rather than nearest-scan.
-    let nearest_other_fq = FullyQualifiedMoniker::compose(
-        &outer_fq,
-        &SegmentMoniker::from_string("ui:nearest-other"),
-    );
+    let nearest_other_fq =
+        FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:nearest-other"));
     reg.register_scope(scope(
         nearest_other_fq.as_ref(),
         "ui:nearest-other",
@@ -146,10 +142,8 @@ fn writer_makes_parent_zone_last_focused_reachable() {
         rect(20.0, 20.0, 10.0, 10.0),
     ));
 
-    let inner_fq = FullyQualifiedMoniker::compose(
-        &outer_fq,
-        &SegmentMoniker::from_string("ui:inner"),
-    );
+    let inner_fq =
+        FullyQualifiedMoniker::compose(&outer_fq, &SegmentMoniker::from_string("ui:inner"));
     reg.register_scope(scope(
         inner_fq.as_ref(),
         "ui:inner",

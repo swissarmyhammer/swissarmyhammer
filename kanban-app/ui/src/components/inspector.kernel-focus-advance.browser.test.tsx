@@ -119,10 +119,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import {
-  asSegment,
-  fqLastSegment
-} from "@/types/spatial";
+import { asSegment, fqLastSegment } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
 // ---------------------------------------------------------------------------
@@ -234,9 +231,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
   const segment = focusedFq ? fqLastSegment(focusedFq) : null;
-  return (
-    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
-  );
+  return <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>;
 }
 
 function renderInspectorChain() {

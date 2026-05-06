@@ -228,13 +228,7 @@ export function fqLastSegment(fq: FullyQualifiedMoniker): SegmentMoniker {
  *
  * Drill-in / drill-out are separate commands, not directions.
  */
-export type Direction =
-  | "up"
-  | "down"
-  | "left"
-  | "right"
-  | "first"
-  | "last";
+export type Direction = "up" | "down" | "left" | "right" | "first" | "last";
 
 // ---------------------------------------------------------------------------
 // Wire payloads

@@ -130,6 +130,7 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FocusLayer } from "./focus-layer";
 import { asSegment } from "@/types/spatial";
 
@@ -144,9 +145,11 @@ function renderTabBar() {
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
-        <TooltipProvider delayDuration={100}>
-          <PerspectiveTabBar />
-        </TooltipProvider>
+        <EntityFocusProvider>
+          <TooltipProvider delayDuration={100}>
+            <PerspectiveTabBar />
+          </TooltipProvider>
+        </EntityFocusProvider>
       </FocusLayer>
     </SpatialFocusProvider>,
   );
@@ -223,9 +226,11 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
       rerender(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <TooltipProvider delayDuration={100}>
-              <PerspectiveTabBar />
-            </TooltipProvider>
+            <EntityFocusProvider>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
       );
@@ -271,9 +276,11 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
       rerender(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <TooltipProvider delayDuration={100}>
-              <PerspectiveTabBar />
-            </TooltipProvider>
+            <EntityFocusProvider>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
       );
@@ -321,9 +328,11 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
       rerender(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <TooltipProvider delayDuration={100}>
-              <PerspectiveTabBar />
-            </TooltipProvider>
+            <EntityFocusProvider>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
       );
@@ -371,9 +380,11 @@ describe("PerspectiveTabBar — external clearFilter resets formula bar buffer",
       rerender(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
-            <TooltipProvider delayDuration={100}>
-              <PerspectiveTabBar />
-            </TooltipProvider>
+            <EntityFocusProvider>
+              <TooltipProvider delayDuration={100}>
+                <PerspectiveTabBar />
+              </TooltipProvider>
+            </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
       );

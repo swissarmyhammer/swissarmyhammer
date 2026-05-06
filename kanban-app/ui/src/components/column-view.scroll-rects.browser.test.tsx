@@ -108,10 +108,7 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  asSegment,
-  type FullyQualifiedMoniker
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -260,14 +257,15 @@ async function flushScroll() {
 function taskMonikerToKey(): Map<string, FullyQualifiedMoniker> {
   const map = new Map<string, FullyQualifiedMoniker>();
   for (const [cmd, args] of mockInvoke.mock.calls) {
-    if (
-      cmd !== "spatial_register_scope" &&
-      cmd !== "spatial_register_scope"
-    ) {
+    if (cmd !== "spatial_register_scope" && cmd !== "spatial_register_scope") {
       continue;
     }
     const a = args as { segment?: string; fq?: FullyQualifiedMoniker };
-    if (typeof a.segment === "string" && a.segment.startsWith("task:") && a.fq) {
+    if (
+      typeof a.segment === "string" &&
+      a.segment.startsWith("task:") &&
+      a.fq
+    ) {
       // Last-write-wins. The most recent register for this moniker is
       // the live key (placeholders may have been registered first then
       // unregistered by the visibility hook).
@@ -319,7 +317,9 @@ function findOuterScroller(container: HTMLElement): HTMLElement {
     "[data-testid='board-shell']",
   ) as HTMLElement | null;
   if (!node) {
-    throw new Error("expected to find the test wrapper [data-testid='board-shell']");
+    throw new Error(
+      "expected to find the test wrapper [data-testid='board-shell']",
+    );
   }
   return node;
 }
@@ -461,9 +461,7 @@ describe("<ColumnView> — rect freshness on scroll & click reliability", () => 
       lastRectByKey.set(u.fq, u.rect);
     }
 
-    const visibleCards = container.querySelectorAll(
-      "[data-segment^='task:']",
-    );
+    const visibleCards = container.querySelectorAll("[data-segment^='task:']");
     expect(visibleCards.length).toBeGreaterThan(0);
 
     // For every currently visible card, the kernel's idea of its rect

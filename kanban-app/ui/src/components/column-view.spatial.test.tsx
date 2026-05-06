@@ -5,7 +5,7 @@
  * wrap as zone, strip legacy keyboard nav from column-view"). The column body
  * is a sized, distinct entity — it registers as a zone in the spatial graph
  * and **advertises its focus** with a visible `<FocusIndicator>` (the
- * production-side default `showFocusBar={true}` on the wrapping `<FocusScope>`).
+ * production-side default `showFocus={true}` on the wrapping `<FocusScope>`).
  * This file pins the click → claim → indicator chain that the user actually
  * sees, as well as the keystroke + drill-out wiring that depends on it.
  *
@@ -120,7 +120,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -324,7 +324,9 @@ function spatialNavigateCalls(): Array<{
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+    .map(
+      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+    );
 }
 
 /** Collect every `spatial_drill_out` call's args, in order. */
@@ -373,7 +375,7 @@ describe("ColumnView — browser spatial behaviour", () => {
     );
     expect(columnZone).toBeTruthy();
     expect(typeof columnZone!.fq).toBe("string");
-    expect((columnZone!.segment as string)).toMatch(/^column:[0-9A-Z]{26}$/);
+    expect(columnZone!.segment as string).toMatch(/^column:[0-9A-Z]{26}$/);
     expect(columnZone!.layerFq).toBeTruthy();
     expect(columnZone!.rect).toBeTruthy();
     expect(columnZone!.overrides).toEqual({});
@@ -400,7 +402,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     const columnZone = registerScopeArgs().find(
       (a) => a.segment === column.moniker,
     )!;
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "ui:board",
+    )!;
 
     // Clear so the assertion measures only the click's IPC.
     mockInvoke.mockClear();
@@ -420,11 +424,9 @@ describe("ColumnView — browser spatial behaviour", () => {
     // calls `e.stopPropagation()` so the click does not bubble to the
     // wrapping board zone. This is the regression-test side of the bug
     // the card was opened on (visible feedback was suppressed by
-    // `showFocusBar={false}`; the click itself was already correct, but
+    // `showFocus={false}`; the click itself was already correct, but
     // pinning bubble-blocking here keeps the click contract intact).
-    expect(
-      focusCalls.find((c) => c.fq === boardZone.fq),
-    ).toBeUndefined();
+    expect(focusCalls.find((c) => c.fq === boardZone.fq)).toBeUndefined();
 
     unmount();
   });
@@ -433,9 +435,9 @@ describe("ColumnView — browser spatial behaviour", () => {
   // Test #3 — Focus claim → visible bar
   // -------------------------------------------------------------------------
 
-  it("focus claim mounts <FocusIndicator> inside the column (showFocusBar={true})", async () => {
+  it("focus claim mounts <FocusIndicator> inside the column (showFocus={true})", async () => {
     // The visible-bar regression: the previous wrap had
-    // `showFocusBar={false}`, which suppressed `<FocusIndicator>` even
+    // `showFocus={false}`, which suppressed `<FocusIndicator>` even
     // when the kernel emitted a focus claim for the column. The fix
     // (drop the `false` and rely on `<FocusScope>`'s default `true`)
     // is what this test pins. If a future edit adds the suppression

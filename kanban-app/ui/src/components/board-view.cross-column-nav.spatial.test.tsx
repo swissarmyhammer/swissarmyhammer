@@ -206,10 +206,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
-import {
-  asSegment,
-  type FullyQualifiedMoniker
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -531,9 +528,7 @@ function registerBatchEntries(): Array<Record<string, unknown>> {
  * direct registration command and the batch-register payload to find
  * the most recent record for the requested moniker.
  */
-function findRegisterRecord(
-  moniker: string,
-): Record<string, unknown> | null {
+function findRegisterRecord(moniker: string): Record<string, unknown> | null {
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];
@@ -616,15 +611,21 @@ describe("BoardView — cross-column spatial navigation", () => {
     }
 
     // Each column registers via `spatial_register_scope` with a
-    // parent_zone that resolves to the `ui:board` scope the board view
-    // mounts. This pins the column-as-scope-with-children shape the
-    // kernel test
+    // parent_zone that resolves to the `board:{id}` entity scope the
+    // board view mounts. Post-`8232b25cc`, the redundant `ui:board`
+    // chrome scope was dropped — columns now hang directly off the
+    // entity scope. This pins the column-as-scope-with-children shape
+    // the kernel test
     // `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`
     // (the unified-cascade successor to the old rule-2 test) assumes.
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
+    const boardZone = registerScopeArgs().find(
+      (a) =>
+        typeof a.segment === "string" &&
+        (a.segment as string).startsWith("board:"),
+    );
     expect(
       boardZone,
-      "ui:board scope must register so columns can hang off it",
+      "board:{id} entity scope must register so columns can hang off it",
     ).toBeTruthy();
     const boardKey = boardZone!.fq as FullyQualifiedMoniker;
 
@@ -637,7 +638,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       ).toBeTruthy();
       expect(
         colZone!.parentZone,
-        `${moniker}'s parent_zone must equal the ui:board scope key`,
+        `${moniker}'s parent_zone must equal the board:{id} entity scope key`,
       ).toBe(boardKey);
     }
 

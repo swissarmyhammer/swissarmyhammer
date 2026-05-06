@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    Direction, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
-    Pixels, Rect, SegmentMoniker, SpatialRegistry, WindowLabel,
+    Direction, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+    SegmentMoniker, SpatialRegistry, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------
@@ -568,8 +568,7 @@ fn scopes_in_layer_filter_by_layer_fq() {
     let l1 = FullyQualifiedMoniker::from_string("/L1");
     let l2 = FullyQualifiedMoniker::from_string("/L2");
 
-    let mut l1_fqs: Vec<&FullyQualifiedMoniker> =
-        reg.scopes_in_layer(&l1).map(|s| &s.fq).collect();
+    let mut l1_fqs: Vec<&FullyQualifiedMoniker> = reg.scopes_in_layer(&l1).map(|s| &s.fq).collect();
     l1_fqs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     assert_eq!(
         l1_fqs,
@@ -579,8 +578,7 @@ fn scopes_in_layer_filter_by_layer_fq() {
         ]
     );
 
-    let l2_fqs: Vec<&FullyQualifiedMoniker> =
-        reg.scopes_in_layer(&l2).map(|s| &s.fq).collect();
+    let l2_fqs: Vec<&FullyQualifiedMoniker> = reg.scopes_in_layer(&l2).map(|s| &s.fq).collect();
     assert_eq!(
         l2_fqs,
         vec![&FullyQualifiedMoniker::from_string("/L2/leaf-2")]

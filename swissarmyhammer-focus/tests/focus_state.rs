@@ -206,7 +206,9 @@ fn unregister_of_unfocused_fq_emits_no_event() {
     let other = FullyQualifiedMoniker::from_string("/L/other");
 
     let mut state = SpatialState::new();
-    state.focus(&mut reg, focused.clone()).expect("focus focused");
+    state
+        .focus(&mut reg, focused.clone())
+        .expect("focus focused");
 
     assert!(state.handle_unregister(&mut reg, &other).is_none());
     assert_eq!(

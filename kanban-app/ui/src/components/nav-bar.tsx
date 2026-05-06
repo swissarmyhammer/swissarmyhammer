@@ -24,27 +24,36 @@ import { asSegment } from "@/types/spatial";
  * Reads board data, open boards, active path, and switch-board handler from
  * `WindowContainer` context — takes no props.
  *
- * The container renders as a `<FocusZone moniker="ui:navbar">` so the spatial
- * navigator can drill into the bar and remember a last-focused leaf for
- * fallback. Each actionable child (board selector, inspect button, search
- * button) registers as a `<FocusScope>` leaf with a `ui:navbar.{name}` moniker
- * — but only when its content is actually rendered, so we never publish a
- * zero-rect leaf for a button that is currently hidden behind a conditional.
+ * The bar is a plain `<div role="banner">` — NOT a `<FocusScope>`. Each
+ * actionable child (board selector, inspect button, search button) registers
+ * as its own `<FocusScope>` leaf with a `ui:navbar.{name}` moniker, and
+ * those leaves register as **peer top-level scopes** under the surrounding
+ * `<FocusLayer name="window">` — siblings of `ui:left-nav` and
+ * `ui:perspective-bar`. Inner scopes only mount when their content is
+ * actually rendered, so we never publish a zero-rect leaf for a button
+ * currently hidden behind a conditional.
+ *
+ * # Why the outer `<FocusScope moniker="ui:navbar">` is gone
+ *
+ * The bar spans the full viewport width. When the navbar was wrapped in a
+ * `<FocusScope>`, the kernel saw a viewport-spanning rectangle that
+ * swallowed clicks landing on bar whitespace AND beam-search candidates
+ * arriving from below — focus resolved to the parent `ui:navbar` rather
+ * than to any inner leaf, so clicks on the board-name field, arrow-nav
+ * from the left-nav, and arrow-nav from the perspective-bar all failed to
+ * reach the inner leaves. This is the same class of bug
+ * commit `8232b25cc` fixed for `ui:board`: a redundant container scope
+ * sitting at the same rect as something else, swallowing focus that
+ * belongs to the inner content.
+ *
+ * Promoting the inner scopes to peers of `ui:left-nav` /
+ * `ui:perspective-bar` lets the kernel hit-test them directly and lets
+ * beam-search treat them as first-class navigation candidates.
  *
  * # Focus indicator layout
  *
- * `<FocusIndicator>` paints a dotted border inside the host's box; no
+ * `<FocusIndicator>` paints a dotted border inside each leaf's box; no
  * special gap or padding is required to make room for it.
- *
- * # Zone-level focus
- *
- * `<FocusZone moniker="ui:navbar">` keeps `showFocusBar={false}`: the bar
- * spans the entire viewport width, so a focus indicator covering the whole
- * row would be visual noise without telling the user anything they don't
- * already know. The zone exists to be the parent of its leaves and to
- * remember a last-focused leaf for drill-out fallback — its leaves own the
- * visible focus signal. `data-focused` still flips on the wrapper so e2e
- * selectors and debugging tooling can observe the claim.
  *
  * No keyboard listeners live here: arrow-key traversal is owned by the Rust
  * spatial navigator. The buttons keep their click handlers so mouse / pointer
@@ -62,9 +71,7 @@ export function NavBar() {
   const { isBusy } = useCommandBusy();
 
   return (
-    <FocusScope
-      moniker={asSegment("ui:navbar")}
-      showFocusBar={false}
+    <div
       role="banner"
       className="relative flex h-12 items-center border-b px-4 gap-2"
     >
@@ -79,7 +86,8 @@ export function NavBar() {
       */}
       <FocusScope
         moniker={asSegment("ui:navbar.board-selector")}
-        showFocusBar={false}
+        // showFocus=false: container zone (BoardSelector's inner Field / dropdown / tear-off paint their own focus).
+        showFocus={false}
       >
         <BoardSelector
           boards={openBoards}
@@ -170,6 +178,6 @@ export function NavBar() {
           <div className="h-full w-1/3 bg-primary animate-indeterminate" />
         </div>
       )}
-    </FocusScope>
+    </div>
   );
 }

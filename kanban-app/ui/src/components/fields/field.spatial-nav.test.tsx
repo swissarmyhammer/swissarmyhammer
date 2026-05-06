@@ -60,9 +60,7 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandBusyProvider } from "@/lib/command-scope";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const TITLE_FIELD: FieldDef = {

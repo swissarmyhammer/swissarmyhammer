@@ -413,10 +413,7 @@ describe("drillIn", () => {
 
     let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
-      returned = await result.current.drillIn(
-        asFq("leaf"),
-        focusedFq,
-      );
+      returned = await result.current.drillIn(asFq("leaf"), focusedFq);
     });
 
     expect(returned).toBe(focusedFq);
@@ -466,10 +463,7 @@ describe("drillOut", () => {
 
     let returned: FullyQualifiedMoniker | undefined;
     await act(async () => {
-      returned = await result.current.drillOut(
-        asFq("root-leaf"),
-        focusedFq,
-      );
+      returned = await result.current.drillOut(asFq("root-leaf"), focusedFq);
     });
 
     expect(returned).toBe(focusedFq);

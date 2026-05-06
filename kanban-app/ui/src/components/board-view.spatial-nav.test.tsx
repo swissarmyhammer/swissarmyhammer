@@ -70,9 +70,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -219,28 +217,30 @@ describe("BoardView (spatial-nav)", () => {
     mockInvoke.mockClear();
   });
 
-  it("registers a single ui:board zone whose parentZone is the outer board entity zone and layerKey is the window root", async () => {
+  it("registers a single board:{id} entity zone parented at the layer root", async () => {
+    // Post-`8232b25cc`, the redundant `ui:board` chrome zone was
+    // dropped — the board content mounts directly under the
+    // `board:{id}` entity zone (the `<Inspectable>` + `<FocusScope>`
+    // pair on `<BoardView>`). Pin that there is exactly one
+    // `board:{id}` zone, parented at the window-root layer.
     const { unmount } = renderBoardWithSpatialStack();
     await flushSetup();
 
-    // The `ui:board` chrome zone must mount exactly once.
-    const boardZones = registeredZones().filter(
+    const boardEntityZones = registeredZones().filter(
+      (z) =>
+        typeof z.segment === "string" &&
+        (z.segment as string).startsWith("board:"),
+    );
+    expect(boardEntityZones).toHaveLength(1);
+    const boardZone = boardEntityZones[0];
+
+    // The chrome `ui:board` scope must NOT be registered — its removal
+    // was the whole point of `8232b25cc`. A regression that
+    // re-introduces it would re-create the same-rect overlap warning.
+    const chromeZones = registeredZones().filter(
       (z) => z.segment === "ui:board",
     );
-    expect(boardZones).toHaveLength(1);
-    const boardZone = boardZones[0];
-
-    // The `ui:board` chrome zone sits inside the outer
-    // `board:<id>` entity zone (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
-    // so `parentZone` is the outer entity zone's FQM. The outer zone
-    // carries the `<Inspectable>` wrapper for double-click dispatch;
-    // the inner chrome zone is pure-spatial.
-    const boardEntityZone = registeredZones().find((z) =>
-      typeof z.segment === "string" &&
-      (z.segment as string).startsWith("board:"),
-    );
-    expect(boardEntityZone).toBeTruthy();
-    expect(boardZone.parentZone).toBe(boardEntityZone!.fq);
+    expect(chromeZones).toHaveLength(0);
 
     // The `layerKey` must match the window-root layer that was just pushed.
     const windowLayer = pushedLayers().find((l) => l.name === "window");
@@ -250,12 +250,15 @@ describe("BoardView (spatial-nav)", () => {
     unmount();
   });
 
-  it("emits a wrapper element with data-moniker='ui:board'", async () => {
+  it("emits a wrapper element with data-segment='board:{id}'", async () => {
     const { container, unmount } = renderBoardWithSpatialStack();
     await flushSetup();
 
-    const node = container.querySelector("[data-segment='ui:board']");
+    const node = container.querySelector("[data-segment='board:board-1']");
     expect(node).not.toBeNull();
+
+    // The dropped chrome scope must leave no DOM marker behind.
+    expect(container.querySelector("[data-segment='ui:board']")).toBeNull();
 
     unmount();
   });

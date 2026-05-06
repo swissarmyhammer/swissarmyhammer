@@ -2273,10 +2273,7 @@ fn spatial_unregister_scope_inner(
 /// infallible at the registry boundary — every entry is applied via
 /// [`SpatialRegistry::register_scope`] in input order, and per-FQM
 /// `last_focused` preservation is handled by the kernel.
-fn spatial_register_batch_inner(
-    registry: &mut SpatialRegistry,
-    entries: Vec<RegisterEntry>,
-) {
+fn spatial_register_batch_inner(registry: &mut SpatialRegistry, entries: Vec<RegisterEntry>) {
     registry.apply_batch(entries);
 }
 

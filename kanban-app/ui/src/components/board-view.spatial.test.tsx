@@ -7,12 +7,12 @@
  * render a visible focus bar around the entire viewport. This file pins
  * every contract `BoardSpatialZone` carries:
  *
- *   1. Registration via `spatial_register_scope` with moniker `ui:board`.
+ *   1. Registration via `spatial_register_scope` with moniker `board:board-1`.
  *   2. Click on the board chrome → `spatial_focus(boardKey)` with
  *      stop-propagation so the click does not bubble up to a window-root
  *      ancestor and does not leak down into a column zone.
  *   3. Focus claim flips `data-focused` for e2e selectors but does NOT
- *      mount `<FocusIndicator>` (because `showFocusBar={false}` — see the
+ *      mount `<FocusIndicator>` (because `showFocus={false}` — see the
  *      inline comment on `BoardSpatialZone`).
  *   4. Keystrokes route through the AppShell's global nav commands and
  *      dispatch `spatial_navigate(boardKey, direction)` for arrows and
@@ -143,7 +143,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -368,7 +368,9 @@ function spatialNavigateCalls(): Array<{
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+    .map(
+      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+    );
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
@@ -401,29 +403,30 @@ describe("BoardView — browser spatial behaviour", () => {
     vi.clearAllMocks();
   });
 
-  it("registers a ui:board zone on mount (test #1)", async () => {
+  it("registers a board:board-1 entity zone on mount (test #1)", async () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board");
-    expect(boardZone).toBeTruthy();
-    expect(typeof boardZone!.fq).toBe("string");
-    expect(boardZone!.layerFq).toBeTruthy();
-    // The `ui:board` chrome zone sits inside the outer
-    // `board:<id>` entity zone (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`),
-    // so its `parentZone` must be the outer entity zone's FQM. The
-    // outer zone is what carries the `<Inspectable>` wrapper for
-    // double-click → inspector dispatch; the inner chrome zone is
-    // pure-spatial.
-    const boardEntityZone = registerScopeArgs().find((a) =>
-      typeof a.segment === "string" &&
-      (a.segment as string).startsWith("board:"),
+    // Post-`8232b25cc`, the redundant `ui:board` chrome zone was
+    // dropped — the board content mounts directly under the
+    // `board:{id}` entity zone (the `<Inspectable>` + `<FocusScope>`
+    // pair on `<BoardView>`). The entity zone is registered exactly
+    // once at mount time.
+    const boardZones = registerScopeArgs().filter(
+      (a) => a.segment === "board:board-1",
     );
-    expect(
-      boardEntityZone,
-      "outer board:<id> entity zone must register",
-    ).toBeTruthy();
-    expect(boardZone!.parentZone).toBe(boardEntityZone!.fq);
+    expect(boardZones).toHaveLength(1);
+    const boardZone = boardZones[0];
+    expect(typeof boardZone.fq).toBe("string");
+    expect(boardZone.layerFq).toBeTruthy();
+
+    // The chrome `ui:board` scope must NOT register — its removal was
+    // the whole point of `8232b25cc`. A regression that re-introduces
+    // it would re-create the same-rect overlap warning.
+    const chromeScopes = registerScopeArgs().filter(
+      (a) => a.segment === "ui:board",
+    );
+    expect(chromeScopes).toHaveLength(0);
 
     unmount();
   });
@@ -432,10 +435,12 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-segment='ui:board']",
+      "[data-segment='board:board-1']",
     ) as HTMLElement;
     expect(boardNode).not.toBeNull();
 
@@ -460,17 +465,19 @@ describe("BoardView — browser spatial behaviour", () => {
   it("focus claim on the board zone flips data-focused but renders no indicator (test #3)", async () => {
     // The board fills the viewport — drawing a focus rectangle around
     // the entire board body would be visual noise, so
-    // `BoardSpatialZone` passes `showFocusBar={false}` to the zone (see
+    // `BoardSpatialZone` passes `showFocus={false}` to the zone (see
     // the inline comment in `board-view.tsx`). The data-focused
     // attribute must still flip so e2e tooling and the umbrella card's
     // verification protocol can observe the claim.
     const { container, queryByTestId, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-segment='ui:board']",
+      "[data-segment='board:board-1']",
     ) as HTMLElement;
     expect(boardNode).not.toBeNull();
     expect(boardNode.getAttribute("data-focused")).toBeNull();
@@ -481,7 +488,7 @@ describe("BoardView — browser spatial behaviour", () => {
       expect(boardNode.getAttribute("data-focused")).not.toBeNull();
     });
 
-    // The board zone uses `showFocusBar={false}`, so even though the
+    // The board zone uses `showFocus={false}`, so even though the
     // data-focused attribute flips, no `<FocusIndicator>` should mount
     // as a direct descendant of the board zone. (Inner sized leaves
     // and entities — columns, cards — render their own indicators
@@ -514,7 +521,9 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed the spatial focus so `nav.up/down/left/right`'s execute
@@ -529,7 +538,10 @@ describe("BoardView — browser spatial behaviour", () => {
     // (`nav.up.keys.cua = "ArrowUp"` etc.) by walking the focused
     // entity scope chain — when no entity is focused, no scope-level
     // bindings are visible and arrow keys never resolve.
-    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
+    await fireFocusChanged({
+      next_fq: boardKey,
+      next_segment: asSegment("board:board-1"),
+    });
 
     mockInvoke.mockClear();
 
@@ -579,12 +591,17 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     // Seed focus so `nav.right`/`nav.left`'s execute closures see a
     // non-null `focusedKey()` — same setup as the arrow-key test.
-    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
+    await fireFocusChanged({
+      next_fq: boardKey,
+      next_segment: asSegment("board:board-1"),
+    });
 
     const tabExpectations: Array<{
       key: string;
@@ -606,10 +623,9 @@ describe("BoardView — browser spatial behaviour", () => {
         (c) => c.focusedFq === boardKey,
       );
       const label = shiftKey ? `Shift+${key}` : key;
-      expect(
-        navCalls.length,
-        `${label} should dispatch spatial_navigate`,
-      ).toBe(1);
+      expect(navCalls.length, `${label} should dispatch spatial_navigate`).toBe(
+        1,
+      );
       expect(navCalls[0].direction).toBe(direction);
     }
 
@@ -620,7 +636,9 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     // Capture the column key BEFORE clearing the mock — the column
     // registered during mount and that record lives in
@@ -637,7 +655,10 @@ describe("BoardView — browser spatial behaviour", () => {
     // resolves Enter to `nav.drillIn` via the focused scope's bindings
     // (Enter is bound globally too, but the contract under test is the
     // scope-level resolution).
-    await fireFocusChanged({ next_fq: boardKey, next_segment: asSegment("ui:board") });
+    await fireFocusChanged({
+      next_fq: boardKey,
+      next_segment: asSegment("board:board-1"),
+    });
 
     mockInvoke.mockClear();
 
@@ -683,7 +704,9 @@ describe("BoardView — browser spatial behaviour", () => {
     const { unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
 
     mockInvoke.mockClear();
@@ -700,10 +723,12 @@ describe("BoardView — browser spatial behaviour", () => {
 
     // Exercise mount + click + a focus claim — the three lifecycle
     // points where legacy code would have called the banned commands.
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const boardNode = container.querySelector(
-      "[data-segment='ui:board']",
+      "[data-segment='board:board-1']",
     ) as HTMLElement;
     fireEvent.click(boardNode);
     await fireFocusChanged({ next_fq: boardKey });
@@ -741,7 +766,9 @@ describe("BoardView — browser spatial behaviour", () => {
     const { container, unmount } = renderBoardWithShell();
     await flushSetup();
 
-    const boardZone = registerScopeArgs().find((a) => a.segment === "ui:board")!;
+    const boardZone = registerScopeArgs().find(
+      (a) => a.segment === "board:board-1",
+    )!;
     const boardKey = boardZone.fq as FullyQualifiedMoniker;
     const todoColumn = registerScopeArgs().find(
       (a) => a.segment === "column:col-todo",
@@ -788,11 +815,11 @@ describe("BoardView — browser spatial behaviour", () => {
         "[data-segment='column:col-todo']",
       ) as HTMLElement;
       const boardNode = container.querySelector(
-        "[data-segment='ui:board']",
+        "[data-segment='board:board-1']",
       ) as HTMLElement;
       // Column has lost focus; board zone has gained it (data-focused
       // flips even though the visible bar stays suppressed by
-      // `showFocusBar={false}`).
+      // `showFocus={false}`).
       expect(columnNode.getAttribute("data-focused")).toBeNull();
       expect(boardNode.getAttribute("data-focused")).not.toBeNull();
     });
@@ -805,7 +832,7 @@ describe("BoardView — browser spatial behaviour", () => {
     });
     await waitFor(() => {
       const boardNode = container.querySelector(
-        "[data-segment='ui:board']",
+        "[data-segment='board:board-1']",
       ) as HTMLElement;
       // Board zone has lost focus; nothing in the React tree carries
       // `data-focused` at this point (the window-root layer does not

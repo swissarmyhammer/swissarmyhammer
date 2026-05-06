@@ -64,7 +64,13 @@ fn entry(
 /// now, no `kind` discriminator is carried on the wire.
 #[test]
 fn register_entry_serializes_with_flat_shape() {
-    let entry = entry("/L/k", "k", "/L", Some("/L/parent"), rect(1.0, 2.0, 3.0, 4.0));
+    let entry = entry(
+        "/L/k",
+        "k",
+        "/L",
+        Some("/L/parent"),
+        rect(1.0, 2.0, 3.0, 4.0),
+    );
     let json = serde_json::to_value(&entry).expect("serialize");
     assert_eq!(json["fq"], "/L/k");
     assert_eq!(json["segment"], "k");
@@ -120,7 +126,8 @@ fn apply_batch_registers_each_entry() {
 
     for fq in ["/L/a", "/L/b", "/L/c"] {
         assert!(
-            reg.find_by_fq(&FullyQualifiedMoniker::from_string(fq)).is_some(),
+            reg.find_by_fq(&FullyQualifiedMoniker::from_string(fq))
+                .is_some(),
             "expected {fq} to be registered after apply_batch"
         );
     }

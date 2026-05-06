@@ -152,7 +152,10 @@ export function columnOfTaskMoniker(moniker: string): string | null {
  * task fixture row. The test expects every card to register with
  * `data-moniker="task:<id>"`, so the moniker field carries that prefix.
  */
-function makeTaskBag(t: { id: string; column: string; title: string }, ord: number): EntityBag {
+function makeTaskBag(
+  t: { id: string; column: string; title: string },
+  ord: number,
+): EntityBag {
   return {
     entity_type: "task",
     id: t.id,
@@ -166,7 +169,11 @@ function makeTaskBag(t: { id: string; column: string; title: string }, ord: numb
 }
 
 /** Build a column entity bag. */
-function makeColumnBag(c: { id: string; name: string; order: number }): EntityBag {
+function makeColumnBag(c: {
+  id: string;
+  name: string;
+  order: number;
+}): EntityBag {
   return {
     entity_type: "column",
     id: c.id,
@@ -379,6 +386,8 @@ export const E2E_SCHEMAS: Record<string, EntitySchema> = {
 };
 
 /** Schema response for a given entity type. */
-export function getEntitySchemaResponse(entityType: string): EntitySchema | null {
+export function getEntitySchemaResponse(
+  entityType: string,
+): EntitySchema | null {
   return E2E_SCHEMAS[entityType] ?? null;
 }

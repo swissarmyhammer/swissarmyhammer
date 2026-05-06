@@ -7,7 +7,9 @@ type ListenCallback = (event: { payload: unknown }) => void;
 const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
   const listeners = new Map<string, ListenCallback[]>();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mockInvoke = vi.fn(async (..._args: any[]): Promise<unknown> => undefined);
+  const mockInvoke = vi.fn(
+    async (..._args: any[]): Promise<unknown> => undefined,
+  );
   const mockListen = vi.fn(
     (eventName: string, cb: ListenCallback): Promise<() => void> => {
       const cbs = listeners.get(eventName) ?? [];
@@ -253,9 +255,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusLayer } from "@/components/focus-layer";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
@@ -286,7 +286,9 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
       <FocusLayer name={asSegment("window")}>
         <TooltipProvider>
           <SchemaProvider>
-            <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
+            <EntityStoreProvider
+              entities={{ task: [entity], tag: tagEntities }}
+            >
               <EntityFocusProvider>
                 <FieldUpdateProvider>
                   <UIStateProvider>

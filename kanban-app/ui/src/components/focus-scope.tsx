@@ -146,17 +146,22 @@ export interface FocusScopeOwnProps {
    * When false, suppresses both the visible `<FocusIndicator>` and the
    * entity-focus-driven `scrollIntoView` effect. Defaults to true.
    */
-  showFocusBar?: boolean;
+  showFocus?: boolean;
   /**
    * When false, suppresses click / right-click / double-click event
-   * handling. Independent of `showFocusBar`. Defaults to true.
+   * handling. Independent of `showFocus`. Defaults to true.
    */
   handleEvents?: boolean;
   /**
    * When false, omits the wrapping primitive — children render directly
-   * under the CommandScopeContext + FocusScopeContext providers.
+   * under the CommandScopeContext + FocusScopeContext +
+   * FullyQualifiedMonikerContext providers, but no `<div>` is emitted
+   * (so no rect is registered with the kernel either).
    *
    * Use for table rows where a wrapping div breaks HTML structure.
+   * Descendant scopes still compose their FQMs against this scope's
+   * FQM, matching the legacy `FocusZone(renderContainer=false)`
+   * behaviour data-table.tsx and other table-row callers depend on.
    */
   renderContainer?: boolean;
   /** Optional ref to the rendered `<div>` element. */
@@ -186,7 +191,7 @@ export function FocusScope({
   navOverride,
   commands = EMPTY_COMMANDS,
   children,
-  showFocusBar = true,
+  showFocus = true,
   handleEvents = true,
   renderContainer = true,
   ref: externalRef,
@@ -219,7 +224,7 @@ export function FocusScope({
     return { commands: map, parent, moniker: segment };
   }, [commands, parent, segment]);
 
-  const isDirectFocus = showFocusBar && isFocused;
+  const isDirectFocus = showFocus && isFocused;
 
   // Register the scope in the entity-focus registry.
   useEntityScopeRegistration(fq, scope);
@@ -235,13 +240,24 @@ export function FocusScope({
     <FocusScopeContext.Provider value={fq}>
       <CommandScopeContext.Provider value={scope}>
         {!renderContainer ? (
-          children
+          // No rendered container — but descendant scopes still need to
+          // compose their FQMs against this scope. Publish the FQM
+          // through context the same way the rendered branch does
+          // (where `SpatialFocusScopeBody` wraps children in
+          // `<FullyQualifiedMonikerContext.Provider value={fq}>`). Without
+          // this, table-row callers using `renderContainer={false}` would
+          // see their inner cell FQs hang off the row's parent FQ
+          // instead of the row's own FQ — breaking the cell-FQ-prefix
+          // invariant the grid-view's row-extreme commands rely on.
+          <FullyQualifiedMonikerContext.Provider value={fq}>
+            {children}
+          </FullyQualifiedMonikerContext.Provider>
         ) : (
           <SpatialFocusScopeBody
             fq={fq}
             segment={segment}
             navOverride={navOverride}
-            showFocusBar={showFocusBar}
+            showFocus={showFocus}
             isDirectFocus={isDirectFocus}
             handleEvents={handleEvents}
             parentZone={parentZone}
@@ -268,7 +284,7 @@ interface SpatialFocusScopeBodyProps extends Omit<
   fq: FullyQualifiedMoniker;
   segment: SegmentMoniker;
   navOverride?: FocusOverrides;
-  showFocusBar: boolean;
+  showFocus: boolean;
   isDirectFocus: boolean;
   handleEvents: boolean;
   /**
@@ -294,7 +310,7 @@ function SpatialFocusScopeBody({
   fq,
   segment,
   navOverride,
-  showFocusBar,
+  showFocus,
   isDirectFocus,
   handleEvents,
   parentZone,
@@ -450,7 +466,7 @@ function SpatialFocusScopeBody({
         {...restWithoutClassName}
         className={mergedClassName}
       >
-        {showFocusBar && <FocusIndicator focused={focused} />}
+        {showFocus && <FocusIndicator focused={focused} />}
         {debugEnabled && (
           <FocusDebugOverlay kind="scope" label={segment} hostRef={ref} />
         )}

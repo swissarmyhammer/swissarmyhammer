@@ -93,10 +93,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
-import {
-  asSegment,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Schema + fixture
@@ -232,9 +229,7 @@ function ensureTestCardCss(): void {
  * registers via `spatial_register_scope`; this helper records the most
  * recent argument bag for the requested moniker.
  */
-function findRegisterRecord(
-  moniker: string,
-): Record<string, unknown> | null {
+function findRegisterRecord(moniker: string): Record<string, unknown> | null {
   for (let i = mockInvoke.mock.calls.length - 1; i >= 0; i--) {
     const c = mockInvoke.mock.calls[i];
     const cmd = c[0];

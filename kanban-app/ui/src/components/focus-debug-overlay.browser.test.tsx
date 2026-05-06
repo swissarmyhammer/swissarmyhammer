@@ -72,9 +72,7 @@ import { FocusDebugOverlay, type FocusDebugKind } from "./focus-debug-overlay";
 import { SpatialFocusProvider } from "@/lib/spatial-focus-context";
 import { FocusDebugProvider } from "@/lib/focus-debug-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  asSegment
-} from "@/types/spatial";
+import { asSegment } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers

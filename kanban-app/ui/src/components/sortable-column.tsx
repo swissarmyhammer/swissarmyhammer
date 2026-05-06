@@ -33,7 +33,18 @@ export function SortableColumn({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex flex-1 min-w-[14em] max-w-[60em] relative"
+      // `shrink-0` is load-bearing: without it, this flex item shrinks under the
+      // parent strip's pressure and the inner ColumnView (which itself carries
+      // `min-w-[24em] shrink-0`) overflows its slot, visually overlapping the
+      // next column. With `shrink-0` the strip's `overflow-x-auto` scroll
+      // container takes over once the columns no longer fit, exactly as the
+      // user expects.
+      //
+      // `min-w-[24em]` matches the inner ColumnView's minimum so the slot
+      // never reports a smaller width than its content. `max-w-[60em]` stays
+      // wider than the inner `max-w-[48em]` to leave headroom for the
+      // separator + grip + paddings.
+      className="flex flex-1 shrink-0 min-w-[24em] max-w-[60em] relative"
     >
       {showSeparator && <div className="w-px bg-border shrink-0 my-3" />}
       <div className="flex flex-col min-h-0 min-w-0 flex-1">

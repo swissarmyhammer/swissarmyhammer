@@ -74,39 +74,29 @@ describe("validateRect", () => {
   });
 
   it("flags negative height as an error", () => {
-    const result = validateRect(
-      "register_scope",
-      rect(0, 0, 40, -1),
-      100,
-      105,
-    );
+    const result = validateRect("register_scope", rect(0, 0, 40, -1), 100, 105);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toMatch(/height must be > 0/);
     expect(result.preLayoutTransient).toBe(false);
   });
 
-  it("treats zero-dim rect on register_scope as a pre-layout transient warning", () => {
+  it("treats zero-dim rect on register_scope as a pre-layout transient (no error, no warning)", () => {
     // On `register_scope`, a zero in either dimension is the structural
     // shape `getBoundingClientRect()` produces for `display: none`,
-    // just-mounted-but-not-yet-laid-out, and detached nodes. Surface
-    // as a warning, not an error, so the error channel stays clean.
-    const result = validateRect(
-      "register_scope",
-      rect(0, 0, 100, 0),
-      100,
-      105,
-    );
+    // just-mounted-but-not-yet-laid-out, and detached nodes. The
+    // validator no longer surfaces a warning for this case (it was
+    // de-noised in commit 8232b25cc); only the `preLayoutTransient`
+    // flag carries the signal so the caller can react if needed.
+    const result = validateRect("register_scope", rect(0, 0, 100, 0), 100, 105);
     expect(result.errors).toEqual([]);
-    expect(result.warnings.length).toBeGreaterThanOrEqual(1);
-    expect(result.warnings[0]).toMatch(/zero dimension/);
+    expect(result.warnings).toEqual([]);
     expect(result.preLayoutTransient).toBe(true);
   });
 
-  it("treats both-zero rect on register_scope as a pre-layout transient warning", () => {
+  it("treats both-zero rect on register_scope as a pre-layout transient (no error, no warning)", () => {
     const result = validateRect("register_scope", rect(0, 0, 0, 0), 100, 105);
     expect(result.errors).toEqual([]);
-    expect(result.warnings.length).toBeGreaterThanOrEqual(1);
-    expect(result.warnings[0]).toMatch(/zero dimension/);
+    expect(result.warnings).toEqual([]);
     expect(result.preLayoutTransient).toBe(true);
   });
 
@@ -322,57 +312,60 @@ describe("validateAndLogRect", () => {
     ).not.toThrow();
   });
 
-  it("logs the pre-layout-transient warning once per (op, fq), not on every re-register", () => {
+  it("does not log the pre-layout-transient case at all (de-noised in commit 8232b25cc)", () => {
     // A zero-dim rect on `register_scope` is the pre-layout shape. The
-    // first occurrence per (op, fq) is informative; later occurrences
-    // are noise — StrictMode double-mount, ResizeObserver fire-on-mount,
-    // and virtualizer placeholder→real-mount swaps repeatedly call
-    // through the validator with the same FQM during the registration →
-    // first-layout transition.
+    // production validator no longer emits a warning for it — the
+    // `preLayoutTransient` flag is the only signal. This test pins
+    // that the channel stays completely silent across repeated
+    // registrations of the same FQM (StrictMode double-mount,
+    // ResizeObserver fire-on-mount, virtualizer placeholder→real-mount
+    // swaps, etc.).
     const fq = asFq("/window/transient");
     for (let i = 0; i < 3; i++) {
-      validateAndLogRect(
+      const result = validateAndLogRect(
         "register_scope",
         fq,
         rect(0, 0, 100, 0),
         performance.now(),
         /* enabled */ true,
       );
+      expect(result.preLayoutTransient).toBe(true);
     }
-    expect(warnSpy.mock.calls.length).toBe(1);
-    expect(warnSpy.mock.calls[0]?.[1]).toContain("zero dimension");
-    // No errors emitted — this is the pre-layout transient path.
+    expect(warnSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("logs the pre-layout-transient warning per distinct (op, fq) pair", () => {
-    // The dedup key is `(op, fq)` so a different op tag or a different
-    // FQM is a fresh first occurrence. The validator's `RectValidationOp`
-    // union still recognises `register_zone` (a legacy alias preserved
-    // for callers that have not yet migrated); using it alongside
-    // `register_scope` exercises the (op, fq) compound key.
-    validateAndLogRect(
-      "register_scope",
-      asFq("/window/a"),
-      rect(0, 0, 0, 0),
-      performance.now(),
-      /* enabled */ true,
-    );
-    validateAndLogRect(
-      "register_zone",
-      asFq("/window/a"),
-      rect(0, 0, 0, 0),
-      performance.now(),
-      /* enabled */ true,
-    );
-    validateAndLogRect(
-      "register_scope",
-      asFq("/window/b"),
-      rect(0, 0, 0, 0),
-      performance.now(),
-      /* enabled */ true,
-    );
-    expect(warnSpy.mock.calls.length).toBe(3);
+  it("stays silent across distinct (op, fq) pre-layout-transient pairs as well", () => {
+    // The dedup key is `(op, fq)` for the zero-dim error path on
+    // `update_rect`. On registration ops, however, the warning was
+    // dropped entirely — distinct (op, fq) pairs still produce no
+    // warn output. The `preLayoutTransient` flag is what callers
+    // observe.
+    const results = [
+      validateAndLogRect(
+        "register_scope",
+        asFq("/window/a"),
+        rect(0, 0, 0, 0),
+        performance.now(),
+        /* enabled */ true,
+      ),
+      validateAndLogRect(
+        "register_zone",
+        asFq("/window/a"),
+        rect(0, 0, 0, 0),
+        performance.now(),
+        /* enabled */ true,
+      ),
+      validateAndLogRect(
+        "register_scope",
+        asFq("/window/b"),
+        rect(0, 0, 0, 0),
+        performance.now(),
+        /* enabled */ true,
+      ),
+    ];
+    for (const r of results) expect(r.preLayoutTransient).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("zero-dim rects on update_rect log to console.error once per (op, fq) (deduped)", () => {

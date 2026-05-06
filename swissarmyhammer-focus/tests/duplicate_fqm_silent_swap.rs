@@ -40,8 +40,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    Direction, FocusScope, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker,
-    SpatialRegistry,
+    Direction, FocusScope, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, SpatialRegistry,
 };
 use tracing::{
     field::{Field, Visit},

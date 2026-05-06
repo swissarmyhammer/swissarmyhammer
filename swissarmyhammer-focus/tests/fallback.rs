@@ -28,8 +28,8 @@
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FallbackResolution, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName,
-    Pixels, Rect, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    FallbackResolution, FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
+    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 // ---------------------------------------------------------------------------

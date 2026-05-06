@@ -25,10 +25,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { type ReactNode } from "react";
-import {
-  EntityFocusProvider,
-  useFocusActions,
-} from "./entity-focus-context";
+import { EntityFocusProvider, useFocusActions } from "./entity-focus-context";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),

@@ -398,11 +398,7 @@ impl SpatialState {
             let Some(lost) = registry.find_by_fq(lost_fq) else {
                 return FallbackResolution::NoFocus;
             };
-            (
-                lost.layer_fq.clone(),
-                lost.parent_zone.clone(),
-                lost.rect,
-            )
+            (lost.layer_fq.clone(), lost.parent_zone.clone(), lost.rect)
         };
 
         let Some(lost_window) = registry.layer(&lost_layer).map(|l| l.window_label.clone()) else {

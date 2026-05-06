@@ -21,7 +21,7 @@
  *      `BoardView`) registers with `parentZone === ui:perspective.fq`.
  *   3. A focus claim on the perspective zone flips `data-focused` for e2e
  *      selectors but does NOT mount `<FocusIndicator>` (because
- *      `showFocusBar={false}` — see the inline comment on the zone).
+ *      `showFocus={false}` — see the inline comment on the zone).
  *   4. Regression: no `ui:view` zone is ever registered, and no DOM node
  *      with `data-segment='ui:view'` is rendered.
  *
@@ -176,7 +176,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 
 // ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
 
   it("focus claim on the perspective zone flips data-focused but renders no indicator (test #2)", async () => {
     // The perspective zone is viewport-sized chrome — a focus bar around
-    // the entire body would be visual noise, so `showFocusBar={false}` is
+    // the entire body would be visual noise, so `showFocus={false}` is
     // applied at the zone (`perspective-container.tsx`). The
     // `data-focused` attribute must still flip so e2e tooling and the
     // umbrella card (`01KQ5PEHWT...`) verification protocol can observe
@@ -397,7 +397,8 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     // Pretend an inner board/grid leaf was focused first; we use a unique
     // key that the registry never minted so it doesn't accidentally match
     // any registered listener.
-    const phantomInnerKey = "ffffffff-ffff-4fff-8fff-ffffffffffff" as FullyQualifiedMoniker;
+    const phantomInnerKey =
+      "ffffffff-ffff-4fff-8fff-ffffffffffff" as FullyQualifiedMoniker;
     await fireFocusChanged({ next_fq: phantomInnerKey });
     expect(node.getAttribute("data-focused")).toBeNull();
 
@@ -434,10 +435,10 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
 
   it("the perspective zone also flips data-focused without an indicator", async () => {
     // Sister contract to test #2 — the surrounding `ui:perspective` zone
-    // is also viewport-sized chrome and uses `showFocusBar={false}`.
+    // is also viewport-sized chrome and uses `showFocus={false}`.
     // Pinning both halves keeps a regression that turns ONLY the view
     // zone's bar back on (and not the perspective's) from sneaking
-    // through under the umbrella card's "any zone with showFocusBar=false
+    // through under the umbrella card's "any zone with showFocus=false
     // has an inline comment" rule.
     const { container, queryByTestId, unmount } = renderViewStack();
     await flushSetup();
@@ -450,7 +451,9 @@ describe("PerspectiveView (ViewContainer + PerspectiveContainer) — browser spa
     ) as HTMLElement;
     expect(node.getAttribute("data-focused")).toBeNull();
 
-    await fireFocusChanged({ next_fq: perspectiveZone.fq as FullyQualifiedMoniker });
+    await fireFocusChanged({
+      next_fq: perspectiveZone.fq as FullyQualifiedMoniker,
+    });
 
     await waitFor(() => {
       expect(node.getAttribute("data-focused")).not.toBeNull();

@@ -91,7 +91,7 @@ export const EntityCard = memo(
     // Either way the card carries the entity-focus / command-scope /
     // context-menu wiring shared with every other entity surface.
     //
-    // `showFocusBar` defaults to true on `<FocusZone>`, which renders
+    // `showFocus` defaults to true on `<FocusZone>`, which renders
     // the visible focus indicator on the card itself when the user
     // focuses the card body. The inner `<FocusScope>` leaves and the
     // `<Field>` zones own their own indicators when those atoms are
@@ -272,7 +272,7 @@ function CardField({
   // `resolveFieldIconAndTip` (see `fields/field.tsx`), so the card no
   // longer needs to duplicate that logic.
   //
-  // `showFocusBar={true}` makes the field zone render a visible
+  // `showFocus={true}` makes the field zone render a visible
   // `<FocusIndicator>` when its `SpatialKey` becomes the focused key
   // for the window. Without this, a click on a single-value field
   // inside the card (title, status, plain text fields) would fire
@@ -291,7 +291,7 @@ function CardField({
       onEdit={onEdit}
       onDone={onDone}
       onCancel={onCancel}
-      showFocusBar
+      showFocus
       withIcon
     />
   );

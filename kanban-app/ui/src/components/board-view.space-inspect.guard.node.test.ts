@@ -81,9 +81,7 @@ function isProductionSource(path: string): boolean {
  */
 function stripJsComments(src: string): string {
   // Block comments: /* ... */ — keep newlines so line numbers line up.
-  let out = src.replace(/\/\*[\s\S]*?\*\//g, (m) =>
-    m.replace(/[^\n]/g, " "),
-  );
+  let out = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
   // Line comments: // ... to end of line.
   out = out.replace(/\/\/[^\n]*/g, (m) => m.replace(/./g, " "));
   return out;

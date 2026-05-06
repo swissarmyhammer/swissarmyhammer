@@ -13,7 +13,7 @@
  * The migration (covered by the same PerspectiveTabFocusable
  * `<FocusScope>` → `<FocusScope>` reshape as the FilterButton path):
  *   1. Promotes `PerspectiveTabFocusable` to `<FocusScope>` with
- *      `showFocusBar={false}`.
+ *      `showFocus={false}`.
  *   2. Adds `<Pressable asChild moniker="perspective_tab.group:{id}">`
  *      inside the existing `<PopoverTrigger asChild>` slot. Because
  *      Radix Slot composes inner-then-slot, Pressable's outer

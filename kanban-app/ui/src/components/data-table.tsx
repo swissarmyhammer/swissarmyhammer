@@ -395,14 +395,19 @@ function useTanstackColumns(columns: DataTableColumn[]) {
               mode="compact"
               editing={false}
               // The enclosing `grid_cell:R:K` `<FocusScope>` leaf is the
-              // cursor target — clicking it
-              // moves the cursor ring. Field's inner `<FocusZone>` would
-              // otherwise intercept the click via stopPropagation and
-              // claim focus on the field-zone moniker instead, so disable
-              // its event handling here. The zone still registers in the
-              // spatial graph (Option A in card
-              // `01KQ5QB6F4MTD35GBTARJH4JEW`) for command-scope and
-              // entity-focus chrome.
+              // cursor target. Field's inner `<FocusScope>` must NOT
+              // register in the spatial graph here: the kernel's
+              // scope-is-leaf invariant rejects nested `<FocusScope>`
+              // registrations, and an inner field scope would cause the
+              // outer cell scope to be dropped as `scope-not-leaf` —
+              // making the cell invisible to beam search and click-focus.
+              // `register={false}` suppresses the inner `<FocusScope>`;
+              // the `<Inspectable>` wrapper inside `<Field>` is preserved
+              // so double-click → field inspect still works. The
+              // `handleEvents={false}` is now structurally redundant
+              // (no inner scope to handle events) but kept as belt-and-
+              // suspenders for the prop's documented contract.
+              register={false}
               handleEvents={false}
             />
           );
@@ -640,10 +645,7 @@ const DataTableRow = memo(function DataTableRowImpl(props: DataTableRowProps) {
     // directly and attaches the resulting handler to its `<tr>`.
     // Both paths share the same hook, so Guard A continues to hold
     // (the inspect dispatch site is still `inspectable.tsx`).
-    <FocusScope
-      moniker={asSegment(entityMk)}
-      renderContainer={false}
-    >
+    <FocusScope moniker={asSegment(entityMk)} renderContainer={false}>
       <EntityRow
         entityMk={entityMk}
         isCursorRow={di === grid.cursor.row}
@@ -782,7 +784,11 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       editing={false}
       // See note in `useTanstackColumns` above — the enclosing
       // `grid_cell:R:K` `<FocusScope>` is the cursor target, so the
-      // Field's inner `<FocusZone>` must not steal clicks from it.
+      // Field's inner `<FocusScope>` must NOT register (it would
+      // violate the kernel's scope-is-leaf invariant and cause the
+      // outer cell scope to be dropped as `scope-not-leaf`). The
+      // `<Inspectable>` wrapper inside `<Field>` is preserved.
+      register={false}
       handleEvents={false}
     />
   );
@@ -797,10 +803,31 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
   // grid-cell focus visual, identical to every other `<FocusScope>` in the
   // app. The selection-range tint (`isSel && !isCursor`) is unrelated to
   // focus and stays.
-  const cellClasses = cn(
-    "px-3 py-1.5 align-middle max-w-[300px]",
-    ci === 0 && "pl-4",
+  //
+  // Class split — `tdClassName` vs `innerClassName`:
+  //
+  // The visible cell border is the `<td>`'s rect, but in the spatial path
+  // the focusable region is the `<FocusScope>`'s rendered `<div>` mounted
+  // *inside* that `<td>`. Putting padding on the `<td>` would shrink the
+  // focusable region inward by the padding amount, leaving a "dead zone"
+  // around the cell edge where left-clicks land on the `<td>` (visible
+  // cell) but miss the focusable. To make the focusable rect equal the
+  // visible cell rect, padding moves OFF the `<td>` and ONTO the
+  // focusable child (which is sized `block h-full w-full` to fill the
+  // `<td>` — see `GridCellFocusable`). The `<td>` keeps the structural /
+  // selection-tint chrome (`align-middle`, `max-w-[300px]`,
+  // `bg-primary/10`) that should still extend to the full cell box, and
+  // explicitly zeroes out `<TableCell>`'s default `p-2` so no padding
+  // sneaks back in. In the fallback path (tests without the spatial
+  // stack), `GridCellFocusable` merges the two halves back onto the
+  // `<td>` so behaviour is unchanged there.
+  const tdClassName = cn(
+    "p-0 align-middle max-w-[300px]",
     isSel && !isCursor && "bg-primary/10",
+  );
+  const innerClassName = cn(
+    "block h-full w-full px-3 py-1.5",
+    ci === 0 && "pl-4",
     // Strip cell padding during editing for editors that fill the entire cell.
     isEditing &&
       col.field.editor !== "color-palette" &&
@@ -814,7 +841,8 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       di={di}
       colKey={col.field.name}
       cursorRef={isCursor ? props.cursorRef : undefined}
-      className={cellClasses}
+      tdClassName={tdClassName}
+      innerClassName={innerClassName}
       cellCursorAttr={props.cellCursorAttr}
       onClick={() => props.handleCellClick(di, ci)}
       onDoubleClick={() => {
@@ -844,7 +872,25 @@ interface GridCellFocusableProps {
   di: number;
   colKey: string;
   cursorRef?: React.Ref<HTMLTableCellElement>;
-  className?: string;
+  /**
+   * Classes applied to the outer `<td>` — structural / chrome concerns
+   * that should extend to the full visible cell rect (alignment,
+   * max-width, selection background). MUST NOT include padding: in the
+   * spatial path, padding lives on the inner focusable child so the
+   * focusable rect equals the visible cell rect (no dead-zone around the
+   * cell edge). The default `<TableCell>` `p-2` is zeroed by the
+   * caller's `tdClassName` so no padding sneaks in.
+   */
+  tdClassName?: string;
+  /**
+   * Classes applied to the click-region wrapper that lives INSIDE the
+   * `<FocusScope>` in the spatial path (sized `block h-full w-full` so it
+   * fills the `<td>`, then padded with the caller's padding utilities).
+   * In the fallback path these classes are merged onto the `<td>`
+   * directly (the `block h-full w-full` is harmless on a `<td>`) so the
+   * fallback behaves exactly as a plain padded table cell.
+   */
+  innerClassName?: string;
   /** Value for the `data-cell-cursor` attribute, or `undefined` to omit. */
   cellCursorAttr?: string | undefined;
   onClick: () => void;
@@ -894,10 +940,28 @@ interface GridCellFocusableProps {
  *     enclosing `<FocusScope>`, so the click handlers attach directly to
  *     the `<TableCell>` and behave exactly as a plain table cell.
  *
+ * Click region — focusable rect equals visible cell rect:
+ *
+ *   In the spatial path, `<FocusScope>` mounts a `<div>` *inside* the
+ *   `<td>`, and `getBoundingClientRect()` on that `<div>` is what the
+ *   spatial-nav kernel registers as the cell's hit rect. Putting padding
+ *   on the `<td>` shrinks the inner `<div>` inward, leaving a "dead
+ *   zone" around the visible cell edge where left-clicks land on the
+ *   `<td>` (visible cell) but miss the focusable. To eliminate the dead
+ *   zone we size the `<FocusScope>`'s `<div>` `block h-full w-full` so
+ *   it fills the `<td>`, attach the inner click wrapper with the same
+ *   sizing plus the caller's padding (`innerClassName`), and zero out
+ *   the `<td>`'s padding via the caller's `tdClassName` (which sets
+ *   `p-0` to override `<TableCell>`'s default `p-2`). Net effect: the
+ *   focusable's `getBoundingClientRect()` matches the `<td>`'s rect, so
+ *   every click anywhere inside the visible cell border lands on the
+ *   focusable.
+ *
  * @param di - Zero-based data-row index.
  * @param colKey - Column field name (the moniker's column key).
  * @param cursorRef - Ref to attach for scroll-into-view.
- * @param className - CSS classes for the cell.
+ * @param tdClassName - Classes for the outer `<td>` (chrome / structural).
+ * @param innerClassName - Classes for the inner click region (padding / fill).
  * @param cellCursorAttr - Value for the `data-cell-cursor` attribute, or
  *                         `undefined` to omit.
  * @param onClick - Click handler — fires on left-click in both branches.
@@ -907,7 +971,8 @@ function GridCellFocusable({
   di,
   colKey,
   cursorRef,
-  className,
+  tdClassName,
+  innerClassName,
   cellCursorAttr,
   onClick,
   onDoubleClick,
@@ -932,10 +997,16 @@ function GridCellFocusable({
   const inSpatialStack = layerKey !== null && actions !== null;
 
   if (!inSpatialStack) {
+    // Fallback path: there is no inner focusable wrapper, so the `<td>`
+    // itself is the click target. Merge the two halves back onto it so
+    // the visible cell carries the padding (and any selection / chrome
+    // styling). The `block h-full w-full` from `innerClassName` is a
+    // no-op on a `<td>` and is left in for symmetry with the spatial
+    // branch.
     return (
       <TableCell
         ref={cursorRef}
-        className={className}
+        className={cn(tdClassName, innerClassName)}
         data-cell-cursor={cellCursorAttr}
         onClick={onClick}
         onDoubleClick={onDoubleClick}
@@ -949,14 +1020,24 @@ function GridCellFocusable({
   // they fire before `FocusScope.onClick` calls `e.stopPropagation()`. An
   // `onClick` on the outer `<TableCell>` would never see the event in
   // this branch — the leaf swallows it before it reaches the cell.
+  //
+  // Both the `<FocusScope>`'s rendered `<div>` and the inner click
+  // wrapper are sized `block h-full w-full` so the focusable (and the
+  // click region) fill the `<td>` exactly. The caller's padding lives on
+  // the inner wrapper via `innerClassName`, not on the `<td>`, so the
+  // focusable's `getBoundingClientRect()` equals the `<td>`'s rect.
   return (
     <TableCell
       ref={cursorRef}
-      className={className}
+      className={tdClassName}
       data-cell-cursor={cellCursorAttr}
     >
-      <FocusScope moniker={moniker}>
-        <div onClick={onClick} onDoubleClick={onDoubleClick}>
+      <FocusScope moniker={moniker} className="block h-full w-full">
+        <div
+          className={innerClassName}
+          onClick={onClick}
+          onDoubleClick={onDoubleClick}
+        >
           {children}
         </div>
       </FocusScope>
@@ -1095,17 +1176,29 @@ function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
 
   const moniker = useMemo(() => asSegment(rowLabelMoniker(di)), [di]);
 
-  const cellClassName = cn(
-    "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
+  // Class split mirrors `DataBodyCellImpl`: `tdClassName` is chrome that
+  // should extend to the full visible cell rect (background, border,
+  // width, cursor), `innerClassName` is the click region that lives
+  // INSIDE the `<FocusScope>` and is sized `block h-full w-full` so the
+  // focusable's `getBoundingClientRect()` equals the `<td>`'s rect (no
+  // dead zone around the cell edge). The `<td>`'s default `p-2` is
+  // explicitly zeroed via `p-0` in `tdClassName` so no padding sneaks
+  // back in. See `GridCellFocusable` for the full rationale.
+  const tdClassName = cn(
+    "w-10 p-0 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
     isCursorRow && "bg-muted text-foreground",
   );
+  const innerClassName = "block h-full w-full px-0 py-1.5";
 
   if (!inSpatialStack) {
+    // Fallback path: no inner focusable wrapper. Merge the chrome and
+    // padding back onto the `<td>` itself. The `block h-full w-full`
+    // utilities are a no-op on `<td>` and left in for symmetry.
     return (
       <TableCell
         data-testid="row-selector"
         data-active={isCursorRow ? "true" : "false"}
-        className={cellClassName}
+        className={cn(tdClassName, innerClassName)}
         style={{ width: 40 }}
         onClick={onClick}
       >
@@ -1119,15 +1212,23 @@ function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
   // `e.stopPropagation()`. An `onClick` on the outer `<TableCell>`
   // would never see the event in this branch — the leaf swallows it
   // before it reaches the cell. Same shape as {@link GridCellFocusable}.
+  //
+  // Both the `<FocusScope>`'s rendered `<div>` and the inner click
+  // wrapper are sized `block h-full w-full` so the focusable rect
+  // equals the visible cell rect — clicks anywhere in the cell border
+  // (including the top/bottom 6px of `py-1.5` padding above/below the
+  // row number) land on the focusable.
   return (
     <TableCell
       data-testid="row-selector"
       data-active={isCursorRow ? "true" : "false"}
-      className={cellClassName}
+      className={tdClassName}
       style={{ width: 40 }}
     >
-      <FocusScope moniker={moniker}>
-        <div onClick={onClick}>{di + 1}</div>
+      <FocusScope moniker={moniker} className="block h-full w-full">
+        <div className={innerClassName} onClick={onClick}>
+          {di + 1}
+        </div>
       </FocusScope>
     </TableCell>
   );

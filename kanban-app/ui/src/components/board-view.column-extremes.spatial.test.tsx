@@ -282,7 +282,9 @@ function spatialNavigateCalls(): Array<{
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+    .map(
+      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+    );
 }
 
 // ---------------------------------------------------------------------------

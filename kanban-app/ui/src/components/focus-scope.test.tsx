@@ -641,7 +641,7 @@ describe("FocusScope", () => {
     expect(probeGetScope!(scopeFq)).toBeNull();
   });
 
-  it("showFocusBar=false still fires context menu (handleEvents defaults true)", async () => {
+  it("showFocus=false still fires context menu (handleEvents defaults true)", async () => {
     mockListCommands([
       {
         id: "tag.inspect",
@@ -655,7 +655,7 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker={asSegment("tag:xyz")}
-        showFocusBar={false}
+        showFocus={false}
         commands={[
           {
             id: "tag.inspect",
@@ -681,7 +681,7 @@ describe("FocusScope", () => {
     });
   });
 
-  it("handleEvents=false suppresses context menu even with showFocusBar=true", async () => {
+  it("handleEvents=false suppresses context menu even with showFocus=true", async () => {
     mockListCommands([
       {
         id: "tag.inspect",
@@ -695,7 +695,7 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker={asSegment("tag:xyz")}
-        showFocusBar={true}
+        showFocus={true}
         handleEvents={false}
         commands={[
           {

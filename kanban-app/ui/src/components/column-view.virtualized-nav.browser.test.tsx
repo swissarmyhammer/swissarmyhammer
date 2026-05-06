@@ -358,9 +358,7 @@ function renderColumnStrip(opts: {
   actionsRef: { current: SpatialFocusActions | null };
 }) {
   const { mountedColumns, tasksByColumn, totalStripWidthPx, actionsRef } = opts;
-  const allTasks = mountedColumns.flatMap(
-    (c) => tasksByColumn.get(c.id) ?? [],
-  );
+  const allTasks = mountedColumns.flatMap((c) => tasksByColumn.get(c.id) ?? []);
   return render(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>

@@ -108,7 +108,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity } from "@/types/kanban";
 
@@ -242,10 +242,15 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Filter `spatial_navigate` calls. */
-function spatialNavigateCalls(): Array<{ focusedFq: FullyQualifiedMoniker; direction: string }> {
+function spatialNavigateCalls(): Array<{
+  focusedFq: FullyQualifiedMoniker;
+  direction: string;
+}> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map((c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string });
+    .map(
+      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
+    );
 }
 
 /** Filter `spatial_update_rect` calls. */
@@ -359,10 +364,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     const tagsZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.tags",
     );
-    expect(
-      titleZone,
-      "title field zone must register",
-    ).toBeTruthy();
+    expect(titleZone, "title field zone must register").toBeTruthy();
     expect(tagsZone, "tags field zone must register").toBeTruthy();
 
     // Seed focus on the first (title) field zone so `nav.down`'s
@@ -522,7 +524,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     const scroller = container.querySelector(
       '[data-testid="scroller"]',
     ) as HTMLElement | null;
-    expect(scroller, "test harness must mount the scroller wrapper").not.toBeNull();
+    expect(
+      scroller,
+      "test harness must mount the scroller wrapper",
+    ).not.toBeNull();
 
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
@@ -539,9 +544,7 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     ).toBeGreaterThan(0);
     // At least one of the update calls must target the title zone's
     // key — the listener fires for every registered descendant.
-    const titleUpdateCall = updateCalls.find(
-      (c) => c.fq === titleZone!.fq,
-    );
+    const titleUpdateCall = updateCalls.find((c) => c.fq === titleZone!.fq);
     expect(
       titleUpdateCall,
       "rect-on-scroll must include the focused (title) field zone",

@@ -101,7 +101,7 @@ import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import {
   asSegment,
   fqLastSegment,
-  type FullyQualifiedMoniker
+  type FullyQualifiedMoniker,
 } from "@/types/spatial";
 import { installKernelSimulator } from "@/test-helpers/kernel-simulator";
 
@@ -242,9 +242,7 @@ const WINDOW_LAYER_NAME = asSegment("window");
 function FocusedMonikerProbe() {
   const { focusedFq } = useEntityFocus();
   const segment = focusedFq ? fqLastSegment(focusedFq) : null;
-  return (
-    <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>
-  );
+  return <span data-testid="focused-moniker-probe">{segment ?? "null"}</span>;
 }
 
 function renderInspectorChain() {

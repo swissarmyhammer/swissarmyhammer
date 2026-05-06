@@ -232,13 +232,13 @@ describe("DataTable grouping sync", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-          <DataTable
-            columns={COLUMNS}
-            rows={ENTITIES}
-            grid={makeGrid()}
-            showRowSelector={true}
-            grouping={["status"]}
-          />
+              <DataTable
+                columns={COLUMNS}
+                rows={ENTITIES}
+                grid={makeGrid()}
+                showRowSelector={true}
+                grouping={["status"]}
+              />
             </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
@@ -253,13 +253,13 @@ describe("DataTable grouping sync", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-          <DataTable
-            columns={COLUMNS}
-            rows={ENTITIES}
-            grid={makeGrid()}
-            showRowSelector={true}
-            grouping={undefined}
-          />
+              <DataTable
+                columns={COLUMNS}
+                rows={ENTITIES}
+                grid={makeGrid()}
+                showRowSelector={true}
+                grouping={undefined}
+              />
             </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
@@ -287,13 +287,13 @@ describe("DataTable container context menu", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-          <DataTable
-            columns={COLUMNS}
-            rows={ENTITIES}
-            grid={makeGrid()}
-            showRowSelector={true}
-            onContainerContextMenu={handler}
-          />
+              <DataTable
+                columns={COLUMNS}
+                rows={ENTITIES}
+                grid={makeGrid()}
+                showRowSelector={true}
+                onContainerContextMenu={handler}
+              />
             </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
@@ -327,13 +327,13 @@ describe("DataTable container context menu", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-          <DataTable
-            columns={COLUMNS}
-            rows={ENTITIES}
-            grid={makeGrid()}
-            showRowSelector={true}
-            onContainerContextMenu={containerHandler}
-          />
+              <DataTable
+                columns={COLUMNS}
+                rows={ENTITIES}
+                grid={makeGrid()}
+                showRowSelector={true}
+                onContainerContextMenu={containerHandler}
+              />
             </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,
@@ -368,13 +368,13 @@ describe("DataTable container context menu", () => {
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
-          <DataTable
-            columns={COLUMNS}
-            rows={ENTITIES}
-            grid={makeGrid()}
-            showRowSelector={true}
-            onContainerContextMenu={containerHandler}
-          />
+              <DataTable
+                columns={COLUMNS}
+                rows={ENTITIES}
+                grid={makeGrid()}
+                showRowSelector={true}
+                onContainerContextMenu={containerHandler}
+              />
             </EntityFocusProvider>
           </FocusLayer>
         </SpatialFocusProvider>,

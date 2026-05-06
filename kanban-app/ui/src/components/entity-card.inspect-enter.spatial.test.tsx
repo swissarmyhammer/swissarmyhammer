@@ -348,7 +348,10 @@ describe("EntityCard inspect button — Enter activates ui.inspect via Pressable
     const inspectButton = container.querySelector(
       'button[aria-label="Inspect"]',
     ) as HTMLButtonElement | null;
-    expect(inspectButton, "(i) button must render with aria-label").toBeTruthy();
+    expect(
+      inspectButton,
+      "(i) button must render with aria-label",
+    ).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(inspectButton!);

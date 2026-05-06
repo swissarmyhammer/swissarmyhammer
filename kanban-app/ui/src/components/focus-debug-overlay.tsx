@@ -125,23 +125,21 @@ export interface FocusDebugOverlayProps {
  *   the top-left corner. The same hue family as the border so the
  *   handle reads as "the affordance for *this* primitive" at a glance.
  */
-const KIND_CLASSES: Record<
-  FocusDebugKind,
-  { border: string; handle: string }
-> = {
-  layer: {
-    border: "border-red-500/70",
-    handle: "bg-red-500/70 ring-1 ring-red-500",
-  },
-  zone: {
-    border: "border-blue-500/70",
-    handle: "bg-blue-500/70 ring-1 ring-blue-500",
-  },
-  scope: {
-    border: "border-emerald-500/70",
-    handle: "bg-emerald-500/70 ring-1 ring-emerald-500",
-  },
-};
+const KIND_CLASSES: Record<FocusDebugKind, { border: string; handle: string }> =
+  {
+    layer: {
+      border: "border-red-500/70",
+      handle: "bg-red-500/70 ring-1 ring-red-500",
+    },
+    zone: {
+      border: "border-blue-500/70",
+      handle: "bg-blue-500/70 ring-1 ring-blue-500",
+    },
+    scope: {
+      border: "border-emerald-500/70",
+      handle: "bg-emerald-500/70 ring-1 ring-emerald-500",
+    },
+  };
 
 // ---------------------------------------------------------------------------
 // Inline-style fallbacks paired with their Tailwind class chains

@@ -158,7 +158,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
-  type WindowLabel
+  type WindowLabel,
 } from "@/types/spatial";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
@@ -473,7 +473,11 @@ function renderCard(entity: Entity = makeTask()) {
           <TooltipProvider delayDuration={100}>
             <SchemaProvider>
               <EntityStoreProvider
-                entities={{ task: [entity], tag: makeTags(), actor: makeActors() }}
+                entities={{
+                  task: [entity],
+                  tag: makeTags(),
+                  actor: makeActors(),
+                }}
               >
                 <EntityFocusProvider>
                   <FieldUpdateProvider>
@@ -829,7 +833,7 @@ describe("EntityCard — browser spatial behaviour", () => {
     it("focus claim on the title field mounts a visible FocusIndicator on the title", async () => {
       // Pins the user-reported regression: clicks on the title fired
       // `spatial_focus` but no indicator appeared. The fix passes
-      // `showFocusBar={true}` from `<CardField>` to `<Field>`, so the
+      // `showFocus={true}` from `<CardField>` to `<Field>`, so the
       // inner field zone now renders an indicator when its key is the
       // focused key for the window.
       const { container, queryByTestId, unmount } = renderCard();
@@ -877,7 +881,8 @@ describe("EntityCard — browser spatial behaviour", () => {
 
       // One `<FocusScope>` leaf per pill, with moniker `tag:{slug}`.
       const tagPillScopes = registerScopeArgs().filter(
-        (a) => typeof a.segment === "string" && /^tag:/.test(a.segment as string),
+        (a) =>
+          typeof a.segment === "string" && /^tag:/.test(a.segment as string),
       );
       const monikers = tagPillScopes.map((a) => a.segment as string).sort();
       expect(monikers).toEqual(["tag:bug", "tag:ui"]);
@@ -907,9 +912,7 @@ describe("EntityCard — browser spatial behaviour", () => {
       const tagsZone = registerScopeArgs().find(
         (a) => a.segment === "field:task:task-1.tags",
       )!;
-      const bugTag = registerScopeArgs().find(
-        (a) => a.segment === "tag:bug",
-      )!;
+      const bugTag = registerScopeArgs().find((a) => a.segment === "tag:bug")!;
 
       mockInvoke.mockClear();
       const bugNode = container.querySelector(
@@ -936,19 +939,17 @@ describe("EntityCard — browser spatial behaviour", () => {
       // SingleMention / FocusScope).
       //
       // Pre-fix, `MentionView`'s list-mode renderer hard-suppressed
-      // `showFocusBar={false}` for compact-mode pills inside cards.
+      // `showFocus={false}` for compact-mode pills inside cards.
       // The kernel emitted `focus-changed` correctly but no indicator
-      // mounted because the pill's `<FocusScope>` had `showFocusBar`
+      // mounted because the pill's `<FocusScope>` had `showFocus`
       // off. Post-fix (sibling card 01KNQY0P9J9...), MentionView passes
-      // `showFocusBar` through unchanged, so each pill defaults to
+      // `showFocus` through unchanged, so each pill defaults to
       // `<FocusScope>`'s default of `true` and the indicator mounts on
       // claim.
       const { container, queryByTestId, unmount } = renderCard();
       await flushSetup();
 
-      const bugTag = registerScopeArgs().find(
-        (a) => a.segment === "tag:bug",
-      )!;
+      const bugTag = registerScopeArgs().find((a) => a.segment === "tag:bug")!;
 
       const bugNode = container.querySelector(
         `[data-segment='tag:bug']`,
@@ -1045,9 +1046,9 @@ describe("EntityCard — browser spatial behaviour", () => {
       //
       // The fix lives in `mention-view.tsx` (sibling card 01KNQY0P9J9...,
       // landed before this test) — `MentionViewList` no longer
-      // hard-suppresses `showFocusBar` in compact mode. With that fix in
+      // hard-suppresses `showFocus` in compact mode. With that fix in
       // place, the assignee pill's `<FocusScope>` defaults to
-      // `showFocusBar={true}` and a `<FocusIndicator>` mounts inside the
+      // `showFocus={true}` and a `<FocusIndicator>` mounts inside the
       // pill when its key becomes the focused key for the window. This
       // test exercises the full chain end-to-end so any future
       // regression in mention-view, the badge-list display, or the

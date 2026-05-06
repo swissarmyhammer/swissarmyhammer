@@ -128,8 +128,8 @@ fn drill_out_panel_with_no_inspector_layer_does_not_collapse_to_window() {
     use std::collections::HashMap;
 
     use swissarmyhammer_focus::{
-        FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect,
-        SegmentMoniker, WindowLabel,
+        FocusLayer, FocusScope, FullyQualifiedMoniker, LayerName, Pixels, Rect, SegmentMoniker,
+        WindowLabel,
     };
 
     let mut reg = SpatialRegistry::new();

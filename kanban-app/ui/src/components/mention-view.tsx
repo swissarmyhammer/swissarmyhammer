@@ -71,14 +71,14 @@ export interface MentionViewProps {
    * redundant noise). Both compact and full modes honour this prop the
    * same way — there is no implicit per-mode override.
    */
-  showFocusBar?: boolean;
+  showFocus?: boolean;
   /** Extra commands (e.g. task.untag) added to the context menu. */
   extraCommands?: CommandDef[];
   /**
    * Rendering mode — informational only at this layer. Spatial-nav
    * keyboard navigation between pills is driven by the Rust beam-search
    * graph (rule 1 in-zone candidates) regardless of this prop, and the
-   * focus bar is no longer gated on mode (see `showFocusBar` above).
+   * focus bar is no longer gated on mode (see `showFocus` above).
    *
    * Retained on the props surface so callers can still thread their
    * mode through (`badge-list-display` does), and so future
@@ -235,7 +235,7 @@ interface SingleMentionProps {
   extensions: Extension[];
   className?: string;
   scopeMoniker: string;
-  showFocusBar?: boolean;
+  showFocus?: boolean;
   extraCommands?: CommandDef[];
 }
 
@@ -245,7 +245,7 @@ function SingleMention({
   extensions,
   className,
   scopeMoniker,
-  showFocusBar,
+  showFocus,
   extraCommands,
 }: SingleMentionProps) {
   const doc = `${resolved.prefix}${resolved.slug}`;
@@ -265,7 +265,7 @@ function SingleMention({
         moniker={asSegment(scopeMoniker)}
         commands={extraCommands}
         className="inline"
-        showFocusBar={showFocusBar}
+        showFocus={showFocus}
       >
         <TextViewer text={doc} extensions={extensions} className={className} />
       </FocusScope>
@@ -337,7 +337,7 @@ function MentionViewSingle({
       extensions={extensions}
       className={props.className}
       scopeMoniker={scopeMoniker}
-      showFocusBar={props.showFocusBar}
+      showFocus={props.showFocus}
       extraCommands={props.extraCommands}
     />
   );
@@ -355,13 +355,13 @@ function MentionViewList({
   pillMonikers: string[];
   props: MentionViewProps;
 }) {
-  // Pass `props.showFocusBar` through unchanged for both compact and full
+  // Pass `props.showFocus` through unchanged for both compact and full
   // modes. An earlier revision hard-suppressed the focus bar in compact
   // mode here, but that broke the contract that every leaf in the spatial
   // graph (including a card-body pill) is a focusable item with a visible
   // indicator. Callers that genuinely need suppression — e.g. a context
   // where a parent zone already provides the visual cue — pass
-  // `showFocusBar={false}` explicitly. `<FocusScope>`'s default of `true`
+  // `showFocus={false}` explicitly. `<FocusScope>`'s default of `true`
   // covers the common case without per-call-site boilerplate.
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -372,7 +372,7 @@ function MentionViewList({
           extensions={extensions}
           className={props.className}
           scopeMoniker={pillMonikers[i]}
-          showFocusBar={props.showFocusBar}
+          showFocus={props.showFocus}
           extraCommands={props.extraCommands}
         />
       ))}
