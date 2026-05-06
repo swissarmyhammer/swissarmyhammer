@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: e080
-project: keyboard-navigation
+project: spatial-nav
 title: Add enumerateScopesInLayer() and layerFqOf() to SpatialFocusProvider
 ---
 ## What

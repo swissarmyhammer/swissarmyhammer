@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: df80
-project: keyboard-navigation
+project: spatial-nav
 title: Disable focus-debug overlays in production
 ---
 ## What

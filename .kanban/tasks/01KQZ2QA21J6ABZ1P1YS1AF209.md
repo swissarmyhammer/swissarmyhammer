@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: e480
-project: keyboard-navigation
+project: spatial-nav
 title: Compose builtin commands at the app layer via a macro
 ---
 ## What

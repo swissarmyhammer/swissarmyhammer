@@ -16,6 +16,8 @@ This skill is an **orchestrator**. It does not pick tasks, write code, or run te
 
 The loop drives the full pipeline: `todo → doing → review → done`. `/implement` lands tasks in the `review` column (not `done`); `/review` drives them from `review` to `done` (clean) or back to `review` with fresh findings for another implement pass.
 
+**Sequential only.** This skill never spawns parallel agents. Tasks are processed one at a time, in order. Parallel execution has caused lost work (stashing, reverting, races on shared trees) and is forbidden here.
+
 ## Invocation
 
 `/finish` has two modes selected by the argument:
@@ -23,10 +25,10 @@ The loop drives the full pipeline: `todo → doing → review → done`. `/imple
 | Invocation | Mode | Meaning |
 |------------|------|---------|
 | `/finish <task-id>` (26-char ULID) | **single-task** | Drive exactly that task to done. Do NOT call `next task`. |
-| `/finish` | **scoped-batch** (no scope) | Every ready task on the board. |
-| `/finish #<tag>` (e.g. `/finish #bug`) | **scoped-batch** | Tasks matching that tag. |
-| `/finish @<user>` | **scoped-batch** | Tasks assigned to that user. |
-| `/finish $<project-slug>` (e.g. `/finish $auth-migration`) | **scoped-batch** | Tasks in that project. |
+| `/finish` | **scoped-batch** (no scope) | Every ready task on the board, one at a time. |
+| `/finish #<tag>` (e.g. `/finish #bug`) | **scoped-batch** | Tasks matching that tag, one at a time. |
+| `/finish @<user>` | **scoped-batch** | Tasks assigned to that user, one at a time. |
+| `/finish $<project-slug>` (e.g. `/finish $auth-migration`) | **scoped-batch** | Tasks in that project, one at a time. |
 | `/finish <filter-expression>` (e.g. `/finish "#bug && @alice"`) | **scoped-batch** | Any filter DSL expression — applied to every `list tasks` call. |
 
 Argument detection:
@@ -78,42 +80,28 @@ Pin `<TASK_ID>` (the argument) for the entire loop — never call `next task`, n
 
 ### Scoped-batch mode
 
-1. **Query ready todo tasks in scope**: `kanban` `op: "list tasks"`, `column: "todo"`, with a `filter` combining `#READY` and the scope:
+Process tasks **one at a time, sequentially**. Never spawn more than one implement or review at a time. Never use parallel `Agent` calls in this skill.
+
+1. **Pick the next ready todo task in scope**: `kanban` `op: "list tasks"`, `column: "todo"`, with a `filter` combining `#READY` and the scope:
    - No scope → `filter: "#READY"`
    - Scope present → `filter: "#READY && (<SCOPE_FILTER>)"`
 
-   Tasks in `doing` are already being worked on; tasks in `review` belong to step 4.
+   Take the first task from the result. If the result is empty, skip ahead to step 5.
 
-2. **Implement the batch**: Spawn parallel `Agent` subagents, one per task. Each agent runs `/implement <task-id>` for a specific task. Send all Agent tool calls in a **single message** so they run concurrently. `/implement` will move each task through `doing` into `review` when it finishes — it will not move anything to `done`.
+2. **Drive that one task through implement → test → review**, exactly like single-task mode:
+   - `/implement <task-id>` (pinned to that id — never `next task`)
+   - `/test`; if failures, re-run `/implement <task-id>` to address them
+   - `/review <task-id>`; if findings, re-run `/implement <task-id>` to work through the checklist, then `/test`, then `/review <task-id>` again
+   - Apply the same 3-iteration guardrail as single-task mode: if the same finding recurs 3 times, mark the task stuck and move on
+   - Stop only when the task is in `done` (or marked stuck)
 
-3. **Run `/test`** — after each implement batch completes, verify all tests pass.
+3. **Verify**: `kanban` `op: "get task"`, `id: "<task-id>"`. Confirm `column: "done"` (or recorded as stuck).
 
-4. **Query the review column (scoped)**: `kanban` `op: "list tasks"`, `column: "review"`, with the same `<SCOPE_FILTER>` (or no filter if none).
+4. **Loop**: return to step 1 to pick the next ready todo task.
 
-   Spawn parallel `Agent` subagents, one per task, each running `/review <task-id>`. Send them in a single message. Each `/review` agent either:
-   - moves its task to `done` (clean: no new findings and any prior checklist items all checked), or
-   - appends a fresh dated `## Review Findings` checklist to the task description and leaves it in `review`.
+5. **Drain the review column (scoped, sequentially)**: `kanban` `op: "list tasks"`, `column: "review"`, with the same `<SCOPE_FILTER>` (or no filter if none). For each task in the result, **one at a time**, run `/review <task-id>`. If clean, it moves to `done`. If findings, run `/implement <task-id>` to address the checklist, then `/test`, then `/review <task-id>` again. Repeat until that task lands in `done` (or is marked stuck), then move to the next.
 
-5. **Handle review-column tasks with unresolved findings**: after step 4, any task still in the scoped `review` set has a fresh `## Review Findings` checklist with unchecked `- [ ]` items. Dispatch parallel `/implement <task-id>` agents on each such task — `/implement` will read the description, work through the unchecked checklist items, flip them to `- [x]`, and move the task back to `review` on completion. Run `/test`, then return to step 4 to re-review.
-
-6. **Loop**: return to step 1. Continue until both queries (ready todo in scope AND review tasks in scope) return empty.
-
-7. **Stop condition**: when both scoped queries are empty, `clear ralph` and report. **Tasks outside the scope are deliberately ignored** — the loop does not touch them even if they are ready.
-
-### Parallel Agent Prompt Template (scoped-batch only)
-
-When spawning parallel agents, use this prompt pattern:
-
-```
-Run `/implement [TASK-ID]` on kanban task [TASK-ID]: [TASK-TITLE]
-
-The explicit task id form pins `/implement` to this specific task — it will not call `next task`.
-`/implement` will move the task through doing → review. Do NOT let it use `complete task`.
-
-Task ID: [TASK-ID]
-```
-
-Each agent must target a specific task by id. Do NOT let parallel agents call `next task` — they will race and pick up the same task.
+6. **Stop condition**: when both scoped queries (ready todo in scope AND review tasks in scope) return empty, `clear ralph` and report. **Tasks outside the scope are deliberately ignored** — the loop does not touch them even if they are ready.
 
 ## Examples
 
@@ -133,37 +121,36 @@ Actions:
 
 Result: Single task driven from whatever starting column to `done`. Ralph kept the loop alive between steps; the guardrail would have stopped it if the same finding had recurred 3 times.
 
-### Example 2: scoped-batch mode — finish all ready bugs
+### Example 2: scoped-batch mode — finish all ready bugs sequentially
 
 User says: `/finish #bug`
 
 Actions:
 1. Argument is not a ULID → scoped-batch mode with `<SCOPE_FILTER> = #bug`. Set ralph: `{"op": "set ralph", "instruction": "Finish all ready kanban tasks in scope until the scope is clear"}`.
-2. Query ready todo tasks in scope: `{"op": "list tasks", "column": "todo", "filter": "#READY && (#bug)"}` → returns 3 ready bug tasks.
-3. Spawn 3 parallel `Agent` subagents in a single message, one per task, each running `/implement <task-id>` pinned to its specific task id (never `next task` — would race).
-4. Run `/test` after the batch completes — all green.
-5. Query review-column tasks in scope: `{"op": "list tasks", "column": "review", "filter": "#bug"}`. Spawn parallel `/review <task-id>` agents in a single message. Two move to `done`; one gets fresh findings appended and stays in `review`.
-6. Dispatch `/implement` on the one remaining task to work through its findings checklist, then `/test`, then re-review.
-7. Loop back to step 2 until both scoped queries return empty.
-8. `{"op": "clear ralph"}` and report: 3 tasks driven to done, parallel counts, any stuck tasks. Tasks outside `#bug` are deliberately untouched.
+2. Query ready todo tasks in scope: `{"op": "list tasks", "column": "todo", "filter": "#READY && (#bug)"}` → returns 3 ready bug tasks. Take the first.
+3. Drive that one task through `/implement <task-id>` → `/test` → `/review <task-id>`. If review returns findings, re-run `/implement <task-id>` to work the checklist, then `/test`, then `/review <task-id>` again. Loop on this single task until it reaches `done` (or hits the 3-iteration stuck guardrail).
+4. Re-query the ready todo list in scope. Take the next task. Repeat step 3. Continue one task at a time until the ready todo list in scope is empty.
+5. Drain the review column in scope: `{"op": "list tasks", "column": "review", "filter": "#bug"}`. For each task, sequentially, run `/review <task-id>`; if findings, run `/implement <task-id>` then `/test` then `/review <task-id>` again until that one task lands in `done`. Then move to the next review task.
+6. When both scoped queries return empty, `{"op": "clear ralph"}` and report: 3 tasks driven to done, any stuck tasks. Tasks outside `#bug` are deliberately untouched.
 
-Result: Every ready bug on the board reaches `done` through the full implement → test → review pipeline, with max 4 concurrent agents, and the scope filter is respected on every query.
+Result: Every ready bug on the board reaches `done` through the full implement → test → review pipeline, processed strictly one at a time, with the scope filter respected on every query.
 
 ## Constraints
 
 ### Delegation
 
-- Use `/implement` for each task (sequential in single-task mode, parallel via `Agent` in scoped-batch mode). Each owns implementation and moving the task into `review`.
-- Use `/review` after each implement batch to drive tasks from `review` to `done` (or back for another pass with fresh findings).
-- Use `/test` after each implement batch to verify all tests pass.
+- Use `/implement` for each task. Each owns implementation and moving the task into `review`.
+- Use `/review` after each implement to drive the task from `review` to `done` (or back for another pass with fresh findings).
+- Use `/test` after each implement to verify all tests pass.
 - Do not pick tasks, write code, run tests, or review code yourself.
-- If an agent reports it is stuck on a task, move on — do not try to fix it yourself. In single-task mode, engage the guardrail (step 6) instead of looping forever.
+- If an agent reports it is stuck on a task, engage the guardrail (3-iteration rule) and move on — do not try to fix it yourself.
 
-### Parallel Safety (scoped-batch only)
+### No parallel execution
 
-- **Max 4 concurrent agents.** Folks are still using their computers.
-- **Do NOT create additional worktrees.** Spawning agents with `isolation: "worktree"` causes changes to be lost — agents write to isolated copies that are never merged back. All agents must work directly in the current working tree.
-- **If a parallel agent fails**, continue with the others. Report the failure at the end.
+- **Never** spawn parallel `Agent` calls from this skill.
+- **Never** issue more than one `/implement`, `/review`, or `/test` invocation at a time.
+- **Never** create worktrees, stash changes, revert changes, or otherwise manipulate the working tree to enable concurrency.
+- One task at a time, in order, in the current working tree. Period.
 
 ### Scope
 
@@ -173,4 +160,4 @@ Result: Every ready bug on the board reaches `done` through the full implement �
 ### When done
 
 - single-task: report the task id, iterations taken, final test status, and any persistent findings.
-- scoped-batch: present a summary of all tasks finished and their test results. Note which ran in parallel vs sequential. Report any tasks that failed or were skipped.
+- scoped-batch: present a summary of all tasks finished and their test results, in the order they were processed. Report any tasks that were marked stuck.

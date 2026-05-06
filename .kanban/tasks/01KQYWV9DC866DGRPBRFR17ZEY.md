@@ -6,7 +6,7 @@ depends_on:
 - 01KQYWSW6NFHCS53JT9Y8NYK47
 position_column: todo
 position_ordinal: e380
-project: keyboard-navigation
+project: spatial-nav
 title: Wire nav.jump command — YAML, keybindings, menu, palette, app-shell state
 ---
 ## What

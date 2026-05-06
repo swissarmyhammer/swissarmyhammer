@@ -3,7 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: e180
-project: keyboard-navigation
+project: spatial-nav
 title: Sneak code generator in swissarmyhammer-focus (pure Rust + Tauri command)
 ---
 ## What
@@ -101,4 +101,4 @@ Architectural fit: spatial-nav vocabulary is Rust-authoritative in this workspac
 
 ## Workflow
 
-- Use `/tdd` — write the Rust unit tests first (will fail because `sneak::generate_sneak_codes` doesn't exist); implement; re-run. Then add the Tauri command and the TS wrapper.
+- Use `/tdd` — write the Rust unit tests first (will fail because `sneak::generate_sneak_codes` doesn't exist); implement; re-run. Then add the Tauri command and the TS wrapper. #nav-jump

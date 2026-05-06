@@ -6,7 +6,7 @@ depends_on:
 - 01KQYWR82C4HVZ1VTJPSBKDNST
 position_column: todo
 position_ordinal: e280
-project: keyboard-navigation
+project: spatial-nav
 title: JumpToOverlay component (portal, code labels, buffered key matcher)
 ---
 ## What

@@ -5,7 +5,7 @@ depends_on:
 - 01KQYWV9DC866DGRPBRFR17ZEY
 position_column: todo
 position_ordinal: de80
-project: keyboard-navigation
+project: spatial-nav
 title: End-to-end spatial test for Jump-To overlay
 ---
 ## What

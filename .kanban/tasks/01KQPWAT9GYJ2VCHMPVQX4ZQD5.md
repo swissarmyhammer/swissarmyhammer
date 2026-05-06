@@ -5,7 +5,6 @@ attachments:
 - 01KQSDH59T9CTS8X40MPN62N6Z-01KQSDH59M1ANQK3086NA8XCDX-image-j9jBODrxZuGJaiYxWB9gLwDmHggV83.png
 position_column: todo
 position_ordinal: c880
-project: spatial-nav
 title: Perspectives are scoped by view kind, not view id — all grid views share one pool
 ---
 ## What

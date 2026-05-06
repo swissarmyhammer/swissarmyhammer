@@ -3,7 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: cf80
-project: spatial-nav
 title: Resizable inspector — drag the left edge to change width (persisted per window)
 ---
 ## What
