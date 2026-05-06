@@ -115,7 +115,120 @@ use std::collections::HashSet;
 
 use crate::registry::{first_child_by_top_left, last_child_by_bottom_right, SpatialRegistry};
 use crate::scope::FocusScope;
+use crate::snapshot::{FocusOverrides, IndexedSnapshot};
 use crate::types::{Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker};
+
+// ---------------------------------------------------------------------------
+// NavScopeView — pathfinding's read-only view over a single layer's scopes.
+// ---------------------------------------------------------------------------
+
+/// Read-only, layer-scoped view of the scope set pathfinding consults.
+pub trait NavScopeView {
+    /// Look up a scope by its fully-qualified path.
+    ///
+    /// Returns `None` when the FQM is not present in this layer view —
+    /// either the FQM is unknown to the underlying store or it belongs
+    /// to a different layer. Pathfinding treats `None` as "torn state"
+    /// and falls back per the no-silent-dropout contract.
+    fn get(&self, fq: &FullyQualifiedMoniker) -> Option<NavScopeRef<'_>>;
+
+    /// Iterate every scope in the layer view.
+    ///
+    /// Order is implementation-defined; pathfinding does not rely on
+    /// any particular traversal order because the Android beam score
+    /// plus the leaves-over-containers tie-break together produce a
+    /// total order on candidates.
+    fn iter(&self) -> Box<dyn Iterator<Item = NavScopeRef<'_>> + '_>;
+}
+
+/// Borrowed view of the fields pathfinding reads on a single scope.
+///
+/// All references borrow from the underlying store ([`FocusScope`] for
+/// the registry impl, [`crate::snapshot::SnapshotScope`] for the
+/// snapshot impl); the rect is carried by value because [`Rect`] is
+/// [`Copy`] and pathfinding pulls coordinates off it more times than
+/// it is worth threading another lifetime through.
+#[derive(Debug, Clone, Copy)]
+pub struct NavScopeRef<'a> {
+    /// Canonical fully-qualified path of this scope.
+    pub fq: &'a FullyQualifiedMoniker,
+    /// Bounding rect in viewport pixel coordinates. Drives beam-search
+    /// distance and overlap math. Carried by value (the type is `Copy`).
+    pub rect: Rect,
+    /// FQM of the immediate enclosing scope, or `None` when this scope
+    /// is registered directly under the layer root. Pathfinding only
+    /// reads it for the leaves-over-containers tie-break.
+    pub parent_zone: Option<&'a FullyQualifiedMoniker>,
+    /// Per-direction navigation overrides for this scope. Mirrors the
+    /// existing `FocusScope::overrides` shape; `check_override` reads
+    /// `nav_override.get(&direction)` to decide between redirect, wall,
+    /// and fall-through.
+    pub nav_override: &'a FocusOverrides,
+}
+
+/// [`NavScopeView`] backed by a [`SpatialRegistry`] filtered to a single layer.
+pub struct RegistryLayerView<'a> {
+    registry: &'a SpatialRegistry,
+    layer_fq: &'a FullyQualifiedMoniker,
+}
+
+impl<'a> RegistryLayerView<'a> {
+    /// Construct a view of `registry` restricted to scopes whose `layer_fq` matches.
+    pub fn new(registry: &'a SpatialRegistry, layer_fq: &'a FullyQualifiedMoniker) -> Self {
+        Self { registry, layer_fq }
+    }
+}
+
+impl<'a> NavScopeView for RegistryLayerView<'a> {
+    fn get(&self, fq: &FullyQualifiedMoniker) -> Option<NavScopeRef<'_>> {
+        let scope = self.registry.find_by_fq(fq)?;
+        if &scope.layer_fq != self.layer_fq {
+            return None;
+        }
+        Some(scope_ref_from_focus_scope(scope))
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = NavScopeRef<'_>> + '_> {
+        Box::new(
+            self.registry
+                .scopes_in_layer(self.layer_fq)
+                .map(scope_ref_from_focus_scope),
+        )
+    }
+}
+
+/// Borrow a [`NavScopeRef`] out of a [`FocusScope`]. Tiny helper used
+/// by both the iterator and lookup paths of
+/// [`RegistryLayerView`].
+fn scope_ref_from_focus_scope(scope: &FocusScope) -> NavScopeRef<'_> {
+    NavScopeRef {
+        fq: &scope.fq,
+        rect: scope.rect,
+        parent_zone: scope.parent_zone.as_ref(),
+        nav_override: &scope.overrides,
+    }
+}
+
+impl<'snap> NavScopeView for IndexedSnapshot<'snap> {
+    fn get(&self, fq: &FullyQualifiedMoniker) -> Option<NavScopeRef<'_>> {
+        let scope = IndexedSnapshot::get(self, fq)?;
+        Some(NavScopeRef {
+            fq: &scope.fq,
+            rect: scope.rect,
+            parent_zone: scope.parent_zone.as_ref(),
+            nav_override: &scope.nav_override,
+        })
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = NavScopeRef<'_>> + '_> {
+        Box::new(self.scopes().iter().map(|scope| NavScopeRef {
+            fq: &scope.fq,
+            rect: scope.rect,
+            parent_zone: scope.parent_zone.as_ref(),
+            nav_override: &scope.nav_override,
+        }))
+    }
+}
 
 /// Pluggable navigation algorithm.
 ///
@@ -224,8 +337,20 @@ impl NavStrategy for BeamNavStrategy {
             return focused_fq.clone();
         };
 
+        // Build the layer-scoped view once. Cardinal pathfinding and
+        // override resolution both read through the trait; First /
+        // Last keep using the registry directly (out of scope for step
+        // 3 of the spatial-nav redesign).
+        let layer_view = RegistryLayerView::new(registry, &entry.layer_fq);
+        let focused_ref = NavScopeRef {
+            fq: &entry.fq,
+            rect: entry.rect,
+            parent_zone: entry.parent_zone.as_ref(),
+            nav_override: &entry.overrides,
+        };
+
         // Rule 0: per-direction override on the focused scope.
-        match check_override(registry, entry, direction) {
+        match check_override(&layer_view, &focused_ref, direction) {
             Some(Some(target)) => return target,
             Some(None) => {
                 // Explicit wall — semantic "stay put", not torn state.
@@ -243,7 +368,7 @@ impl NavStrategy for BeamNavStrategy {
         #[allow(deprecated)]
         match direction {
             Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
-                geometric_pick(registry, entry, focused_fq, direction)
+                geometric_pick(&layer_view, &focused_ref, focused_fq, direction)
             }
             Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
                 edge_command(registry, entry, focused_fq, direction)
@@ -279,23 +404,25 @@ impl NavStrategy for BeamNavStrategy {
 /// names an FQM registered in a *different* layer is treated as
 /// "unresolved" and the override falls through to beam search. Cross-
 /// layer teleportation is never allowed, even via override.
-fn check_override(
-    registry: &SpatialRegistry,
-    focused: &FocusScope,
+///
+/// Reads through [`NavScopeView`] so the same code services both the
+/// existing registry-backed path and the future snapshot-driven path.
+/// `view` already represents a single layer; resolution against the
+/// view is therefore implicitly layer-scoped.
+fn check_override<V: NavScopeView + ?Sized>(
+    view: &V,
+    focused: &NavScopeRef<'_>,
     direction: Direction,
 ) -> Option<Option<FullyQualifiedMoniker>> {
-    let entry = focused.overrides.get(&direction)?;
+    let entry = focused.nav_override.get(&direction)?;
     match entry {
         // Explicit `None` — block navigation in this direction.
         None => Some(None),
-        // `Some(target_fq)` — resolve only within the focused scope's layer.
-        // A target in a different layer (or unregistered entirely) makes
-        // the override fall through to beam search.
+        // `Some(target_fq)` — resolve only within the layer view. A
+        // target outside the view (different layer, or unregistered
+        // entirely) makes the override fall through to beam search.
         Some(target) => {
-            let target_in_layer = registry
-                .scopes_in_layer(&focused.layer_fq)
-                .any(|s| &s.fq == target);
-            if target_in_layer {
+            if view.get(target).is_some() {
                 Some(Some(target.clone()))
             } else {
                 None
@@ -321,27 +448,32 @@ fn check_override(
 /// visual edge of the layer in `direction`; the function returns
 /// `focused_fq` (stay-put), per the no-silent-dropout invariant.
 ///
-/// The layer FQM is the absolute boundary — `scopes_in_layer` already
-/// scopes by layer, so a candidate from a different layer (e.g. the
-/// inspector layer) never enters the search.
-fn geometric_pick(
-    reg: &SpatialRegistry,
-    focused: &FocusScope,
+/// The layer FQM is the absolute boundary — the view passed in is
+/// already layer-scoped, so a candidate from a different layer (e.g.
+/// the inspector layer) never enters the search.
+///
+/// Reads through [`NavScopeView`] so the same code services both the
+/// existing registry-backed path and the future snapshot-driven path.
+/// The "has children" precomputation walks the same view and therefore
+/// stays O(N), independent of the underlying store.
+fn geometric_pick<V: NavScopeView + ?Sized>(
+    view: &V,
+    focused: &NavScopeRef<'_>,
     focused_fq: &FullyQualifiedMoniker,
     direction: Direction,
 ) -> FullyQualifiedMoniker {
     // Build the "has children" predicate once per pick, not per
-    // candidate. `reg.has_children(fq)` is O(N) over the global scope
-    // table, so calling it inside the candidate loop made the pick
-    // O(N²). Collecting the set of FQMs that appear as some scope's
-    // `parent_zone` (anywhere in the layer) restores O(N).
-    let parent_fqs: HashSet<&FullyQualifiedMoniker> = reg
-        .scopes_in_layer(&focused.layer_fq)
-        .filter_map(|s| s.parent_zone.as_ref())
-        .collect();
+    // candidate. Looking up `has_children(fq)` on every iteration is
+    // O(N) on the underlying store, so calling it inside the
+    // candidate loop made the pick O(N²). Collecting the set of FQMs
+    // that appear as some scope's `parent_zone` (anywhere in the
+    // layer view) restores O(N). Cloning each FQM keeps the set
+    // independent of the iteration's transient `NavScopeRef` borrow.
+    let parent_fqs: HashSet<FullyQualifiedMoniker> =
+        view.iter().filter_map(|s| s.parent_zone.cloned()).collect();
     let from_rect = focused.rect;
-    let mut best: Option<BestCandidate<'_>> = None;
-    for cand in reg.scopes_in_layer(&focused.layer_fq) {
+    let mut best: Option<BestCandidate> = None;
+    for cand in view.iter() {
         if cand.fq == focused.fq {
             continue;
         }
@@ -356,28 +488,28 @@ fn geometric_pick(
             continue;
         }
         let cand_summary = BestCandidate {
-            fq: &cand.fq,
+            fq: cand.fq.clone(),
             score,
-            has_children: parent_fqs.contains(&cand.fq),
+            has_children: parent_fqs.contains(cand.fq),
         };
         if better_candidate(&best, &cand_summary) {
             best = Some(cand_summary);
         }
     }
     match best {
-        Some(b) => b.fq.clone(),
+        Some(b) => b.fq,
         None => focused_fq.clone(),
     }
 }
 
-/// Decision-state for the running best candidate inside
-/// [`geometric_pick`]. Carries the FQM, the beam score, and a flag
-/// indicating whether the candidate has registered children (used for
-/// the leaves-over-containers tie-break: a candidate with no children
-/// wins over one with children when their scores tie).
-#[derive(Clone, Copy)]
-struct BestCandidate<'a> {
-    fq: &'a FullyQualifiedMoniker,
+/// Running best candidate inside [`geometric_pick`]: FQM, beam score, and the
+/// has-children flag used for the leaves-over-containers tie-break.
+///
+/// `fq` is owned because `view.iter()` returns a fresh boxed iterator whose
+/// items don't outlive the call.
+#[derive(Clone)]
+struct BestCandidate {
+    fq: FullyQualifiedMoniker,
     score: f64,
     has_children: bool,
 }
@@ -389,7 +521,7 @@ struct BestCandidate<'a> {
 /// (a leaf is a scope with no registered children) — this ensures the
 /// focus indicator paints on a visible leaf rather than on a
 /// `showFocusBar=false` container.
-fn better_candidate(current: &Option<BestCandidate<'_>>, cand: &BestCandidate<'_>) -> bool {
+fn better_candidate(current: &Option<BestCandidate>, cand: &BestCandidate) -> bool {
     match current {
         None => true,
         Some(cur) => {
@@ -1170,6 +1302,494 @@ mod tests {
             first, drill_target,
             "First and drill_in (cold-start fallback) share semantics — both \
              pick topmost-then-leftmost child"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Snapshot-path parity — step 3 of the spatial-nav redesign
+    // (`01KQTC1VNQM9KC90S65P7QX9N1` / step card `01KQW65Z689G7WWRYMBHX6MD7V`).
+    //
+    // The pathfinding helpers (`geometric_pick`, `check_override`) are
+    // refactored over [`NavScopeView`]. The trait is implemented for
+    // both [`RegistryLayerView`] (existing behaviour) and
+    // [`IndexedSnapshot`] (new path; no production callers yet — step 6
+    // wires it in).
+    //
+    // Each parallel test below builds a [`NavSnapshot`] mirroring the
+    // exact scope set used by the registry-backed test above, runs
+    // pathfinding via the snapshot view, and asserts the result
+    // matches the registry-path result. This is the parity invariant
+    // that lets later steps swap the call boundary without smoke
+    // testing every cardinal trajectory by hand.
+    // -----------------------------------------------------------------
+
+    use crate::snapshot::{IndexedSnapshot, NavSnapshot, SnapshotScope};
+
+    /// Convert a [`FocusScope`] into the [`SnapshotScope`] wire-format
+    /// counterpart. The fields map one-to-one because both types share
+    /// the same shape; the snapshot omits the registry's
+    /// `last_focused`, `segment`, and `layer_fq` slots (snapshots are
+    /// already layer-scoped, segment is for logging, and last_focused
+    /// is registry state).
+    fn snapshot_from_focus_scope(s: &FocusScope) -> SnapshotScope {
+        SnapshotScope {
+            fq: s.fq.clone(),
+            rect: s.rect,
+            parent_zone: s.parent_zone.clone(),
+            nav_override: s.overrides.clone(),
+        }
+    }
+
+    /// Build a [`NavSnapshot`] that mirrors every scope in `reg` for
+    /// the layer FQ `/L`. Used by the parallel-snapshot tests below to
+    /// stand up the same scope set against both pathfinding paths.
+    fn snapshot_for_layer(reg: &SpatialRegistry) -> NavSnapshot {
+        let layer_fq = FullyQualifiedMoniker::from_string("/L");
+        NavSnapshot {
+            scopes: reg
+                .scopes_in_layer(&layer_fq)
+                .map(snapshot_from_focus_scope)
+                .collect(),
+            layer_fq,
+        }
+    }
+
+    /// Run the cardinal-direction pathfinder against a snapshot view.
+    fn snapshot_geometric_pick(
+        reg: &SpatialRegistry,
+        focused_fq: &FullyQualifiedMoniker,
+        direction: Direction,
+    ) -> FullyQualifiedMoniker {
+        let snap = snapshot_for_layer(reg);
+        let idx = IndexedSnapshot::new(&snap);
+        // Resolve `focused` through the trait so the test exercises
+        // `IndexedSnapshot::get`, not the snapshot's inherent method
+        // — the trait is the production path step 6 will use.
+        let focused = NavScopeView::get(&idx, focused_fq)
+            .expect("focused fq must be present in the snapshot");
+        geometric_pick(&idx, &focused, focused_fq, direction)
+    }
+
+    /// Resolve a per-direction override against a snapshot view —
+    /// matches the rule-0 path inside `BeamNavStrategy::next`. The
+    /// override-block / override-redirect parallel tests exercise this
+    /// helper; cardinal-direction parallel tests use the geometric
+    /// pick helper instead.
+    fn snapshot_check_override(
+        reg: &SpatialRegistry,
+        focused_fq: &FullyQualifiedMoniker,
+        direction: Direction,
+    ) -> Option<Option<FullyQualifiedMoniker>> {
+        let snap = snapshot_for_layer(reg);
+        let idx = IndexedSnapshot::new(&snap);
+        let focused = NavScopeView::get(&idx, focused_fq)
+            .expect("focused fq must be present in the snapshot");
+        check_override(&idx, &focused, direction)
+    }
+
+    /// Resolve a per-direction override against a registry layer view
+    /// — mirrors `snapshot_check_override` for the registry path so
+    /// the override parity tests can compare the two return values
+    /// directly.
+    fn registry_check_override(
+        reg: &SpatialRegistry,
+        focused_fq: &FullyQualifiedMoniker,
+        direction: Direction,
+    ) -> Option<Option<FullyQualifiedMoniker>> {
+        let entry = reg
+            .find_by_fq(focused_fq)
+            .expect("focused fq must be present in the registry");
+        let view = RegistryLayerView::new(reg, &entry.layer_fq);
+        let focused_ref = NavScopeRef {
+            fq: &entry.fq,
+            rect: entry.rect,
+            parent_zone: entry.parent_zone.as_ref(),
+            nav_override: &entry.overrides,
+        };
+        check_override(&view, &focused_ref, direction)
+    }
+
+    /// Snapshot mirror of `lonely_scope_returns_focused_fq`. The
+    /// half-plane is empty in every direction, so the snapshot path
+    /// must echo the focused FQM under the no-silent-dropout
+    /// invariant — same outcome as the registry path.
+    #[test]
+    fn snapshot_lonely_scope_returns_focused_fq() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+        let only = make_scope("k", None, rect_zero());
+        let only_fq = only.fq.clone();
+        reg.register_scope(only);
+
+        for d in [
+            Direction::Up,
+            Direction::Down,
+            Direction::Left,
+            Direction::Right,
+        ] {
+            let snap_result = snapshot_geometric_pick(&reg, &only_fq, d);
+            assert_eq!(
+                snap_result, only_fq,
+                "snapshot-backed pathfinding must echo focused FQM for {d:?}"
+            );
+
+            // Parity guard: the registry path must agree.
+            let strategy = BeamNavStrategy::new();
+            let focused_segment = SegmentMoniker::from_string("k");
+            let reg_result = strategy.next(&reg, &only_fq, &focused_segment, d);
+            assert_eq!(
+                snap_result, reg_result,
+                "snapshot and registry paths must agree on {d:?}"
+            );
+        }
+    }
+
+    /// Snapshot mirror of `one_neighbor_in_direction_wins`.
+    #[test]
+    fn snapshot_one_neighbor_in_direction_wins() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let neighbor = make_scope("neighbor", None, rect(20.0, 0.0, 10.0, 10.0));
+        let src_fq = src.fq.clone();
+        let neighbor_fq = neighbor.fq.clone();
+        reg.register_scope(src);
+        reg.register_scope(neighbor);
+
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Right);
+        assert_eq!(snap_result, neighbor_fq);
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(snap_result, reg_result);
+    }
+
+    /// Snapshot mirror of `closer_neighbor_wins`.
+    #[test]
+    fn snapshot_closer_neighbor_wins() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let near = make_scope("near", None, rect(20.0, 0.0, 10.0, 10.0));
+        let far = make_scope("far", None, rect(100.0, 0.0, 10.0, 10.0));
+        let src_fq = src.fq.clone();
+        let near_fq = near.fq.clone();
+        reg.register_scope(src);
+        reg.register_scope(near);
+        reg.register_scope(far);
+
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Right);
+        assert_eq!(snap_result, near_fq);
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(snap_result, reg_result);
+    }
+
+    /// Snapshot mirror of `tied_distances_leaf_wins_over_container` —
+    /// the leaves-over-containers tie-break is computed via
+    /// `view.iter()` so it must hold identically through the snapshot
+    /// path (every container's child contributes its `parent_zone` to
+    /// the precomputed `parent_fqs` set, exactly as it does on the
+    /// registry path).
+    #[test]
+    fn snapshot_tied_distances_leaf_wins_over_container() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let container_cand = make_scope("container-cand", None, rect(20.0, 0.0, 10.0, 10.0));
+        let container_cand_fq = container_cand.fq.clone();
+        let container_child = make_scope(
+            "container-cand/child",
+            Some(container_cand_fq.clone()),
+            rect(20.0, 0.0, 5.0, 5.0),
+        );
+        let leaf_cand = make_scope("leaf-cand", None, rect(20.0, 0.0, 10.0, 10.0));
+        let src_fq = src.fq.clone();
+        let leaf_cand_fq = leaf_cand.fq.clone();
+        reg.register_scope(src);
+        reg.register_scope(container_cand);
+        reg.register_scope(container_child);
+        reg.register_scope(leaf_cand);
+
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Right);
+        assert_eq!(snap_result, leaf_cand_fq);
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(snap_result, reg_result);
+    }
+
+    /// Snapshot mirror of
+    /// `cross_parent_zone_candidate_wins_when_geometrically_nearer`.
+    #[test]
+    fn snapshot_cross_parent_zone_candidate_wins_when_geometrically_nearer() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+
+        let zone_left = make_scope("zone-left", None, rect(0.0, 0.0, 100.0, 50.0));
+        let zone_right = make_scope("zone-right", None, rect(200.0, 100.0, 100.0, 50.0));
+        let zone_left_fq = zone_left.fq.clone();
+        let zone_right_fq = zone_right.fq.clone();
+        reg.register_scope(zone_left);
+        reg.register_scope(zone_right);
+
+        let src = make_scope(
+            "src",
+            Some(zone_left_fq.clone()),
+            rect(80.0, 10.0, 10.0, 10.0),
+        );
+        let in_zone = make_scope(
+            "in-zone-below",
+            Some(zone_left_fq),
+            rect(80.0, 30.0, 10.0, 10.0),
+        );
+        let cross_zone = make_scope(
+            "cross-zone-near",
+            Some(zone_right_fq),
+            rect(205.0, 10.0, 10.0, 10.0),
+        );
+        let src_fq = src.fq.clone();
+        let cross_fq = cross_zone.fq.clone();
+        reg.register_scope(src);
+        reg.register_scope(in_zone);
+        reg.register_scope(cross_zone);
+
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Right);
+        assert_eq!(snap_result, cross_fq);
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(snap_result, reg_result);
+    }
+
+    /// Snapshot mirror of `beam_returns_focused_fq_for_unknown_start` —
+    /// torn-state echo. The snapshot path's `iter()` returns the empty
+    /// set when the focused FQ is missing; we test by using the
+    /// strategy's full path (which catches the unknown FQ before
+    /// touching `geometric_pick`) so both paths echo the input FQM
+    /// identically.
+    #[test]
+    fn snapshot_beam_returns_focused_fq_for_unknown_start() {
+        let reg = SpatialRegistry::new();
+        let strategy = BeamNavStrategy::new();
+        let focused_fq = FullyQualifiedMoniker::from_string("/ghost");
+        let focused_segment = SegmentMoniker::from_string("ghost");
+        let reg_result = strategy.next(&reg, &focused_fq, &focused_segment, Direction::Up);
+        assert_eq!(reg_result, focused_fq);
+
+        // Snapshot-path mirror: an empty registry produces an empty
+        // snapshot; the snapshot view's `get` returns `None` for any
+        // FQ, and the geometric pick helper falls through to the
+        // stay-put echo. We open-code the lookup here rather than
+        // calling `snapshot_geometric_pick`, because that helper
+        // unwraps the focused entry (which is exactly what
+        // `BeamNavStrategy::next` checks for and short-circuits).
+        let snap = snapshot_for_layer(&reg);
+        let idx = IndexedSnapshot::new(&snap);
+        assert!(NavScopeView::get(&idx, &focused_fq).is_none());
+    }
+
+    /// Empty half-plane parity (Up/Down/Left/Right) — the focused
+    /// scope sits at the visual edge of the layer for every cardinal
+    /// direction. Both paths return `focused_fq` (semantic stay-put,
+    /// no log noise) for every direction.
+    #[test]
+    fn snapshot_empty_half_plane_returns_focused_fq() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let src_fq = src.fq.clone();
+        reg.register_scope(src);
+        // Every other scope sits behind `src` on every cardinal axis.
+        // For `Direction::Right`: behind = "to the left or overlapping".
+        let behind_left = make_scope("behind-left", None, rect(-50.0, 0.0, 10.0, 10.0));
+        let behind_right = make_scope("behind-right", None, rect(50.0, 200.0, 10.0, 10.0));
+        reg.register_scope(behind_left);
+        reg.register_scope(behind_right);
+
+        // Down must stay-put (no candidate strictly below `src`'s
+        // bottom that overlaps horizontally).
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Down);
+        assert_eq!(
+            snap_result, src_fq,
+            "Down half-plane is empty — snapshot path must stay put"
+        );
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Down,
+        );
+        assert_eq!(
+            snap_result, reg_result,
+            "snapshot and registry paths must agree on empty Down half-plane"
+        );
+    }
+
+    /// Override redirect parity. With a per-direction redirect on the
+    /// focused scope, both paths return the redirect target. The
+    /// override targets a scope registered in the same layer; both
+    /// the registry view's `get` and the snapshot view's `get` resolve
+    /// it.
+    #[test]
+    fn snapshot_nav_override_redirect_honored() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+
+        let target = make_scope("target", None, rect(100.0, 0.0, 10.0, 10.0));
+        let target_fq = target.fq.clone();
+        reg.register_scope(target);
+
+        // Source has a Right-redirect to `target`. Geometrically
+        // there is no Right neighbor, so the only way `Right` resolves
+        // to `target` is via the override.
+        let mut src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        src.overrides
+            .insert(Direction::Right, Some(target_fq.clone()));
+        let src_fq = src.fq.clone();
+        reg.register_scope(src);
+
+        let snap = snapshot_check_override(&reg, &src_fq, Direction::Right);
+        assert_eq!(
+            snap,
+            Some(Some(target_fq.clone())),
+            "snapshot path must resolve override redirect"
+        );
+
+        let reg_result = registry_check_override(&reg, &src_fq, Direction::Right);
+        assert_eq!(
+            snap, reg_result,
+            "snapshot and registry paths must resolve the override identically"
+        );
+
+        // End-to-end through the strategy: same target.
+        let strategy = BeamNavStrategy::new();
+        let strategy_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(strategy_result, target_fq);
+    }
+
+    /// Override block parity. A `None` entry on the focused scope's
+    /// override map for `direction` is an explicit "wall" — both
+    /// paths report `Some(None)` and the strategy returns the focused
+    /// FQM (semantic stay-put).
+    #[test]
+    fn snapshot_nav_override_block_honored() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+
+        let neighbor = make_scope("neighbor", None, rect(20.0, 0.0, 10.0, 10.0));
+        reg.register_scope(neighbor);
+
+        // Source has a Right-block (`null`). Without the override,
+        // `neighbor` would win; with it, navigation walls and stays
+        // put.
+        let mut src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        src.overrides.insert(Direction::Right, None);
+        let src_fq = src.fq.clone();
+        reg.register_scope(src);
+
+        let snap = snapshot_check_override(&reg, &src_fq, Direction::Right);
+        assert_eq!(
+            snap,
+            Some(None),
+            "snapshot path must report explicit wall as Some(None)"
+        );
+
+        let reg_result = registry_check_override(&reg, &src_fq, Direction::Right);
+        assert_eq!(
+            snap, reg_result,
+            "snapshot and registry paths must report the wall identically"
+        );
+
+        // End-to-end through the strategy: stay put despite an
+        // otherwise valid Right neighbor.
+        let strategy = BeamNavStrategy::new();
+        let strategy_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(
+            strategy_result, src_fq,
+            "explicit wall must take precedence over geometric pick"
+        );
+    }
+
+    /// `parent_zone` cycle parity. A malformed registry / snapshot
+    /// where two scopes name each other as their `parent_zone` must
+    /// not freeze pathfinding. `geometric_pick` reads `parent_zone`
+    /// only as a flat-set membership check (the leaves-over-containers
+    /// tie-break), so cycles are naturally tolerated by both paths;
+    /// this test pins the contract.
+    #[test]
+    fn snapshot_parent_zone_cycle_does_not_hang() {
+        let mut reg = SpatialRegistry::new();
+        reg.push_layer(make_layer());
+
+        // Source on the left.
+        let src = make_scope("src", None, rect(0.0, 0.0, 10.0, 10.0));
+        let src_fq = src.fq.clone();
+        reg.register_scope(src);
+
+        // Two candidates whose `parent_zone` form a cycle
+        // (a.parent = b, b.parent = a). Both candidates are leaves
+        // (no third scope names them as `parent_zone`), so the
+        // leaves-over-containers tie-break is a no-op. The Right
+        // beam picks the closer one.
+        let a_fq = FullyQualifiedMoniker::from_string("/L/a");
+        let b_fq = FullyQualifiedMoniker::from_string("/L/b");
+        let mut a = make_scope("a", Some(b_fq.clone()), rect(20.0, 0.0, 10.0, 10.0));
+        a.fq = a_fq.clone();
+        let mut b = make_scope("b", Some(a_fq.clone()), rect(50.0, 0.0, 10.0, 10.0));
+        b.fq = b_fq.clone();
+        reg.register_scope(a);
+        reg.register_scope(b);
+
+        let snap_result = snapshot_geometric_pick(&reg, &src_fq, Direction::Right);
+        assert_eq!(
+            snap_result, a_fq,
+            "snapshot path must terminate cleanly under a parent_zone cycle"
+        );
+
+        let strategy = BeamNavStrategy::new();
+        let reg_result = strategy.next(
+            &reg,
+            &src_fq,
+            &SegmentMoniker::from_string("src"),
+            Direction::Right,
+        );
+        assert_eq!(
+            snap_result, reg_result,
+            "snapshot and registry paths must agree under a parent_zone cycle"
         );
     }
 }

@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KQW643TXM5YFKRZTNB8JPVVC
-position_column: todo
-position_ordinal: d280
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffa780
 project: spatial-nav
 title: 'spatial-nav redesign step 3: adapt pathfinding to accept optional snapshot'
 ---
@@ -77,3 +77,14 @@ The override-walk path (consulting nav_override for each ancestor up the parent_
 
 - `swissarmyhammer-focus/src/navigate.rs` — trait, snapshot impl, registry impl, refactor `geometric_pick` / `BeamNavStrategy::next` / `check_override`
 - Possibly `swissarmyhammer-focus/src/snapshot.rs` — implement `NavScopeView for IndexedSnapshot` #stateless-nav
+
+## Review Findings (2026-05-06 12:40)
+
+### Warnings
+- [x] `swissarmyhammer-focus/src/navigate.rs:196` — Broken intra-doc link. The `RegistryLayerView` doc comment says "Created by [`SpatialRegistry::layer_view`]", but no such method exists on `SpatialRegistry`; the actual constructor is `RegistryLayerView::new` (line 210). Anyone clicking through this link in rustdoc gets a dead reference. Fix: change the doc to "Created by [`RegistryLayerView::new`]" — or drop the cross-reference entirely since the constructor sits two lines below the type.
+
+### Nits
+- [x] `swissarmyhammer-focus/src/navigate.rs:127-150` — The `NavScopeView` trait doc-comment is roughly 25 lines and includes kanban card IDs (`01KQTC1VNQM9KC90S65P7QX9N1`) plus step references ("Step 3 of the spatial-nav redesign", "Step 6 will wire..."). Per the doc-comments skill: doc comments should state the current contract, not project history; the 3-sentence ceiling for fns/types is breached. Trim to a single sentence describing what the trait abstracts ("Read-only, layer-scoped view of the scope set pathfinding consults") and move the multi-step migration narrative into a non-doc `//` comment or the kanban card itself.
+- [x] `swissarmyhammer-focus/src/navigate.rs:1400` — `snapshot_geometric_pick` test helper's doc-comment references "step 3 introduced". Same rule — the test helper's contract is "run the cardinal-direction pathfinder against a snapshot view"; the step-history detail belongs elsewhere.
+- [x] `swissarmyhammer-focus/src/navigate.rs:539-548` — `BestCandidate` doc-comment is correct on the why-owned-fq rationale but spans 10 lines; the lifetime-mechanics paragraph could compress to one sentence ("`fq` is owned because `view.iter()` returns a fresh boxed iterator whose items don't outlive the call.").
+- [x] `swissarmyhammer-focus/src/navigate.rs:194-200` — `RegistryLayerView` doc-comment overlaps with the trait doc and the `new` doc; consolidate so the type doc states the contract once and `new` describes only construction params.
