@@ -63,6 +63,7 @@ use serde::{Deserialize, Serialize};
 
 use super::layer::FocusLayer;
 use super::scope::FocusScope;
+use super::snapshot::IndexedSnapshot;
 use super::types::{
     pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker, WindowLabel,
 };
@@ -427,6 +428,17 @@ pub struct SpatialRegistry {
     /// would re-walk the layer on every benign re-push without surfacing
     /// any new mismatch.
     validated_layers: HashSet<FullyQualifiedMoniker>,
+    /// Most-recent focused descendant under each ancestor scope, keyed
+    /// by the ancestor's [`FullyQualifiedMoniker`].
+    ///
+    /// Populated by [`SpatialRegistry::record_focus`] for every scope
+    /// ancestor walked during a focus event. Read by
+    /// [`super::state::FallbackResolution::FallbackParentZoneLastFocused`]
+    /// in preference to per-scope [`FocusScope::last_focused`] — the two
+    /// stay synchronized via the dual-write in `record_focus`, but this
+    /// top-level map is the authoritative slot going forward as the
+    /// per-scope mirror is retired.
+    pub last_focused_by_fq: HashMap<FullyQualifiedMoniker, FullyQualifiedMoniker>,
 }
 
 impl SpatialRegistry {
@@ -531,21 +543,25 @@ impl SpatialRegistry {
     /// scope ancestor and every layer ancestor in the chain rooted at
     /// `fq`.
     ///
-    /// This is the kernel writer for [`FocusScope::last_focused`] and
+    /// This is the kernel writer for [`FocusScope::last_focused`],
+    /// [`SpatialRegistry::last_focused_by_fq`], and
     /// [`FocusLayer::last_focused`]. [`super::state::SpatialState::focus`]
     /// and any other code path that mutates `focus_by_window` calls this
     /// after the new focus FQM has been validated. The walk:
     ///
-    /// 1. Climbs the `parent_zone` chain starting from `fq`'s scope; each
-    ///    visited ancestor scope's `last_focused` is set to `Some(fq)`.
-    ///    The walk terminates when an ancestor's `parent_zone` is `None`
-    ///    (the scope sits directly under the layer root) or names an
-    ///    unregistered FQM (torn state).
-    /// 2. Climbs the layer ancestor chain starting from `fq`'s
-    ///    `layer_fq`; each visited layer (the scope's own layer plus
-    ///    every ancestor reachable via `FocusLayer::parent`) has its
-    ///    `last_focused` set to `Some(fq)`. Terminates at the window
-    ///    root (`parent` is `None`) or at a missing layer reference.
+    /// 1. Climbs the scope ancestor chain. When `snapshot` is `Some`,
+    ///    the walk reads ancestors from
+    ///    [`IndexedSnapshot::parent_zone_chain`]; when `None`, it walks
+    ///    the registry's own `parent_zone` chain. For each visited
+    ///    ancestor, both `last_focused_by_fq[ancestor] = fq` and
+    ///    (when the ancestor is still present in `scopes`)
+    ///    `scopes[ancestor].last_focused = Some(fq)` are written. The
+    ///    walk terminates at the layer root or at a missing FQM (torn
+    ///    state).
+    /// 2. Climbs the layer ancestor chain via `FocusLayer::parent`,
+    ///    setting each visited layer's `last_focused` to `fq`.
+    ///    Terminates at the window root (`parent` is `None`) or at a
+    ///    missing layer reference.
     ///
     /// Both walks make the cascade arms
     /// [`super::state::FallbackResolution::FallbackParentZoneLastFocused`]
@@ -555,60 +571,82 @@ impl SpatialRegistry {
     /// unregistered, the resolver consults these recorded slots to
     /// land the user back on a meaningful target.
     ///
-    /// The lost FQM itself is not written into its own scope's
+    /// The focused FQM itself is not written into its own scope's
     /// `last_focused` — that slot is reserved for descendants. A scope's
     /// own focus event is reflected only on its ancestors (and on its
     /// owning layer plus the layer's ancestors).
     ///
-    /// No-op when `fq` is not a registered scope: the writer is invoked
-    /// at the same boundary as `state.focus`, which already validates
-    /// registration and short-circuits otherwise. The defensive check
-    /// here keeps the registry sound even if a future caller invokes
-    /// `record_focus` on a torn registry.
-    pub fn record_focus(&mut self, fq: &FullyQualifiedMoniker) {
-        // Snapshot the focused scope's metadata into owned values so the
-        // immutable borrow can be released before we mutate the scopes
-        // map. Walking the parent_zone chain mutates entries in `scopes`,
-        // and Rust's borrow checker rejects iterating an immutable view
-        // while writing through a mutable one.
-        let Some(focused) = self.scopes.get(fq) else {
-            return;
-        };
-        let layer_fq = focused.layer_fq.clone();
-        let mut next_zone = focused.parent_zone.clone();
-
-        // Phase 1: walk the scope ancestor chain, recording `fq` on
-        // each ancestor's `last_focused` slot.
+    /// In the registry-walk variant (`snapshot` is `None`), this is a
+    /// no-op when `fq` is not a registered scope. In the snapshot-walk
+    /// variant, the layer chain is still walked from
+    /// `scopes[fq].layer_fq` if `fq` is registered locally; otherwise
+    /// the layer phase is skipped.
+    pub fn record_focus(
+        &mut self,
+        fq: &FullyQualifiedMoniker,
+        snapshot: Option<&IndexedSnapshot<'_>>,
+    ) {
+        // Phase 1: walk the scope ancestor chain.
         //
-        // `visited` guards against a self-referential or cyclic
-        // `parent_zone` chain — e.g. a scope whose `parent_zone == fq`
-        // (the React-side bug fixed alongside this guard) — which
-        // would otherwise loop indefinitely while holding the
-        // registry mutex and freeze every focus IPC.
-        let mut visited: HashSet<FullyQualifiedMoniker> = HashSet::new();
-        while let Some(zone_fq) = next_zone {
-            if !visited.insert(zone_fq.clone()) {
-                tracing::error!(
-                    op = "record_focus",
-                    cycle_fq = %zone_fq,
-                    "parent_zone chain cycle detected; breaking walk"
-                );
-                break;
+        // The dual-write keeps `last_focused_by_fq` and the per-scope
+        // `last_focused` mirror synchronized while the per-scope slot
+        // is on its way out. The scope-side write degrades to a no-op
+        // when an ancestor named in the snapshot is not present in the
+        // registry — by design during cutover, when the registry no
+        // longer mirrors React's scope tree.
+        match snapshot {
+            Some(idx) => {
+                for ancestor in idx.parent_zone_chain(fq) {
+                    self.last_focused_by_fq
+                        .insert(ancestor.fq.clone(), fq.clone());
+                    if let Some(zone) = self.scopes.get_mut(&ancestor.fq) {
+                        zone.last_focused = Some(fq.clone());
+                    }
+                }
             }
-            let Some(zone) = self.scopes.get_mut(&zone_fq) else {
-                // Torn registry — parent_zone names an FQM with no
-                // entry. Stop the walk; callers that care about
-                // structural integrity log elsewhere.
-                break;
-            };
-            zone.last_focused = Some(fq.clone());
-            next_zone = zone.parent_zone.clone();
+            None => {
+                let Some(focused) = self.scopes.get(fq) else {
+                    return;
+                };
+                let mut next_zone = focused.parent_zone.clone();
+
+                // `visited` guards against a self-referential or cyclic
+                // `parent_zone` chain — e.g. a scope whose
+                // `parent_zone == fq` (a React-side bug class fixed
+                // alongside this guard) — which would otherwise loop
+                // indefinitely while holding the registry mutex and
+                // freeze every focus IPC.
+                let mut visited: HashSet<FullyQualifiedMoniker> = HashSet::new();
+                while let Some(zone_fq) = next_zone {
+                    if !visited.insert(zone_fq.clone()) {
+                        tracing::error!(
+                            op = "record_focus",
+                            cycle_fq = %zone_fq,
+                            "parent_zone chain cycle detected; breaking walk"
+                        );
+                        break;
+                    }
+                    let Some(zone) = self.scopes.get_mut(&zone_fq) else {
+                        // Torn registry — parent_zone names an FQM
+                        // with no entry. Stop the walk; callers that
+                        // care about structural integrity log
+                        // elsewhere.
+                        break;
+                    };
+                    zone.last_focused = Some(fq.clone());
+                    self.last_focused_by_fq.insert(zone_fq.clone(), fq.clone());
+                    next_zone = zone.parent_zone.clone();
+                }
+            }
         }
 
         // Phase 2: walk the layer ancestor chain (the focused scope's
         // own layer plus every ancestor reachable via
         // `FocusLayer::parent`). Each visited layer's `last_focused`
         // slot is set to `fq`. Same cycle guard as phase 1.
+        let Some(layer_fq) = self.scopes.get(fq).map(|s| s.layer_fq.clone()) else {
+            return;
+        };
         let mut next_layer = Some(layer_fq);
         let mut visited_layers: HashSet<FullyQualifiedMoniker> = HashSet::new();
         while let Some(layer_fq) = next_layer {

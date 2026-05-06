@@ -268,16 +268,28 @@ fn resolve_fallback_inner(
         let on_lost_zone = is_first_iteration;
         if !on_lost_zone {
             if let Some(zone_fq) = &current_zone {
-                if let Some(parent) = registry.find_by_fq(zone_fq) {
-                    if let Some(remembered) = &parent.last_focused {
-                        if remembered != lost_fq {
-                            if let Some(scope) = registry.find_by_fq(remembered) {
-                                if same_window(registry, scope, &lost_window) {
-                                    return FallbackResolution::FallbackParentZoneLastFocused(
-                                        scope.fq.clone(),
-                                        scope.segment.clone(),
-                                    );
-                                }
+                // Consult the top-level `last_focused_by_fq` map first;
+                // fall back to the per-scope `FocusScope::last_focused`
+                // mirror. The two stay synchronized via the dual-write
+                // in `record_focus`, but the map is the authoritative
+                // slot going forward as the per-scope mirror is retired.
+                let remembered = registry
+                    .last_focused_by_fq
+                    .get(zone_fq)
+                    .cloned()
+                    .or_else(|| {
+                        registry
+                            .find_by_fq(zone_fq)
+                            .and_then(|parent| parent.last_focused.clone())
+                    });
+                if let Some(remembered) = remembered {
+                    if &remembered != lost_fq {
+                        if let Some(scope) = registry.find_by_fq(&remembered) {
+                            if same_window(registry, scope, &lost_window) {
+                                return FallbackResolution::FallbackParentZoneLastFocused(
+                                    scope.fq.clone(),
+                                    scope.segment.clone(),
+                                );
                             }
                         }
                     }
@@ -412,9 +424,10 @@ impl SpatialState {
         self.focus_by_window.insert(window.clone(), fq.clone());
         // Record the new focus on every ancestor scope and every
         // ancestor layer of `fq`. This is the kernel writer for
-        // `FocusScope::last_focused` and `FocusLayer::last_focused`;
-        // see `SpatialRegistry::record_focus` for the walk semantics.
-        registry.record_focus(&fq);
+        // `FocusScope::last_focused`, `last_focused_by_fq`, and
+        // `FocusLayer::last_focused`; see
+        // `SpatialRegistry::record_focus` for the walk semantics.
+        registry.record_focus(&fq, None);
         Some(FocusChangedEvent {
             window_label: window,
             prev_fq,
@@ -501,7 +514,7 @@ impl SpatialState {
                 // stay in sync. The fallback target's ancestors get
                 // the recorded path; the lost entry's slot is moot
                 // (the caller unregisters it next).
-                registry.record_focus(&next_fq);
+                registry.record_focus(&next_fq, None);
                 Some(FocusChangedEvent {
                     window_label: window,
                     prev_fq: Some(fq.clone()),

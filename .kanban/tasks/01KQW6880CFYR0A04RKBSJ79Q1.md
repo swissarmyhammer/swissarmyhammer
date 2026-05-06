@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KQW643TXM5YFKRZTNB8JPVVC
-position_column: todo
-position_ordinal: d480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffa980
 project: spatial-nav
 title: 'spatial-nav redesign step 5: introduce last_focused_by_fq map and adapt record_focus to walk snapshot'
 ---
