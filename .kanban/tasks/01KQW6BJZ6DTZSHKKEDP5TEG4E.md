@@ -77,4 +77,4 @@ Same pattern as step 6: dev-mode dual-run, log `tracing::warn!` on divergence be
 
 - `kanban-app/src/commands.rs` — `spatial_focus` accepts optional snapshot
 - `swissarmyhammer-focus/src/state.rs` — `state.focus` branches on snapshot
-- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — `actions.focus` builds snapshot; layer-pop event handler does round-trip #01KQTC1VNQM9KC90S65P7QX9N1
+- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — `actions.focus` builds snapshot; layer-pop event handler does round-trip #stateless-nav

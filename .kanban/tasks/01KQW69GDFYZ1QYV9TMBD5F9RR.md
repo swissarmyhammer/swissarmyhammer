@@ -71,4 +71,4 @@ In dev builds, log when the snapshot-path result differs from the registry-path 
 - `kanban-app/src/commands.rs` — `spatial_navigate` accepts optional snapshot
 - `swissarmyhammer-focus/src/state.rs` — `SpatialState::navigate` branches on snapshot
 - `kanban-app/ui/src/lib/spatial-focus-context.tsx` — `actions.navigate` builds snapshot
-- `kanban-app/ui/src/types/spatial.ts` — `NavSnapshot` / `SnapshotScope` TS types finalized to match Rust serde shape #01KQTC1VNQM9KC90S65P7QX9N1
+- `kanban-app/ui/src/types/spatial.ts` — `NavSnapshot` / `SnapshotScope` TS types finalized to match Rust serde shape #stateless-nav

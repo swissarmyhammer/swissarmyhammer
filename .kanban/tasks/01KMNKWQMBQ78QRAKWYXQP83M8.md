@@ -46,7 +46,7 @@ Empty column:                    Empty column:
 
 ### Props interface changes
 - **Remove**: `insertAtIndex`, `onDragOver`, `onDragEnter`, `onDragLeave`, `isDragTarget`
-- **Change**: `onDrop` signature from `(columnId, taskData, insertIndex)` to `(descriptor, taskData)` 
+- **Change**: `onDrop` signature from `(columnId, taskData, insertIndex)` to `(descriptor, taskData)`
 - **Add**: `dragTaskId` — passed to DropZones for no-op hiding
 - **Add**: `boardPath` — needed by `computeDropZones`
 - **Add**: `dragActive` — passed to DropZones so they expand during any drag

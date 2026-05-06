@@ -38,7 +38,7 @@ Add keyboard navigation commands to `board-view.tsx` by wiring `useBoardNav` int
 ## Acceptance Criteria
 
 - [ ] `h`/`l` or arrows move between columns
-- [ ] `j`/`k` or arrows move between cards within a column  
+- [ ] `j`/`k` or arrows move between cards within a column
 - [ ] `gg`/`Home` jumps to first column, `G`/`End` to last
 - [ ] `Enter` on a card opens inspector (calls `inspectEntity`)
 - [ ] `o`/`Mod+Enter` adds a new task to the current column

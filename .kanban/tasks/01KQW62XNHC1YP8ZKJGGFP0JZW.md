@@ -1,14 +1,14 @@
 ---
 assignees:
 - wballard
-position_column: todo
-position_ordinal: d080
+position_column: review
+position_ordinal: '8480'
 project: spatial-nav
 title: 'spatial-nav redesign step 1: add LayerScopeRegistry context (additive, no behavior change)'
 ---
 ## Parent
 
-Implementation step for the architectural redesign in **01KQTC1VNQM9KC90S65P7QX9N1**. Read that card first for the rationale.
+  Implementation step for the architectural redesign in **01KQTC1VNQM9KC90S65P7QX9N1**. Read that card first for the rationale.
 
 ## Goal
 
@@ -103,4 +103,4 @@ Skip an entry if `entry.ref.current === null` (transient unmount window).
 - `kanban-app/ui/src/lib/spatial-focus-context.tsx` (or new context file)
 - `kanban-app/ui/src/components/focus-layer.tsx`
 - `kanban-app/ui/src/components/focus-scope.tsx`
-- New test file: `kanban-app/ui/src/lib/layer-scope-registry.test.tsx` #01KQTC1VNQM9KC90S65P7QX9N1
+- New test file: `kanban-app/ui/src/lib/layer-scope-registry.test.tsx` #stateless-nav

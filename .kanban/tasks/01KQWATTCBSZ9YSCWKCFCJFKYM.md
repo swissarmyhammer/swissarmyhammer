@@ -43,7 +43,7 @@ Then trace the validator code path inside `SpatialRegistry::register_scope` to s
 
 ## Tags
 
-#01KQTC1VNQM9KC90S65P7QX9N1 #stateless-nav
+#stateless-nav
 
 ## Review Findings (2026-05-05 15:35)
 

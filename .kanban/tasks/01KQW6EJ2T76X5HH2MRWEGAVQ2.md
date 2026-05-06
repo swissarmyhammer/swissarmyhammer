@@ -84,4 +84,4 @@ Every captured divergence is an architectural defect — the snapshot path doesn
 
 - New `swissarmyhammer-focus/src/divergence.rs` (the harness)
 - `kanban-app/src/commands.rs` — wrap snapshot/registry calls in `compare_paths`
-- New `kanban-app/ui/src/spatial-nav-soak.spatial.test.tsx` (integration test bundle) #01KQTC1VNQM9KC90S65P7QX9N1
+- New `kanban-app/ui/src/spatial-nav-soak.spatial.test.tsx` (integration test bundle) #stateless-nav

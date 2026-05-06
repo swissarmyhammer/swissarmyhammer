@@ -113,4 +113,4 @@ Dev mode: assert that the FocusChangedEvent emitted by `spatial_focus_lost` matc
 
 - `kanban-app/src/commands.rs` — new `spatial_focus_lost` command
 - `swissarmyhammer-focus/src/state.rs` — new `focus_lost` method
-- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — registry's delete handler emits the IPC; track `currentFocusFqRef` #01KQTC1VNQM9KC90S65P7QX9N1
+- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — registry's delete handler emits the IPC; track `currentFocusFqRef` #stateless-nav

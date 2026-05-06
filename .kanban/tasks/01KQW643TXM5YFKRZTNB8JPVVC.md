@@ -85,4 +85,4 @@ In `swissarmyhammer-focus/src/snapshot.rs::tests`:
 ## Files
 
 - `swissarmyhammer-focus/src/snapshot.rs` (new)
-- `swissarmyhammer-focus/src/lib.rs` (export) #01KQTC1VNQM9KC90S65P7QX9N1
+- `swissarmyhammer-focus/src/lib.rs` (export) #stateless-nav

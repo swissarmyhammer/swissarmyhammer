@@ -14,7 +14,7 @@ Add a YAML merge strategy to `swissarmyhammer-merge` that does field-level three
 1. Parse base, ours, theirs as YAML mappings (`serde_yaml::Value::Mapping`)
 2. For each field, compare ours and theirs against base:
    - Only ours changed → take ours
-   - Only theirs changed → take theirs  
+   - Only theirs changed → take theirs
    - Neither changed → keep as-is
    - Field added only in one side → take the addition
    - Field removed only in one side → take the removal

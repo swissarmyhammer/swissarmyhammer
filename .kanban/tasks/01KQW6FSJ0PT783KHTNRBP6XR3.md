@@ -66,4 +66,4 @@ Delete `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts` entir
 - `kanban-app/ui/src/components/focus-scope.tsx` — strip rect-tracking
 - `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.ts` — DELETE
 - `kanban-app/ui/src/components/use-track-rect-on-ancestor-scroll.test.ts` (if exists) — DELETE
-- `kanban-app/ui/src/lib/rect-validation.ts` — slim down #01KQTC1VNQM9KC90S65P7QX9N1
+- `kanban-app/ui/src/lib/rect-validation.ts` — slim down #stateless-nav

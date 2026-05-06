@@ -7,7 +7,7 @@ title: '1. Fix: external file edits don''t update UI — events are signals to r
 ---
 ## What
 
-External file edits (e.g., editing a `.md` task file in vim) don't cause the UI to update. 
+External file edits (e.g., editing a `.md` task file in vim) don't cause the UI to update.
 
 ### Design principle
 Events are **signals to re-fetch**, not data carriers. Eliminate the enrichment path in `flush_and_emit_for_handle` (`commands.rs:1487-1534`). Both command-path and watcher-path should emit the same raw events. The frontend always re-fetches the entity via `get_entity` on any event.

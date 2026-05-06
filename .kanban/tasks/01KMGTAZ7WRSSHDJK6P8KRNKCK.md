@@ -16,7 +16,7 @@ You must fix an test this without askign the user to do any work.
 
 ## What's proven (5 tests pass)
 
-1. **Ordinal logic correct** — `reorder_move_third_before_second` 
+1. **Ordinal logic correct** — `reorder_move_third_before_second`
 2. **Disk write correct** — `task_move_writes_new_ordinal_to_disk` confirms .md file gets new ordinal
 3. **Registry correct** — `task_move_is_undoable_in_registry` confirms undoable=true
 4. **Watcher detects changes** — `test_flush_and_emit_detects_task_position_ordinal_change` confirms flush_and_emit CAN detect ordinal changes in .md files

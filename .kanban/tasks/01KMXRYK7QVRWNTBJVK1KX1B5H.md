@@ -26,7 +26,7 @@ Add Tauri command that wraps commands_for_scope. Rewrite frontend context menu a
 
 ### Remove from frontend
 - `useEntityCommands()` command building (keep schema loading for field display)
-- `buildEntityCommandDefs()` 
+- `buildEntityCommandDefs()`
 - `resolveCommandName()` for commands (backend does this)
 - `collectAvailableCommands()` — backend replacement
 - `useAvailableCommands()` — backend replacement

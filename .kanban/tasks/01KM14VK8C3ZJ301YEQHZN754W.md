@@ -15,7 +15,7 @@ Load `tools.yaml` during `McpServer` initialization and apply the disabled set t
 
 **Loading sequence:**
 1. `register_all_tools()` — all tools registered (existing behavior)
-2. `remove_agent_tools()` — if not agent mode (existing behavior)  
+2. `remove_agent_tools()` — if not agent mode (existing behavior)
 3. **NEW:** `load_and_apply_tool_config()` — read tools.yaml, disable configured tools
 
 **Config resolution:** Use `swissarmyhammer-directory` to find `.sah/` at project root and `~/.sah/` for global. Load both, merge (project overrides global), apply.

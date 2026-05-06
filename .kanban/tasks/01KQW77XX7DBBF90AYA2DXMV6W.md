@@ -27,7 +27,7 @@ Documentation across the crate has grown bloated and nearly unreadable, with thr
    - `the redesign's removal target`
    - References to `01KQTC1VNQM9KC90S65P7QX9N1`, `01KQQSXM2PEYR1WAQ7QXW3B8ME`, `01KQ9XBAG5P9W3JREQYNGAYM8Y`, or any other prior-design ULID
    - `pre-redesign call` / `post-redesign` / `formerly` / `previously` / `legacy`
-   
+
    **Referencing prior designs is worthless.** The reader is trying to understand the code as it exists. They don't need a story about what it used to be.
 
 3. **Way too wordy.** Where one sentence answers "what is this and what does it do," the existing prose runs three paragraphs. Strip every adjective, every qualifier, every "this is the X that does Y because Z used to be W."

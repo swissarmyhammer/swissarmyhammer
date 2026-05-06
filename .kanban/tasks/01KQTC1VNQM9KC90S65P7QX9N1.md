@@ -215,4 +215,4 @@ Drift is a property of replication. The kernel and React are currently two repli
 
 The kernel doesn't fundamentally need to know what scopes exist between decisions. It needs to know *at the moment of a decision*. So push that knowledge across exactly when it's needed. State that doesn't exist can't be stale.
 
-Plus: virtualization caps snapshot size, so the cost argument against this design (which would have been real with thousands of off-screen scopes) doesn't apply here. The architecture matches the runtime characteristics. #01KQTC1VNQM9KC90S65P7QX9N1
+Plus: virtualization caps snapshot size, so the cost argument against this design (which would have been real with thousands of off-screen scopes) doesn't apply here. The architecture matches the runtime characteristics. #stateless-nav

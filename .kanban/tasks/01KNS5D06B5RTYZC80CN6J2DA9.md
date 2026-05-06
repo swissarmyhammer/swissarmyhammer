@@ -13,8 +13,8 @@ Pressing Enter in the filter formula bar when an autocomplete suggestion is sele
 
 All three Enter-handling paths in `kanban-app/ui/src/lib/cm-submit-cancel.ts` register at `Prec.highest`, which fires **before** CM6's autocomplete plugin can process the key:
 
-1. **`buildCuaExtensions`** — `Prec.highest keymap.of([{ key: "Enter", run: () => { onSubmitRef.current?.(); return true; } }])`  
-2. **`buildVimEnterExtension` (alwaysSubmitOnEnter: true)** — same Prec.highest pattern  
+1. **`buildCuaExtensions`** — `Prec.highest keymap.of([{ key: "Enter", run: () => { onSubmitRef.current?.(); return true; } }])`
+2. **`buildVimEnterExtension` (alwaysSubmitOnEnter: true)** — same Prec.highest pattern
 3. **`buildVimEnterExtension` (DOM capture listener)** — capture-phase listener on `view.dom` that also intercepts Enter before autocomplete
 
 When `autocompletion()` is active and a completion is selected, CM6's autocomplete plugin needs to handle Enter to accept the completion. Our `Prec.highest` binding fires first, returns `true` (consumed), and the autocomplete never sees the event.

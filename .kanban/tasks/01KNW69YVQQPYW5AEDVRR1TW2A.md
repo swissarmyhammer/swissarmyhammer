@@ -33,7 +33,7 @@ color: `var(${colorVar}, #888)`,
 border: `1px solid color-mix(in srgb, var(${colorVar}, #888) 30%, transparent)`,
 ```
 
-The `#888` inline fallback covers the "variable not set" case for every entity type. So `--project-color: #888888` in :root is functionally redundant — it produces the same pixel result as the inline fallback. 
+The `#888` inline fallback covers the "variable not set" case for every entity type. So `--project-color: #888888` in :root is functionally redundant — it produces the same pixel result as the inline fallback.
 
 **Resolution options (pick one):**
 1. **Remove `--project-color` from index.css** — the inline `#888` fallback in `buildMentionTheme` already provides the same visual result. Fewer cross-file couplings.

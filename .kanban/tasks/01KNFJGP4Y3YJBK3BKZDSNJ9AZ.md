@@ -21,7 +21,7 @@ Create a pure utility function `computeGroups(tasks, groupField, fieldDefs)` tha
      /** Task entities belonging to this group, preserving their input order. */
      tasks: Entity[];
    }
-   
+
    function computeGroups(
      tasks: Entity[],
      groupField: string,

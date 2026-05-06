@@ -23,7 +23,7 @@ Commands are the single source of truth. Both the native menu and the command pa
 ### Commands to add
 - `app.quit` — Quit the application. In palette, executes `window.close()` or Tauri quit API
 - `app.keymap.vim` — Switch to vim mode
-- `app.keymap.cua` — Switch to CUA mode  
+- `app.keymap.cua` — Switch to CUA mode
 - `app.keymap.emacs` — Switch to emacs mode
 - `app.about` — Show about dialog
 - `file.new` — New board

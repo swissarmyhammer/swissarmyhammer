@@ -36,7 +36,7 @@ No explicit `scope` required — availability is checked dynamically (clipboard 
 
 ### Rust implementation
 
-**PasteCmd**: 
+**PasteCmd**:
 - `available()` = UIState clipboard is `Some` AND (`has_in_scope(\"column\")` OR `has_in_scope(\"board\")`)
 - `execute()`:
   1. Read clipboard from UIState

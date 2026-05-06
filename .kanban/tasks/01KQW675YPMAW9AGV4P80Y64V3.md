@@ -53,4 +53,4 @@ Recommended: add two fields to the IPC for the lost case rather than overloading
 
 ## Files
 
-- `swissarmyhammer-focus/src/state.rs` — `resolve_fallback`, `handle_unregister`, fallback helpers #01KQTC1VNQM9KC90S65P7QX9N1
+- `swissarmyhammer-focus/src/state.rs` — `resolve_fallback`, `handle_unregister`, fallback helpers #stateless-nav

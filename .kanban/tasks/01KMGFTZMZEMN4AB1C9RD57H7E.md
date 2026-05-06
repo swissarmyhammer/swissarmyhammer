@@ -14,7 +14,7 @@ Wire mouse clicks on board cards to set the keyboard cursor, so mouse and keyboa
 ### Changes to `kanban-app/ui/src/components/board-view.tsx`
 
 1. Add an `onCardClick` callback to `ColumnView` that receives `(columnIndex, cardIndex)`
-2. On single-click: set the board cursor to that position (`setCursor(colIdx, cardIdx)`)  
+2. On single-click: set the board cursor to that position (`setCursor(colIdx, cardIdx)`)
 3. On double-click: open inspector (existing behavior via the info button, but now also available via double-click on the card body)
 4. Click on empty area of the board (outside cards) sets focus to column header level (`card: -1`)
 

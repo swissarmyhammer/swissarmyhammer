@@ -19,7 +19,7 @@ The test renders `<Field entity={...} fieldDef={...} mode={...} onDone={...} />`
 - `kanban-app/ui/src/components/fields/editors/editor-save.test.tsx` — rewrite
 
 ### Approach
-1. Remove `vi.mock("@/lib/field-update-context")` 
+1. Remove `vi.mock("@/lib/field-update-context")`
 2. Wrap in real `FieldUpdateProvider` + `EntityStoreProvider`
 3. Mock only `invoke` — assert `invoke("dispatch_command", { cmd: "entity.update_field", ... })` is called
 4. Keep the matrix: all field types × all keymaps × all exit paths × both modes

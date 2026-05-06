@@ -19,7 +19,7 @@ Use the existing `FocusHighlight` component (`kanban-app/ui/src/components/ui/fo
 
 1. Add new props to `ColumnViewProps`:
    - `focusedCardIndex?: number | null` — which card in this column has keyboard focus (-1 = column header, null = not focused)
-2. Wrap the column header in `<FocusHighlight focused={focusedCardIndex === -1}>` 
+2. Wrap the column header in `<FocusHighlight focused={focusedCardIndex === -1}>`
 3. Wrap each `DraggableTaskCard` in `<FocusHighlight focused={focusedCardIndex === i}>`
 4. FocusHighlight handles scroll-into-view automatically
 

@@ -28,7 +28,7 @@ The FIRST thing to do is prove whether `perspective.list` returns data in an int
 - In `swissarmyhammer-kanban/tests/perspective_integration.rs`, add a test with StoreHandle wired in that proves: `add perspective` → `list perspectives` → results include the added one → `flush_changes()` has pending events
 
 **5. Quick fixes:**
-- `perspective-tab-bar.tsx:154` — add `title="New perspective"` to "+" button  
+- `perspective-tab-bar.tsx:154` — add `title="New perspective"` to "+" button
 - `perspective.yaml` — add `palette: true` to `perspective.save`, `perspective.delete`, `perspective.list`
 
 ### Files to modify

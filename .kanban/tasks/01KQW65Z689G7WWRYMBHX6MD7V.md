@@ -76,4 +76,4 @@ The override-walk path (consulting nav_override for each ancestor up the parent_
 ## Files
 
 - `swissarmyhammer-focus/src/navigate.rs` — trait, snapshot impl, registry impl, refactor `geometric_pick` / `BeamNavStrategy::next` / `check_override`
-- Possibly `swissarmyhammer-focus/src/snapshot.rs` — implement `NavScopeView for IndexedSnapshot` #01KQTC1VNQM9KC90S65P7QX9N1
+- Possibly `swissarmyhammer-focus/src/snapshot.rs` — implement `NavScopeView for IndexedSnapshot` #stateless-nav

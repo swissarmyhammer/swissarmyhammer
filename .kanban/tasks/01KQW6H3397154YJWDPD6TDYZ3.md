@@ -85,4 +85,4 @@ Step 9's soak tests stay; they now run only the snapshot path and still cover th
 - `kanban-app/src/lib.rs` — adjust handler list / re-exports
 - `kanban-app/ui/src/lib/spatial-focus-context.tsx` — delete actions
 - `kanban-app/ui/src/components/focus-scope.tsx` — delete IPC useEffect
-- `swissarmyhammer-focus/src/divergence.rs` — DELETE (or rename to single-path harness) #01KQTC1VNQM9KC90S65P7QX9N1
+- `swissarmyhammer-focus/src/divergence.rs` — DELETE (or rename to single-path harness) #stateless-nav

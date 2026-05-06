@@ -32,7 +32,7 @@ Git calls merge drivers as: `sah merge jsonl %O %A %B` where %O=base, %A=ours (w
 
 ## Acceptance Criteria
 - [ ] `sah merge jsonl base ours theirs` produces correct merged output
-- [ ] `sah merge yaml base ours theirs` produces correct merged output  
+- [ ] `sah merge yaml base ours theirs` produces correct merged output
 - [ ] `sah merge md base ours theirs` produces correct merged output
 - [ ] Exit code 0 on success, 1 on conflict for all three
 - [ ] `sah merge --help` shows available file types

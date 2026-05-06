@@ -81,4 +81,4 @@ Recommended: drop the trait. Replace with direct `&IndexedSnapshot` arguments. C
 - `swissarmyhammer-focus/src/registry.rs` — major shrink
 - `swissarmyhammer-focus/src/state.rs` — delete handle_unregister, tighten signatures
 - `swissarmyhammer-focus/src/navigate.rs` — drop trait, take `&IndexedSnapshot`
-- `swissarmyhammer-focus/tests/*` — rewrite scope-building helpers to use snapshots #01KQTC1VNQM9KC90S65P7QX9N1
+- `swissarmyhammer-focus/tests/*` — rewrite scope-building helpers to use snapshots #stateless-nav

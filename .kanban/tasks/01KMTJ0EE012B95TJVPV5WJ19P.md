@@ -21,7 +21,7 @@ Currently `KanbanContext::entity_context()` returns `&EntityContext` (via `OnceC
 **Changes in `kanban-app/src/commands.rs` → `dispatch_command_internal()`:**
 
 1. **Set EntityContext as a direct extension:**
-   - After setting the KanbanContext extension, get the EntityContext via `kanban_ctx.entity_context().await?` and call `ctx.set_extension(entity_ctx)` 
+   - After setting the KanbanContext extension, get the EntityContext via `kanban_ctx.entity_context().await?` and call `ctx.set_extension(entity_ctx)`
    - This is the key decoupling: undo/redo commands only need EntityContext, not KanbanContext
 
 2. **Transaction wrapping for undoable commands:**

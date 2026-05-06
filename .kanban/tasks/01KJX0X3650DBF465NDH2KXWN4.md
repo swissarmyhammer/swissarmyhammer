@@ -25,7 +25,7 @@ User action (palette, keybinding, context menu, drag-drop)
 
 ## Key event sources
 - `dispatch_command` (commands.rs:558-561): emits `board-changed` for undoable commands
-- `handle_menu_event` (menu.rs:261): emits `board-changed` for native menu actions  
+- `handle_menu_event` (menu.rs:261): emits `board-changed` for native menu actions
 - `field-update-context.tsx`: field edits dispatch `entity.update_field` → Rust emits event
 - Drag-drop in `board-view.tsx`: dispatches `task.move` → Rust emits event
 

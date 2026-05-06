@@ -22,7 +22,7 @@ When `get changes` returns files from a range:
 ### Changes to `GitChangesResponse`
 
 Add optional fields:
-- `range: Option<String>` — the range that was used (e.g. `HEAD~3..HEAD`)  
+- `range: Option<String>` — the range that was used (e.g. `HEAD~3..HEAD`)
 
 The agent uses these to construct `get diff` calls.
 

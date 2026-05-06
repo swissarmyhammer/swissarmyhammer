@@ -98,4 +98,4 @@ React DevTools / `console.warn` natively show the component stack. Make sure the
 The redesign is complete. Recommended follow-up:
 
 - Re-evaluate `01KQSF0VCEWW523VXCBTYX4W0B` (nav.left collapse to engine root) — likely fixed or now diagnosable cleanly against the simpler architecture
-- Update `MEMORY.md` reference about spatial-nav architecture if any entries point to the old replicated kernel #01KQTC1VNQM9KC90S65P7QX9N1
+- Update `MEMORY.md` reference about spatial-nav architecture if any entries point to the old replicated kernel #stateless-nav

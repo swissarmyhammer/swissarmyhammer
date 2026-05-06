@@ -15,7 +15,7 @@ Uncovered areas:
 - find_from_current_dir()
 
 Also swissarmyhammer-git/src/types.rs (68.8%, 30 uncovered lines):
-- StatusSummary::all_changed_files() 
+- StatusSummary::all_changed_files()
 - StatusSummary::has_conflicts()
 - CommitInfo::new() with short hash < 8 chars
 - FromStr impl for BranchName #coverage-gap

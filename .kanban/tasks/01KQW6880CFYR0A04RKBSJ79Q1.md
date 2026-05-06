@@ -66,4 +66,4 @@ When `None`: existing behavior (walks registry).
 ## Files
 
 - `swissarmyhammer-focus/src/registry.rs` — new field + dual-write in `record_focus`
-- `swissarmyhammer-focus/src/state.rs` — `resolve_fallback` reads from `last_focused_by_fq` first #01KQTC1VNQM9KC90S65P7QX9N1
+- `swissarmyhammer-focus/src/state.rs` — `resolve_fallback` reads from `last_focused_by_fq` first #stateless-nav

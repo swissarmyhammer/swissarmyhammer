@@ -9,7 +9,7 @@ title: 'Fix: Live LSP ops need atomic lock hold for didOpen+request+didClose seq
 
 Live LSP ops (get_hover, get_definition, get_references, etc.) send a 3-step sequence:
 1. `lsp_notify(didOpen)`
-2. `lsp_request(textDocument/hover)` 
+2. `lsp_request(textDocument/hover)`
 3. `lsp_notify(didClose)`
 
 Each of these independently acquires and releases the `SharedLspClient` mutex. Between steps, the indexing worker thread can interleave its own requests on the same stdin/stdout pipe, causing:
@@ -47,16 +47,16 @@ pub fn lsp_request_with_document(
         Some(rpc) => rpc,
         None => return Ok(None),
     };
-    
+
     // All three ops under one lock hold:
     let uri = file_path_to_uri(file_path);
     let text = std::fs::read_to_string(file_path).unwrap_or_default();
     let lang = language_id_from_path(file_path);
-    
+
     rpc.send_notification("textDocument/didOpen", json!({...}))?;
     let response = rpc.send_request(method, params)?;
     rpc.send_notification("textDocument/didClose", json!({...}))?;
-    
+
     Ok(Some(response))
 }
 ```
