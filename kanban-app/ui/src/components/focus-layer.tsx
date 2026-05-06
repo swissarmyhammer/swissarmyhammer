@@ -50,7 +50,7 @@
  * your overlay, you want a `<FocusLayer>`.
  */
 
-import { useContext, useEffect, useMemo, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   asLayerName,
   composeFq,
@@ -70,6 +70,10 @@ import {
 } from "@/components/focus-layer-z-tier-context";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
+import {
+  LayerScopeRegistry,
+  LayerScopeRegistryContext,
+} from "@/lib/layer-scope-registry-context";
 import { FocusLayerOverlay } from "@/components/focus-debug-overlay";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +200,24 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
 
   const { pushLayer, popLayer } = useSpatialFocusActions();
 
+  // ---------------------------------------------------------------------
+  // LayerScopeRegistry — React-side replica of the kernel's per-layer
+  // scope set. Step 1 of the spatial-nav redesign (parent card
+  // 01KQTC1VNQM9KC90S65P7QX9N1): stand the registry up alongside the
+  // existing kernel sync. Both sources of truth coexist for now.
+  //
+  // Held in a ref so the registry instance is stable across re-renders.
+  // If the layer's FQM changes (rare — caller swapped `name` or
+  // `parentLayerFq`), the registry is rebuilt from scratch so we don't
+  // carry stale entries from the previous layer identity. The push/pop
+  // effect below already tears the kernel-side layer down on the same
+  // dependency change, so React-side teardown matches kernel teardown.
+  // ---------------------------------------------------------------------
+  const registryRef = useRef<LayerScopeRegistry | null>(null);
+  if (registryRef.current === null || registryRef.current.layerFq !== fq) {
+    registryRef.current = new LayerScopeRegistry(fq);
+  }
+
   useEffect(() => {
     // The kernel takes both the segment (path component) and the
     // separate `LayerName` metadata. By convention they are the same
@@ -256,10 +278,12 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
   return (
     <FullyQualifiedMonikerContext.Provider value={fq}>
       <LayerFqContext.Provider value={fq}>
-        <FocusLayerZTierContext.Provider value={myTier}>
-          {debugEnabled ? <FocusLayerOverlay name={name} /> : null}
-          {children}
-        </FocusLayerZTierContext.Provider>
+        <LayerScopeRegistryContext.Provider value={registryRef.current}>
+          <FocusLayerZTierContext.Provider value={myTier}>
+            {debugEnabled ? <FocusLayerOverlay name={name} /> : null}
+            {children}
+          </FocusLayerZTierContext.Provider>
+        </LayerScopeRegistryContext.Provider>
       </LayerFqContext.Provider>
     </FullyQualifiedMonikerContext.Provider>
   );

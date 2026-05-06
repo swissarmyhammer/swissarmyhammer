@@ -1,8 +1,8 @@
 ---
 assignees:
 - wballard
-position_column: review
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffa580
 project: spatial-nav
 title: 'spatial-nav redesign step 1: add LayerScopeRegistry context (additive, no behavior change)'
 ---

@@ -94,6 +94,7 @@ import {
   useFocusClaim,
   useSpatialFocusActions,
 } from "@/lib/spatial-focus-context";
+import { useOptionalLayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 import { cn } from "@/lib/utils";
 import { useFocusDebug } from "@/lib/focus-debug-context";
 import {
@@ -417,6 +418,31 @@ function SpatialFocusScopeBody({
     unregisterScope,
     updateRect,
   ]);
+
+  // ---------------------------------------------------------------------
+  // LayerScopeRegistry registration — step 1 of the spatial-nav redesign
+  // ---------------------------------------------------------------------
+  // Mirrors the kernel-side `register_scope` / `unregister_scope` pair
+  // above into the React-side per-layer registry provided by
+  // `<FocusLayer>`. Runs ALONGSIDE the existing kernel sync — this is
+  // additive in step 1; the kernel path is still authoritative. Later
+  // steps will cut the kernel path over to per-decision snapshots built
+  // from this registry and remove the kernel-sync effect entirely.
+  //
+  // `navOverride` is intentionally a dependency here (unlike the kernel
+  // sync, which reads through a ref and ignores mid-life changes). The
+  // redesign's snapshot-on-decision contract makes mid-life changes
+  // observable in the next nav, which is the behaviour callers
+  // naively expect; tying the registry update to the prop directly
+  // delivers that.
+  const layerRegistry = useOptionalLayerScopeRegistry();
+  useEffect(() => {
+    if (!layerRegistry) return;
+    layerRegistry.add(fq, { ref, parentZone, navOverride, segment });
+    return () => {
+      layerRegistry.delete(fq);
+    };
+  }, [layerRegistry, fq, segment, parentZone, navOverride]);
 
   useTrackRectOnAncestorScroll(ref, fq, updateRect);
 
