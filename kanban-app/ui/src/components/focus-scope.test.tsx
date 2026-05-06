@@ -1052,9 +1052,10 @@ describe("FocusScope", () => {
       fireEvent.click(getByText("card"));
 
       await waitFor(() => {
-        expect(invoke).toHaveBeenCalledWith("spatial_focus", {
-          fq: registeredKey,
-        });
+        expect(invoke).toHaveBeenCalledWith(
+          "spatial_focus",
+          expect.objectContaining({ fq: registeredKey }),
+        );
       });
     });
 

@@ -230,8 +230,14 @@ export function installKernelSimulator(
       return undefined;
     }
     if (cmd === "spatial_pop_layer") {
+      // Mirrors the real kernel: returns the popped layer's
+      // `last_focused` (or `null`) so the React side can issue the
+      // follow-up `spatial_focus(next_fq, snapshot)`. The simulator
+      // tracks layers without a `last_focused` slot, so the return is
+      // `null` — the no-restoration case the round-trip handler
+      // tolerates.
       layers.delete(a.fq as FullyQualifiedMoniker);
-      return undefined;
+      return null;
     }
     if (cmd === "spatial_register_scope") {
       const record: RegistrationRecord = {

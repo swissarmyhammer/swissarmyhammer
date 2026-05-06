@@ -5,8 +5,8 @@ depends_on:
 - 01KQW62XNHC1YP8ZKJGGFP0JZW
 - 01KQW65Z689G7WWRYMBHX6MD7V
 - 01KQW6880CFYR0A04RKBSJ79Q1
-position_column: todo
-position_ordinal: d680
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffab80
 project: spatial-nav
 title: 'spatial-nav redesign step 7: spatial_focus(snapshot) IPC variant + wire click and programmatic focus'
 ---
@@ -78,3 +78,12 @@ Same pattern as step 6: dev-mode dual-run, log `tracing::warn!` on divergence be
 - `kanban-app/src/commands.rs` — `spatial_focus` accepts optional snapshot
 - `swissarmyhammer-focus/src/state.rs` — `state.focus` branches on snapshot
 - `kanban-app/ui/src/lib/spatial-focus-context.tsx` — `actions.focus` builds snapshot; layer-pop event handler does round-trip #stateless-nav
+
+## Review Findings (2026-05-06 15:16)
+
+### Warnings
+- [x] `swissarmyhammer-focus/src/state.rs:470-475` — `focus_with_snapshot` emits `tracing::error!` ("focus target missing from snapshot; dropping commit") when `fq` is absent from `snapshot.scopes`. The layer-pop round-trip relies on this drop path to gracefully tolerate stale `last_focused` targets after the previously-focused scope unmounted while a child layer was open — a normal user-driven scenario, not torn state. The registry-path equivalent `state.focus(unknown_fq)` returns silently via `?` on line 414 with no log. Promote-or-demote: either drop the log entirely (to match the silent registry path and the design's "natural fallback" intent), or downgrade to `tracing::debug!`. Today's `tracing::error!` will produce noise on every layer-pop where the target unmounted, including filter changes and task deletions during dialog focus. The doc comment on the function ("absence is treated as torn state") should also be softened to match — "torn state" implies a kernel bug, not an expected user flow.
+- [x] `kanban-app/ui/src/lib/spatial-focus-context.test.tsx:501-513` — The "popLayer rounds-tripping through spatial_focus" test asserts both calls happened via `expect(mockInvoke).toHaveBeenCalledWith(...)` twice, but does not pin the order. The implementation is sequential by construction (`await invoke('spatial_pop_layer'); ... await invoke('spatial_focus')`) but the test would still pass if a future refactor accidentally reversed them or fired them in parallel. The reviewer brief explicitly required ordering verification. Suggested fix: assert `mockInvoke.mock.calls[N][0] === 'spatial_pop_layer'` and `mockInvoke.mock.calls[N+1][0] === 'spatial_focus'`, or use `mockInvoke.mock.invocationCallOrder` to compare the two invocations directly.
+
+### Nits
+- [x] `swissarmyhammer-focus/src/state.rs:439-451` — The doc comment on `focus_with_snapshot` enumerates four `None` conditions ("`fq` is not registered, its layer is missing, the window already has `fq` focused, or `fq` is not present in `snapshot.scopes`"). Three of the four match `Self::focus`'s contract verbatim; consider phrasing this as "Returns `None` under the same conditions as [`Self::focus`], plus when `fq` is not present in `snapshot.scopes`" to avoid drift if the registry-path contract ever changes.

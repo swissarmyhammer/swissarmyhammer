@@ -401,7 +401,8 @@ function buildSpatialFocusActions(
     registryRef.current.has(fq);
 
   const focus: SpatialFocusActions["focus"] = async (fq) => {
-    await invoke("spatial_focus", { fq });
+    const snapshot = buildSnapshotForFocused(layerRegistriesRef, fq);
+    await invoke("spatial_focus", { fq, snapshot });
   };
 
   const clearFocus: SpatialFocusActions["clearFocus"] = async () => {
@@ -490,7 +491,14 @@ function buildSpatialFocusActions(
   };
 
   const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
-    await invoke("spatial_pop_layer", { fq });
+    const nextFq = await invoke<FullyQualifiedMoniker | null>(
+      "spatial_pop_layer",
+      { fq },
+    );
+    if (nextFq !== null && nextFq !== undefined) {
+      const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
+      await invoke("spatial_focus", { fq: nextFq, snapshot });
+    }
   };
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {

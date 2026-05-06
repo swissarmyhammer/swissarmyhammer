@@ -133,7 +133,10 @@ describe("SpatialFocusProvider", () => {
       await result.current.focus(key);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_focus", { fq: key });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "spatial_focus",
+      expect.objectContaining({ fq: key }),
+    );
 
     unmount();
   });
@@ -389,6 +392,167 @@ describe("SpatialFocusProvider", () => {
     );
 
     dispose();
+    unmount();
+  });
+
+  it("invokes spatial_focus with a populated snapshot when the target FQ is in a registered layer registry", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const layerFq: FullyQualifiedMoniker = asFq("/window");
+    const target: FullyQualifiedMoniker = asFq("/window/zone/card");
+    const zone: FullyQualifiedMoniker = asFq("/window/zone");
+
+    const targetNode = document.createElement("div");
+    targetNode.getBoundingClientRect = () =>
+      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+
+    const registry = new LayerScopeRegistry(layerFq);
+    registry.add(target, {
+      ref: { current: targetNode },
+      parentZone: zone,
+      navOverride: {},
+      segment: asSegment("card"),
+    });
+
+    const dispose = result.current.registerLayerRegistry(layerFq, registry);
+
+    await act(async () => {
+      await result.current.focus(target);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "spatial_focus",
+      expect.objectContaining({
+        fq: target,
+        snapshot: expect.objectContaining({
+          layer_fq: layerFq,
+          scopes: expect.arrayContaining([
+            expect.objectContaining({
+              fq: target,
+              parent_zone: zone,
+            }),
+          ]),
+        }),
+      }),
+    );
+
+    dispose();
+    unmount();
+  });
+
+  it("invokes spatial_focus with snapshot: undefined when no layer registry contains the target FQ", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const target: FullyQualifiedMoniker = asFq("/window/orphan");
+
+    await act(async () => {
+      await result.current.focus(target);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_focus", {
+      fq: target,
+      snapshot: undefined,
+    });
+
+    unmount();
+  });
+
+  it("popLayer rounds-tripping through spatial_focus when the kernel returns a next_fq", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const layerFq: FullyQualifiedMoniker = asFq("/window");
+    const restored: FullyQualifiedMoniker = asFq("/window/restored");
+    const popped: FullyQualifiedMoniker = asFq("/window/dialog");
+
+    // Register a layer registry for the parent layer so the round-trip
+    // builds a populated snapshot for the restored FQ.
+    const restoredNode = document.createElement("div");
+    restoredNode.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 10, height: 10, top: 0, right: 10, bottom: 10, left: 0, toJSON: () => "" }) as DOMRect;
+    const registry = new LayerScopeRegistry(layerFq);
+    registry.add(restored, {
+      ref: { current: restoredNode },
+      parentZone: null,
+      navOverride: {},
+      segment: asSegment("restored"),
+    });
+    const dispose = result.current.registerLayerRegistry(layerFq, registry);
+
+    // The kernel returns the layer's `last_focused`; mock that.
+    mockInvoke.mockImplementation(async (...args: unknown[]) => {
+      const cmd = args[0] as string;
+      if (cmd === "spatial_pop_layer") return restored;
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.popLayer(popped);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_pop_layer", { fq: popped });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "spatial_focus",
+      expect.objectContaining({
+        fq: restored,
+        snapshot: expect.objectContaining({
+          layer_fq: layerFq,
+          scopes: expect.arrayContaining([
+            expect.objectContaining({ fq: restored }),
+          ]),
+        }),
+      }),
+    );
+
+    // Pin call order: spatial_pop_layer must precede spatial_focus.
+    const popIdx = mockInvoke.mock.calls.findIndex(
+      ([cmd]) => cmd === "spatial_pop_layer",
+    );
+    const focusIdx = mockInvoke.mock.calls.findIndex(
+      ([cmd]) => cmd === "spatial_focus",
+    );
+    expect(popIdx).toBeGreaterThanOrEqual(0);
+    expect(focusIdx).toBeGreaterThanOrEqual(0);
+    expect(
+      mockInvoke.mock.invocationCallOrder[popIdx],
+    ).toBeLessThan(mockInvoke.mock.invocationCallOrder[focusIdx]);
+
+    dispose();
+    unmount();
+  });
+
+  it("popLayer does not round-trip to spatial_focus when the kernel returns null", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const popped: FullyQualifiedMoniker = asFq("/window/dialog");
+
+    mockInvoke.mockImplementation(async (...args: unknown[]) => {
+      const cmd = args[0] as string;
+      if (cmd === "spatial_pop_layer") return null;
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.popLayer(popped);
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("spatial_pop_layer", { fq: popped });
+    const focusCalls = mockInvoke.mock.calls.filter(
+      ([cmd]) => cmd === "spatial_focus",
+    );
+    expect(focusCalls).toHaveLength(0);
+
     unmount();
   });
 });

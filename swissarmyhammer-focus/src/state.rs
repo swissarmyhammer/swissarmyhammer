@@ -436,6 +436,57 @@ impl SpatialState {
         })
     }
 
+    /// Move focus to `fq`, writing ancestry from `snapshot` instead of the
+    /// registry's `parent_zone` chain.
+    ///
+    /// `registry` is still consulted for the focused entry's owning
+    /// window, segment, and layer-ancestor chain when recording focus;
+    /// only the scope-ancestor walk reads from `snapshot`. If `fq` is
+    /// absent from `snapshot.scopes` the commit drops as a graceful
+    /// fallback — this is the natural path for layer-pop restoration
+    /// targets that have unmounted (filter changes, deletions, etc.)
+    /// while a child layer was open, and matches the snapshot-walk
+    /// contract on [`Self::navigate_with_snapshot`].
+    ///
+    /// Returns `None` under the same conditions as [`Self::focus`],
+    /// plus when `fq` is not present in `snapshot.scopes`.
+    pub fn focus_with_snapshot(
+        &mut self,
+        registry: &mut SpatialRegistry,
+        snapshot: &crate::snapshot::NavSnapshot,
+        fq: FullyQualifiedMoniker,
+    ) -> Option<FocusChangedEvent> {
+        let entry = registry.find_by_fq(&fq)?;
+        let layer = registry.layer(&entry.layer_fq)?;
+        let window = layer.window_label.clone();
+        let segment = entry.segment.clone();
+
+        let prev_fq = self.focus_by_window.get(&window).cloned();
+        if prev_fq.as_ref() == Some(&fq) {
+            return None;
+        }
+
+        let indexed = IndexedSnapshot::new(snapshot);
+        if indexed.get(&fq).is_none() {
+            tracing::debug!(
+                op = "focus_with_snapshot",
+                focused_fq = %fq,
+                layer_fq = %snapshot.layer_fq,
+                "focus target missing from snapshot; dropping commit"
+            );
+            return None;
+        }
+
+        self.focus_by_window.insert(window.clone(), fq.clone());
+        registry.record_focus(&fq, Some(&indexed));
+        Some(FocusChangedEvent {
+            window_label: window,
+            prev_fq,
+            next_fq: Some(fq),
+            next_segment: Some(segment),
+        })
+    }
+
     /// React to a scope being unregistered from the registry, computing
     /// a scope-aware focus fallback.
     ///
@@ -657,15 +708,17 @@ impl SpatialState {
     /// against `snapshot` instead of the registry's scope set.
     ///
     /// `registry` is still consulted for layer / segment / window
-    /// metadata when committing the resolved focus through
-    /// [`Self::focus`]; only the geometric search reads from `snapshot`.
-    /// The snapshot must include `from` — its absence is treated as torn
-    /// state, mirroring the registry path.
+    /// metadata when committing the resolved focus and for the layer-
+    /// ancestor chain in `record_focus`; the geometric search and the
+    /// scope-ancestor walk both read from `snapshot`. The snapshot must
+    /// include `from` — its absence is treated as torn state, mirroring
+    /// the registry path.
     ///
     /// Returns `None` under the same conditions as [`Self::navigate_with`]:
     /// the focused FQM has no resolvable entry to commit through, the
     /// resolved target is not registered, or the resolved target is
-    /// already focused in its window.
+    /// already focused in its window. Also returns `None` when the
+    /// resolved target is missing from `snapshot` (torn state).
     pub fn navigate_with_snapshot(
         &mut self,
         registry: &mut SpatialRegistry,
@@ -680,7 +733,7 @@ impl SpatialState {
         if !registry.is_registered(&target_fq) {
             return None;
         }
-        self.focus(registry, target_fq)
+        self.focus_with_snapshot(registry, snapshot, target_fq)
     }
 
     /// Clear focus for `window`.
