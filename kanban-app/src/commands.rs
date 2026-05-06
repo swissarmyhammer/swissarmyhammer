@@ -2157,7 +2157,8 @@ pub async fn show_context_menu(
 
 use swissarmyhammer_focus::{
     BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope, FullyQualifiedMoniker,
-    LayerName, Rect, RegisterEntry, SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
+    LayerName, NavSnapshot, Rect, RegisterEntry, SegmentMoniker, SpatialRegistry, SpatialState,
+    WindowLabel,
 };
 
 /// Tauri event name for spatial focus changes — mirrors the listener
@@ -2486,14 +2487,20 @@ pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> 
 
 /// Move focus relative to `key` in `direction`.
 ///
-/// Uses the default [`BeamNavStrategy`] for the navigator. `key` is the
-/// currently-focused scope (the React side passes its own focused key
-/// to keep this call symmetric across windows).
+/// When `snapshot` is `Some`, pathfinding runs against the snapshot;
+/// the registry is consulted only for the focused entry's segment /
+/// window and the target's commit metadata. When `snapshot` is `None`,
+/// the registry-backed [`BeamNavStrategy`] runs.
+///
+/// In debug builds, supplying a snapshot also triggers a parity check:
+/// the registry path is run alongside, and a `tracing::warn!` fires when
+/// the two paths diverge. The check is gated by `#[cfg(debug_assertions)]`
+/// so release builds never pay the double-pathfinding cost.
 ///
 /// Returns `Ok(())` whether or not focus actually moved — under the
 /// no-silent-dropout contract, the kernel always returns a moniker; if
 /// it equals the focused moniker (semantic "stay put" or torn-state
-/// echo), `navigate_with` short-circuits via the
+/// echo), the inner method short-circuits via the
 /// "already focused → no event" check in `SpatialState::focus` and
 /// nothing is emitted. Same outcome when the resolved moniker doesn't
 /// own any registered scope.
@@ -2503,10 +2510,18 @@ pub async fn spatial_navigate(
     state: State<'_, AppState>,
     focused_fq: FullyQualifiedMoniker,
     direction: Direction,
+    snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
-    let strategy = BeamNavStrategy::new();
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate_with(registry, &strategy, focused_fq, direction)
+    let event = with_spatial(&state, |registry, spatial_state| match &snapshot {
+        Some(snapshot) => {
+            #[cfg(debug_assertions)]
+            check_navigate_divergence(registry, snapshot, &focused_fq, direction);
+            spatial_state.navigate_with_snapshot(registry, snapshot, focused_fq.clone(), direction)
+        }
+        None => {
+            let strategy = BeamNavStrategy::new();
+            spatial_state.navigate_with(registry, &strategy, focused_fq.clone(), direction)
+        }
     })
     .await;
 
@@ -2514,6 +2529,50 @@ pub async fn spatial_navigate(
         emit_focus_changed(&window, &event)?;
     }
     Ok(())
+}
+
+/// Compare snapshot-driven and registry-driven nav targets and warn on
+/// divergence.
+///
+/// Bedding-in instrumentation for the spatial-nav redesign cutover: the
+/// snapshot path is the new authoritative path, but until every layer's
+/// snapshot is proven to track the registry it is shipped alongside the
+/// registry path so a regression is observable in dev logs. Compiled out
+/// of release builds via the call-site `#[cfg(debug_assertions)]` gate.
+#[cfg(debug_assertions)]
+fn check_navigate_divergence(
+    registry: &SpatialRegistry,
+    snapshot: &NavSnapshot,
+    focused_fq: &FullyQualifiedMoniker,
+    direction: Direction,
+) {
+    use swissarmyhammer_focus::navigate::NavStrategy;
+    use swissarmyhammer_focus::{pick_target_via_view, IndexedSnapshot};
+
+    let Some(entry) = registry.find_by_fq(focused_fq) else {
+        return;
+    };
+    let focused_segment = entry.segment.clone();
+    let layer_fq = entry.layer_fq.clone();
+
+    let registry_target =
+        BeamNavStrategy::new().next(registry, focused_fq, &focused_segment, direction);
+
+    let snapshot_view = IndexedSnapshot::new(snapshot);
+    let snapshot_target =
+        pick_target_via_view(&snapshot_view, focused_fq, &focused_segment, direction);
+
+    if registry_target != snapshot_target {
+        tracing::warn!(
+            op = "spatial_navigate.divergence",
+            focused_fq = %focused_fq,
+            ?direction,
+            layer_fq = %layer_fq,
+            registry_target = %registry_target,
+            snapshot_target = %snapshot_target,
+            "snapshot path picked a different nav target than the registry path",
+        );
+    }
 }
 
 /// Push a new layer onto the registry.
@@ -3387,6 +3446,237 @@ mod spatial_command_tests {
         assert_eq!(event.prev_fq, Some(top));
         assert_eq!(event.next_fq, Some(bottom));
         assert_eq!(event.next_segment, Some(m_bottom));
+    }
+
+    /// A snapshot mirroring the registry's scope set lands on the same
+    /// target as the registry path. Pinned regression for the parity
+    /// invariant the cutover relies on.
+    #[test]
+    fn spatial_navigate_with_snapshot_matches_registry_target() {
+        use swissarmyhammer_focus::SnapshotScope;
+
+        let mut registry = SpatialRegistry::new();
+        let mut state_a = SpatialState::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+
+        let (top, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:top",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (bottom, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:bottom",
+            rect_at(0.0, 20.0, 10.0, 10.0),
+        );
+
+        state_a
+            .focus(&mut registry, top.clone())
+            .expect("focus top");
+
+        let snapshot = NavSnapshot {
+            layer_fq: layer.clone(),
+            scopes: registry
+                .scopes_in_layer(&layer)
+                .map(|s| SnapshotScope {
+                    fq: s.fq.clone(),
+                    rect: s.rect,
+                    parent_zone: s.parent_zone.clone(),
+                    nav_override: s.overrides.clone(),
+                })
+                .collect(),
+        };
+
+        let mut state_snapshot = state_a.clone();
+        let snapshot_event = state_snapshot
+            .navigate_with_snapshot(
+                &mut registry.clone(),
+                &snapshot,
+                top.clone(),
+                Direction::Down,
+            )
+            .expect("Down via snapshot resolves to bottom");
+
+        let mut state_registry = state_a;
+        let strategy = BeamNavStrategy::new();
+        let registry_event = state_registry
+            .navigate_with(&mut registry, &strategy, top.clone(), Direction::Down)
+            .expect("Down via registry resolves to bottom");
+
+        assert_eq!(snapshot_event.next_fq, Some(bottom.clone()));
+        assert_eq!(registry_event.next_fq, Some(bottom));
+        assert_eq!(snapshot_event.next_fq, registry_event.next_fq);
+    }
+
+    /// A snapshot whose rect for the off-axis neighbor is rewritten so
+    /// the snapshot path picks a different target than the registry
+    /// path triggers `tracing::warn!` from the dev-mode divergence
+    /// check, with the focused FQM, both target FQMs, and the layer FQM
+    /// in structured fields.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn check_navigate_divergence_warns_on_target_mismatch() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use swissarmyhammer_focus::SnapshotScope;
+        use tracing::{
+            field::{Field, Visit},
+            span::Attributes,
+            Event, Id, Level, Subscriber,
+        };
+        use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
+
+        #[derive(Debug, Default, Clone)]
+        struct CapturedEvent {
+            level: Option<Level>,
+            message: String,
+            fields: HashMap<String, String>,
+        }
+
+        struct FieldVisitor<'a> {
+            fields: &'a mut HashMap<String, String>,
+            message: &'a mut String,
+        }
+
+        impl<'a> Visit for FieldVisitor<'a> {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                if field.name() == "message" {
+                    self.message.push_str(value);
+                } else {
+                    self.fields
+                        .insert(field.name().to_string(), value.to_string());
+                }
+            }
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.message.push_str(&format!("{value:?}"));
+                } else {
+                    self.fields
+                        .insert(field.name().to_string(), format!("{value:?}"));
+                }
+            }
+        }
+
+        struct CapturingLayer {
+            events: Arc<Mutex<Vec<CapturedEvent>>>,
+        }
+
+        impl<S> Layer<S> for CapturingLayer
+        where
+            S: Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+                let level = *event.metadata().level();
+                if level > Level::WARN {
+                    return;
+                }
+                let mut captured = CapturedEvent {
+                    level: Some(level),
+                    ..CapturedEvent::default()
+                };
+                let mut visitor = FieldVisitor {
+                    fields: &mut captured.fields,
+                    message: &mut captured.message,
+                };
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(captured);
+            }
+            fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
+        }
+
+        let mut registry = SpatialRegistry::new();
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let (top, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:top",
+            rect_at(0.0, 0.0, 10.0, 10.0),
+        );
+        let (bottom, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:bottom",
+            rect_at(0.0, 20.0, 10.0, 10.0),
+        );
+        let (right_neighbor, _) = register_leaf(
+            &mut registry,
+            &layer,
+            "task:right",
+            rect_at(40.0, 100.0, 10.0, 10.0),
+        );
+
+        // Build a snapshot whose `bottom` rect lies off to the right
+        // (out of the cardinal-Down half-plane), so the snapshot path
+        // picks `right_neighbor` while the registry path still picks
+        // `bottom`.
+        let snapshot = NavSnapshot {
+            layer_fq: layer.clone(),
+            scopes: vec![
+                SnapshotScope {
+                    fq: top.clone(),
+                    rect: rect_at(0.0, 0.0, 10.0, 10.0),
+                    parent_zone: None,
+                    nav_override: HashMap::new(),
+                },
+                SnapshotScope {
+                    fq: bottom.clone(),
+                    rect: rect_at(500.0, 500.0, 10.0, 10.0),
+                    parent_zone: None,
+                    nav_override: HashMap::new(),
+                },
+                SnapshotScope {
+                    fq: right_neighbor.clone(),
+                    rect: rect_at(0.0, 30.0, 10.0, 10.0),
+                    parent_zone: None,
+                    nav_override: HashMap::new(),
+                },
+            ],
+        };
+
+        let events = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
+        let layer_capture = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = tracing_subscriber::registry().with(layer_capture);
+        tracing::subscriber::with_default(subscriber, || {
+            check_navigate_divergence(&registry, &snapshot, &top, Direction::Down);
+        });
+
+        let captured = events.lock().unwrap().clone();
+        let divergence_events: Vec<_> = captured
+            .iter()
+            .filter(|e| {
+                e.fields
+                    .get("op")
+                    .map(|v| v == "spatial_navigate.divergence")
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            divergence_events.len(),
+            1,
+            "expected exactly one divergence event, got {captured:?}"
+        );
+        let event = divergence_events[0];
+        assert_eq!(event.level, Some(Level::WARN));
+        assert_eq!(
+            event.fields.get("registry_target").map(String::as_str),
+            Some(bottom.as_str())
+        );
+        assert_eq!(
+            event.fields.get("snapshot_target").map(String::as_str),
+            Some(right_neighbor.as_str())
+        );
+        assert_eq!(
+            event.fields.get("focused_fq").map(String::as_str),
+            Some(top.as_str())
+        );
+        assert_eq!(
+            event.fields.get("layer_fq").map(String::as_str),
+            Some(layer.as_str())
+        );
     }
 
     /// `spatial_push_layer_inner` derives `window_label` from the calling

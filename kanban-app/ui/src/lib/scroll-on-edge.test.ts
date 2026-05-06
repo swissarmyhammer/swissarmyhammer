@@ -439,6 +439,9 @@ describe("runNavWithScrollOnEdge", () => {
       drillIn: todo("drillIn") as unknown as SpatialFocusActions["drillIn"],
       drillOut: todo("drillOut") as unknown as SpatialFocusActions["drillOut"],
       focusedFq: () => state.focused,
+      registerLayerRegistry: todo(
+        "registerLayerRegistry",
+      ) as unknown as SpatialFocusActions["registerLayerRegistry"],
       subscribeFocusChanged: todo(
         "subscribeFocusChanged",
       ) as unknown as SpatialFocusActions["subscribeFocusChanged"],

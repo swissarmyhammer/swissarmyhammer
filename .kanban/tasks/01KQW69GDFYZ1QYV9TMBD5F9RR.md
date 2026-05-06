@@ -5,8 +5,8 @@ depends_on:
 - 01KQW62XNHC1YP8ZKJGGFP0JZW
 - 01KQW65Z689G7WWRYMBHX6MD7V
 - 01KQW6880CFYR0A04RKBSJ79Q1
-position_column: todo
-position_ordinal: d580
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffaa80
 project: spatial-nav
 title: 'spatial-nav redesign step 6: spatial_navigate(snapshot) IPC variant + wire React nav handler'
 ---

@@ -317,16 +317,22 @@ function spatialFocusCalls(): Array<{ fq: FullyQualifiedMoniker }> {
     .map((c) => c[1] as { fq: FullyQualifiedMoniker });
 }
 
-/** Collect every `spatial_navigate` call's args, in order. */
+/** Collect every `spatial_navigate` call's `(focusedFq, direction)`
+ * pair, in order. The snapshot field is omitted from the comparison —
+ * tests in this file pin the IPC routing, not the snapshot payload. */
 function spatialNavigateCalls(): Array<{
   focusedFq: FullyQualifiedMoniker;
   direction: string;
 }> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_navigate")
-    .map(
-      (c) => c[1] as { focusedFq: FullyQualifiedMoniker; direction: string },
-    );
+    .map((c) => {
+      const args = c[1] as {
+        focusedFq: FullyQualifiedMoniker;
+        direction: string;
+      };
+      return { focusedFq: args.focusedFq, direction: args.direction };
+    });
 }
 
 /** Collect every `spatial_drill_out` call's args, in order. */

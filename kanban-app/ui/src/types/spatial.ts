@@ -286,3 +286,39 @@ export interface Rect {
 export type FocusOverrides = Partial<
   Record<Direction, FullyQualifiedMoniker | null>
 >;
+
+/**
+ * One scope's contribution to a navigation snapshot.
+ *
+ * Mirrors `swissarmyhammer_focus::snapshot::SnapshotScope`. Field names
+ * use snake_case so the JSON payload built on the React side
+ * deserializes verbatim into the Rust kernel.
+ */
+export interface SnapshotScope {
+  /** Canonical fully-qualified path to this scope. */
+  readonly fq: FullyQualifiedMoniker;
+  /** Viewport rect in logical pixels at snapshot time. */
+  readonly rect: Rect;
+  /**
+   * FQM of the immediate enclosing scope or zone, or `null` when this
+   * scope is registered directly under the layer root.
+   */
+  readonly parent_zone: FullyQualifiedMoniker | null;
+  /** Per-direction overrides; `{}` means "no overrides". */
+  readonly nav_override: FocusOverrides;
+}
+
+/**
+ * A snapshot of every `<FocusScope>` mounted under a single
+ * `<FocusLayer>`.
+ *
+ * Mirrors `swissarmyhammer_focus::snapshot::NavSnapshot`. Built per
+ * decision (per-nav, per-focus, per-focus-lost) and shipped to the
+ * kernel inline so the kernel never has to read scope state out-of-band.
+ */
+export interface NavSnapshot {
+  /** FQM of the layer this snapshot describes. */
+  readonly layer_fq: FullyQualifiedMoniker;
+  /** All scopes registered in the layer at snapshot time. */
+  readonly scopes: SnapshotScope[];
+}

@@ -53,56 +53,17 @@ import { createContext, useContext } from "react";
 import type {
   FocusOverrides,
   FullyQualifiedMoniker,
-  Rect,
+  NavSnapshot,
   SegmentMoniker,
+  SnapshotScope,
 } from "@/types/spatial";
 import { asPixels } from "@/types/spatial";
 
-// ---------------------------------------------------------------------------
-// Wire-shape types — mirror the planned Rust types
-// ---------------------------------------------------------------------------
-
-/**
- * A single scope's contribution to a navigation snapshot.
- *
- * Mirrors the shape of the planned Rust `SnapshotScope` from step 2 of
- * the parent card. The kernel's pathfinding and fallback rules will
- * walk a flat `Vec<SnapshotScope>` plus the `parent_zone` chain to
- * resolve targets. Field names use snake_case so the React-side build
- * can be serialized verbatim once the Tauri command boundary lands.
- */
-export interface SnapshotScope {
-  /** The scope's canonical FQM. */
-  readonly fq: FullyQualifiedMoniker;
-  /** Viewport rect at snapshot time, in logical pixels. */
-  readonly rect: Rect;
-  /**
-   * FQM of the enclosing scope or zone, or `null` when this scope is
-   * registered directly under the layer root. The kernel walks this
-   * chain in `resolve_fallback` to locate sibling-in-zone and
-   * parent-zone fall-back targets.
-   */
-  readonly parent_zone: FullyQualifiedMoniker | null;
-  /** Per-direction overrides. Empty object means "no overrides". */
-  readonly nav_override: FocusOverrides;
-}
-
-/**
- * A snapshot of every `<FocusScope>` mounted under a single
- * `<FocusLayer>`.
- *
- * Mirrors the shape of the planned Rust `NavSnapshot` from step 2 of
- * the parent card. Built per decision (per-nav, per-focus, per-focus-
- * lost) and shipped to the kernel inline so the kernel never has to
- * read scope state out-of-band. Step 1 builds the snapshot but does
- * not yet send it anywhere.
- */
-export interface NavSnapshot {
-  /** FQM of the layer this snapshot describes. */
-  readonly layer_fq: FullyQualifiedMoniker;
-  /** All scopes registered in the layer at snapshot time. */
-  readonly scopes: SnapshotScope[];
-}
+// Re-export the wire-shape types so existing call sites that import
+// them from this module keep compiling. The canonical home for these
+// types is `@/types/spatial` — they sit there because they cross the
+// Tauri IPC boundary.
+export type { NavSnapshot, SnapshotScope };
 
 // ---------------------------------------------------------------------------
 // ScopeEntry — what each FQM maps to in the registry

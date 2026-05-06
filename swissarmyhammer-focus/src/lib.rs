@@ -100,7 +100,7 @@ pub mod state;
 pub mod types;
 
 pub use layer::FocusLayer;
-pub use navigate::{BeamNavStrategy, NavStrategy};
+pub use navigate::{pick_target_via_view, BeamNavStrategy, NavScopeView, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
 pub use registry::{RegisterEntry, SpatialRegistry};
 pub use scope::FocusScope;

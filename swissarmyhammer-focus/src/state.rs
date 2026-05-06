@@ -653,6 +653,36 @@ impl SpatialState {
         self.focus(registry, target_fq)
     }
 
+    /// Move focus relative to `from` in `direction`, running pathfinding
+    /// against `snapshot` instead of the registry's scope set.
+    ///
+    /// `registry` is still consulted for layer / segment / window
+    /// metadata when committing the resolved focus through
+    /// [`Self::focus`]; only the geometric search reads from `snapshot`.
+    /// The snapshot must include `from` — its absence is treated as torn
+    /// state, mirroring the registry path.
+    ///
+    /// Returns `None` under the same conditions as [`Self::navigate_with`]:
+    /// the focused FQM has no resolvable entry to commit through, the
+    /// resolved target is not registered, or the resolved target is
+    /// already focused in its window.
+    pub fn navigate_with_snapshot(
+        &mut self,
+        registry: &mut SpatialRegistry,
+        snapshot: &crate::snapshot::NavSnapshot,
+        from: FullyQualifiedMoniker,
+        direction: Direction,
+    ) -> Option<FocusChangedEvent> {
+        let focused_segment = registry.find_by_fq(&from)?.segment.clone();
+        let view = IndexedSnapshot::new(snapshot);
+        let target_fq =
+            crate::navigate::pick_target_via_view(&view, &from, &focused_segment, direction);
+        if !registry.is_registered(&target_fq) {
+            return None;
+        }
+        self.focus(registry, target_fq)
+    }
+
     /// Clear focus for `window`.
     ///
     /// Removes the per-window focus slot and returns a

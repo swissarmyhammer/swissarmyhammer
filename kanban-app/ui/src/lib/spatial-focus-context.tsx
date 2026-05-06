@@ -47,10 +47,12 @@ import type {
   FocusOverrides,
   FullyQualifiedMoniker,
   LayerName,
+  NavSnapshot,
   Rect,
   SegmentMoniker,
 } from "@/types/spatial";
 import { validateAndLogRect } from "@/lib/rect-validation";
+import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 
 // ---------------------------------------------------------------------------
 // Claim registry — per-FQM callbacks
@@ -225,6 +227,22 @@ export interface SpatialFocusActions {
     focusedFq: FullyQualifiedMoniker,
   ) => Promise<FullyQualifiedMoniker>;
   /**
+   * Register a per-layer scope registry under its `layerFq`.
+   *
+   * Called once on `<FocusLayer>` mount. The provider keeps a map of
+   * registered layer registries so the snapshot-driven nav path can
+   * locate the registry that owns a focused FQM at decision time.
+   * Returns the unsubscribe function — call it on layer unmount.
+   *
+   * Replaces any prior entry under the same FQM (rare; the FQM is
+   * deterministic per layer instance and a remount with a different
+   * registry under the same FQM is the placeholder/real-mount swap).
+   */
+  registerLayerRegistry: (
+    layerFq: FullyQualifiedMoniker,
+    registry: LayerScopeRegistry,
+  ) => () => void;
+  /**
    * Subscribe to every `focus-changed` payload the provider observes.
    *
    * Returns an unsubscribe function — call it on unmount to remove the
@@ -277,6 +295,13 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   // on the Rust side, scoped to this window.
   const focusedFqRef = useRef<FullyQualifiedMoniker | null>(null);
 
+  // Map of layer FQM → LayerScopeRegistry. Populated by `<FocusLayer>`
+  // on mount, drained on unmount. The snapshot-driven nav path locates
+  // the registry that owns the focused FQM by walking this map.
+  const layerRegistriesRef = useRef<
+    Map<FullyQualifiedMoniker, LayerScopeRegistry>
+  >(new Map());
+
   // Subscribe to the global `focus-changed` event exactly once for the
   // provider's lifetime. The cleanup is critical: an unmounted provider
   // that left its listener live would receive every focus-changed event
@@ -328,6 +353,7 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
       registryRef,
       subscribersRef,
       focusedFqRef,
+      layerRegistriesRef,
     );
   }
 
@@ -351,6 +377,9 @@ function buildSpatialFocusActions(
   >,
   subscribersRef: React.MutableRefObject<Set<FocusChangedSubscriber>>,
   focusedFqRef: React.MutableRefObject<FullyQualifiedMoniker | null>,
+  layerRegistriesRef: React.MutableRefObject<
+    Map<FullyQualifiedMoniker, LayerScopeRegistry>
+  >,
 ): SpatialFocusActions {
   const registerClaim: SpatialFocusActions["registerClaim"] = (
     fq,
@@ -434,7 +463,21 @@ function buildSpatialFocusActions(
     focusedFq,
     direction,
   ) => {
-    await invoke("spatial_navigate", { focusedFq, direction });
+    const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
+    await invoke("spatial_navigate", { focusedFq, direction, snapshot });
+  };
+
+  const registerLayerRegistry: SpatialFocusActions["registerLayerRegistry"] = (
+    layerFq,
+    registry,
+  ) => {
+    layerRegistriesRef.current.set(layerFq, registry);
+    return () => {
+      const current = layerRegistriesRef.current.get(layerFq);
+      if (current === registry) {
+        layerRegistriesRef.current.delete(layerFq);
+      }
+    };
   };
 
   const pushLayer: SpatialFocusActions["pushLayer"] = async (
@@ -490,8 +533,32 @@ function buildSpatialFocusActions(
     drillIn,
     drillOut,
     focusedFq,
+    registerLayerRegistry,
     subscribeFocusChanged,
   };
+}
+
+/**
+ * Locate the layer registry that owns `focusedFq` and build a snapshot
+ * for its layer.
+ *
+ * Returns `undefined` when no registry contains the FQM — typically the
+ * transient unmount window where the focused scope's registry has
+ * already torn down. The IPC adapter falls back to its registry path on
+ * `undefined`, so this is the documented "no snapshot available" signal.
+ */
+function buildSnapshotForFocused(
+  layerRegistriesRef: React.MutableRefObject<
+    Map<FullyQualifiedMoniker, LayerScopeRegistry>
+  >,
+  focusedFq: FullyQualifiedMoniker,
+): NavSnapshot | undefined {
+  for (const [layerFq, registry] of layerRegistriesRef.current) {
+    if (registry.has(focusedFq)) {
+      return registry.buildSnapshot(layerFq);
+    }
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

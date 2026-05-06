@@ -43,6 +43,7 @@ import {
   useFocusClaim,
   useSpatialFocusActions,
 } from "./spatial-focus-context";
+import { LayerScopeRegistry } from "./layer-scope-registry-context";
 import type {
   FocusChangedPayload,
   Rect,
@@ -314,11 +315,80 @@ describe("SpatialFocusProvider", () => {
       await result.current.navigate(key, "right");
     });
 
+    // No layer registry has been registered for this FQM, so the
+    // snapshot field is `undefined` — the kernel falls back to the
+    // registry path.
     expect(mockInvoke).toHaveBeenCalledWith("spatial_navigate", {
       focusedFq: key,
       direction: "right",
+      snapshot: undefined,
     });
 
+    unmount();
+  });
+
+  it("invokes spatial_navigate with a populated snapshot when the focused FQ is in a registered layer registry", async () => {
+    const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
+      wrapper,
+    });
+    await flushListenSetup();
+
+    const layerFq: FullyQualifiedMoniker = asFq("/window");
+    const focused: FullyQualifiedMoniker = asFq("/window/zone/leaf-a");
+    const sibling: FullyQualifiedMoniker = asFq("/window/zone/leaf-b");
+    const zone: FullyQualifiedMoniker = asFq("/window/zone");
+
+    const focusedNode = document.createElement("div");
+    focusedNode.getBoundingClientRect = () =>
+      ({ x: 10, y: 20, width: 30, height: 40, top: 20, right: 40, bottom: 60, left: 10, toJSON: () => "" }) as DOMRect;
+    const siblingNode = document.createElement("div");
+    siblingNode.getBoundingClientRect = () =>
+      ({ x: 100, y: 20, width: 30, height: 40, top: 20, right: 130, bottom: 60, left: 100, toJSON: () => "" }) as DOMRect;
+
+    const registry = new LayerScopeRegistry(layerFq);
+    registry.add(focused, {
+      ref: { current: focusedNode },
+      parentZone: zone,
+      navOverride: {},
+      segment: asSegment("leaf-a"),
+    });
+    registry.add(sibling, {
+      ref: { current: siblingNode },
+      parentZone: zone,
+      navOverride: {},
+      segment: asSegment("leaf-b"),
+    });
+
+    const dispose = result.current.registerLayerRegistry(layerFq, registry);
+
+    await act(async () => {
+      await result.current.navigate(focused, "right");
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "spatial_navigate",
+      expect.objectContaining({
+        focusedFq: focused,
+        direction: "right",
+        snapshot: expect.objectContaining({
+          layer_fq: layerFq,
+          scopes: expect.arrayContaining([
+            expect.objectContaining({
+              fq: focused,
+              parent_zone: zone,
+              nav_override: {},
+            }),
+            expect.objectContaining({
+              fq: sibling,
+              parent_zone: zone,
+              nav_override: {},
+            }),
+          ]),
+        }),
+      }),
+    );
+
+    dispose();
     unmount();
   });
 });

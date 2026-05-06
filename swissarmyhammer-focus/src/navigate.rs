@@ -116,7 +116,7 @@ use std::collections::HashSet;
 use crate::registry::{first_child_by_top_left, last_child_by_bottom_right, SpatialRegistry};
 use crate::scope::FocusScope;
 use crate::snapshot::{FocusOverrides, IndexedSnapshot};
-use crate::types::{Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker};
+use crate::types::{pixels_cmp, Direction, FullyQualifiedMoniker, Pixels, Rect, SegmentMoniker};
 
 // ---------------------------------------------------------------------------
 // NavScopeView — pathfinding's read-only view over a single layer's scopes.
@@ -375,6 +375,102 @@ impl NavStrategy for BeamNavStrategy {
             }
         }
     }
+}
+
+/// Pick the next focus target for `focused_fq` in `direction`, reading
+/// the layer's scope set entirely through a [`NavScopeView`].
+///
+/// Mirrors [`BeamNavStrategy::next`] but with no [`SpatialRegistry`]
+/// dependency: every read (focused entry, candidates, override target,
+/// First/Last children) goes through `view`. The result is byte-equal
+/// to the registry-backed path when `view` is built from a
+/// [`RegistryLayerView`] over the focused entry's layer, which is the
+/// invariant the divergence diagnostic in the snapshot adapter relies
+/// on.
+///
+/// Returns `focused_fq` (semantic stay-put) when:
+/// - the focused FQM is missing from `view` (torn snapshot — also
+///   emits `tracing::error!`),
+/// - an explicit "wall" override fires for `direction`, or
+/// - no candidate satisfies the half-plane / in-beam filters
+///   (cardinal) or the focused scope has no children (First/Last).
+pub fn pick_target_via_view<V: NavScopeView + ?Sized>(
+    view: &V,
+    focused_fq: &FullyQualifiedMoniker,
+    focused_segment: &SegmentMoniker,
+    direction: Direction,
+) -> FullyQualifiedMoniker {
+    let Some(focused) = view.get(focused_fq) else {
+        tracing::error!(
+            op = "nav_via_view",
+            focused_fq = %focused_fq,
+            focused_segment = %focused_segment,
+            ?direction,
+            "unknown focused FQM passed to pick_target_via_view"
+        );
+        return focused_fq.clone();
+    };
+
+    match check_override(view, &focused, direction) {
+        Some(Some(target)) => return target,
+        Some(None) => return focused_fq.clone(),
+        None => {}
+    }
+
+    #[allow(deprecated)]
+    match direction {
+        Direction::Up | Direction::Down | Direction::Left | Direction::Right => {
+            geometric_pick(view, &focused, focused_fq, direction)
+        }
+        Direction::First | Direction::Last | Direction::RowStart | Direction::RowEnd => {
+            edge_command_via_view(view, &focused, focused_fq, direction)
+        }
+    }
+}
+
+/// First/Last edge-command pick, generic over [`NavScopeView`].
+///
+/// Mirrors the registry-backed [`edge_command`] but reads candidates
+/// from `view`. Children of the focused scope are entries whose
+/// `parent_zone == focused.parent_zone` (i.e. siblings of the focused
+/// scope under its own zone), or — when the focused scope has no
+/// parent zone — entries whose `parent_zone == focused.fq` (the focused
+/// scope IS a layer-root container, so its children are the entries
+/// directly under it).
+#[allow(deprecated)]
+fn edge_command_via_view<V: NavScopeView + ?Sized>(
+    view: &V,
+    focused: &NavScopeRef<'_>,
+    focused_fq: &FullyQualifiedMoniker,
+    direction: Direction,
+) -> FullyQualifiedMoniker {
+    let target_parent = focused.parent_zone.cloned();
+    let pick: Option<FullyQualifiedMoniker> = match direction {
+        Direction::First | Direction::RowStart => view
+            .iter()
+            .filter(|s| match &target_parent {
+                Some(p) => s.parent_zone == Some(p),
+                None => s.parent_zone == Some(focused.fq),
+            })
+            .min_by(|a, b| {
+                pixels_cmp(a.rect.top(), b.rect.top())
+                    .then(pixels_cmp(a.rect.left(), b.rect.left()))
+            })
+            .map(|s| s.fq.clone()),
+        Direction::Last | Direction::RowEnd => view
+            .iter()
+            .filter(|s| match &target_parent {
+                Some(p) => s.parent_zone == Some(p),
+                None => s.parent_zone == Some(focused.fq),
+            })
+            .max_by(|a, b| {
+                pixels_cmp(a.rect.bottom(), b.rect.bottom())
+                    .then(pixels_cmp(a.rect.right(), b.rect.right()))
+            })
+            .map(|s| s.fq.clone()),
+        Direction::Up | Direction::Down | Direction::Left | Direction::Right => None,
+    };
+    pick.unwrap_or_else(|| focused_fq.clone())
 }
 
 // ---------------------------------------------------------------------------

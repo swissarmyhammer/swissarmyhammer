@@ -198,7 +198,8 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
   const parentTier = useContext(FocusLayerZTierContext);
   const myTier = LAYER_Z_TIERS[name] ?? parentTier + 20;
 
-  const { pushLayer, popLayer } = useSpatialFocusActions();
+  const { pushLayer, popLayer, registerLayerRegistry } =
+    useSpatialFocusActions();
 
   // ---------------------------------------------------------------------
   // LayerScopeRegistry — React-side replica of the kernel's per-layer
@@ -234,6 +235,18 @@ export function FocusLayer({ name, parentLayerFq, children }: FocusLayerProps) {
       });
     };
   }, [fq, name, parent, pushLayer, popLayer]);
+
+  // Publish the layer's scope registry into the spatial-focus
+  // provider's per-layer registry map. The snapshot-driven nav path
+  // walks that map at decision time to locate the registry that owns
+  // the focused FQM. Re-runs when the layer's FQM changes (the
+  // registry instance is rebuilt above; both writes happen in the
+  // same render cycle).
+  useEffect(() => {
+    const registry = registryRef.current;
+    if (registry === null) return;
+    return registerLayerRegistry(fq, registry);
+  }, [fq, registerLayerRegistry]);
 
   // Debug-overlay branch — see `lib/focus-debug-context.tsx`. When the
   // flag is on, render the layer's debug overlay as a SIBLING of
