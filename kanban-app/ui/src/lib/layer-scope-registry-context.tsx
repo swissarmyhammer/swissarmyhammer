@@ -82,13 +82,16 @@ export type { NavSnapshot, SnapshotScope };
  * changes are visible in subsequent snapshots without a re-register.
  *
  * `lastKnownRect` caches the most recent bounding rect sampled for this
- * scope. The registry updates it on every `updateRect` call (mount
- * register, ResizeObserver fire, ancestor scroll). Held as a cache
- * rather than re-sampled at delete time because React's commit phase
- * nullifies bound `ref` callbacks before `useEffect` cleanups run, so
- * an unmount-time `getBoundingClientRect()` would observe a detached
- * node. Initialised to `null` for the brief window between `add()` and
- * the first `updateRect()`; `null` means "no rect ever cached".
+ * scope. Two writers seed and refresh it: the mount-time `updateRect`
+ * call from `<FocusScope>`'s registration `useEffect`, and the scope's
+ * `useLayoutEffect` cleanup that resamples just before unmount (while
+ * the bound ref is still attached). Held as a cache rather than
+ * re-sampled at delete time because React's commit phase nullifies
+ * bound `ref` callbacks before `useEffect` cleanups run, so an
+ * unmount-time `getBoundingClientRect()` from the deletion listener
+ * would observe a detached node. Initialised to `null` for the brief
+ * window between `add()` and the first `updateRect()`; `null` means
+ * "no rect ever cached".
  */
 export interface ScopeEntry {
   /** Ref to the rendered DOM element; read at snapshot time. */
@@ -204,14 +207,18 @@ export class LayerScopeRegistry {
    * Update the cached `lastKnownRect` for `fq`. No-op if `fq` is not
    * registered.
    *
-   * Callers invoke this whenever they freshly sampled a bounding rect
-   * — the initial mount-time `getBoundingClientRect()`, every
-   * `ResizeObserver` fire, and every ancestor-scroll-driven resample.
-   * The cached rect is what the deletion listener reads to dispatch
-   * `spatial_focus_lost`, so it must reflect the most recent live
-   * geometry; sampling at delete time would observe a detached node
-   * because React clears the bound `ref` during the commit phase before
-   * the `useEffect` cleanup that calls `delete()` runs.
+   * Two call sites invoke this with a freshly sampled bounding rect:
+   * the initial mount-time `getBoundingClientRect()` from
+   * `<FocusScope>`'s registration `useEffect` (seeds the cache so the
+   * focused-scope-unmount IPC has a non-null rect even when unmount
+   * happens before the layout-effect cleanup ever runs), and the
+   * scope's `useLayoutEffect` cleanup that resamples just before
+   * unmount while the bound ref is still attached. The cached rect is
+   * what the deletion listener reads to dispatch `spatial_focus_lost`,
+   * so it must reflect the most recent live geometry; sampling at
+   * delete time would observe a detached node because React clears the
+   * bound `ref` during the commit phase before the `useEffect` cleanup
+   * that calls `delete()` runs.
    */
   updateRect(fq: FullyQualifiedMoniker, rect: Rect): void {
     const entry = this.store.get(fq);

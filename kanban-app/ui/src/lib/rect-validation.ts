@@ -1,49 +1,35 @@
 /**
- * Dev-mode validators for rects shipped to the spatial-nav kernel.
+ * Dev-mode validators for rects flowing through the spatial-nav pipeline.
  *
  * # Why
  *
  * The kernel's geometric pick (cardinal nav, `nav.{up,down,left,right}`)
  * is correct *iff* every candidate rect in the same layer was sampled in
  * the same coordinate system. The contract is **viewport-relative,
- * sampled by `getBoundingClientRect()`, refreshed on ancestor scroll**.
- * If any callsite ships a NaN coordinate, a negative dimension, a
- * cached document-relative rect, or a stale rect that predates a scroll,
- * beam search runs on broken geometry and the kernel produces wrong
- * answers silently — no exceptions, no warnings, just bad nav.
+ * sampled by `getBoundingClientRect()`**. If any callsite ships a NaN
+ * coordinate, a negative dimension, a cached document-relative rect, or
+ * a stale rect that predates a scroll, beam search runs on broken
+ * geometry and the kernel produces wrong answers silently — no
+ * exceptions, no warnings, just bad nav.
  *
  * The validators here are observability-only: in dev mode they
  * `console.error` / `console.warn` on detected violations; in production
  * they are no-ops (the entire branch is gated on `import.meta.env.DEV`,
- * the Vite-injected dev-mode flag). They never throw — the
- * registration / update IPC must still go through so the rest of the
- * registry stays consistent.
+ * the Vite-injected dev-mode flag). They never throw — the calling code
+ * still proceeds so the rest of the registry stays consistent.
  *
  * # What is checked
  *
  * - **Finite coordinates** — `x`, `y`, `width`, `height` are not `NaN`,
  *   `+Infinity`, or `-Infinity`.
- * - **Positive dimensions** — `width > 0` and `height > 0`. The op
- *   distinguishes two cases:
- *
- *   - On `register_scope` / `register_zone` (initial registration), a
- *     zero in either dimension is treated as a *pre-layout transient*:
- *     `getBoundingClientRect()` legitimately returns rects with zero
- *     dims for `display: none`, just-mounted-but-not-yet-laid-out, and
- *     detached nodes (in test environments, jsdom-style flex/grid
- *     containers commonly produce `width × 0` zones until the first
- *     layout pass). That's not a coordinate-system bug — it's "the
- *     registration `useEffect` ran before the first layout pass." Such
- *     rects emit a single one-shot `console.warn` per `(op, fq)` rather
- *     than per-component `console.error`, so the channel stays clean
- *     during the registration → first-layout transition.
- *
- *   - On `update_rect`, a zero in either dimension is a real error.
- *     Update-rect runs from `ResizeObserver` and the ancestor-scroll
- *     listener, both of which fire only after layout has occurred. A
- *     zero dim at this point means the kernel will register a
- *     persistent broken rect, not a transient one — the violation must
- *     surface.
+ * - **Plausible dimensions** — `width >= 0` and `height >= 0`. A
+ *   zero-dim rect is the structural shape `getBoundingClientRect()`
+ *   legitimately produces for `display: none`,
+ *   just-mounted-but-not-yet-laid-out, and detached nodes; the
+ *   validator surfaces it through the `preLayoutTransient` flag rather
+ *   than a console message so the channel stays clean during the
+ *   registration → first-layout transition. Negative dims are real
+ *   errors.
  * - **Plausible scale** — coordinates inside `[-1e6, 1e6]`. A rect at
  *   `(50000, 50000)` is almost always document-relative (the user
  *   computed `node.offsetTop` instead of `getBoundingClientRect().top`)
@@ -52,11 +38,6 @@
  *   more than one animation frame (16 ms) older than `performance.now()`
  *   at validation time. Stale rects predate a scroll the kernel hasn't
  *   seen yet, so beam search runs on geometry the user no longer sees.
- *   The contract is that callers capture `performance.now()` at the
- *   exact callsite that sampled the rect via `getBoundingClientRect()`
- *   and thread it through the IPC adapter; capturing the timestamp at
- *   the adapter (one tick later) is a contract violation that defeats
- *   the staleness check.
  *
  * The kernel side has its own `cfg(debug_assertions)` validators that
  * cover the same invariants — the TS side catches the bug before it
@@ -95,34 +76,14 @@ const STALE_RECT_MS = 16;
 const LARGE_COORD_BOUND = 1_000_000;
 
 /**
- * Op tag identifying which IPC adapter sourced the rect. Mirrors the
- * `op` field on the kernel-side `tracing` events so log readers can
- * correlate the two sides.
- */
-export type RectValidationOp =
-  | "register_scope"
-  | "register_zone"
-  | "update_rect";
-
-/**
- * Result of validating one rect. Each `string` in `errors` describes
- * one violation in human-readable form, suitable for `console.error`.
- *
- * `errors` carries hard violations (NaN, negative dim, post-layout
- * zero dim on `update_rect`, etc.); `warnings` carries soft violations
- * (stale timestamp, pre-layout transient zero dim on
- * `register_scope` / `register_zone`). The split lets the caller pick
- * `console.error` vs `console.warn` per category.
- *
- * `preLayoutTransient` is `true` when the rect has at least one zero
- * dimension AND the op is a registration (`register_scope` /
- * `register_zone`) — the structural shape `getBoundingClientRect()`
- * legitimately produces for `display: none`,
- * just-mounted-but-not-yet-laid-out, and detached nodes during initial
- * registration. Callers (`validateAndLogRect`) use this to dedup the
- * warning per `(op, fq)` so a re-registering scope (StrictMode
- * double-mount, virtualizer placeholder→real-mount swap) does not
- * spam the channel.
+ * Result of validating one rect. `errors` carries hard violations
+ * (NaN, negative dim, implausible scale, etc.); `warnings` carries
+ * soft violations (stale timestamp). `preLayoutTransient` is `true`
+ * when the rect has at least one zero dimension — the structural
+ * shape `getBoundingClientRect()` legitimately produces for
+ * `display: none`, just-mounted-but-not-yet-laid-out, and detached
+ * nodes; callers can branch on it to skip downstream work that
+ * needs real geometry.
  */
 export interface RectValidationResult {
   errors: string[];
@@ -165,7 +126,6 @@ export function isDevModeRectValidationEnabled(): boolean {
  * `performance.now()` by default, overridable for deterministic tests).
  */
 export function validateRect(
-  op: RectValidationOp,
   rect: Rect,
   sampledAtMs: number,
   nowMs: number = performance.now(),
@@ -174,22 +134,8 @@ export function validateRect(
   const warnings: string[] = [];
 
   pushFiniteErrors(rect, errors);
-  // Zero-dim handling depends on the op:
-  // - On register_scope / register_zone, a zero dim is a pre-layout
-  //   transient — layout has not yet completed, and the next
-  //   ResizeObserver fire will populate the real rect. Surface as a
-  //   one-shot warning per (op, fq) so the channel stays clean during
-  //   the registration → first-layout transition.
-  // - On update_rect, a zero dim is a real error. Update fires from
-  //   ResizeObserver / ancestor-scroll listener, both of which run
-  //   only after layout, so a zero dim here means the kernel will
-  //   record a persistent broken rect.
-  const isRegistration = op === "register_scope" || op === "register_zone";
-  const hasZeroDim = isZeroDim(rect);
-  const preLayoutTransient = isRegistration && hasZeroDim;
-  if (preLayoutTransient) {
-    // The rect has a zero dimension, but that's expected on initial layout before resive
-  } else {
+  const preLayoutTransient = isZeroDim(rect);
+  if (!preLayoutTransient) {
     pushPositiveDimensionErrors(rect, errors);
   }
   pushPlausibleScaleErrors(rect, errors);
@@ -242,17 +188,19 @@ function pushFiniteErrors(rect: Rect, errors: string[]): void {
 /**
  * Append errors for non-positive width/height. Skips finite-failed
  * components since a non-finite value already produced its own error
- * above and a follow-up "non-positive" message would be noise.
+ * above and a follow-up "non-positive" message would be noise. Skips
+ * zero dims as well — those are surfaced through the
+ * `preLayoutTransient` flag rather than as errors.
  */
 function pushPositiveDimensionErrors(rect: Rect, errors: string[]): void {
-  if (Number.isFinite(rect.width) && rect.width <= 0) {
+  if (Number.isFinite(rect.width) && rect.width < 0) {
     errors.push(
-      `rect.width must be > 0 (got ${rect.width}); a zero-size rect breaks beam search distance math`,
+      `rect.width must be >= 0 (got ${rect.width}); a negative-size rect breaks beam search distance math`,
     );
   }
-  if (Number.isFinite(rect.height) && rect.height <= 0) {
+  if (Number.isFinite(rect.height) && rect.height < 0) {
     errors.push(
-      `rect.height must be > 0 (got ${rect.height}); a zero-size rect breaks beam search distance math`,
+      `rect.height must be >= 0 (got ${rect.height}); a negative-size rect breaks beam search distance math`,
     );
   }
 }
@@ -306,12 +254,12 @@ function pushStalenessWarnings(
  * for callers that want to act on it (e.g. tests).
  *
  * No-op when dev-mode validation is disabled (production builds). The
- * caller's IPC `invoke` proceeds either way — this validator is
+ * caller's downstream work proceeds either way — this validator is
  * observability, not a circuit breaker.
  *
  * Each error is logged with `console.error`; each warning with
  * `console.warn`. The first argument is a structured tag identifying
- * the op and FQM so log filters / source-map consumers can locate the
+ * the FQM so log filters / source-map consumers can locate the
  * offender; subsequent arguments include the rect and the violation
  * message.
  *
@@ -323,7 +271,6 @@ function pushStalenessWarnings(
  * always plumb through).
  */
 export function validateAndLogRect(
-  op: RectValidationOp,
   fq: FullyQualifiedMoniker,
   rect: Rect,
   sampledAtMs: number,
@@ -332,90 +279,18 @@ export function validateAndLogRect(
   if (!enabled) {
     return { errors: [], warnings: [], preLayoutTransient: false };
   }
-  const result = validateRect(op, rect, sampledAtMs);
-
-  // Zero-dim emissions get one-shot dedup per (op, fq) regardless of
-  // whether they surfaced as a warning (registration path) or an error
-  // (update_rect path). The first occurrence per (op, fq) is informative
-  // — "this scope was registered with no layout" or "the kernel saw a
-  // post-layout zero-dim rect" — but a re-rendering component, a rapid
-  // ResizeObserver burst, or a test environment that fires update_rect
-  // every frame on an unlaid-out node will repeat the same payload. The
-  // dedup keeps the channel clean for genuinely new offenders.
-  //
-  // Other errors (NaN, negative, plausible-scale) are NOT deduped: each
-  // one is structurally distinct enough that repetition is itself a
-  // signal that something is off.
-  const zeroDim = isZeroDim(rect);
-  const zeroDimKey = zeroDim ? `${op}|${fq}` : null;
-  const zeroDimAlreadyLogged =
-    zeroDimKey !== null && loggedZeroDim.has(zeroDimKey);
+  const result = validateRect(rect, sampledAtMs);
 
   for (const error of result.errors) {
-    if (
-      zeroDimAlreadyLogged &&
-      (error.startsWith("rect.width must be > 0") ||
-        error.startsWith("rect.height must be > 0"))
-    ) {
-      continue;
-    }
-    console.error(`[spatial-nav][${op}][${fq}] rect validation error:`, error, {
+    console.error(`[spatial-nav][${fq}] rect validation error:`, error, {
       rect,
     });
   }
   for (const warning of result.warnings) {
-    if (
-      zeroDimAlreadyLogged &&
-      warning.startsWith("rect has a zero dimension")
-    ) {
-      continue;
-    }
-    console.warn(
-      `[spatial-nav][${op}][${fq}] rect validation warning:`,
-      warning,
-      { rect },
-    );
+    console.warn(`[spatial-nav][${fq}] rect validation warning:`, warning, {
+      rect,
+    });
   }
 
-  if (zeroDimKey !== null) {
-    loggedZeroDim.add(zeroDimKey);
-  }
   return result;
-}
-
-/**
- * Per-`(op, fq)` dedup set for zero-dim rect emissions (both the
- * registration-path warning and the update_rect-path error). A
- * registered scope that mounts before its first layout pass produces a
- * zero-dim rect; the first emission is informative but quickly turns
- * to noise if the scope re-registers across StrictMode double-mount,
- * virtualizer placeholder→real-mount swaps, or rapid re-renders. On
- * the update_rect side, test environments routinely fire ResizeObserver
- * with a zero-dim rect every frame because jsdom doesn't compute layout;
- * deduping per (op, fq) collapses that burst to one event.
- *
- * The set is process-scoped so the same FQM, even after
- * unregister/re-register, only logs once per session — that matches
- * the "best-effort observability, never noise" tone of the rest of the
- * validators. The trade-off is that a real bug that re-introduces a
- * zero dim after a previously-logged occurrence will be silent until
- * the dedup is reset; in practice the first occurrence is enough to
- * surface the bug class to a log reader.
- *
- * Test-only: `__resetPreLayoutTransientLog` clears the set so individual
- * tests can pin first-occurrence behaviour without leaking state across
- * test cases.
- */
-const loggedZeroDim = new Set<string>();
-
-/**
- * Reset the zero-dim dedup set. Test-only — production code never
- * calls this; the set is intentionally process-scoped at runtime. The
- * name is kept as `__resetPreLayoutTransientLog` for backward
- * compatibility with existing test imports; functionally it now resets
- * the broader zero-dim dedup set, which is a strict superset of the
- * old pre-layout-transient set.
- */
-export function __resetPreLayoutTransientLog(): void {
-  loggedZeroDim.clear();
 }

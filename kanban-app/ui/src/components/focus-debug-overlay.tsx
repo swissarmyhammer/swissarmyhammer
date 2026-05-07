@@ -388,14 +388,8 @@ export function FocusDebugOverlay({
      * intentionally NOT part of the equality short-circuit — that keeps
      * the overlay quiet when the host's content reflows in place
      * (dimensions move but the top-left does not). The internal `rect`
-     * state still holds full DOMRect (the kernel uses width / height for
-     * its own bookkeeping); they are simply not used for either the
-     * visible label or the re-render gate.
-     *
-     * TODO(01KQ9XBAG5P9W3JREQYNGAYM8Y): swap this rAF poll for a
-     * subscription to the same scroll/resize observers that
-     * `useTrackRectOnAncestorScroll` will expose once the rects-on-scroll
-     * ticket lands. The poll is correct but burns a frame per overlay.
+     * state still holds full DOMRect; the dimensions are simply not used
+     * for either the visible label or the re-render gate.
      */
     const tick = () => {
       if (cancelled) return;

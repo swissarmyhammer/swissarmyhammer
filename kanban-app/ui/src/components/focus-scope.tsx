@@ -71,6 +71,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -108,7 +109,6 @@ import {
   FocusScopeContext,
   useParentFocusScope,
 } from "@/components/focus-scope-context";
-import { useTrackRectOnAncestorScroll } from "@/components/use-track-rect-on-ancestor-scroll";
 import {
   asPixels,
   composeFq,
@@ -184,9 +184,9 @@ export type FocusScopeProps = FocusScopeOwnProps &
  * the entity-focus / command-scope / context-menu chrome on top.
  *
  * The FQM is composed deterministically from the parent FQM context plus
- * the consumer's `moniker` segment — no UUID minting. A ResizeObserver
- * attached to the root element keeps the Rust-side rect in sync. The
- * component re-renders only when its own focus claim flips.
+ * the consumer's `moniker` segment — no UUID minting. The component
+ * re-renders only when its own focus claim flips; rects are read fresh
+ * from the DOM at decision time via the layer-scope-registry snapshot.
  */
 export function FocusScope({
   moniker: segment,
@@ -347,7 +347,6 @@ function SpatialFocusScopeBody({
   const {
     registerScope: registerSpatialScope,
     unregisterScope,
-    updateRect,
     focus,
   } = useSpatialFocusActions();
 
@@ -360,31 +359,16 @@ function SpatialFocusScopeBody({
   const navOverrideRef = useRef<FocusOverrides | undefined>(navOverride);
   navOverrideRef.current = navOverride;
 
-  // ---------------------------------------------------------------------
-  // LayerScopeRegistry registration — step 1 of the spatial-nav redesign
-  // ---------------------------------------------------------------------
   // Mirrors the kernel-side `register_scope` / `unregister_scope` pair
-  // below into the React-side per-layer registry provided by
-  // `<FocusLayer>`. Runs ALONGSIDE the existing kernel sync — this is
-  // additive in step 1; the kernel path is still authoritative. Later
-  // steps will cut the kernel path over to per-decision snapshots built
-  // from this registry and remove the kernel-sync effect entirely.
+  // into the React-side per-layer registry provided by `<FocusLayer>`.
+  // Snapshots built from this registry read rects fresh from the DOM at
+  // decision time, so no continuous rect sync is needed.
   //
   // `navOverride` is intentionally a dependency here (unlike the kernel
   // sync, which reads through a ref and ignores mid-life changes). The
-  // redesign's snapshot-on-decision contract makes mid-life changes
-  // observable in the next nav, which is the behaviour callers
-  // naively expect; tying the registry update to the prop directly
-  // delivers that.
-  //
-  // The `add` call seeds `lastKnownRect: null`; the kernel-sync effect
-  // below populates it on initial sample and refreshes it on every
-  // ResizeObserver / ancestor-scroll-driven rect read. The cached rect
-  // is what the deletion listener consumes when dispatching
-  // `spatial_focus_lost`, because by the time React's `useEffect`
-  // cleanup runs the bound callback ref has already been nullified by
-  // the commit phase and a fresh `getBoundingClientRect()` would see a
-  // detached node.
+  // snapshot-on-decision contract makes mid-life changes observable in
+  // the next nav, which is the behaviour callers naively expect; tying
+  // the registry update to the prop directly delivers that.
   const layerRegistry = useOptionalLayerScopeRegistry();
   useEffect(() => {
     if (!layerRegistry) return;
@@ -400,6 +384,30 @@ function SpatialFocusScopeBody({
     };
   }, [layerRegistry, fq, segment, parentZone, navOverride]);
 
+  // Capture `lastKnownRect` synchronously just before unmount. React
+  // clears bound `ref` callbacks during the commit phase before
+  // `useEffect` cleanups fire, so a fresh `getBoundingClientRect()` from
+  // the registry's deletion listener would see a detached node. A
+  // `useLayoutEffect` cleanup runs in the same commit phase but BEFORE
+  // refs are nullified, so it can read the live geometry the
+  // `spatial_focus_lost` IPC needs. Because layout-effect cleanups run
+  // before useEffect cleanups, this updateRect writes the fresh rect
+  // before `delete(fq)` fires the deletion listener that consumes it —
+  // a load-bearing ordering invariant for `lost_rect` correctness.
+  useLayoutEffect(() => {
+    return () => {
+      const node = ref.current;
+      if (!node || !layerRegistry) return;
+      const r = node.getBoundingClientRect();
+      layerRegistry.updateRect(fq, {
+        x: asPixels(r.x),
+        y: asPixels(r.y),
+        width: asPixels(r.width),
+        height: asPixels(r.height),
+      });
+    };
+  }, [layerRegistry, fq]);
+
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
@@ -414,13 +422,9 @@ function SpatialFocusScopeBody({
     };
     // Seed the layer registry's cached rect alongside the kernel
     // register so the focused-scope-unmount IPC has a non-null rect to
-    // dispatch with even if the unmount happens before any
-    // ResizeObserver / scroll fire ever updated it.
+    // dispatch with even when the unmount happens before the
+    // layout-effect cleanup ever resamples it.
     layerRegistry?.updateRect(fq, initialRectPx);
-    // Capture `performance.now()` adjacent to the rect read so the
-    // dev-mode staleness check (`rect-validation.ts`) can compare
-    // against the validator's `nowMs` and surface rects that age
-    // between sample and IPC dispatch.
     const initialSampledAtMs = performance.now();
     registerSpatialScope(
       fq,
@@ -432,26 +436,7 @@ function SpatialFocusScopeBody({
       initialSampledAtMs,
     ).catch((err) => console.error("[FocusScope] register failed", err));
 
-    const observer = new ResizeObserver(() => {
-      const node = ref.current;
-      if (!node) return;
-      const r = node.getBoundingClientRect();
-      const rPx: Rect = {
-        x: asPixels(r.x),
-        y: asPixels(r.y),
-        width: asPixels(r.width),
-        height: asPixels(r.height),
-      };
-      layerRegistry?.updateRect(fq, rPx);
-      const sampledAtMs = performance.now();
-      updateRect(fq, rPx, sampledAtMs).catch((err) =>
-        console.error("[FocusScope] updateRect failed", err),
-      );
-    });
-    observer.observe(node);
-
     return () => {
-      observer.disconnect();
       unregisterScope(fq).catch((err) =>
         console.error("[FocusScope] unregister failed", err),
       );
@@ -464,10 +449,7 @@ function SpatialFocusScopeBody({
     layerRegistry,
     registerSpatialScope,
     unregisterScope,
-    updateRect,
   ]);
-
-  useTrackRectOnAncestorScroll(ref, fq, updateRect, layerRegistry);
 
   useEffect(() => {
     if (isDirectFocus && ref.current?.scrollIntoView) {

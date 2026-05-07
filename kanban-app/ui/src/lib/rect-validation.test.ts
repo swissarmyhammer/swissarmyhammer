@@ -1,17 +1,20 @@
 /**
  * Unit tests for `rect-validation.ts`.
  *
- * Pins the four invariants the dev-mode validator enforces:
+ * Pins the invariants the dev-mode validator enforces:
  *
  *   1. A valid rect produces no errors and no warnings.
  *   2. A non-finite component produces exactly one error per offender.
- *   3. A non-positive width or height produces an error.
- *   4. Coordinates outside the plausible viewport range produce an error.
- *   5. A stale sample timestamp produces a warning.
+ *   3. A negative width or height produces an error.
+ *   4. A zero-dim rect surfaces through `preLayoutTransient` and emits
+ *      no console message.
+ *   5. Coordinates outside the plausible viewport range produce an error.
+ *   6. A stale sample timestamp produces a warning.
  *
  * The validator is **observability-only** — it never throws and never
- * blocks the IPC. Tests assert on returned `errors` / `warnings` arrays
- * and on `console.error` / `console.warn` spies attached via Vitest.
+ * blocks the caller. Tests assert on returned `errors` / `warnings`
+ * arrays and on `console.error` / `console.warn` spies attached via
+ * Vitest.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -19,7 +22,6 @@ import {
   validateRect,
   validateAndLogRect,
   isDevModeRectValidationEnabled,
-  __resetPreLayoutTransientLog,
 } from "./rect-validation";
 import { asPixels, asFq } from "@/types/spatial";
 import type { Rect } from "@/types/spatial";
@@ -54,75 +56,43 @@ function plausibleRect(): Rect {
 // ---------------------------------------------------------------------------
 
 describe("validateRect", () => {
-  it("passes a plausible viewport-relative rect on register_scope", () => {
-    const result = validateRect("register_scope", plausibleRect(), 100, 105);
+  it("passes a plausible viewport-relative rect", () => {
+    const result = validateRect(plausibleRect(), 100, 105);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.preLayoutTransient).toBe(false);
   });
 
   it("flags negative width as an error", () => {
-    const result = validateRect(
-      "register_scope",
-      rect(0, 0, -10, 40),
-      100,
-      105,
-    );
+    const result = validateRect(rect(0, 0, -10, 40), 100, 105);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/width must be > 0/);
+    expect(result.errors[0]).toMatch(/width must be >= 0/);
     expect(result.preLayoutTransient).toBe(false);
   });
 
   it("flags negative height as an error", () => {
-    const result = validateRect("register_scope", rect(0, 0, 40, -1), 100, 105);
+    const result = validateRect(rect(0, 0, 40, -1), 100, 105);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/height must be > 0/);
+    expect(result.errors[0]).toMatch(/height must be >= 0/);
     expect(result.preLayoutTransient).toBe(false);
   });
 
-  it("treats zero-dim rect on register_scope as a pre-layout transient (no error, no warning)", () => {
-    // On `register_scope`, a zero in either dimension is the structural
-    // shape `getBoundingClientRect()` produces for `display: none`,
-    // just-mounted-but-not-yet-laid-out, and detached nodes. The
-    // validator no longer surfaces a warning for this case (it was
-    // de-noised in commit 8232b25cc); only the `preLayoutTransient`
-    // flag carries the signal so the caller can react if needed.
-    const result = validateRect("register_scope", rect(0, 0, 100, 0), 100, 105);
+  it("treats a zero-dim rect as a pre-layout transient (no error, no warning)", () => {
+    const result = validateRect(rect(0, 0, 100, 0), 100, 105);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.preLayoutTransient).toBe(true);
   });
 
-  it("treats both-zero rect on register_scope as a pre-layout transient (no error, no warning)", () => {
-    const result = validateRect("register_scope", rect(0, 0, 0, 0), 100, 105);
+  it("treats a both-zero rect as a pre-layout transient (no error, no warning)", () => {
+    const result = validateRect(rect(0, 0, 0, 0), 100, 105);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.preLayoutTransient).toBe(true);
-  });
-
-  it("flags zero-dim rect on update_rect as a real error", () => {
-    // `update_rect` runs from ResizeObserver / ancestor-scroll listener,
-    // both of which fire only after layout. A zero dim at this point is
-    // a real bug — the kernel will record a persistent broken rect.
-    const result = validateRect("update_rect", rect(0, 0, 100, 0), 100, 105);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/height must be > 0/);
-    expect(result.preLayoutTransient).toBe(false);
-  });
-
-  it("flags both-zero rect on update_rect as two errors", () => {
-    const result = validateRect("update_rect", rect(0, 0, 0, 0), 100, 105);
-    expect(result.errors).toHaveLength(2);
-    expect(result.preLayoutTransient).toBe(false);
   });
 
   it("flags NaN x coordinate", () => {
-    const result = validateRect(
-      "register_scope",
-      rect(Number.NaN, 0, 40, 40),
-      100,
-      105,
-    );
+    const result = validateRect(rect(Number.NaN, 0, 40, 40), 100, 105);
     expect(result.errors.length).toBeGreaterThanOrEqual(1);
     expect(result.errors.some((e) => e.includes("rect.x"))).toBe(true);
     expect(result.errors.some((e) => e.includes("not finite"))).toBe(true);
@@ -130,7 +100,6 @@ describe("validateRect", () => {
 
   it("flags Infinity y coordinate", () => {
     const result = validateRect(
-      "register_scope",
       rect(0, Number.POSITIVE_INFINITY, 40, 40),
       100,
       105,
@@ -142,31 +111,18 @@ describe("validateRect", () => {
 
   it("collects errors for multiple bad components on one rect", () => {
     const result = validateRect(
-      "register_scope",
       rect(Number.NaN, Number.NaN, -1, -1),
       100,
       105,
     );
-    // Two non-finite errors (x, y) plus two non-positive errors (width,
-    // height). The non-positive checks are skipped for non-finite values,
-    // but width = -1 and height = -1 ARE finite, so they fire. The
-    // plausible-scale check skips non-finite values too (`pushPlausibleScaleErrors`
-    // continues on `!Number.isFinite(value)`), so x and y do not
-    // contribute a second pair of errors there — that's why the total
-    // is exactly 4 rather than 6. Note also that `-1` is a true negative,
-    // not a zero, so the pre-layout-transient detection (which requires
-    // a zero, not a negative) does not fire and the dim errors stay in
-    // the error channel.
+    // Two non-finite errors (x, y) plus two negative-dim errors
+    // (width, height). The plausible-scale check skips non-finite
+    // values, so x and y do not contribute a second pair of errors.
     expect(result.errors.length).toBe(4);
   });
 
   it("flags a coordinate far outside the plausible viewport range", () => {
-    const result = validateRect(
-      "register_scope",
-      rect(50_000_000, 0, 40, 40),
-      100,
-      105,
-    );
+    const result = validateRect(rect(50_000_000, 0, 40, 40), 100, 105);
     expect(result.errors.length).toBeGreaterThanOrEqual(1);
     expect(
       result.errors.some((e) => e.includes("plausible viewport range")),
@@ -175,39 +131,29 @@ describe("validateRect", () => {
 
   it("does not flag a coordinate inside the plausible viewport range", () => {
     // -100 is a legal off-screen virtualizer position.
-    const result = validateRect(
-      "register_scope",
-      rect(-100, -200, 40, 40),
-      100,
-      105,
-    );
+    const result = validateRect(rect(-100, -200, 40, 40), 100, 105);
     expect(result.errors).toEqual([]);
   });
 
   it("warns on stale rect sample (>16ms old)", () => {
     // sampled at 100ms, validating at 130ms → 30ms old → warning.
-    const result = validateRect("update_rect", plausibleRect(), 100, 130);
+    const result = validateRect(plausibleRect(), 100, 130);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatch(/rect sample is 30\.0ms old/);
   });
 
   it("does not warn on a fresh rect sample (<= 16ms old)", () => {
-    const result = validateRect("update_rect", plausibleRect(), 100, 116);
+    const result = validateRect(plausibleRect(), 100, 116);
     expect(result.warnings).toEqual([]);
   });
 
   it("does not warn when the sample timestamp is the same tick as now", () => {
-    const result = validateRect("update_rect", plausibleRect(), 100, 100);
+    const result = validateRect(plausibleRect(), 100, 100);
     expect(result.warnings).toEqual([]);
   });
 
   it("ignores non-finite timestamps for the staleness check", () => {
-    const result = validateRect(
-      "update_rect",
-      plausibleRect(),
-      Number.NaN,
-      100,
-    );
+    const result = validateRect(plausibleRect(), Number.NaN, 100);
     // No warning even though NaN < anything compares falsy.
     expect(result.warnings).toEqual([]);
   });
@@ -230,10 +176,6 @@ describe("validateAndLogRect", () => {
   beforeEach(() => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Reset the per-(op, fq) pre-layout-transient dedup set so a test
-    // that asserts on first-occurrence behaviour does not see state
-    // from a prior test case.
-    __resetPreLayoutTransientLog();
   });
 
   afterEach(() => {
@@ -244,7 +186,6 @@ describe("validateAndLogRect", () => {
 
   it("is a no-op when enabled = false", () => {
     const result = validateAndLogRect(
-      "register_scope",
       asFq("/window/x"),
       rect(Number.NaN, 0, 40, 40),
       0,
@@ -258,7 +199,6 @@ describe("validateAndLogRect", () => {
 
   it("logs each error via console.error when enabled = true", () => {
     const result = validateAndLogRect(
-      "register_scope",
       asFq("/window/x"),
       rect(Number.NaN, 0, -1, 40),
       performance.now(),
@@ -266,8 +206,7 @@ describe("validateAndLogRect", () => {
     );
     expect(result.errors.length).toBeGreaterThanOrEqual(2);
     expect(errorSpy.mock.calls.length).toBe(result.errors.length);
-    // The structured tag carries the op and FQM.
-    expect(errorSpy.mock.calls[0]?.[0]).toContain("register_scope");
+    // The structured tag carries the FQM.
     expect(errorSpy.mock.calls[0]?.[0]).toContain("/window/x");
   });
 
@@ -275,7 +214,6 @@ describe("validateAndLogRect", () => {
     // Force staleness by passing an old sampledAt timestamp.
     const sampledAt = performance.now() - 100;
     const result = validateAndLogRect(
-      "update_rect",
       asFq("/window/y"),
       plausibleRect(),
       sampledAt,
@@ -283,12 +221,11 @@ describe("validateAndLogRect", () => {
     );
     expect(result.warnings.length).toBeGreaterThanOrEqual(1);
     expect(warnSpy.mock.calls.length).toBe(result.warnings.length);
-    expect(warnSpy.mock.calls[0]?.[0]).toContain("update_rect");
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("/window/y");
   });
 
   it("logs nothing for a clean rect when enabled = true", () => {
     const result = validateAndLogRect(
-      "register_scope",
       asFq("/window/z"),
       plausibleRect(),
       performance.now(),
@@ -303,7 +240,6 @@ describe("validateAndLogRect", () => {
   it("never throws on bad input", () => {
     expect(() =>
       validateAndLogRect(
-        "register_scope",
         asFq("/window/x"),
         rect(Number.NaN, Number.POSITIVE_INFINITY, -1, -1),
         Number.NaN,
@@ -312,107 +248,22 @@ describe("validateAndLogRect", () => {
     ).not.toThrow();
   });
 
-  it("does not log the pre-layout-transient case at all (de-noised in commit 8232b25cc)", () => {
-    // A zero-dim rect on `register_scope` is the pre-layout shape. The
-    // production validator no longer emits a warning for it — the
-    // `preLayoutTransient` flag is the only signal. This test pins
-    // that the channel stays completely silent across repeated
-    // registrations of the same FQM (StrictMode double-mount,
-    // ResizeObserver fire-on-mount, virtualizer placeholder→real-mount
-    // swaps, etc.).
-    const fq = asFq("/window/transient");
-    for (let i = 0; i < 3; i++) {
-      const result = validateAndLogRect(
-        "register_scope",
-        fq,
-        rect(0, 0, 100, 0),
-        performance.now(),
-        /* enabled */ true,
-      );
-      expect(result.preLayoutTransient).toBe(true);
-    }
-    expect(warnSpy).not.toHaveBeenCalled();
+  it("logs nothing for a zero-dim rect (pre-layout transient)", () => {
+    const result = validateAndLogRect(
+      asFq("/window/transient"),
+      rect(0, 0, 100, 0),
+      performance.now(),
+      /* enabled */ true,
+    );
+    expect(result.preLayoutTransient).toBe(true);
     expect(errorSpy).not.toHaveBeenCalled();
-  });
-
-  it("stays silent across distinct (op, fq) pre-layout-transient pairs as well", () => {
-    // The dedup key is `(op, fq)` for the zero-dim error path on
-    // `update_rect`. On registration ops, however, the warning was
-    // dropped entirely — distinct (op, fq) pairs still produce no
-    // warn output. The `preLayoutTransient` flag is what callers
-    // observe.
-    const results = [
-      validateAndLogRect(
-        "register_scope",
-        asFq("/window/a"),
-        rect(0, 0, 0, 0),
-        performance.now(),
-        /* enabled */ true,
-      ),
-      validateAndLogRect(
-        "register_zone",
-        asFq("/window/a"),
-        rect(0, 0, 0, 0),
-        performance.now(),
-        /* enabled */ true,
-      ),
-      validateAndLogRect(
-        "register_scope",
-        asFq("/window/b"),
-        rect(0, 0, 0, 0),
-        performance.now(),
-        /* enabled */ true,
-      ),
-    ];
-    for (const r of results) expect(r.preLayoutTransient).toBe(true);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("zero-dim rects on update_rect log to console.error once per (op, fq) (deduped)", () => {
-    // After layout, a zero dim is a real bug — ResizeObserver only
-    // fires post-layout. The first occurrence per (op, fq) emits;
-    // subsequent ones are deduped to keep test environments (where
-    // ResizeObserver fires every frame on an unlaid-out node) from
-    // drowning the channel with the same payload.
-    for (let i = 0; i < 3; i++) {
-      validateAndLogRect(
-        "update_rect",
-        asFq("/window/post-layout"),
-        rect(0, 0, 100, 0),
-        performance.now(),
-        /* enabled */ true,
-      );
-    }
-    expect(errorSpy.mock.calls.length).toBe(1);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("zero-dim rects on update_rect re-log per distinct (op, fq) pair", () => {
-    // The dedup key is `(op, fq)` so a different FQM is a fresh first
-    // occurrence even on the same op tag.
-    validateAndLogRect(
-      "update_rect",
-      asFq("/window/a"),
-      rect(0, 0, 100, 0),
-      performance.now(),
-      /* enabled */ true,
-    );
-    validateAndLogRect(
-      "update_rect",
-      asFq("/window/b"),
-      rect(0, 0, 100, 0),
-      performance.now(),
-      /* enabled */ true,
-    );
-    expect(errorSpy.mock.calls.length).toBe(2);
-  });
-
-  it("negative dimensions still log to console.error on register_scope (not transient)", () => {
+  it("negative dimensions log to console.error (not transient)", () => {
     // A negative dim is not a pre-layout shape (`getBoundingClientRect()`
-    // never returns negatives), so it stays in the error channel even
-    // on the registration path.
+    // never returns negatives).
     validateAndLogRect(
-      "register_scope",
       asFq("/window/neg"),
       rect(0, 0, -10, 40),
       performance.now(),

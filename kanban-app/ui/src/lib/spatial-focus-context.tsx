@@ -424,12 +424,7 @@ function buildSpatialFocusActions(
     // adapter-boundary `performance.now()` (the legacy behaviour) — that
     // makes the staleness check a no-op for legacy callers but keeps the
     // adapter usable from contexts that have no rect-sample timing.
-    validateAndLogRect(
-      "register_scope",
-      fq,
-      rect,
-      sampledAtMs ?? performance.now(),
-    );
+    validateAndLogRect(fq, rect, sampledAtMs ?? performance.now());
     await invoke("spatial_register_scope", {
       fq,
       segment,
@@ -451,12 +446,7 @@ function buildSpatialFocusActions(
     rect,
     sampledAtMs,
   ) => {
-    validateAndLogRect(
-      "update_rect",
-      fq,
-      rect,
-      sampledAtMs ?? performance.now(),
-    );
+    validateAndLogRect(fq, rect, sampledAtMs ?? performance.now());
     await invoke("spatial_update_rect", { fq, rect });
   };
 
@@ -484,9 +474,11 @@ function buildSpatialFocusActions(
       // this listener runs from a `<FocusScope>`'s `useEffect` cleanup,
       // React has already invoked the scope's bound `setRef(null)` in
       // the commit phase, so `entry.ref.current` is `null` and a fresh
-      // sample would skip the IPC. The cached rect is refreshed on
-      // every register / ResizeObserver / ancestor-scroll fire, so it
-      // always reflects the most recent live geometry.
+      // sample would skip the IPC. The cached rect is refreshed at
+      // mount (initial seed alongside `registerSpatialScope`) and
+      // immediately before unmount (via the scope's `useLayoutEffect`
+      // cleanup, which runs while the ref is still attached), so it
+      // reflects live geometry at the moment of unmount.
       const lostRect = entry.lastKnownRect;
       // No rect ever sampled (the scope unmounted in the same tick it
       // was registered) — skip the IPC. The surviving

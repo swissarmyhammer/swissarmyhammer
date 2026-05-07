@@ -486,15 +486,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
 
   // -------------------------------------------------------------------------
   // #3: After scrolling the inspector body, ArrowDown still picks the
-  // correct sibling — the rect-on-scroll fix keeps the kernel's view of
-  // the world current.
+  // correct sibling — the snapshot path reads each scope's rect fresh
+  // from the DOM at decision time, so the dispatched snapshot reflects
+  // the post-scroll geometry.
   //
-  // Strategy: dispatch a scroll event on the document (the inspector
-  // panel is rendered via `<AppShell>` but for the rect-on-scroll
-  // contract any scrollable ancestor will do), assert that
-  // `spatial_update_rect` was invoked at least once for the title and
-  // tags field zones (the key of each registered zone), then fire
-  // ArrowDown and assert the dispatch still uses the same field key.
+  // Strategy: dispatch a scroll event on the inspector body, then fire
+  // ArrowDown and assert the `spatial_navigate` IPC carries a snapshot
+  // whose rects match the post-scroll DOM.
   // -------------------------------------------------------------------------
 
   it("down_after_scroll_picks_next_field_in_content_order", async () => {
@@ -515,12 +513,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
     });
     await flushSetup();
 
-    // Scroll the inspector-body wrapper. The rect-on-scroll listener
-    // installed by every `<FocusScope>` (`useTrackRectOnAncestorScroll`)
-    // walks up to find scrollable ancestors and subscribes; scrolling
-    // any of them calls `spatial_update_rect(key, rect)` for the
-    // descendant zone(s). Use the `data-testid="scroller"` wrapper to
-    // mirror the production `<SlidePanel>`'s `overflow-y-auto` body.
+    // Scroll the inspector-body wrapper. The snapshot built at
+    // ArrowDown time reads each registered scope's
+    // `getBoundingClientRect()` lazily, so the post-scroll DOM is the
+    // source of truth — no IPC fires from the scroll itself.
     const scroller = container.querySelector(
       '[data-testid="scroller"]',
     ) as HTMLElement | null;
@@ -537,22 +533,13 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
       await new Promise((r) => setTimeout(r, 30));
     });
 
-    const updateCalls = spatialUpdateRectCalls();
-    expect(
-      updateCalls.length,
-      "the rect-on-scroll listener must refresh at least one field zone's rect after scroll",
-    ).toBeGreaterThan(0);
-    // At least one of the update calls must target the title zone's
-    // key — the listener fires for every registered descendant.
-    const titleUpdateCall = updateCalls.find((c) => c.fq === titleZone!.fq);
-    expect(
-      titleUpdateCall,
-      "rect-on-scroll must include the focused (title) field zone",
-    ).toBeTruthy();
+    // The scroll itself produces no rect-update IPCs — continuous rect
+    // sync was removed once snapshots became the rect source of truth.
+    expect(spatialUpdateRectCalls().length).toBe(0);
 
-    // Now press ArrowDown — the dispatch carries the focused field
-    // key, so the kernel can run beam search over the up-to-date
-    // rects.
+    // Press ArrowDown — the dispatch carries the focused field's FQM
+    // plus a fresh snapshot, so the kernel can run beam search over the
+    // up-to-date rects.
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
     await act(async () => {
