@@ -1,18 +1,14 @@
-//! Integration tests for `SpatialState::navigate_with_snapshot`.
+//! Integration tests for `SpatialState::navigate`.
 //!
-//! Snapshot-driven nav must agree with the registry-backed
-//! `navigate_with` for matching scope sets — the parity invariant the
-//! divergence diagnostic in the kanban-app `spatial_navigate` adapter
-//! relies on. Each test sets up a registry, builds a `NavSnapshot`
-//! mirroring it, runs both paths, and asserts the resulting
-//! `FocusChangedEvent.next_fq` matches.
+//! Each test stands up a registry layer + snapshot and asserts that
+//! `state.navigate(...)` lands on the expected target (or short-circuits
+//! to `None` for stay-put / torn-state outcomes).
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusLayer, FocusOverrides, FocusScope, FullyQualifiedMoniker,
-    LayerName, NavSnapshot, Pixels, Rect, SegmentMoniker, SnapshotScope, SpatialRegistry,
-    SpatialState, WindowLabel,
+    Direction, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect,
+    SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 const LAYER: &str = "/L";
@@ -41,292 +37,129 @@ fn fq(s: &str) -> FullyQualifiedMoniker {
     FullyQualifiedMoniker::from_string(s)
 }
 
-fn seg(s: &str) -> SegmentMoniker {
-    SegmentMoniker::from_string(s)
-}
-
-fn make_scope(fq_str: &str, segment: &str, parent_zone: Option<&str>, r: Rect) -> FocusScope {
-    FocusScope {
+fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
+    SnapshotScope {
         fq: fq(fq_str),
-        segment: seg(segment),
         rect: r,
-        layer_fq: fq(LAYER),
         parent_zone: parent_zone.map(fq),
-        overrides: HashMap::new(),
-        last_focused: None,
+        nav_override: HashMap::new(),
     }
 }
 
-fn snapshot_from_registry(reg: &SpatialRegistry) -> NavSnapshot {
-    let layer_fq = fq(LAYER);
+fn snapshot(scopes: Vec<SnapshotScope>) -> NavSnapshot {
     NavSnapshot {
-        scopes: reg
-            .scopes_in_layer(&layer_fq)
-            .map(|s| SnapshotScope {
-                fq: s.fq.clone(),
-                rect: s.rect,
-                parent_zone: s.parent_zone.clone(),
-                nav_override: s.overrides.clone(),
-            })
-            .collect(),
-        layer_fq,
+        layer_fq: fq(LAYER),
+        scopes,
     }
 }
 
-fn run_both_paths(
-    reg: &mut SpatialRegistry,
-    state: &mut SpatialState,
+fn nav_to(
+    snapshot: &NavSnapshot,
     from: FullyQualifiedMoniker,
     direction: Direction,
-) -> (Option<FullyQualifiedMoniker>, Option<FullyQualifiedMoniker>) {
+) -> Option<FullyQualifiedMoniker> {
+    let mut reg = SpatialRegistry::new();
+    reg.push_layer(make_layer());
+    let mut state = SpatialState::new();
     state
-        .focus(reg, from.clone())
-        .expect("focus must succeed before nav");
-
-    let strategy = BeamNavStrategy::new();
-    let registry_event =
-        state
-            .clone()
-            .navigate_with(&mut reg.clone(), &strategy, from.clone(), direction);
-    let registry_target = registry_event
+        .focus(&mut reg, snapshot, from.clone())
+        .expect("focus seed");
+    state
+        .navigate(&mut reg, snapshot, from, direction)
         .and_then(|e| e.next_fq)
-        .or(Some(from.clone()));
-
-    let snapshot = snapshot_from_registry(reg);
-    let snapshot_event =
-        state
-            .clone()
-            .navigate_with_snapshot(&mut reg.clone(), &snapshot, from.clone(), direction);
-    let snapshot_target = snapshot_event.and_then(|e| e.next_fq).or(Some(from));
-
-    (registry_target, snapshot_target)
 }
 
-/// Cardinal `Down` picks the same target via either path.
 #[test]
-fn cardinal_down_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-    reg.register_scope(make_scope(
-        "/L/top",
-        "top",
-        None,
-        rect(0.0, 0.0, 50.0, 30.0),
-    ));
-    reg.register_scope(make_scope(
-        "/L/bottom",
-        "bottom",
-        None,
-        rect(0.0, 100.0, 50.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/top"), Direction::Down);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/bottom")));
+fn down_picks_below_neighbor() {
+    let snapshot = snapshot(vec![
+        snap("/L/top", None, rect(0.0, 0.0, 10.0, 10.0)),
+        snap("/L/bottom", None, rect(0.0, 20.0, 10.0, 10.0)),
+    ]);
+    let target = nav_to(&snapshot, fq("/L/top"), Direction::Down);
+    assert_eq!(target, Some(fq("/L/bottom")));
 }
 
-/// Cardinal `Up` picks the same target via either path.
 #[test]
-fn cardinal_up_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-    reg.register_scope(make_scope(
-        "/L/top",
-        "top",
-        None,
-        rect(0.0, 0.0, 50.0, 30.0),
-    ));
-    reg.register_scope(make_scope(
-        "/L/bottom",
-        "bottom",
-        None,
-        rect(0.0, 100.0, 50.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/bottom"), Direction::Up);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/top")));
+fn empty_half_plane_returns_none() {
+    let snapshot = snapshot(vec![snap("/L/only", None, rect(0.0, 0.0, 10.0, 10.0))]);
+    // Pathfinding echoes focused FQM; navigate detects "already focused"
+    // and short-circuits.
+    let target = nav_to(&snapshot, fq("/L/only"), Direction::Right);
+    assert!(target.is_none(), "lonely scope must not move on Right");
 }
 
-/// Cardinal `Left` picks the same target via either path.
 #[test]
-fn cardinal_left_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-    reg.register_scope(make_scope("/L/l", "l", None, rect(0.0, 0.0, 50.0, 30.0)));
-    reg.register_scope(make_scope("/L/r", "r", None, rect(100.0, 0.0, 50.0, 30.0)));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/r"), Direction::Left);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/l")));
+fn override_redirect_target_wins() {
+    let mut src = snap("/L/src", None, rect(0.0, 0.0, 10.0, 10.0));
+    src.nav_override
+        .insert(Direction::Right, Some(fq("/L/jump")));
+    let snapshot = snapshot(vec![
+        src,
+        snap("/L/jump", None, rect(100.0, 0.0, 10.0, 10.0)),
+    ]);
+    let target = nav_to(&snapshot, fq("/L/src"), Direction::Right);
+    assert_eq!(target, Some(fq("/L/jump")));
 }
 
-/// Cardinal `Right` picks the same target via either path.
 #[test]
-fn cardinal_right_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-    reg.register_scope(make_scope("/L/l", "l", None, rect(0.0, 0.0, 50.0, 30.0)));
-    reg.register_scope(make_scope("/L/r", "r", None, rect(100.0, 0.0, 50.0, 30.0)));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/l"), Direction::Right);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/r")));
-}
-
-/// An override redirect is honored identically by both paths.
-#[test]
-fn override_redirect_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-
-    let mut overrides: FocusOverrides = HashMap::new();
-    overrides.insert(Direction::Down, Some(fq("/L/destination")));
-
-    let mut from = make_scope("/L/from", "from", None, rect(0.0, 0.0, 50.0, 30.0));
-    from.overrides = overrides;
-    reg.register_scope(from);
-
-    reg.register_scope(make_scope(
-        "/L/destination",
-        "destination",
-        None,
-        rect(500.0, 500.0, 50.0, 30.0),
-    ));
-    reg.register_scope(make_scope(
-        "/L/below",
-        "below",
-        None,
-        rect(0.0, 100.0, 50.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/from"), Direction::Down);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/destination")));
-}
-
-/// An explicit override wall (`Some(None)`) keeps focus on `from` via
-/// either path.
-#[test]
-fn override_block_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-
-    let mut overrides: FocusOverrides = HashMap::new();
-    overrides.insert(Direction::Down, None);
-    let mut from = make_scope("/L/from", "from", None, rect(0.0, 0.0, 50.0, 30.0));
-    from.overrides = overrides;
-    reg.register_scope(from);
-
-    reg.register_scope(make_scope(
-        "/L/below",
-        "below",
-        None,
-        rect(0.0, 100.0, 50.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    let strategy = BeamNavStrategy::new();
-    state
-        .focus(&mut reg, fq("/L/from"))
-        .expect("focus must succeed before nav");
-
-    let registry_event =
-        state
-            .clone()
-            .navigate_with(&mut reg.clone(), &strategy, fq("/L/from"), Direction::Down);
-    let snapshot = snapshot_from_registry(&reg);
-    let snapshot_event = state.clone().navigate_with_snapshot(
-        &mut reg.clone(),
-        &snapshot,
-        fq("/L/from"),
-        Direction::Down,
-    );
-
+fn override_wall_blocks_navigation() {
+    let mut src = snap("/L/src", None, rect(0.0, 0.0, 10.0, 10.0));
+    src.nav_override.insert(Direction::Right, None);
+    let snapshot = snapshot(vec![
+        src,
+        snap("/L/neighbor", None, rect(20.0, 0.0, 10.0, 10.0)),
+    ]);
+    let target = nav_to(&snapshot, fq("/L/src"), Direction::Right);
     assert!(
-        registry_event.is_none(),
-        "wall override → no event from registry path"
-    );
-    assert!(
-        snapshot_event.is_none(),
-        "wall override → no event from snapshot path"
+        target.is_none(),
+        "wall must take precedence over geometric pick"
     );
 }
 
-/// At the visual edge of the layer, both paths return the focused FQM
-/// (no event emitted because focus did not move).
 #[test]
-fn layer_bounded_edge_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-    reg.register_scope(make_scope(
-        "/L/lonely",
-        "lonely",
-        None,
-        rect(0.0, 0.0, 50.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    state
-        .focus(&mut reg, fq("/L/lonely"))
-        .expect("focus must succeed before nav");
-
-    let strategy = BeamNavStrategy::new();
-    let registry_event = state.clone().navigate_with(
-        &mut reg.clone(),
-        &strategy,
-        fq("/L/lonely"),
-        Direction::Down,
-    );
-    let snapshot = snapshot_from_registry(&reg);
-    let snapshot_event = state.clone().navigate_with_snapshot(
-        &mut reg.clone(),
-        &snapshot,
-        fq("/L/lonely"),
-        Direction::Down,
-    );
-
-    assert!(registry_event.is_none(), "edge → no event via registry");
-    assert!(snapshot_event.is_none(), "edge → no event via snapshot");
+fn first_picks_topmost_then_leftmost_child() {
+    let snapshot = snapshot(vec![
+        snap("/L/parent", None, rect(0.0, 0.0, 300.0, 300.0)),
+        snap(
+            "/L/parent/alpha",
+            Some("/L/parent"),
+            rect(0.0, 0.0, 50.0, 30.0),
+        ),
+        snap(
+            "/L/parent/beta",
+            Some("/L/parent"),
+            rect(100.0, 0.0, 50.0, 30.0),
+        ),
+        snap(
+            "/L/parent/gamma",
+            Some("/L/parent"),
+            rect(0.0, 100.0, 50.0, 30.0),
+        ),
+    ]);
+    let target = nav_to(&snapshot, fq("/L/parent"), Direction::First);
+    assert_eq!(target, Some(fq("/L/parent/alpha")));
 }
 
-/// Beam tie-break (leaf-over-container) resolves identically via either
-/// path.
 #[test]
-fn beam_tie_break_parity() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer());
-
-    // Focused scope at the top.
-    reg.register_scope(make_scope(
-        "/L/from",
-        "from",
-        None,
-        rect(0.0, 0.0, 100.0, 30.0),
-    ));
-    // Container directly below — overlaps and contains the inner leaf.
-    reg.register_scope(make_scope(
-        "/L/container",
-        "container",
-        None,
-        rect(0.0, 100.0, 100.0, 100.0),
-    ));
-    // Inner leaf with the same top edge as the container — same beam
-    // score; leaves win over containers in the tie-break.
-    reg.register_scope(make_scope(
-        "/L/container/leaf",
-        "leaf",
-        Some("/L/container"),
-        rect(20.0, 100.0, 60.0, 30.0),
-    ));
-
-    let mut state = SpatialState::new();
-    let (a, b) = run_both_paths(&mut reg, &mut state, fq("/L/from"), Direction::Down);
-    assert_eq!(a, b);
-    assert_eq!(a, Some(fq("/L/container/leaf")));
+fn last_picks_bottommost_then_rightmost_child() {
+    let snapshot = snapshot(vec![
+        snap("/L/parent", None, rect(0.0, 0.0, 300.0, 300.0)),
+        snap(
+            "/L/parent/alpha",
+            Some("/L/parent"),
+            rect(0.0, 0.0, 50.0, 30.0),
+        ),
+        snap(
+            "/L/parent/beta",
+            Some("/L/parent"),
+            rect(100.0, 0.0, 50.0, 30.0),
+        ),
+        snap(
+            "/L/parent/gamma",
+            Some("/L/parent"),
+            rect(0.0, 100.0, 50.0, 30.0),
+        ),
+    ]);
+    let target = nav_to(&snapshot, fq("/L/parent"), Direction::Last);
+    assert_eq!(target, Some(fq("/L/parent/gamma")));
 }

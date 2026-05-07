@@ -1,27 +1,30 @@
 # swissarmyhammer-focus
 
-Headless spatial-navigation kernel. Knows about `FocusScope`s with rects
-inside `Layer`s. Doesn't know about the DOM, scroll containers, or
-virtualizers — the consumer measures rects and ships them in.
+Headless spatial-navigation kernel. Per-decision navigation snapshots
+ride on every focus-mutating call; the kernel reads scope geometry out
+of the snapshot at the moment of a decision and holds no scope replica
+between calls.
 
 ## Primitive
 
-**`FocusScope`** — has a rect, may have children, lives in a `Layer`,
-identified by a `FullyQualifiedMoniker` (the path through the focus
-hierarchy).
+**`SnapshotScope`** — has a rect, optional `parent_zone`, and per-
+direction navigation overrides. Identified by a
+`FullyQualifiedMoniker` (the path through the focus hierarchy). Carried
+inline on the wire as part of a `NavSnapshot`.
 
 ## Boundary
 
 **`Layer`** — modal boundary. Layers form a per-window forest (window
 root → inspector → dialog). Nav and drill operations never cross a
-layer.
+layer. Layers are the only structural state the kernel persists between
+decisions.
 
 ## Operations
 
 ### up / down / left / right
 
-Geometric beam pick across all `FocusScope`s in the focused scope's
-layer. For direction D, candidates are the scopes that:
+Geometric beam pick across all snapshot scopes in the layer. For
+direction D, candidates are the scopes that:
 
 1. lie strictly in the half-plane of D from the focused rect,
 2. overlap the focused rect on the cross axis (horizontal overlap for
@@ -37,9 +40,9 @@ Empty candidate set → stay-put.
 
 Focus a child of the focused scope.
 
-1. If the focused scope's `last_focused` slot resolves to a registered
-   child, return it.
-2. Else return the topmost-then-leftmost child.
+1. If the kernel's `last_focused_by_fq` map has an entry for the
+   focused scope and the recorded target is in the snapshot, return it.
+2. Else return the topmost-then-leftmost child in the snapshot.
 3. Else (no children) stay-put.
 
 ### drill up
@@ -65,8 +68,8 @@ focused FQM — the React side detects stay-put by FQM equality.
 
 ## Coordinate system
 
-All registered rects are viewport-relative, sampled by
-`getBoundingClientRect()`, and refreshed on ancestor scroll. The
+All snapshot rects are viewport-relative, sampled by
+`getBoundingClientRect()` on the React side at decision time. The
 kernel ranks by raw rect; mixing coordinate frames silently picks the
 wrong neighbor.
 

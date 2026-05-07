@@ -1,21 +1,6 @@
-//! Per-decision navigation snapshots — the wire shape the kernel reads
-//! at decision time, plus the read-only index helper that pathfinding
-//! and fallback resolution will use.
-//!
-//! # What this module is, and why
-//!
-//! Step 2 of the spatial-nav redesign described in card
-//! `01KQTC1VNQM9KC90S65P7QX9N1`. The redesign moves the scope registry
-//! out of the kernel and into the React side; the kernel becomes
-//! stateless with respect to scope geometry and structure, and reads a
-//! fresh [`NavSnapshot`] per decision instead. This file defines the
-//! Rust mirror of the TypeScript wire shape introduced by step 1
-//! (`kanban-app/ui/src/lib/layer-scope-registry-context.tsx`) — the
-//! frontend already builds these payloads, but no IPC commands carry
-//! them yet, so this module has no production callers in step 2. That
-//! is intentional: steps 3–5 will adapt `geometric_pick`,
-//! `resolve_fallback`, and `record_focus` to take a snapshot argument,
-//! and steps 6–8 will plumb the IPC.
+//! Per-decision navigation snapshot — the wire shape every focus-mutating
+//! IPC carries. The kernel reads scope geometry out of the snapshot at
+//! decision time and holds no replica between calls.
 //!
 //! # Field-name mirror with TypeScript
 //!
@@ -38,11 +23,9 @@
 //! entry's `parent_zone`. The walk degrades gracefully on torn input
 //! (an FQM whose `parent_zone` names a missing entry) by stopping at
 //! the missing edge, and on a malformed cycle by emitting
-//! `tracing::error!` and breaking — matching the same defensive
-//! pattern that `SpatialRegistry::record_focus` uses when walking
-//! `FocusScope::parent_zone` chains today. The kernel does not produce
-//! cycles in well-formed code, but the guard keeps a malformed React-
-//! side payload from freezing a focus IPC under the registry mutex.
+//! `tracing::error!` and breaking. The kernel does not produce cycles
+//! in well-formed code, but the guard keeps a malformed React-side
+//! payload from freezing a focus IPC under the registry mutex.
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,13 +35,8 @@ use crate::types::{Direction, FullyQualifiedMoniker, Rect};
 
 /// Per-direction navigation overrides for a single scope.
 ///
-/// Mirrors the React `FocusOverrides` type (a partial map from
-/// `Direction` to a target FQM or `null`). The same shape is used
-/// inline today on [`crate::scope::FocusScope::overrides`]; this alias
-/// gives the snapshot wire format a stable name for the type and
-/// matches the TypeScript shape one-for-one.
-///
-/// Semantics follow the existing `overrides` field on `FocusScope`:
+/// Mirrors the React `FocusOverrides` type — a partial map from
+/// `Direction` to a target FQM or `null`. Semantics:
 ///
 /// - missing key — fall through to beam search;
 /// - `Some(target_fq)` — redirect navigation to the named target;
@@ -67,15 +45,11 @@ pub type FocusOverrides = HashMap<Direction, Option<FullyQualifiedMoniker>>;
 
 /// A single scope's contribution to a navigation snapshot.
 ///
-/// Mirrors the TypeScript `SnapshotScope` introduced by step 1 of the
-/// parent card. Fields are snake_case so a JSON payload built on the
-/// React side deserializes verbatim.
-///
-/// Construction is plain struct-literal — there is no validating
-/// constructor because (a) the only producer is the React-side
-/// snapshot builder and (b) the kernel walks snapshot scopes
-/// defensively, tolerating torn input via the cycle-guards in
-/// [`IndexedSnapshot::parent_zone_chain`].
+/// Mirrors the TypeScript `SnapshotScope` wire shape; fields are
+/// snake_case so a JSON payload built on the React side deserializes
+/// verbatim. Construction is plain struct-literal — the kernel walks
+/// snapshot scopes defensively, tolerating torn input via the
+/// cycle-guards in [`IndexedSnapshot::parent_zone_chain`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotScope {
     /// Canonical fully-qualified path to this scope. Acts as the
@@ -93,21 +67,18 @@ pub struct SnapshotScope {
     /// `resolve_fallback` walks this chain to locate sibling-in-zone
     /// and parent-zone fall-back targets.
     pub parent_zone: Option<FullyQualifiedMoniker>,
-    /// Per-direction navigation overrides for this scope. Mirrors the
-    /// existing `FocusScope::overrides` shape; the redesign reads it
-    /// at decision time so mid-life changes to the React-side
-    /// `navOverride` prop take effect on the next nav (the previous
-    /// register-time snapshot semantics are explicitly improved
-    /// here).
+    /// Per-direction navigation overrides for this scope. The kernel
+    /// reads it at decision time so mid-life changes to the React-side
+    /// `navOverride` prop take effect on the next nav.
     pub nav_override: FocusOverrides,
 }
 
 /// A snapshot of every scope mounted under a single layer.
 ///
-/// Mirrors the TypeScript `NavSnapshot` introduced by step 1. Built
-/// per decision (per-nav, per-focus, per-focus-lost) on the React
-/// side and shipped to the kernel inline so the kernel never has to
-/// read scope state out-of-band.
+/// Mirrors the TypeScript `NavSnapshot` wire shape. Built per decision
+/// (per-nav, per-focus, per-focus-lost) on the React side and shipped
+/// to the kernel inline so the kernel never has to read scope state
+/// out-of-band.
 ///
 /// The `scopes` vector is treated as flat — pathfinding and fallback
 /// wrap the snapshot in [`IndexedSnapshot`] for O(1) FQM lookups when
@@ -283,10 +254,8 @@ impl<'a, 'idx> Iterator for ParentZoneChain<'a, 'idx> {
 #[cfg(test)]
 mod tests {
     //! Unit coverage for the snapshot data types and the
-    //! [`IndexedSnapshot`] walks. Tests deliberately stay small and
-    //! focused — no production callers exist yet (steps 3–5 will
-    //! introduce them) so the bar is "the helpers behave as
-    //! documented", not "every kernel decision is covered".
+    //! [`IndexedSnapshot`] walks — round-trip serde, indexed FQM
+    //! lookup, parent-zone chain walks (linear, missing-edge, cycle).
 
     use super::*;
     use crate::types::Pixels;
@@ -434,7 +403,7 @@ mod tests {
     /// `NavSnapshot` round-trips through `serde_json` byte-identically
     /// for at least one populated payload. The wire shape is the
     /// kernel↔React contract — any breaking change here would also
-    /// break the TypeScript mirror in step 1.
+    /// break the TypeScript mirror.
     #[test]
     fn nav_snapshot_round_trips_through_serde() {
         let mut overrides: FocusOverrides = HashMap::new();
@@ -478,9 +447,9 @@ mod tests {
     }
 
     /// The on-wire JSON keys are the snake_case names the TypeScript
-    /// step-1 builder produces (`layer_fq`, `parent_zone`,
-    /// `nav_override`). Pinning the field names here catches a future
-    /// rename that would silently break the React-side payload.
+    /// builder produces (`layer_fq`, `parent_zone`, `nav_override`).
+    /// Pinning the field names here catches a future rename that
+    /// would silently break the React-side payload.
     #[test]
     fn nav_snapshot_json_uses_snake_case_field_names() {
         let snapshot = snapshot_for("/L", vec![scope("/L/zone", None)]);
@@ -565,9 +534,8 @@ mod tests {
     }
 
     /// When the starting FQM is not in the snapshot the iterator is
-    /// empty — no panic, no log, just an early termination. Step 3+
-    /// callers can rely on this when validating against a torn
-    /// payload.
+    /// empty — no panic, no log, just an early termination. Callers
+    /// can rely on this when validating against a torn payload.
     #[test]
     fn parent_zone_chain_empty_for_missing_fq() {
         let snap = snapshot_for("/L", vec![scope("/L/a", None)]);
@@ -651,7 +619,7 @@ mod tests {
     /// `IndexedSnapshot::new` is robust to a snapshot whose `scopes`
     /// is empty — the index is empty too and every lookup returns
     /// `None`. This is the boring base case but pins the contract so
-    /// step-3 callers don't have to special-case empty input.
+    /// callers don't have to special-case empty input.
     #[test]
     fn indexed_snapshot_handles_empty_scopes() {
         let snap = snapshot_for("/L", vec![]);

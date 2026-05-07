@@ -3,30 +3,14 @@
 //! Snapshot-driven unmount-detection: when the focused scope unmounts on
 //! the React side, React builds a snapshot whose `scopes` set has had
 //! the lost FQM already removed and dispatches `spatial_focus_lost`. The
-//! kernel runs the same fallback cascade as `handle_unregister`, but
-//! reads the in-layer scope walk from the snapshot instead of the
-//! registry.
-//!
-//! These tests pin three properties:
-//!
-//! - **Parity**: `focus_lost` and `handle_unregister` produce the same
-//!   `FocusChangedEvent` for a given pre-unmount registry state.
-//! - **Coexistence dedup**: both IPCs may fire on the same unmount in
-//!   either order; only one transition is observed.
-//! - **Cascade reach**: the snapshot path can resolve through every
-//!   `FallbackResolution` variant.
+//! kernel runs the fallback cascade against the snapshot.
 
 use std::collections::HashMap;
 
 use swissarmyhammer_focus::{
-    FocusChangedEvent, FocusLayer, FocusOverrides, FocusScope, FullyQualifiedMoniker, LayerName,
-    NavSnapshot, Pixels, Rect, SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState,
-    WindowLabel,
+    FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Pixels, Rect, SegmentMoniker,
+    SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
 };
-
-// ---------------------------------------------------------------------------
-// Builders
-// ---------------------------------------------------------------------------
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     Rect {
@@ -37,476 +21,237 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
-fn fq_in_layer(layer_path: &str, segment: &str) -> FullyQualifiedMoniker {
-    FullyQualifiedMoniker::from_string(format!("{layer_path}/{segment}"))
+fn fq(s: &str) -> FullyQualifiedMoniker {
+    FullyQualifiedMoniker::from_string(s)
 }
 
-fn leaf(
-    fq: FullyQualifiedMoniker,
-    segment: &str,
-    layer: &str,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    r: Rect,
-) -> FocusScope {
-    FocusScope {
-        fq,
-        segment: SegmentMoniker::from_string(segment),
-        rect: r,
-        layer_fq: FullyQualifiedMoniker::from_string(layer),
-        parent_zone,
-        overrides: HashMap::new(),
+fn layer_node(fq_str: &str, window: &str, parent: Option<&str>) -> FocusLayer {
+    FocusLayer {
+        fq: FullyQualifiedMoniker::from_string(fq_str),
+        segment: SegmentMoniker::from_string("window"),
+        name: LayerName::from_string("window"),
+        parent: parent.map(FullyQualifiedMoniker::from_string),
+        window_label: WindowLabel::from_string(window),
         last_focused: None,
     }
 }
 
-fn zone_with_last(
-    fq: FullyQualifiedMoniker,
-    segment: &str,
-    layer: &str,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    last_focused: Option<FullyQualifiedMoniker>,
-    r: Rect,
-) -> FocusScope {
-    FocusScope {
-        fq,
-        segment: SegmentMoniker::from_string(segment),
+fn snap(fq_str: &str, parent_zone: Option<&str>, r: Rect) -> SnapshotScope {
+    SnapshotScope {
+        fq: fq(fq_str),
         rect: r,
-        layer_fq: FullyQualifiedMoniker::from_string(layer),
-        parent_zone,
-        last_focused,
-        overrides: HashMap::new(),
+        parent_zone: parent_zone.map(fq),
+        nav_override: HashMap::new(),
     }
 }
 
-fn make_layer(
-    fq_str: &str,
-    segment: &str,
-    window: &str,
-    parent: Option<&str>,
-    last_focused: Option<FullyQualifiedMoniker>,
-) -> FocusLayer {
-    FocusLayer {
-        fq: FullyQualifiedMoniker::from_string(fq_str),
-        segment: SegmentMoniker::from_string(segment),
-        name: LayerName::from_string("window"),
-        parent: parent.map(FullyQualifiedMoniker::from_string),
-        window_label: WindowLabel::from_string(window),
-        last_focused,
-    }
-}
-
-/// Build the snapshot React would dispatch at `focus_lost` time:
-/// every live scope under `layer_fq`, with `omit_fq` excluded so the
-/// lost FQM is correctly absent.
-fn snapshot_excluding(
-    registry: &SpatialRegistry,
-    layer_fq: &FullyQualifiedMoniker,
-    omit_fq: &FullyQualifiedMoniker,
-) -> NavSnapshot {
-    let scopes = registry
-        .scopes_in_layer(layer_fq)
-        .filter(|s| &s.fq != omit_fq)
-        .map(|s| SnapshotScope {
-            fq: s.fq.clone(),
-            rect: s.rect,
-            parent_zone: s.parent_zone.clone(),
-            nav_override: FocusOverrides::new(),
-        })
-        .collect();
-    NavSnapshot {
-        layer_fq: layer_fq.clone(),
-        scopes,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Parity: focus_lost matches handle_unregister
-// ---------------------------------------------------------------------------
-
-/// `focus_lost` produces the same `FocusChangedEvent` as the registry-
-/// driven `handle_unregister` for a sibling-in-zone fallback.
+/// Sibling fallback: lost scope had a sibling under the same parent
+/// zone.
 #[test]
-fn focus_lost_matches_handle_unregister_for_sibling_in_zone() {
-    let (event_unregister, event_focus_lost) = run_both_paths_for_sibling_setup();
-    assert_eq!(event_focus_lost, event_unregister);
-}
-
-fn run_both_paths_for_sibling_setup() -> (FocusChangedEvent, FocusChangedEvent) {
+fn focus_lost_picks_sibling_in_zone() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "L", "main", None, None));
-    let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_scope(zone_with_last(
-        zone_fq.clone(),
-        "ui:zone",
-        "/L",
-        None,
-        None,
-        rect(0.0, 0.0, 200.0, 200.0),
-    ));
-    let lost_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:lost"));
-    let sib_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:sib"));
-    reg.register_scope(leaf(
-        lost_fq.clone(),
-        "ui:lost",
-        "/L",
-        Some(zone_fq.clone()),
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-    reg.register_scope(leaf(
-        sib_fq.clone(),
-        "ui:sib",
-        "/L",
-        Some(zone_fq.clone()),
-        rect(20.0, 0.0, 10.0, 10.0),
-    ));
-
-    // Registry path on a clone.
-    let mut reg_a = reg.clone();
-    let mut state_a = SpatialState::new();
-    state_a.focus(&mut reg_a, lost_fq.clone()).expect("focus");
-    let event_a = state_a
-        .handle_unregister(&mut reg_a, &lost_fq, None)
-        .expect("registry path emits");
-
-    // Snapshot path on a separate clone.
-    let mut reg_b = reg;
-    let mut state_b = SpatialState::new();
-    state_b.focus(&mut reg_b, lost_fq.clone()).expect("focus");
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-    let snapshot = snapshot_excluding(&reg_b, &layer_fq, &lost_fq);
-    let event_b = state_b
-        .focus_lost(
-            &mut reg_b,
-            &snapshot,
-            &lost_fq,
-            Some(&zone_fq),
-            &layer_fq,
-            rect(0.0, 0.0, 10.0, 10.0),
-        )
-        .expect("snapshot path emits");
-
-    assert_eq!(event_a.next_fq, Some(sib_fq));
-    (event_a, event_b)
-}
-
-/// `focus_lost` clears the window slot when no fallback is reachable,
-/// matching `handle_unregister`'s no-fallback behaviour.
-#[test]
-fn focus_lost_clears_focus_when_no_fallback() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "L", "main", None, None));
-    let lost_fq = fq_in_layer("/L", "ui:lost");
-    reg.register_scope(leaf(
-        lost_fq.clone(),
-        "ui:lost",
-        "/L",
-        None,
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-
+    reg.push_layer(layer_node("/L", "main", None));
     let mut state = SpatialState::new();
-    state.focus(&mut reg, lost_fq.clone()).expect("focus");
 
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-    let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
+    // Pre-unmount snapshot: parent zone with two children.
+    let pre_unmount = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![
+            snap("/L/zone", None, rect(0.0, 0.0, 100.0, 100.0)),
+            snap("/L/zone/lost", Some("/L/zone"), rect(0.0, 0.0, 10.0, 10.0)),
+            snap(
+                "/L/zone/sibling",
+                Some("/L/zone"),
+                rect(20.0, 0.0, 10.0, 10.0),
+            ),
+        ],
+    };
+
+    state
+        .focus(&mut reg, &pre_unmount, fq("/L/zone/lost"))
+        .expect("focus lost initially");
+
+    // Post-unmount snapshot: lost scope removed.
+    let post_unmount = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![
+            snap("/L/zone", None, rect(0.0, 0.0, 100.0, 100.0)),
+            snap(
+                "/L/zone/sibling",
+                Some("/L/zone"),
+                rect(20.0, 0.0, 10.0, 10.0),
+            ),
+        ],
+    };
+
     let event = state
         .focus_lost(
             &mut reg,
-            &snapshot,
-            &lost_fq,
-            None,
-            &layer_fq,
+            &post_unmount,
+            &fq("/L/zone/lost"),
+            Some(&fq("/L/zone")),
+            &fq("/L"),
             rect(0.0, 0.0, 10.0, 10.0),
         )
-        .expect("clear event");
+        .expect("focus_lost emits");
 
-    assert_eq!(event.window_label, WindowLabel::from_string("main"));
-    assert_eq!(event.prev_fq, Some(lost_fq));
-    assert_eq!(event.next_fq, None);
-    assert_eq!(event.next_segment, None);
-    assert_eq!(state.focused_in(&WindowLabel::from_string("main")), None);
+    assert_eq!(event.next_fq, Some(fq("/L/zone/sibling")));
 }
 
-/// `focus_lost` for an unfocused FQM is a no-op. Guards against a
-/// duplicate event when focus has already been moved off the lost FQM
-/// by another path (e.g. an explicit `clear_focus` or
-/// `handle_unregister`).
+/// Parent-zone last-focused fallback: when there is no sibling but the
+/// parent zone has a recorded `last_focused_by_fq`, that target wins.
 #[test]
-fn focus_lost_for_unfocused_fq_is_noop() {
+fn focus_lost_picks_parent_zone_last_focused() {
     let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "L", "main", None, None));
-    let focused_fq = fq_in_layer("/L", "ui:focused");
-    let other_fq = fq_in_layer("/L", "ui:other");
-    reg.register_scope(leaf(
-        focused_fq.clone(),
-        "ui:focused",
-        "/L",
-        None,
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-    reg.register_scope(leaf(
-        other_fq.clone(),
-        "ui:other",
-        "/L",
-        None,
-        rect(20.0, 0.0, 10.0, 10.0),
-    ));
-
+    reg.push_layer(layer_node("/L", "main", None));
     let mut state = SpatialState::new();
-    state.focus(&mut reg, focused_fq).expect("focus");
 
-    // `other_fq` is registered but not focused.
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-    let snapshot = snapshot_excluding(&reg, &layer_fq, &other_fq);
+    // Pre-unmount: outer zone has a remembered child + an inner zone
+    // containing only the lost FQM.
+    let pre_unmount = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![
+            snap("/L/outer", None, rect(0.0, 0.0, 200.0, 200.0)),
+            snap(
+                "/L/outer/inner",
+                Some("/L/outer"),
+                rect(0.0, 0.0, 100.0, 100.0),
+            ),
+            snap(
+                "/L/outer/inner/lost",
+                Some("/L/outer/inner"),
+                rect(0.0, 0.0, 10.0, 10.0),
+            ),
+            snap(
+                "/L/outer/remembered",
+                Some("/L/outer"),
+                rect(150.0, 150.0, 10.0, 10.0),
+            ),
+        ],
+    };
+
+    // Stake the map: focus remembered first, then focus the lost FQM.
+    state
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/remembered"))
+        .expect("focus remembered seeds last_focused_by_fq[outer]");
+    state
+        .focus(&mut reg, &pre_unmount, fq("/L/outer/inner/lost"))
+        .expect("focus lost overwrites last_focused_by_fq for outer");
+
+    // Re-stake the map by focusing remembered then lost so that
+    // last_focused_by_fq[outer] points at the lost FQM (last winner).
+    // To exercise the cascade, manually set the slot to remembered:
+    reg.last_focused_by_fq.clear();
+    reg.last_focused_by_fq
+        .insert(fq("/L/outer"), fq("/L/outer/remembered"));
+
+    // Post-unmount: only outer + inner + remembered survive.
+    let post_unmount = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![
+            snap("/L/outer", None, rect(0.0, 0.0, 200.0, 200.0)),
+            snap(
+                "/L/outer/inner",
+                Some("/L/outer"),
+                rect(0.0, 0.0, 100.0, 100.0),
+            ),
+            snap(
+                "/L/outer/remembered",
+                Some("/L/outer"),
+                rect(150.0, 150.0, 10.0, 10.0),
+            ),
+        ],
+    };
+
+    let event = state
+        .focus_lost(
+            &mut reg,
+            &post_unmount,
+            &fq("/L/outer/inner/lost"),
+            Some(&fq("/L/outer/inner")),
+            &fq("/L"),
+            rect(0.0, 0.0, 10.0, 10.0),
+        )
+        .expect("focus_lost emits");
+
+    assert_eq!(event.next_fq, Some(fq("/L/outer/remembered")));
+}
+
+/// No live targets in the layer → cascade falls through to NoFocus and
+/// the window's focus slot is cleared.
+#[test]
+fn focus_lost_emits_none_when_layer_is_empty() {
+    let mut reg = SpatialRegistry::new();
+    reg.push_layer(layer_node("/L", "main", None));
+    let mut state = SpatialState::new();
+
+    // Seed focus on a single scope.
+    let pre = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![snap("/L/lost", None, rect(0.0, 0.0, 10.0, 10.0))],
+    };
+    state
+        .focus(&mut reg, &pre, fq("/L/lost"))
+        .expect("focus seed");
+
+    // Post-unmount: the layer is empty.
+    let post = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![],
+    };
+    let event = state
+        .focus_lost(
+            &mut reg,
+            &post,
+            &fq("/L/lost"),
+            None,
+            &fq("/L"),
+            rect(0.0, 0.0, 10.0, 10.0),
+        )
+        .expect("focus_lost emits");
+
+    assert_eq!(event.next_fq, None);
+    assert_eq!(event.prev_fq, Some(fq("/L/lost")));
+    assert!(state
+        .focused_in(&WindowLabel::from_string("main"))
+        .is_none());
+}
+
+/// `focus_lost` on a non-focused FQM is a no-op.
+#[test]
+fn focus_lost_on_unfocused_fq_is_noop() {
+    let mut reg = SpatialRegistry::new();
+    reg.push_layer(layer_node("/L", "main", None));
+    let mut state = SpatialState::new();
+
+    let pre = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![
+            snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0)),
+            snap("/L/b", None, rect(20.0, 0.0, 10.0, 10.0)),
+        ],
+    };
+    state.focus(&mut reg, &pre, fq("/L/a")).expect("focus a");
+
+    let post = NavSnapshot {
+        layer_fq: fq("/L"),
+        scopes: vec![snap("/L/a", None, rect(0.0, 0.0, 10.0, 10.0))],
+    };
+
+    // `/L/b` was never focused — focus_lost should be a no-op.
     let event = state.focus_lost(
         &mut reg,
-        &snapshot,
-        &other_fq,
+        &post,
+        &fq("/L/b"),
         None,
-        &layer_fq,
+        &fq("/L"),
         rect(20.0, 0.0, 10.0, 10.0),
     );
-    assert!(event.is_none(), "unfocused unmount produces no event");
-}
 
-// ---------------------------------------------------------------------------
-// Idempotence between focus_lost and handle_unregister
-// ---------------------------------------------------------------------------
-
-/// When `focus_lost` runs first, the kernel applies the snapshot-driven
-/// fallback. A subsequent `handle_unregister` for the same FQM sees the
-/// already-moved focus and returns `None`. Exactly one transition is
-/// observed.
-#[test]
-fn focus_lost_then_handle_unregister_emits_once() {
-    let mut reg = build_two_sibling_registry();
-    let lost_fq = fq_in_layer("/L", "ui:zone/ui:lost");
-    let sib_fq = fq_in_layer("/L", "ui:zone/ui:sib");
-    let zone_fq = fq_in_layer("/L", "ui:zone");
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-
-    let mut state = SpatialState::new();
-    state.focus(&mut reg, lost_fq.clone()).expect("focus");
-
-    // 1. focus_lost arrives first.
-    let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
-    let first = state.focus_lost(
-        &mut reg,
-        &snapshot,
-        &lost_fq,
-        Some(&zone_fq),
-        &layer_fq,
-        rect(0.0, 0.0, 10.0, 10.0),
+    assert!(event.is_none());
+    assert_eq!(
+        state.focused_in(&WindowLabel::from_string("main")),
+        Some(&fq("/L/a")),
+        "unrelated focus must not be perturbed",
     );
-    assert!(first.is_some(), "first call drives the transition");
-    assert_eq!(first.as_ref().unwrap().next_fq, Some(sib_fq));
-
-    // 2. handle_unregister arrives second — focus has already moved,
-    //    so it is a no-op.
-    let second = state.handle_unregister(&mut reg, &lost_fq, None);
-    assert!(second.is_none(), "second call is a no-op");
-}
-
-/// When `handle_unregister` runs first, the registry path drives the
-/// fallback. A subsequent `focus_lost` sees the already-moved focus and
-/// returns `None`.
-#[test]
-fn handle_unregister_then_focus_lost_emits_once() {
-    let mut reg = build_two_sibling_registry();
-    let lost_fq = fq_in_layer("/L", "ui:zone/ui:lost");
-    let sib_fq = fq_in_layer("/L", "ui:zone/ui:sib");
-    let zone_fq = fq_in_layer("/L", "ui:zone");
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-
-    let mut state = SpatialState::new();
-    state.focus(&mut reg, lost_fq.clone()).expect("focus");
-
-    // Build the snapshot before unregister so it still reflects the
-    // pre-unregister registry state — but with the lost FQM omitted.
-    let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
-
-    // 1. handle_unregister arrives first (with registry.unregister_scope
-    //    cleaning up the entry).
-    let first = state.handle_unregister(&mut reg, &lost_fq, None);
-    reg.unregister_scope(&lost_fq);
-    assert!(first.is_some(), "first call drives the transition");
-    assert_eq!(first.as_ref().unwrap().next_fq, Some(sib_fq));
-
-    // 2. focus_lost arrives second — focus has already moved, so it is
-    //    a no-op.
-    let second = state.focus_lost(
-        &mut reg,
-        &snapshot,
-        &lost_fq,
-        Some(&zone_fq),
-        &layer_fq,
-        rect(0.0, 0.0, 10.0, 10.0),
-    );
-    assert!(second.is_none(), "second call is a no-op");
-}
-
-fn build_two_sibling_registry() -> SpatialRegistry {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "L", "main", None, None));
-    let zone_fq = fq_in_layer("/L", "ui:zone");
-    reg.register_scope(zone_with_last(
-        zone_fq.clone(),
-        "ui:zone",
-        "/L",
-        None,
-        None,
-        rect(0.0, 0.0, 200.0, 200.0),
-    ));
-    let lost_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:lost"));
-    let sib_fq = FullyQualifiedMoniker::compose(&zone_fq, &SegmentMoniker::from_string("ui:sib"));
-    reg.register_scope(leaf(
-        lost_fq,
-        "ui:lost",
-        "/L",
-        Some(zone_fq.clone()),
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-    reg.register_scope(leaf(
-        sib_fq,
-        "ui:sib",
-        "/L",
-        Some(zone_fq),
-        rect(20.0, 0.0, 10.0, 10.0),
-    ));
-    reg
-}
-
-// ---------------------------------------------------------------------------
-// Cascade reach: parent_zone last_focused, parent layer last_focused
-// ---------------------------------------------------------------------------
-
-/// Snapshot-vs-registry parity for a multi-level cascade: the focused
-/// leaf is in an inner zone, the inner zone has no other live siblings,
-/// and the cascade must walk up the parent_zone chain. Snapshot path
-/// and registry path must resolve the same target.
-#[test]
-fn focus_lost_matches_handle_unregister_for_parent_zone_walk() {
-    let mut reg = SpatialRegistry::new();
-    reg.push_layer(make_layer("/L", "L", "main", None, None));
-    let outer_zone = fq_in_layer("/L", "ui:outer");
-    let inner_zone =
-        FullyQualifiedMoniker::compose(&outer_zone, &SegmentMoniker::from_string("ui:inner"));
-    let neighbor =
-        FullyQualifiedMoniker::compose(&outer_zone, &SegmentMoniker::from_string("ui:neighbor"));
-    reg.register_scope(zone_with_last(
-        outer_zone.clone(),
-        "ui:outer",
-        "/L",
-        None,
-        None,
-        rect(0.0, 0.0, 300.0, 300.0),
-    ));
-    reg.register_scope(zone_with_last(
-        inner_zone.clone(),
-        "ui:inner",
-        "/L",
-        Some(outer_zone.clone()),
-        None,
-        rect(0.0, 0.0, 50.0, 50.0),
-    ));
-    let lost_fq =
-        FullyQualifiedMoniker::compose(&inner_zone, &SegmentMoniker::from_string("ui:lost"));
-    reg.register_scope(leaf(
-        lost_fq.clone(),
-        "ui:lost",
-        "/L",
-        Some(inner_zone.clone()),
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-    reg.register_scope(leaf(
-        neighbor,
-        "ui:neighbor",
-        "/L",
-        Some(outer_zone),
-        rect(100.0, 100.0, 10.0, 10.0),
-    ));
-
-    let layer_fq = FullyQualifiedMoniker::from_string("/L");
-
-    let mut reg_a = reg.clone();
-    let mut state_a = SpatialState::new();
-    state_a.focus(&mut reg_a, lost_fq.clone()).expect("focus a");
-    let event_a = state_a
-        .handle_unregister(&mut reg_a, &lost_fq, None)
-        .expect("registry path emits");
-
-    let mut reg_b = reg;
-    let mut state_b = SpatialState::new();
-    state_b.focus(&mut reg_b, lost_fq.clone()).expect("focus b");
-    let snapshot = snapshot_excluding(&reg_b, &layer_fq, &lost_fq);
-    let event_b = state_b
-        .focus_lost(
-            &mut reg_b,
-            &snapshot,
-            &lost_fq,
-            Some(&inner_zone),
-            &layer_fq,
-            rect(0.0, 0.0, 10.0, 10.0),
-        )
-        .expect("snapshot path emits");
-
-    assert_eq!(event_a, event_b);
-    assert!(event_a.next_fq.is_some(), "fallback resolves to a target");
-}
-
-/// When the entire scope tree under the lost layer empties, fallback
-/// crosses into the parent layer and lands on its `last_focused`.
-#[test]
-fn focus_lost_walks_to_parent_layer_last_focused() {
-    let mut reg = SpatialRegistry::new();
-    let parent_last = fq_in_layer("/root", "ui:parent-last");
-    reg.push_layer(make_layer(
-        "/root",
-        "root",
-        "main",
-        None,
-        Some(parent_last.clone()),
-    ));
-    reg.register_scope(leaf(
-        parent_last.clone(),
-        "ui:parent-last",
-        "/root",
-        None,
-        rect(50.0, 50.0, 10.0, 10.0),
-    ));
-    // Nested layer, no other scopes — so phase 1 (scope tree) finds
-    // nothing and the cascade walks up.
-    reg.push_layer(make_layer(
-        "/root/nested",
-        "nested",
-        "main",
-        Some("/root"),
-        None,
-    ));
-    let lost_fq = fq_in_layer("/root/nested", "ui:lost");
-    reg.register_scope(leaf(
-        lost_fq.clone(),
-        "ui:lost",
-        "/root/nested",
-        None,
-        rect(0.0, 0.0, 10.0, 10.0),
-    ));
-
-    let mut state = SpatialState::new();
-    state.focus(&mut reg, lost_fq.clone()).expect("focus");
-
-    let layer_fq = FullyQualifiedMoniker::from_string("/root/nested");
-    let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
-    let event = state
-        .focus_lost(
-            &mut reg,
-            &snapshot,
-            &lost_fq,
-            None,
-            &layer_fq,
-            rect(0.0, 0.0, 10.0, 10.0),
-        )
-        .expect("event");
-
-    assert_eq!(event.next_fq, Some(parent_last));
 }

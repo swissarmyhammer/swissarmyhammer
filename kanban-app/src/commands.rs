@@ -2246,7 +2246,7 @@ fn spatial_push_layer_inner(
 /// the kernel drops the commit silently in that case rather than guess
 /// at scope ancestry without a snapshot.
 ///
-/// Delegates to [`SpatialState::focus_with_snapshot`]. Returns
+/// Delegates to [`SpatialState::focus`]. Returns
 /// `Some(FocusChangedEvent)` when focus actually moved and `None`
 /// otherwise (no snapshot, window unknown, already focused, or the FQM
 /// is missing from `snapshot.scopes`). We forward only actual
@@ -2259,10 +2259,15 @@ pub async fn spatial_focus(
     snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
     let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_focus",
+            focused_fq = %fq,
+            "snapshot=None — dropping focus commit (transient unmount race)"
+        );
         return Ok(());
     };
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.focus_with_snapshot(registry, &snapshot, fq.clone())
+        spatial_state.focus(registry, &snapshot, fq.clone())
     })
     .await;
 
@@ -2329,10 +2334,16 @@ pub async fn spatial_navigate(
     snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
     let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_navigate",
+            focused_fq = %focused_fq,
+            direction = ?direction,
+            "snapshot=None — dropping navigation (transient unmount race)"
+        );
         return Ok(());
     };
     let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_state.navigate_with_snapshot(registry, &snapshot, focused_fq.clone(), direction)
+        spatial_state.navigate(registry, &snapshot, focused_fq.clone(), direction)
     })
     .await;
 
@@ -2438,79 +2449,71 @@ pub async fn spatial_pop_layer(
     Ok(next_fq)
 }
 
-/// Compute the [`Moniker`] to focus when the user drills *into* the scope
-/// at `key`.
+/// Compute the FQM to focus when the user drills *into* the scope at
+/// `fq`.
 ///
-/// Pure registry query — delegates to [`SpatialRegistry::drill_in`] and
-/// returns the result verbatim. Does not mutate focus state and does not
-/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
-/// on the result. Under the no-silent-dropout contract the kernel always
-/// returns a [`Moniker`]; the React side detects "no descent happened"
-/// by comparing the result against `focused_moniker`.
+/// Returns the result of [`swissarmyhammer_focus::drill_in`]: the
+/// scope's recorded `last_focused_by_fq` target if it is still in
+/// `snapshot`, else the topmost-then-leftmost child by rect, else
+/// `focused_fq` (semantic no-op).
 ///
-/// Result equals `focused_moniker` when:
-/// - the scope is a leaf (no children to descend into) — React falls
-///   through to inline edit if the leaf has an editor;
-/// - the zone is empty (no children at all) — React falls through;
-/// - the key is unknown — torn state, kernel emits `tracing::error!`.
-///
-/// Result is a different moniker when the zone has a registered
-/// `last_focused` (preferred) or at least one child entry; the caller
-/// dispatches `setFocus` against the entity-focus store.
-///
-/// The `window` parameter is unused but kept in the signature for
-/// symmetry with the other spatial commands; lock acquisition still
-/// goes through `with_spatial` so the registry/state ordering stays
-/// uniform across the spatial command surface.
+/// Pure query — does not mutate focus state and does not emit a
+/// `focus-changed` event; the React side calls `setFocus(moniker)` on
+/// the result. Returns `Ok(focused_fq)` when `snapshot` is `None`
+/// (transient unmount window; the React side has nothing live to drill
+/// into).
 #[tauri::command]
 pub async fn spatial_drill_in(
     _window: Window,
     state: State<'_, AppState>,
     fq: FullyQualifiedMoniker,
     focused_fq: FullyQualifiedMoniker,
+    snapshot: Option<NavSnapshot>,
 ) -> Result<FullyQualifiedMoniker, String> {
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_drill_in",
+            focused_fq = %focused_fq,
+            target_fq = %fq,
+            "snapshot=None — returning focused_fq (transient unmount race)"
+        );
+        return Ok(focused_fq);
+    };
     let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        registry.drill_in(fq, &focused_fq)
+        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
+        swissarmyhammer_focus::drill_in(&view, registry, fq, &focused_fq)
     })
     .await;
     Ok(next_fq)
 }
 
-/// Compute the [`Moniker`] to focus when the user drills *out of* the
-/// scope at `key`.
+/// Compute the FQM to focus when the user drills *out of* the scope at
+/// `fq`.
 ///
-/// Pure registry query — delegates to [`SpatialRegistry::drill_out`] and
-/// returns the result verbatim. Does not mutate focus state and does not
-/// emit a `focus-changed` event; the React side calls `setFocus(moniker)`
-/// on the result. Under the no-silent-dropout contract the kernel always
-/// returns a [`Moniker`]; the React side compares the result against
-/// `focused_moniker` to detect "no zone-level drill happened" and falls
-/// through to `app.dismiss` (close the topmost modal layer).
-///
-/// Result equals `focused_moniker` when:
-/// - the scope sits at the layer root (no enclosing zone) — well-formed
-///   edge, no tracing;
-/// - the key is unknown — torn state, kernel emits `tracing::error!`;
-/// - the `parent_zone` reference points at an unregistered scope —
-///   torn state, kernel emits `tracing::error!`.
-///
-/// Result is a different moniker when the scope has a registered,
-/// resolvable `parent_zone`; the caller dispatches `setFocus` against
-/// the entity-focus store.
-///
-/// The `window` parameter is unused but kept in the signature for
-/// symmetry with the other spatial commands; lock acquisition still
-/// goes through `with_spatial` so the registry/state ordering stays
-/// uniform across the spatial command surface.
+/// Returns the result of [`swissarmyhammer_focus::drill_out`]: the
+/// scope's `parent_zone` if it is still in `snapshot`, else
+/// `focused_fq` (the React side compares against `focused_fq` to fall
+/// through to `app.dismiss`).
 #[tauri::command]
 pub async fn spatial_drill_out(
     _window: Window,
     state: State<'_, AppState>,
     fq: FullyQualifiedMoniker,
     focused_fq: FullyQualifiedMoniker,
+    snapshot: Option<NavSnapshot>,
 ) -> Result<FullyQualifiedMoniker, String> {
-    let next_fq = with_spatial(&state, |registry, _spatial_state| {
-        registry.drill_out(fq, &focused_fq)
+    let Some(snapshot) = snapshot else {
+        tracing::debug!(
+            op = "spatial_drill_out",
+            focused_fq = %focused_fq,
+            target_fq = %fq,
+            "snapshot=None — returning focused_fq (transient unmount race)"
+        );
+        return Ok(focused_fq);
+    };
+    let next_fq = with_spatial(&state, |_registry, _spatial_state| {
+        let view = swissarmyhammer_focus::IndexedSnapshot::new(&snapshot);
+        swissarmyhammer_focus::drill_out(&view, fq, &focused_fq)
     })
     .await;
     Ok(next_fq)
@@ -2982,10 +2985,10 @@ mod tests {
 #[cfg(test)]
 mod spatial_command_tests {
     use super::*;
+    use std::collections::HashMap;
+    use swissarmyhammer_focus::{Pixels, SnapshotScope};
 
-    /// Build a `Rect` at `(x, y)` with extent `(w, h)`.
     fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Rect {
-        use swissarmyhammer_focus::Pixels;
         Rect {
             x: Pixels::new(x),
             y: Pixels::new(y),
@@ -2995,7 +2998,7 @@ mod spatial_command_tests {
     }
 
     /// Push a window-root layer into `registry`, returning the layer FQM
-    /// the test should pass to subsequent register calls.
+    /// for use as `snapshot.layer_fq`.
     fn push_root_layer(
         registry: &mut SpatialRegistry,
         window: &str,
@@ -3014,121 +3017,84 @@ mod spatial_command_tests {
         fq
     }
 
-    /// Register a leaf with a deterministic FQM into `registry`. The leaf's
-    /// FQM is composed as `<layer_fq>/<segment>`. Returns the FQM and
-    /// segment for assertions.
-    fn register_leaf(
-        registry: &mut SpatialRegistry,
+    /// Build a snapshot scope at the composed FQM `<layer_fq>/<segment>`
+    /// with the given rect.
+    fn snapshot_leaf(
         layer_fq: &FullyQualifiedMoniker,
         segment_str: &str,
         rect: Rect,
-    ) -> (FullyQualifiedMoniker, SegmentMoniker) {
+    ) -> (FullyQualifiedMoniker, SnapshotScope) {
         let segment = SegmentMoniker::from_string(segment_str);
         let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
-        registry.register_scope(swissarmyhammer_focus::FocusScope {
-            fq: fq.clone(),
-            segment: segment.clone(),
-            rect,
-            layer_fq: layer_fq.clone(),
-            parent_zone: None,
-            last_focused: None,
-            overrides: HashMap::new(),
-        });
-        (fq, segment)
+        (
+            fq.clone(),
+            SnapshotScope {
+                fq,
+                rect,
+                parent_zone: None,
+                nav_override: HashMap::new(),
+            },
+        )
     }
 
-    /// `spatial_focus` invokes `SpatialState::focus` and the kernel returns
-    /// a `FocusChangedEvent` carrying the focused window, FQM, and segment.
-    /// This is the same code path the Tauri command takes before
-    /// emitting on the window — so an event from this inner call is
-    /// exactly what the React side would receive over IPC.
+    /// `spatial_focus` invokes the snapshot-driven focus path and the
+    /// kernel returns a `FocusChangedEvent` carrying the focused window,
+    /// FQM, and segment.
     #[test]
     fn spatial_focus_emits_focus_changed_event() {
         let mut registry = SpatialRegistry::new();
         let mut state = SpatialState::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, segment) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:01",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
+        let (fq, scope) = snapshot_leaf(&layer, "task:01", rect_at(0.0, 0.0, 10.0, 10.0));
+        let snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![scope],
+        };
 
         let event = state
-            .focus(&mut registry, fq.clone())
-            .expect("focus emits an event for a freshly registered scope");
+            .focus(&mut registry, &snapshot, fq.clone())
+            .expect("focus emits an event for a snapshot scope");
 
         assert_eq!(event.window_label, WindowLabel::from_string("main"));
         assert_eq!(event.prev_fq, None);
         assert_eq!(event.next_fq, Some(fq));
-        assert_eq!(event.next_segment, Some(segment));
+        assert_eq!(
+            event.next_segment,
+            Some(SegmentMoniker::from_string("task:01"))
+        );
     }
 
-    /// A snapshot mirroring the registry's scope set lands on the same
-    /// target as the registry path. Pinned regression for the parity
-    /// invariant the cutover relies on.
+    /// `spatial_navigate` lands on the snapshot-determined target and
+    /// emits the matching `FocusChangedEvent`.
     #[test]
-    fn spatial_navigate_with_snapshot_matches_registry_target() {
-        use swissarmyhammer_focus::{BeamNavStrategy, SnapshotScope};
-
+    fn spatial_navigate_with_snapshot_resolves_target() {
         let mut registry = SpatialRegistry::new();
-        let mut state_a = SpatialState::new();
+        let mut state = SpatialState::new();
         let layer = push_root_layer(&mut registry, "main", "L");
 
-        let (top, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:top",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-        let (bottom, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:bottom",
-            rect_at(0.0, 20.0, 10.0, 10.0),
-        );
-
-        state_a
-            .focus(&mut registry, top.clone())
-            .expect("focus top");
+        let (top, top_scope) = snapshot_leaf(&layer, "task:top", rect_at(0.0, 0.0, 10.0, 10.0));
+        let (bottom, bottom_scope) =
+            snapshot_leaf(&layer, "task:bottom", rect_at(0.0, 20.0, 10.0, 10.0));
 
         let snapshot = NavSnapshot {
-            layer_fq: layer.clone(),
-            scopes: registry
-                .scopes_in_layer(&layer)
-                .map(|s| SnapshotScope {
-                    fq: s.fq.clone(),
-                    rect: s.rect,
-                    parent_zone: s.parent_zone.clone(),
-                    nav_override: s.overrides.clone(),
-                })
-                .collect(),
+            layer_fq: layer,
+            scopes: vec![top_scope, bottom_scope],
         };
 
-        let mut state_snapshot = state_a.clone();
-        let snapshot_event = state_snapshot
-            .navigate_with_snapshot(
-                &mut registry.clone(),
-                &snapshot,
-                top.clone(),
-                Direction::Down,
-            )
-            .expect("Down via snapshot resolves to bottom");
+        state
+            .focus(&mut registry, &snapshot, top.clone())
+            .expect("focus top");
 
-        let mut state_registry = state_a;
-        let strategy = BeamNavStrategy::new();
-        let registry_event = state_registry
-            .navigate_with(&mut registry, &strategy, top.clone(), Direction::Down)
-            .expect("Down via registry resolves to bottom");
+        let event = state
+            .navigate(&mut registry, &snapshot, top, Direction::Down)
+            .expect("Down resolves to bottom");
 
-        assert_eq!(snapshot_event.next_fq, Some(bottom.clone()));
-        assert_eq!(registry_event.next_fq, Some(bottom));
-        assert_eq!(snapshot_event.next_fq, registry_event.next_fq);
+        assert_eq!(event.next_fq, Some(bottom));
     }
 
     /// `spatial_push_layer_inner` derives `window_label` from the calling
-    /// command (in production from `tauri::Window::label()`) and stores
-    /// the layer under that label so `root_for_window` can find it.
+    /// command and stores the layer under that label so `root_for_window`
+    /// can find it.
     #[test]
     fn spatial_push_layer_associates_window_label() {
         let mut registry = SpatialRegistry::new();
@@ -3150,33 +3116,7 @@ mod spatial_command_tests {
         assert_eq!(root.window_label, WindowLabel::from_string("board-abc"));
     }
 
-    /// `update_rect` refreshes the geometry of a registered scope.
-    /// No-op when the FQM is unknown — the kernel does not invent a new
-    /// scope from a stray rect update.
-    #[test]
-    fn spatial_update_rect_refreshes_registered_scope() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:01",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-
-        let new_rect = rect_at(50.0, 60.0, 70.0, 80.0);
-        registry.update_rect(&fq, new_rect);
-        let scope = registry.scope(&fq).unwrap();
-        assert_eq!(scope.rect, new_rect);
-
-        // Unknown FQM: pure no-op.
-        let ghost = FullyQualifiedMoniker::from_string("/ghost");
-        registry.update_rect(&ghost, rect_at(1.0, 2.0, 3.0, 4.0));
-        assert!(!registry.is_registered(&ghost));
-    }
-
     /// `spatial_pop_layer` removes the layer from the registry.
-    /// Consistent with `remove_layer`: no-op when the FQM is unknown.
     #[test]
     fn spatial_pop_layer_removes_layer() {
         let mut registry = SpatialRegistry::new();
@@ -3187,240 +3127,63 @@ mod spatial_command_tests {
         assert!(registry.layer(&layer).is_none());
     }
 
-    /// `focus_with_snapshot` writes the same `focus_by_window` and
-    /// `last_focused_by_fq` entries as `focus(None)` for matching scope
-    /// sets — the parity invariant the cutover relies on.
+    /// When `fq` is missing from `snapshot.scopes`, `focus` drops the
+    /// commit and returns `None`.
     #[test]
-    fn focus_with_snapshot_matches_registry_focus() {
-        use swissarmyhammer_focus::SnapshotScope;
-
-        let mut registry_a = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry_a, "main", "L");
-        let (zone, _) = register_leaf(
-            &mut registry_a,
-            &layer,
-            "zone:01",
-            rect_at(0.0, 0.0, 100.0, 100.0),
-        );
-        let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
-        registry_a.register_scope(swissarmyhammer_focus::FocusScope {
-            fq: leaf.clone(),
-            segment: SegmentMoniker::from_string("leaf:01"),
-            rect: rect_at(10.0, 10.0, 10.0, 10.0),
-            layer_fq: layer.clone(),
-            parent_zone: Some(zone.clone()),
-            last_focused: None,
-            overrides: HashMap::new(),
-        });
-
-        let snapshot = NavSnapshot {
-            layer_fq: layer.clone(),
-            scopes: registry_a
-                .scopes_in_layer(&layer)
-                .map(|s| SnapshotScope {
-                    fq: s.fq.clone(),
-                    rect: s.rect,
-                    parent_zone: s.parent_zone.clone(),
-                    nav_override: s.overrides.clone(),
-                })
-                .collect(),
-        };
-        let mut registry_b = registry_a.clone();
-
-        let mut state_a = SpatialState::new();
-        let event_registry = state_a
-            .focus(&mut registry_a, leaf.clone())
-            .expect("focus via registry path");
-
-        let mut state_b = SpatialState::new();
-        let event_snapshot = state_b
-            .focus_with_snapshot(&mut registry_b, &snapshot, leaf.clone())
-            .expect("focus via snapshot path");
-
-        assert_eq!(event_registry.next_fq, event_snapshot.next_fq);
-        assert_eq!(event_registry.window_label, event_snapshot.window_label);
-        assert_eq!(
-            registry_a.last_focused_by_fq.get(&zone),
-            registry_b.last_focused_by_fq.get(&zone),
-            "ancestor zone's last_focused_by_fq must match between paths",
-        );
-    }
-
-    /// When `fq` is missing from `snapshot.scopes`, `focus_with_snapshot`
-    /// drops the commit and returns `None` — the kernel rejects torn
-    /// snapshots rather than committing focus to a scope it can't walk
-    /// the ancestry of.
-    #[test]
-    fn focus_with_snapshot_drops_when_fq_missing_from_snapshot() {
+    fn focus_drops_when_fq_missing_from_snapshot() {
         let mut registry = SpatialRegistry::new();
         let layer = push_root_layer(&mut registry, "main", "L");
-        let (leaf, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "leaf:01",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
+        let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
 
         let empty_snapshot = NavSnapshot {
-            layer_fq: layer.clone(),
+            layer_fq: layer,
             scopes: vec![],
         };
 
         let mut state = SpatialState::new();
-        let event = state.focus_with_snapshot(&mut registry, &empty_snapshot, leaf);
+        let event = state.focus(&mut registry, &empty_snapshot, leaf);
         assert!(
             event.is_none(),
-            "focus_with_snapshot must drop when target is absent from snapshot"
+            "focus must drop when target is absent from snapshot"
         );
     }
 
-    /// `spatial_pop_layer_inner` returns the popped layer's
-    /// `last_focused` without mutating `focus_by_window`. The two-step
-    /// round-trip (pop → React → `focus_with_snapshot`) reproduces the
-    /// commit semantics that an internal layer-pop commit would have
-    /// had.
+    /// `focus` populates `last_focused_by_fq` for every ancestor in the
+    /// snapshot's `parent_zone` chain.
     #[test]
-    fn spatial_pop_layer_returns_last_focused_without_committing() {
-        use swissarmyhammer_focus::SnapshotScope;
-
+    fn focus_records_last_focused_for_ancestor_zones() {
         let mut registry = SpatialRegistry::new();
-        let parent_layer = push_root_layer(&mut registry, "main", "L");
-        let (parent_leaf, _) = register_leaf(
-            &mut registry,
-            &parent_layer,
-            "parent:leaf",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
+        let layer = push_root_layer(&mut registry, "main", "L");
+        let zone = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("zone:01"));
+        let leaf = FullyQualifiedMoniker::compose(&zone, &SegmentMoniker::from_string("leaf:01"));
 
-        // Push a child layer with one scope, focus it via the kernel
-        // (which seeds `last_focused` on every ancestor layer including
-        // the child layer itself), then unregister the child scope so
-        // the round-trip target lives in the parent layer.
-        let child_layer_fq =
-            FullyQualifiedMoniker::compose(&parent_layer, &SegmentMoniker::from_string("child"));
-        spatial_push_layer_inner(
-            &mut registry,
-            child_layer_fq.clone(),
-            SegmentMoniker::from_string("child"),
-            LayerName::from_string("dialog"),
-            Some(parent_layer.clone()),
-            WindowLabel::from_string("main"),
-        );
+        let snapshot = NavSnapshot {
+            layer_fq: layer,
+            scopes: vec![
+                SnapshotScope {
+                    fq: zone.clone(),
+                    rect: rect_at(0.0, 0.0, 100.0, 100.0),
+                    parent_zone: None,
+                    nav_override: HashMap::new(),
+                },
+                SnapshotScope {
+                    fq: leaf.clone(),
+                    rect: rect_at(10.0, 10.0, 10.0, 10.0),
+                    parent_zone: Some(zone.clone()),
+                    nav_override: HashMap::new(),
+                },
+            ],
+        };
 
         let mut state = SpatialState::new();
-        // Focus the parent leaf to populate `last_focused` on every
-        // ancestor layer the writer visits — including the child layer
-        // (the writer walks layer parents starting from the focused
-        // scope's own layer; for a parent-layer scope the walk visits
-        // parent_layer then nothing). The child layer's `last_focused`
-        // therefore needs a focus event on a child-layer scope.
-        let (child_leaf, _) = register_leaf(
-            &mut registry,
-            &child_layer_fq,
-            "child:leaf",
-            rect_at(50.0, 50.0, 10.0, 10.0),
-        );
         state
-            .focus(&mut registry, child_leaf.clone())
-            .expect("focus child seeds child layer's last_focused");
-        // Re-focus the parent leaf so the test's "expected next_fq"
-        // (parent_leaf) is still in the parent layer; the child
-        // layer's `last_focused` slot stays at child_leaf because
-        // the parent leaf is in the parent layer (writer walks
-        // parent → none, never visits child).
-        state
-            .focus(&mut registry, parent_leaf.clone())
-            .expect("re-focus parent leaf");
-        // Now manually overwrite the child layer's `last_focused` to
-        // parent_leaf via another focus event INSIDE the child layer
-        // that records parent_leaf — but that requires going through
-        // record_focus. The simplest in-test path: focus child_leaf
-        // again (so child.last_focused = child_leaf), then unregister
-        // child_leaf so parent_leaf is the only viable round-trip
-        // target in the parent layer's snapshot.
-        state
-            .focus(&mut registry, child_leaf.clone())
-            .expect("focus child_leaf — sets child.last_focused = child_leaf");
-        registry.unregister_scope(&child_leaf);
+            .focus(&mut registry, &snapshot, leaf.clone())
+            .expect("focus emits");
 
-        // The kernel side of the round-trip: read the layer's
-        // last_focused before remove_layer, then drop the layer.
-        let next_fq = registry
-            .layer(&child_layer_fq)
-            .and_then(|l| l.last_focused.clone());
-        registry.remove_layer(&child_layer_fq);
         assert_eq!(
-            next_fq,
-            Some(child_leaf.clone()),
-            "pop returns the layer's last_focused"
-        );
-
-        // The React side of the round-trip would then build a snapshot
-        // for the PARENT layer and call `spatial_focus(next_fq, snapshot)`.
-        // Because `next_fq` (child_leaf) is no longer registered AND
-        // not in the parent-layer snapshot, the round-trip naturally
-        // drops the commit — matching the design's "stale target →
-        // focus dropped" tolerance.
-        let snapshot = NavSnapshot {
-            layer_fq: parent_layer.clone(),
-            scopes: registry
-                .scopes_in_layer(&parent_layer)
-                .map(|s| SnapshotScope {
-                    fq: s.fq.clone(),
-                    rect: s.rect,
-                    parent_zone: s.parent_zone.clone(),
-                    nav_override: s.overrides.clone(),
-                })
-                .collect(),
-        };
-        let event = state.focus_with_snapshot(
-            &mut registry,
-            &snapshot,
-            next_fq.expect("pop returned a target"),
-        );
-        assert!(
-            event.is_none(),
-            "round-trip drops when the target is not registered or in the snapshot"
-        );
-
-        // Now exercise the success path of the round-trip: pretend
-        // `last_focused` pointed to a still-live scope in the parent
-        // layer. Re-focus parent_leaf to re-seed `focus_by_window`,
-        // then run the round-trip with parent_leaf as the target.
-        state
-            .focus(&mut registry, parent_leaf.clone())
-            .expect("re-focus parent_leaf to seed focus state");
-        // Move focus elsewhere so the round-trip is a real transition.
-        let (other_leaf, _) = register_leaf(
-            &mut registry,
-            &parent_layer,
-            "parent:other",
-            rect_at(200.0, 0.0, 10.0, 10.0),
-        );
-        state
-            .focus(&mut registry, other_leaf.clone())
-            .expect("focus other so the round-trip transitions");
-
-        let snapshot = NavSnapshot {
-            layer_fq: parent_layer.clone(),
-            scopes: registry
-                .scopes_in_layer(&parent_layer)
-                .map(|s| SnapshotScope {
-                    fq: s.fq.clone(),
-                    rect: s.rect,
-                    parent_zone: s.parent_zone.clone(),
-                    nav_override: s.overrides.clone(),
-                })
-                .collect(),
-        };
-        let event = state
-            .focus_with_snapshot(&mut registry, &snapshot, parent_leaf.clone())
-            .expect("round-trip commit succeeds for a live target in the snapshot");
-        assert_eq!(event.next_fq, Some(parent_leaf.clone()));
-        assert_eq!(
-            state.focused_in(&WindowLabel::from_string("main")),
-            Some(&parent_leaf),
-            "round-trip leaves focus_by_window in the same state a single-call commit would",
+            registry.last_focused_by_fq.get(&zone),
+            Some(&leaf),
+            "ancestor zone records the focused descendant",
         );
     }
 }

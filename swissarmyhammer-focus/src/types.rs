@@ -23,12 +23,9 @@
 //! before being passed to the kernel.
 //!
 //! There is no UUID-based `SpatialKey` and no flat `Moniker`. Path is
-//! the key, the key is exact-match. See the parent path-monikers card
-//! (`01KQD6064G1C1RAXDFPJVT1F46`) for the structural-bug rationale: with
-//! flat `Moniker`s the inspector's `field:T1.title` zone collided with
-//! the board's `field:T1.title` zone in the registry's lookup table,
-//! and `find_by_moniker` resolved non-deterministically. FQMs eliminate
-//! the collision by construction.
+//! the key, the key is exact-match — FQMs eliminate cross-context
+//! collisions (e.g. an inspector and board both registering
+//! `field:T1.title`) by construction.
 //!
 //! [`Pixels`] is the only numeric newtype on the spatial-nav surface, so
 //! it is hand-rolled with arithmetic ops (`+`, `-`, `*`, `/`) that keep
@@ -107,6 +104,20 @@ impl FullyQualifiedMoniker {
             segment.as_str()
         ))
     }
+
+    /// Read the trailing path component as a [`SegmentMoniker`].
+    ///
+    /// FQMs are composed via [`Self::compose`] — the segment after the
+    /// final separator is always the consumer-declared segment for the
+    /// scope or layer at this path. The kernel uses this to derive the
+    /// scope segment for [`super::state::FocusChangedEvent::next_segment`]
+    /// from a snapshot scope's FQM, since the snapshot does not carry
+    /// segments separately.
+    pub fn last_segment(&self) -> SegmentMoniker {
+        let s = self.as_str();
+        let tail = s.rsplit(FQ_SEPARATOR).next().unwrap_or(s);
+        SegmentMoniker::from_string(tail)
+    }
 }
 
 /// Navigation direction passed to `spatial_navigate`.
@@ -123,7 +134,7 @@ impl FullyQualifiedMoniker {
 ///   both ops return the focused FQM (semantic no-op). Wired to Home
 ///   / End style keymap entries on the React side.
 ///
-///   `Direction::First` shares its result with [`drill_in`]'s
+///   `Direction::First` shares its result with `drill_in`'s
 ///   cold-start fallback when the focused zone has no `last_focused`
 ///   memory — both pick the topmost-then-leftmost child.
 ///
@@ -134,16 +145,13 @@ impl FullyQualifiedMoniker {
 /// "first in row" and "first child" collapse to the same operation.
 /// New code must use `Direction::First` / `Direction::Last`.
 ///
-/// Drill-in / drill-out are **separate commands** (see the
-/// corresponding task card), not directions.
+/// Drill-in / drill-out are separate commands, not directions.
 ///
 /// Serializes to lower-case identifiers (`"up"`, `"down"`, `"left"`,
 /// `"right"`, `"first"`, `"last"`) so the TypeScript side can mirror
 /// the variants as a string-literal union without bridging glue. The
 /// deprecated `RowStart` / `RowEnd` variants serialize as `"rowstart"`
 /// / `"rowend"` for the same one-release wire-compat window.
-///
-/// [`drill_in`]: crate::registry::SpatialRegistry::drill_in
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
@@ -406,9 +414,7 @@ mod tests {
 
     /// `SegmentMoniker` and `FullyQualifiedMoniker` are distinct types
     /// — the type system rejects passing one where the other is
-    /// expected. This is the safety net the path-monikers refactor
-    /// relies on; an accidental `String` alias would silently let
-    /// segment values reach `find_by_fq` callsites.
+    /// expected.
     #[test]
     fn segment_and_fq_are_distinct_types() {
         use std::any::TypeId;
