@@ -60,6 +60,7 @@ Report: pass/fail, what was fixed, what's left. If you get stuck, report what yo
 - Every failing test is your responsibility to fix. No exceptions.
 - Do not add `#[allow(...)]`, `@suppress`, `// eslint-disable`, or any other mechanism to silence warnings.
 - Do not add `#[ignore]` or `skip` to make a test stop failing.
+- Tests must be automated and bounded. No soaks, no burn-in, no "let it run overnight", no manual observation, no duration-gated pass conditions. If behavior needs time to surface (leaks, retries, backoff, eviction), fake the clock or scheduler and assert deterministically — never sit and watch a process. We are in the automated-testing business, not the human-babysitting business.
 
 ## Troubleshooting
 

@@ -37,11 +37,21 @@ Every task's `Tests` section MUST specify **automated tests** (unit, integration
 - "Try it in the browser and make sure…"
 - Any acceptance criterion whose only check is human observation.
 
+**Also forbidden — soaks, burn-in, and other duration-gated runs:**
+- "Soak test for N hours…", "let it run overnight…", "leave it running and check tomorrow…"
+- "Burn-in for…", "stress test for…", "load test for N minutes…" as an acceptance check
+- "Watch the dashboard / logs / metrics for a while to confirm…"
+- "Run the app and use it for a while…"
+- Any check whose pass condition is "elapsed wall-clock time without failure."
+
+We are in the automated-testing business. Every check must be a deterministic, bounded automated test that runs in CI and produces pass/fail in seconds-to-minutes — not a job that asks a person or an agent to babysit a process. If the behavior genuinely needs duration to surface (memory leaks, retries, backoff, cache eviction), encode it as a fast deterministic test: fake the clock, inject the trigger, assert on observable state. Never spend wall-clock time watching.
+
 **Required instead:**
 - For backend/library code: unit tests and integration tests that exercise the real behavior.
 - For APIs/services: integration tests against the real server (or a realistic harness).
 - For UI: end-to-end tests (Playwright, Cypress, or equivalent) that drive the UI and assert on observable state.
 - For bug fixes: a regression test that fails before the fix and passes after.
+- For time-dependent behavior: inject a fake clock or scheduler and assert deterministically — do not gate on real elapsed time.
 
 If the work is genuinely not testable automatically, that is a red flag — rescope the task or add a preceding task to make it testable. Our job is to do work for users, not to make work for them.
 
