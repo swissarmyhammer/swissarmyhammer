@@ -5,8 +5,8 @@ depends_on:
 - 01KQW69GDFYZ1QYV9TMBD5F9RR
 - 01KQW6BJZ6DTZSHKKEDP5TEG4E
 - 01KQW6D6B2JXPA4PX6H94R86KB
-position_column: todo
-position_ordinal: d880
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffad80
 project: spatial-nav
 title: 'spatial-nav redesign step 9: dev-mode dual-source soak — verify zero divergence under real use'
 ---

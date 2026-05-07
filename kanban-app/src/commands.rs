@@ -2560,32 +2560,19 @@ fn check_navigate_divergence(
     direction: Direction,
 ) {
     use swissarmyhammer_focus::navigate::NavStrategy;
-    use swissarmyhammer_focus::{pick_target_via_view, IndexedSnapshot};
+    use swissarmyhammer_focus::{compare_paths, pick_target_via_view, IndexedSnapshot};
 
     let Some(entry) = registry.find_by_fq(focused_fq) else {
         return;
     };
     let focused_segment = entry.segment.clone();
-    let layer_fq = entry.layer_fq.clone();
-
-    let registry_target =
-        BeamNavStrategy::new().next(registry, focused_fq, &focused_segment, direction);
 
     let snapshot_view = IndexedSnapshot::new(snapshot);
-    let snapshot_target =
-        pick_target_via_view(&snapshot_view, focused_fq, &focused_segment, direction);
-
-    if registry_target != snapshot_target {
-        tracing::warn!(
-            op = "spatial_navigate.divergence",
-            focused_fq = %focused_fq,
-            ?direction,
-            layer_fq = %layer_fq,
-            registry_target = %registry_target,
-            snapshot_target = %snapshot_target,
-            "snapshot path picked a different nav target than the registry path",
-        );
-    }
+    let _ = compare_paths(
+        "spatial_navigate.divergence",
+        || pick_target_via_view(&snapshot_view, focused_fq, &focused_segment, direction),
+        || BeamNavStrategy::new().next(registry, focused_fq, &focused_segment, direction),
+    );
 }
 
 /// Compares the registry-path and snapshot-path `record_focus` ancestor
@@ -2596,41 +2583,34 @@ fn check_focus_divergence(
     snapshot: &NavSnapshot,
     fq: &FullyQualifiedMoniker,
 ) {
-    use swissarmyhammer_focus::IndexedSnapshot;
-
-    let registry_chain: Vec<FullyQualifiedMoniker> = {
-        let mut chain = Vec::new();
-        let mut next = registry.find_by_fq(fq).and_then(|s| s.parent_zone.clone());
-        let mut visited = std::collections::HashSet::new();
-        while let Some(zone_fq) = next {
-            if !visited.insert(zone_fq.clone()) {
-                break;
-            }
-            let Some(zone) = registry.find_by_fq(&zone_fq) else {
-                break;
-            };
-            chain.push(zone.fq.clone());
-            next = zone.parent_zone.clone();
-        }
-        chain
-    };
+    use swissarmyhammer_focus::{compare_paths, IndexedSnapshot};
 
     let snapshot_view = IndexedSnapshot::new(snapshot);
-    let snapshot_chain: Vec<FullyQualifiedMoniker> = snapshot_view
-        .parent_zone_chain(fq)
-        .map(|s| s.fq.clone())
-        .collect();
-
-    if registry_chain != snapshot_chain {
-        tracing::warn!(
-            op = "spatial_focus.divergence",
-            focused_fq = %fq,
-            layer_fq = %snapshot.layer_fq,
-            registry_chain = ?registry_chain,
-            snapshot_chain = ?snapshot_chain,
-            "snapshot path walked a different parent_zone chain than the registry path",
-        );
-    }
+    let _ = compare_paths(
+        "spatial_focus.divergence",
+        || -> Vec<FullyQualifiedMoniker> {
+            snapshot_view
+                .parent_zone_chain(fq)
+                .map(|s| s.fq.clone())
+                .collect()
+        },
+        || -> Vec<FullyQualifiedMoniker> {
+            let mut chain = Vec::new();
+            let mut next = registry.find_by_fq(fq).and_then(|s| s.parent_zone.clone());
+            let mut visited = std::collections::HashSet::new();
+            while let Some(zone_fq) = next {
+                if !visited.insert(zone_fq.clone()) {
+                    break;
+                }
+                let Some(zone) = registry.find_by_fq(&zone_fq) else {
+                    break;
+                };
+                chain.push(zone.fq.clone());
+                next = zone.parent_zone.clone();
+            }
+            chain
+        },
+    );
 }
 
 /// React to the focused scope unmounting on the React side.
@@ -2706,14 +2686,7 @@ fn check_focus_lost_divergence(
     lost_layer_fq: &FullyQualifiedMoniker,
     lost_rect: Rect,
 ) {
-    use swissarmyhammer_focus::{IndexedSnapshot, LostFocusContext};
-
-    // Both `resolve_fallback` and `resolve_fallback_with_snapshot` are
-    // pure queries — no state mutation. Whether the lost FQM is still
-    // the focused slot is irrelevant to comparing the two cascades; the
-    // resolutions describe what *would* happen, and the diagnostic is
-    // observability-only.
-    let registry_resolution = spatial_state.resolve_fallback(registry, focused_fq);
+    use swissarmyhammer_focus::{compare_paths, IndexedSnapshot, LostFocusContext};
 
     let indexed = IndexedSnapshot::new(snapshot);
     let ctx = LostFocusContext {
@@ -2722,19 +2695,16 @@ fn check_focus_lost_divergence(
         lost_parent_zone: lost_parent_zone.cloned(),
         lost_rect,
     };
-    let snapshot_resolution =
-        spatial_state.resolve_fallback_with_snapshot(registry, focused_fq, &ctx);
-
-    if registry_resolution != snapshot_resolution {
-        tracing::warn!(
-            op = "spatial_focus_lost.divergence",
-            focused_fq = %focused_fq,
-            lost_layer_fq = %lost_layer_fq,
-            registry_resolution = ?registry_resolution,
-            snapshot_resolution = ?snapshot_resolution,
-            "snapshot path resolved a different fallback target than the registry path",
-        );
-    }
+    // Both `resolve_fallback` and `resolve_fallback_with_snapshot` are
+    // pure queries — no state mutation. Whether the lost FQM is still
+    // the focused slot is irrelevant to comparing the two cascades; the
+    // resolutions describe what *would* happen, and the diagnostic is
+    // observability-only.
+    let _ = compare_paths(
+        "spatial_focus_lost.divergence",
+        || spatial_state.resolve_fallback_with_snapshot(registry, focused_fq, &ctx),
+        || spatial_state.resolve_fallback(registry, focused_fq),
+    );
 }
 
 /// Push a new layer onto the registry.
@@ -3832,22 +3802,32 @@ mod spatial_command_tests {
         );
         let event = divergence_events[0];
         assert_eq!(event.level, Some(Level::WARN));
-        assert_eq!(
-            event.fields.get("registry_target").map(String::as_str),
-            Some(bottom.as_str())
+        let snapshot_field = event
+            .fields
+            .get("snapshot")
+            .expect("divergence warn carries snapshot field");
+        let registry_field = event
+            .fields
+            .get("registry")
+            .expect("divergence warn carries registry field");
+        assert!(
+            registry_field.contains(bottom.as_str()),
+            "registry target FQM appears in registry field; got {registry_field}",
         );
-        assert_eq!(
-            event.fields.get("snapshot_target").map(String::as_str),
-            Some(right_neighbor.as_str())
+        assert!(
+            snapshot_field.contains(right_neighbor.as_str()),
+            "snapshot target FQM appears in snapshot field; got {snapshot_field}",
         );
-        assert_eq!(
-            event.fields.get("focused_fq").map(String::as_str),
-            Some(top.as_str())
+        assert!(
+            event
+                .message
+                .contains("spatial-nav snapshot/registry divergence"),
+            "warn message identifies the divergence; got {:?}",
+            event.message,
         );
-        assert_eq!(
-            event.fields.get("layer_fq").map(String::as_str),
-            Some(layer.as_str())
-        );
+        // Suppress unused warnings — `top` and `layer` are kept to
+        // document the registry shape that triggered the divergence.
+        let _ = (&top, &layer);
     }
 
     /// `spatial_push_layer_inner` derives `window_label` from the calling
@@ -4291,14 +4271,32 @@ mod spatial_command_tests {
         );
         let event = divergence_events[0];
         assert_eq!(event.level, Some(Level::WARN));
-        assert_eq!(
-            event.fields.get("focused_fq").map(String::as_str),
-            Some(leaf.as_str())
+        let snapshot_field = event
+            .fields
+            .get("snapshot")
+            .expect("divergence warn carries snapshot field");
+        let registry_field = event
+            .fields
+            .get("registry")
+            .expect("divergence warn carries registry field");
+        assert!(
+            registry_field.contains(zone.as_str()),
+            "registry chain visits the zone FQM; got {registry_field}",
         );
         assert_eq!(
-            event.fields.get("layer_fq").map(String::as_str),
-            Some(layer.as_str())
+            snapshot_field, "[]",
+            "snapshot chain is empty when leaf has no parent_zone in the snapshot",
         );
+        assert!(
+            event
+                .message
+                .contains("spatial-nav snapshot/registry divergence"),
+            "warn message identifies the divergence; got {:?}",
+            event.message,
+        );
+        // Document the layer the divergence happened in for future
+        // triage.
+        let _ = (&leaf, &layer);
     }
 
     /// `spatial_register_batch_inner` applies a vector of `RegisterEntry`

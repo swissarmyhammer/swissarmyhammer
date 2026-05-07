@@ -90,6 +90,7 @@
 //! so a `WindowLabel` and a `Moniker` cannot be mixed up at the Tauri
 //! boundary.
 
+pub mod divergence;
 pub mod layer;
 pub mod navigate;
 pub mod observer;
@@ -99,6 +100,7 @@ pub mod snapshot;
 pub mod state;
 pub mod types;
 
+pub use divergence::compare_paths;
 pub use layer::FocusLayer;
 pub use navigate::{pick_target_via_view, BeamNavStrategy, NavScopeView, NavStrategy};
 pub use observer::{FocusEventSink, NoopSink, RecordingSink};
