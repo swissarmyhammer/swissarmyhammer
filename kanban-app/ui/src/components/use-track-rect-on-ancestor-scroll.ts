@@ -46,19 +46,9 @@ import { useEffect } from "react";
 import {
   asPixels,
   type FullyQualifiedMoniker,
-  type Pixels,
+  type Rect,
 } from "@/types/spatial";
-
-/**
- * Wire-shape rect used by `spatial_update_rect`. Mirrors the kernel's
- * `Rect` field types — branded `Pixels` for each component.
- */
-interface Rect {
-  x: Pixels;
-  y: Pixels;
-  width: Pixels;
-  height: Pixels;
-}
+import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 
 /**
  * The subset of `SpatialFocusActions["updateRect"]` this hook needs. Kept
@@ -129,6 +119,11 @@ function findScrollableAncestors(node: Element): Element[] {
  * - `key`: the `FullyQualifiedMoniker` to push rect updates against.
  * - `updateRect`: the `spatial_update_rect` action from
  *   `useSpatialFocusActions`.
+ * - `layerRegistry`: optional handle to the enclosing
+ *   `LayerScopeRegistry`. When provided, every freshly sampled rect is
+ *   also written to its `lastKnownRect` cache so the focused-scope
+ *   unmount IPC has live geometry to dispatch with even if the unmount
+ *   happens between scrolls.
  *
  * # Errors
  *
@@ -140,6 +135,7 @@ export function useTrackRectOnAncestorScroll(
   nodeRef: React.RefObject<HTMLElement | null>,
   fq: FullyQualifiedMoniker,
   updateRect: UpdateRect,
+  layerRegistry?: LayerScopeRegistry | null,
 ): void {
   useEffect(() => {
     const node = nodeRef.current;
@@ -166,6 +162,16 @@ export function useTrackRectOnAncestorScroll(
         const live = nodeRef.current;
         if (!live || !live.isConnected) return;
         const r = live.getBoundingClientRect();
+        const rect: Rect = {
+          x: asPixels(r.x),
+          y: asPixels(r.y),
+          width: asPixels(r.width),
+          height: asPixels(r.height),
+        };
+        // Refresh the layer registry's cached rect alongside the
+        // kernel-side update so the focused-scope-unmount IPC reads
+        // post-scroll geometry rather than the mount-time sample.
+        layerRegistry?.updateRect(fq, rect);
         // Capture the sample timestamp immediately after the rect read
         // so the dev-mode staleness check (`rect-validation.ts`) can
         // detect rects that age between sample and IPC dispatch. The
@@ -174,16 +180,7 @@ export function useTrackRectOnAncestorScroll(
         // and a hostile schedule can stretch the queued IPC by another
         // frame.
         const sampledAtMs = performance.now();
-        updateRect(
-          fq,
-          {
-            x: asPixels(r.x),
-            y: asPixels(r.y),
-            width: asPixels(r.width),
-            height: asPixels(r.height),
-          },
-          sampledAtMs,
-        ).catch((err) =>
+        updateRect(fq, rect, sampledAtMs).catch((err) =>
           console.error(
             "[useTrackRectOnAncestorScroll] updateRect failed",
             err,
@@ -213,5 +210,5 @@ export function useTrackRectOnAncestorScroll(
       }
       window.removeEventListener("scroll", onScroll);
     };
-  }, [nodeRef, fq, updateRect]);
+  }, [nodeRef, fq, updateRect, layerRegistry]);
 }

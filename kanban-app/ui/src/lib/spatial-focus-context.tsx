@@ -473,7 +473,39 @@ function buildSpatialFocusActions(
     registry,
   ) => {
     layerRegistriesRef.current.set(layerFq, registry);
+    // Subscribe to scope deletions so we can detect the focused-scope
+    // unmount case and dispatch `spatial_focus_lost` to the kernel.
+    // The deletion listener fires AFTER the entry leaves the map, so
+    // `buildSnapshot()` called below correctly excludes the lost FQM.
+    const unsubscribeDeleted = registry.onDeleted((fq, entry) => {
+      if (focusedFqRef.current !== fq) return;
+      // Read the cached rect rather than calling
+      // `getBoundingClientRect()` on `entry.ref.current`. By the time
+      // this listener runs from a `<FocusScope>`'s `useEffect` cleanup,
+      // React has already invoked the scope's bound `setRef(null)` in
+      // the commit phase, so `entry.ref.current` is `null` and a fresh
+      // sample would skip the IPC. The cached rect is refreshed on
+      // every register / ResizeObserver / ancestor-scroll fire, so it
+      // always reflects the most recent live geometry.
+      const lostRect = entry.lastKnownRect;
+      // No rect ever sampled (the scope unmounted in the same tick it
+      // was registered) — skip the IPC. The surviving
+      // `spatial_unregister_scope` path will still drive fallback off
+      // the kernel's stored rect.
+      if (lostRect === null) return;
+      const snapshot = registry.buildSnapshot(layerFq);
+      invoke("spatial_focus_lost", {
+        focusedFq: fq,
+        lostParentZone: entry.parentZone,
+        lostLayerFq: layerFq,
+        lostRect,
+        snapshot,
+      }).catch((err) =>
+        console.error("[spatial_focus_lost] failed", err),
+      );
+    });
     return () => {
+      unsubscribeDeleted();
       const current = layerRegistriesRef.current.get(layerFq);
       if (current === registry) {
         layerRegistriesRef.current.delete(layerFq);

@@ -78,6 +78,7 @@ fn run_app(app_state: AppState) {
             commands::spatial_unregister_scope,
             commands::spatial_update_rect,
             commands::spatial_focus,
+            commands::spatial_focus_lost,
             commands::spatial_clear_focus,
             commands::spatial_navigate,
             commands::spatial_push_layer,

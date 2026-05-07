@@ -354,12 +354,14 @@ describe("SpatialFocusProvider", () => {
       parentZone: zone,
       navOverride: {},
       segment: asSegment("leaf-a"),
+      lastKnownRect: null,
     });
     registry.add(sibling, {
       ref: { current: siblingNode },
       parentZone: zone,
       navOverride: {},
       segment: asSegment("leaf-b"),
+      lastKnownRect: null,
     });
 
     const dispose = result.current.registerLayerRegistry(layerFq, registry);
@@ -415,6 +417,7 @@ describe("SpatialFocusProvider", () => {
       parentZone: zone,
       navOverride: {},
       segment: asSegment("card"),
+      lastKnownRect: null,
     });
 
     const dispose = result.current.registerLayerRegistry(layerFq, registry);
@@ -484,6 +487,7 @@ describe("SpatialFocusProvider", () => {
       parentZone: null,
       navOverride: {},
       segment: asSegment("restored"),
+      lastKnownRect: null,
     });
     const dispose = result.current.registerLayerRegistry(layerFq, registry);
 

@@ -543,15 +543,96 @@ impl SpatialState {
             Some(ctx) => self.resolve_fallback_with_snapshot(registry, fq, ctx),
             None => self.resolve_fallback(registry, fq),
         };
+        // Both fallback-driven entry points (registry-path
+        // `handle_unregister` and snapshot-path `focus_lost`) commit
+        // through `commit_fallback_resolution` so the focus-write,
+        // record-focus, and event-shape stay in lockstep when contracts
+        // change. The only difference between the two callers is whether
+        // `record_focus` reads from a snapshot view or the registry.
+        Some(self.commit_fallback_resolution(registry, &window, fq, resolution, None))
+    }
+
+    /// React to the focused scope unmounting on the React side, computing
+    /// a snapshot-driven focus fallback.
+    ///
+    /// React calls this from its layer registry's deletion path when the
+    /// scope being unmounted equals the currently focused FQM in the
+    /// window. The lost FQM is **not** present in `snapshot.scopes`
+    /// (already removed before the snapshot was built), so its
+    /// `parent_zone`, owning layer FQM, and bounding rect arrive on the
+    /// wire alongside the snapshot.
+    ///
+    /// If `lost_fq` is no longer the focused slot for any window, this is
+    /// a no-op returning `None` — the unmount-detection IPC and the
+    /// existing `handle_unregister` path can both fire on the same
+    /// unmount, and whichever runs first wins; the second sees the
+    /// already-moved focus and short-circuits. This idempotency is the
+    /// load-bearing dedup story for the dual-path coexistence.
+    ///
+    /// On a successful fallback transition, this method writes the new
+    /// FQM into `focus_by_window` and calls
+    /// [`SpatialRegistry::record_focus`] with the snapshot so the
+    /// `last_focused` slots track the recovered focus. When the cascade
+    /// resolves to [`FallbackResolution::NoFocus`], the window's slot is
+    /// cleared and a `Some(prev) → None` event is returned.
+    pub fn focus_lost(
+        &mut self,
+        registry: &mut SpatialRegistry,
+        snapshot: &crate::snapshot::NavSnapshot,
+        lost_fq: &FullyQualifiedMoniker,
+        lost_parent_zone: Option<&FullyQualifiedMoniker>,
+        lost_layer_fq: &FullyQualifiedMoniker,
+        lost_rect: Rect,
+    ) -> Option<FocusChangedEvent> {
+        let window = self
+            .focus_by_window
+            .iter()
+            .find(|(_, focused)| *focused == lost_fq)
+            .map(|(w, _)| w.clone())?;
+
+        let indexed = IndexedSnapshot::new(snapshot);
+        let ctx = LostFocusContext {
+            view: &indexed,
+            lost_layer_fq: lost_layer_fq.clone(),
+            lost_parent_zone: lost_parent_zone.cloned(),
+            lost_rect,
+        };
+        let resolution = self.resolve_fallback_with_snapshot(registry, lost_fq, &ctx);
+        Some(self.commit_fallback_resolution(
+            registry,
+            &window,
+            lost_fq,
+            resolution,
+            Some(&indexed),
+        ))
+    }
+
+    /// Commit a [`FallbackResolution`] to `focus_by_window` and produce
+    /// the matching [`FocusChangedEvent`].
+    ///
+    /// Shared by the two fallback-driven entry points
+    /// ([`Self::handle_unregister`] and [`Self::focus_lost`]) so the
+    /// focus-write, `record_focus`, and event-shape contracts stay in
+    /// lockstep — the registry-path and snapshot-path callers only
+    /// differ in whether `record_focus` reads from `snapshot_view` or
+    /// the registry.
+    fn commit_fallback_resolution(
+        &mut self,
+        registry: &mut SpatialRegistry,
+        window: &WindowLabel,
+        prev_fq: &FullyQualifiedMoniker,
+        resolution: FallbackResolution,
+        snapshot_view: Option<&IndexedSnapshot<'_>>,
+    ) -> FocusChangedEvent {
         match resolution {
             FallbackResolution::NoFocus => {
-                self.focus_by_window.remove(&window);
-                Some(FocusChangedEvent {
-                    window_label: window,
-                    prev_fq: Some(fq.clone()),
+                self.focus_by_window.remove(window);
+                FocusChangedEvent {
+                    window_label: window.clone(),
+                    prev_fq: Some(prev_fq.clone()),
                     next_fq: None,
                     next_segment: None,
-                })
+                }
             }
             FallbackResolution::FallbackSiblingInZone(next_fq, next_segment)
             | FallbackResolution::FallbackParentZoneLastFocused(next_fq, next_segment)
@@ -561,17 +642,17 @@ impl SpatialState {
                 self.focus_by_window.insert(window.clone(), next_fq.clone());
                 // Mirror `Self::focus`: any code path that mutates
                 // `focus_by_window` to a new FQM also records the new
-                // focus on the registry so the `last_focused` slots
-                // stay in sync. The fallback target's ancestors get
-                // the recorded path; the lost entry's slot is moot
-                // (the caller unregisters it next).
-                registry.record_focus(&next_fq, None);
-                Some(FocusChangedEvent {
-                    window_label: window,
-                    prev_fq: Some(fq.clone()),
+                // focus on the registry so the `last_focused` slots stay
+                // in sync. The fallback target's ancestors get the
+                // recorded path; the lost entry's slot is moot (the
+                // caller unregisters / has unregistered it).
+                registry.record_focus(&next_fq, snapshot_view);
+                FocusChangedEvent {
+                    window_label: window.clone(),
+                    prev_fq: Some(prev_fq.clone()),
                     next_fq: Some(next_fq),
                     next_segment: Some(next_segment),
-                })
+                }
             }
         }
     }

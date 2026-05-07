@@ -54,6 +54,7 @@ import type {
   FocusOverrides,
   FullyQualifiedMoniker,
   NavSnapshot,
+  Rect,
   SegmentMoniker,
   SnapshotScope,
 } from "@/types/spatial";
@@ -79,6 +80,15 @@ export type { NavSnapshot, SnapshotScope };
  * `navOverride` is intentionally an object, not a ref-snapshot — the
  * registry stores the latest value the consumer passed, so mid-life
  * changes are visible in subsequent snapshots without a re-register.
+ *
+ * `lastKnownRect` caches the most recent bounding rect sampled for this
+ * scope. The registry updates it on every `updateRect` call (mount
+ * register, ResizeObserver fire, ancestor scroll). Held as a cache
+ * rather than re-sampled at delete time because React's commit phase
+ * nullifies bound `ref` callbacks before `useEffect` cleanups run, so
+ * an unmount-time `getBoundingClientRect()` would observe a detached
+ * node. Initialised to `null` for the brief window between `add()` and
+ * the first `updateRect()`; `null` means "no rect ever cached".
  */
 export interface ScopeEntry {
   /** Ref to the rendered DOM element; read at snapshot time. */
@@ -89,6 +99,9 @@ export interface ScopeEntry {
   readonly navOverride?: FocusOverrides;
   /** The relative segment the scope was mounted with. */
   readonly segment: SegmentMoniker;
+  /** Last bounding rect sampled for this scope; `null` until the first
+   * `updateRect` call. */
+  lastKnownRect: Rect | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +122,18 @@ export interface ScopeEntry {
  * and so the type system accurately captures the live `Map` semantics
  * (`has`, `entries`) without us re-implementing them.
  */
+/**
+ * Listener notified after a registry entry has been deleted.
+ *
+ * Receives the removed FQM and the entry's metadata at the moment of
+ * deletion. Fires AFTER the entry leaves the underlying `Map`, so a
+ * snapshot built inside the callback correctly excludes the lost FQM.
+ */
+export type ScopeDeletedListener = (
+  fq: FullyQualifiedMoniker,
+  entry: ScopeEntry,
+) => void;
+
 export class LayerScopeRegistry {
   /**
    * The layer this registry is scoped to. Used by `buildSnapshot` so
@@ -117,6 +142,8 @@ export class LayerScopeRegistry {
   readonly layerFq: FullyQualifiedMoniker;
 
   private readonly store: Map<FullyQualifiedMoniker, ScopeEntry> = new Map();
+
+  private readonly deletedListeners: Set<ScopeDeletedListener> = new Set();
 
   /**
    * Construct a fresh, empty registry for the given layer. Each
@@ -137,12 +164,59 @@ export class LayerScopeRegistry {
   }
 
   /**
-   * Remove the entry for `fq`. No-op if `fq` is not registered, so the
-   * cleanup path is safe to call unconditionally from a `useEffect`
-   * cleanup function.
+   * Remove the entry for `fq` and notify deletion listeners.
+   *
+   * No-op if `fq` is not registered, so the cleanup path is safe to call
+   * unconditionally from a `useEffect` cleanup function. Listeners fire
+   * AFTER the underlying map deletion so they observe the post-delete
+   * registry state — `buildSnapshot()` called from a listener will not
+   * include `fq`.
+   *
+   * Listener exceptions are caught and logged so a single misbehaving
+   * subscriber cannot break the cleanup path of an unrelated scope.
    */
   delete(fq: FullyQualifiedMoniker): void {
+    const entry = this.store.get(fq);
+    if (entry === undefined) return;
     this.store.delete(fq);
+    for (const listener of this.deletedListeners) {
+      try {
+        listener(fq, entry);
+      } catch (err) {
+        console.error("[LayerScopeRegistry] deleted listener threw", err);
+      }
+    }
+  }
+
+  /**
+   * Subscribe to entry deletions. Returns the unsubscribe function — call
+   * it on cleanup to remove the listener so a hot-reloaded provider does
+   * not leak references.
+   */
+  onDeleted(listener: ScopeDeletedListener): () => void {
+    this.deletedListeners.add(listener);
+    return () => {
+      this.deletedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Update the cached `lastKnownRect` for `fq`. No-op if `fq` is not
+   * registered.
+   *
+   * Callers invoke this whenever they freshly sampled a bounding rect
+   * — the initial mount-time `getBoundingClientRect()`, every
+   * `ResizeObserver` fire, and every ancestor-scroll-driven resample.
+   * The cached rect is what the deletion listener reads to dispatch
+   * `spatial_focus_lost`, so it must reflect the most recent live
+   * geometry; sampling at delete time would observe a detached node
+   * because React clears the bound `ref` during the commit phase before
+   * the `useEffect` cleanup that calls `delete()` runs.
+   */
+  updateRect(fq: FullyQualifiedMoniker, rect: Rect): void {
+    const entry = this.store.get(fq);
+    if (entry === undefined) return;
+    entry.lastKnownRect = rect;
   }
 
   /** True iff `fq` is currently registered. */

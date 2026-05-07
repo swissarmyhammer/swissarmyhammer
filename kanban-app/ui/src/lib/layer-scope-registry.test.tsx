@@ -83,7 +83,9 @@ async function flushSetup() {
 /**
  * Build a `ScopeEntry` whose `ref.current` is a real DOM node — used
  * by the direct unit tests so `buildSnapshot` can read a live
- * `getBoundingClientRect`.
+ * `getBoundingClientRect`. `lastKnownRect` defaults to `null` so unit
+ * tests that don't care about the cached rect get the same default
+ * `<FocusScope>` produces between mount and the first rect sample.
  */
 function makeEntry(
   parentZone: FullyQualifiedMoniker | null = null,
@@ -96,7 +98,7 @@ function makeEntry(
   // accept zeros for the unit tests.
   const ref: RefObject<HTMLElement | null> = { current: node };
   return {
-    entry: { ref, parentZone, navOverride, segment },
+    entry: { ref, parentZone, navOverride, segment, lastKnownRect: null },
     node,
   };
 }
@@ -163,6 +165,148 @@ describe("LayerScopeRegistry (unit)", () => {
     expect(reg.size).toBe(0);
   });
 
+  it("onDeleted fires after the entry leaves the map", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const fq = composeFq(layerFq, asSegment("a"));
+    const { entry } = makeEntry();
+    reg.add(fq, entry);
+
+    let observedSize: number | null = null;
+    let observedFq: FullyQualifiedMoniker | null = null;
+    const unsubscribe = reg.onDeleted((deletedFq) => {
+      observedFq = deletedFq;
+      observedSize = reg.size;
+    });
+
+    reg.delete(fq);
+    // The map must already have shrunk by the time the listener fires —
+    // a snapshot built inside the listener correctly excludes `fq`.
+    expect(observedFq).toBe(fq);
+    expect(observedSize).toBe(0);
+
+    unsubscribe();
+  });
+
+  it("onDeleted is silent for delete of an unknown FQ", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const ghost = composeFq(layerFq, asSegment("ghost"));
+    const listener = vi.fn();
+    reg.onDeleted(listener);
+
+    reg.delete(ghost);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("onDeleted unsubscribe stops further notifications", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const fq = composeFq(layerFq, asSegment("a"));
+    const { entry } = makeEntry();
+    const listener = vi.fn();
+    const unsubscribe = reg.onDeleted(listener);
+    unsubscribe();
+
+    reg.add(fq, entry);
+    reg.delete(fq);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("onDeleted isolates listener exceptions: a throwing listener does not stop other listeners and is logged", () => {
+    // Pin the documented contract: the registry catches per-listener
+    // exceptions so a single misbehaving subscriber cannot break the
+    // cleanup path of an unrelated scope. The diagnostic prefix is
+    // observable via `console.error` so dev builds surface the
+    // misbehaving listener.
+    const reg = new LayerScopeRegistry(layerFq);
+    const fq = composeFq(layerFq, asSegment("a"));
+    const { entry } = makeEntry();
+    reg.add(fq, entry);
+
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const throwingListener = vi.fn(() => {
+      throw new Error("listener boom");
+    });
+    const survivingListener = vi.fn();
+    reg.onDeleted(throwingListener);
+    reg.onDeleted(survivingListener);
+
+    expect(() => reg.delete(fq)).not.toThrow();
+
+    expect(throwingListener).toHaveBeenCalledTimes(1);
+    expect(survivingListener).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[LayerScopeRegistry] deleted listener threw",
+      expect.any(Error),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("updateRect caches the rect on the matching entry", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const fq = composeFq(layerFq, asSegment("a"));
+    const { entry } = makeEntry();
+    reg.add(fq, entry);
+
+    expect(entry.lastKnownRect).toBeNull();
+
+    const rect = {
+      x: asPixels(5),
+      y: asPixels(6),
+      width: asPixels(7),
+      height: asPixels(8),
+    };
+    reg.updateRect(fq, rect);
+    expect(entry.lastKnownRect).toEqual(rect);
+
+    // A second call replaces the cached value.
+    const newer = {
+      x: asPixels(50),
+      y: asPixels(60),
+      width: asPixels(70),
+      height: asPixels(80),
+    };
+    reg.updateRect(fq, newer);
+    expect(entry.lastKnownRect).toEqual(newer);
+  });
+
+  it("updateRect is a no-op for an unknown FQ", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const ghost = composeFq(layerFq, asSegment("ghost"));
+    const rect = {
+      x: asPixels(1),
+      y: asPixels(2),
+      width: asPixels(3),
+      height: asPixels(4),
+    };
+    expect(() => reg.updateRect(ghost, rect)).not.toThrow();
+    expect(reg.size).toBe(0);
+  });
+
+  it("delete listener observes the cached rect on the deleted entry", () => {
+    const reg = new LayerScopeRegistry(layerFq);
+    const fq = composeFq(layerFq, asSegment("a"));
+    const { entry } = makeEntry();
+    reg.add(fq, entry);
+
+    const cached = {
+      x: asPixels(11),
+      y: asPixels(22),
+      width: asPixels(33),
+      height: asPixels(44),
+    };
+    reg.updateRect(fq, cached);
+
+    let observedRect: typeof cached | null = null;
+    reg.onDeleted((_fq, e) => {
+      observedRect = e.lastKnownRect as typeof cached | null;
+    });
+    reg.delete(fq);
+
+    expect(observedRect).toEqual(cached);
+  });
+
   it("re-adding an FQ replaces the previous entry", () => {
     const reg = new LayerScopeRegistry(layerFq);
     const fq = composeFq(layerFq, asSegment("a"));
@@ -210,6 +354,7 @@ describe("LayerScopeRegistry (unit)", () => {
       ref: { current: null },
       parentZone: null,
       segment: asSegment("b"),
+      lastKnownRect: null,
     };
     reg.add(aFq, live);
     reg.add(bFq, detached);

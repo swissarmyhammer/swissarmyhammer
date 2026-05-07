@@ -114,6 +114,7 @@ import {
   composeFq,
   type FocusOverrides,
   type FullyQualifiedMoniker,
+  type Rect,
   type SegmentMoniker,
 } from "@/types/spatial";
 
@@ -359,12 +360,63 @@ function SpatialFocusScopeBody({
   const navOverrideRef = useRef<FocusOverrides | undefined>(navOverride);
   navOverrideRef.current = navOverride;
 
+  // ---------------------------------------------------------------------
+  // LayerScopeRegistry registration — step 1 of the spatial-nav redesign
+  // ---------------------------------------------------------------------
+  // Mirrors the kernel-side `register_scope` / `unregister_scope` pair
+  // below into the React-side per-layer registry provided by
+  // `<FocusLayer>`. Runs ALONGSIDE the existing kernel sync — this is
+  // additive in step 1; the kernel path is still authoritative. Later
+  // steps will cut the kernel path over to per-decision snapshots built
+  // from this registry and remove the kernel-sync effect entirely.
+  //
+  // `navOverride` is intentionally a dependency here (unlike the kernel
+  // sync, which reads through a ref and ignores mid-life changes). The
+  // redesign's snapshot-on-decision contract makes mid-life changes
+  // observable in the next nav, which is the behaviour callers
+  // naively expect; tying the registry update to the prop directly
+  // delivers that.
+  //
+  // The `add` call seeds `lastKnownRect: null`; the kernel-sync effect
+  // below populates it on initial sample and refreshes it on every
+  // ResizeObserver / ancestor-scroll-driven rect read. The cached rect
+  // is what the deletion listener consumes when dispatching
+  // `spatial_focus_lost`, because by the time React's `useEffect`
+  // cleanup runs the bound callback ref has already been nullified by
+  // the commit phase and a fresh `getBoundingClientRect()` would see a
+  // detached node.
+  const layerRegistry = useOptionalLayerScopeRegistry();
+  useEffect(() => {
+    if (!layerRegistry) return;
+    layerRegistry.add(fq, {
+      ref,
+      parentZone,
+      navOverride,
+      segment,
+      lastKnownRect: null,
+    });
+    return () => {
+      layerRegistry.delete(fq);
+    };
+  }, [layerRegistry, fq, segment, parentZone, navOverride]);
+
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
 
     const overrides: FocusOverrides = navOverrideRef.current ?? {};
     const initialRect = node.getBoundingClientRect();
+    const initialRectPx: Rect = {
+      x: asPixels(initialRect.x),
+      y: asPixels(initialRect.y),
+      width: asPixels(initialRect.width),
+      height: asPixels(initialRect.height),
+    };
+    // Seed the layer registry's cached rect alongside the kernel
+    // register so the focused-scope-unmount IPC has a non-null rect to
+    // dispatch with even if the unmount happens before any
+    // ResizeObserver / scroll fire ever updated it.
+    layerRegistry?.updateRect(fq, initialRectPx);
     // Capture `performance.now()` adjacent to the rect read so the
     // dev-mode staleness check (`rect-validation.ts`) can compare
     // against the validator's `nowMs` and surface rects that age
@@ -373,12 +425,7 @@ function SpatialFocusScopeBody({
     registerSpatialScope(
       fq,
       segment,
-      {
-        x: asPixels(initialRect.x),
-        y: asPixels(initialRect.y),
-        width: asPixels(initialRect.width),
-        height: asPixels(initialRect.height),
-      },
+      initialRectPx,
       layerFq,
       parentZone,
       overrides,
@@ -389,17 +436,17 @@ function SpatialFocusScopeBody({
       const node = ref.current;
       if (!node) return;
       const r = node.getBoundingClientRect();
+      const rPx: Rect = {
+        x: asPixels(r.x),
+        y: asPixels(r.y),
+        width: asPixels(r.width),
+        height: asPixels(r.height),
+      };
+      layerRegistry?.updateRect(fq, rPx);
       const sampledAtMs = performance.now();
-      updateRect(
-        fq,
-        {
-          x: asPixels(r.x),
-          y: asPixels(r.y),
-          width: asPixels(r.width),
-          height: asPixels(r.height),
-        },
-        sampledAtMs,
-      ).catch((err) => console.error("[FocusScope] updateRect failed", err));
+      updateRect(fq, rPx, sampledAtMs).catch((err) =>
+        console.error("[FocusScope] updateRect failed", err),
+      );
     });
     observer.observe(node);
 
@@ -414,37 +461,13 @@ function SpatialFocusScopeBody({
     segment,
     layerFq,
     parentZone,
+    layerRegistry,
     registerSpatialScope,
     unregisterScope,
     updateRect,
   ]);
 
-  // ---------------------------------------------------------------------
-  // LayerScopeRegistry registration — step 1 of the spatial-nav redesign
-  // ---------------------------------------------------------------------
-  // Mirrors the kernel-side `register_scope` / `unregister_scope` pair
-  // above into the React-side per-layer registry provided by
-  // `<FocusLayer>`. Runs ALONGSIDE the existing kernel sync — this is
-  // additive in step 1; the kernel path is still authoritative. Later
-  // steps will cut the kernel path over to per-decision snapshots built
-  // from this registry and remove the kernel-sync effect entirely.
-  //
-  // `navOverride` is intentionally a dependency here (unlike the kernel
-  // sync, which reads through a ref and ignores mid-life changes). The
-  // redesign's snapshot-on-decision contract makes mid-life changes
-  // observable in the next nav, which is the behaviour callers
-  // naively expect; tying the registry update to the prop directly
-  // delivers that.
-  const layerRegistry = useOptionalLayerScopeRegistry();
-  useEffect(() => {
-    if (!layerRegistry) return;
-    layerRegistry.add(fq, { ref, parentZone, navOverride, segment });
-    return () => {
-      layerRegistry.delete(fq);
-    };
-  }, [layerRegistry, fq, segment, parentZone, navOverride]);
-
-  useTrackRectOnAncestorScroll(ref, fq, updateRect);
+  useTrackRectOnAncestorScroll(ref, fq, updateRect, layerRegistry);
 
   useEffect(() => {
     if (isDirectFocus && ref.current?.scrollIntoView) {

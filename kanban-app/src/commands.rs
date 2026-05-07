@@ -2550,14 +2550,8 @@ pub async fn spatial_navigate(
     Ok(())
 }
 
-/// Compare snapshot-driven and registry-driven nav targets and warn on
-/// divergence.
-///
-/// Bedding-in instrumentation for the spatial-nav redesign cutover: the
-/// snapshot path is the new authoritative path, but until every layer's
-/// snapshot is proven to track the registry it is shipped alongside the
-/// registry path so a regression is observable in dev logs. Compiled out
-/// of release builds via the call-site `#[cfg(debug_assertions)]` gate.
+/// Compares the registry-path and snapshot-path nav targets and warns on
+/// divergence; debug-only, observation-only.
 #[cfg(debug_assertions)]
 fn check_navigate_divergence(
     registry: &SpatialRegistry,
@@ -2594,15 +2588,8 @@ fn check_navigate_divergence(
     }
 }
 
-/// Compare snapshot-driven and registry-driven `record_focus` ancestor
-/// chains for `fq` and warn on divergence.
-///
-/// Bedding-in instrumentation matching [`check_navigate_divergence`]:
-/// the snapshot path is the new authoritative writer for
-/// `last_focused_by_fq`, but until every layer's snapshot is proven to
-/// track the registry it is shipped alongside the registry walk so a
-/// regression is observable in dev logs. Compiled out of release builds
-/// via the call-site `#[cfg(debug_assertions)]` gate.
+/// Compares the registry-path and snapshot-path `record_focus` ancestor
+/// chains for `fq` and warns on divergence; debug-only, observation-only.
 #[cfg(debug_assertions)]
 fn check_focus_divergence(
     registry: &SpatialRegistry,
@@ -2642,6 +2629,110 @@ fn check_focus_divergence(
             registry_chain = ?registry_chain,
             snapshot_chain = ?snapshot_chain,
             "snapshot path walked a different parent_zone chain than the registry path",
+        );
+    }
+}
+
+/// React to the focused scope unmounting on the React side.
+///
+/// Called from the React-side layer registry's deletion path when the
+/// scope being unmounted is the currently focused FQM in this window.
+/// React supplies the lost FQM, its `parent_zone`, owning layer FQM, and
+/// last-known bounding rect alongside a snapshot whose `scopes` set has
+/// already had the lost FQM removed — the kernel's fallback walk reads
+/// from the snapshot only, so no registry mutation around the lost
+/// entry's metadata is required.
+///
+/// Coexists with [`spatial_unregister_scope`] during the transitional
+/// step: both fire on the same scope unmount, in either order. The
+/// kernel's [`SpatialState::focus_lost`] returns `None` when the lost
+/// FQM is no longer the focused slot, so whichever IPC arrives second
+/// becomes a no-op.
+///
+/// In debug builds, supplying a snapshot also triggers a parity check:
+/// the registry path's `handle_unregister` resolution is computed
+/// alongside the snapshot path's and a `tracing::warn!` fires when the
+/// two paths disagree. The check is gated by
+/// `#[cfg(debug_assertions)]` so release builds never pay the
+/// double-walk cost.
+#[tauri::command]
+pub async fn spatial_focus_lost(
+    window: Window,
+    state: State<'_, AppState>,
+    focused_fq: FullyQualifiedMoniker,
+    lost_parent_zone: Option<FullyQualifiedMoniker>,
+    lost_layer_fq: FullyQualifiedMoniker,
+    lost_rect: Rect,
+    snapshot: NavSnapshot,
+) -> Result<(), String> {
+    let event = with_spatial(&state, |registry, spatial_state| {
+        #[cfg(debug_assertions)]
+        check_focus_lost_divergence(
+            registry,
+            spatial_state,
+            &snapshot,
+            &focused_fq,
+            lost_parent_zone.as_ref(),
+            &lost_layer_fq,
+            lost_rect,
+        );
+        spatial_state.focus_lost(
+            registry,
+            &snapshot,
+            &focused_fq,
+            lost_parent_zone.as_ref(),
+            &lost_layer_fq,
+            lost_rect,
+        )
+    })
+    .await;
+
+    if let Some(event) = event {
+        emit_focus_changed(&window, &event)?;
+    }
+    Ok(())
+}
+
+/// Compares the registry-path and snapshot-path fallback resolutions and
+/// warns on divergence; debug-only, observation-only.
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_arguments)]
+fn check_focus_lost_divergence(
+    registry: &SpatialRegistry,
+    spatial_state: &SpatialState,
+    snapshot: &NavSnapshot,
+    focused_fq: &FullyQualifiedMoniker,
+    lost_parent_zone: Option<&FullyQualifiedMoniker>,
+    lost_layer_fq: &FullyQualifiedMoniker,
+    lost_rect: Rect,
+) {
+    use swissarmyhammer_focus::{IndexedSnapshot, LostFocusContext};
+
+    // Both `resolve_fallback` and `resolve_fallback_with_snapshot` are
+    // pure queries — no state mutation. Whether the lost FQM is still
+    // the focused slot is irrelevant to comparing the two cascades; the
+    // resolutions describe what *would* happen, and the diagnostic is
+    // observability-only.
+    let registry_resolution = spatial_state.resolve_fallback(registry, focused_fq);
+
+    let indexed = IndexedSnapshot::new(snapshot);
+    let ctx = LostFocusContext {
+        view: &indexed,
+        lost_layer_fq: lost_layer_fq.clone(),
+        lost_parent_zone: lost_parent_zone.cloned(),
+        lost_rect,
+    };
+    let snapshot_resolution =
+        spatial_state.resolve_fallback_with_snapshot(registry, focused_fq, &ctx);
+
+    if registry_resolution != snapshot_resolution {
+        tracing::warn!(
+            op = "spatial_focus_lost.divergence",
+            focused_fq = %focused_fq,
+            lost_layer_fq = %lost_layer_fq,
+            registry_resolution = ?registry_resolution,
+            snapshot_resolution = ?snapshot_resolution,
+            "snapshot path resolved a different fallback target than the registry path",
         );
     }
 }
