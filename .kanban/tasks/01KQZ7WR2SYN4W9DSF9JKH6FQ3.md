@@ -8,11 +8,23 @@ title: 'stateless: implement decide() — pure-functional kernel, all motions co
 ---
 ## Why this is card 3
 
-Implement the stateless kernel as a self-contained module. No consumer changes yet. Sits alongside the existing kernel.
+Implement the stateless kernel as a self-contained module. No consumer changes yet. Sits alongside the existing kernel during this card; card 5 deletes the old kernel.
+
+**End-state goal:** `swissarmyhammer-focus` is a *stateless* crate. The only computation surface is `decide(state, op, snapshot, window) -> FocusDecision`. The crate holds no global state, no `Mutex`, no `OnceCell`, no `static mut`, no interior mutability — every byte of mutable state lives in the **consumer**, which threads `&FocusState` and `&NavSnapshot` in on every call. This card writes `decide()` to that contract; cards 4 and 5 enforce it across the rest of the surface.
 
 ## What to build
 
-`swissarmyhammer-focus/src/stateless/decide.rs` — body of `decide(state, op, snapshot, window)`. Exhaustively handles every `FocusOp` variant. Returns `(FocusState, Option<FocusChangedEvent>)`.
+`swissarmyhammer-focus/src/stateless/decide.rs` — body of `decide(state, op, snapshot, window)`. Exhaustively handles every `FocusOp` variant. Returns `FocusDecision { next: FocusState, event: Option<FocusChangedEvent> }`.
+
+```rust
+#[must_use]
+pub fn decide(
+    state: &FocusState,
+    op: &FocusOp,
+    snapshot: &NavSnapshot,
+    window: &WindowLabel,
+) -> FocusDecision { ... }
+```
 
 Per-op behaviour (mirrors the algorithms validated in card 1, but reads from `snapshot` instead of `&SpatialRegistry`):
 
@@ -31,6 +43,13 @@ Per-op behaviour (mirrors the algorithms validated in card 1, but reads from `sn
 
 Cycle-guard parent_zone walks with a HashSet (logs `tracing::error!` and stops on cycle).
 
+### Statelessness invariants this card enforces
+
+- `decide()` is `#[must_use]`, takes `&` references for all four parameters, and returns the new `FocusState` by value inside `FocusDecision`.
+- No file under `swissarmyhammer-focus/src/stateless/` uses `Mutex`, `RwLock`, `OnceCell`, `Lazy`, `lazy_static!`, `static mut`, `RefCell`, `Cell`, or `parking_lot::*`. The module is pure.
+- All helpers under `stateless/` take `&NavSnapshot`, never `&SpatialRegistry`. The snapshot is the only source of structural data.
+- No `tokio` / `async` anywhere in `stateless/` — `decide()` is sync and CPU-bound.
+
 ## Tests
 
 Comprehensive unit suite in `swissarmyhammer-focus/src/stateless/decide.rs::tests`:
@@ -41,10 +60,17 @@ Comprehensive unit suite in `swissarmyhammer-focus/src/stateless/decide.rs::test
 - Focus-lost: each fallback cascade rule fires under a fixture that isolates it
 - Layer push/pop: last_focused recorded, restoration target emitted
 
+Plus structural tests:
+
+- `swissarmyhammer-focus/tests/stateless_is_pure.rs`: a regex-grep over `src/stateless/**/*.rs` (using `include_str!` of each file) that asserts none of `Mutex`, `RwLock`, `OnceCell`, `Lazy`, `lazy_static`, `static mut`, `RefCell`, `Cell`, `parking_lot::`, `tokio::sync::` appear in any file. Test fails ⇔ someone reintroduces interior mutability.
+- `swissarmyhammer-focus/tests/decide_signature.rs`: a one-line `let _: fn(&FocusState, &FocusOp, &NavSnapshot, &WindowLabel) -> FocusDecision = swissarmyhammer_focus::stateless::decide;` — pins the by-reference signature so any drift to `&mut` or owned values fails to compile.
+
 ## Acceptance
 
-- `cargo test -p swissarmyhammer-focus` green (existing tests unchanged + new decide() suite passes)
-- 100% branch coverage on `decide()`
-- `decide()` is `#[must_use]`, takes `&` references, never panics on torn snapshots
-- No consumer-side changes
+- `cargo test -p swissarmyhammer-focus` green (existing tests unchanged + new decide() suite passes + stateless_is_pure + decide_signature pass).
+- 100% branch coverage on `decide()`.
+- `decide()` is `#[must_use]`, takes `&` references, never panics on torn snapshots.
+- `src/stateless/` directory contains zero interior-mutability primitives (asserted by `stateless_is_pure.rs`).
+- No consumer-side changes (card 4 owns those).
+
 #stateless-rebuild
