@@ -429,17 +429,18 @@ pub(crate) struct AppState {
     /// resurrecting previous-session windows on top of the one the deep-link
     /// handler focused or created.
     pub(crate) deep_link_handled: AtomicBool,
-    /// Headless spatial-navigation registry — stores every registered
-    /// `<FocusScope>` / `<FocusZone>` along with its layer membership and
-    /// geometry. Wrapped in a `tokio::sync::Mutex` because spatial commands
-    /// hold both this and `spatial_state` together for transactional
-    /// register / unregister; using the async mutex matches the pattern
-    /// used by the rest of `AppState`'s shared state.
+    /// Headless spatial-navigation registry — stores every layer and
+    /// the focus tracker's `last_focused_by_fq` map. Wrapped in a
+    /// `tokio::sync::Mutex` because spatial commands hold both this and
+    /// `spatial_state` together for the duration of a single
+    /// transaction; using the async mutex matches the pattern used by
+    /// the rest of `AppState`'s shared state.
     pub(crate) spatial_registry: TokioMutex<SpatialRegistry>,
     /// Per-window focused [`swissarmyhammer_focus::FullyQualifiedMoniker`] tracker.
-    /// Mutated by every `spatial_focus`, `spatial_navigate`, and
-    /// `spatial_unregister_scope` command. Held under `tokio::sync::Mutex`
-    /// because spatial commands routinely take both `spatial_registry` and
+    /// Mutated by every spatial command that commits a focus transition
+    /// (`spatial_focus`, `spatial_navigate`, `spatial_focus_lost`,
+    /// `spatial_clear_focus`). Held under `tokio::sync::Mutex` because
+    /// spatial commands routinely take both `spatial_registry` and
     /// `spatial_state` for the duration of a single transaction.
     pub(crate) spatial_state: TokioMutex<SpatialState>,
 }

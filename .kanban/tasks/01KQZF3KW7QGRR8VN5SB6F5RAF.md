@@ -2,7 +2,6 @@
 assignees:
 - claude-code
 depends_on:
-- 01KQZ7VR7JK1QD5QJDDKB529JG
 - 01KQZ7W84TTCCEBZYPRKBVSJ3F
 - 01KQZ7WR2SYN4W9DSF9JKH6FQ3
 - 01KQZJKQDWY3ZFMVW9GEH2VQ4C
@@ -93,4 +92,4 @@ If no surviving code site implements a claim, the README is fiction and the clai
 
 - Use `/tdd` — write `tests/readme_claims.rs` first against the surviving stateless symbols. Then rewrite the README. Then run `wc -l` and `cargo doc` to verify the size + doc-build constraints.
 
-#stateless-rebuild #docs
+#stateless-rebuild #docs #stateless-nav

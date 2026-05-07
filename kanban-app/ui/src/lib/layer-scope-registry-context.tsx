@@ -1,20 +1,8 @@
 /**
  * `LayerScopeRegistry` — React-side registry of every `<FocusScope>`
- * mounted under a single `<FocusLayer>`.
- *
- * # What this is, and why
- *
- * Step 1 of the spatial-nav redesign described in card
- * `01KQTC1VNQM9KC90S65P7QX9N1`. The kernel currently keeps a replica of
- * the React scope tree (`SpatialRegistry::scopes`) populated over async
- * IPC; the redesign moves that registry into React and lets the kernel
- * read a fresh snapshot per decision instead. This file is the *first*
- * step toward that cutover — it stands the React-side registry up
- * **alongside** the existing kernel sync. Both sources of truth coexist
- * for now; nothing is removed from the kernel path. The point of this
- * step is purely to give later steps a place to build snapshots from
- * React state, and to provide a parity diagnostic that proves the dual-
- * source model works before the cutover happens.
+ * mounted under a single `<FocusLayer>`. The sole scope-tracking
+ * authority: the kernel reads scope state only via per-decision
+ * snapshots built from this registry.
  *
  * # Layer-scoped, not global
  *
@@ -28,25 +16,12 @@
  *
  * The registry holds the React `RefObject<HTMLElement>` for each scope,
  * not a frozen rect. `buildSnapshot()` walks the entries and reads
- * `getBoundingClientRect()` *at call time*, so the snapshot reflects the
- * current viewport regardless of how stale the kernel's replica is.
+ * `getBoundingClientRect()` *at call time*, so the snapshot always
+ * reflects the current viewport.
  *
  * `navOverride` is also read live — the registry stores the latest
- * `navOverride` value. This is a deliberate behavior change from the
- * existing kernel registration path, which snapshots `navOverride` only
- * at register time and ignores mid-life changes (see the comment in
- * `focus-scope.tsx`'s navOverride contract). The redesign explicitly
- * improves this; a `<FocusScope>` whose `navOverride` prop changes after
+ * `navOverride` value, so a `<FocusScope>` whose prop changes after
  * mount will see the new value reflected in the next snapshot.
- *
- * # Out of scope for this step
- *
- * - Sending snapshots over IPC (steps 6–8 of the parent card).
- * - Removing the kernel sync (steps 10–12).
- * - Changing kernel behavior (steps 2–5).
- *
- * No existing call sites are changed. The registry is purely additive in
- * step 1.
  */
 
 import { createContext, useContext } from "react";
@@ -137,6 +112,35 @@ export type ScopeDeletedListener = (
   entry: ScopeEntry,
 ) => void;
 
+/**
+ * Cross-instance hook fired for every `add` / `delete` on any
+ * `LayerScopeRegistry`. Vitest test setups install one to mirror
+ * registrations into the per-test mock-invoke history so legacy
+ * `registerScopeArgs()` helpers (which scan `mockInvoke.mock.calls` for
+ * `spatial_register_scope` entries) keep working after the IPC cutover.
+ *
+ * Production never installs a hook — the field is `null` by default and
+ * the registry skips the call entirely on the hot path.
+ */
+export interface RegistryEventHook {
+  onAdd(layerFq: FullyQualifiedMoniker, fq: FullyQualifiedMoniker, entry: ScopeEntry): void;
+  onDelete(layerFq: FullyQualifiedMoniker, fq: FullyQualifiedMoniker, entry: ScopeEntry): void;
+}
+
+let globalRegistryHook: RegistryEventHook | null = null;
+
+/**
+ * Install a cross-instance hook that fires for every `add` / `delete` on
+ * any `LayerScopeRegistry`. Returns the uninstaller. Tests use this to
+ * mirror registrations into a captured trace.
+ */
+export function installRegistryHook(hook: RegistryEventHook): () => void {
+  globalRegistryHook = hook;
+  return () => {
+    if (globalRegistryHook === hook) globalRegistryHook = null;
+  };
+}
+
 export class LayerScopeRegistry {
   /**
    * The layer this registry is scoped to. Used by `buildSnapshot` so
@@ -164,6 +168,13 @@ export class LayerScopeRegistry {
    */
   add(fq: FullyQualifiedMoniker, entry: ScopeEntry): void {
     this.store.set(fq, entry);
+    if (globalRegistryHook !== null) {
+      try {
+        globalRegistryHook.onAdd(this.layerFq, fq, entry);
+      } catch (err) {
+        console.error("[LayerScopeRegistry] global add hook threw", err);
+      }
+    }
   }
 
   /**
@@ -187,6 +198,13 @@ export class LayerScopeRegistry {
         listener(fq, entry);
       } catch (err) {
         console.error("[LayerScopeRegistry] deleted listener threw", err);
+      }
+    }
+    if (globalRegistryHook !== null) {
+      try {
+        globalRegistryHook.onDelete(this.layerFq, fq, entry);
+      } catch (err) {
+        console.error("[LayerScopeRegistry] global delete hook threw", err);
       }
     }
   }

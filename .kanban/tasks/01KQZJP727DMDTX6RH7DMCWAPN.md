@@ -159,4 +159,4 @@ description = "Stateless spatial focus and keyboard navigation kernel — pure d
 
 - Use `/tdd` — write `tests/lib_surface.rs` and the extended `tests/stateless_is_pure.rs` first; let them fail because the deleted modules still exist; then walk sections A–H deleting until they pass. Re-run the eight motion-validation suites + the end-to-end test after each section to confirm zero behavior regression.
 
-#stateless-rebuild
+#stateless-rebuild #stateless-nav

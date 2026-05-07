@@ -2156,9 +2156,8 @@ pub async fn show_context_menu(
 // ─────────────────────────────────────────────────────────────────────────────
 
 use swissarmyhammer_focus::{
-    BeamNavStrategy, Direction, FocusChangedEvent, FocusLayer, FocusScope, FullyQualifiedMoniker,
-    LayerName, NavSnapshot, Rect, RegisterEntry, SegmentMoniker, SpatialRegistry, SpatialState,
-    WindowLabel,
+    Direction, FocusChangedEvent, FocusLayer, FullyQualifiedMoniker, LayerName, NavSnapshot, Rect,
+    SegmentMoniker, SpatialRegistry, SpatialState, WindowLabel,
 };
 
 /// Tauri event name for spatial focus changes — mirrors the listener
@@ -2179,11 +2178,9 @@ fn window_label_from(window: &Window) -> WindowLabel {
 /// Acquire both spatial locks in canonical order and run `f` with mutable
 /// access.
 ///
-/// Holding `spatial_registry` first then `spatial_state` mirrors the
-/// ordering used by [`spatial_unregister_scope`] (which is the only
-/// command that genuinely needs both at once). Centralizing the order
-/// here means every other adapter inherits it for free, and
-/// future commands cannot accidentally lock-invert.
+/// Order is `spatial_registry` then `spatial_state` for any command that
+/// holds both at once. Centralizing the order here means every adapter
+/// inherits it for free and cannot accidentally lock-invert.
 async fn with_spatial<R, F>(state: &State<'_, AppState>, f: F) -> R
 where
     F: FnOnce(&mut SpatialRegistry, &mut SpatialState) -> R,
@@ -2214,70 +2211,6 @@ fn emit_focus_changed(window: &Window, event: &FocusChangedEvent) -> Result<(), 
 // canonical order, dispatch to one of these helpers, and emit the resulting
 // `FocusChangedEvent` (when any) on the calling window.
 
-/// Register a [`FocusScope`] into `registry`.
-///
-/// Pulled out of [`spatial_register_scope`] so unit tests can exercise
-/// the same body without constructing a Tauri runtime.
-///
-/// `last_focused` is intentionally **not** taken from the wire —
-/// registration is the React side's "this scope just mounted" signal,
-/// and `last_focused` is server-owned drill-out memory that the
-/// navigator populates as focus moves. The kernel's
-/// [`SpatialRegistry::register_scope`] preserves any existing
-/// `last_focused` slot when a scope is re-registered (the
-/// placeholder/real-mount swap), so we always pass `None` here and
-/// let the kernel handle preservation.
-#[allow(clippy::too_many_arguments)]
-fn spatial_register_scope_inner(
-    registry: &mut SpatialRegistry,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layer_fq: FullyQualifiedMoniker,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-) {
-    registry.register_scope(FocusScope {
-        fq,
-        segment,
-        rect,
-        layer_fq,
-        parent_zone,
-        last_focused: None,
-        overrides,
-    });
-}
-
-/// Unregister a scope, calling `handle_unregister` BEFORE `unregister_scope`
-/// so the focus tracker can read the lost entry's metadata.
-///
-/// This ordering is the central invariant of the unregister command — the
-/// kernel cannot compute a fallback target after the entry has been
-/// removed from the registry. Returns the [`FocusChangedEvent`] (if any)
-/// the kernel produced; the caller is responsible for emitting it.
-fn spatial_unregister_scope_inner(
-    registry: &mut SpatialRegistry,
-    spatial_state: &mut SpatialState,
-    fq: &FullyQualifiedMoniker,
-) -> Option<FocusChangedEvent> {
-    let event = spatial_state.handle_unregister(registry, fq, None);
-    registry.unregister_scope(fq);
-    event
-}
-
-/// Apply a batch of [`RegisterEntry`] values to `registry` in one call.
-///
-/// Pulled out of [`spatial_register_batch`] so unit tests can drive the
-/// same code path against `&mut SpatialRegistry` without spinning up a
-/// Tauri runtime. After the kernel's scope/zone collapse there is a
-/// single registered primitive type, so the batch path is now
-/// infallible at the registry boundary — every entry is applied via
-/// [`SpatialRegistry::register_scope`] in input order, and per-FQM
-/// `last_focused` preservation is handled by the kernel.
-fn spatial_register_batch_inner(registry: &mut SpatialRegistry, entries: Vec<RegisterEntry>) {
-    registry.apply_batch(entries);
-}
-
 /// Push a layer into the registry under the given owning window.
 ///
 /// `window_label` is derived from the calling `tauri::Window` in the
@@ -2301,153 +2234,23 @@ fn spatial_push_layer_inner(
     });
 }
 
-/// Register a `<FocusScope>` with the spatial registry.
+/// Move focus to the scope at `fq`.
 ///
-/// Mirrors [`FocusScope`] on the kernel side. `parent_zone` is `None`
-/// when the scope sits directly under its layer root; `overrides` is
-/// empty when the scope has no per-direction special cases. Whether the
-/// scope plays a leaf or a navigable-container role is determined at
-/// runtime by whether anything else is registered under it — there is
-/// no separate zone primitive on the wire.
+/// The kernel records ancestry from the snapshot's `parent_zone` chain —
+/// mid-life `navOverride` and `parent_zone` changes propagate without a
+/// re-register. The registry is consulted only for the focused entry's
+/// owning window, segment, and layer-ancestor chain.
 ///
-/// Replacing a registration with the same key is intentionally allowed
-/// (idempotent re-mount); the kernel's per-key overwrite semantics
-/// preserve any existing `last_focused` slot so a placeholder→real-mount
-/// swap does not lose drill-out memory accumulated while the placeholder
-/// was live.
+/// `snapshot` is `None` only during the transient unmount window where
+/// the focused scope's React-side layer registry has already torn down;
+/// the kernel drops the commit silently in that case rather than guess
+/// at scope ancestry without a snapshot.
 ///
-/// Returns `Ok(())` on success. Registration is purely structural — no
-/// `focus-changed` event is emitted.
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn spatial_register_scope(
-    _window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layer_fq: FullyQualifiedMoniker,
-    parent_zone: Option<FullyQualifiedMoniker>,
-    overrides: HashMap<Direction, Option<FullyQualifiedMoniker>>,
-) -> Result<(), String> {
-    with_spatial(&state, |registry, _spatial_state| {
-        spatial_register_scope_inner(
-            registry,
-            fq,
-            segment,
-            rect,
-            layer_fq,
-            parent_zone,
-            overrides,
-        );
-    })
-    .await;
-    Ok(())
-}
-
-/// Register a batch of [`RegisterEntry`] values in one Tauri invoke.
-///
-/// The React-side virtualizer ships a `Vec<RegisterEntry>` for off-screen
-/// rows whenever the visible window changes — twenty placeholder mounts
-/// collapse into a single IPC round-trip and a single registry lock,
-/// rather than twenty independent `spatial_register_scope` calls.
-///
-/// After the kernel's scope/zone collapse the batch path is infallible:
-/// every entry is applied via [`SpatialRegistry::register_scope`] in
-/// input order, and the kernel preserves any existing `last_focused`
-/// slot per FQM so the placeholder→real-mount swap does not lose
-/// drill-out memory.
-///
-/// Returns `Ok(())` on success. No `focus-changed` event is emitted —
-/// registration does not move focus.
-#[tauri::command]
-pub async fn spatial_register_batch(
-    _window: Window,
-    state: State<'_, AppState>,
-    entries: Vec<RegisterEntry>,
-) -> Result<(), String> {
-    with_spatial(&state, |registry, _spatial_state| {
-        spatial_register_batch_inner(registry, entries);
-    })
-    .await;
-    Ok(())
-}
-
-/// Unregister a previously-registered scope.
-///
-/// **Lock ordering** is critical here: we acquire the registry lock first,
-/// then the state lock, then call `SpatialState::handle_unregister` BEFORE
-/// `SpatialRegistry::unregister_scope`. This ordering exists because
-/// `handle_unregister` must read the lost entry's metadata (its layer,
-/// parent zone, and rect) so the focus tracker can compute a fallback
-/// target — once `unregister_scope` runs, that metadata is gone.
-///
-/// Both locks are held together for the entire transaction so observers
-/// cannot see a half-applied unregister.
-///
-/// If the unregistered scope was the focused one, the resulting
-/// `FocusChangedEvent` is emitted to the React side so claim listeners
-/// release the focus visual.
-#[tauri::command]
-pub async fn spatial_unregister_scope(
-    window: Window,
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-) -> Result<(), String> {
-    let event = with_spatial(&state, |registry, spatial_state| {
-        spatial_unregister_scope_inner(registry, spatial_state, &fq)
-    })
-    .await;
-
-    if let Some(event) = event {
-        emit_focus_changed(&window, &event)?;
-    }
-    Ok(())
-}
-
-/// Refresh the bounding rect of a registered scope.
-///
-/// Called from the React side when ResizeObserver fires on the underlying
-/// DOM node. No-op on the kernel side if the key is unknown — a
-/// late-arriving rect for an already-unregistered scope drops silently
-/// rather than re-creating the entry.
-///
-/// No `focus-changed` event is emitted; rect updates do not move focus.
-#[tauri::command]
-pub async fn spatial_update_rect(
-    state: State<'_, AppState>,
-    fq: FullyQualifiedMoniker,
-    rect: Rect,
-) -> Result<(), String> {
-    with_spatial(&state, |registry, _spatial_state| {
-        registry.update_rect(&fq, rect);
-    })
-    .await;
-    Ok(())
-}
-
-/// Move focus to the scope at `key`.
-///
-/// When `snapshot` is `Some`, the kernel records ancestry from the
-/// snapshot's `parent_zone` chain — mid-life `navOverride` and
-/// `parent_zone` changes propagate without a re-register. The registry
-/// is consulted only for the focused entry's owning window, segment,
-/// and layer-ancestor chain. When `snapshot` is `None`, the
-/// registry-walk path runs.
-///
-/// In debug builds, supplying a snapshot also triggers a parity check:
-/// the registry-walk `last_focused_by_fq` chain is computed alongside
-/// and a `tracing::warn!` fires when the two paths disagree. The check
-/// is gated by `#[cfg(debug_assertions)]` so release builds never pay
-/// the double-walk cost.
-///
-/// Delegates to [`SpatialState::focus_with_snapshot`] on the snapshot
-/// path and [`SpatialState::focus`] on the registry path. Both return
+/// Delegates to [`SpatialState::focus_with_snapshot`]. Returns
 /// `Some(FocusChangedEvent)` when focus actually moved and `None`
-/// otherwise (key not registered, window unknown, already focused, or
-/// — snapshot path only — the FQM is missing from `snapshot.scopes`).
-/// We forward only actual transitions so claim listeners don't see
-/// redundant events.
+/// otherwise (no snapshot, window unknown, already focused, or the FQM
+/// is missing from `snapshot.scopes`). We forward only actual
+/// transitions so claim listeners don't see redundant events.
 #[tauri::command]
 pub async fn spatial_focus(
     window: Window,
@@ -2455,13 +2258,11 @@ pub async fn spatial_focus(
     fq: FullyQualifiedMoniker,
     snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
-    let event = with_spatial(&state, |registry, spatial_state| match &snapshot {
-        Some(snapshot) => {
-            #[cfg(debug_assertions)]
-            check_focus_divergence(registry, snapshot, &fq);
-            spatial_state.focus_with_snapshot(registry, snapshot, fq.clone())
-        }
-        None => spatial_state.focus(registry, fq.clone()),
+    let Some(snapshot) = snapshot else {
+        return Ok(());
+    };
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.focus_with_snapshot(registry, &snapshot, fq.clone())
     })
     .await;
 
@@ -2504,17 +2305,13 @@ pub async fn spatial_clear_focus(window: Window, state: State<'_, AppState>) -> 
     Ok(())
 }
 
-/// Move focus relative to `key` in `direction`.
+/// Move focus relative to `focused_fq` in `direction`.
 ///
-/// When `snapshot` is `Some`, pathfinding runs against the snapshot;
-/// the registry is consulted only for the focused entry's segment /
-/// window and the target's commit metadata. When `snapshot` is `None`,
-/// the registry-backed [`BeamNavStrategy`] runs.
-///
-/// In debug builds, supplying a snapshot also triggers a parity check:
-/// the registry path is run alongside, and a `tracing::warn!` fires when
-/// the two paths diverge. The check is gated by `#[cfg(debug_assertions)]`
-/// so release builds never pay the double-pathfinding cost.
+/// Pathfinding runs against the snapshot; the registry is consulted only
+/// for the focused entry's segment / window and the target's commit
+/// metadata. When `snapshot` is `None` (the transient unmount window),
+/// the call drops silently — the React-side layer registry has torn
+/// down and there is no live geometry to navigate over.
 ///
 /// Returns `Ok(())` whether or not focus actually moved — under the
 /// no-silent-dropout contract, the kernel always returns a moniker; if
@@ -2531,16 +2328,11 @@ pub async fn spatial_navigate(
     direction: Direction,
     snapshot: Option<NavSnapshot>,
 ) -> Result<(), String> {
-    let event = with_spatial(&state, |registry, spatial_state| match &snapshot {
-        Some(snapshot) => {
-            #[cfg(debug_assertions)]
-            check_navigate_divergence(registry, snapshot, &focused_fq, direction);
-            spatial_state.navigate_with_snapshot(registry, snapshot, focused_fq.clone(), direction)
-        }
-        None => {
-            let strategy = BeamNavStrategy::new();
-            spatial_state.navigate_with(registry, &strategy, focused_fq.clone(), direction)
-        }
+    let Some(snapshot) = snapshot else {
+        return Ok(());
+    };
+    let event = with_spatial(&state, |registry, spatial_state| {
+        spatial_state.navigate_with_snapshot(registry, &snapshot, focused_fq.clone(), direction)
     })
     .await;
 
@@ -2548,69 +2340,6 @@ pub async fn spatial_navigate(
         emit_focus_changed(&window, &event)?;
     }
     Ok(())
-}
-
-/// Compares the registry-path and snapshot-path nav targets and warns on
-/// divergence; debug-only, observation-only.
-#[cfg(debug_assertions)]
-fn check_navigate_divergence(
-    registry: &SpatialRegistry,
-    snapshot: &NavSnapshot,
-    focused_fq: &FullyQualifiedMoniker,
-    direction: Direction,
-) {
-    use swissarmyhammer_focus::navigate::NavStrategy;
-    use swissarmyhammer_focus::{compare_paths, pick_target_via_view, IndexedSnapshot};
-
-    let Some(entry) = registry.find_by_fq(focused_fq) else {
-        return;
-    };
-    let focused_segment = entry.segment.clone();
-
-    let snapshot_view = IndexedSnapshot::new(snapshot);
-    let _ = compare_paths(
-        "spatial_navigate.divergence",
-        || pick_target_via_view(&snapshot_view, focused_fq, &focused_segment, direction),
-        || BeamNavStrategy::new().next(registry, focused_fq, &focused_segment, direction),
-    );
-}
-
-/// Compares the registry-path and snapshot-path `record_focus` ancestor
-/// chains for `fq` and warns on divergence; debug-only, observation-only.
-#[cfg(debug_assertions)]
-fn check_focus_divergence(
-    registry: &SpatialRegistry,
-    snapshot: &NavSnapshot,
-    fq: &FullyQualifiedMoniker,
-) {
-    use swissarmyhammer_focus::{compare_paths, IndexedSnapshot};
-
-    let snapshot_view = IndexedSnapshot::new(snapshot);
-    let _ = compare_paths(
-        "spatial_focus.divergence",
-        || -> Vec<FullyQualifiedMoniker> {
-            snapshot_view
-                .parent_zone_chain(fq)
-                .map(|s| s.fq.clone())
-                .collect()
-        },
-        || -> Vec<FullyQualifiedMoniker> {
-            let mut chain = Vec::new();
-            let mut next = registry.find_by_fq(fq).and_then(|s| s.parent_zone.clone());
-            let mut visited = std::collections::HashSet::new();
-            while let Some(zone_fq) = next {
-                if !visited.insert(zone_fq.clone()) {
-                    break;
-                }
-                let Some(zone) = registry.find_by_fq(&zone_fq) else {
-                    break;
-                };
-                chain.push(zone.fq.clone());
-                next = zone.parent_zone.clone();
-            }
-            chain
-        },
-    );
 }
 
 /// React to the focused scope unmounting on the React side.
@@ -2622,19 +2351,6 @@ fn check_focus_divergence(
 /// already had the lost FQM removed — the kernel's fallback walk reads
 /// from the snapshot only, so no registry mutation around the lost
 /// entry's metadata is required.
-///
-/// Coexists with [`spatial_unregister_scope`] during the transitional
-/// step: both fire on the same scope unmount, in either order. The
-/// kernel's [`SpatialState::focus_lost`] returns `None` when the lost
-/// FQM is no longer the focused slot, so whichever IPC arrives second
-/// becomes a no-op.
-///
-/// In debug builds, supplying a snapshot also triggers a parity check:
-/// the registry path's `handle_unregister` resolution is computed
-/// alongside the snapshot path's and a `tracing::warn!` fires when the
-/// two paths disagree. The check is gated by
-/// `#[cfg(debug_assertions)]` so release builds never pay the
-/// double-walk cost.
 #[tauri::command]
 pub async fn spatial_focus_lost(
     window: Window,
@@ -2646,16 +2362,6 @@ pub async fn spatial_focus_lost(
     snapshot: NavSnapshot,
 ) -> Result<(), String> {
     let event = with_spatial(&state, |registry, spatial_state| {
-        #[cfg(debug_assertions)]
-        check_focus_lost_divergence(
-            registry,
-            spatial_state,
-            &snapshot,
-            &focused_fq,
-            lost_parent_zone.as_ref(),
-            &lost_layer_fq,
-            lost_rect,
-        );
         spatial_state.focus_lost(
             registry,
             &snapshot,
@@ -2671,40 +2377,6 @@ pub async fn spatial_focus_lost(
         emit_focus_changed(&window, &event)?;
     }
     Ok(())
-}
-
-/// Compares the registry-path and snapshot-path fallback resolutions and
-/// warns on divergence; debug-only, observation-only.
-#[cfg(debug_assertions)]
-#[allow(clippy::too_many_arguments)]
-fn check_focus_lost_divergence(
-    registry: &SpatialRegistry,
-    spatial_state: &SpatialState,
-    snapshot: &NavSnapshot,
-    focused_fq: &FullyQualifiedMoniker,
-    lost_parent_zone: Option<&FullyQualifiedMoniker>,
-    lost_layer_fq: &FullyQualifiedMoniker,
-    lost_rect: Rect,
-) {
-    use swissarmyhammer_focus::{compare_paths, IndexedSnapshot, LostFocusContext};
-
-    let indexed = IndexedSnapshot::new(snapshot);
-    let ctx = LostFocusContext {
-        view: &indexed,
-        lost_layer_fq: lost_layer_fq.clone(),
-        lost_parent_zone: lost_parent_zone.cloned(),
-        lost_rect,
-    };
-    // Both `resolve_fallback` and `resolve_fallback_with_snapshot` are
-    // pure queries — no state mutation. Whether the lost FQM is still
-    // the focused slot is irrelevant to comparing the two cascades; the
-    // resolutions describe what *would* happen, and the diagnostic is
-    // observability-only.
-    let _ = compare_paths(
-        "spatial_focus_lost.divergence",
-        || spatial_state.resolve_fallback_with_snapshot(registry, focused_fq, &ctx),
-        || spatial_state.resolve_fallback(registry, focused_fq),
-    );
 }
 
 /// Push a new layer onto the registry.
@@ -3322,13 +2994,6 @@ mod spatial_command_tests {
         }
     }
 
-    /// Compose an FQM by appending `child_segment` to `parent_fq` with the
-    /// `/` separator — mirrors what the React `FullyQualifiedMonikerContext`
-    /// composes on the consumer side before the IPC call.
-    fn compose_fq(parent_fq: &FullyQualifiedMoniker, child_segment: &str) -> FullyQualifiedMoniker {
-        FullyQualifiedMoniker::compose(parent_fq, &SegmentMoniker::from_string(child_segment))
-    }
-
     /// Push a window-root layer into `registry`, returning the layer FQM
     /// the test should pass to subsequent register calls.
     fn push_root_layer(
@@ -3360,15 +3025,15 @@ mod spatial_command_tests {
     ) -> (FullyQualifiedMoniker, SegmentMoniker) {
         let segment = SegmentMoniker::from_string(segment_str);
         let fq = FullyQualifiedMoniker::compose(layer_fq, &segment);
-        spatial_register_scope_inner(
-            registry,
-            fq.clone(),
-            segment.clone(),
+        registry.register_scope(swissarmyhammer_focus::FocusScope {
+            fq: fq.clone(),
+            segment: segment.clone(),
             rect,
-            layer_fq.clone(),
-            None,
-            HashMap::new(),
-        );
+            layer_fq: layer_fq.clone(),
+            parent_zone: None,
+            last_focused: None,
+            overrides: HashMap::new(),
+        });
         (fq, segment)
     }
 
@@ -3399,202 +3064,12 @@ mod spatial_command_tests {
         assert_eq!(event.next_segment, Some(segment));
     }
 
-    /// Registering a leaf scope inserts it into the registry and the
-    /// scope is reachable via `scope()`. Mirrors the wire path
-    /// `spatial_register_scope` → `register_scope_inner` →
-    /// `SpatialRegistry::register_scope`.
-    #[test]
-    fn spatial_register_scope_round_trips() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, segment) = register_leaf(
-            &mut registry,
-            &layer,
-            "ui:button",
-            rect_at(5.0, 5.0, 20.0, 30.0),
-        );
-
-        let scope = registry.scope(&fq).expect("scope was registered");
-        assert_eq!(scope.segment, segment);
-        assert_eq!(scope.layer_fq, layer);
-        assert_eq!(scope.parent_zone, None);
-    }
-
-    /// Re-registering a scope at the same FQM preserves any existing
-    /// `last_focused` slot — the kernel's placeholder/real-mount swap
-    /// requires drill-out memory to survive a re-register. Verifies the
-    /// inner helper passes `last_focused: None` on the wire and lets the
-    /// kernel's per-FQM preservation logic in `register_scope` carry the
-    /// previous value forward.
-    #[test]
-    fn spatial_register_scope_preserves_last_focused() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let parent_fq = compose_fq(&layer, "ui:parent");
-        let child_fq = compose_fq(&parent_fq, "ui:child");
-        spatial_register_scope_inner(
-            &mut registry,
-            parent_fq.clone(),
-            SegmentMoniker::from_string("ui:parent"),
-            rect_at(0.0, 0.0, 100.0, 100.0),
-            layer.clone(),
-            None,
-            HashMap::new(),
-        );
-
-        // Populate `last_focused` directly on the registered scope —
-        // emulates the navigator's mutation as focus moves through the
-        // parent's descendants. (The kernel currently never originates
-        // a write here, but the register path must preserve any value
-        // an external mutator placed.)
-        registry.register_scope(FocusScope {
-            fq: parent_fq.clone(),
-            segment: SegmentMoniker::from_string("ui:parent"),
-            rect: rect_at(0.0, 0.0, 100.0, 100.0),
-            layer_fq: layer.clone(),
-            parent_zone: None,
-            last_focused: Some(child_fq.clone()),
-            overrides: HashMap::new(),
-        });
-
-        // Re-register through the inner helper — the real wire path. The
-        // helper passes `last_focused: None`; `register_scope` must carry
-        // the prior value forward.
-        spatial_register_scope_inner(
-            &mut registry,
-            parent_fq.clone(),
-            SegmentMoniker::from_string("ui:parent"),
-            rect_at(0.0, 0.0, 200.0, 200.0),
-            layer,
-            None,
-            HashMap::new(),
-        );
-
-        let scope = registry.scope(&parent_fq).expect("scope still registered");
-        assert_eq!(
-            scope.last_focused.as_ref(),
-            Some(&child_fq),
-            "re-register should preserve last_focused for placeholder/real-mount swap"
-        );
-    }
-
-    /// The unregister path **must** call `handle_unregister` BEFORE
-    /// `unregister_scope` so the focus tracker can read the lost entry's
-    /// metadata. We verify the ordering by registering two leaves,
-    /// focusing one, unregistering it, and asserting:
-    ///
-    /// 1. A `focus-changed` event was produced (proves
-    ///    `handle_unregister` saw the lost entry's metadata).
-    /// 2. The lost FQM is no longer in the registry (proves
-    ///    `unregister_scope` ran).
-    /// 3. The fallback target is the surviving sibling (proves the
-    ///    fallback resolver had the metadata it needed).
-    #[test]
-    fn spatial_unregister_calls_handle_unregister_before_unregister_scope() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let (k1, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:01",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-        let (k2, m2) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:02",
-            rect_at(20.0, 0.0, 10.0, 10.0),
-        );
-
-        // Focus k1, then unregister it — fallback should pick k2.
-        state.focus(&mut registry, k1.clone()).expect("focus k1");
-
-        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &k1)
-            .expect("unregistering the focused scope must produce a focus-changed event");
-
-        assert_eq!(event.prev_fq, Some(k1.clone()));
-        assert_eq!(event.next_fq, Some(k2.clone()));
-        assert_eq!(event.next_segment, Some(m2));
-        assert!(
-            registry.scope(&k1).is_none(),
-            "unregister_scope ran after handle_unregister"
-        );
-        assert!(
-            registry.scope(&k2).is_some(),
-            "sibling survives the unregister"
-        );
-    }
-
-    /// Unregister with no focus claim is a no-op at the focus-tracker
-    /// layer but still removes the scope from the registry.
-    /// Verifies the inner helper does not panic when there is no
-    /// focus to fall back from.
-    #[test]
-    fn spatial_unregister_unfocused_scope_is_noop_event_wise() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (fq, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:01",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-
-        let event = spatial_unregister_scope_inner(&mut registry, &mut state, &fq);
-        assert!(
-            event.is_none(),
-            "unregistering an unfocused scope produces no event"
-        );
-        assert!(
-            registry.scope(&fq).is_none(),
-            "scope is still removed from the registry"
-        );
-    }
-
-    /// `spatial_navigate(Down)` from the top leaf moves focus to the
-    /// bottom leaf in the same zone. Exercises the full kernel pipeline:
-    /// `BeamNavStrategy::next` resolves the FQM, `navigate_with` updates
-    /// the per-window slot, and `focus` emits the transition.
-    #[test]
-    fn spatial_navigate_down_moves_focus_to_below_neighbor() {
-        let mut registry = SpatialRegistry::new();
-        let mut state = SpatialState::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let (top, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:top",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-        let (bottom, m_bottom) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:bottom",
-            rect_at(0.0, 20.0, 10.0, 10.0),
-        );
-
-        state.focus(&mut registry, top.clone()).expect("focus top");
-        let strategy = BeamNavStrategy::new();
-        let event = state
-            .navigate_with(&mut registry, &strategy, top.clone(), Direction::Down)
-            .expect("Down from top hits bottom");
-
-        assert_eq!(event.prev_fq, Some(top));
-        assert_eq!(event.next_fq, Some(bottom));
-        assert_eq!(event.next_segment, Some(m_bottom));
-    }
-
     /// A snapshot mirroring the registry's scope set lands on the same
     /// target as the registry path. Pinned regression for the parity
     /// invariant the cutover relies on.
     #[test]
     fn spatial_navigate_with_snapshot_matches_registry_target() {
-        use swissarmyhammer_focus::SnapshotScope;
+        use swissarmyhammer_focus::{BeamNavStrategy, SnapshotScope};
 
         let mut registry = SpatialRegistry::new();
         let mut state_a = SpatialState::new();
@@ -3649,185 +3124,6 @@ mod spatial_command_tests {
         assert_eq!(snapshot_event.next_fq, Some(bottom.clone()));
         assert_eq!(registry_event.next_fq, Some(bottom));
         assert_eq!(snapshot_event.next_fq, registry_event.next_fq);
-    }
-
-    /// A snapshot whose rect for the off-axis neighbor is rewritten so
-    /// the snapshot path picks a different target than the registry
-    /// path triggers `tracing::warn!` from the dev-mode divergence
-    /// check, with the focused FQM, both target FQMs, and the layer FQM
-    /// in structured fields.
-    #[cfg(debug_assertions)]
-    #[test]
-    fn check_navigate_divergence_warns_on_target_mismatch() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
-        use swissarmyhammer_focus::SnapshotScope;
-        use tracing::{
-            field::{Field, Visit},
-            span::Attributes,
-            Event, Id, Level, Subscriber,
-        };
-        use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
-
-        #[derive(Debug, Default, Clone)]
-        struct CapturedEvent {
-            level: Option<Level>,
-            message: String,
-            fields: HashMap<String, String>,
-        }
-
-        struct FieldVisitor<'a> {
-            fields: &'a mut HashMap<String, String>,
-            message: &'a mut String,
-        }
-
-        impl<'a> Visit for FieldVisitor<'a> {
-            fn record_str(&mut self, field: &Field, value: &str) {
-                if field.name() == "message" {
-                    self.message.push_str(value);
-                } else {
-                    self.fields
-                        .insert(field.name().to_string(), value.to_string());
-                }
-            }
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    self.message.push_str(&format!("{value:?}"));
-                } else {
-                    self.fields
-                        .insert(field.name().to_string(), format!("{value:?}"));
-                }
-            }
-        }
-
-        struct CapturingLayer {
-            events: Arc<Mutex<Vec<CapturedEvent>>>,
-        }
-
-        impl<S> Layer<S> for CapturingLayer
-        where
-            S: Subscriber + for<'a> LookupSpan<'a>,
-        {
-            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-                let level = *event.metadata().level();
-                if level > Level::WARN {
-                    return;
-                }
-                let mut captured = CapturedEvent {
-                    level: Some(level),
-                    ..CapturedEvent::default()
-                };
-                let mut visitor = FieldVisitor {
-                    fields: &mut captured.fields,
-                    message: &mut captured.message,
-                };
-                event.record(&mut visitor);
-                self.events.lock().unwrap().push(captured);
-            }
-            fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
-        }
-
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (top, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:top",
-            rect_at(0.0, 0.0, 10.0, 10.0),
-        );
-        let (bottom, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:bottom",
-            rect_at(0.0, 20.0, 10.0, 10.0),
-        );
-        let (right_neighbor, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "task:right",
-            rect_at(40.0, 100.0, 10.0, 10.0),
-        );
-
-        // Build a snapshot whose `bottom` rect lies off to the right
-        // (out of the cardinal-Down half-plane), so the snapshot path
-        // picks `right_neighbor` while the registry path still picks
-        // `bottom`.
-        let snapshot = NavSnapshot {
-            layer_fq: layer.clone(),
-            scopes: vec![
-                SnapshotScope {
-                    fq: top.clone(),
-                    rect: rect_at(0.0, 0.0, 10.0, 10.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-                SnapshotScope {
-                    fq: bottom.clone(),
-                    rect: rect_at(500.0, 500.0, 10.0, 10.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-                SnapshotScope {
-                    fq: right_neighbor.clone(),
-                    rect: rect_at(0.0, 30.0, 10.0, 10.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-            ],
-        };
-
-        let events = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
-        let layer_capture = CapturingLayer {
-            events: events.clone(),
-        };
-        let subscriber = tracing_subscriber::registry().with(layer_capture);
-        tracing::subscriber::with_default(subscriber, || {
-            check_navigate_divergence(&registry, &snapshot, &top, Direction::Down);
-        });
-
-        let captured = events.lock().unwrap().clone();
-        let divergence_events: Vec<_> = captured
-            .iter()
-            .filter(|e| {
-                e.fields
-                    .get("op")
-                    .map(|v| v == "spatial_navigate.divergence")
-                    .unwrap_or(false)
-            })
-            .collect();
-        assert_eq!(
-            divergence_events.len(),
-            1,
-            "expected exactly one divergence event, got {captured:?}"
-        );
-        let event = divergence_events[0];
-        assert_eq!(event.level, Some(Level::WARN));
-        let snapshot_field = event
-            .fields
-            .get("snapshot")
-            .expect("divergence warn carries snapshot field");
-        let registry_field = event
-            .fields
-            .get("registry")
-            .expect("divergence warn carries registry field");
-        assert!(
-            registry_field.contains(bottom.as_str()),
-            "registry target FQM appears in registry field; got {registry_field}",
-        );
-        assert!(
-            snapshot_field.contains(right_neighbor.as_str()),
-            "snapshot target FQM appears in snapshot field; got {snapshot_field}",
-        );
-        assert!(
-            event
-                .message
-                .contains("spatial-nav snapshot/registry divergence"),
-            "warn message identifies the divergence; got {:?}",
-            event.message,
-        );
-        // Suppress unused warnings — `top` and `layer` are kept to
-        // document the registry shape that triggered the divergence.
-        let _ = (&top, &layer);
     }
 
     /// `spatial_push_layer_inner` derives `window_label` from the calling
@@ -3906,16 +3202,16 @@ mod spatial_command_tests {
             "zone:01",
             rect_at(0.0, 0.0, 100.0, 100.0),
         );
-        spatial_register_scope_inner(
-            &mut registry_a,
-            FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01")),
-            SegmentMoniker::from_string("leaf:01"),
-            rect_at(10.0, 10.0, 10.0, 10.0),
-            layer.clone(),
-            Some(zone.clone()),
-            HashMap::new(),
-        );
         let leaf = FullyQualifiedMoniker::compose(&layer, &SegmentMoniker::from_string("leaf:01"));
+        registry_a.register_scope(swissarmyhammer_focus::FocusScope {
+            fq: leaf.clone(),
+            segment: SegmentMoniker::from_string("leaf:01"),
+            rect: rect_at(10.0, 10.0, 10.0, 10.0),
+            layer_fq: layer.clone(),
+            parent_zone: Some(zone.clone()),
+            last_focused: None,
+            overrides: HashMap::new(),
+        });
 
         let snapshot = NavSnapshot {
             layer_fq: layer.clone(),
@@ -4126,217 +3422,5 @@ mod spatial_command_tests {
             Some(&parent_leaf),
             "round-trip leaves focus_by_window in the same state a single-call commit would",
         );
-    }
-
-    /// `check_focus_divergence` compares the registry-walk and
-    /// snapshot-walk `parent_zone` chains; a snapshot whose chain
-    /// differs from the registry's triggers the dev-mode `tracing::warn!`
-    /// with the focused FQM, layer FQM, and both chains in structured
-    /// fields.
-    #[cfg(debug_assertions)]
-    #[test]
-    fn check_focus_divergence_warns_on_chain_mismatch() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
-        use swissarmyhammer_focus::SnapshotScope;
-        use tracing::{
-            field::{Field, Visit},
-            span::Attributes,
-            Event, Id, Level, Subscriber,
-        };
-        use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
-
-        #[derive(Debug, Default, Clone)]
-        struct CapturedEvent {
-            level: Option<Level>,
-            message: String,
-            fields: HashMap<String, String>,
-        }
-
-        struct FieldVisitor<'a> {
-            fields: &'a mut HashMap<String, String>,
-            message: &'a mut String,
-        }
-
-        impl<'a> Visit for FieldVisitor<'a> {
-            fn record_str(&mut self, field: &Field, value: &str) {
-                if field.name() == "message" {
-                    self.message.push_str(value);
-                } else {
-                    self.fields
-                        .insert(field.name().to_string(), value.to_string());
-                }
-            }
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    self.message.push_str(&format!("{value:?}"));
-                } else {
-                    self.fields
-                        .insert(field.name().to_string(), format!("{value:?}"));
-                }
-            }
-        }
-
-        struct CapturingLayer {
-            events: Arc<Mutex<Vec<CapturedEvent>>>,
-        }
-
-        impl<S> Layer<S> for CapturingLayer
-        where
-            S: Subscriber + for<'a> LookupSpan<'a>,
-        {
-            fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-                let level = *event.metadata().level();
-                if level > Level::WARN {
-                    return;
-                }
-                let mut captured = CapturedEvent {
-                    level: Some(level),
-                    ..CapturedEvent::default()
-                };
-                let mut visitor = FieldVisitor {
-                    fields: &mut captured.fields,
-                    message: &mut captured.message,
-                };
-                event.record(&mut visitor);
-                self.events.lock().unwrap().push(captured);
-            }
-            fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
-        }
-
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-        let (zone, _) = register_leaf(
-            &mut registry,
-            &layer,
-            "zone:01",
-            rect_at(0.0, 0.0, 100.0, 100.0),
-        );
-        let leaf_segment = SegmentMoniker::from_string("leaf:01");
-        let leaf = FullyQualifiedMoniker::compose(&layer, &leaf_segment);
-        spatial_register_scope_inner(
-            &mut registry,
-            leaf.clone(),
-            leaf_segment,
-            rect_at(10.0, 10.0, 10.0, 10.0),
-            layer.clone(),
-            Some(zone.clone()),
-            HashMap::new(),
-        );
-
-        // Snapshot rewrites the leaf's parent_zone to None, so the
-        // snapshot walk yields an empty chain while the registry walk
-        // visits `zone`.
-        let snapshot = NavSnapshot {
-            layer_fq: layer.clone(),
-            scopes: vec![
-                SnapshotScope {
-                    fq: zone.clone(),
-                    rect: rect_at(0.0, 0.0, 100.0, 100.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-                SnapshotScope {
-                    fq: leaf.clone(),
-                    rect: rect_at(10.0, 10.0, 10.0, 10.0),
-                    parent_zone: None,
-                    nav_override: HashMap::new(),
-                },
-            ],
-        };
-
-        let events = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
-        let layer_capture = CapturingLayer {
-            events: events.clone(),
-        };
-        let subscriber = tracing_subscriber::registry().with(layer_capture);
-        tracing::subscriber::with_default(subscriber, || {
-            check_focus_divergence(&registry, &snapshot, &leaf);
-        });
-
-        let captured = events.lock().unwrap().clone();
-        let divergence_events: Vec<_> = captured
-            .iter()
-            .filter(|e| {
-                e.fields
-                    .get("op")
-                    .map(|v| v == "spatial_focus.divergence")
-                    .unwrap_or(false)
-            })
-            .collect();
-        assert_eq!(
-            divergence_events.len(),
-            1,
-            "expected exactly one divergence event, got {captured:?}"
-        );
-        let event = divergence_events[0];
-        assert_eq!(event.level, Some(Level::WARN));
-        let snapshot_field = event
-            .fields
-            .get("snapshot")
-            .expect("divergence warn carries snapshot field");
-        let registry_field = event
-            .fields
-            .get("registry")
-            .expect("divergence warn carries registry field");
-        assert!(
-            registry_field.contains(zone.as_str()),
-            "registry chain visits the zone FQM; got {registry_field}",
-        );
-        assert_eq!(
-            snapshot_field, "[]",
-            "snapshot chain is empty when leaf has no parent_zone in the snapshot",
-        );
-        assert!(
-            event
-                .message
-                .contains("spatial-nav snapshot/registry divergence"),
-            "warn message identifies the divergence; got {:?}",
-            event.message,
-        );
-        // Document the layer the divergence happened in for future
-        // triage.
-        let _ = (&leaf, &layer);
-    }
-
-    /// `spatial_register_batch_inner` applies a vector of `RegisterEntry`
-    /// values. The wire path is
-    /// `spatial_register_batch` → `spatial_register_batch_inner` →
-    /// `SpatialRegistry::apply_batch`; this test exercises the inner half
-    /// to prove the adapter forwards the call without mutating the
-    /// payload. After the kernel's scope/zone collapse the batch path
-    /// has a single primitive type, so every entry is registered through
-    /// `register_scope` in input order.
-    #[test]
-    fn spatial_register_batch_inner_registers_all_entries() {
-        let mut registry = SpatialRegistry::new();
-        let layer = push_root_layer(&mut registry, "main", "L");
-
-        let s1 = compose_fq(&layer, "task:01");
-        let s2 = compose_fq(&layer, "ui:button");
-
-        let entries = vec![
-            RegisterEntry {
-                fq: s1.clone(),
-                segment: SegmentMoniker::from_string("task:01"),
-                rect: rect_at(0.0, 0.0, 10.0, 10.0),
-                layer_fq: layer.clone(),
-                parent_zone: None,
-                overrides: HashMap::new(),
-            },
-            RegisterEntry {
-                fq: s2.clone(),
-                segment: SegmentMoniker::from_string("ui:button"),
-                rect: rect_at(20.0, 0.0, 10.0, 10.0),
-                layer_fq: layer,
-                parent_zone: None,
-                overrides: HashMap::new(),
-            },
-        ];
-
-        spatial_register_batch_inner(&mut registry, entries);
-
-        assert!(registry.is_registered(&s1), "first batch entry registered");
-        assert!(registry.is_registered(&s2), "second batch entry registered");
     }
 }

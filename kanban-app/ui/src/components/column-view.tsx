@@ -1,18 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
-import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { invoke } from "@tauri-apps/api/core";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
-import { useParentFocusScope } from "@/components/focus-scope-context";
 import { Inspectable } from "@/components/inspectable";
 import { Pressable } from "@/components/pressable";
-import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
-import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -23,12 +19,7 @@ import { useSchema } from "@/lib/schema-context";
 import { useFocusActions } from "@/lib/entity-focus-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
-import {
-  asPixels,
-  asSegment,
-  composeFq,
-  type FullyQualifiedMoniker,
-} from "@/types/spatial";
+import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 
 /**
  * Props for {@link ColumnView} — one column in the kanban board.
@@ -197,268 +188,6 @@ function useColumnLayout(props: ColumnViewProps): ColumnLayout {
     [tasks, column.id],
   );
   return { zones };
-}
-
-// ---------------------------------------------------------------------------
-// Placeholder FQMs — composed from each task's segment under the column FQ
-// ---------------------------------------------------------------------------
-
-/**
- * Compute the placeholder FQM for each off-screen task.
- *
- * Path-monikers identity makes per-task `SpatialKey` minting unnecessary:
- * the FQM IS the kernel's identifier, derived deterministically from the
- * task's segment and the enclosing column zone's FQM. Re-registration
- * across scroll-window changes hits the same key, so the kernel's
- * `apply_batch` overwrites the rect without disturbing `last_focused`.
- *
- * Returns a map of `taskId → FullyQualifiedMoniker`. Callers should not
- * mutate it.
- */
-function useTaskPlaceholderFqs(
-  tasks: Entity[],
-  columnFq: FullyQualifiedMoniker | null,
-): Map<string, FullyQualifiedMoniker> {
-  return useMemo(() => {
-    const map = new Map<string, FullyQualifiedMoniker>();
-    if (columnFq === null) return map;
-    for (const task of tasks) {
-      map.set(task.id, composeFq(columnFq, asSegment(task.moniker)));
-    }
-    return map;
-  }, [tasks, columnFq]);
-}
-
-// ---------------------------------------------------------------------------
-// useVisibleIndexSet — Set of indices currently in the virtualizer's window
-// ---------------------------------------------------------------------------
-
-/**
- * Read the set of task indices currently in the virtualizer's visible
- * window.
- *
- * Excludes the trailing-zone pseudo-index (`vi.index === taskCount`) so the
- * placeholder hook only sees real-task indices. The returned set is
- * recomputed when the virtualizer's range changes — `getVirtualItems()` is
- * stable across re-renders that don't shift the window, so the dependent
- * `useEffect` in `usePlaceholderRegistration` only fires on real
- * scroll-window changes.
- */
-function useVisibleIndexSet<T extends Element>(
-  virtualizer: Virtualizer<T, Element>,
-  taskCount: number,
-): Set<number> {
-  const items = virtualizer.getVirtualItems();
-  return useMemo(() => {
-    const set = new Set<number>();
-    for (const vi of items) {
-      if (vi.index < taskCount) set.add(vi.index);
-    }
-    return set;
-    // `items` identity is stable across renders that don't change the
-    // window, which is exactly the cache-key we want.
-  }, [items, taskCount]);
-}
-
-// ---------------------------------------------------------------------------
-// usePlaceholderRegistration — register Vec<RegisterEntry> for off-screen rows
-// ---------------------------------------------------------------------------
-
-/** Inputs for `usePlaceholderRegistration`. */
-interface PlaceholderRegistrationInputs {
-  tasks: Entity[];
-  /** FQM map keyed by task ID — composed once per task list. */
-  taskFqs: Map<string, FullyQualifiedMoniker>;
-  /** Set of indices currently in the virtualizer's visible window. */
-  visibleIndices: Set<number>;
-  /** Layer this column lives in, or `null` outside the spatial-nav stack. */
-  layerFq: FullyQualifiedMoniker | null;
-  /** Enclosing zone (the column's own zone), or `null` when the column is
-   *  at the layer root. */
-  parentZone: FullyQualifiedMoniker | null;
-  /** The scrollable container — used to derive a sensible placeholder rect. */
-  scrollEl: HTMLDivElement | null;
-  /**
-   * Current scroll offset reported by the virtualizer. Subtracted from
-   * placeholder y-coordinates so placeholder rects share the viewport
-   * coordinate frame that real-mounted card rects use (their rects come
-   * from `getBoundingClientRect()`, which is viewport-relative). Without
-   * this, an above-viewport placeholder would land at the visible top
-   * edge while a real card on the same content row also sits there —
-   * beam search would see overlapping rects in completely different
-   * "rows" and pick wrong candidates.
-   *
-   * `null` when the virtualizer hasn't observed an offset yet (first
-   * render before the scroll observer fires). Treated as `0`.
-   */
-  scrollOffset: number | null;
-}
-
-/**
- * Wire-shape companion to the Rust `RegisterEntry::Scope` enum variant.
- *
- * Mirrors the kernel-side `#[serde(tag = "kind", rename_all = "snake_case")]`
- * discriminator. Task placeholders register as `Scope` (matching the
- * kind that `EntityCard` uses for its own `<FocusScope>` leaf) so
- * kind-stability holds when the real mount eventually overwrites the
- * placeholder. Cards must be leaves so the unified cascade's iter-0 /
- * iter-1 trajectory works as the user expects (iter 0 finds in-column
- * card peers; iter 1 escalates to the card's parent column zone and
- * lands on the neighbouring column zone). See the docstring on
- * `<EntityCard>` and the kernel test
- * `cross_zone_realistic_board_right_from_card_in_a_lands_on_column_b_zone`.
- */
-interface ScopeRegisterEntry {
-  fq: FullyQualifiedMoniker;
-  segment: string;
-  rect: { x: number; y: number; width: number; height: number };
-  layer_fq: FullyQualifiedMoniker;
-  parent_zone: FullyQualifiedMoniker | null;
-  overrides: Record<string, never>;
-}
-
-/**
- * Register placeholder zones for off-screen tasks via
- * `spatial_register_batch`, and unregister placeholders for tasks that
- * have just become visible.
- *
- * Why placeholders exist: the virtualizer only mounts cards in the visible
- * window, so without placeholders the spatial graph has no entries below
- * (or above) the visible range and `nav.down` past the last visible row
- * dead-ends. Placeholders give the navigator candidate rectangles for
- * every task — when nav lands on a placeholder the column scrolls to
- * bring the real card into view (caller responsibility — that wiring sits
- * outside this hook).
- *
- * Idempotency: the kernel's `apply_batch` is idempotent on `SpatialKey` —
- * re-registering an existing key overwrites its rect and preserves any
- * `last_focused` slot. Re-running this hook on every scroll is therefore
- * cheap; the only real work is the IPC round-trip.
- *
- * Parallel-safety: when the spatial-nav stack is absent (`layerKey ===
- * null`, e.g. a unit test that does not mount `<SpatialFocusProvider>`),
- * the hook is a no-op so column-view renders without crashing in those
- * tests.
- */
-function usePlaceholderRegistration(inputs: PlaceholderRegistrationInputs) {
-  const {
-    tasks,
-    taskFqs,
-    visibleIndices,
-    layerFq,
-    parentZone,
-    scrollEl,
-    scrollOffset,
-  } = inputs;
-  const spatial = useOptionalSpatialFocusActions();
-
-  // Track each registered placeholder as `(taskId → FullyQualifiedMoniker)`
-  // so the unregister path is self-contained even if the surrounding
-  // `taskFqs` map has dropped a deleted task's entry by the time this
-  // effect runs.
-  const registeredRef = useRef<Map<string, FullyQualifiedMoniker>>(new Map());
-
-  useEffect(() => {
-    // Outside the spatial-nav stack — nothing to register against. Bail
-    // out early; the tests that mount column-view without a provider hit
-    // this path and stay quiet.
-    if (!spatial || !layerFq) return;
-
-    // Build the placeholder set for the current off-screen tasks, plus
-    // the wire-format batch entries to ship across the IPC boundary.
-    const wantPlaceholder = new Map<string, FullyQualifiedMoniker>();
-    const offScreen: ScopeRegisterEntry[] = [];
-
-    // Skip entirely when we don't have a real scroll element to anchor
-    // off — the next render will refire this effect once the ref
-    // attaches. Using a fake fallback rect would mislead beam search
-    // (real-mounted cards use viewport-relative rects from
-    // `getBoundingClientRect()`, so a fabricated one risks colliding).
-    const rect = scrollEl?.getBoundingClientRect();
-    if (rect) {
-      const baseX = rect.x;
-      const baseY = rect.y;
-      const width = rect.width;
-      // `scrollOffset` is the virtualizer's content-y of the visible
-      // top edge. Real cards' rects come from `getBoundingClientRect()`
-      // which is viewport-relative — they live at viewport-y `baseY +
-      // (item.start - scrollOffset)`. Mirror that for placeholders so
-      // both systems share one coordinate frame: `baseY + i * H -
-      // scrollOffset`. Without this subtraction, an above-viewport
-      // placeholder would land at `baseY` (the visible top edge) while
-      // a real card on row 50 also sits near `baseY` — beam search
-      // would see overlapping rects in completely different "rows".
-      const offset = scrollOffset ?? 0;
-
-      for (let i = 0; i < tasks.length; i++) {
-        if (visibleIndices.has(i)) continue;
-        const task = tasks[i];
-        const fq = taskFqs.get(task.id);
-        if (!fq) continue;
-        wantPlaceholder.set(task.id, fq);
-        offScreen.push({
-          fq,
-          segment: task.moniker,
-          rect: {
-            x: asPixels(baseX),
-            y: asPixels(baseY + i * ESTIMATED_ITEM_HEIGHT - offset),
-            width: asPixels(width),
-            height: asPixels(ESTIMATED_ITEM_HEIGHT),
-          },
-          layer_fq: layerFq,
-          parent_zone: parentZone,
-          overrides: {},
-        });
-      }
-    }
-
-    // Unregister placeholders that should no longer exist — IDs that
-    // either became visible (real card now owns the FQM) or left the
-    // task list. Done before the batch register so the kernel sees the
-    // unregisters first if the same FQM is being recycled.
-    const previouslyRegistered = registeredRef.current;
-    for (const [id, fq] of previouslyRegistered) {
-      if (wantPlaceholder.has(id)) continue;
-      spatial.unregisterScope(fq).catch((err) => {
-        console.error("[column-view] placeholder unregister failed", err);
-      });
-    }
-
-    // Register / refresh placeholders for the current off-screen set.
-    // Sent as one IPC round-trip so twenty placeholders collapse into a
-    // single registry lock.
-    if (offScreen.length > 0) {
-      invoke("spatial_register_batch", { entries: offScreen }).catch((err) => {
-        console.error("[column-view] placeholder batch register failed", err);
-      });
-    }
-
-    registeredRef.current = wantPlaceholder;
-  }, [
-    tasks,
-    taskFqs,
-    visibleIndices,
-    layerFq,
-    parentZone,
-    scrollEl,
-    scrollOffset,
-    spatial,
-  ]);
-
-  // Unregister every live placeholder when the column unmounts so a torn
-  // column does not leak stale entries into the registry.
-  useEffect(() => {
-    const registered = registeredRef;
-    return () => {
-      if (!spatial) return;
-      for (const [, fq] of registered.current) {
-        spatial.unregisterScope(fq).catch((err) => {
-          console.error("[column-view] placeholder cleanup failed", err);
-        });
-      }
-      registered.current.clear();
-    };
-  }, [spatial]);
 }
 
 // ---------------------------------------------------------------------------
@@ -953,33 +682,6 @@ function VirtualColumn(props: VirtualColumnProps) {
     estimateSize: (i) =>
       i < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT,
     overscan: 5,
-  });
-
-  // Spatial-nav placeholder wiring. Off-screen rows have no mounted
-  // primitives, so without placeholders the spatial graph dead-ends at the
-  // visible window. The placeholder FQMs are composed deterministically
-  // from each task's segment under the column's FQM, so re-registers
-  // across scroll-window changes hit the same key and the kernel's
-  // idempotent `apply_batch` overwrites the rect without losing drill-
-  // out memory.
-  //
-  // Hooks live deep inside the column body (here, not on `<ColumnView>`)
-  // so they sit alongside the virtualizer they depend on — keeping the
-  // outer `<FocusScope>` wrap untouched (the FocusScope wrap was rewritten
-  // when `FocusScopeBody` was removed).
-  const layerFq = useOptionalEnclosingLayerFq();
-  const parentZone = useParentFocusScope();
-  const columnFq = useOptionalFullyQualifiedMoniker();
-  const taskFqs = useTaskPlaceholderFqs(tasks, columnFq);
-  const visibleIndices = useVisibleIndexSet(virtualizer, tasks.length);
-  usePlaceholderRegistration({
-    tasks,
-    taskFqs,
-    visibleIndices,
-    layerFq,
-    parentZone,
-    scrollEl: scrollRef.current,
-    scrollOffset: virtualizer.scrollOffset,
   });
 
   return (

@@ -420,15 +420,6 @@ describe("runNavWithScrollOnEdge", () => {
       clearFocus: todo(
         "clearFocus",
       ) as unknown as SpatialFocusActions["clearFocus"],
-      registerScope: todo(
-        "registerScope",
-      ) as unknown as SpatialFocusActions["registerScope"],
-      unregisterScope: todo(
-        "unregisterScope",
-      ) as unknown as SpatialFocusActions["unregisterScope"],
-      updateRect: todo(
-        "updateRect",
-      ) as unknown as SpatialFocusActions["updateRect"],
       navigate: vi.fn(async (fq, direction) => {
         state.calls.push({ fq, direction });
       }),

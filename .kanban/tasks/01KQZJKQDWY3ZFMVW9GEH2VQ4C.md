@@ -103,4 +103,4 @@ The same migration extends to the non-keyboard ops. Each existing dispatch site 
 
 - Use `/tdd` — write `spatial_decide_integration.rs` first against the new command signature; let it fail; implement `spatial_decide`; migrate the React call sites; re-run the eight motion-validation suites and the end-to-end test until green.
 
-#stateless-rebuild
+#stateless-rebuild #stateless-nav

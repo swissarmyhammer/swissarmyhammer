@@ -73,34 +73,11 @@ use super::types::{
 /// of the structural fields (`segment`, `layer_fq`, `parent_zone`,
 /// `overrides`).
 ///
-/// Same-shape re-registration is silent. The legitimate paths that hit
-/// this case repeatedly:
-///
-/// * **Virtualizer placeholder → real-mount swap.** The board column's
-///   `usePlaceholderRegistration` hook in `column-view.tsx` registers
-///   off-screen task FQMs as placeholder scopes via
-///   `spatial_register_batch`. When a task scrolls into view (or mounts
-///   on the first render after measurement) its `<EntityCard>`
-///   `<FocusScope>` registers at the same FQM with an identical
-///   structural shape — only the rect (placeholder estimate vs. real
-///   `getBoundingClientRect()`) differs. The placeholder hook
-///   unregisters its entry on the next render commit; in between, the
-///   kernel sees a same-shape re-register that is part of the
-///   intentional swap.
-///
-/// * **React StrictMode dev double-mount.** The `<FocusScope>` register
-///   effect runs, cleans up, and re-runs in a single mount under
-///   StrictMode. Both register IPCs ship with identical structural
-///   data; the cleanup's unregister IPC sits in between, so this is
-///   *normally* not even a duplicate at the kernel. But if any IPC
-///   reordering or batching causes the second register to land before
-///   the cleanup unregister, the kernel still sees a same-shape
-///   re-register.
-///
-/// * **ResizeObserver-driven rect refresh.** The same `<FocusScope>`
-///   re-fires its register effect when its dependency tuple shifts
-///   (e.g. `parent_zone` or `layer_fq` recomputed identically by
-///   context, but the React reconciler still re-runs the effect).
+/// Same-shape re-registration is silent. Kernel-internal callers that
+/// register at an already-occupied FQM with identical structural data
+/// simply refresh the entry's rect; only a real structural mismatch
+/// (different segment / layer / parent_zone / overrides) escalates
+/// to an error log.
 ///
 /// A genuine programmer mistake — two primitives whose composed paths
 /// collide with conflicting metadata (different segments, different
@@ -229,6 +206,7 @@ fn warn_overlap(payload: OverlapWarn<'_>) {
 ///
 /// Mirrors the same bound on the TS-side validator
 /// (`kanban-app/ui/src/lib/rect-validation.ts::LARGE_COORD_BOUND`).
+#[cfg(debug_assertions)]
 const LARGE_COORD_BOUND: f64 = 1_000_000.0;
 
 /// Multiplier used by [`SpatialRegistry::validate_coordinate_consistency`]
@@ -263,13 +241,12 @@ const COORDINATE_CONSISTENCY_MULTIPLIER: f64 = 10.0;
 ///     dims for `display: none`, just-mounted-but-not-yet-laid-out, and
 ///     detached nodes (and in test environments, jsdom-style flex/grid
 ///     containers commonly produce `width × 0` zones until the first
-///     layout pass). That's not a coordinate-system bug — it's "the
-///     registration `useEffect` ran before the first layout pass."
-///     Downgrades to a single `tracing::warn!` and continues.
+///     layout pass). Downgrades to a single `tracing::warn!` and
+///     continues.
 ///   - On `"update_rect"`, a zero in either dimension is a real error.
-///     Update fires from `ResizeObserver` and the ancestor-scroll
-///     listener, both of which run only after layout — a zero dim at
-///     this point means a persistent broken rect, not a transient one.
+///     Update is kernel-internal and only runs against entries the
+///     caller already laid out, so a zero dim signals a persistent
+///     broken rect rather than a transient pre-layout state.
 ///
 ///   Negative dims always stay in the error path: `getBoundingClientRect()`
 ///   never returns a negative width or height, so a negative dim is a
@@ -283,13 +260,13 @@ const COORDINATE_CONSISTENCY_MULTIPLIER: f64 = 10.0;
 /// observability, not enforcement, and the kernel must remain
 /// best-effort for unknown / torn input. The TS-side validator
 /// (`rect-validation.ts`) catches the same violations earlier in dev
-/// mode, so the kernel-side check is the safety net for IPC adapters
-/// or test fixtures that bypass the React tree.
+/// mode, so the kernel-side check is the safety net for callers that
+/// bypass the React tree.
 ///
 /// `op` is the caller op tag (`"register_scope"`, `"update_rect"`) —
-/// used as a structured tracing field so log readers can correlate the
-/// event back to the IPC adapter, AND as the dispatch key for the
-/// registration vs update zero-dim handling described above.
+/// used as a structured tracing field for log correlation AND as the
+/// dispatch key for the registration vs update zero-dim handling
+/// described above.
 fn validate_rect_invariants(op: &'static str, fq: &FullyQualifiedMoniker, rect: &Rect) {
     #[cfg(debug_assertions)]
     {
@@ -454,17 +431,13 @@ impl SpatialRegistry {
     /// Register a [`FocusScope`].
     ///
     /// Replaces any prior scope under the same FQM. Re-registration at
-    /// the same FQM is part of the normal lifecycle — the virtualizer's
-    /// placeholder→real-mount swap, React StrictMode dev-mode double
-    /// effects, scroll-into-view, and ResizeObserver-driven rect
-    /// refreshes all funnel through here repeatedly under the same
-    /// path. The registry treats those silently: same `(segment,
-    /// layer_fq, parent_zone, overrides)` tuple is a structural
-    /// no-op and only the `rect` is refreshed. Any pre-existing
+    /// the same FQM is part of the normal lifecycle: same `(segment,
+    /// layer_fq, parent_zone, overrides)` tuple is a structural no-op
+    /// and only the `rect` is refreshed. Any pre-existing
     /// `last_focused` slot on the prior registration — written by the
     /// kernel via [`Self::record_focus`] as focus moved through the
     /// scope — is preserved across the swap so drill-out memory
-    /// survives the placeholder / real-mount cycle.
+    /// survives the re-register.
     ///
     /// A *structural* duplicate — same FQM but a different
     /// `(segment, layer_fq, parent_zone, overrides)` tuple — IS a
@@ -483,9 +456,8 @@ impl SpatialRegistry {
         // next nav into the layer re-runs the consistency walk.
         self.validated_layers.remove(&f.layer_fq);
 
-        // Preserve any existing `last_focused` so a real-mount swap
-        // from a placeholder doesn't lose drill-out memory accumulated
-        // while the placeholder was live. The kernel writer
+        // Preserve any existing `last_focused` across a same-FQM
+        // re-register so drill-out memory survives. The kernel writer
         // (`record_focus`) populates this slot as focus moves; new
         // registrations start with whatever was passed in (typically
         // `None`).
@@ -668,14 +640,13 @@ impl SpatialRegistry {
 
     /// Update the bounding rect of a registered scope.
     ///
-    /// No-op if the FQM is unknown. Called from the React side via
-    /// `spatial_update_rect` when ResizeObserver fires.
+    /// Kernel-internal — no IPC adapter calls this. Slated for removal
+    /// alongside the rest of the kernel-resident scope replica.
+    /// No-op if the FQM is unknown.
     ///
     /// Emits the overlap `WARN` if the new rect lands the entry on
     /// top of another entry in the same layer. Per-key suppression
-    /// elides re-warnings while the same overlap pair persists —
-    /// `update_rect` fires every animation frame during scroll-tracking,
-    /// so without the gate every frame would re-emit.
+    /// elides re-warnings while the same overlap pair persists.
     pub fn update_rect(&mut self, fq: &FullyQualifiedMoniker, rect: Rect) {
         // Coordinate-system invariant check (debug-only). Validates
         // before the mutation so a bad rect surfaces in the log even
@@ -1147,10 +1118,10 @@ impl SpatialRegistry {
 
     /// Remove a layer from the registry.
     ///
-    /// No-op if the FQM is unknown. Does not cascade to scopes that name
-    /// this layer in their `layer_fq` — the React side unmounts those
-    /// scopes first via `spatial_unregister_scope`, so the registry
-    /// state remains consistent without a GC pass.
+    /// No-op if the FQM is unknown. Does not cascade to scopes that
+    /// name this layer in their `layer_fq` — the kernel-resident scope
+    /// replica is independent of layer membership for cleanup
+    /// purposes.
     pub fn remove_layer(&mut self, fq: &FullyQualifiedMoniker) {
         self.layers.remove(fq);
         // Drop the consistency-validated bit so a remounted layer is
@@ -1243,22 +1214,14 @@ impl SpatialRegistry {
     /// Apply a batch of [`RegisterEntry`] values to the registry under a
     /// single mutable borrow.
     ///
-    /// This is the headless counterpart to the Tauri
-    /// `spatial_register_batch` adapter. The virtualizer in
-    /// `kanban-app/ui/src/components/column-view.tsx` constructs a
-    /// `Vec<RegisterEntry>` (one entry per off-screen placeholder) and
-    /// ships it through a single IPC invoke; the adapter holds the
-    /// registry lock once and forwards the slice here.
-    ///
-    /// Iteration order is the order of the input vector. Successful
-    /// batches are atomic at the registry boundary — observers see
-    /// all-or-nothing.
+    /// Kernel utility — slated for removal alongside the rest of the
+    /// kernel-resident scope replica. Iteration order is the order of
+    /// the input vector. Successful batches are atomic at the registry
+    /// boundary — observers see all-or-nothing.
     pub fn apply_batch(&mut self, entries: Vec<RegisterEntry>) {
-        // Apply each entry. The registry's per-FQM overwrite semantics
-        // handle the placeholder→real-mount rect refresh transparently;
-        // scopes preserve their `last_focused` slot across re-registers
-        // (rather than resetting it on every virtualizer pass) so
-        // drill-out memory survives the swap.
+        // Apply each entry. Per-FQM overwrite semantics handle rect
+        // refreshes transparently; scopes preserve their `last_focused`
+        // slot across re-registers so drill-out memory survives.
         for entry in entries {
             let RegisterEntry {
                 fq,

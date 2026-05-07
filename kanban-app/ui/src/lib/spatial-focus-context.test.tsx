@@ -46,11 +46,10 @@ import {
 import { LayerScopeRegistry } from "./layer-scope-registry-context";
 import type {
   FocusChangedPayload,
-  Rect,
   FullyQualifiedMoniker,
   SegmentMoniker,
 } from "@/types/spatial";
-import { asFq, asSegment, asPixels } from "@/types/spatial";
+import { asFq, asSegment } from "@/types/spatial";
 
 /* ---- Helpers ---- */
 
@@ -141,40 +140,24 @@ describe("SpatialFocusProvider", () => {
     unmount();
   });
 
-  it("invokes spatial_register_scope with the full kernel-types record", async () => {
+  it("does not expose registerScope / unregisterScope / updateRect actions", async () => {
     const { result, unmount } = renderHook(() => useSpatialFocusActions(), {
       wrapper,
     });
     await flushListenSetup();
 
-    const key: FullyQualifiedMoniker = asFq("k1");
-    const moniker: SegmentMoniker = asSegment("task:01ABC");
-    const rect: Rect = {
-      x: asPixels(0),
-      y: asPixels(0),
-      width: asPixels(100),
-      height: asPixels(50),
-    };
-    const layerKey: FullyQualifiedMoniker = asFq("L1");
-    await act(async () => {
-      await result.current.registerScope(
-        key,
-        moniker,
-        rect,
-        layerKey,
-        null,
-        {},
-      );
-    });
-
-    expect(mockInvoke).toHaveBeenCalledWith("spatial_register_scope", {
-      fq: key,
-      segment: moniker,
-      rect,
-      layerFq: layerKey,
-      parentZone: null,
-      overrides: {},
-    });
+    // React no longer tells the kernel about scopes; the kernel sees
+    // scope state only via per-decision snapshots. The actions bag must
+    // therefore not surface entry points to the deleted IPCs.
+    expect(
+      (result.current as unknown as Record<string, unknown>).registerScope,
+    ).toBeUndefined();
+    expect(
+      (result.current as unknown as Record<string, unknown>).unregisterScope,
+    ).toBeUndefined();
+    expect(
+      (result.current as unknown as Record<string, unknown>).updateRect,
+    ).toBeUndefined();
 
     unmount();
   });

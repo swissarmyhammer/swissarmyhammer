@@ -1,126 +1,40 @@
-//! Comprehensive soak suite for the snapshot/registry parity invariant
-//! that backs the kanban-app `compare_paths` divergence diagnostic.
+//! Snapshot-path regression suite covering every production navigation
+//! scenario.
 //!
-//! Each test mirrors one of the production navigation scenarios listed
-//! in the spatial-nav redesign card and asserts the snapshot path and
-//! the registry path produce identical results — the same invariant the
-//! debug-build `check_navigate_divergence`, `check_focus_divergence`,
-//! and `check_focus_lost_divergence` adapters in `kanban-app/src/commands.rs`
-//! pin at the IPC boundary. A `tracing::subscriber::with_default` layer
-//! captures any `compare_paths` warns the parity computations might emit
-//! and asserts the captured set is empty for every scenario.
+//! The kernel sees scope state only via per-decision snapshots. This
+//! suite drives each production scenario through the snapshot path
+//! (`navigate_with_snapshot`, `focus_with_snapshot`, `focus_lost`) and
+//! asserts on the resulting `FocusChangedEvent` — focus targets,
+//! fallback resolutions, ancestor-walk side effects — not just absence
+//! of panic.
 //!
-//! Scenarios covered (every production nav scenario from the parent
-//! card 01KQTC1VNQM9KC90S65P7QX9N1):
+//! Scenarios covered:
 //!
-//! 1. Arrow nav across all four directions from every column position
-//!    on a multi-column board.
+//! 1. Arrow nav across all four directions from every position on a
+//!    multi-column board (every card finds at least one peer).
 //! 2. Click focus on every scope kind (chip, field, button, card,
-//!    column header).
-//! 3. Drag-drop a card between columns and nav from the moved card.
-//! 4. Filter changes that hide the focused row, with focus restoration.
-//! 5. Layer push (open inspector), nav inside, layer pop with focus
-//!    restoration.
-//! 6. Modal dialog push, focus inside, cancel, focus restored.
-//! 7. Bulk actions deleting multiple cards including the focused one.
-//!
-//! When divergence is found in any scenario, add the offending registry/
-//! snapshot pair as a regression test to this file rather than chasing
-//! the symptom in production logs.
+//!    column header) — each click emits an event with the expected
+//!    prev/next pair and writes through the ancestor walk.
+//! 3. Drag-drop a card between columns and nav from the moved card —
+//!    the click commits, the parent-zone walk records `last_focused`
+//!    on the new column, and left-nav crosses into the previous
+//!    column.
+//! 4. Filter changes that hide the focused row — `focus_lost`
+//!    cascades to a sibling.
+//! 5. Layer push (open inspector), nav inside, focus loss — fallback
+//!    stays inside the inspector layer.
+//! 6. Modal dialog push, focus inside, cancel — fallback resolves to
+//!    the surviving sibling inside the modal.
+//! 7. Bulk actions deleting multiple cards including the focused one
+//!    — fallback emits and prev_fq matches the deleted FQM.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use swissarmyhammer_focus::{
-    compare_paths, BeamNavStrategy, Direction, FocusLayer, FocusOverrides, FocusScope,
-    FullyQualifiedMoniker, IndexedSnapshot, LayerName, LostFocusContext, NavSnapshot, Pixels, Rect,
-    SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState, WindowLabel,
+    Direction, FocusLayer, FocusOverrides, FocusScope, FullyQualifiedMoniker, LayerName,
+    NavSnapshot, Pixels, Rect, SegmentMoniker, SnapshotScope, SpatialRegistry, SpatialState,
+    WindowLabel,
 };
-use tracing::{
-    field::{Field, Visit},
-    span::Attributes,
-    Event, Id, Level, Subscriber,
-};
-use tracing_subscriber::{layer::Context, prelude::*, registry::LookupSpan, Layer};
-
-// ---------------------------------------------------------------------------
-// Tracing capture — records every WARN event emitted while a closure runs
-// so the suite can assert no `compare_paths` divergence warns fired.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Default, Clone)]
-struct CapturedEvent {
-    fields: HashMap<String, String>,
-    message: String,
-}
-
-struct FieldVisitor<'a> {
-    fields: &'a mut HashMap<String, String>,
-    message: &'a mut String,
-}
-
-impl<'a> Visit for FieldVisitor<'a> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "message" {
-            self.message.push_str(value);
-        } else {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-    }
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.message.push_str(&format!("{value:?}"));
-        } else {
-            self.fields
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
-}
-
-struct CapturingLayer {
-    events: Arc<Mutex<Vec<CapturedEvent>>>,
-}
-
-impl<S> Layer<S> for CapturingLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let level = *event.metadata().level();
-        if level > Level::WARN {
-            return;
-        }
-        let mut captured = CapturedEvent::default();
-        let mut visitor = FieldVisitor {
-            fields: &mut captured.fields,
-            message: &mut captured.message,
-        };
-        event.record(&mut visitor);
-        self.events.lock().unwrap().push(captured);
-    }
-    fn on_new_span(&self, _attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {}
-}
-
-/// Run `f` under a tracing layer that captures WARN events; return the
-/// list of events whose `op` field starts with `spatial_` and whose
-/// message matches the `compare_paths` divergence shape.
-fn collect_divergence_warns<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
-    let events = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
-    let layer = CapturingLayer {
-        events: events.clone(),
-    };
-    let subscriber = tracing_subscriber::registry().with(layer);
-    tracing::subscriber::with_default(subscriber, f);
-    let captured = events.lock().unwrap().clone();
-    captured
-        .into_iter()
-        .filter(|e| {
-            e.message
-                .contains("spatial-nav snapshot/registry divergence")
-        })
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // Builders mirroring the kanban board's typical scope shape.
@@ -212,91 +126,6 @@ fn snapshot_excluding(
 }
 
 // ---------------------------------------------------------------------------
-// Parity helpers — duplicate the bodies of kanban-app's three
-// `check_*_divergence` adapters using only public APIs, so the soak
-// suite drives the real `compare_paths` on each scenario.
-// ---------------------------------------------------------------------------
-
-/// Drive the navigate diagnostic the same way `spatial_navigate` does in
-/// debug builds. Returns the snapshot result for chaining.
-fn drive_navigate_check(
-    registry: &SpatialRegistry,
-    snapshot: &NavSnapshot,
-    focused_fq: &FullyQualifiedMoniker,
-    direction: Direction,
-) -> Option<FullyQualifiedMoniker> {
-    use swissarmyhammer_focus::navigate::NavStrategy;
-    use swissarmyhammer_focus::pick_target_via_view;
-
-    let entry = registry.find_by_fq(focused_fq)?;
-    let focused_segment = entry.segment.clone();
-    let view = IndexedSnapshot::new(snapshot);
-    Some(compare_paths(
-        "spatial_navigate.divergence",
-        || pick_target_via_view(&view, focused_fq, &focused_segment, direction),
-        || BeamNavStrategy::new().next(registry, focused_fq, &focused_segment, direction),
-    ))
-}
-
-/// Drive the focus-ancestor diagnostic the same way `spatial_focus` does
-/// in debug builds.
-fn drive_focus_check(
-    registry: &SpatialRegistry,
-    snapshot: &NavSnapshot,
-    fq: &FullyQualifiedMoniker,
-) -> Vec<FullyQualifiedMoniker> {
-    let view = IndexedSnapshot::new(snapshot);
-    compare_paths(
-        "spatial_focus.divergence",
-        || -> Vec<FullyQualifiedMoniker> {
-            view.parent_zone_chain(fq).map(|s| s.fq.clone()).collect()
-        },
-        || -> Vec<FullyQualifiedMoniker> {
-            let mut chain = Vec::new();
-            let mut next = registry.find_by_fq(fq).and_then(|s| s.parent_zone.clone());
-            let mut visited = std::collections::HashSet::new();
-            while let Some(zone_fq) = next {
-                if !visited.insert(zone_fq.clone()) {
-                    break;
-                }
-                let Some(zone) = registry.find_by_fq(&zone_fq) else {
-                    break;
-                };
-                chain.push(zone.fq.clone());
-                next = zone.parent_zone.clone();
-            }
-            chain
-        },
-    )
-}
-
-/// Drive the focus-lost fallback diagnostic the same way
-/// `spatial_focus_lost` does in debug builds.
-#[allow(clippy::too_many_arguments)]
-fn drive_focus_lost_check(
-    registry: &SpatialRegistry,
-    spatial_state: &SpatialState,
-    snapshot: &NavSnapshot,
-    focused_fq: &FullyQualifiedMoniker,
-    lost_parent_zone: Option<&FullyQualifiedMoniker>,
-    lost_layer_fq: &FullyQualifiedMoniker,
-    lost_rect: Rect,
-) -> swissarmyhammer_focus::FallbackResolution {
-    let indexed = IndexedSnapshot::new(snapshot);
-    let ctx = LostFocusContext {
-        view: &indexed,
-        lost_layer_fq: lost_layer_fq.clone(),
-        lost_parent_zone: lost_parent_zone.cloned(),
-        lost_rect,
-    };
-    compare_paths(
-        "spatial_focus_lost.divergence",
-        || spatial_state.resolve_fallback_with_snapshot(registry, focused_fq, &ctx),
-        || spatial_state.resolve_fallback(registry, focused_fq),
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Scenario fixtures
 // ---------------------------------------------------------------------------
 
@@ -345,48 +174,54 @@ fn build_three_column_board() -> (
 // Scenario 1: arrow nav across all four directions from every position.
 // ---------------------------------------------------------------------------
 
-/// Soak the four-direction arrow nav from every card on a 3×3 board.
-/// Both paths must agree at every position; no divergence warn fires.
+/// Drive every cardinal direction from every card on a 3×3 board through
+/// the snapshot-driven nav path. Every card on the interior or edge has
+/// at least one navigable peer, so each card must produce a focus event
+/// for at least one direction.
 #[test]
 fn soak_arrow_nav_every_card_every_direction() {
     let (mut reg, layer_fq, _columns, cards) = build_three_column_board();
     let snapshot = snapshot_for_layer(&reg, &layer_fq);
 
-    let warns = collect_divergence_warns(|| {
-        for card in &cards {
-            let mut state = SpatialState::new();
-            state.focus(&mut reg, card.clone()).expect("focus card");
-            for direction in [
-                Direction::Up,
-                Direction::Down,
-                Direction::Left,
-                Direction::Right,
-            ] {
-                let _ = drive_navigate_check(&reg, &snapshot, card, direction);
+    for card in &cards {
+        let mut state = SpatialState::new();
+        state.focus(&mut reg, card.clone()).expect("focus card");
+        let mut moved_at_least_once = false;
+        for direction in [
+            Direction::Up,
+            Direction::Down,
+            Direction::Left,
+            Direction::Right,
+        ] {
+            // Snapshot-only path — never panics, returns a sensible
+            // result whether or not focus actually moved.
+            let event = state.navigate_with_snapshot(&mut reg, &snapshot, card.clone(), direction);
+            if event.is_some() {
+                moved_at_least_once = true;
             }
         }
-    });
-
-    assert!(
-        warns.is_empty(),
-        "soak_arrow_nav_every_card_every_direction produced divergence warns: {warns:?}",
-    );
+        assert!(
+            moved_at_least_once,
+            "every card on a 3x3 board has at least one direction with a peer; {card:?} found none",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Scenario 2: click focus on every scope kind.
 // ---------------------------------------------------------------------------
 
-/// Soak click-focus on each scope kind: chip, field, button, card,
-/// column header. Each click triggers a `record_focus` ancestor walk
-/// (the snapshot/registry parity that `check_focus_divergence` pins).
+/// Drive `focus_with_snapshot` on every scope kind: chip, field, button,
+/// card, column header. Each click commits focus on its target and runs
+/// the ancestor `record_focus` walk. The first click on a given window
+/// emits a `prev=None → next=Some(scope)` event; subsequent clicks emit
+/// a `prev=Some(prior) → next=Some(scope)` transition.
 #[test]
 fn soak_click_focus_every_scope_kind() {
     let mut reg = SpatialRegistry::new();
     let layer_fq = fq("/L");
     reg.push_layer(make_layer("/L", None, None));
 
-    // Column header at the top of a column zone.
     let col_fq = fq("/L/col:1");
     reg.register_scope(leaf(
         col_fq.as_str(),
@@ -404,7 +239,6 @@ fn soak_click_focus_every_scope_kind() {
         rect(0.0, 0.0, 200.0, 30.0),
     ));
 
-    // Card and its inner scopes (chip, field, button) under the column.
     let card_fq = fq("/L/col:1/card:01");
     reg.register_scope(leaf(
         card_fq.as_str(),
@@ -439,16 +273,30 @@ fn soak_click_focus_every_scope_kind() {
     ));
 
     let snapshot = snapshot_for_layer(&reg, &layer_fq);
+    let mut state = SpatialState::new();
 
-    let warns = collect_divergence_warns(|| {
-        for fq_to_click in [&col_header, &card_fq, &chip, &field, &button] {
-            let _ = drive_focus_check(&reg, &snapshot, fq_to_click);
-        }
-    });
-
+    let click_order = [&col_header, &card_fq, &chip, &field, &button];
+    let mut prev_fq: Option<FullyQualifiedMoniker> = None;
+    for fq_to_click in click_order {
+        let event = state
+            .focus_with_snapshot(&mut reg, &snapshot, fq_to_click.clone())
+            .expect("click commits focus and emits an event");
+        assert_eq!(event.next_fq.as_ref(), Some(fq_to_click));
+        assert_eq!(event.prev_fq, prev_fq);
+        // The ancestor walk records `last_focused` on this scope's
+        // parent_zone (when present) and on its layer.
+        let layer = reg.layer(&layer_fq).expect("layer present");
+        assert_eq!(layer.last_focused.as_ref(), Some(fq_to_click));
+        prev_fq = Some(fq_to_click.clone());
+    }
+    // After all clicks, the column zone records the deepest leaf — the
+    // ancestor walk has run on every click and the most recent descendant
+    // wins.
+    let col_entry = reg.find_by_fq(&col_fq).expect("col still registered");
+    let col_last = col_entry.last_focused.clone();
     assert!(
-        warns.is_empty(),
-        "soak_click_focus_every_scope_kind produced divergence warns: {warns:?}",
+        col_last.is_some(),
+        "ancestor walk records last_focused on the parent zone"
     );
 }
 
@@ -456,21 +304,17 @@ fn soak_click_focus_every_scope_kind() {
 // Scenario 3: drag-drop a card between columns; nav from the moved card.
 // ---------------------------------------------------------------------------
 
-/// Soak a card moving from one column to another. Post-move snapshot
-/// matches the post-move registry; nav from the moved card via either
-/// path picks the same target.
+/// Drag-drop scenario: relocate a card from one column to another.
+/// Click-focus on the moved card commits and writes through the new
+/// parent zone via the ancestor walk; left-nav crosses the column
+/// boundary into the previous column.
 #[test]
 fn soak_drag_drop_card_between_columns() {
     let (mut reg, layer_fq, _columns, _cards) = build_three_column_board();
 
-    // Simulate the drag-drop: relocate /L/col:0/card:0-1 into col:2 by
-    // updating its rect and parent_zone. The kernel's stateless rewrite
-    // is registry.update_rect + a re-register with new parent_zone.
     let moved_old = fq("/L/col:0/card:0-1");
     let moved_new = fq("/L/col:2/card:moved");
-    // Drop the old slot.
     reg.unregister_scope(&moved_old);
-    // Register at the new location.
     reg.register_scope(leaf(
         moved_new.as_str(),
         "card:moved",
@@ -480,29 +324,31 @@ fn soak_drag_drop_card_between_columns() {
     ));
 
     let snapshot = snapshot_for_layer(&reg, &layer_fq);
+    let mut state = SpatialState::new();
 
-    let warns = collect_divergence_warns(|| {
-        let mut state = SpatialState::new();
-        state
-            .focus(&mut reg, moved_new.clone())
-            .expect("focus moved card");
+    // Click-focus on the moved card via the snapshot path — exercises
+    // the ancestor walk through the new parent zone. `record_focus`
+    // walks the snapshot's parent_zone chain and dual-writes into
+    // `last_focused_by_fq`.
+    let click = state
+        .focus_with_snapshot(&mut reg, &snapshot, moved_new.clone())
+        .expect("snapshot click on moved card emits an event");
+    assert_eq!(click.next_fq.as_ref(), Some(&moved_new));
+    let new_zone = fq("/L/col:2");
+    assert_eq!(
+        reg.last_focused_by_fq.get(&new_zone),
+        Some(&moved_new),
+        "ancestor walk records last_focused on the new parent zone",
+    );
 
-        // Nav from the moved card in every direction.
-        for direction in [
-            Direction::Up,
-            Direction::Down,
-            Direction::Left,
-            Direction::Right,
-        ] {
-            let _ = drive_navigate_check(&reg, &snapshot, &moved_new, direction);
-        }
-        // Ancestor walk on the moved card (now under col:2).
-        let _ = drive_focus_check(&reg, &snapshot, &moved_new);
-    });
-
+    // Left-from-col-2 should land in col-1 (any of /L/col:1/card:1-*).
+    let left = state
+        .navigate_with_snapshot(&mut reg, &snapshot, moved_new.clone(), Direction::Left)
+        .expect("left from col 2 has a peer in col 1");
+    let left_target = left.next_fq.expect("event has a next target");
     assert!(
-        warns.is_empty(),
-        "soak_drag_drop_card_between_columns produced divergence warns: {warns:?}",
+        left_target.as_str().starts_with("/L/col:1/"),
+        "left nav crosses column boundary: {left_target:?}",
     );
 }
 
@@ -510,39 +356,35 @@ fn soak_drag_drop_card_between_columns() {
 // Scenario 4: filter changes that hide the focused row; focus restored.
 // ---------------------------------------------------------------------------
 
-/// Soak a filter change that unmounts the focused card. The snapshot
-/// path's `focus_lost` and the registry path's `handle_unregister` resolve
-/// the same fallback target.
+/// Filter scenario: a filter change hides the focused card. The
+/// snapshot excludes the lost FQM. The kernel's `focus_lost` cascade
+/// picks a fallback target and emits an event whose `prev_fq` matches
+/// the lost card.
 #[test]
 fn soak_filter_hides_focused_row_focus_restored() {
     let (mut reg, layer_fq, _columns, cards) = build_three_column_board();
-    // Focus a middle card.
     let focused = cards[4].clone(); // /L/col:1/card:1-1
     let mut state = SpatialState::new();
     state.focus(&mut reg, focused.clone()).expect("focus");
 
-    // The filter hides this card — React's registry deletes it before
-    // dispatching focus_lost; build the snapshot accordingly.
     let snapshot = snapshot_excluding(&reg, &layer_fq, &focused);
     let lost_parent_zone = reg.find_by_fq(&focused).and_then(|s| s.parent_zone.clone());
     let lost_rect = reg.find_by_fq(&focused).map(|s| s.rect).expect("rect");
 
-    let warns = collect_divergence_warns(|| {
-        let _ = drive_focus_lost_check(
-            &reg,
-            &state,
-            &snapshot,
-            &focused,
-            lost_parent_zone.as_ref(),
-            &layer_fq,
-            lost_rect,
-        );
-    });
-
-    assert!(
-        warns.is_empty(),
-        "soak_filter_hides_focused_row_focus_restored produced divergence warns: {warns:?}",
+    let event = state.focus_lost(
+        &mut reg,
+        &snapshot,
+        &focused,
+        lost_parent_zone.as_ref(),
+        &layer_fq,
+        lost_rect,
     );
+    assert!(
+        event.is_some(),
+        "focus_lost on a filtered-out card produces a fallback event",
+    );
+    let event = event.unwrap();
+    assert_eq!(event.prev_fq, Some(focused));
 }
 
 // ---------------------------------------------------------------------------
@@ -550,9 +392,10 @@ fn soak_filter_hides_focused_row_focus_restored() {
 //             focus restored.
 // ---------------------------------------------------------------------------
 
-/// Soak the inspector lifecycle: a child layer pushes, focus moves
-/// inside, then the layer pops, restoring the parent layer's
-/// last_focused. Both paths must agree on every step.
+/// Inspector lifecycle: a child layer pushes, focus moves inside,
+/// down-nav lands on the body field, and a focus loss inside the
+/// inspector resolves to the sibling field — the fallback stays inside
+/// the inspector layer rather than escaping to the parent.
 #[test]
 fn soak_inspector_push_nav_pop_focus_restored() {
     let mut reg = SpatialRegistry::new();
@@ -572,7 +415,6 @@ fn soak_inspector_push_nav_pop_focus_restored() {
         .focus(&mut reg, card_fq.clone())
         .expect("focus card before inspector");
 
-    // Inspector layer pushed; two scopes inside.
     let inspector_layer_fq = fq("/L/inspector");
     reg.push_layer(make_layer("/L/inspector", Some("/L"), None));
     let insp_a = fq("/L/inspector/field:title");
@@ -594,34 +436,44 @@ fn soak_inspector_push_nav_pop_focus_restored() {
 
     let inspector_snapshot = snapshot_for_layer(&reg, &inspector_layer_fq);
 
-    let warns = collect_divergence_warns(|| {
-        // Focus inside the inspector and run the focus-ancestor check
-        // and the nav check.
-        let _ = drive_focus_check(&reg, &inspector_snapshot, &insp_a);
-        let _ = drive_navigate_check(&reg, &inspector_snapshot, &insp_a, Direction::Down);
+    // Focus inside the inspector — emits prev=card, next=insp_a.
+    let inside = state
+        .focus_with_snapshot(&mut reg, &inspector_snapshot, insp_a.clone())
+        .expect("focus inside inspector emits an event");
+    assert_eq!(inside.prev_fq.as_ref(), Some(&card_fq));
+    assert_eq!(inside.next_fq.as_ref(), Some(&insp_a));
 
-        // Layer pop, snapshot side: the inspector entry unmounts on
-        // React, so the snapshot for the inspector layer no longer
-        // contains it. The kernel registry still has the inspector
-        // scopes and layer (the per-scope unregister IPCs have not
-        // arrived yet at the moment focus_lost fires).
-        let snapshot_without_a = snapshot_excluding(&reg, &inspector_layer_fq, &insp_a);
-        let lost_rect_a = reg.find_by_fq(&insp_a).map(|s| s.rect).expect("rect");
+    // Down-nav inside the inspector lands on the body field.
+    let down = state
+        .navigate_with_snapshot(
+            &mut reg,
+            &inspector_snapshot,
+            insp_a.clone(),
+            Direction::Down,
+        )
+        .expect("down nav from title finds body inside inspector");
+    assert_eq!(down.next_fq.as_ref(), Some(&insp_b));
 
-        let _ = drive_focus_lost_check(
-            &reg,
-            &state,
-            &snapshot_without_a,
-            &insp_a,
+    // Inspector field unmounts: snapshot for the inspector layer drops
+    // the lost FQM; kernel cascades to a sibling. The fallback target
+    // must be the surviving inspector field, not anything from /L.
+    let snapshot_without_b = snapshot_excluding(&reg, &inspector_layer_fq, &insp_b);
+    let lost_rect_b = reg.find_by_fq(&insp_b).map(|s| s.rect).expect("rect");
+    let lost_event = state
+        .focus_lost(
+            &mut reg,
+            &snapshot_without_b,
+            &insp_b,
             None,
             &inspector_layer_fq,
-            lost_rect_a,
-        );
-    });
-
-    assert!(
-        warns.is_empty(),
-        "soak_inspector_push_nav_pop_focus_restored produced divergence warns: {warns:?}",
+            lost_rect_b,
+        )
+        .expect("focus_lost on the focused inspector field emits an event");
+    assert_eq!(lost_event.prev_fq.as_ref(), Some(&insp_b));
+    assert_eq!(
+        lost_event.next_fq.as_ref(),
+        Some(&insp_a),
+        "fallback stays inside the inspector layer (sibling), not the parent layer",
     );
 }
 
@@ -629,9 +481,10 @@ fn soak_inspector_push_nav_pop_focus_restored() {
 // Scenario 6: modal dialog push → focus inside → cancel → focus restored.
 // ---------------------------------------------------------------------------
 
-/// Soak a modal dialog lifecycle. Same shape as the inspector scenario
-/// but with a modal layer that gets dismissed (pop) without committing
-/// any state. Focus restoration must match between paths.
+/// Modal dialog lifecycle: same shape as the inspector scenario.
+/// Right/left nav between confirm and cancel resolves to the matching
+/// sibling, and dismissing cancel resolves the fallback to confirm —
+/// staying inside the modal layer.
 #[test]
 fn soak_modal_push_focus_cancel_focus_restored() {
     let mut reg = SpatialRegistry::new();
@@ -672,35 +525,48 @@ fn soak_modal_push_focus_cancel_focus_restored() {
 
     let modal_snapshot = snapshot_for_layer(&reg, &modal_layer_fq);
 
-    let warns = collect_divergence_warns(|| {
-        // Nav between confirm and cancel inside the modal.
-        let _ = drive_navigate_check(&reg, &modal_snapshot, &confirm, Direction::Right);
-        let _ = drive_navigate_check(&reg, &modal_snapshot, &cancel, Direction::Left);
-        let _ = drive_focus_check(&reg, &modal_snapshot, &confirm);
+    // Click into the modal: focus confirm.
+    let into = state
+        .focus_with_snapshot(&mut reg, &modal_snapshot, confirm.clone())
+        .expect("click confirm inside modal emits an event");
+    assert_eq!(into.next_fq.as_ref(), Some(&confirm));
 
-        // Cancel dismisses the modal. React-side: the cancel button
-        // unmounts and focus_lost fires immediately. Kernel-side: the
-        // unregister IPCs have not arrived yet, so the modal layer
-        // and its scopes are still in the registry. Snapshot omits
-        // the cancel scope (and only the cancel scope) — that is what
-        // React's registry holds at dispatch time.
-        let snapshot_without_cancel = snapshot_excluding(&reg, &modal_layer_fq, &cancel);
-        let lost_rect_cancel = reg.find_by_fq(&cancel).map(|s| s.rect).expect("rect");
+    // Right from confirm lands on cancel.
+    let right = state
+        .navigate_with_snapshot(&mut reg, &modal_snapshot, confirm.clone(), Direction::Right)
+        .expect("right from confirm finds cancel inside the modal");
+    assert_eq!(right.next_fq.as_ref(), Some(&cancel));
 
-        let _ = drive_focus_lost_check(
-            &reg,
-            &state,
+    // Left from cancel returns to confirm.
+    let left = state
+        .navigate_with_snapshot(&mut reg, &modal_snapshot, cancel.clone(), Direction::Left)
+        .expect("left from cancel finds confirm inside the modal");
+    assert_eq!(left.next_fq.as_ref(), Some(&confirm));
+
+    // Cancel dismisses (modal still open): snapshot omits cancel; the
+    // fallback resolution should pick confirm — the surviving sibling
+    // inside the modal layer — not the trigger from /L.
+    let snapshot_without_cancel = snapshot_excluding(&reg, &modal_layer_fq, &cancel);
+    let lost_rect_cancel = reg.find_by_fq(&cancel).map(|s| s.rect).expect("rect");
+    // Move focus onto cancel so focus_lost has something to drop.
+    state
+        .focus_with_snapshot(&mut reg, &modal_snapshot, cancel.clone())
+        .expect("focus cancel before dismissal");
+    let lost = state
+        .focus_lost(
+            &mut reg,
             &snapshot_without_cancel,
             &cancel,
             None,
             &modal_layer_fq,
             lost_rect_cancel,
-        );
-    });
-
-    assert!(
-        warns.is_empty(),
-        "soak_modal_push_focus_cancel_focus_restored produced divergence warns: {warns:?}",
+        )
+        .expect("focus_lost on cancel emits a fallback event");
+    assert_eq!(lost.prev_fq.as_ref(), Some(&cancel));
+    assert_eq!(
+        lost.next_fq.as_ref(),
+        Some(&confirm),
+        "fallback stays inside the modal layer",
     );
 }
 
@@ -708,85 +574,60 @@ fn soak_modal_push_focus_cancel_focus_restored() {
 // Scenario 7: bulk actions delete multiple cards including the focused.
 // ---------------------------------------------------------------------------
 
-/// Soak a bulk delete that takes the focused card down with several
-/// peers. The focus-lost cascade resolves the same fallback under both
-/// paths.
-///
-/// The React-side `spatial_focus_lost` IPC fires only on the deletion
-/// of the focused FQM (`SpatialFocusActions.focus` listens to
-/// `LayerScopeRegistry.onDeleted` and ignores deletions of unfocused
-/// scopes). Sibling cards deleted in the same React commit run their
-/// own `useEffect` cleanups separately; their `spatial_unregister_scope`
-/// IPCs land asynchronously. So the snapshot built inside the focused
-/// scope's deletion listener excludes only the focused FQM — the other
-/// bulk-deleted siblings are still in the React layer registry at the
-/// moment the listener runs.
+/// Bulk delete scenario: the focused card disappears alongside several
+/// peers. The deletion listener fires only for the focused FQM, so the
+/// snapshot it builds excludes only that FQM — sibling bulk-deletes
+/// produce their own separate notifications. The kernel's `focus_lost`
+/// cascade resolves a fallback target inside the same layer.
 #[test]
 fn soak_bulk_delete_includes_focused_card() {
     let (mut reg, layer_fq, _columns, cards) = build_three_column_board();
-    // Focus a card we're about to delete.
     let focused = cards[4].clone(); // /L/col:1/card:1-1
     let mut state = SpatialState::new();
     state.focus(&mut reg, focused.clone()).expect("focus");
 
     let lost_rect = reg.find_by_fq(&focused).map(|s| s.rect).expect("rect");
     let lost_parent_zone = reg.find_by_fq(&focused).and_then(|s| s.parent_zone.clone());
-
-    // Snapshot excludes only the focused FQM — the React listener that
-    // dispatches `spatial_focus_lost` runs from the deletion of the
-    // focused scope alone. Sibling deletions in the same commit produce
-    // separate `spatial_unregister_scope` IPCs and do not contribute to
-    // this snapshot.
     let snapshot = snapshot_excluding(&reg, &layer_fq, &focused);
 
-    let warns = collect_divergence_warns(|| {
-        let _ = drive_focus_lost_check(
-            &reg,
-            &state,
-            &snapshot,
-            &focused,
-            lost_parent_zone.as_ref(),
-            &layer_fq,
-            lost_rect,
-        );
-    });
-
+    let event = state.focus_lost(
+        &mut reg,
+        &snapshot,
+        &focused,
+        lost_parent_zone.as_ref(),
+        &layer_fq,
+        lost_rect,
+    );
     assert!(
-        warns.is_empty(),
-        "soak_bulk_delete_includes_focused_card produced divergence warns: {warns:?}",
+        event.is_some(),
+        "bulk delete of the focused card produces a fallback event",
     );
 }
 
 // ---------------------------------------------------------------------------
-// Cross-cutting: every scenario in sequence on a shared subscriber.
-// Mirrors a continuous "user works the board for a while" flow in dev
-// builds — a single divergence in any phase should fail the suite.
+// Cross-cutting: every scenario in sequence on a fresh kernel.
+// Mirrors a continuous "user works the board for a while" flow.
 // ---------------------------------------------------------------------------
 
-/// Run every scenario back-to-back under a single tracing subscriber and
-/// assert the captured divergence-warn list is empty across the union.
+/// Run every scenario back-to-back, mirroring a continuous user
+/// session. Each phase asserts the same key behavioral outcome as its
+/// dedicated scenario test.
 #[test]
 fn soak_all_scenarios_in_sequence() {
-    let warns = collect_divergence_warns(|| {
-        run_scenario_arrow_nav();
-        run_scenario_click_focus();
-        run_scenario_drag_drop();
-        run_scenario_filter_hide();
-        run_scenario_inspector();
-        run_scenario_modal();
-        run_scenario_bulk_delete();
-    });
-
-    assert!(
-        warns.is_empty(),
-        "soak_all_scenarios_in_sequence produced divergence warns: {warns:?}",
-    );
+    run_scenario_arrow_nav();
+    run_scenario_click_focus();
+    run_scenario_drag_drop();
+    run_scenario_filter_hide();
+    run_scenario_inspector();
+    run_scenario_modal();
+    run_scenario_bulk_delete();
 }
 
-// Compact, side-effect-only fixtures the cross-cutting test runs in
-// sequence. Each one exercises the same shape as the matching dedicated
-// scenario test but without its own subscriber so the cross-cutting
-// test can assert across the union.
+// Compact fixtures the cross-cutting test runs in sequence. Each one
+// asserts on the same key behavioral outcome as its dedicated scenario
+// test (event presence, fallback target, cross-column nav) so a panic
+// in any one phase or a silent change in fallback resolution still
+// fails the suite.
 
 fn run_scenario_arrow_nav() {
     let (mut reg, layer_fq, _columns, cards) = build_three_column_board();
@@ -794,14 +635,21 @@ fn run_scenario_arrow_nav() {
     for card in &cards {
         let mut state = SpatialState::new();
         state.focus(&mut reg, card.clone()).expect("focus card");
+        let mut moved = false;
         for direction in [
             Direction::Up,
             Direction::Down,
             Direction::Left,
             Direction::Right,
         ] {
-            let _ = drive_navigate_check(&reg, &snapshot, card, direction);
+            if state
+                .navigate_with_snapshot(&mut reg, &snapshot, card.clone(), direction)
+                .is_some()
+            {
+                moved = true;
+            }
         }
+        assert!(moved, "card {card:?} has at least one navigable peer");
     }
 }
 
@@ -834,9 +682,16 @@ fn run_scenario_click_focus() {
         rect(20.0, 50.0, 30.0, 16.0),
     ));
     let snapshot = snapshot_for_layer(&reg, &layer_fq);
-    for f in [&card, &chip] {
-        let _ = drive_focus_check(&reg, &snapshot, f);
-    }
+    let mut state = SpatialState::new();
+    let card_event = state
+        .focus_with_snapshot(&mut reg, &snapshot, card.clone())
+        .expect("first click commits focus");
+    assert_eq!(card_event.next_fq.as_ref(), Some(&card));
+    let chip_event = state
+        .focus_with_snapshot(&mut reg, &snapshot, chip.clone())
+        .expect("second click transitions focus");
+    assert_eq!(chip_event.prev_fq.as_ref(), Some(&card));
+    assert_eq!(chip_event.next_fq.as_ref(), Some(&chip));
 }
 
 fn run_scenario_drag_drop() {
@@ -853,18 +708,18 @@ fn run_scenario_drag_drop() {
     ));
     let snapshot = snapshot_for_layer(&reg, &layer_fq);
     let mut state = SpatialState::new();
-    state
-        .focus(&mut reg, moved_new.clone())
-        .expect("focus moved card");
-    for direction in [
-        Direction::Up,
-        Direction::Down,
-        Direction::Left,
-        Direction::Right,
-    ] {
-        let _ = drive_navigate_check(&reg, &snapshot, &moved_new, direction);
-    }
-    let _ = drive_focus_check(&reg, &snapshot, &moved_new);
+    let click = state
+        .focus_with_snapshot(&mut reg, &snapshot, moved_new.clone())
+        .expect("snapshot click on moved card emits an event");
+    assert_eq!(click.next_fq.as_ref(), Some(&moved_new));
+    let left = state
+        .navigate_with_snapshot(&mut reg, &snapshot, moved_new.clone(), Direction::Left)
+        .expect("left from moved card finds a peer in col 1");
+    let left_target = left.next_fq.expect("event has a next target");
+    assert!(
+        left_target.as_str().starts_with("/L/col:1/"),
+        "left nav crosses column boundary: {left_target:?}",
+    );
 }
 
 fn run_scenario_filter_hide() {
@@ -875,15 +730,17 @@ fn run_scenario_filter_hide() {
     let snapshot = snapshot_excluding(&reg, &layer_fq, &focused);
     let lost_parent_zone = reg.find_by_fq(&focused).and_then(|s| s.parent_zone.clone());
     let lost_rect = reg.find_by_fq(&focused).map(|s| s.rect).expect("rect");
-    let _ = drive_focus_lost_check(
-        &reg,
-        &state,
-        &snapshot,
-        &focused,
-        lost_parent_zone.as_ref(),
-        &layer_fq,
-        lost_rect,
-    );
+    let event = state
+        .focus_lost(
+            &mut reg,
+            &snapshot,
+            &focused,
+            lost_parent_zone.as_ref(),
+            &layer_fq,
+            lost_rect,
+        )
+        .expect("filter-hide fallback emits an event");
+    assert_eq!(event.prev_fq.as_ref(), Some(&focused));
 }
 
 fn run_scenario_inspector() {
@@ -909,21 +766,37 @@ fn run_scenario_inspector() {
         None,
         rect(0.0, 0.0, 300.0, 30.0),
     ));
-    let snapshot = snapshot_for_layer(&reg, &inspector_layer_fq);
-    let _ = drive_focus_check(&reg, &snapshot, &insp_a);
-    let _ = drive_navigate_check(&reg, &snapshot, &insp_a, Direction::Down);
-
-    let snapshot_without_a = snapshot_excluding(&reg, &inspector_layer_fq, &insp_a);
-    let lost_rect_a = reg.find_by_fq(&insp_a).map(|s| s.rect).expect("rect");
-    let _ = drive_focus_lost_check(
-        &reg,
-        &state,
-        &snapshot_without_a,
-        &insp_a,
+    let insp_b = fq("/L/inspector/field:body");
+    reg.register_scope(leaf(
+        insp_b.as_str(),
+        "field:body",
+        "/L/inspector",
         None,
-        &inspector_layer_fq,
-        lost_rect_a,
-    );
+        rect(0.0, 50.0, 300.0, 100.0),
+    ));
+    let snapshot = snapshot_for_layer(&reg, &inspector_layer_fq);
+    let inside = state
+        .focus_with_snapshot(&mut reg, &snapshot, insp_a.clone())
+        .expect("focus inside inspector");
+    assert_eq!(inside.next_fq.as_ref(), Some(&insp_a));
+    let down = state
+        .navigate_with_snapshot(&mut reg, &snapshot, insp_a.clone(), Direction::Down)
+        .expect("down from title finds body");
+    assert_eq!(down.next_fq.as_ref(), Some(&insp_b));
+
+    let snapshot_without_b = snapshot_excluding(&reg, &inspector_layer_fq, &insp_b);
+    let lost_rect_b = reg.find_by_fq(&insp_b).map(|s| s.rect).expect("rect");
+    let lost = state
+        .focus_lost(
+            &mut reg,
+            &snapshot_without_b,
+            &insp_b,
+            None,
+            &inspector_layer_fq,
+            lost_rect_b,
+        )
+        .expect("focus_lost emits fallback event");
+    assert_eq!(lost.next_fq.as_ref(), Some(&insp_a));
 }
 
 fn run_scenario_modal() {
@@ -941,6 +814,14 @@ fn run_scenario_modal() {
     state.focus(&mut reg, trigger.clone()).expect("focus");
     let modal_layer_fq = fq("/L/modal");
     reg.push_layer(make_layer("/L/modal", Some("/L"), None));
+    let confirm = fq("/L/modal/btn:confirm");
+    reg.register_scope(leaf(
+        confirm.as_str(),
+        "btn:confirm",
+        "/L/modal",
+        None,
+        rect(40.0, 100.0, 80.0, 30.0),
+    ));
     let cancel = fq("/L/modal/btn:cancel");
     reg.register_scope(leaf(
         cancel.as_str(),
@@ -950,19 +831,24 @@ fn run_scenario_modal() {
         rect(140.0, 100.0, 80.0, 30.0),
     ));
     let modal_snapshot = snapshot_for_layer(&reg, &modal_layer_fq);
-    let _ = drive_focus_check(&reg, &modal_snapshot, &cancel);
+    let into = state
+        .focus_with_snapshot(&mut reg, &modal_snapshot, cancel.clone())
+        .expect("click cancel inside modal");
+    assert_eq!(into.next_fq.as_ref(), Some(&cancel));
 
     let snapshot_without_cancel = snapshot_excluding(&reg, &modal_layer_fq, &cancel);
     let lost_rect = reg.find_by_fq(&cancel).map(|s| s.rect).expect("rect");
-    let _ = drive_focus_lost_check(
-        &reg,
-        &state,
-        &snapshot_without_cancel,
-        &cancel,
-        None,
-        &modal_layer_fq,
-        lost_rect,
-    );
+    let lost = state
+        .focus_lost(
+            &mut reg,
+            &snapshot_without_cancel,
+            &cancel,
+            None,
+            &modal_layer_fq,
+            lost_rect,
+        )
+        .expect("modal cancel-dismiss fallback emits an event");
+    assert_eq!(lost.next_fq.as_ref(), Some(&confirm));
 }
 
 fn run_scenario_bulk_delete() {
@@ -972,17 +858,16 @@ fn run_scenario_bulk_delete() {
     state.focus(&mut reg, focused.clone()).expect("focus");
     let lost_rect = reg.find_by_fq(&focused).map(|s| s.rect).expect("rect");
     let lost_parent_zone = reg.find_by_fq(&focused).and_then(|s| s.parent_zone.clone());
-    // Snapshot excludes only the focused FQM — sibling deletions from
-    // the same commit fire separately and do not contribute to the
-    // listener's snapshot. See the dedicated test for the rationale.
     let snapshot = snapshot_excluding(&reg, &layer_fq, &focused);
-    let _ = drive_focus_lost_check(
-        &reg,
-        &state,
-        &snapshot,
-        &focused,
-        lost_parent_zone.as_ref(),
-        &layer_fq,
-        lost_rect,
-    );
+    let event = state
+        .focus_lost(
+            &mut reg,
+            &snapshot,
+            &focused,
+            lost_parent_zone.as_ref(),
+            &layer_fq,
+            lost_rect,
+        )
+        .expect("bulk delete fallback emits an event");
+    assert_eq!(event.prev_fq.as_ref(), Some(&focused));
 }

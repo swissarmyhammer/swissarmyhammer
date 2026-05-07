@@ -294,6 +294,10 @@ describe("Inspector field — Space → ui.inspect", () => {
   it("space_on_focused_inspector_field_dispatches_inspect_with_field_moniker", async () => {
     const { unmount } = renderInspector();
     await flushSetup();
+    // Second flush to drain the LayerScopeRegistry → mockInvoke mirror
+    // queue (the setup hook resolves the dynamic import asynchronously
+    // on the first scope mount per test file).
+    await flushSetup();
 
     // Find the title field's `<FocusScope>` registration so we know
     // the FullyQualifiedMoniker to drive into `focus-changed`.

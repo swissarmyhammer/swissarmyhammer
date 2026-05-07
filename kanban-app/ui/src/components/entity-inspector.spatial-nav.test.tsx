@@ -377,6 +377,10 @@ describe("EntityInspector — spatial-nav per-leaf focus indicator", () => {
   it("clicking a single-value field row dispatches spatial_focus for THAT field's zone key", async () => {
     const { container, unmount } = renderInspector();
     await flushSetup();
+    // Second flush to drain the LayerScopeRegistry → mockInvoke mirror
+    // queue (the setup hook resolves the dynamic import asynchronously
+    // on the first scope mount per test file).
+    await flushSetup();
 
     const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:task-1.title",

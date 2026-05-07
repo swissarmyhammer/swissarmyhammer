@@ -227,9 +227,10 @@ fn focus_lost_clears_focus_when_no_fallback() {
     assert_eq!(state.focused_in(&WindowLabel::from_string("main")), None);
 }
 
-/// `focus_lost` for an unfocused FQM is a no-op — the `spatial_focus_lost`
-/// IPC racing `spatial_unregister_scope` (which already moved focus away)
-/// must not emit a duplicate event.
+/// `focus_lost` for an unfocused FQM is a no-op. Guards against a
+/// duplicate event when focus has already been moved off the lost FQM
+/// by another path (e.g. an explicit `clear_focus` or
+/// `handle_unregister`).
 #[test]
 fn focus_lost_for_unfocused_fq_is_noop() {
     let mut reg = SpatialRegistry::new();
@@ -269,15 +270,15 @@ fn focus_lost_for_unfocused_fq_is_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// Coexistence dedup
+// Idempotence between focus_lost and handle_unregister
 // ---------------------------------------------------------------------------
 
 /// When `focus_lost` runs first, the kernel applies the snapshot-driven
-/// fallback. The subsequent `spatial_unregister_scope` (which calls
-/// `handle_unregister`) sees the already-moved focus and returns `None`.
-/// Exactly one transition is observed.
+/// fallback. A subsequent `handle_unregister` for the same FQM sees the
+/// already-moved focus and returns `None`. Exactly one transition is
+/// observed.
 #[test]
-fn coexistence_focus_lost_first_then_unregister_emits_once() {
+fn focus_lost_then_handle_unregister_emits_once() {
     let mut reg = build_two_sibling_registry();
     let lost_fq = fq_in_layer("/L", "ui:zone/ui:lost");
     let sib_fq = fq_in_layer("/L", "ui:zone/ui:sib");
@@ -287,7 +288,7 @@ fn coexistence_focus_lost_first_then_unregister_emits_once() {
     let mut state = SpatialState::new();
     state.focus(&mut reg, lost_fq.clone()).expect("focus");
 
-    // 1. spatial_focus_lost arrives first.
+    // 1. focus_lost arrives first.
     let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
     let first = state.focus_lost(
         &mut reg,
@@ -297,20 +298,20 @@ fn coexistence_focus_lost_first_then_unregister_emits_once() {
         &layer_fq,
         rect(0.0, 0.0, 10.0, 10.0),
     );
-    assert!(first.is_some(), "first IPC drives the transition");
+    assert!(first.is_some(), "first call drives the transition");
     assert_eq!(first.as_ref().unwrap().next_fq, Some(sib_fq));
 
-    // 2. spatial_unregister_scope arrives second — focus has already
-    //    moved, so handle_unregister is a no-op.
+    // 2. handle_unregister arrives second — focus has already moved,
+    //    so it is a no-op.
     let second = state.handle_unregister(&mut reg, &lost_fq, None);
-    assert!(second.is_none(), "second IPC is a no-op");
+    assert!(second.is_none(), "second call is a no-op");
 }
 
-/// When `spatial_unregister_scope` runs first, the registry path drives
-/// the fallback. The subsequent `spatial_focus_lost` sees the already-
-/// moved focus and returns `None`.
+/// When `handle_unregister` runs first, the registry path drives the
+/// fallback. A subsequent `focus_lost` sees the already-moved focus and
+/// returns `None`.
 #[test]
-fn coexistence_unregister_first_then_focus_lost_emits_once() {
+fn handle_unregister_then_focus_lost_emits_once() {
     let mut reg = build_two_sibling_registry();
     let lost_fq = fq_in_layer("/L", "ui:zone/ui:lost");
     let sib_fq = fq_in_layer("/L", "ui:zone/ui:sib");
@@ -320,21 +321,19 @@ fn coexistence_unregister_first_then_focus_lost_emits_once() {
     let mut state = SpatialState::new();
     state.focus(&mut reg, lost_fq.clone()).expect("focus");
 
-    // Build the snapshot BEFORE unregister so it still reflects the
-    // pre-unregister registry state — but with the lost FQM omitted to
-    // mirror what React would dispatch.
+    // Build the snapshot before unregister so it still reflects the
+    // pre-unregister registry state — but with the lost FQM omitted.
     let snapshot = snapshot_excluding(&reg, &layer_fq, &lost_fq);
 
-    // 1. spatial_unregister_scope arrives first (handle_unregister +
-    //    registry.unregister_scope). Mirrors what
-    //    `spatial_unregister_scope_inner` does.
+    // 1. handle_unregister arrives first (with registry.unregister_scope
+    //    cleaning up the entry).
     let first = state.handle_unregister(&mut reg, &lost_fq, None);
     reg.unregister_scope(&lost_fq);
-    assert!(first.is_some(), "first IPC drives the transition");
+    assert!(first.is_some(), "first call drives the transition");
     assert_eq!(first.as_ref().unwrap().next_fq, Some(sib_fq));
 
-    // 2. spatial_focus_lost arrives second — focus has already moved,
-    //    so focus_lost is a no-op.
+    // 2. focus_lost arrives second — focus has already moved, so it is
+    //    a no-op.
     let second = state.focus_lost(
         &mut reg,
         &snapshot,
@@ -343,7 +342,7 @@ fn coexistence_unregister_first_then_focus_lost_emits_once() {
         &layer_fq,
         rect(0.0, 0.0, 10.0, 10.0),
     );
-    assert!(second.is_none(), "second IPC is a no-op");
+    assert!(second.is_none(), "second call is a no-op");
 }
 
 fn build_two_sibling_registry() -> SpatialRegistry {

@@ -44,14 +44,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Direction,
   FocusChangedPayload,
-  FocusOverrides,
   FullyQualifiedMoniker,
   LayerName,
   NavSnapshot,
-  Rect,
   SegmentMoniker,
 } from "@/types/spatial";
-import { validateAndLogRect } from "@/lib/rect-validation";
 import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 
 // ---------------------------------------------------------------------------
@@ -116,60 +113,6 @@ export interface SpatialFocusActions {
    * `focus-changed` event is emitted.
    */
   clearFocus: () => Promise<void>;
-  /**
-   * Invoke `spatial_register_scope` with the FQM-keyed kernel record:
-   * canonical FQM, declared segment, viewport rect, owning layer FQM,
-   * optional enclosing scope FQM, and per-direction overrides.
-   *
-   * Mirrors [`FocusScope`] on the Rust side — the single registered
-   * primitive. Whether the scope plays a leaf or a navigable-container
-   * role is determined at runtime by whether anything else is
-   * registered under it; the wire shape is the same for both. Pass
-   * `null` for `parentZone` when the scope is registered directly
-   * under the layer root, and an empty object for `overrides` when
-   * the scope has no per-direction special cases.
-   *
-   * `last_focused` is server-owned drill-out memory and is **not**
-   * carried on the wire — registration is the React side's "this scope
-   * just mounted" signal. The kernel preserves any existing
-   * `last_focused` slot when a scope is re-registered (the
-   * placeholder/real-mount swap), so the lack of a wire field is
-   * correct rather than lossy.
-   *
-   * `sampledAtMs` is the `performance.now()` timestamp captured at the
-   * exact callsite that called `getBoundingClientRect()` to produce
-   * `rect`. The dev-mode validator uses it to detect stale rects (a
-   * rect sampled before an unobserved scroll). Callers that just
-   * sampled the rect should call `performance.now()` immediately
-   * after; callers that don't have a meaningful timestamp may pass
-   * `performance.now()` at the IPC boundary, but doing so makes the
-   * staleness check a no-op. Optional — defaults to `performance.now()`
-   * at the IPC boundary for legacy callers that have not yet been
-   * threaded through.
-   */
-  registerScope: (
-    fq: FullyQualifiedMoniker,
-    segment: SegmentMoniker,
-    rect: Rect,
-    layerFq: FullyQualifiedMoniker,
-    parentZone: FullyQualifiedMoniker | null,
-    overrides: FocusOverrides,
-    sampledAtMs?: number,
-  ) => Promise<void>;
-  /** Invoke `spatial_unregister_scope` for the given FQM. */
-  unregisterScope: (fq: FullyQualifiedMoniker) => Promise<void>;
-  /**
-   * Invoke `spatial_update_rect` to refresh the bounding rect of a
-   * registered scope. Call from a ResizeObserver on the underlying DOM
-   * node; no-op on the Rust side if the FQM is unknown.
-   *
-   * See `registerScope` for the `sampledAtMs` contract.
-   */
-  updateRect: (
-    fq: FullyQualifiedMoniker,
-    rect: Rect,
-    sampledAtMs?: number,
-  ) => Promise<void>;
   /** Invoke `spatial_navigate` from `focusedFq` in `direction`. */
   navigate: (
     focusedFq: FullyQualifiedMoniker,
@@ -409,47 +352,6 @@ function buildSpatialFocusActions(
     await invoke("spatial_clear_focus");
   };
 
-  const registerScope: SpatialFocusActions["registerScope"] = async (
-    fq,
-    segment,
-    rect,
-    layerFq,
-    parentZone,
-    overrides,
-    sampledAtMs,
-  ) => {
-    // The staleness check is meaningful only when the caller threads
-    // `performance.now()` through from the same callsite that ran
-    // `getBoundingClientRect()`. A missing timestamp falls back to the
-    // adapter-boundary `performance.now()` (the legacy behaviour) — that
-    // makes the staleness check a no-op for legacy callers but keeps the
-    // adapter usable from contexts that have no rect-sample timing.
-    validateAndLogRect(fq, rect, sampledAtMs ?? performance.now());
-    await invoke("spatial_register_scope", {
-      fq,
-      segment,
-      rect,
-      layerFq,
-      parentZone,
-      overrides,
-    });
-  };
-
-  const unregisterScope: SpatialFocusActions["unregisterScope"] = async (
-    fq,
-  ) => {
-    await invoke("spatial_unregister_scope", { fq });
-  };
-
-  const updateRect: SpatialFocusActions["updateRect"] = async (
-    fq,
-    rect,
-    sampledAtMs,
-  ) => {
-    validateAndLogRect(fq, rect, sampledAtMs ?? performance.now());
-    await invoke("spatial_update_rect", { fq, rect });
-  };
-
   const navigate: SpatialFocusActions["navigate"] = async (
     focusedFq,
     direction,
@@ -474,16 +376,17 @@ function buildSpatialFocusActions(
       // this listener runs from a `<FocusScope>`'s `useEffect` cleanup,
       // React has already invoked the scope's bound `setRef(null)` in
       // the commit phase, so `entry.ref.current` is `null` and a fresh
-      // sample would skip the IPC. The cached rect is refreshed at
-      // mount (initial seed alongside `registerSpatialScope`) and
-      // immediately before unmount (via the scope's `useLayoutEffect`
-      // cleanup, which runs while the ref is still attached), so it
-      // reflects live geometry at the moment of unmount.
+      // sample would skip the IPC. The cached rect is seeded at mount
+      // (alongside `LayerScopeRegistry.add`) and refreshed immediately
+      // before unmount (via the scope's `useLayoutEffect` cleanup,
+      // which runs while the ref is still attached), so it reflects
+      // live geometry at the moment of unmount.
       const lostRect = entry.lastKnownRect;
       // No rect ever sampled (the scope unmounted in the same tick it
-      // was registered) — skip the IPC. The surviving
-      // `spatial_unregister_scope` path will still drive fallback off
-      // the kernel's stored rect.
+      // was registered) — skip the IPC entirely. There is no fallback
+      // path in the kernel: without a rect the snapshot-driven
+      // resolver has nothing to rank against, so the focused FQM stays
+      // until something else moves it.
       if (lostRect === null) return;
       const snapshot = registry.buildSnapshot(layerFq);
       invoke("spatial_focus_lost", {
@@ -556,9 +459,6 @@ function buildSpatialFocusActions(
     hasClaim,
     focus,
     clearFocus,
-    registerScope,
-    unregisterScope,
-    updateRect,
     navigate,
     pushLayer,
     popLayer,

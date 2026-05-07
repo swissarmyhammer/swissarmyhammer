@@ -8,26 +8,27 @@
  *
  * # Path-monikers identity model
  *
- * After card `01KQD6064G1C1RAXDFPJVT1F46` the spatial graph uses one
- * identifier shape per primitive: `FullyQualifiedMoniker`. The FQM is
- * the spatial key — there is no separate UUID. The scope reads its
- * parent FQM from `FullyQualifiedMonikerContext`, composes its own
- * FQM as `<parentFq>/<segment>`, and registers with the kernel via
- * `spatial_register_scope(fq, segment, rect, layerFq, parentZone,
- * overrides)`. There is no `crypto.randomUUID()` on the React side.
+ * The spatial graph uses one identifier shape per primitive:
+ * `FullyQualifiedMoniker`. The FQM is the spatial key — there is no
+ * separate UUID. The scope reads its parent FQM from
+ * `FullyQualifiedMonikerContext`, composes its own FQM as
+ * `<parentFq>/<segment>`, and registers with the per-layer
+ * `LayerScopeRegistry`. The kernel sees scope state only via per-decision
+ * snapshots; there is no kernel-side scope replica to keep in sync.
  *
  * Three peers, not four: the spatial-nav kernel exposes `<FocusLayer>`
  * (modal boundary), `<FocusZone>` (navigable container), and
  * `<FocusScope>` (leaf). This component is the leaf:
  *
  *   - Composes its FQM via `useFullyQualifiedMoniker()` + the consumer's
- *     `moniker` segment, then registers with Rust via
- *     `spatial_register_scope`.
+ *     `moniker` segment, then registers with the per-layer
+ *     `LayerScopeRegistry`.
  *   - Subscribes to per-FQM focus claims through `useFocusClaim` so its
  *     `data-focused` attribute and the visible `<FocusIndicator>` flip
  *     when this FQM becomes focused.
- *   - Handles click → `spatial_focus(fq)`, with editable surfaces (inputs,
- *     contenteditable) spared so caret placement is not stolen.
+ *   - Handles click → `spatial_focus(fq, snapshot)`, with editable
+ *     surfaces (inputs, contenteditable) spared so caret placement is
+ *     not stolen.
  *   - Right-click → `setFocus(fq)` + native context menu via
  *     `useContextMenu`.
  *   - Pushes a `CommandScopeContext.Provider` so descendants participate
@@ -36,8 +37,8 @@
  *     nearest enclosing scope without walking the command-scope chain.
  *   - Registers with the entity-focus scope registry so `useFocusedScope`
  *     and the dispatcher can compute scope chains.
- *   - Optional `navOverride` per-direction directives forwarded into the
- *     Rust-side registry.
+ *   - Optional `navOverride` per-direction directives surface in the
+ *     next snapshot — mid-life changes take effect on the next nav.
  *   - `scrollIntoView` when the entity-focus store reports this scope as
  *     directly focused — preserves the legacy "follow the focus bar"
  *     scroll behavior.
@@ -102,7 +103,6 @@ import {
   FullyQualifiedMonikerContext,
   useFullyQualifiedMoniker,
 } from "@/components/fully-qualified-moniker-context";
-import { useEnclosingLayerFq } from "@/components/layer-fq-context";
 import { FocusDebugOverlay } from "@/components/focus-debug-overlay";
 import { FocusIndicator } from "@/components/focus-indicator";
 import {
@@ -114,7 +114,6 @@ import {
   composeFq,
   type FocusOverrides,
   type FullyQualifiedMoniker,
-  type Rect,
   type SegmentMoniker,
 } from "@/types/spatial";
 
@@ -302,9 +301,8 @@ interface SpatialFocusScopeBodyProps extends Omit<
 /**
  * Body branch when a `<FocusLayer>` ancestor IS present.
  *
- * Registers with the Rust-side spatial registry via
- * `spatial_register_scope(fq, segment, ...)`, subscribes to per-FQM
- * focus claims, and renders a single `<div>` that carries the
+ * Registers with the per-layer `LayerScopeRegistry`, subscribes to
+ * per-FQM focus claims, and renders a single `<div>` that carries the
  * consumer's className plus the `data-moniker` / `data-focused`
  * debugging attributes.
  */
@@ -324,8 +322,6 @@ function SpatialFocusScopeBody({
   const focusActions = useOptionalFocusActions();
   const setFocus = focusActions?.setFocus;
 
-  const layerFq = useEnclosingLayerFq();
-
   const ref = useRef<HTMLDivElement | null>(null);
 
   const setRef = useCallback(
@@ -344,40 +340,39 @@ function SpatialFocusScopeBody({
   const [focused, setFocused] = useState(false);
   useFocusClaim(fq, setFocused);
 
-  const {
-    registerScope: registerSpatialScope,
-    unregisterScope,
-    focus,
-  } = useSpatialFocusActions();
+  const { focus } = useSpatialFocusActions();
 
-  // ---------------------------------------------------------------------
-  // navOverride contract
-  // ---------------------------------------------------------------------
-  // `navOverride` is read from a ref and snapshotted into the Rust-side
-  // registry **only when the registration effect runs**. Mid-life changes
-  // are intentionally ignored.
-  const navOverrideRef = useRef<FocusOverrides | undefined>(navOverride);
-  navOverrideRef.current = navOverride;
-
-  // Mirrors the kernel-side `register_scope` / `unregister_scope` pair
-  // into the React-side per-layer registry provided by `<FocusLayer>`.
-  // Snapshots built from this registry read rects fresh from the DOM at
-  // decision time, so no continuous rect sync is needed.
-  //
-  // `navOverride` is intentionally a dependency here (unlike the kernel
-  // sync, which reads through a ref and ignores mid-life changes). The
+  // Register this scope with the per-layer registry provided by
+  // `<FocusLayer>`. Snapshots built from this registry read rects fresh
+  // from the DOM at decision time. `navOverride` is a dep because the
   // snapshot-on-decision contract makes mid-life changes observable in
-  // the next nav, which is the behaviour callers naively expect; tying
-  // the registry update to the prop directly delivers that.
+  // the next nav — tying the registry update to the prop directly
+  // delivers that.
+  //
+  // The initial rect is sampled before `add()` so the registry's
+  // mount-time entry already carries live geometry: a same-tick unmount
+  // still has a non-null `lastKnownRect` for `spatial_focus_lost`.
   const layerRegistry = useOptionalLayerScopeRegistry();
   useEffect(() => {
     if (!layerRegistry) return;
+    const node = ref.current;
+    const initialRect = node
+      ? (() => {
+          const r = node.getBoundingClientRect();
+          return {
+            x: asPixels(r.x),
+            y: asPixels(r.y),
+            width: asPixels(r.width),
+            height: asPixels(r.height),
+          };
+        })()
+      : null;
     layerRegistry.add(fq, {
       ref,
       parentZone,
       navOverride,
       segment,
-      lastKnownRect: null,
+      lastKnownRect: initialRect,
     });
     return () => {
       layerRegistry.delete(fq);
@@ -407,49 +402,6 @@ function SpatialFocusScopeBody({
       });
     };
   }, [layerRegistry, fq]);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-
-    const overrides: FocusOverrides = navOverrideRef.current ?? {};
-    const initialRect = node.getBoundingClientRect();
-    const initialRectPx: Rect = {
-      x: asPixels(initialRect.x),
-      y: asPixels(initialRect.y),
-      width: asPixels(initialRect.width),
-      height: asPixels(initialRect.height),
-    };
-    // Seed the layer registry's cached rect alongside the kernel
-    // register so the focused-scope-unmount IPC has a non-null rect to
-    // dispatch with even when the unmount happens before the
-    // layout-effect cleanup ever resamples it.
-    layerRegistry?.updateRect(fq, initialRectPx);
-    const initialSampledAtMs = performance.now();
-    registerSpatialScope(
-      fq,
-      segment,
-      initialRectPx,
-      layerFq,
-      parentZone,
-      overrides,
-      initialSampledAtMs,
-    ).catch((err) => console.error("[FocusScope] register failed", err));
-
-    return () => {
-      unregisterScope(fq).catch((err) =>
-        console.error("[FocusScope] unregister failed", err),
-      );
-    };
-  }, [
-    fq,
-    segment,
-    layerFq,
-    parentZone,
-    layerRegistry,
-    registerSpatialScope,
-    unregisterScope,
-  ]);
 
   useEffect(() => {
     if (isDirectFocus && ref.current?.scrollIntoView) {

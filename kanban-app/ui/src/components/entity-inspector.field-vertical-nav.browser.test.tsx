@@ -357,6 +357,10 @@ describe("EntityInspector — Up/Down arrow nav between sibling field zones", ()
       makeTask({ title: "Hello", tags: [], body: "" }),
     );
     await flushSetup();
+    // Second flush to drain the LayerScopeRegistry → mockInvoke mirror
+    // queue (the setup hook resolves the dynamic import asynchronously
+    // on the first scope mount per test file).
+    await flushSetup();
 
     const titleZone = registerScopeArgs().find(
       (a) => a.segment === "field:task:T1.title",
