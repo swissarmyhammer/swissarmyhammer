@@ -56,56 +56,10 @@ export const EntityCard = memo(
     } = props;
     const cardSections = useCardSections(entity.entity_type);
 
-    // The card body registers as a `<FocusZone>` — a navigable
-    // container in the spatial-nav graph. The card holds focusable
-    // atoms (the `<Field>` rows with their own zones and pill leaves,
-    // the inspect button), so it is a zone by the kernel's three-peer
-    // contract: scopes are leaves, zones are containers. Keyboard-
-    // actionable non-Field atoms inside the card are wrapped in their
-    // own inner `<FocusScope>` leaf — mirroring the navbar pattern
-    // (`<FocusZone moniker="ui:navbar">` → leaf scopes for inspect /
-    // search). The drag handle is intentionally NOT a leaf: it is
-    // mouse-only (dnd-kit uses `PointerSensor` with no `KeyboardSensor`
-    // — see `board-view.tsx`), so a focusable leaf there would be a
-    // tab-stop trap. See `DragHandle` below for the full rationale.
-    // The card's inner Field zones nest under this card zone via
-    // `FocusZoneContext`, so drill-in / drill-out work field → card →
-    // column → board.
-    //
-    // Pre-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG` history: the card body was
-    // a `<FocusScope>` because of an earlier kernel cross-zone-nav
-    // workaround. That shape silently degraded the spatial graph: the
-    // card scope was a kernel "leaf" with no children (because Scopes
-    // do not push `FocusZoneContext`), but the React tree composed
-    // Field zones inside it whose `parent_zone` skipped to the column
-    // — so the kernel saw fields as siblings of cards under the
-    // column rather than as descendants of a card. The card-as-zone
-    // shape restores the topology and surfaces drill-in / drill-out
-    // memory (`last_focused`) at the right level.
-    //
-    // When the surrounding tree mounts the spatial-nav stack
-    // (`<SpatialFocusProvider>` + `<FocusLayer>` — the production path
-    // in `App.tsx`) the zone registers via `spatial_register_zone`;
-    // outside that stack the zone falls back to a plain `<div>` so
-    // isolated unit tests don't need to spin up the spatial providers.
-    // Either way the card carries the entity-focus / command-scope /
-    // context-menu wiring shared with every other entity surface.
-    //
-    // `showFocus` defaults to true on `<FocusZone>`, which renders
-    // the visible focus indicator on the card itself when the user
-    // focuses the card body. The inner `<FocusScope>` leaves and the
-    // `<Field>` zones own their own indicators when those atoms are
-    // the focused FQM — same pattern as the navbar.
+    // The card is a navigable container: its body holds `<Field>`
+    // scopes that nest under the card's FQM via `FocusScopeContext`,
+    // so drill-in / drill-out walk field → card → column → board.
     return (
-      // The card wraps an entity (`task:` / `tag:` moniker), so a
-      // double-click on the card body should open the inspector for
-      // that entity. The `<Inspectable>` wrapper owns the
-      // `useDispatchCommand("ui.inspect")` hook and its `onDoubleClick`
-      // handler; the spatial primitive `<FocusZone>` stays pure-spatial.
-      // UI-chrome zones (`ui:*` / `perspective_tab:`) are NOT wrapped
-      // in `<Inspectable>`. The architectural guard
-      // (`focus-architecture.guards.node.test.ts`, Guards B + C)
-      // enforces both directions.
       <Inspectable moniker={asSegment(entity.moniker)}>
         <FocusScope
           moniker={asSegment(entity.moniker)}

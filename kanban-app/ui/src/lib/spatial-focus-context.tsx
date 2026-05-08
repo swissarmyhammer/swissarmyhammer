@@ -429,16 +429,20 @@ function buildSpatialFocusActions(
   };
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
+    const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
     return await invoke<FullyQualifiedMoniker>("spatial_drill_in", {
       fq,
       focusedFq,
+      snapshot,
     });
   };
 
   const drillOut: SpatialFocusActions["drillOut"] = async (fq, focusedFq) => {
+    const snapshot = buildSnapshotForFocused(layerRegistriesRef, focusedFq);
     return await invoke<FullyQualifiedMoniker>("spatial_drill_out", {
       fq,
       focusedFq,
+      snapshot,
     });
   };
 

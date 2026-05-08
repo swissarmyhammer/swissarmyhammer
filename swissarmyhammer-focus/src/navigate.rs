@@ -814,4 +814,350 @@ mod tests {
             FullyQualifiedMoniker::from_string("/L/a"),
         );
     }
+
+    // -----------------------------------------------------------------
+    // drill_in / drill_out coverage
+    //
+    // These tests pin the user-symptom contract: pressing Enter on a
+    // focused card must walk into the card's first field child via
+    // `drill_in`'s `parent_zone == Some(card_fq)` filter, and pressing
+    // Escape inside a field must climb back up via `drill_out`'s
+    // `parent_zone` lookup. Both helpers are layer-scoped and rely on
+    // the snapshot for all geometry — the registry only contributes the
+    // `last_focused_by_fq` warm-path memory consulted by `drill_in`.
+    // -----------------------------------------------------------------
+
+    /// Drive `drill_in` against an in-test snapshot. Mirrors `pick` but
+    /// returns the descended target rather than the cardinal pick, and
+    /// borrows a [`SpatialRegistry`] so callers can preload
+    /// `last_focused_by_fq` to exercise the warm path.
+    fn drill_in_at(
+        snap: &NavSnapshot,
+        registry: &SpatialRegistry,
+        fq: &str,
+        focused_fq: &str,
+    ) -> FullyQualifiedMoniker {
+        let view = IndexedSnapshot::new(snap);
+        let target = FullyQualifiedMoniker::from_string(fq);
+        let focused = FullyQualifiedMoniker::from_string(focused_fq);
+        drill_in(&view, registry, target, &focused)
+    }
+
+    /// Drive `drill_out` against an in-test snapshot. `drill_out` does
+    /// not consult the registry, so the caller does not need to build
+    /// one.
+    fn drill_out_at(snap: &NavSnapshot, fq: &str, focused_fq: &str) -> FullyQualifiedMoniker {
+        let view = IndexedSnapshot::new(snap);
+        let target = FullyQualifiedMoniker::from_string(fq);
+        let focused = FullyQualifiedMoniker::from_string(focused_fq);
+        drill_out(&view, target, &focused)
+    }
+
+    /// Card with three field children, no `last_focused_by_fq` entry.
+    /// `drill_in` must fall back to the topmost-leftmost child. The
+    /// fields are deliberately registered in a non-sorted order so the
+    /// test can't pass on insertion order alone.
+    #[test]
+    fn drill_in_card_with_field_children_picks_topmost_leftmost() {
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 200.0, 100.0)),
+            // Bottom row, left.
+            scope(
+                "/L/card/f-bottom",
+                Some("/L/card"),
+                rect(0.0, 60.0, 50.0, 30.0),
+            ),
+            // Top row, right — same y as the topmost-left field.
+            scope(
+                "/L/card/f-top-right",
+                Some("/L/card"),
+                rect(100.0, 10.0, 50.0, 30.0),
+            ),
+            // Top row, left — should win on `(top, left)` ordering.
+            scope(
+                "/L/card/f-top-left",
+                Some("/L/card"),
+                rect(0.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let registry = SpatialRegistry::new();
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card/f-top-left"),
+            "with no last_focused, drill_in must pick the topmost-leftmost field child"
+        );
+    }
+
+    /// Card with field children AND a recorded `last_focused_by_fq`
+    /// entry. The warm path wins over the topmost-leftmost fallback.
+    #[test]
+    fn drill_in_returns_remembered_last_focused_when_present() {
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 200.0, 100.0)),
+            scope(
+                "/L/card/f-top-left",
+                Some("/L/card"),
+                rect(0.0, 10.0, 50.0, 30.0),
+            ),
+            scope(
+                "/L/card/f-second",
+                Some("/L/card"),
+                rect(60.0, 10.0, 50.0, 30.0),
+            ),
+            scope(
+                "/L/card/f-third",
+                Some("/L/card"),
+                rect(120.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let mut registry = SpatialRegistry::new();
+        registry.last_focused_by_fq.insert(
+            FullyQualifiedMoniker::from_string("/L/card"),
+            FullyQualifiedMoniker::from_string("/L/card/f-second"),
+        );
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card/f-second"),
+            "warm path: a recorded last_focused must override the geometric first-child fallback"
+        );
+    }
+
+    /// Card with no field children (a leaf). Per the no-silent-dropout
+    /// contract, `drill_in` echoes `focused_fq`.
+    #[test]
+    fn drill_in_card_with_no_children_returns_focused_fq() {
+        let snap = snapshot(vec![scope("/L/card", None, rect_zero())]);
+        let registry = SpatialRegistry::new();
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card"),
+            "leaf card must echo focused_fq (semantic 'stay put')"
+        );
+    }
+
+    /// Card with exactly one field child — trivial pick.
+    #[test]
+    fn drill_in_card_with_one_field_child_returns_that_child() {
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 100.0, 50.0)),
+            scope(
+                "/L/card/only-field",
+                Some("/L/card"),
+                rect(10.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let registry = SpatialRegistry::new();
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card/only-field"),
+            "single-child case must descend to that child"
+        );
+    }
+
+    /// Two field children at the same rect — the kernel must pick one
+    /// deterministically using the chained `(top, left)` comparison.
+    /// `min_by` is stable on equal keys: it returns the first element
+    /// when no later element compares strictly less, so the snapshot
+    /// insertion order pins the tie-break.
+    #[test]
+    fn drill_in_with_tied_field_positions_is_deterministic() {
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 100.0, 50.0)),
+            scope(
+                "/L/card/f-first",
+                Some("/L/card"),
+                rect(10.0, 10.0, 50.0, 30.0),
+            ),
+            scope(
+                "/L/card/f-second",
+                Some("/L/card"),
+                rect(10.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let registry = SpatialRegistry::new();
+        let first_run = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        // Multiple runs must agree — there is no nondeterministic
+        // tie-break (no hashing or RNG on this path).
+        for _ in 0..5 {
+            let again = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+            assert_eq!(
+                again, first_run,
+                "drill_in must return the same FQM on every call for a tied snapshot"
+            );
+        }
+        assert_eq!(
+            first_run,
+            FullyQualifiedMoniker::from_string("/L/card/f-first"),
+            "tie-break must yield the first scope in insertion order"
+        );
+    }
+
+    /// `parent_zone` cycle: card claims its own field as its parent.
+    /// `drill_in` walks `parent_zone` only as a flat-set predicate
+    /// (`s.parent_zone.as_ref() == Some(&fq)`) so a self-reference does
+    /// not cause infinite recursion. This also pins the result against
+    /// regression — even on a malformed snapshot the pick is
+    /// deterministic.
+    #[test]
+    fn drill_in_with_parent_zone_cycle_does_not_hang() {
+        let snap = snapshot(vec![
+            // Card names the field as its own parent — torn input.
+            scope(
+                "/L/card",
+                Some("/L/card/field"),
+                rect(0.0, 0.0, 100.0, 50.0),
+            ),
+            scope(
+                "/L/card/field",
+                Some("/L/card"),
+                rect(10.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let registry = SpatialRegistry::new();
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card/field"),
+            "even with a parent_zone cycle, drill_in must terminate with a deterministic pick"
+        );
+    }
+
+    /// `record_focus` writes the focused FQM into every ancestor scope's
+    /// `last_focused_by_fq` slot, so a subsequent `drill_in(card)`
+    /// re-lands on the same field. Pins the warm-path round-trip
+    /// described in the registry's `record_focus` doc-comment.
+    #[test]
+    fn record_focus_then_drill_in_round_trips_to_same_field() {
+        use crate::layer::FocusLayer;
+        use crate::types::{LayerName, WindowLabel};
+
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 100.0, 50.0)),
+            scope(
+                "/L/card/f-top-left",
+                Some("/L/card"),
+                rect(0.0, 10.0, 50.0, 30.0),
+            ),
+            scope(
+                "/L/card/f-second",
+                Some("/L/card"),
+                rect(60.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let mut registry = SpatialRegistry::new();
+        // The layer must be registered for `record_focus` to walk the
+        // layer-ancestor chain — otherwise that phase is a no-op.
+        registry.push_layer(FocusLayer {
+            fq: FullyQualifiedMoniker::from_string("/L"),
+            segment: SegmentMoniker::from_string("L"),
+            name: LayerName::from_string("window"),
+            parent: None,
+            window_label: WindowLabel::from_string("main"),
+            last_focused: None,
+        });
+
+        let view = IndexedSnapshot::new(&snap);
+        let second_field = FullyQualifiedMoniker::from_string("/L/card/f-second");
+        registry.record_focus(&second_field, &view);
+
+        // The card's `last_focused_by_fq` slot now holds f-second.
+        assert_eq!(
+            registry
+                .last_focused_by_fq
+                .get(&FullyQualifiedMoniker::from_string("/L/card")),
+            Some(&second_field),
+            "record_focus must write the ancestor's last_focused_by_fq slot",
+        );
+
+        // Drill back into the card — the warm path returns f-second
+        // even though f-top-left would win on the cold-path topmost-
+        // leftmost ordering.
+        let result = drill_in_at(&snap, &registry, "/L/card", "/L/card");
+        assert_eq!(
+            result, second_field,
+            "drill_in after record_focus must return the recorded descendant",
+        );
+    }
+
+    /// `drill_in` on an unknown FQM emits `tracing::error!` and echoes
+    /// `focused_fq`. The registry's `last_focused_by_fq` is consulted
+    /// only after the existence check, so a stale entry does not mask
+    /// the torn-state error path.
+    #[test]
+    fn drill_in_unknown_fq_returns_focused_fq() {
+        let snap = snapshot(vec![scope("/L/known", None, rect_zero())]);
+        let registry = SpatialRegistry::new();
+        let result = drill_in_at(&snap, &registry, "/L/ghost", "/L/known");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/known"),
+            "torn state must echo focused_fq, not the unknown target"
+        );
+    }
+
+    /// `drill_out` on a field with a registered parent card returns the
+    /// card's FQM. Mirrors the user-symptom contract for Escape inside
+    /// a field.
+    #[test]
+    fn drill_out_field_returns_parent_card() {
+        let snap = snapshot(vec![
+            scope("/L/card", None, rect(0.0, 0.0, 100.0, 50.0)),
+            scope(
+                "/L/card/field",
+                Some("/L/card"),
+                rect(10.0, 10.0, 50.0, 30.0),
+            ),
+        ]);
+        let result = drill_out_at(&snap, "/L/card/field", "/L/card/field");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/card"),
+            "drill_out from a field must climb to its parent card"
+        );
+    }
+
+    /// `drill_out` on a scope with no parent_zone (registered directly
+    /// under the layer root) returns `focused_fq`. The React side
+    /// detects this via FQM-equality and falls through to `app.dismiss`.
+    #[test]
+    fn drill_out_top_level_scope_returns_focused_fq() {
+        let snap = snapshot(vec![scope("/L/top", None, rect_zero())]);
+        let result = drill_out_at(&snap, "/L/top", "/L/top");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/top"),
+            "scope with no parent_zone must echo focused_fq"
+        );
+    }
+
+    /// `drill_out` on an unknown FQM emits `tracing::error!` and echoes
+    /// `focused_fq`. Torn-state path.
+    #[test]
+    fn drill_out_unknown_fq_returns_focused_fq() {
+        let snap = snapshot(vec![scope("/L/known", None, rect_zero())]);
+        let result = drill_out_at(&snap, "/L/ghost", "/L/known");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/known"),
+            "drill_out on unknown FQM must echo focused_fq"
+        );
+    }
+
+    /// `drill_out` where the scope's `parent_zone` names an FQM that
+    /// is not present in the snapshot — torn-state recovery. Returns
+    /// `focused_fq`.
+    #[test]
+    fn drill_out_dangling_parent_zone_returns_focused_fq() {
+        let snap = snapshot(vec![scope("/L/orphan", Some("/L/missing"), rect_zero())]);
+        let result = drill_out_at(&snap, "/L/orphan", "/L/orphan");
+        assert_eq!(
+            result,
+            FullyQualifiedMoniker::from_string("/L/orphan"),
+            "dangling parent_zone must echo focused_fq, not propagate the missing FQM"
+        );
+    }
 }

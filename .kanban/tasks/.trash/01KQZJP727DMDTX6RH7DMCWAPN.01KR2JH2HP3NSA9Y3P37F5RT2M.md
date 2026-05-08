@@ -1,8 +1,7 @@
 ---
 assignees:
 - claude-code
-depends_on:
-- 01KQZJKQDWY3ZFMVW9GEH2VQ4C
+depends_on: []
 position_column: todo
 position_ordinal: f580
 project: spatial-nav

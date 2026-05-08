@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: f280
+position_ordinal: '7e80'
 project: spatial-nav
 title: Rename showFocusBar → showFocus in Rust doc-comments and assert focus-indicator coverage on perspective tabs + nav buttons
 ---

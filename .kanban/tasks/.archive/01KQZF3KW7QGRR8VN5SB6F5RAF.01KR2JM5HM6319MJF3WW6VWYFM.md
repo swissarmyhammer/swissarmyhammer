@@ -1,11 +1,7 @@
 ---
 assignees:
 - claude-code
-depends_on:
-- 01KQZ7W84TTCCEBZYPRKBVSJ3F
-- 01KQZ7WR2SYN4W9DSF9JKH6FQ3
-- 01KQZJKQDWY3ZFMVW9GEH2VQ4C
-- 01KQZJP727DMDTX6RH7DMCWAPN
+depends_on: []
 position_column: todo
 position_ordinal: f380
 project: spatial-nav

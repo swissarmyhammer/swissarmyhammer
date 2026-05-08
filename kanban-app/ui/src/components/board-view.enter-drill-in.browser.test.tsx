@@ -2,36 +2,21 @@
  * Browser-mode tests pinning the "Enter drills in, not inspect" contract on
  * the board surface.
  *
- * Source of truth for card `01KQ9X3A9NMRYK50GWP4S4ZMJ4`. Before this card
- * the BoardView's `<CommandScopeProvider>` registered a `board.inspect`
- * command keyed to vim Enter. Because that scope is closer than the root
- * scope in `extractScopeBindings`, vim Enter on every focused entity
- * inside the board shadowed the global `nav.drillIn` and dispatched
- * `ui.inspect` instead of drilling in. After the fix:
- *
- *   - vim Enter on a focused card no longer dispatches `ui.inspect`.
- *     The card is a leaf today (no zone children), so `nav.drillIn`'s
- *     execute closure invokes `spatial_drill_in` and the kernel
- *     returns `null` — Enter is a no-op. The test pins this by
- *     asserting zero `ui.inspect` invocations on the dispatch trace.
- *   - cua Enter has never been bound to inspect; the same regression
- *     guard applies in cua mode for completeness.
- *   - cua Space still dispatches `ui.inspect` against the focused
- *     entity — the per-`<Inspectable>` scope-level command kept the
- *     Space binding (see card 01KQ9XJ4XGKVW24EZSQCA6K3E2).
- *   - vim Enter on a focused column drills into the column's first
- *     card via `spatial_drill_in` → `column:<id>` resolves to the
- *     first task moniker.
+ * Covers:
+ *   - vim Enter on a focused card does not dispatch `ui.inspect`.
+ *   - cua Enter on a focused card does not dispatch `ui.inspect`.
+ *   - cua Space on a focused card still dispatches `ui.inspect` against
+ *     the focused entity via the per-`<Inspectable>` scope-level command.
+ *   - vim Enter on a focused column drills into the column's first card
+ *     via `spatial_drill_in`.
  *   - vim Enter on a focused column with a remembered `last_focused`
- *     drills back into that remembered card, not the structural
- *     first child.
+ *     drills back into that remembered card.
+ *   - The drill-in / drill-out IPC payloads carry a snapshot built from
+ *     the layer registry so the kernel can resolve descendants instead
+ *     of short-circuiting on `snapshot=None`.
  *
- * Mock pattern matches `board-view.spatial.test.tsx` so the two files
- * stay in sync as the BoardView spatial contract evolves.
- *
- * Runs under `kanban-app/ui/vite.config.ts`'s browser project (real
- * Chromium via Playwright) — every `*.test.tsx` outside
- * `*.node.test.tsx` lands here.
+ * Runs under the browser project (real Chromium via Playwright) — every
+ * `*.test.tsx` outside `*.node.test.tsx` lands here.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -122,6 +107,7 @@ import {
   asSegment,
   type FocusChangedPayload,
   type FullyQualifiedMoniker,
+  type NavSnapshot,
   type WindowLabel,
 } from "@/types/spatial";
 
@@ -395,10 +381,39 @@ function registerScopeArgs(): Array<Record<string, unknown>> {
 }
 
 /** Pull every `spatial_drill_in` call's args, in order. */
-function spatialDrillInCalls(): Array<{ fq: FullyQualifiedMoniker }> {
+function spatialDrillInCalls(): Array<{
+  fq: FullyQualifiedMoniker;
+  focusedFq?: FullyQualifiedMoniker;
+  snapshot?: NavSnapshot;
+}> {
   return mockInvoke.mock.calls
     .filter((c) => c[0] === "spatial_drill_in")
-    .map((c) => c[1] as { fq: FullyQualifiedMoniker });
+    .map(
+      (c) =>
+        c[1] as {
+          fq: FullyQualifiedMoniker;
+          focusedFq?: FullyQualifiedMoniker;
+          snapshot?: NavSnapshot;
+        },
+    );
+}
+
+/** Pull every `spatial_drill_out` call's args, in order. */
+function spatialDrillOutCalls(): Array<{
+  fq: FullyQualifiedMoniker;
+  focusedFq?: FullyQualifiedMoniker;
+  snapshot?: NavSnapshot;
+}> {
+  return mockInvoke.mock.calls
+    .filter((c) => c[0] === "spatial_drill_out")
+    .map(
+      (c) =>
+        c[1] as {
+          fq: FullyQualifiedMoniker;
+          focusedFq?: FullyQualifiedMoniker;
+          snapshot?: NavSnapshot;
+        },
+    );
 }
 
 /** Filter `dispatch_command` calls down to those for `ui.inspect`. */
@@ -410,11 +425,8 @@ function inspectDispatches(): Array<Record<string, unknown>> {
 }
 
 /**
- * Find the registered FullyQualifiedMoniker for a given moniker. The
- * board zone, columns, and cards all register via
- * `spatial_register_scope` (post-card-`01KQJDYJ4SDKK2G8FTAQ348ZHG`);
- * the scope-fallback path is kept for any leaf segment a future test
- * driver might emit.
+ * Find the registered FullyQualifiedMoniker for a given segment moniker by
+ * scanning `spatial_register_scope` calls.
  */
 function keyForMoniker(moniker: string): FullyQualifiedMoniker | undefined {
   const zone = registerScopeArgs().find((a) => a.segment === moniker);
@@ -712,6 +724,249 @@ describe("BoardView — Enter drills in, not inspect", () => {
       expect(t2Node).not.toBeNull();
       expect(t2Node!.getAttribute("data-focused")).not.toBeNull();
     });
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #6: drill_in IPC carries a snapshot from the layer registry
+  // -------------------------------------------------------------------------
+
+  it("enter_on_focused_card_passes_snapshot_to_drill_in", async () => {
+    mockKeymapMode = "vim";
+    const { unmount } = renderBoardWithShell();
+    await flushSetup();
+
+    const cardKey = keyForMoniker("task:t1");
+    expect(cardKey).toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(defaultInvokeImpl);
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    const drillCalls = spatialDrillInCalls();
+    expect(
+      drillCalls.length,
+      "vim Enter on a focused card must dispatch spatial_drill_in exactly once",
+    ).toBe(1);
+    expect(
+      drillCalls[0].snapshot,
+      "spatial_drill_in must carry a snapshot built from the layer registry",
+    ).toBeDefined();
+    const snap = drillCalls[0].snapshot!;
+    expect(snap.layer_fq, "snapshot.layer_fq must be set").toBeTruthy();
+    expect(
+      snap.scopes.some((s) => s.fq === cardKey),
+      "snapshot must include the focused card's scope entry",
+    ).toBe(true);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #7a: vim Enter on a focused card drills into the kernel-resolved
+  //      child field FQM (the user-symptom contract).
+  //
+  //      The earlier #4 test pinned column → card. This pins the
+  //      missing card → field hop: the React side trusts whatever FQM
+  //      `spatial_drill_in` returns and forwards it to setFocus. With
+  //      the kernel simulator stubbed to return a synthetic field FQM,
+  //      the assertion proves the resulting `spatial_focus` IPC lands
+  //      on the field — NOT back on the focused card itself (which is
+  //      the visible "Enter does nothing" symptom this task fixes).
+  // -------------------------------------------------------------------------
+
+  it("enter_on_focused_card_drills_into_first_field", async () => {
+    mockKeymapMode = "vim";
+    const { unmount } = renderBoardWithShell();
+    await flushSetup();
+
+    const cardKey = keyForMoniker("task:t1");
+    expect(cardKey, "the first card must register a spatial scope").toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+
+    // Pretend the real kernel resolved drill_in(cardKey) to a synthetic
+    // field FQM under the card. This mimics what step 12's
+    // snapshot-driven `drill_in` returns for a card whose snapshot
+    // contains field children (the kernel unit tests in
+    // `swissarmyhammer-focus/src/navigate.rs::tests::drill_in_*` pin
+    // that contract); the stub bypasses the (separate) topology
+    // question of whether EntityCard registers its fields as children
+    // in the snapshot.
+    const fieldKey = `${cardKey}/field:title` as FullyQualifiedMoniker;
+    mockInvoke.mockImplementation(async (cmd, args) => {
+      if (cmd === "spatial_drill_in") {
+        return fieldKey;
+      }
+      return defaultInvokeImpl(cmd, args);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    // Enter dispatched `nav.drillIn` for the focused card key exactly once.
+    const drillCalls = spatialDrillInCalls();
+    expect(
+      drillCalls.length,
+      "vim Enter on a focused card must dispatch spatial_drill_in exactly once",
+    ).toBe(1);
+    expect(drillCalls[0].fq).toBe(cardKey);
+
+    // The success branch forwards the kernel-returned FQM to setFocus,
+    // which under the production SpatialFocusProvider path invokes
+    // `spatial_focus` with that FQM. If the runtime fix regressed and
+    // the kernel was given no snapshot (or echoed `cardKey`), this
+    // would either be the card's own FQM or never fire — both visible
+    // as the user-reported "Enter does nothing" symptom.
+    const focusCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "spatial_focus",
+    );
+    expect(
+      focusCall,
+      "drill-in must invoke spatial_focus on the kernel-resolved target",
+    ).toBeTruthy();
+    const focusArgs = focusCall![1] as { fq?: string };
+    expect(
+      focusArgs.fq,
+      "drill-in's setFocus must invoke spatial_focus with the resolved field FQM, not the card's own FQM",
+    ).toBe(fieldKey);
+    expect(
+      focusArgs.fq,
+      "regression guard: focus must NOT echo back to the focused card",
+    ).not.toBe(cardKey);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #7b: vim Escape on a focused field drills back to the parent card.
+  //      Symmetric to #7a, mirrors the drill_out user-symptom contract.
+  // -------------------------------------------------------------------------
+
+  it("escape_on_focused_field_drills_out_to_parent_card", async () => {
+    mockKeymapMode = "vim";
+    const { unmount } = renderBoardWithShell();
+    await flushSetup();
+
+    const cardKey = keyForMoniker("task:t1");
+    expect(cardKey).toBeTruthy();
+
+    // Synthesize a field FQM nested under the card. The card already
+    // registered a real scope on mount; the field FQM is a fabricated
+    // descendant because the test schema declares no fields. The
+    // kernel-simulator stub below resolves `spatial_drill_out(fieldKey)`
+    // to `cardKey` exactly as the real `drill_out` would for a snapshot
+    // where `parent_zone(field) == card`.
+    const fieldKey = `${cardKey}/field:title` as FullyQualifiedMoniker;
+
+    // Seed focus to the field. We do NOT need to actually register the
+    // field as a scope — the entity-focus bridge takes the segment from
+    // the focus-changed event payload, and `extractScopeBindings` walks
+    // the scope chain that `<EntityFocusProvider>` produces.
+    await fireFocusChanged({
+      next_fq: fieldKey,
+      next_segment: asSegment("field:title"),
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(async (cmd, args) => {
+      if (cmd === "spatial_drill_out") return cardKey;
+      return defaultInvokeImpl(cmd, args);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    const drillCalls = spatialDrillOutCalls();
+    expect(
+      drillCalls.length,
+      "vim Escape on a focused field must dispatch spatial_drill_out exactly once",
+    ).toBe(1);
+
+    const focusCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "spatial_focus",
+    );
+    expect(
+      focusCall,
+      "drill-out must invoke spatial_focus on the kernel-resolved parent",
+    ).toBeTruthy();
+    const focusArgs = focusCall![1] as { fq?: string };
+    expect(
+      focusArgs.fq,
+      "drill-out's setFocus must invoke spatial_focus with the parent card's FQM",
+    ).toBe(cardKey);
+    expect(
+      focusArgs.fq,
+      "regression guard: focus must NOT echo back to the focused field",
+    ).not.toBe(fieldKey);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #8: drill_out IPC carries a snapshot from the layer registry
+  // -------------------------------------------------------------------------
+
+  it("escape_on_focused_card_passes_snapshot_to_drill_out", async () => {
+    mockKeymapMode = "vim";
+    const { unmount } = renderBoardWithShell();
+    await flushSetup();
+
+    const cardKey = keyForMoniker("task:t1");
+    expect(cardKey).toBeTruthy();
+
+    await fireFocusChanged({
+      next_fq: cardKey!,
+      next_segment: asSegment("task:t1"),
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation(async (cmd, args) => {
+      if (cmd === "spatial_drill_out") return cardKey;
+      return defaultInvokeImpl(cmd, args);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      await Promise.resolve();
+    });
+    await flushSetup();
+
+    const drillCalls = spatialDrillOutCalls();
+    expect(
+      drillCalls.length,
+      "vim Escape on a focused card must dispatch spatial_drill_out exactly once",
+    ).toBe(1);
+    expect(
+      drillCalls[0].snapshot,
+      "spatial_drill_out must carry a snapshot built from the layer registry",
+    ).toBeDefined();
 
     unmount();
   });
