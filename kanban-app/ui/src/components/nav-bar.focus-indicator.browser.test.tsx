@@ -345,7 +345,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='ui:navbar.board-selector']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     // No indicator on the zone wrapper — leaves own the visible focus.
@@ -379,7 +379,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(
@@ -414,7 +414,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='ui:navbar.search']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(
@@ -459,7 +459,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='field:board:b1.percent_complete']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(
@@ -535,7 +535,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
     expect(queryByTestId("focus-indicator")).not.toBeNull();
 
@@ -601,7 +601,7 @@ describe("NavBar — focus-indicator renders on each navbar entry", () => {
         "[data-segment='ui:navbar.inspect']",
       ) as HTMLElement | null;
       expect(node).not.toBeNull();
-      expect(node!.getAttribute("data-focused")).not.toBeNull();
+      expect(node!.getAttribute("data-focused")).toBe("true");
     });
 
     const node = container.querySelector(

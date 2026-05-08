@@ -52,7 +52,7 @@
 //! containers** (a leaf is a scope no other snapshot entry names as
 //! `parent_zone`; a container is a scope at least one other entry
 //! names as `parent_zone`). This ensures that when the geometric pick
-//! would land equally on a `showFocusBar=false` container and an inner
+//! would land equally on a `showFocus=false` container and an inner
 //! leaf, the user sees the focus indicator paint on the leaf.
 //!
 //! ## When the half-plane is empty
