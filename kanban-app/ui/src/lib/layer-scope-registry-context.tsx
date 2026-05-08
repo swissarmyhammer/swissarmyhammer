@@ -175,6 +175,40 @@ export class LayerScopeRegistry {
         console.error("[LayerScopeRegistry] global add hook threw", err);
       }
     }
+    // The `import.meta.env.DEV` check is inlined here on purpose — Vite's
+    // `define` substitutes the literal at the exact call site, so in a
+    // production build this becomes `if (false) { ... }` and the entire
+    // block (including the `detectNeedlessNesting` reference) is dead-
+    // code-eliminated. Hiding the gate behind a function call would
+    // promote the check to runtime and anchor the detector body in the
+    // production bundle. Do not extract this `if` into a helper.
+    //
+    // Microtask (rather than `requestAnimationFrame`) because by the time
+    // React's mount effect has called `add()`, the commit phase is over
+    // and layout has already run synchronously — `getBoundingClientRect()`
+    // returns the painted rect immediately. The microtask delay is needed
+    // only so the new entry's mount-time ref is observable from the
+    // iteration; rAF would block the warning until the next frame and is
+    // unnecessary.
+    //
+    // The pre-existing partners are captured at call time, before any
+    // later sibling mounts in the same commit can race in, so each
+    // structural overlap produces exactly one warning (the newer mount),
+    // not a pair of mirrored warnings.
+    if (import.meta.env.DEV) {
+      const priorFqs = new Set(this.store.keys());
+      priorFqs.delete(fq);
+      queueMicrotask(() => {
+        try {
+          detectNeedlessNesting(fq, entry, this, priorFqs);
+        } catch (err) {
+          console.error(
+            "[LayerScopeRegistry] needless-nesting detector threw",
+            err,
+          );
+        }
+      });
+    }
   }
 
   /**
@@ -339,3 +373,140 @@ export const LayerScopeRegistryContext =
 export function useOptionalLayerScopeRegistry(): LayerScopeRegistry | null {
   return useContext(LayerScopeRegistryContext);
 }
+
+// ---------------------------------------------------------------------------
+// Needless-nesting detection (dev-mode, observability-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pixel tolerance used when comparing two scope rects for "needless
+ * nesting" overlap. Two rects are considered to share geometry when
+ * their `x`, `y`, right edge (`x + width`), and bottom edge (`y +
+ * height`) all agree within this many pixels. A small tolerance
+ * absorbs subpixel rendering noise (anti-aliased borders, fractional
+ * dpr math) without missing the structural pattern of a parent scope
+ * wrapping a single child with no offset.
+ */
+const NEEDLESS_NESTING_TOLERANCE_PX = 2;
+
+/**
+ * `true` when both rects' four sides all agree within `tolerance` px.
+ *
+ * Compares `x`, `y`, right edge (`x + width`), and bottom edge (`y +
+ * height`) absolute differences against `tolerance`. This is the
+ * "two scopes share rect" predicate — width/height differences are
+ * captured implicitly via the right and bottom edges, so the partner
+ * rect must agree on all four sides, not just the origin.
+ *
+ * Internal to this module — not exported. The `add()` hook gates its
+ * call site on a literal `import.meta.env.DEV` so Vite's `define`
+ * substitutes `false` in production and the entire detection block is
+ * dead-code-eliminated. Keeping this helper unexported lets tree-
+ * shaking drop its body from production bundles. Tests reach it via
+ * the `__test__` namespace export at the bottom of this module.
+ */
+function rectsOverlapTightly(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+  tolerance: number = NEEDLESS_NESTING_TOLERANCE_PX,
+): boolean {
+  return (
+    Math.abs(a.x - b.x) <= tolerance &&
+    Math.abs(a.y - b.y) <= tolerance &&
+    Math.abs(a.x + a.width - (b.x + b.width)) <= tolerance &&
+    Math.abs(a.y + a.height - (b.y + b.height)) <= tolerance
+  );
+}
+
+/**
+ * Inspect `newEntry` against every live entry in `registry` and emit
+ * one structured `console.warn` per partner whose rect overlaps tightly.
+ * Observability-only — never throws (callers wrap defensively), never
+ * mutates the registry, never affects focus state. Skips entries whose
+ * `ref.current` has gone null (the brief unmount window) so a
+ * tearing-down sibling cannot trigger a spurious warning.
+ *
+ * `restrictToFqs`, when provided, narrows the iteration to only those
+ * partners that existed when the new entry was registered. The `add`
+ * hook uses this so a structural overlap warns exactly once (from the
+ * later mount's perspective), rather than producing mirrored warnings
+ * when both partners' microtasks run with the registry already
+ * containing both.
+ *
+ * The warning carries both FQMs, both segments, and the shared rect so
+ * a developer can locate the offending nesting in the React tree.
+ * React DevTools augments `console.warn` with the component stack
+ * automatically; the structured payload supplements that with the
+ * spatial-nav identifiers.
+ *
+ * Internal to this module — not exported. See the `rectsOverlapTightly`
+ * doc-comment for the rationale; tests use `__test__` below.
+ */
+function detectNeedlessNesting(
+  newFq: FullyQualifiedMoniker,
+  newEntry: ScopeEntry,
+  registry: LayerScopeRegistry,
+  restrictToFqs?: ReadonlySet<FullyQualifiedMoniker>,
+): void {
+  const newNode = newEntry.ref.current;
+  if (newNode === null) return;
+  const newRect = newNode.getBoundingClientRect();
+  // Pre-layout / detached rects are all zeros; skip rather than warn
+  // because a zero-rect "overlap" is a layout-not-yet-run artefact,
+  // not a structural nesting bug.
+  if (newRect.width === 0 && newRect.height === 0) return;
+
+  for (const [otherFq, otherEntry] of registry.entries()) {
+    if (otherFq === newFq) continue;
+    if (restrictToFqs !== undefined && !restrictToFqs.has(otherFq)) continue;
+    const otherNode = otherEntry.ref.current;
+    if (otherNode === null) continue;
+    const otherRect = otherNode.getBoundingClientRect();
+    if (otherRect.width === 0 && otherRect.height === 0) continue;
+
+    if (rectsOverlapTightly(newRect, otherRect)) {
+      console.warn(
+        "[spatial-nav] needless-nesting: two scopes share rect",
+        {
+          newFq,
+          otherFq,
+          newSegment: newEntry.segment,
+          otherSegment: otherEntry.segment,
+          rect: {
+            x: newRect.x,
+            y: newRect.y,
+            width: newRect.width,
+            height: newRect.height,
+          },
+          newEntry,
+          otherEntry,
+        },
+      );
+    }
+  }
+}
+
+/**
+ * Test-only entry point for the otherwise-internal needless-nesting
+ * helpers.
+ *
+ * The detection helpers (`rectsOverlapTightly`, `detectNeedlessNesting`,
+ * `NEEDLESS_NESTING_TOLERANCE_PX`) are deliberately unexported so tree-
+ * shaking can drop their bodies from production bundles. Tests still
+ * need to exercise them directly, so we expose them through this single
+ * named-export object. The `add()` hook is gated on a literal
+ * `import.meta.env.DEV`, which Vite's `define` rewrites to `false` in
+ * production builds — at that point the entire detector block is dead
+ * code, no production import path references the helpers, and tree-
+ * shaking is free to drop both the helper bodies and this `__test__`
+ * binding from `dist/`.
+ *
+ * Production code MUST NOT import from `__test__`. The grep-for-
+ * `needless-nesting` test in this module's spec verifies the production
+ * bundle never reaches this object.
+ */
+export const __test__ = {
+  rectsOverlapTightly,
+  detectNeedlessNesting,
+  NEEDLESS_NESTING_TOLERANCE_PX,
+};

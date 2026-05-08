@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KQW6JF6P7QHXFARAR5RTZVX4
-position_column: todo
-position_ordinal: dc80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffb080
 project: spatial-nav
 title: 'spatial-nav redesign step 13: cutover (4/4) — move overlap-warning to JS dev-mode against LayerScopeRegistry'
 ---
