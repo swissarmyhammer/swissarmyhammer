@@ -553,31 +553,54 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Spatial-nav debug overlay — proves <FocusDebugProvider enabled> is
-  // mounted at the App root.
+  // Spatial-nav debug overlay — proves the production
+  // `<FocusDebugProvider enabled={false}>` mount in `App.tsx` reaches
+  // every consumer (`<FocusLayer>` / `<FocusScope>`) so no
+  // `[data-debug=…]` overlay paints in shipped builds.
   //
-  // The overlay is gated by `useFocusDebug()`, which reads from a context
-  // mounted in `App.tsx` (and the quick-capture window). When the project
-  // is past its bug-fixing phase, flipping `enabled={false}` at the mount
-  // site removes every `[data-debug=…]` element in one edit.
+  // The Jump-To overlay supersedes the developer overlay; the
+  // dashed border, color-coded handle, and `(x,y)` tooltip are off by
+  // default. A developer who wants the overlay back flips
+  // `enabled={false}` to `enabled` at the mount site locally — the
+  // dedicated coverage in
+  // `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx`
+  // mounts its own `<FocusDebugProvider enabled>` so that path stays
+  // tested. See kanban task `01KQYWNHX9NS63JAFRDQ6E0DCM`.
+  //
+  // Pairs with `kanban-app/ui/src/App.no-debug-overlay.browser.test.tsx`,
+  // the regression test for the same invariant; this version is kept here
+  // because the e2e file is the place the original
+  // `app_renders_focus_debug_provider_at_root` assertion lived, and a
+  // direct counter-assertion at the same spot is the cleanest way to
+  // pin the new default.
   // -------------------------------------------------------------------------
 
-  it("app_renders_focus_debug_provider_at_root", async () => {
+  it("app_does_not_render_focus_debug_overlays", async () => {
     const { container, unmount } = renderApp();
     await flushAppMount();
 
-    // At least one scope overlay must exist somewhere in the rendered
-    // tree — the chrome scopes (`ui:nav-bar`, `ui:board`, etc.) all
-    // mount under `<FocusDebugProvider enabled>` and so must each
-    // render their `[data-debug="scope"]` decorator. After parent
-    // task `01KQSDP4ZJY5ERAJ68TFPVFRRE` collapsed the legacy split
-    // primitives into a single `<FocusScope>`, every spatial-primitive
-    // overlay carries `data-debug="scope"`.
-    const scopeOverlays = container.querySelectorAll('[data-debug="scope"]');
+    // Sanity check that the App actually rendered focus scopes — a
+    // bootstrap regression that threw before mounting any
+    // `<FocusScope>` would also produce zero overlays, which would
+    // falsely look like a pass. `data-segment` is the host attribute
+    // every `<FocusScope>` carries (see `focus-scope.tsx`); its
+    // presence proves the chrome scopes mounted normally.
+    const scopeHosts = container.querySelectorAll("[data-segment]");
     expect(
-      scopeOverlays.length,
-      "App must mount <FocusDebugProvider enabled> so scope overlays render",
+      scopeHosts.length,
+      "App must render <FocusScope> hosts (sanity check)",
     ).toBeGreaterThan(0);
+
+    // The `[data-debug]` selector matches every overlay kind
+    // (`layer` / `zone` / `scope`). Zero matches proves the
+    // `<FocusDebugProvider enabled={false}>` mount in `App.tsx` reaches
+    // every consumer and that no production code path mounts a second
+    // provider with `enabled` deeper in the tree.
+    const overlays = container.querySelectorAll("[data-debug]");
+    expect(
+      overlays.length,
+      "App must NOT render any focus-debug overlays in production",
+    ).toBe(0);
 
     unmount();
   });

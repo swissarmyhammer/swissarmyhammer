@@ -200,6 +200,34 @@ export interface SpatialFocusActions {
    * cheap.
    */
   subscribeFocusChanged: (subscriber: FocusChangedSubscriber) => () => void;
+  /**
+   * Enumerate every currently-registered scope in `layerFq`'s registry.
+   *
+   * Reads `getBoundingClientRect()` at call time for each entry's host
+   * ref. Returns `[]` when the layer has no registered registry, or
+   * when the registry exists but every entry's `ref.current` is null
+   * (the brief unmount window where React has already cleared the
+   * bound ref but the registry-deletion cleanup has not run yet).
+   *
+   * Mirrors the contract of `LayerScopeRegistry.buildSnapshot`: rects
+   * are sampled fresh on every call, no cache; entries with a null
+   * ref are skipped; zero-rect entries (host present but `display:
+   * none` / detached layout) ARE included — the Jump-To overlay
+   * filters zero-area rects when laying out pills.
+   */
+  enumerateScopesInLayer: (
+    layerFq: FullyQualifiedMoniker,
+  ) => Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }>;
+  /**
+   * Look up the layer FQM whose `LayerScopeRegistry` currently
+   * contains `fq`. Returns `null` when no registry has the FQM (the
+   * transient unmount window, or an unregistered FQM).
+   *
+   * Walks `layerRegistriesRef` in insertion order; in practice each
+   * scope FQM lives in exactly one layer's registry by construction
+   * so the first match is the only match.
+   */
+  layerFqOf: (fq: FullyQualifiedMoniker) => FullyQualifiedMoniker | null;
 }
 
 const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
@@ -458,6 +486,26 @@ function buildSpatialFocusActions(
     };
   };
 
+  const enumerateScopesInLayer: SpatialFocusActions["enumerateScopesInLayer"] =
+    (layerFq) => {
+      const registry = layerRegistriesRef.current.get(layerFq);
+      if (registry === undefined) return [];
+      const out: Array<{ fq: FullyQualifiedMoniker; rect: DOMRect }> = [];
+      for (const [fq, entry] of registry.entries()) {
+        const node = entry.ref.current;
+        if (node === null) continue;
+        out.push({ fq, rect: node.getBoundingClientRect() });
+      }
+      return out;
+    };
+
+  const layerFqOf: SpatialFocusActions["layerFqOf"] = (fq) => {
+    for (const [layerFq, registry] of layerRegistriesRef.current) {
+      if (registry.has(fq)) return layerFq;
+    }
+    return null;
+  };
+
   return {
     registerClaim,
     hasClaim,
@@ -471,6 +519,8 @@ function buildSpatialFocusActions(
     focusedFq,
     registerLayerRegistry,
     subscribeFocusChanged,
+    enumerateScopesInLayer,
+    layerFqOf,
   };
 }
 

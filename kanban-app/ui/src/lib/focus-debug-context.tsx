@@ -10,11 +10,14 @@
  *
  * # Toggle path
  *
- * Production windows mount `<FocusDebugProvider enabled>` at the root of
- * their tree (App.tsx and the quick-capture window). When the spatial-nav
- * project lands and the overlay is no longer needed, flip
- * `enabled={false}` at those mount sites — or pull the provider entirely.
- * Both paths cause the overlay to render `null` and add zero DOM.
+ * Production windows mount `<FocusDebugProvider enabled={false}>` at the
+ * root of their tree (App.tsx and the quick-capture window) so the
+ * overlay stays off in shipped builds — the Jump-To overlay supersedes
+ * the need for the per-primitive dashed-border decorator. The provider
+ * stays mounted (instead of being removed entirely) so a developer
+ * diagnosing a rect-staleness, conditional-remount, or zero-rect bug
+ * can flip the prop to `enabled` locally and instantly see live
+ * geometry without rewiring the App tree.
  *
  * # Default
  *

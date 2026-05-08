@@ -81,6 +81,7 @@ fn run_app(app_state: AppState) {
             commands::spatial_pop_layer,
             commands::spatial_drill_in,
             commands::spatial_drill_out,
+            commands::generate_jump_codes,
         ])
         .setup(setup_app)
         .on_window_event(handle_window_event)

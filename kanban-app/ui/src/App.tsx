@@ -69,7 +69,7 @@ if (IS_QUICK_CAPTURE) {
 function App() {
   return (
     <DiagErrorBoundary>
-      <FocusDebugProvider enabled>
+      <FocusDebugProvider enabled={false}>
         <SpatialFocusProvider>
           <FocusLayer name={WINDOW_LAYER_NAME}>
             <CommandBusyProvider>
@@ -124,7 +124,7 @@ function QuickCaptureApp() {
   document.body.style.background = "transparent";
 
   return (
-    <FocusDebugProvider enabled>
+    <FocusDebugProvider enabled={false}>
       <SpatialFocusProvider>
         <FocusLayer name={WINDOW_LAYER_NAME}>
           <RustEngineContainer>

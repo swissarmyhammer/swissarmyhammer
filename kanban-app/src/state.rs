@@ -448,13 +448,14 @@ pub(crate) struct AppState {
 impl AppState {
     /// Create a new AppState, loading config from disk.
     ///
-    /// Delegates all loading to the crates that own it:
-    /// [`swissarmyhammer_kanban::default_ui_state`] resolves the XDG
-    /// config path and reads the YAML (or seeds defaults), and
-    /// [`swissarmyhammer_kanban::default_commands_registry`] composes
-    /// the builtin command stack. This struct does not know the config
-    /// file format, the default path, or how the command registry is
-    /// assembled — it just wires the pieces together.
+    /// Delegates UI state loading to
+    /// [`swissarmyhammer_kanban::default_ui_state`] (which resolves the
+    /// XDG config path and reads the YAML, or seeds defaults). The
+    /// builtin command stack is composed at this app layer via
+    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// contributor crates the app pulls in. This struct does not know
+    /// the config file format or the default path — it just wires the
+    /// pieces together.
     pub fn new() -> Self {
         Self::with_ui_state(swissarmyhammer_kanban::default_ui_state(CONFIG_APP_SUBDIR))
     }
@@ -473,15 +474,21 @@ impl AppState {
     ///
     /// Every other constructor funnels through here so the wiring (MRU,
     /// window bookkeeping, command registry) sits in exactly one place.
-    /// The command registry is composed by
-    /// [`swissarmyhammer_kanban::default_commands_registry`] — user
-    /// overrides from `.kanban/commands/` layer on top later via
-    /// [`Self::reload_command_overrides`].
+    /// The command registry is composed via
+    /// [`swissarmyhammer_commands::compose_registry!`] over the
+    /// contributor crates this app pulls in (generic UI commands from
+    /// `swissarmyhammer_commands`, then domain commands from
+    /// `swissarmyhammer_kanban`). User overrides from `.kanban/commands/`
+    /// layer on top later via [`Self::reload_command_overrides`].
     fn with_ui_state(ui_state: UIState) -> Self {
         Self {
             boards: RwLock::new(HashMap::new()),
             ui_state: Arc::new(ui_state),
-            commands_registry: RwLock::new(swissarmyhammer_kanban::default_commands_registry()),
+            commands_registry: RwLock::new(swissarmyhammer_commands::compose_registry![
+                swissarmyhammer_commands,
+                swissarmyhammer_focus,
+                swissarmyhammer_kanban,
+            ]),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
@@ -717,10 +724,10 @@ impl AppState {
     /// Rebuild the commands registry from builtins + user overrides from the
     /// active board's `.kanban/commands/` directory.
     ///
-    /// Delegates the default-stack composition to
-    /// [`swissarmyhammer_kanban::default_commands_registry_with_overrides`]
-    /// so the stacking order (generic → kanban → user) lives in one
-    /// place, not spread across every call site that builds a registry.
+    /// Composes the builtin stack via
+    /// [`swissarmyhammer_commands::compose_yaml_sources!`] (same crate
+    /// list and order as [`Self::with_ui_state`]) and appends the user
+    /// overrides last so they take precedence by command id.
     async fn reload_command_overrides(&self, kanban_path: &Path) {
         let commands_dir = kanban_path.join("commands");
         let user_sources = load_yaml_dir(&commands_dir);
@@ -729,8 +736,19 @@ impl AppState {
         }
 
         let count = user_sources.len();
-        let registry =
-            swissarmyhammer_kanban::default_commands_registry_with_overrides(&user_sources);
+
+        let mut sources = swissarmyhammer_commands::compose_yaml_sources![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+        // User overrides apply last with partial-merge-by-id semantics.
+        let user_refs: Vec<(&str, &str)> = user_sources
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        sources.extend(user_refs);
+        let registry = swissarmyhammer_commands::CommandsRegistry::from_yaml_sources(&sources);
 
         *self.commands_registry.write().await = registry;
         tracing::info!(

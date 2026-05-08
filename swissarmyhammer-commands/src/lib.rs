@@ -13,6 +13,7 @@
 pub mod command;
 pub mod context;
 pub mod error;
+pub mod macros;
 pub mod registry;
 pub mod types;
 pub mod ui_state;

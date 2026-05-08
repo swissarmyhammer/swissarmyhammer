@@ -46,9 +46,19 @@ pub fn build_menu_from_commands(
     let app_menu = build_app_submenu(app, &menus, &mut menu_items)?;
     let file_menu = build_file_submenu(app, &menus, recent, &mut menu_items)?;
     let edit_menu = build_grouped_submenu(app, "Edit", menus.get("Edit"), &mut menu_items)?;
+    // Navigation submenu hosts the nine `nav.*` commands contributed by
+    // `swissarmyhammer-focus` (eight directional/drill plus
+    // `nav.jump`). Placement between Edit and Window mirrors common
+    // app conventions (View / Navigate sits after Edit) and keeps
+    // Window as the trailing menu before any platform-specific Help.
+    let nav_menu =
+        build_grouped_submenu(app, "Navigation", menus.get("Navigation"), &mut menu_items)?;
     let window_menu = build_window_submenu(app, &menus, windows, &mut menu_items)?;
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
+    let menu = Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &nav_menu, &window_menu],
+    )?;
     app.set_menu(menu).map_err(|e| {
         tracing::error!("Failed to set menu: {}", e);
         e
@@ -601,5 +611,71 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
         Err(e) => {
             tracing::error!("Failed to open board at {}: {}", path.display(), e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_menu_entries;
+    use swissarmyhammer_commands::{compose_registry, UIState};
+
+    /// The composed registry contributed by `swissarmyhammer-focus` must
+    /// land all nine `nav.*` commands under a single top-level
+    /// `Navigation` submenu key. The native menu builder
+    /// (`Menu::with_items` in `build_menu_from_commands`) feeds this map
+    /// into `build_grouped_submenu(app, "Navigation",
+    /// menus.get("Navigation"), …)`, so the count and grouping here is
+    /// the load-bearing contract for the menu wiring.
+    #[test]
+    fn navigation_submenu_contains_all_nine_nav_commands() {
+        let registry = compose_registry![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+        let ui_state = UIState::new();
+        let menus = collect_menu_entries(&registry, &ui_state);
+
+        let nav = menus
+            .get("Navigation")
+            .expect("Navigation submenu must exist after composing the focus crate");
+        assert_eq!(
+            nav.len(),
+            9,
+            "Navigation submenu must collect all 9 nav.* commands; got {:?}",
+            nav.iter().map(|e| &e.id).collect::<Vec<_>>(),
+        );
+
+        // Verify every expected nav id appears under Navigation.
+        let mut got_ids: Vec<&str> = nav.iter().map(|e| e.id.as_str()).collect();
+        got_ids.sort();
+        let expected_ids = [
+            "nav.down",
+            "nav.drillIn",
+            "nav.drillOut",
+            "nav.first",
+            "nav.jump",
+            "nav.last",
+            "nav.left",
+            "nav.right",
+            "nav.up",
+        ];
+        assert_eq!(got_ids, expected_ids);
+
+        // Entries must be sorted by (group, order). The YAML places
+        // directional first (group 0), first/last next (group 1),
+        // drill commands next (group 2), and `nav.jump` last
+        // (group 3). Pull just the group sequence and assert it is
+        // non-decreasing — that's the property
+        // `append_grouped_entries` relies on to insert separators.
+        let groups: Vec<usize> = nav.iter().map(|e| e.group).collect();
+        let mut sorted_groups = groups.clone();
+        sorted_groups.sort();
+        assert_eq!(
+            groups, sorted_groups,
+            "Navigation entries must be sorted by group",
+        );
+        assert_eq!(groups.first().copied(), Some(0), "first group must be 0");
+        assert_eq!(groups.last().copied(), Some(3), "last group must be 3");
     }
 }

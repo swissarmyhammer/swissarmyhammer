@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -22,6 +29,7 @@ import {
 import { reportDispatchError } from "@/lib/dispatch-error";
 import { CommandPalette } from "@/components/command-palette";
 import { FocusLayer } from "@/components/focus-layer";
+import { JumpToOverlay } from "@/components/jump-to-overlay";
 import { useEnclosingLayerFq } from "@/components/layer-fq-context";
 import {
   asSegment,
@@ -484,6 +492,14 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   const spatialActions = useSpatialFocusActions();
   const dismiss = useDispatchCommand("app.dismiss");
 
+  // Jump-To overlay open/close lives here so every entry point —
+  // vim-mode `s`, cua/emacs `Mod+G`, the Navigation > Jump To menu
+  // item, and the palette — opens the *same* overlay instance. The
+  // `nav.jump` global command flips this; `<JumpToOverlay>` mounts
+  // when `jumpOpen` is true and dismisses itself via the sentinel
+  // `app.dismiss` shadow on Escape / backdrop click / blur.
+  const [jumpOpen, setJumpOpen] = useState(false);
+
   // Drill + nav commands need read-on-demand access to spatial focus, entity
   // setFocus, and the `app.dismiss` dispatcher. Holding each in a ref keeps
   // the `globalCommands` memo dependency list empty while still letting the
@@ -528,6 +544,20 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
         setFocusRef,
         dismissRef,
       }),
+      // `nav.jump` is neither directional (NAV_COMMAND_SPEC) nor a
+      // drill (buildDrillCommands) — it just flips the AppShell's
+      // `jumpOpen` flag, so it lives directly in the global batch.
+      // `setJumpOpen` is identity-stable (React guarantees the
+      // setter from `useState` keeps its identity across renders),
+      // so it's safe to leave the memo's dep list empty.
+      {
+        id: "nav.jump",
+        name: "Jump To",
+        keys: { vim: "s", cua: "Mod+G", emacs: "Mod+G" },
+        execute: async () => {
+          setJumpOpen(true);
+        },
+      },
       ...STATIC_GLOBAL_COMMANDS,
     ],
     [],
@@ -564,6 +594,13 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
           />
         </FocusLayer>
       )}
+      {/* Jump-To overlay (AceJump-style scope picker). Opened by the
+          `nav.jump` global command from any entry point (keybinding,
+          menu, palette). The overlay manages its own internal focus
+          layer (`/jump-to`) and dismiss paths — Escape, backdrop
+          click, no-match flash, and window blur all flow through its
+          sentinel `app.dismiss` shadow back to `setJumpOpen(false)`. */}
+      <JumpToOverlay open={jumpOpen} onClose={() => setJumpOpen(false)} />
     </CommandScopeProvider>
   );
 }

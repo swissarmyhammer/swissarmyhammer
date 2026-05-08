@@ -161,38 +161,47 @@ fn kanban_yaml_preserves_command_metadata() {
     assert!(registry.get("file.newBoard").is_some());
 }
 
-/// Compose both builtin sources the way `kanban-app/src/state.rs` does and
-/// assert the full command count matches the pre-move total. Proves that
-/// the file move lost no commands.
+/// Compose every builtin source the way `kanban-app/src/state.rs` does
+/// and assert the full command count matches the post-focus total.
+/// Proves that the file moves and the focus-crate addition lost no
+/// commands.
 ///
-/// Count: 32 (commands-crate) + 28 (kanban-crate) = 60.
+/// Count: 32 (commands-crate) + 9 (focus-crate nav.*) + 28 (kanban-crate) = 69.
 ///
 /// The 34/26 → 32/28 shift came from relocating `ui.view.set` and
 /// `ui.perspective.set` into the kanban domain (new ids `view.set` and
-/// `perspective.set`) in 01KPY02X405QTP5ACH67THHSN8.
+/// `perspective.set`) in 01KPY02X405QTP5ACH67THHSN8. The +8 came from
+/// landing the eight directional / drill `nav.*` YAML stubs in
+/// `swissarmyhammer-focus` (01KQYWM5BHFRPCRD70GF8YRCGY); the +1 to 9
+/// came from adding `nav.jump` (AceJump-style overlay) in
+/// 01KQYWV9DC866DGRPBRFR17ZEY.
 #[test]
-fn composed_builtins_register_all_sixty_commands() {
+fn composed_builtins_register_all_sixty_nine_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
+    let focus_sources = swissarmyhammer_focus::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
 
     let mut composed: Vec<(&str, &str)> =
-        Vec::with_capacity(commands_sources.len() + kanban_sources.len());
+        Vec::with_capacity(commands_sources.len() + focus_sources.len() + kanban_sources.len());
     composed.extend(commands_sources.iter().map(|(n, c)| (*n, *c)));
+    composed.extend(focus_sources.iter().map(|(n, c)| (*n, *c)));
     composed.extend(kanban_sources.iter().map(|(n, c)| (*n, *c)));
 
     let registry = CommandsRegistry::from_yaml_sources(&composed);
 
     assert_eq!(
         registry.all_commands().len(),
-        60,
-        "composed registry must match the pre-move command count",
+        69,
+        "composed registry must match the post-focus command count",
     );
 
-    // Spot checks across both source sets.
+    // Spot checks across all three source sets.
     assert!(registry.get("app.quit").is_some(), "commands crate");
     assert!(registry.get("entity.add").is_some(), "commands crate");
     assert!(registry.get("ui.palette.open").is_some(), "commands crate");
     assert!(registry.get("drag.start").is_some(), "commands crate");
+    assert!(registry.get("nav.up").is_some(), "focus crate");
+    assert!(registry.get("nav.drillIn").is_some(), "focus crate");
     assert!(registry.get("task.untag").is_some(), "kanban crate");
     assert!(registry.get("perspective.goto").is_some(), "kanban crate");
     assert!(registry.get("file.closeBoard").is_some(), "kanban crate");

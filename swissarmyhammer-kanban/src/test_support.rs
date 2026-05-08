@@ -13,11 +13,16 @@
 /// call site) is load-bearing: later sources override earlier via the
 /// partial-merge-by-id semantics in `CommandsRegistry::merge_yaml_value`.
 ///
-/// Delegates to [`crate::default_builtin_yaml_sources`] — the public
-/// non-test version of this helper. Kept here so existing tests keep
-/// compiling without a mass rename; new test code should prefer
-/// `default_builtin_yaml_sources` so production and tests exercise the
-/// same composition path.
+/// Mirrors the contributor list used by the app layer's
+/// `swissarmyhammer_commands::compose_registry!` invocation
+/// (`swissarmyhammer_commands` then this crate), so production and tests
+/// exercise the same composition path. The macro can't be used directly
+/// here because it expects a `::`-separated identifier path and this
+/// crate's contribution lives at our crate root (the `crate` keyword
+/// isn't an identifier).
 pub fn composed_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    crate::default_builtin_yaml_sources()
+    let mut sources: Vec<(&'static str, &'static str)> = Vec::new();
+    sources.extend(swissarmyhammer_commands::builtin_yaml_sources());
+    sources.extend(crate::builtin_yaml_sources());
+    sources
 }

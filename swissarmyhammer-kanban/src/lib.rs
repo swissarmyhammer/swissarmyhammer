@@ -117,9 +117,10 @@ pub use swissarmyhammer_entity::EntityContext;
 /// generic commands (`app`, `settings`, `entity`, `ui`, `drag`). Kanban-specific
 /// commands (`task`, `column`, `tag`, `attachment`, `perspective`, `file`) live
 /// under `swissarmyhammer-kanban/builtin/commands/` and are contributed to the
-/// composed command registry via [`builtin_yaml_sources`]. Callers layer the
-/// commands crate's builtins first, then the kanban crate's builtins, then
-/// user overrides — later sources override earlier by ID with partial merge.
+/// composed command registry via [`builtin_yaml_sources`]. The app layer
+/// (kanban-app, kanban-cli, etc.) decides which contributors to compose and
+/// in what order via `swissarmyhammer_commands::compose_registry!` — later
+/// sources override earlier by id with partial merge.
 static BUILTIN_COMMANDS: include_dir::Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/builtin/commands");
 
@@ -135,6 +136,10 @@ static BUILTIN_COMMANDS: include_dir::Dir =
 /// `commands/sub/foo.yaml` would silently shadow `commands/foo.yaml` on
 /// `HashMap` insert downstream. Filtering to the root prevents that
 /// class of bug at the loader.
+///
+/// This is this crate's contribution function — every contributor crate
+/// exposes the same shape so the app layer can compose them with
+/// [`swissarmyhammer_commands::compose_registry!`].
 pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
     BUILTIN_COMMANDS
         .files()
@@ -146,65 +151,6 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
             Some((name, content))
         })
         .collect()
-}
-
-/// Returns the stacked builtin command YAML sources used by every kanban
-/// consumer at startup: generic commands from `swissarmyhammer-commands`
-/// first, then kanban-specific commands from this crate.
-///
-/// The ordering is load-bearing: later sources override earlier via the
-/// partial-merge-by-id semantics in `CommandsRegistry::merge_yaml_value`.
-/// User overrides (from `.kanban/commands/`) layer on top of this stack
-/// at the call site — see [`default_commands_registry_with_overrides`].
-///
-/// This replaces inline stacking that every consumer (GUI, CLI, MCP,
-/// tests) used to duplicate. The `test_support` crate used to carry a
-/// copy under `composed_builtin_yaml_sources`; that helper now delegates
-/// here so only one definition exists.
-pub fn default_builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
-    let commands = swissarmyhammer_commands::builtin_yaml_sources();
-    let kanban = builtin_yaml_sources();
-    let mut out = Vec::with_capacity(commands.len() + kanban.len());
-    out.extend(commands);
-    out.extend(kanban);
-    out
-}
-
-/// Build a fresh [`swissarmyhammer_commands::CommandsRegistry`] containing
-/// the full default command stack (generic + kanban builtins).
-///
-/// Consumers that need user overrides can call
-/// [`default_commands_registry_with_overrides`] or merge them manually via
-/// [`swissarmyhammer_commands::CommandsRegistry::merge_yaml_sources`].
-///
-/// This is the self-composing factory the reviewer called for in PR #40:
-/// `AppState` no longer has to know about both source stacks — it just
-/// asks for the default registry and gets a ready-to-use one.
-pub fn default_commands_registry() -> swissarmyhammer_commands::CommandsRegistry {
-    let sources = default_builtin_yaml_sources();
-    swissarmyhammer_commands::CommandsRegistry::from_yaml_sources(&sources)
-}
-
-/// Build a [`swissarmyhammer_commands::CommandsRegistry`] composed of the
-/// default builtins plus user YAML overrides (typically loaded from a
-/// board's `.kanban/commands/` directory via
-/// [`swissarmyhammer_commands::load_yaml_dir`]).
-///
-/// Overrides apply last with partial-merge-by-id semantics, so they can
-/// tweak specific fields on a builtin without replacing the whole
-/// definition.
-pub fn default_commands_registry_with_overrides(
-    overrides: &[(String, String)],
-) -> swissarmyhammer_commands::CommandsRegistry {
-    let mut registry = default_commands_registry();
-    if !overrides.is_empty() {
-        let refs: Vec<(&str, &str)> = overrides
-            .iter()
-            .map(|(n, c)| (n.as_str(), c.as_str()))
-            .collect();
-        registry.merge_yaml_sources(&refs);
-    }
-    registry
 }
 
 /// File name for the UIState YAML config, used under every consumer's

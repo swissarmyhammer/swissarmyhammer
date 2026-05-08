@@ -8344,9 +8344,13 @@ dependencies = [
 name = "swissarmyhammer-focus"
 version = "0.12.11"
 dependencies = [
+ "include_dir",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
+ "swissarmyhammer-commands",
  "swissarmyhammer-common",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "ulid",
@@ -8408,6 +8412,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
+ "swissarmyhammer-focus",
  "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",

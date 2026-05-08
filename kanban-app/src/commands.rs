@@ -2519,8 +2519,55 @@ pub async fn spatial_drill_out(
     Ok(next_fq)
 }
 
+/// Generate `count` distinct, prefix-free key codes for the Jump-To
+/// overlay (vim-sneak / AceJump-style labels).
+///
+/// Pure pass-through to
+/// [`swissarmyhammer_focus::generate_sneak_codes`] — no state mutation,
+/// no I/O. The frontend calls this once when the overlay opens and uses
+/// the resulting codes to label visible scopes.
+///
+/// # Errors
+///
+/// Returns the stringified
+/// [`swissarmyhammer_focus::SneakError`] when `count` exceeds
+/// the maximum capacity of the alphabet (currently 529 — `23²`). In
+/// practice this means an upstream bug, since the overlay never shows
+/// hundreds of targets.
+#[tauri::command]
+pub fn generate_jump_codes(count: usize) -> Result<Vec<String>, String> {
+    swissarmyhammer_focus::generate_sneak_codes(count).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::generate_jump_codes;
+
+    /// `generate_jump_codes` round-trips through the same code path the
+    /// Tauri runtime invokes — identical output to the underlying Rust
+    /// impl, errors flattened to `String`.
+    #[test]
+    fn generate_jump_codes_matches_rust_impl_for_known_count() {
+        let count = 30usize;
+        let via_command = generate_jump_codes(count).expect("count=30 must succeed");
+        let via_rust = swissarmyhammer_focus::generate_sneak_codes(count)
+            .expect("count=30 must succeed via direct call");
+        assert_eq!(via_command, via_rust);
+        assert_eq!(via_command.len(), count);
+    }
+
+    /// `generate_jump_codes` flattens [`SneakError`] to a `String`
+    /// preserving the canonical error message.
+    #[test]
+    fn generate_jump_codes_flattens_too_many_targets_error() {
+        let over = swissarmyhammer_focus::MAX_SNEAK_CODES + 1;
+        let err = generate_jump_codes(over).expect_err("over-capacity must fail");
+        assert!(
+            err.contains("too many jump targets"),
+            "unexpected error message: {err:?}",
+        );
+    }
+
     /// Verifies that store_name and id are correctly extracted from ChangeEvent
     /// payloads, and that events with missing fields are identified.
     #[test]

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e480
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffb880
 project: spatial-nav
 title: Compose builtin commands at the app layer via a macro
 ---

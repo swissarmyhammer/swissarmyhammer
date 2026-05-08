@@ -1,8 +1,7 @@
 ---
 assignees:
 - wballard
-depends_on:
-- 01KQW6EJ2T76X5HH2MRWEGAVQ2
+depends_on: []
 position_column: done
 position_ordinal: ffffffffffffffffffffffffffffffffffad80
 project: spatial-nav

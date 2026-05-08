@@ -5,12 +5,13 @@
  *
  * This is a developer aid, not production chrome. It renders only when
  * `useFocusDebug()` returns `true` — controlled by the
- * `<FocusDebugProvider>` mounted at the App root. When the spatial-nav
- * project lands and the overlay is no longer needed, flip
- * `enabled={false}` at the provider site (App.tsx and the quick-capture
- * window) — or pull the provider entirely. Either path causes consumers
- * (`<FocusLayer>`, `<FocusZone>`, `<FocusScope>`) to skip rendering this
- * component, so its existence has zero DOM cost when off.
+ * `<FocusDebugProvider>` mounted at the App root. Production ships with
+ * `<FocusDebugProvider enabled={false}>` (App.tsx and the quick-capture
+ * window) so consumers (`<FocusLayer>`, `<FocusZone>`, `<FocusScope>`)
+ * skip rendering this component and the overlay has zero DOM cost.
+ * A developer who wants the overlay back flips that prop to `enabled`
+ * locally — see the test-local mounts in
+ * `focus-debug-overlay.browser.test.tsx` for an example wrapping pattern.
  *
  * # Why per-primitive
  *

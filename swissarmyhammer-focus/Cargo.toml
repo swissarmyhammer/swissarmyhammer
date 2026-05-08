@@ -9,11 +9,15 @@ description = "Spatial focus and keyboard navigation engine — generic, no doma
 readme = "README.md"
 
 [dependencies]
+include_dir = { workspace = true }
 serde = { workspace = true }
 swissarmyhammer-common = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+swissarmyhammer-commands = { workspace = true }
 tracing-subscriber = { workspace = true }

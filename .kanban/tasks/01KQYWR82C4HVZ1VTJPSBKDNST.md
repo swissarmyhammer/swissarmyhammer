@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: e180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffb680
 project: spatial-nav
 title: Sneak code generator in swissarmyhammer-focus (pure Rust + Tauri command)
 ---
@@ -79,26 +79,36 @@ Architectural fit: spatial-nav vocabulary is Rust-authoritative in this workspac
 
 ## Acceptance Criteria
 
-- [ ] `swissarmyhammer-focus::generate_sneak_codes(0)` returns an empty vec.
-- [ ] `swissarmyhammer-focus::generate_sneak_codes(N)` returns N distinct strings for `1 <= N <= alphabet.len().pow(2)`.
-- [ ] No element of the returned vec is a prefix of any other element.
-- [ ] Codes for small N use the home-row letters first.
-- [ ] `generate_sneak_codes(N+1)` returns `Err(SneakError::TooManyTargets(...))` when `N` is the maximum capacity.
-- [ ] Tauri command `generate_jump_codes` is registered and round-trips correctly through `invoke`.
-- [ ] Frontend `generateSneakCodes(count)` resolves to the same vec the Rust impl produces.
+- [x] `swissarmyhammer-focus::generate_sneak_codes(0)` returns an empty vec.
+- [x] `swissarmyhammer-focus::generate_sneak_codes(N)` returns N distinct strings for `1 <= N <= alphabet.len().pow(2)`.
+- [x] No element of the returned vec is a prefix of any other element.
+- [x] Codes for small N use the home-row letters first.
+- [x] `generate_sneak_codes(N+1)` returns `Err(SneakError::TooManyTargets(...))` when `N` is the maximum capacity.
+- [x] Tauri command `generate_jump_codes` is registered and round-trips correctly through `invoke`.
+- [x] Frontend `generateSneakCodes(count)` resolves to the same vec the Rust impl produces.
 
 ## Tests
 
-- [ ] New Rust unit tests in `swissarmyhammer-focus/src/sneak.rs` (`#[cfg(test)] mod tests`):
+- [x] New Rust unit tests in `swissarmyhammer-focus/src/sneak.rs` (`#[cfg(test)] mod tests`):
   - `generates_empty_for_zero_count` — `generate_sneak_codes(0)` is empty.
   - `generates_distinct_codes` — for N in `[1, 5, 10, 23, 50, 200, 500]`, every pair is distinct.
   - `prefix_free_invariant` — for the same range of N, no code is a prefix of any other (brute-force check: for each pair, neither `starts_with` the other).
   - `single_letter_codes_use_home_row_first` — for N=4, returned codes match the first 4 letters of `SNEAK_ALPHABET`.
   - `errors_when_count_exceeds_capacity` — `generate_sneak_codes(SNEAK_ALPHABET.len().pow(2) + 1)` returns `Err(TooManyTargets(...))`.
-- [ ] Tauri command test in `kanban-app/tests/`: round-trip `generate_jump_codes` with a known count and assert the result matches the Rust impl.
-- [ ] Frontend test `kanban-app/ui/src/lib/sneak-codes.test.ts`: mock `invoke`, assert the wrapper passes `count` through and returns the resolved array.
-- [ ] Test command: `cargo nextest run -p swissarmyhammer-focus && cd kanban-app/ui && pnpm test sneak-codes` — passes.
+  - (added) `generates_at_max_capacity` — boundary check confirming exactly `MAX_SNEAK_CODES` distinct codes at the upper bound.
+- [x] Tauri command test in `kanban-app/src/commands.rs` `#[cfg(test)] mod tests`: round-trip `generate_jump_codes` with a known count, plus an error-flattening check (`generate_jump_codes_matches_rust_impl_for_known_count`, `generate_jump_codes_flattens_too_many_targets_error`). Inline rather than `kanban-app/tests/` because the command body is pure and has no Tauri runtime to integration-test against.
+- [x] Frontend test `kanban-app/ui/src/lib/sneak-codes.test.ts`: mocks `invoke`, asserts the wrapper passes `count` through, returns the resolved array, and propagates rejected promises.
+- [x] Test command: `cargo nextest run -p swissarmyhammer-focus && cd kanban-app/ui && pnpm test sneak-codes` — passes.
 
 ## Workflow
 
 - Use `/tdd` — write the Rust unit tests first (will fail because `sneak::generate_sneak_codes` doesn't exist); implement; re-run. Then add the Tauri command and the TS wrapper. #nav-jump
+
+## Review Findings (2026-05-08 11:18)
+
+Algorithm is correct, all boundaries handled (0, alphabet_len, MAX_SNEAK_CODES, MAX+1), prefix-free invariant holds by disjoint-bucket partition, tests verify behavioral invariants brute-force rather than implementation. Inline tests in `kanban-app/src/commands.rs` (instead of a new `kanban-app/tests/` directory) is a sensible call — the function body is pure, the file already has `#[cfg(test)] mod tests`, and no Tauri runtime needs exercising. RUST_REVIEW and JS_TS_REVIEW guidelines are met (rustdoc on every public item, `thiserror` used idiomatically, no `unsafe`/`unwrap` outside tests, TS wrapper is a thin invoke with explicit type parameter).
+
+### Nits
+
+- [x] `swissarmyhammer-focus/src/lib.rs:46-60` — The crate-level "Modules" prose list does not mention `sneak`. Arguably the section describes the spatial-nav kernel pipeline (`layer`/`navigate`/`snapshot`/`registry`/`state`/`types`/`observer`) and `sneak` is a standalone utility, so omission may be intentional. If you want full coverage, add a one-liner like `[`sneak`] — prefix-free Jump-To code generator (vim-sneak / AceJump labels).` to that list.
+- [x] `swissarmyhammer-focus/src/sneak.rs:50` — `#[error("too many jump targets: {0} exceeds capacity {1}")]` uses positional placeholders. Named tuple fields aren't possible without naming the variant fields, but you could rename to `TooManyTargets { requested: usize, capacity: usize }` and use `{requested}`/`{capacity}` for slightly clearer error formatting and matchability. Optional polish — current form is idiomatic `thiserror`.

@@ -48,6 +48,9 @@ tokio-test = { workspace = true }
 # Re-enable the entity crate with test-support so tests and benches can use
 # io::READ_ENTITY_DIR_CALLS to assert cache short-circuiting.
 swissarmyhammer-entity = { workspace = true, features = ["test-support"] }
+# Composed-registry tests stack the focus crate alongside this crate via
+# `compose_registry!` to assert the full nav.* + kanban command set.
+swissarmyhammer-focus = { workspace = true }
 # Enable our own `test-support` feature so integration tests under `tests/`
 # can import `swissarmyhammer_kanban::test_support::*` helpers without the
 # individual test file needing a feature gate.

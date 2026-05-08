@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: df80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffb480
 project: spatial-nav
 title: Disable focus-debug overlays in production
 ---
@@ -28,18 +28,25 @@ Do NOT add a runtime preference / settings toggle for this in this task — that
 
 ## Acceptance Criteria
 
-- [ ] `kanban-app/ui/src/App.tsx:98` and `App.tsx:153` both mount `<FocusDebugProvider enabled={false}>`.
-- [ ] No dashed border, no colored corner handle, no `(x,y)` label appears on any focusable element when running `pnpm tauri dev`.
-- [ ] No other `FocusDebugProvider` in production code paths is `enabled` (test files may mount their own with `enabled` for test-local needs).
-- [ ] `kanban-app/ui/src/spatial-nav-end-to-end.spatial.test.tsx` still passes with the new defaults.
-- [ ] `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx` still passes (it mounts its own provider).
+- [x] `kanban-app/ui/src/App.tsx:98` and `App.tsx:153` both mount `<FocusDebugProvider enabled={false}>`.
+- [x] No dashed border, no colored corner handle, no `(x,y)` label appears on any focusable element when running `pnpm tauri dev`.
+- [x] No other `FocusDebugProvider` in production code paths is `enabled` (test files may mount their own with `enabled` for test-local needs).
+- [x] `kanban-app/ui/src/spatial-nav-end-to-end.spatial.test.tsx` still passes with the new defaults.
+- [x] `kanban-app/ui/src/components/focus-debug-overlay.browser.test.tsx` still passes (it mounts its own provider).
 
 ## Tests
 
-- [ ] Update `kanban-app/ui/src/spatial-nav-end-to-end.spatial.test.tsx` — assertion rewritten as described.
-- [ ] Add a regression test `kanban-app/ui/src/App.no-debug-overlay.browser.test.tsx`: render `<App />` (or a minimal slice with `<FocusScope>` underneath the App's provider tree), query the document for any element with `data-focus-debug-kind` (or whatever attribute the overlay uses; if there isn't one, add one in this task to make the assertion testable), assert zero matches.
-- [ ] Test command: `cd kanban-app/ui && pnpm test spatial-nav-end-to-end App.no-debug-overlay focus-debug-overlay` — all three pass.
+- [x] Update `kanban-app/ui/src/spatial-nav-end-to-end.spatial.test.tsx` — assertion rewritten as described.
+- [x] Add a regression test `kanban-app/ui/src/App.no-debug-overlay.browser.test.tsx`: render `<App />` (or a minimal slice with `<FocusScope>` underneath the App's provider tree), query the document for any element with `data-focus-debug-kind` (or whatever attribute the overlay uses; if there isn't one, add one in this task to make the assertion testable), assert zero matches.
+- [x] Test command: `cd kanban-app/ui && pnpm test spatial-nav-end-to-end App.no-debug-overlay focus-debug-overlay` — all three pass.
 
 ## Workflow
 
 - Use `/tdd` — add the new `App.no-debug-overlay` regression test first (it will fail because overlays still render), then flip the prop and update the e2e test. #nav-jump
+
+## Implementation Notes
+
+- The overlay's existing `data-debug={kind}` attribute (set on outer span in both `<FocusLayerOverlay>` and `<FocusDebugOverlay>`) is the stable selector — no new attribute needed.
+- Chose Option 2 in the e2e test rewrite: counter-assertion that no `[data-debug]` elements exist after App mounts, with a sanity check that `[data-segment]` hosts (FocusScope hosts) did render. This pins the new default cleanly at the same spot the original assertion lived.
+- Updated docstrings in `focus-debug-context.tsx` and `focus-debug-overlay.tsx` so they reflect the new shipping default instead of describing the old developer-on-by-default state.
+- Test runs: `pnpm exec vitest run spatial-nav-end-to-end App.no-debug-overlay focus-debug-overlay` → 5 files / 53 tests, all green. `tsc --noEmit` clean.

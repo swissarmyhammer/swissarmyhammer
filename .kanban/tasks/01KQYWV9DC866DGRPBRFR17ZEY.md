@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KQYWM5BHFRPCRD70GF8YRCGY
 - 01KQYWSW6NFHCS53JT9Y8NYK47
-position_column: todo
-position_ordinal: e380
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffba80
 project: spatial-nav
 title: Wire nav.jump command — YAML, keybindings, menu, palette, app-shell state
 ---
@@ -15,7 +15,7 @@ Add the `nav.jump` command and connect every entry point to a single `<JumpToOve
 
 Touch points:
 
-1. **YAML** — append to `swissarmyhammer-commands/builtin/commands/nav.yaml` (created by the prior task):
+1. **YAML** — append to `swissarmyhammer-focus/builtin/commands/nav.yaml` (created by the prior task that lands the nav.* commands in `swissarmyhammer-focus`):
 
    ```yaml
    - id: nav.jump
@@ -33,19 +33,20 @@ Touch points:
 
    Group 3 places it after up/down/left/right (group 0), first/last (group 1), and drillIn/drillOut (group 2) with a separator.
 
-2. **Keybindings** — `kanban-app/ui/src/lib/keybindings.ts`:
-   - Add `s: "nav.jump"` to the `vim` `BINDING_TABLES` block (around line 97).
-   - Add `"Mod+g": "nav.jump"` to the `cua` block (around line 108).
-   - Add `"Mod+g": "nav.jump"` to the `emacs` block (around line 131).
-   - Verify vim's `s` does not conflict with any existing chord prefix in `SEQUENCE_TABLES.vim` (currently `g`, `d`, `z` — `s` is free).
+2. **Keybindings** — `kanban-app/ui/src/lib/keybindings.ts`. Note that as of the spatial-nav cutover this file uses a **single nested `BINDING_TABLES` object** with `vim`, `cua`, `emacs` as nested keys (not three separate constants). Add:
+   - Inside the `vim` block: `s: "nav.jump"`.
+   - Inside the `cua` block: `"Mod+g": "nav.jump"`.
+   - Inside the `emacs` block: `"Mod+g": "nav.jump"`.
+   - Verify vim's `s` does not conflict with any existing chord prefix in `SEQUENCE_TABLES.vim`. Inspect `SEQUENCE_TABLES` in the same file before landing.
 
 3. **App-shell wiring** — `kanban-app/ui/src/components/app-shell.tsx`:
    - Add `const [jumpOpen, setJumpOpen] = useState(false);` to the AppShell component.
    - Render `<JumpToOverlay open={jumpOpen} onClose={() => setJumpOpen(false)} />` near the existing modal mounts (e.g., command palette).
-   - In the `globalCommands` memo, append a `nav.jump` CommandDef whose `execute: async () => setJumpOpen(true)`. Use the same memo pattern as the other nav commands.
+   - In the `globalCommands` memo, append a `nav.jump` `CommandDef` whose `execute: async () => setJumpOpen(true)`. Use the same memo pattern as the other nav commands.
+   - Note: the existing nav.* commands are split between `NAV_COMMAND_SPEC` (the 6 directional + first/last commands, built via `buildNavCommands`) and `buildDrillCommands` (`nav.drillIn` / `nav.drillOut`, which thread snapshot through `actions.drillIn` / `actions.drillOut`). `nav.jump` is its own thing — neither directional nor drill — so wire it directly into `globalCommands` rather than extending either spec/builder.
 
 4. **Menu wiring** — `kanban-app/src/menu.rs`:
-   - The Navigation submenu was added in the prior task; `nav.jump` will appear automatically because it has `menu.path: [Navigation]`.
+   - The Navigation submenu was added in the prior task (`build_grouped_submenu` for Navigation in `build_menu_from_commands`); `nav.jump` will appear automatically because it has `menu.path: [Navigation]`.
    - Confirm the menu click for `nav.jump` is dispatched through the same Tauri menu-event path that existing commands use, ending in the React `execute` closure (no extra plumbing needed).
 
 5. **Palette discoverability** — automatic once the YAML stub has `name: "Jump To"`. Verify by opening the palette and typing "jump".

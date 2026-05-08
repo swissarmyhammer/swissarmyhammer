@@ -35,10 +35,16 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     Enter: "nav.drillIn",
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",
+    // `s` opens the Jump-To overlay (AceJump-style scope picker). Free
+    // in vim because the existing chord prefixes are `g`, `d`, `z`
+    // (see `SEQUENCE_TABLES.vim`) — `s` collides with neither a chord
+    // root nor any other single-key vim binding above.
+    s: "nav.jump",
   },
   cua: {
     "Mod+Shift+P": "app.palette",
     "Mod+f": "app.search",
+    "Mod+g": "nav.jump",
     "Mod+z": "app.undo",
     "Mod+Shift+Z": "app.redo",
     Enter: "nav.drillIn",
@@ -61,6 +67,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
+    "Mod+g": "nav.jump",
     Enter: "nav.drillIn",
     Escape: "nav.drillOut",
     "Mod+w": "file.closeBoard",

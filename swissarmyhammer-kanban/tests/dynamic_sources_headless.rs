@@ -25,12 +25,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use swissarmyhammer_commands::UIState;
+use swissarmyhammer_commands::{compose_registry, UIState};
 use swissarmyhammer_kanban::dynamic_sources::{build_dynamic_sources, DynamicSourcesInputs};
 use swissarmyhammer_kanban::scope_commands::{commands_for_scope, DynamicSources, WindowInfo};
 use swissarmyhammer_kanban::{
-    board::InitBoard, default_commands_registry, dispatch::execute_operation, parse::parse_input,
-    Execute, KanbanContext,
+    board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
 use tempfile::TempDir;
 
@@ -161,7 +160,7 @@ async fn build_dynamic_sources_assembles_views_boards_perspectives_headless() {
     // Now pipe through `commands_for_scope` and verify the headless
     // DynamicSources drives the same dynamic-command emission the GUI
     // path exercises.
-    let registry = default_commands_registry();
+    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
     let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![
@@ -320,7 +319,7 @@ async fn build_dynamic_sources_emits_every_open_board_and_window() {
 
     // Pipe through `commands_for_scope` and verify both `board.switch:*` and
     // both `window.focus:*` commands are emitted.
-    let registry = default_commands_registry();
+    let registry = compose_registry![swissarmyhammer_commands, swissarmyhammer_kanban];
     let impls: HashMap<String, Arc<dyn swissarmyhammer_commands::Command>> = HashMap::new();
     let ui_arc = Arc::new(ui);
     let scope = vec![

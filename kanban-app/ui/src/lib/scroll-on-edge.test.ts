@@ -436,6 +436,12 @@ describe("runNavWithScrollOnEdge", () => {
       subscribeFocusChanged: todo(
         "subscribeFocusChanged",
       ) as unknown as SpatialFocusActions["subscribeFocusChanged"],
+      enumerateScopesInLayer: todo(
+        "enumerateScopesInLayer",
+      ) as unknown as SpatialFocusActions["enumerateScopesInLayer"],
+      layerFqOf: todo(
+        "layerFqOf",
+      ) as unknown as SpatialFocusActions["layerFqOf"],
     };
   }
 
