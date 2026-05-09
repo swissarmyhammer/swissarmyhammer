@@ -324,15 +324,31 @@ function JumpToOverlayChrome({
     onMatch,
   });
 
+  // Attach the matcher at the document level in the capture phase. Two
+  // reasons:
+  //
+  // 1. The sentinel scope claims focus, but the keydown actually fires on
+  //    whatever DOM node holds focus — not on this chrome `<div>` — so a
+  //    React `onKeyDown` here never observes the user's keystrokes.
+  // 2. Capture phase runs before bubble phase, so this listener fires
+  //    BEFORE the global keymap's bubble-phase listener registered in
+  //    `KeybindingHandler`. Combined with `stopImmediatePropagation` in
+  //    `useKeyMatcher`'s `claim()` helper, this makes the overlay a true
+  //    modal — keystrokes routed through us never leak to global
+  //    keybindings or focused-scope shortcuts while the overlay is open.
+  useEffect(() => {
+    const onDocKeyDown = (e: KeyboardEvent) => handleKeyDown(e);
+    document.addEventListener("keydown", onDocKeyDown, { capture: true });
+    return () =>
+      document.removeEventListener("keydown", onDocKeyDown, { capture: true });
+  }, [handleKeyDown]);
+
   return (
     <div
       data-testid="jump-to-overlay"
-      // The chrome is the keydown surface — `tabIndex={-1}` would be
-      // redundant because the host `<FocusScope>` already publishes a
-      // wrapping div, but the keydown listener on this inner div is
-      // what observes the user's letter / Backspace presses. Escape
-      // bypasses this handler (owned by the global keymap).
-      onKeyDown={handleKeyDown}
+      // The matcher itself is wired on `document` (see effect above) so it
+      // catches keystrokes regardless of which inner element has focus.
+      // This wrapper exists for layout / `data-testid` only.
     >
       <div
         data-testid="jump-to-backdrop"
@@ -397,15 +413,38 @@ function useKeyMatcher(params: UseKeyMatcherParams) {
   } = params;
 
   return useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === "Backspace") {
+    (e: KeyboardEvent | React.KeyboardEvent<HTMLDivElement>) => {
+      // Helper: claim the event so the global keymap and any focused
+      // scope's keybindings don't ALSO see it while the overlay owns
+      // input. `stopImmediatePropagation` is required (not just
+      // `stopPropagation`) because the global keymap installs its own
+      // document-level listener — both fire on the same target.
+      const claim = () => {
         e.preventDefault();
+        if ("stopImmediatePropagation" in e) {
+          (e as KeyboardEvent).stopImmediatePropagation();
+        }
+      };
+      // Escape dismisses directly. The original design routed Escape
+      // through the global keymap's `nav.drillOut → app.dismiss → sentinel
+      // shadow` cascade, but that proved flaky in practice — when the
+      // sentinel hasn't fully claimed focus, drillOut walks the user's
+      // prior chain and never reaches the shadow. Handling Escape here
+      // (the overlay's own document listener, mounted only while open)
+      // makes dismissal deterministic.
+      if (e.key === "Escape") {
+        claim();
+        handleDismiss();
+        return;
+      }
+      if (e.key === "Backspace") {
+        claim();
         setBuffer((b) => b.slice(0, -1));
         return;
       }
       // Only printable single-letter keys participate in matching.
       if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return;
-      e.preventDefault();
+      claim();
       const next = buffer + e.key.toLowerCase();
       const exact = codes.indexOf(next);
       if (exact >= 0) {
@@ -461,7 +500,7 @@ function JumpPill({ target }: JumpPillProps) {
         top: rect.top + 4,
       }}
     >
-      {code.toUpperCase()}
+      {code}
     </div>
   );
 }
