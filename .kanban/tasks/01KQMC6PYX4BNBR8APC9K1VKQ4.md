@@ -1,7 +1,7 @@
 ---
 assignees: []
-position_column: todo
-position_ordinal: 7d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffc680
 title: resolve 4 pre-existing it.skip()s in kanban-app/ui — fix or delete
 ---
 The frontend test suite reports 4 skipped tests on the `kanban` branch. Per the test skill rule "skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it)" — but these are pre-existing project-level decisions, so I am not removing them as part of a /test verification run. File for explicit resolution.
@@ -27,3 +27,18 @@ Skipped tests:
 Resolution plan: for each, decide whether (a) the feature is now implementable — un-skip and rewrite; (b) the feature is no longer planned — delete the test and any associated dead code.
 
 Found during a /test run on commit 35a106634 (registry overlap-warning landed cleanly).
+
+## Resolution (2026-05-09 — closed as obsolete)
+
+All four items have already been resolved by intervening work; no `.skip` calls remain in `kanban-app/ui`:
+
+1. `entity-focus.kernel-projection.test.tsx:229` — un-skipped to a real `it(`. The kernel-side rejection path now exists; the test runs.
+2. `focus-scope.test.tsx:779` — un-skipped to a real `it(`. The ancestor `useIsFocused` indicator landed; the test runs.
+3. `focus-on-click.regression.spatial.test.tsx` — `it.skip` block deleted; a comment block at lines ~1119–1123 documents the deferred toolbar-component class so the gap is still visible to future contributors. No production toolbar exists.
+4. `board-view.spatial-nav.test.tsx` — `it.skip` deleted; a comment tombstone at line 266 records the removal.
+
+Repo-wide grep for `it.skip(|test.skip(|describe.skip(` in `kanban-app/ui` returns the lone `board-view.spatial-nav.test.tsx` match, which is the comment text "Note: a former it.skip(...)", not an actual call. `pnpm -C kanban-app/ui test` reports `0 skipped` across 215 test files / 2068 tests.
+
+Cleanup commits earlier this session: `15ca8f7a1` "test: drop dead it.skip placeholders in nav suites".
+
+Closing.
