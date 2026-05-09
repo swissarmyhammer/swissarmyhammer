@@ -10,9 +10,9 @@
  * the user sees in the buffer after each debounce.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, cleanup } from "@testing-library/react";
 import { userEvent } from "vitest/browser";
 
 const mockInvoke = vi.fn(
@@ -111,6 +111,17 @@ describe("FilterEditor type → type → delete scenario", () => {
   beforeEach(() => {
     mockKeymapMode = "cua";
     mockInvoke.mockReset();
+  });
+
+  // Browser-mode tests do not run @testing-library's automatic cleanup, so
+  // each prior test's CodeMirror EditorView remains attached to the document
+  // until the next garbage cycle. Without this explicit cleanup, the cold
+  // first run of `pnpm test` would see the previous test's contentDOM
+  // intercept keystrokes intended for the freshly-rendered editor — leaving
+  // the new view's doc partially populated (the "#BL" residue described in
+  // task 01KQZ9R9TQF1EQ32MH1NXHEGEN).
+  afterEach(() => {
+    cleanup();
   });
 
   it("tag → append tag → delete appended tag: saved filter matches buffer at each step", async () => {

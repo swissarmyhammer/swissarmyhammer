@@ -20,5 +20,12 @@ tracing = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 ane-embedding = { workspace = true }
 
+[features]
+# Enables the integration tests in `tests/integration_test.rs`. They resolve
+# real embedding model files from HuggingFace (cached on disk after the first
+# run), so they are not part of the default `cargo test` run. Run with:
+#   cargo nextest run --features embedding-models --profile embedding-models
+embedding-models = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

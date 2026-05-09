@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c980
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffc180
 title: Reject unknown moniker in setFocus instead of writing to store
 ---
 ## What

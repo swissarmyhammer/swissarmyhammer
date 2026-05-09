@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '7e80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffc080
 title: vitest birpc unhandled rejections cause `pnpm test` to exit 1 (multiple browser-mode test files)
 ---
 ## Symptom

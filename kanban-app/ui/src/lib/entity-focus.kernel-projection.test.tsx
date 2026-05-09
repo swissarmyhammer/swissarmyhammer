@@ -226,7 +226,7 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
     expect(sim.currentFocus.fq).toBe("task:01ABC");
   });
 
-  it.skip("setFocus(moniker) for an unknown moniker leaves the store untouched and logs an error", async () => {
+  it("setFocus(moniker) for an unknown moniker leaves the store untouched and logs an error", async () => {
     installKernelSimulator(mockInvoke, listeners);
 
     // Seed an initial focus so we can prove the store DOESN'T regress.
@@ -243,11 +243,28 @@ describe("EntityFocusProvider — kernel-projection invariant", () => {
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      // Ask the kernel to focus a moniker that has no registered scope.
-      // The kernel emits `tracing::error!`; the simulator is
-      // architected to mirror that as a no-op (no focus-changed
-      // emission). The React-side dispatch awaits an `Err` from
-      // `spatial_focus_by_moniker` and surfaces it as console.error.
+      // Mirror the real kernel's rejection of an unregistered moniker by
+      // having the next `spatial_focus` invocation throw. Tauri surfaces
+      // a Rust `Err(_)` as a rejected invoke promise, which the React
+      // adapter catches and logs as `console.error`. The simulator's
+      // default `spatial_focus` handler is permissive (registration
+      // races in real React trees would otherwise produce false
+      // negatives — see the inspector kernel-focus advance tests), so
+      // the rejection is staged just for this case via
+      // `mockImplementationOnce`.
+      const previousImpl = mockInvoke.getMockImplementation();
+      mockInvoke.mockImplementationOnce(async (cmd, args) => {
+        if (
+          cmd === "spatial_focus" &&
+          (args as { fq: string } | undefined)?.fq === "task:does-not-exist"
+        ) {
+          throw new Error(
+            "spatial_focus: unknown moniker task:does-not-exist",
+          );
+        }
+        return previousImpl?.(cmd, args);
+      });
+
       await act(async () => {
         result.current.setFocus(asFq("task:does-not-exist"));
         await new Promise((r) => setTimeout(r, 0));

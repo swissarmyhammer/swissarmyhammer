@@ -40,6 +40,27 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   } as unknown as typeof ResizeObserver;
 }
 
+// Vitest browser mode (4.1.x) emits spurious birpc `function "toJSON" not
+// found` unhandled rejections during tests that exercise virtualized lists
+// or field-editor matrices. The host receives a TYPE_REQUEST with
+// method="toJSON" that has no registered handler. The rejection does not
+// affect any assertion, but it bubbles up to the vite/HMR pipe and causes
+// `pnpm test` to exit non-zero. Tracked at task 01KR454PDHCX07SN7RQ4Z9ASWS;
+// suppress only this specific, narrowly-scoped vitest-internal rejection so
+// the test runner exit code reflects real test outcomes. Any other
+// unhandled rejection (real bugs, missing awaits, etc.) is left alone.
+if (typeof window !== "undefined") {
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason as { message?: string } | null;
+    if (
+      reason?.message ===
+      `[birpc] function "toJSON" not found`
+    ) {
+      event.preventDefault();
+    }
+  });
+}
+
 type InvokeFn = (
   cmd: string,
   args?: Record<string, unknown>,

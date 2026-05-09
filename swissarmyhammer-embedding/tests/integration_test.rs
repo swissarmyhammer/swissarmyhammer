@@ -4,11 +4,11 @@
 //! HuggingFace (cached) → load backend → embed text. They hit the network on
 //! first run and use the HF cache thereafter.
 //!
-//! Run with the `embedding-models` nextest profile to include these tests:
-//!   cargo nextest run --profile embedding-models
-//!
-//! They are excluded from the default profile because they require model files
-//! to be present on disk (downloaded from HuggingFace).
+//! Gated behind the `embedding-models` cargo feature so they don't compile or
+//! run in the default workspace build. Run with:
+//!   cargo nextest run --features embedding-models --profile embedding-models
+
+#![cfg(feature = "embedding-models")]
 
 use model_embedding::TextEmbedder;
 use swissarmyhammer_embedding::Embedder;
