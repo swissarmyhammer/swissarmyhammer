@@ -4,8 +4,8 @@ assignees:
 attachments:
 - 01KR6YRGB6EBY6JG57D31EBP0F-image-LEFRRLR3zJQ6haj77VrwDgQk1WwdxZ.png
 - 01KR6YRV0CQ9DGY1W1QVA566Z8-01KR6YRT0S0RWPG8R7YFNGJT8W-image-j9jBODrxZuGJaiYxWB9gLwDmHggV83.png
-position_column: todo
-position_ordinal: 7c80
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffc480
 title: menu.rs resolve_accelerator drops valid named keys (Enter, Escape, ArrowUp, etc.)
 ---
 ## Symptom
@@ -28,10 +28,10 @@ Open the app's native menu after this branch lands. Look at `Navigation > Drill 
 
 ## Acceptance Criteria
 
-- [ ] Menu accelerators render for `nav.up`/`down`/`left`/`right` (Arrow keys).
-- [ ] Menu accelerators render for `nav.drillIn` (Enter) and `nav.drillOut` (Escape).
-- [ ] Menu accelerators render for `nav.first`/`last` per mode where they exist.
-- [ ] Vim chord strings (e.g. `gg`) still get filtered out (no garbled accelerator labels).
+- [x] Menu accelerators render for `nav.up`/`down`/`left`/`right` (Arrow keys).
+- [x] Menu accelerators render for `nav.drillIn` (Enter) and `nav.drillOut` (Escape).
+- [x] Menu accelerators render for `nav.first`/`last` per mode where they exist.
+- [x] Vim chord strings (e.g. `gg`) still get filtered out (no garbled accelerator labels).
 
 ## Tags
 

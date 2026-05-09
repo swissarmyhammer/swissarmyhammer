@@ -221,11 +221,224 @@ fn append_grouped_entries(
     Ok(())
 }
 
+/// Canonical Tauri-accelerator named keys.
+///
+/// Mirrors the named-key tokens recognised by muda's `parse_key`
+/// (the accelerator parser used by Tauri 2 / muda 0.17 — see
+/// `muda::accelerator::parse_key`). Stored as an upper-case allowlist
+/// so the membership test is a single ASCII-uppercase pass.
+///
+/// Single-character keys (`a`–`z`, `0`–`9`, ASCII punctuation like
+/// `,` `.` `-` `=` `;` `'` `[` `]` `\` `/` `` ` ``) are not in this
+/// list — they pass the length-1 fast path in `is_valid_accelerator_key`
+/// and never reach the named-key check. Modifier-chord strings (anything
+/// containing `+`) likewise short-circuit before this list is consulted.
+///
+/// The list intentionally omits modifier names (`Shift`, `Ctrl`, `Alt`,
+/// `Cmd`, `Super`, `CmdOrCtrl`) — those are only ever valid as the
+/// modifier portion of a `+`-joined chord, never as the main key, and
+/// the `+`-containing branch handles them.
+const TAURI_NAMED_KEYS: &[&str] = &[
+    // Editing / whitespace block
+    "BACKSPACE",
+    "TAB",
+    "ENTER",
+    "SPACE",
+    "DELETE",
+    "INSERT",
+    // Navigation block
+    "HOME",
+    "END",
+    "PAGEUP",
+    "PAGEDOWN",
+    "ARROWUP",
+    "ARROWDOWN",
+    "ARROWLEFT",
+    "ARROWRIGHT",
+    // Aliases that muda accepts for arrow keys
+    "UP",
+    "DOWN",
+    "LEFT",
+    "RIGHT",
+    // Lock / system keys
+    "CAPSLOCK",
+    "NUMLOCK",
+    "SCROLLLOCK",
+    "PRINTSCREEN",
+    // Escape and its alias
+    "ESCAPE",
+    "ESC",
+    // Function keys F1–F24
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F21",
+    "F22",
+    "F23",
+    "F24",
+    // Numpad block
+    "NUMPAD0",
+    "NUMPAD1",
+    "NUMPAD2",
+    "NUMPAD3",
+    "NUMPAD4",
+    "NUMPAD5",
+    "NUMPAD6",
+    "NUMPAD7",
+    "NUMPAD8",
+    "NUMPAD9",
+    "NUM0",
+    "NUM1",
+    "NUM2",
+    "NUM3",
+    "NUM4",
+    "NUM5",
+    "NUM6",
+    "NUM7",
+    "NUM8",
+    "NUM9",
+    "NUMPADADD",
+    "NUMADD",
+    "NUMPADPLUS",
+    "NUMPLUS",
+    "NUMPADDECIMAL",
+    "NUMDECIMAL",
+    "NUMPADDIVIDE",
+    "NUMDIVIDE",
+    "NUMPADENTER",
+    "NUMENTER",
+    "NUMPADEQUAL",
+    "NUMEQUAL",
+    "NUMPADMULTIPLY",
+    "NUMMULTIPLY",
+    "NUMPADSUBTRACT",
+    "NUMSUBTRACT",
+    // Digit / letter long-form names (muda also accepts the bare
+    // single-char form, but `KeyA`, `Digit5`, etc. are valid tokens too)
+    "DIGIT0",
+    "DIGIT1",
+    "DIGIT2",
+    "DIGIT3",
+    "DIGIT4",
+    "DIGIT5",
+    "DIGIT6",
+    "DIGIT7",
+    "DIGIT8",
+    "DIGIT9",
+    "KEYA",
+    "KEYB",
+    "KEYC",
+    "KEYD",
+    "KEYE",
+    "KEYF",
+    "KEYG",
+    "KEYH",
+    "KEYI",
+    "KEYJ",
+    "KEYK",
+    "KEYL",
+    "KEYM",
+    "KEYN",
+    "KEYO",
+    "KEYP",
+    "KEYQ",
+    "KEYR",
+    "KEYS",
+    "KEYT",
+    "KEYU",
+    "KEYV",
+    "KEYW",
+    "KEYX",
+    "KEYY",
+    "KEYZ",
+    // Punctuation long-form names (single-char form passes the length-1
+    // branch; the named form is included for symmetry with muda)
+    "BACKQUOTE",
+    "BACKSLASH",
+    "BRACKETLEFT",
+    "BRACKETRIGHT",
+    "COMMA",
+    "EQUAL",
+    "MINUS",
+    "PERIOD",
+    "QUOTE",
+    "SEMICOLON",
+    "SLASH",
+    // Audio volume keys
+    "AUDIOVOLUMEDOWN",
+    "VOLUMEDOWN",
+    "AUDIOVOLUMEUP",
+    "VOLUMEUP",
+    "AUDIOVOLUMEMUTE",
+    "VOLUMEMUTE",
+];
+
+/// Decide whether a YAML-supplied binding string is a valid Tauri
+/// accelerator atom that can be displayed in a native menu.
+///
+/// Three accepted shapes, in priority order:
+/// 1. **Modifier chord** — anything containing `+` (e.g. `Cmd+S`,
+///    `Shift+G`, `Alt+ArrowDown`). The chord components are validated
+///    by Tauri itself when the menu item is built; this filter only
+///    decides whether to forward the string at all.
+/// 2. **Single character** — exactly one character. Covers
+///    `[A-Za-z0-9]` and ASCII punctuation atoms (`,`, `.`, `-`, `=`,
+///    `;`, `'`, `[`, `]`, `\`, `/`, `` ` ``) which muda's `parse_key`
+///    accepts directly.
+/// 3. **Named key** — case-insensitively matches an entry in
+///    [`TAURI_NAMED_KEYS`] (e.g. `Enter`, `Escape`, `ArrowUp`,
+///    `Home`, `F5`, `KeyA`, `Digit5`).
+///
+/// Anything else — vim chord strings like `dd`, `gg`, `:q`, `yy`, or
+/// empty / whitespace-only input — is rejected. This is the actual
+/// filter target: vim's multi-character bindings are handled in the
+/// frontend's `SEQUENCE_TABLES` and never become native accelerators.
+fn is_valid_accelerator_key(binding: &str) -> bool {
+    let trimmed = binding.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.contains('+') {
+        // Modifier chord — Tauri's accelerator parser validates the
+        // individual tokens when the menu item is constructed.
+        return true;
+    }
+    // `chars().count() == 1` (not `len() == 1`) so multi-byte single
+    // characters like `é` aren't truncated by byte-length comparison.
+    if trimmed.chars().count() == 1 {
+        return true;
+    }
+    let upper = trimmed.to_ascii_uppercase();
+    TAURI_NAMED_KEYS.contains(&upper.as_str())
+}
+
 /// Resolve the keyboard accelerator for a command in the current keymap mode.
 ///
 /// Looks up the binding for the active mode, falling back to CUA if the
 /// mode-specific binding is absent. Replaces `Mod` with `CmdOrCtrl` so
 /// Tauri maps it correctly per platform.
+///
+/// Bindings that aren't valid Tauri accelerators (vim chord strings
+/// like `"dd"`, `"gg"`, `":q"`) are filtered out via
+/// [`is_valid_accelerator_key`] so they don't render as garbled
+/// menu accelerators.
 fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
     let keys = cmd.keys.as_ref()?;
     let binding = match keymap_mode {
@@ -233,8 +446,7 @@ fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
         "emacs" => keys.emacs.as_deref().or(keys.cua.as_deref()),
         _ => keys.cua.as_deref(),
     }?;
-    // Vim chord-style bindings (e.g. ":q", "dd") are not valid accelerators.
-    if binding.len() > 1 && !binding.contains('+') {
+    if !is_valid_accelerator_key(binding) {
         return None;
     }
     Some(binding.replace("Mod", "CmdOrCtrl"))
@@ -616,8 +828,37 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
 
 #[cfg(test)]
 mod tests {
-    use super::collect_menu_entries;
-    use swissarmyhammer_commands::{compose_registry, UIState};
+    use super::{collect_menu_entries, is_valid_accelerator_key, resolve_accelerator};
+    use swissarmyhammer_commands::{compose_registry, CommandDef, KeysDef, UIState};
+
+    /// Build a minimal `CommandDef` carrying only the per-mode keys —
+    /// enough for `resolve_accelerator` to operate. All other fields
+    /// take their default-ish values; the function never reads them.
+    fn cmd_with_keys(
+        id: &str,
+        vim: Option<&str>,
+        cua: Option<&str>,
+        emacs: Option<&str>,
+    ) -> CommandDef {
+        CommandDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            menu_name: None,
+            scope: None,
+            visible: true,
+            keys: Some(KeysDef {
+                vim: vim.map(String::from),
+                cua: cua.map(String::from),
+                emacs: emacs.map(String::from),
+            }),
+            params: Vec::new(),
+            undoable: false,
+            context_menu: false,
+            context_menu_group: None,
+            context_menu_order: None,
+            menu: None,
+        }
+    }
 
     /// The composed registry contributed by `swissarmyhammer-focus` must
     /// land all nine `nav.*` commands under a single top-level
@@ -677,5 +918,255 @@ mod tests {
         );
         assert_eq!(groups.first().copied(), Some(0), "first group must be 0");
         assert_eq!(groups.last().copied(), Some(3), "last group must be 3");
+    }
+
+    /// Single-character bindings are valid accelerator atoms — they
+    /// pass straight through to muda's `parse_key`, which handles
+    /// `[A-Za-z0-9]` and the punctuation atoms it lists.
+    #[test]
+    fn is_valid_accelerator_key_accepts_single_chars() {
+        assert!(is_valid_accelerator_key("a"));
+        assert!(is_valid_accelerator_key("g"));
+        assert!(is_valid_accelerator_key("Z"));
+        assert!(is_valid_accelerator_key("5"));
+        assert!(is_valid_accelerator_key(","));
+        assert!(is_valid_accelerator_key("/"));
+    }
+
+    /// Every Tauri/muda named key that appears in the YAML for `nav.*`
+    /// commands must survive the filter. This is the load-bearing
+    /// case — the bug that motivated this fix was that named keys
+    /// like `Enter`, `Escape`, and `Arrow*` were being rejected.
+    #[test]
+    fn is_valid_accelerator_key_accepts_named_keys() {
+        // Required by the task acceptance criteria
+        for name in [
+            "Enter",
+            "Escape",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Home",
+            "End",
+        ] {
+            assert!(
+                is_valid_accelerator_key(name),
+                "named key {name} must be accepted as a valid accelerator atom",
+            );
+        }
+        // A representative sample of the wider muda allowlist
+        for name in [
+            "Tab",
+            "Space",
+            "Backspace",
+            "Delete",
+            "PageUp",
+            "PageDown",
+            "Insert",
+            "F1",
+            "F12",
+            "F24",
+        ] {
+            assert!(
+                is_valid_accelerator_key(name),
+                "named key {name} must be accepted as a valid accelerator atom",
+            );
+        }
+    }
+
+    /// Named-key matching is case-insensitive — muda's `parse_key`
+    /// uppercases its input before comparing, so the YAML may use
+    /// any casing (`enter`, `Enter`, `ENTER`).
+    #[test]
+    fn is_valid_accelerator_key_named_keys_are_case_insensitive() {
+        assert!(is_valid_accelerator_key("enter"));
+        assert!(is_valid_accelerator_key("ENTER"));
+        assert!(is_valid_accelerator_key("ArRoWuP"));
+    }
+
+    /// Modifier chord strings — anything with `+` — pass through.
+    /// Tauri's accelerator parser validates the individual tokens
+    /// when the menu item is built, so the filter doesn't need to.
+    #[test]
+    fn is_valid_accelerator_key_accepts_modifier_chords() {
+        assert!(is_valid_accelerator_key("Cmd+S"));
+        assert!(is_valid_accelerator_key("Shift+G"));
+        assert!(is_valid_accelerator_key("Alt+ArrowDown"));
+        assert!(is_valid_accelerator_key("Mod+Shift+P"));
+        assert!(is_valid_accelerator_key("Ctrl+p"));
+        assert!(is_valid_accelerator_key("Alt+<"));
+        assert!(is_valid_accelerator_key("Alt+>"));
+    }
+
+    /// Vim chord strings are the actual filter target. They appear
+    /// in `keys.vim` for sequence bindings (`gg`, `dd`, `yy`, `:q`)
+    /// and have no representation as a single Tauri accelerator —
+    /// the frontend's `SEQUENCE_TABLES` handles them instead.
+    #[test]
+    fn is_valid_accelerator_key_rejects_vim_chord_strings() {
+        assert!(!is_valid_accelerator_key("dd"));
+        assert!(!is_valid_accelerator_key("gg"));
+        assert!(!is_valid_accelerator_key(":q"));
+        assert!(!is_valid_accelerator_key("yy"));
+        assert!(!is_valid_accelerator_key("zo"));
+    }
+
+    /// Empty / whitespace-only input is rejected — there's nothing
+    /// for the menu to render and Tauri would error on an empty
+    /// accelerator string.
+    #[test]
+    fn is_valid_accelerator_key_rejects_empty_and_whitespace() {
+        assert!(!is_valid_accelerator_key(""));
+        assert!(!is_valid_accelerator_key("   "));
+        assert!(!is_valid_accelerator_key("\t"));
+    }
+
+    /// Smoke test: with cua mode, `nav.up` (cua: ArrowUp) resolves
+    /// to a non-None accelerator, demonstrating that the named-key
+    /// path works end-to-end in `resolve_accelerator`.
+    #[test]
+    fn resolve_accelerator_returns_named_key_for_arrow_up() {
+        let cmd = cmd_with_keys("nav.up", Some("k"), Some("ArrowUp"), Some("Ctrl+p"));
+        assert_eq!(
+            resolve_accelerator(&cmd, "cua"),
+            Some("ArrowUp".to_string())
+        );
+    }
+
+    /// `Mod+G` must canonicalise to `CmdOrCtrl+G` so Tauri picks
+    /// the platform-specific modifier (Cmd on macOS, Ctrl elsewhere).
+    #[test]
+    fn resolve_accelerator_replaces_mod_with_cmd_or_ctrl() {
+        let cmd = cmd_with_keys("nav.jump", Some("s"), Some("Mod+G"), Some("Mod+G"));
+        assert_eq!(
+            resolve_accelerator(&cmd, "cua"),
+            Some("CmdOrCtrl+G".to_string()),
+        );
+    }
+
+    /// Vim mode: `nav.first` has only `vim: gg` and `cua: Home` (no
+    /// emacs binding). Under vim mode the chord string `gg` must be
+    /// filtered out — leaving the menu item with no accelerator
+    /// rather than rendering a garbled `gg` label. (`nav.first`'s
+    /// real YAML omits the vim binding for exactly this reason —
+    /// the chord is handled by `SEQUENCE_TABLES.vim` instead.)
+    #[test]
+    fn resolve_accelerator_filters_vim_chord_strings() {
+        let cmd = cmd_with_keys("test.cmd", Some("gg"), Some("Home"), None);
+        assert_eq!(resolve_accelerator(&cmd, "vim"), None);
+        // Same command in cua mode picks up the cua binding instead.
+        assert_eq!(resolve_accelerator(&cmd, "cua"), Some("Home".to_string()));
+    }
+
+    /// End-to-end check against the real YAML: every `nav.*` command
+    /// that has a `cua` binding must render a non-None accelerator
+    /// in cua mode. This is the AC checklist converted to an
+    /// automated assertion — proves the fix without manual menu
+    /// inspection.
+    ///
+    /// `nav.jump` is excluded from the cua-arrow assertion because
+    /// it binds to `Mod+G` (a chord), not an Arrow/Home/End/Enter/
+    /// Escape named key — it was already rendering correctly under
+    /// the old filter and only proves the chord branch.
+    #[test]
+    fn nav_commands_render_accelerators_in_cua_mode() {
+        let registry = compose_registry![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+
+        // Each (id, expected accelerator) pair maps directly to the
+        // YAML in `swissarmyhammer-focus/builtin/commands/nav.yaml`.
+        let expected = [
+            ("nav.up", "ArrowUp"),
+            ("nav.down", "ArrowDown"),
+            ("nav.left", "ArrowLeft"),
+            ("nav.right", "ArrowRight"),
+            ("nav.first", "Home"),
+            ("nav.last", "End"),
+            ("nav.drillIn", "Enter"),
+            ("nav.drillOut", "Escape"),
+        ];
+
+        for (id, want) in expected {
+            let cmd = registry
+                .get(id)
+                .unwrap_or_else(|| panic!("registry must define {id}"));
+            let got = resolve_accelerator(cmd, "cua");
+            assert_eq!(
+                got.as_deref(),
+                Some(want),
+                "{id} must resolve to {want:?} in cua mode (was the named-key allowlist regressed?)",
+            );
+        }
+    }
+
+    /// Same end-to-end check for vim mode: `nav.drillIn` /
+    /// `nav.drillOut` carry `vim: Enter` / `vim: Escape` directly
+    /// (those are not chord prefixes — see
+    /// `swissarmyhammer-focus/builtin/commands/nav.yaml`), and
+    /// `nav.last` carries `vim: Shift+G` (a chord with `+`). Each
+    /// must produce a non-None accelerator; the directional vim
+    /// bindings (`h`/`j`/`k`/`l`, single chars) are likewise valid.
+    #[test]
+    fn nav_commands_render_accelerators_in_vim_mode() {
+        let registry = compose_registry![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+
+        let expected = [
+            ("nav.up", "k"),
+            ("nav.down", "j"),
+            ("nav.left", "h"),
+            ("nav.right", "l"),
+            ("nav.drillIn", "Enter"),
+            ("nav.drillOut", "Escape"),
+            ("nav.last", "Shift+G"),
+        ];
+
+        for (id, want) in expected {
+            let cmd = registry
+                .get(id)
+                .unwrap_or_else(|| panic!("registry must define {id}"));
+            let got = resolve_accelerator(cmd, "vim");
+            assert_eq!(
+                got.as_deref(),
+                Some(want),
+                "{id} must resolve to {want:?} in vim mode",
+            );
+        }
+    }
+
+    /// `nav.first` has `cua: Home` and `emacs: Alt+<` but no vim
+    /// binding — under vim mode the resolver falls back to cua,
+    /// so the accelerator must be `Home` (not None). This exercises
+    /// the fallback path through the named-key allowlist.
+    #[test]
+    fn resolve_accelerator_falls_back_to_cua_in_vim_mode() {
+        let registry = compose_registry![
+            swissarmyhammer_commands,
+            swissarmyhammer_focus,
+            swissarmyhammer_kanban,
+        ];
+
+        let cmd = registry
+            .get("nav.first")
+            .expect("registry must define nav.first");
+        // Sanity: nav.first really has no vim binding in the YAML.
+        let keys = cmd.keys.as_ref().expect("nav.first has keys");
+        assert!(
+            keys.vim.is_none(),
+            "nav.first YAML must keep its vim binding empty so this test exercises the cua fallback",
+        );
+
+        assert_eq!(
+            resolve_accelerator(cmd, "vim").as_deref(),
+            Some("Home"),
+            "nav.first under vim mode must fall back to its cua binding (Home)",
+        );
     }
 }
