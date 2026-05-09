@@ -1487,18 +1487,63 @@ async fn matrix_attachment_copy_available() {
 }
 
 #[tokio::test]
-async fn matrix_attachment_cut_not_available() {
+async fn matrix_attachment_cut_available_with_task_in_scope() {
+    // Cutting an attachment chip means "snapshot the attachment to the
+    // clipboard, then remove it from the parent task". The dispatch path
+    // resolves the parent via the scope chain — `task:` must be present.
+    // See `CutEntityCmd::available()` "attachment" arm.
     let h = MatrixHarness::new().await;
     let target = "attachment:/tmp/x.png";
 
     let surface = h.surface(&[target, "task:01X", "column:todo"]);
+    assert_shape(
+        &surface,
+        "entity.cut",
+        Some(target),
+        "Cut Attachment",
+        true,
+        true, // keys.cua = Mod+X on entity.cut
+        true,
+    );
+}
+
+#[tokio::test]
+async fn matrix_attachment_cut_not_available_without_parent_task() {
+    // Without `task:` in scope there is no owner to remove the
+    // attachment from — `CutEntityCmd::available()` rejects.
+    let h = MatrixHarness::new().await;
+    let target = "attachment:/tmp/x.png";
+
+    let surface = h.surface(&[target, "column:todo"]);
     assert_absent(&surface, "entity.cut", Some(target));
 }
 
 #[tokio::test]
-async fn matrix_attachment_paste_not_emitted() {
-    // No `(*, attachment)` paste handler. Even with any clipboard, paste is
-    // not available on an attachment target.
+async fn matrix_attachment_paste_available_when_attachment_clipboard() {
+    // Right-clicking an attachment chip with another attachment on the
+    // clipboard surfaces Paste — the `(attachment, attachment)` handler
+    // dispatches to the parent task via the scope chain. Without an
+    // attachment-shaped clipboard the entry stays hidden.
+    let h = MatrixHarness::new().await;
+    h.seed_clipboard("attachment");
+    let target = "attachment:/tmp/x.png";
+
+    let surface = h.surface(&[target, "task:01X", "column:todo"]);
+    assert_shape(
+        &surface,
+        "entity.paste",
+        Some(target),
+        "Paste Attachment",
+        true,
+        true,
+        true,
+    );
+}
+
+#[tokio::test]
+async fn matrix_attachment_paste_not_emitted_without_attachment_clipboard() {
+    // A task-shaped clipboard has no `(task, attachment)` handler — the
+    // matrix returns no match and the cross-cutting emit drops the row.
     let h = MatrixHarness::new().await;
     h.seed_clipboard("task");
     let target = "attachment:/tmp/x.png";

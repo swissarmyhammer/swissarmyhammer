@@ -276,6 +276,131 @@ describe("AttachmentItem", () => {
     mockInvoke.mockImplementation(() => Promise.resolve("ok"));
   });
 
+  it("forwards Open, Show in Finder, Delete, Cut, Copy, Paste from list_commands_for_scope into show_context_menu", async () => {
+    // Companion to the simpler "Open + Reveal" test above. Once the
+    // backend lights up the cross-cutting commands for the
+    // `attachment:<path>` scope (kanban task 01KR70R8YRRB36H6FVZMQMWFT1),
+    // the UI must forward the full set into `show_context_menu` in the
+    // order the backend emits, with the group separator preserved
+    // between the attachment-group and cross-cutting groups so the
+    // visual menu shows
+    //   Open
+    //   Show in Finder
+    //   --- separator ---
+    //   Cut / Copy / Paste / Delete
+    // Group strings come from the backend (`attachment` for the
+    // scoped commands, `attachment:ctx{N}` for the cross-cutting
+    // emit) — `useContextMenu` inserts a separator between rows
+    // whose group strings differ, so the resolved list above maps
+    // straight onto the rendered menu.
+    mockInvoke.mockClear();
+    mockListen.mockClear();
+    mockListen.mockResolvedValue(() => {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockInvoke.mockImplementation((cmd: any) => {
+      if (cmd === "list_commands_for_scope") {
+        return Promise.resolve([
+          {
+            id: "attachment.open",
+            name: "Open",
+            target: imageAttachment.path,
+            group: "attachment",
+            context_menu: true,
+            available: true,
+          },
+          {
+            id: "attachment.reveal",
+            name: "Show in Finder",
+            target: imageAttachment.path,
+            group: "attachment",
+            context_menu: true,
+            available: true,
+          },
+          {
+            id: "entity.cut",
+            name: "Cut Attachment",
+            target: `attachment:${imageAttachment.path}`,
+            group: "attachment:ctx1",
+            context_menu: true,
+            available: true,
+          },
+          {
+            id: "entity.copy",
+            name: "Copy Attachment",
+            target: `attachment:${imageAttachment.path}`,
+            group: "attachment:ctx1",
+            context_menu: true,
+            available: true,
+          },
+          {
+            id: "entity.paste",
+            name: "Paste Attachment",
+            target: `attachment:${imageAttachment.path}`,
+            group: "attachment:ctx1",
+            context_menu: true,
+            available: true,
+          },
+          {
+            id: "entity.delete",
+            name: "Delete Attachment",
+            target: `attachment:${imageAttachment.path}`,
+            group: "attachment:ctx2",
+            context_menu: true,
+            available: true,
+          },
+        ]);
+      }
+      return Promise.resolve("ok");
+    });
+    const { container } = render(
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
+    );
+    fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
+    await vi.waitFor(() => {
+      const call = mockInvoke.mock.calls.find(
+        (c: unknown[]) => c[0] === "show_context_menu",
+      );
+      expect(call).toBeDefined();
+      const items = (call![1] as { items: { cmd: string; separator: boolean }[] })
+        .items;
+      // `useContextMenu` interleaves dedicated separator rows
+      // (`{cmd: "", separator: true}`) between adjacent commands whose
+      // `group` strings differ. The full sequence the menu sees is:
+      //   Open → Show in Finder
+      //   --- separator ---  (attachment → attachment:ctx1)
+      //   Cut → Copy → Paste
+      //   --- separator ---  (attachment:ctx1 → attachment:ctx2)
+      //   Delete
+      const cmds = items.map((i) => i.cmd);
+      expect(cmds).toEqual([
+        "attachment.open",
+        "attachment.reveal",
+        "",
+        "entity.cut",
+        "entity.copy",
+        "entity.paste",
+        "",
+        "entity.delete",
+      ]);
+      // The two transitions flip the separator marker; everything
+      // else is a real command row with `separator: false`.
+      const seps = items.map((i) => i.separator);
+      expect(seps).toEqual([
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+      ]);
+    });
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+  });
+
   it("scope chain includes attachment moniker on right-click", async () => {
     mockInvoke.mockClear();
     mockListen.mockResolvedValue(() => {});

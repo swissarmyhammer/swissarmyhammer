@@ -3039,6 +3039,74 @@ mod tests {
         );
     }
 
+    /// Right-clicking an `attachment:<path>` chip must surface the four
+    /// cross-cutting commands (`entity.delete`, `entity.cut`, `entity.copy`,
+    /// `entity.paste`) alongside the attachment-specific `attachment.open`
+    /// and `attachment.reveal`. Without this the menu is missing Delete,
+    /// Cut, Copy, and Paste — see kanban task
+    /// 01KR70R8YRRB36H6FVZMQMWFT1.
+    ///
+    /// Setup mirrors the real focus chain the frontend builds for an
+    /// attachment chip (`[attachment:..., task:..., column:..., board:...]`)
+    /// and seeds an attachment-shaped clipboard so `entity.paste` resolves
+    /// — paste availability gates on `clipboard_entity_type` matching a
+    /// registered `(clipboard_type, target_type)` PasteHandler.
+    #[test]
+    fn attachment_context_menu_includes_cross_cutting_commands() {
+        let (registry, impls, fields, ui) = setup();
+        // An attachment lives on a task. Seed a non-empty clipboard so the
+        // paste availability guard fires — without `clipboard_entity_type`
+        // set, `PasteEntityCmd::available()` returns false up-front.
+        ui.set_clipboard_entity_type("attachment");
+
+        let scope = vec![
+            "attachment:/path/to/file.png".into(),
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        for required in [
+            "attachment.open",
+            "attachment.reveal",
+            "entity.delete",
+            "entity.cut",
+            "entity.copy",
+            "entity.paste",
+        ] {
+            assert!(
+                ids.contains(&required),
+                "{required} must surface in the attachment context menu; got: {:?}",
+                ids,
+            );
+        }
+
+        // Each of the four cross-cutting commands must resolve with the
+        // attachment moniker as its target — that's how the dispatch path
+        // distinguishes "delete this attachment" from "delete the parent
+        // task" when both monikers are in scope.
+        for id in ["entity.delete", "entity.cut", "entity.copy", "entity.paste"] {
+            let cmd = cmds
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("{id} must be present"));
+            assert_eq!(
+                cmd.target.as_deref(),
+                Some("attachment:/path/to/file.png"),
+                "{id} target must be the attachment moniker (innermost scope), \
+                 not the parent task: got {:?}",
+                cmd.target,
+            );
+            assert!(
+                cmd.available,
+                "{id} must be available on an attachment scope (clipboard \
+                 seeded with attachment, parent task in scope chain)",
+            );
+        }
+    }
+
     #[test]
     fn tag_commands_appear_before_task_commands_in_context_menu() {
         let (registry, impls, fields, ui) = setup();

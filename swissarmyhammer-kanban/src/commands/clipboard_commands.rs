@@ -17,6 +17,7 @@
 
 use super::paste_handlers::{register_paste_handlers, PasteMatrix};
 use super::run_op;
+use crate::attachment::{match_attachment_index, DeleteAttachment};
 use crate::clipboard::{self, ClipboardProviderExt};
 use crate::context::KanbanContext;
 use async_trait::async_trait;
@@ -79,6 +80,12 @@ async fn write_to_clipboard(
 /// string. Used by both copy and cut execution paths — both need the
 /// same payload shape, they only differ in whether the source is also
 /// deleted afterwards.
+///
+/// Attachments are not first-class stored entities — they live as
+/// metadata entries inside their parent task's `attachments` field. For
+/// `entity_type == "attachment"`, the caller must use
+/// [`snapshot_attachment_to_clipboard`] instead, which resolves the
+/// parent task from the scope chain.
 async fn snapshot_entity_to_clipboard(
     kanban: &KanbanContext,
     entity_type: &str,
@@ -98,6 +105,122 @@ async fn snapshot_entity_to_clipboard(
     Ok(clipboard::serialize_to_clipboard(
         entity_type,
         entity_id,
+        mode,
+        fields,
+    ))
+}
+
+/// Copy the cut attachment's file bytes to an OS-temp staging path so
+/// the clipboard payload survives the immediate `DeleteAttachment`
+/// (which trashes the original under `.attachments/.trash/`).
+///
+/// The staged file lives at `<system-temp>/sah-cut-<ulid>/<basename>`.
+/// We deliberately don't reap it ourselves — `entity.cut` is followed
+/// by an arbitrary number of pastes (or none at all), so attaching a
+/// guard to the command would defeat the point. The OS temp janitor
+/// is the cleanup channel of record.
+///
+/// Returns the absolute staged path as a `String`. The path is the
+/// new `entity_id` for the clipboard payload — paste handlers find
+/// readable bytes there after the original was trashed.
+async fn stage_cut_attachment(
+    source_path: &str,
+    _clipboard_json: &str,
+) -> swissarmyhammer_commands::Result<String> {
+    let basename = std::path::Path::new(source_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("attachment");
+    let dir = std::env::temp_dir().join(format!(
+        "sah-cut-{}",
+        ulid::Ulid::new().to_string().to_lowercase()
+    ));
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("cut staging dir: {e}")))?;
+    let dest = dir.join(basename);
+    tokio::fs::copy(source_path, &dest)
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(format!("cut staging copy: {e}")))?;
+    dest.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| CommandError::ExecutionFailed("staged path is not valid UTF-8".into()))
+}
+
+/// Rewrite a clipboard JSON payload's `entity_id` to a new value,
+/// preserving the rest of the envelope.
+///
+/// Used by the attachment cut path to swap the original
+/// `.attachments/{id}-{name}` path (which is about to be trashed) for
+/// the staged-copy path returned by [`stage_cut_attachment`].
+fn rewrite_attachment_entity_id(
+    clipboard_json: &str,
+    new_entity_id: &str,
+) -> swissarmyhammer_commands::Result<String> {
+    let mut payload = clipboard::deserialize_from_clipboard(clipboard_json).ok_or_else(|| {
+        CommandError::ExecutionFailed(
+            "internal: cut snapshot is not a swissarmyhammer payload".into(),
+        )
+    })?;
+    payload.swissarmyhammer_clipboard.entity_id = new_entity_id.to_string();
+    serde_json::to_string(&payload)
+        .map_err(|e| CommandError::ExecutionFailed(format!("clipboard re-serialize: {e}")))
+}
+
+/// Snapshot an attachment's metadata to clipboard JSON.
+///
+/// Attachments do not exist as standalone stored entities — each one is
+/// a metadata entry on its parent task's `attachments` field. The
+/// scope chain carries `[attachment:<path>, task:<id>, ...]` for any
+/// attachment-row interaction; this helper resolves the parent task
+/// id from `ctx.resolve_entity_id("task")`, reads the enriched
+/// attachments list, finds the entry whose `path` matches `attachment_path`,
+/// and snapshots its `{name, mime_type, size}` metadata into a clipboard
+/// payload keyed by the file path.
+///
+/// The resulting payload is shaped so the existing `attachment_onto_task`
+/// paste handler can land it without changes — `name` populates
+/// [`AttachmentOntoTaskHandler::resolve_name`], `mime_type` populates
+/// [`AttachmentOntoTaskHandler::resolve_mime_type`], etc.
+///
+/// Returns [`CommandError::MissingScope`] if no `task:` moniker sits in
+/// the scope chain, and [`CommandError::ExecutionFailed`] if the parent
+/// task does not list the attachment by path.
+async fn snapshot_attachment_to_clipboard(
+    kanban: &KanbanContext,
+    ctx: &CommandContext,
+    attachment_path: &str,
+    mode: &str,
+) -> swissarmyhammer_commands::Result<String> {
+    let task_id = ctx
+        .resolve_entity_id("task")
+        .ok_or_else(|| CommandError::MissingScope("task".into()))?;
+    let ectx = kanban
+        .entity_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let task = ectx
+        .read("task", task_id)
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let attachments_arr = task
+        .get("attachments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let idx = match_attachment_index(&attachments_arr, attachment_path).ok_or_else(|| {
+        CommandError::ExecutionFailed(format!(
+            "attachment '{attachment_path}' not found on task '{task_id}'"
+        ))
+    })?;
+    // Snapshot the enriched metadata fields directly — they already carry
+    // the shape `attachment_onto_task` expects (`name`, `mime_type`,
+    // `size`). The `id` and `path` fields are also retained for diagnostic
+    // purposes; the paste handler keys solely off `entity_id` (the path).
+    let fields = attachments_arr[idx].clone();
+    Ok(clipboard::serialize_to_clipboard(
+        "attachment",
+        attachment_path,
         mode,
         fields,
     ))
@@ -134,8 +257,15 @@ impl Command for CopyEntityCmd {
             )));
         }
 
-        let clipboard_json =
-            snapshot_entity_to_clipboard(&kanban, entity_type, entity_id, "copy").await?;
+        // Attachments are association-shaped — they live as metadata
+        // entries on their parent task's `attachments` field rather than
+        // as standalone stored entities. Dispatch through the parent task
+        // to grab the enriched metadata snapshot.
+        let clipboard_json = if entity_type == "attachment" {
+            snapshot_attachment_to_clipboard(&kanban, ctx, entity_id, "copy").await?
+        } else {
+            snapshot_entity_to_clipboard(&kanban, entity_type, entity_id, "copy").await?
+        };
         write_to_clipboard(ctx, &clipboard_json, entity_type).await?;
 
         Ok(serde_json::json!({
@@ -176,6 +306,11 @@ impl Command for CutEntityCmd {
             // shares the scope chain". Without a task in scope there is
             // no destructive operation to perform.
             "tag" => ctx.has_in_scope("task"),
+            // Attachments are owned by a parent task — cutting one means
+            // "snapshot the attachment to the clipboard, then remove it
+            // from the parent task". Requires `task:` in scope so the
+            // dispatch path can identify the owner.
+            "attachment" => ctx.has_in_scope("task"),
             _ => false,
         }
     }
@@ -216,6 +351,39 @@ impl Command for CutEntityCmd {
                     .to_string();
                 let op = crate::tag::CutTag::new(task_id, tag_name);
                 (run_op(&op, &kanban).await?, "tag")
+            }
+            "attachment" => {
+                // Mirrors the task / tag cut shape: snapshot first, then
+                // run the destructive op. The clipboard payload is built
+                // from the parent task's enriched attachments entry so the
+                // existing `attachment_onto_task` paste handler can land
+                // it without further translation.
+                //
+                // Unlike task / tag cut where the clipboard payload is
+                // pure metadata, an attachment IS its file content — and
+                // the destructive `DeleteAttachment` step trashes the
+                // backing file. We stage a copy of the file to a stable
+                // temp location and rewrite the clipboard's `entity_id`
+                // to point at the staged copy, so a subsequent paste can
+                // still find readable bytes after the original is in
+                // `.attachments/.trash/`. The staged file is reaped by
+                // the OS temp janitor; we deliberately don't tie its
+                // lifetime to the clipboard since the user may paste
+                // minutes later.
+                let task_id = ctx
+                    .resolve_entity_id("task")
+                    .ok_or_else(|| CommandError::MissingScope("task".into()))?
+                    .to_string();
+                let clipboard_json =
+                    snapshot_attachment_to_clipboard(&kanban, ctx, entity_id, "cut").await?;
+                let staged_path = stage_cut_attachment(entity_id, &clipboard_json).await?;
+                let clipboard_json = rewrite_attachment_entity_id(&clipboard_json, &staged_path)?;
+                let delete_result =
+                    run_op(&DeleteAttachment::new(task_id.as_str(), entity_id), &kanban).await?;
+                let mut combined = delete_result.as_object().cloned().unwrap_or_default();
+                combined.insert("cut".into(), Value::Bool(true));
+                combined.insert("clipboard_json".into(), Value::String(clipboard_json));
+                (Value::Object(combined), "attachment")
             }
             other => {
                 return Err(CommandError::ExecutionFailed(format!(
@@ -1013,5 +1181,443 @@ mod tests {
         );
         let result = PasteEntityCmd::new().execute(&ctx).await;
         assert!(result.is_err(), "paste should fail without a handler");
+    }
+
+    // =========================================================================
+    // Attachment cut / copy / paste integration
+    //
+    // These tests pin the end-to-end contract for the attachment context
+    // menu — see kanban task 01KR70R8YRRB36H6FVZMQMWFT1. Each test mirrors
+    // the dispatch path the right-click menu walks: scope chain
+    // `[attachment:<path>, task:<id>, column:...]`, target set to the
+    // attachment moniker, and a real `KanbanContext` so the attachment
+    // metadata enrichment actually runs.
+    // =========================================================================
+
+    /// Helper: create a temp file used as an attachment source.
+    fn write_temp_file(dir: &std::path::Path, name: &str, content: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Read a task's enriched attachments list (empty when absent).
+    async fn read_attachments(kanban: &KanbanContext, task_id: &str) -> Vec<Value> {
+        let ectx = kanban.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        task.get("attachments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Build a CommandContext shaped like a right-click on an attachment
+    /// chip — the scope chain carries the attachment moniker first
+    /// (innermost), then its parent task, then a column.
+    fn make_attachment_ctx(
+        command_id: &str,
+        attachment_path: &str,
+        task_id: &str,
+        kanban: &Arc<KanbanContext>,
+        clipboard: &Arc<ClipboardProviderExt>,
+        ui: &Arc<UIState>,
+    ) -> CommandContext {
+        make_ctx(
+            command_id,
+            &[
+                &format!("attachment:{attachment_path}"),
+                &format!("task:{task_id}"),
+                "column:todo",
+            ],
+            Some(&format!("attachment:{attachment_path}")),
+            kanban,
+            clipboard,
+            ui,
+        )
+    }
+
+    /// `entity.copy` against an attachment moniker snapshots the
+    /// attachment's metadata into a clipboard payload keyed by the file
+    /// path. The source task must be left untouched — copy is
+    /// non-destructive.
+    #[tokio::test]
+    async fn copy_attachment_via_target_snapshots_payload_without_mutation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
+        InitBoard::new("Test")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
+        let ui = Arc::new(UIState::new());
+
+        let task = AddTask::new("Has attachment")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        let source = write_temp_file(temp.path(), "spec.pdf", b"hello pdf");
+        crate::attachment::AddAttachment::new(task_id.as_str(), "spec.pdf", &source)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        // Resolve the attachment's enriched path — the same value the
+        // frontend embeds in the `attachment:${path}` moniker.
+        let arr = read_attachments(&kanban, &task_id).await;
+        assert_eq!(arr.len(), 1);
+        let attachment_path = arr[0]["path"].as_str().unwrap().to_string();
+
+        let ctx = make_attachment_ctx(
+            "entity.copy",
+            &attachment_path,
+            &task_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        let result = CopyEntityCmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["copied"], true);
+        assert_eq!(result["entity_type"], "attachment");
+        assert_eq!(result["id"], attachment_path);
+
+        // Source task is unchanged.
+        let after = read_attachments(&kanban, &task_id).await;
+        assert_eq!(after.len(), 1, "copy must not mutate source attachments");
+
+        // Clipboard carries the right metadata for `attachment_onto_task`
+        // to land it on a destination task.
+        assert_eq!(ui.clipboard_entity_type().as_deref(), Some("attachment"));
+        let text = clipboard.0.read_text().await.unwrap().unwrap();
+        let payload = clipboard::deserialize_from_clipboard(&text).unwrap();
+        assert_eq!(payload.swissarmyhammer_clipboard.entity_type, "attachment");
+        assert_eq!(payload.swissarmyhammer_clipboard.entity_id, attachment_path);
+        assert_eq!(
+            payload.swissarmyhammer_clipboard.fields["name"], "spec.pdf",
+            "clipboard payload must carry the attachment name"
+        );
+    }
+
+    /// `entity.cut` against an attachment moniker snapshots the
+    /// attachment to the clipboard *and* removes it from the parent
+    /// task — mirrors the cut-task / cut-tag pattern in this file.
+    #[tokio::test]
+    async fn cut_attachment_via_target_removes_from_parent_and_puts_on_clipboard() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
+        InitBoard::new("Test")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
+        let ui = Arc::new(UIState::new());
+
+        let task = AddTask::new("Cut me")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        let source = write_temp_file(temp.path(), "screenshot.png", b"png bytes");
+        crate::attachment::AddAttachment::new(task_id.as_str(), "screenshot.png", &source)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let arr = read_attachments(&kanban, &task_id).await;
+        let attachment_path = arr[0]["path"].as_str().unwrap().to_string();
+
+        let ctx = make_attachment_ctx(
+            "entity.cut",
+            &attachment_path,
+            &task_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        let result = CutEntityCmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["cut"], true);
+        assert_eq!(result["task_id"], task_id);
+
+        // Attachment is gone from the parent task.
+        let after = read_attachments(&kanban, &task_id).await;
+        assert!(
+            after.is_empty(),
+            "cut must remove the attachment from the parent task: {:?}",
+            after,
+        );
+
+        // The trashed file lives in `.attachments/.trash/`. Confirm via
+        // existence — the `trash_removed_attachments` pass renames the
+        // file there during the underlying entity write.
+        let trash_dir = temp
+            .path()
+            .join(".kanban")
+            .join("tasks")
+            .join(".attachments")
+            .join(".trash");
+        let trash_present = trash_dir.exists()
+            && std::fs::read_dir(&trash_dir)
+                .map(|mut it| it.any(|e| e.is_ok()))
+                .unwrap_or(false);
+        assert!(
+            trash_present,
+            "cut must trash the attachment file under .attachments/.trash/"
+        );
+
+        // Clipboard payload is shaped like a copy and ready for paste.
+        assert_eq!(ui.clipboard_entity_type().as_deref(), Some("attachment"));
+        let text = clipboard.0.read_text().await.unwrap().unwrap();
+        let payload = clipboard::deserialize_from_clipboard(&text).unwrap();
+        assert_eq!(payload.swissarmyhammer_clipboard.entity_type, "attachment");
+        assert_eq!(payload.swissarmyhammer_clipboard.mode, "cut");
+    }
+
+    /// Cut from task A, paste onto task B — the attachment "moves" in
+    /// the user-visible sense: the source loses it, the destination
+    /// gains it. Implemented as `cut` (destructive on source) + `paste`
+    /// (non-destructive copy onto destination).
+    #[tokio::test]
+    async fn cut_then_paste_moves_attachment_between_tasks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
+        InitBoard::new("Test")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
+        let ui = Arc::new(UIState::new());
+
+        let source_task = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = source_task["id"].as_str().unwrap().to_string();
+
+        let dest_task = AddTask::new("Destination")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let dest_id = dest_task["id"].as_str().unwrap().to_string();
+
+        let source_file = write_temp_file(temp.path(), "diagram.png", b"diagram bytes");
+        crate::attachment::AddAttachment::new(source_id.as_str(), "diagram.png", &source_file)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let arr = read_attachments(&kanban, &source_id).await;
+        let attachment_path = arr[0]["path"].as_str().unwrap().to_string();
+
+        // Cut from the source task.
+        let cut_ctx = make_attachment_ctx(
+            "entity.cut",
+            &attachment_path,
+            &source_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        CutEntityCmd.execute(&cut_ctx).await.unwrap();
+
+        // Source is empty after cut.
+        assert!(read_attachments(&kanban, &source_id).await.is_empty());
+
+        // Paste onto the destination task.
+        let paste_ctx = make_ctx(
+            "entity.paste",
+            &[],
+            Some(&format!("task:{dest_id}")),
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        PasteEntityCmd::new().execute(&paste_ctx).await.unwrap();
+
+        // Source still empty, destination gained the attachment — the
+        // "move" semantics fall out of cut-deletes-source plus
+        // paste-creates-on-destination.
+        assert!(
+            read_attachments(&kanban, &source_id).await.is_empty(),
+            "source task must remain empty after paste"
+        );
+        let dest_arr = read_attachments(&kanban, &dest_id).await;
+        assert_eq!(
+            dest_arr.len(),
+            1,
+            "destination task must have the attachment after paste"
+        );
+        assert_eq!(dest_arr[0]["name"], "diagram.png");
+    }
+
+    /// Copy from task A, paste onto task B — the attachment ends up on
+    /// **both** tasks. Source is preserved; destination gains a fresh
+    /// association with the same file.
+    #[tokio::test]
+    async fn copy_then_paste_duplicates_attachment_across_tasks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
+        InitBoard::new("Test")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
+        let ui = Arc::new(UIState::new());
+
+        let source_task = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = source_task["id"].as_str().unwrap().to_string();
+
+        let dest_task = AddTask::new("Destination")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let dest_id = dest_task["id"].as_str().unwrap().to_string();
+
+        let source_file = write_temp_file(temp.path(), "report.pdf", b"report bytes");
+        crate::attachment::AddAttachment::new(source_id.as_str(), "report.pdf", &source_file)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let arr = read_attachments(&kanban, &source_id).await;
+        let attachment_path = arr[0]["path"].as_str().unwrap().to_string();
+
+        // Copy from the source task.
+        let copy_ctx = make_attachment_ctx(
+            "entity.copy",
+            &attachment_path,
+            &source_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        CopyEntityCmd.execute(&copy_ctx).await.unwrap();
+
+        // Source is unchanged after copy.
+        assert_eq!(
+            read_attachments(&kanban, &source_id).await.len(),
+            1,
+            "copy must not mutate the source task"
+        );
+
+        // Paste onto the destination task.
+        let paste_ctx = make_ctx(
+            "entity.paste",
+            &[],
+            Some(&format!("task:{dest_id}")),
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        PasteEntityCmd::new().execute(&paste_ctx).await.unwrap();
+
+        // Both tasks now carry the attachment.
+        let source_after = read_attachments(&kanban, &source_id).await;
+        assert_eq!(source_after.len(), 1, "source preserved");
+        let dest_after = read_attachments(&kanban, &dest_id).await;
+        assert_eq!(dest_after.len(), 1, "destination gained the attachment");
+        assert_eq!(dest_after[0]["name"], "report.pdf");
+    }
+
+    /// `entity.paste` against an `attachment:<path>` target — i.e.
+    /// right-clicking another attachment chip with an attachment on the
+    /// clipboard — must land the new attachment on the parent task in
+    /// scope, via the `(attachment, attachment)` paste handler shim.
+    #[tokio::test]
+    async fn paste_attachment_onto_attachment_target_lands_on_parent_task() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban = Arc::new(KanbanContext::new(temp.path().join(".kanban")));
+        InitBoard::new("Test")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let clipboard = Arc::new(ClipboardProviderExt(Arc::new(InMemoryClipboard::new())));
+        let ui = Arc::new(UIState::new());
+
+        let source_task = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let source_id = source_task["id"].as_str().unwrap().to_string();
+
+        let dest_task = AddTask::new("Destination")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let dest_id = dest_task["id"].as_str().unwrap().to_string();
+
+        // Seed each task with one attachment so destination has an
+        // attachment chip the user could right-click.
+        let source_file = write_temp_file(temp.path(), "src.txt", b"src");
+        crate::attachment::AddAttachment::new(source_id.as_str(), "src.txt", &source_file)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let dest_seed = write_temp_file(temp.path(), "existing.txt", b"existing");
+        crate::attachment::AddAttachment::new(dest_id.as_str(), "existing.txt", &dest_seed)
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let source_arr = read_attachments(&kanban, &source_id).await;
+        let source_path = source_arr[0]["path"].as_str().unwrap().to_string();
+
+        // Copy from the source task.
+        let copy_ctx = make_attachment_ctx(
+            "entity.copy",
+            &source_path,
+            &source_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        CopyEntityCmd.execute(&copy_ctx).await.unwrap();
+
+        // Paste onto the destination task's existing attachment chip —
+        // target is `attachment:<dest_path>`, scope carries `task:<dest>`.
+        let dest_arr_before = read_attachments(&kanban, &dest_id).await;
+        let dest_existing_path = dest_arr_before[0]["path"].as_str().unwrap().to_string();
+        let paste_ctx = make_attachment_ctx(
+            "entity.paste",
+            &dest_existing_path,
+            &dest_id,
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        PasteEntityCmd::new().execute(&paste_ctx).await.unwrap();
+
+        // Destination now has both attachments.
+        let dest_after = read_attachments(&kanban, &dest_id).await;
+        assert_eq!(
+            dest_after.len(),
+            2,
+            "paste onto attachment chip must add a new attachment to the parent task"
+        );
+        // Source still has its original attachment (copy was non-destructive).
+        assert_eq!(read_attachments(&kanban, &source_id).await.len(), 1);
     }
 }

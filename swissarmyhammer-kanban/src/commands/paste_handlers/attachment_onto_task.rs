@@ -28,7 +28,63 @@ use crate::commands::run_op;
 use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::path::PathBuf;
 use swissarmyhammer_commands::{parse_moniker, CommandContext, CommandError, Result};
+
+/// RAII guard for the friendly-name staging directory used when
+/// pasting an attachment whose source path's basename disagrees with
+/// the clipboard's friendly `name`.
+///
+/// The guard creates `<system-temp>/sah-paste-<ulid>/<name>` containing
+/// a copy of the source file, exposes that staged path to the paste
+/// handler, and removes the entire staging directory on drop — even
+/// when the underlying `AddAttachment` fails after staging — so the
+/// /tmp tree doesn't accrete one tempdir per paste.
+struct StagedPaste {
+    dir: PathBuf,
+    file: PathBuf,
+}
+
+impl StagedPaste {
+    /// Stage `source` into `<system-temp>/sah-paste-<ulid>/<name>` so
+    /// downstream `copy_attachment` sees a basename equal to `name`.
+    async fn new(source: &str, name: &str) -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!(
+            "sah-paste-{}",
+            ulid::Ulid::new().to_string().to_lowercase()
+        ));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(format!("paste staging dir: {e}")))?;
+        let file = dir.join(name);
+        tokio::fs::copy(source, &file).await.map_err(|e| {
+            // Best-effort: if the copy failed, drop the staging dir
+            // immediately rather than waiting on Drop — Drop runs
+            // synchronously and we already know the dir is empty.
+            let _ = std::fs::remove_dir_all(&dir);
+            CommandError::ExecutionFailed(format!("paste staging copy: {e}"))
+        })?;
+        Ok(Self { dir, file })
+    }
+
+    /// Return the staged path as `&str`, surfacing a structured error
+    /// when the path is not valid UTF-8 (rare on the platforms we
+    /// target, but copy_attachment requires `&str`).
+    fn path_str(&self) -> Result<&str> {
+        self.file.to_str().ok_or_else(|| {
+            CommandError::ExecutionFailed("paste staging path is not valid UTF-8".into())
+        })
+    }
+}
+
+impl Drop for StagedPaste {
+    fn drop(&mut self) {
+        // Best-effort cleanup. Failures to remove the temp dir should
+        // not surface as command errors — they only mean a stale
+        // directory remains under the OS temp tree.
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
 
 /// Paste handler that attaches the clipboard's file to the target task.
 ///
@@ -181,7 +237,39 @@ impl PasteHandler for AttachmentOntoTaskHandler {
         let fields = &clipboard.swissarmyhammer_clipboard.fields;
         let name = Self::resolve_name(fields, path);
 
-        let mut op = AddAttachment::new(task_id, name, path);
+        // The entity layer's `copy_attachment` derives the stored
+        // filename from `source.file_name()`, ignoring `AddAttachment`'s
+        // `name` field. When the user pastes an attachment whose source
+        // path already lives under `.attachments/{old_id}-{name}` (the
+        // canonical case for "copy from one task, paste to another"),
+        // letting that pass through unchanged would produce a
+        // double-prefixed stored name like `{new_id}-{old_id}-{name}`
+        // whose enriched view splits to `name = "{old_id}-{name}"`.
+        // Stage a copy under the friendly basename first when the source
+        // basename disagrees with the resolved `name`, so the
+        // destination gets a clean `{new_id}-{name}` form and the
+        // user-visible filename is preserved across paste.
+        //
+        // The staging directory is created under the OS temp dir with a
+        // ULID-suffixed name so concurrent pastes don't collide. The
+        // [`StagedPaste`] guard cleans it up on drop — including on the
+        // error paths below — without pulling in the `tempfile` crate
+        // as a runtime dependency.
+        let source_basename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let staged: Option<StagedPaste> = if source_basename != name {
+            Some(StagedPaste::new(path, &name).await?)
+        } else {
+            None
+        };
+        let effective_path: &str = match staged.as_ref() {
+            Some(s) => s.path_str()?,
+            None => path,
+        };
+
+        let mut op = AddAttachment::new(task_id, name.as_str(), effective_path);
         if let Some(mime) = Self::resolve_mime_type(fields) {
             op = op.with_mime_type(mime);
         }

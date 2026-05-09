@@ -19,6 +19,7 @@
 //! Each handler lands as its own follow-up card.
 
 pub mod actor_onto_task;
+pub mod attachment_onto_attachment;
 pub mod attachment_onto_task;
 pub mod column_into_board;
 pub mod tag_onto_task;
@@ -179,6 +180,7 @@ impl PasteMatrix {
 pub fn register_paste_handlers() -> PasteMatrix {
     let mut matrix = PasteMatrix::default();
     matrix.register(actor_onto_task::ActorOntoTaskHandler);
+    matrix.register(attachment_onto_attachment::AttachmentOntoAttachmentHandler);
     matrix.register(attachment_onto_task::AttachmentOntoTaskHandler);
     matrix.register(column_into_board::ColumnIntoBoardHandler);
     matrix.register(tag_onto_task::TagOntoTaskHandler);
@@ -275,6 +277,7 @@ mod tests {
             keys,
             vec![
                 ("actor", "task"),
+                ("attachment", "attachment"),
                 ("attachment", "task"),
                 ("column", "board"),
                 ("tag", "task"),

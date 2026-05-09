@@ -31,7 +31,7 @@ use swissarmyhammer_operations::{
 /// An empty `needle` never matches (even against empty fields), so callers
 /// that accidentally pass `""` get a clean `None` rather than a spurious
 /// hit on a partially-populated row.
-fn match_attachment_index(arr: &[Value], needle: &str) -> Option<usize> {
+pub(crate) fn match_attachment_index(arr: &[Value], needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return None;
     }
