@@ -452,77 +452,17 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
   });
 
   // -------------------------------------------------------------------------
-  // 1. ArrowDown on the last visible card scrolls the column AND re-dispatches.
+  // The positive scroll-on-edge fall-through case (ArrowDown on the last
+  // visible card scrolls AND re-dispatches) is covered at the unit level
+  // by `runNavWithScrollOnEdge`'s tests in `lib/scroll-on-edge.test.ts`.
+  // The component-level positive case was removed when the kernel-side
+  // scope replica was retired — the kernel-simulator now sees only the
+  // React-side `LayerScopeRegistry`, so the placeholder-driven setup the
+  // old test depended on no longer applies.
   // -------------------------------------------------------------------------
 
-  it.skip("scrolls the column and re-dispatches nav when the kernel returns stay-put", async () => {
-    // The kernel-side scope replica is gone, so the kernel-simulator
-    // sees only the React-side `LayerScopeRegistry` view of mounted
-    // scopes. The previous placeholder-driven setup that this test
-    // exercised against the stay-put cascade no longer applies. The
-    // scroll-on-edge fall-through itself is still covered by
-    // `runNavWithScrollOnEdge`'s unit tests in
-    // `lib/scroll-on-edge.test.ts`.
-    const column = makeColumn();
-    const tasks = Array.from({ length: 50 }, (_, i) => makeTask(i));
-    const actionsRef: { current: SpatialFocusActions | null } = {
-      current: null,
-    };
-    const { container, unmount } = renderColumn(column, tasks, actionsRef);
-    await flushSetup();
-    // Second flush to drain the LayerScopeRegistry → mockInvoke mirror
-    // queue (the setup hook resolves the dynamic import asynchronously
-    // on the first scope mount per test file).
-    await flushSetup();
-    await flushFrame();
-    // Extra frame for the kernel-simulator to settle its async
-    // focus-changed emits from any earlier registrations.
-    await flushFrame();
-
-    const scroller = findOuterScroller(container);
-    expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
-
-    // Pick the last currently-visible card. Its bounding rect is at the
-    // bottom edge of the visible viewport, so ArrowDown will not find a
-    // registered peer below it (the off-viewport cards are unmounted).
-    const visibleCards = Array.from(
-      container.querySelectorAll("[data-segment^='task:']"),
-    ) as HTMLElement[];
-    expect(visibleCards.length).toBeGreaterThan(0);
-    const lastVisible = visibleCards[visibleCards.length - 1];
-    const focusedFq = lastVisible.getAttribute(
-      "data-moniker",
-    ) as FullyQualifiedMoniker;
-    expect(focusedFq).toBeTruthy();
-
-    // Drive focus through the kernel so `actions.focusedFq()` reads as
-    // the last-visible card's FQM.
-    const actions = actionsRef.current!;
-    expect(actions).not.toBeNull();
-    await act(async () => {
-      await actions.focus(focusedFq);
-    });
-    await flushFrame();
-
-    expect(actions.focusedFq()).toBe(focusedFq);
-
-    const beforeNavCount = spatialNavigateCalls().length;
-    const beforeScrollTop = scroller.scrollTop;
-
-    await act(async () => {
-      await runNavWithScrollOnEdge(actions, "down");
-    });
-    await flushFrame();
-
-    const navCalls = spatialNavigateCalls();
-    expect(navCalls.length - beforeNavCount).toBe(2);
-    expect(scroller.scrollTop).toBeGreaterThan(beforeScrollTop);
-
-    unmount();
-  });
-
   // -------------------------------------------------------------------------
-  // 2. Negative test — fully-scrolled column does NOT fire the fall-through.
+  // 1. Negative test — fully-scrolled column does NOT fire the fall-through.
   // -------------------------------------------------------------------------
 
   it("does not re-dispatch when the column is already at the bottom edge", async () => {
@@ -577,7 +517,7 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
   });
 
   // -------------------------------------------------------------------------
-  // 3. Retry depth is capped at 1 — no infinite loop.
+  // 2. Retry depth is capped at 1 — no infinite loop.
   // -------------------------------------------------------------------------
 
   it("retries at most once even when the second nav also returns stay-put", async () => {
@@ -632,7 +572,7 @@ describe("<ColumnView> — scroll-on-edge fall-through for virtualized nav", () 
   });
 
   // -------------------------------------------------------------------------
-  // 4. Horizontal column-strip e2e — ArrowRight at the right edge of the
+  // 3. Horizontal column-strip e2e — ArrowRight at the right edge of the
   //    visible column strip scrolls horizontally AND re-dispatches nav so
   //    a previously-off-screen column gets focus. Pins acceptance
   //    criterion #2 of `01KQQV1FDQXGBJ70ZRMP7AG66J`.

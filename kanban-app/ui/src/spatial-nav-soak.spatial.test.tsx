@@ -21,7 +21,7 @@
  *
  * Scenarios that vitest cannot faithfully exercise (real OS drag-drop,
  * real Tauri-driven modal lifecycle through the production AppShell)
- * are kept here as `it.skip` placeholders that name the gap; those
+ * are documented in a trailing comment block that names each gap; those
  * land in the manual ≥1 hour soak in `pnpm tauri dev`.
  *
  * Runs under `kanban-app/ui/vite.config.ts`'s browser project (real
@@ -665,41 +665,28 @@ describe("spatial-nav soak: bulk delete includes focused card", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Skipped: scenarios that need the real Tauri runtime / OS drag-drop.
-// These land in the manual ≥1 hour soak in `pnpm tauri dev`.
+// Scenarios reserved for the manual ≥1 hour soak in `pnpm tauri dev`. These
+// cannot be exercised under vitest's browser-mode harness because they
+// depend on the real Tauri runtime / OS drag-drop / production AppShell
+// composition. They are documented here (next to the IPC-shape coverage that
+// pins the corresponding contracts) so the test gap stays visible:
+//
+//   - real OS drag-drop a card between columns: post-move registry/snapshot
+//     parity is covered by `soak_drag_drop_card_between_columns` in
+//     `swissarmyhammer-focus/tests/spatial_nav_soak.rs`. The OS-level drag
+//     gesture through the production AppShell + `useDragDrop` chain is the
+//     manual soak's territory.
+//   - modal dismissal via Escape through the production AppShell: the
+//     IPC-shape contract is pinned by the "modal dialog round-trip"
+//     scenario above. Driving the dismissal through the full keymap +
+//     dialog primitive composition is the manual soak's territory.
+//   - inspector open/close through the real layer machinery: the IPC-shape
+//     contract is pinned by the "inspector layer round-trip" scenario
+//     above. Driving the inspector through the real
+//     `<InspectorsContainer>` + dispatch chain is reserved for the manual
+//     soak.
+//   - ≥1 hour continuous interaction with no divergence: the acceptance
+//     criterion explicitly names the manual soak in `pnpm tauri dev`
+//     watching `just logs | grep "snapshot/registry divergence"` as the
+//     user-side gate before step 10/cutover.
 // ---------------------------------------------------------------------------
-
-describe("spatial-nav soak: scenarios reserved for manual dev-mode soak", () => {
-  it.skip("real OS drag-drop a card between columns — needs Playwright drag emulation against the real AppShell", () => {
-    // The Rust soak suite covers the post-move registry/snapshot parity
-    // (`soak_drag_drop_card_between_columns` in
-    // `swissarmyhammer-focus/tests/spatial_nav_soak.rs`). Driving an
-    // OS-level drag through the production AppShell — which depends on
-    // the Tauri runtime, native drag previews, and the
-    // `useDragDrop` hook chain — is out of reach for vitest's
-    // browser-mode harness; the manual soak in `pnpm tauri dev` is the
-    // gate.
-  });
-
-  it.skip("modal dismissal via Escape through the production AppShell — needs the real keymap + dialog wiring", () => {
-    // The IPC-shape contract is pinned by the
-    // "modal dialog round-trip" scenario above. Driving the dismissal
-    // through the production keymap (Escape → modal close → focus
-    // restore) needs the full AppShell + keymap registry + dialog
-    // primitive composition, which is the manual soak's territory.
-  });
-
-  it.skip("inspector open/close through the real layer machinery — needs production AppShell + inspector registry", () => {
-    // The IPC-shape contract is pinned by the "inspector layer
-    // round-trip" scenario above. Driving the inspector through the
-    // real `<InspectorsContainer>` + dispatch chain is reserved for the
-    // manual soak.
-  });
-
-  it.skip("≥1 hour continuous interaction with no divergence warns — manual gate", () => {
-    // The acceptance criterion explicitly names the ≥1 hour manual
-    // soak in `pnpm tauri dev` watching
-    // `just logs | grep \"snapshot/registry divergence\"` as the
-    // user-side gate before step 10/cutover.
-  });
-});
