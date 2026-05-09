@@ -1,7 +1,7 @@
 ---
 assignees: []
 position_column: todo
-position_ordinal: c180
+position_ordinal: 7d80
 title: resolve 4 pre-existing it.skip()s in kanban-app/ui — fix or delete
 ---
 The frontend test suite reports 4 skipped tests on the `kanban` branch. Per the test skill rule "skipped tests are not acceptable. A skipped test is either broken (fix it) or dead (delete it)" — but these are pre-existing project-level decisions, so I am not removing them as part of a /test verification run. File for explicit resolution.
