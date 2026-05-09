@@ -494,7 +494,7 @@ function JumpPill({ target }: JumpPillProps) {
     <div
       data-jump-code={code}
       data-jump-fq={fq}
-      className="fixed bg-yellow-300 text-black font-mono px-1 rounded shadow text-xs leading-tight"
+      className="fixed bg-primary text-primary-foreground font-mono px-1 rounded shadow text-xs leading-tight"
       style={{
         left: rect.left + 4,
         top: rect.top + 4,
