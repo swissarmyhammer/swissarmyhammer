@@ -27,6 +27,10 @@ import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
 import { CompactCellWrapper } from "./compact-cell-wrapper";
+import {
+  basename,
+  normalizeAttachments,
+} from "@/components/fields/attachment-utils";
 import type { FieldDef } from "@/types/kanban";
 import { asSegment } from "@/types/spatial";
 
@@ -327,6 +331,32 @@ export function AttachmentDisplay({
   );
 }
 
+/** Props for the PendingAttachmentItem component. */
+interface PendingAttachmentItemProps {
+  path: string;
+}
+
+/**
+ * Renders a row for a string entry that landed in the array between the
+ * drop commit and the entity-layer enrichment. Mirrors the layout of
+ * {@link AttachmentItem} (icon + truncated name) so the row does not
+ * reflow once the metadata arrives. Muted styling signals "pending" to
+ * sighted users; `aria-busy="true"` plus a visually-hidden "pending"
+ * label communicates the same transient state to assistive tech.
+ */
+function PendingAttachmentItem({ path }: PendingAttachmentItemProps) {
+  return (
+    <div
+      className="flex items-center gap-2 min-w-0 opacity-60"
+      aria-busy="true"
+    >
+      <Paperclip className="shrink-0 text-muted-foreground" size={16} />
+      <span className="truncate text-sm italic">{basename(path)}</span>
+      <span className="sr-only">pending</span>
+    </div>
+  );
+}
+
 /** Renders a list of attachment metadata objects. Also acts as a drag-drop target. */
 export function AttachmentListDisplay({
   field,
@@ -334,7 +364,14 @@ export function AttachmentListDisplay({
   mode,
   onCommit,
 }: AttachmentListDisplayProps) {
-  const attachments = Array.isArray(value) ? (value as AttachmentMeta[]) : [];
+  // The runtime contract is `(AttachmentMeta | string)[]` — string entries
+  // appear briefly during the drop commit -> entity-layer enrichment
+  // round-trip (see `process_attachment_field` in the Rust entity layer).
+  // `normalizeAttachments` is shared with `AttachmentEditor` so both
+  // sides agree on the contract: it filters out unexpected shapes
+  // (`null`/numbers/objects without a string `id`) before they hit
+  // `AttachmentItem` and crash `getFileIcon` on `undefined.lastIndexOf`.
+  const attachments = normalizeAttachments(value);
   const { isDragging, registerDropTarget, unregisterDropTarget } =
     useFileDrop();
 
@@ -389,9 +426,13 @@ export function AttachmentListDisplay({
     >
       {attachments.length > 0 ? (
         <div className="flex flex-col gap-1">
-          {attachments.map((att) => (
-            <AttachmentItem key={att.id} attachment={att} />
-          ))}
+          {attachments.map((att, index) =>
+            typeof att === "string" ? (
+              <PendingAttachmentItem key={`pending:${index}:${att}`} path={att} />
+            ) : (
+              <AttachmentItem key={att.id} attachment={att} />
+            ),
+          )}
         </div>
       ) : (
         <div className="flex flex-col items-center text-muted-foreground opacity-40 py-1">

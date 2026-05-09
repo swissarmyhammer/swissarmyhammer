@@ -469,6 +469,65 @@ describe("AttachmentListDisplay", () => {
     expect(zone).toBeTruthy();
   });
 
+  it("renders mixed array of meta and pending string paths without throwing", () => {
+    // Regression for crash on drop: the entity-layer round-trip leaves the
+    // `attachments` array containing raw string paths between the drop
+    // commit and the read-back enrichment. Before the fix,
+    // `AttachmentListDisplay` cast the array to `AttachmentMeta[]` and
+    // `AttachmentItem` called `getFileIcon(undefined, undefined)`, which
+    // threw `TypeError: Cannot read properties of undefined (reading
+    // 'lastIndexOf')`. After the fix, string entries render inline with
+    // their basename (mirroring `AttachmentEditor`).
+    const mixed: Array<AttachmentMeta | string> = [
+      imageAttachment,
+      "/tmp/dropped-file.png",
+    ];
+    expect(() => {
+      render(
+        <AttachmentListDisplay
+          value={mixed as unknown}
+          mode="full"
+        />,
+        { wrapper: Wrapper },
+      );
+    }).not.toThrow();
+    // Meta entry renders by name
+    expect(screen.getByText("screenshot.png")).toBeTruthy();
+    // Pending string entry renders by basename
+    expect(screen.getByText("dropped-file.png")).toBeTruthy();
+  });
+
+  it("renders pending string paths with nested directory basenames", () => {
+    // Defensive: ensure POSIX-style nested paths reduce to their final
+    // segment, not the full path, since the editor uses the same
+    // basename convention.
+    render(
+      <AttachmentListDisplay
+        value={["/var/folders/abc/T/swissarmyhammer/photo-001.jpg"] as unknown}
+        mode="full"
+      />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.getByText("photo-001.jpg")).toBeTruthy();
+  });
+
+  it("renders pending Windows backslash paths by basename", () => {
+    // The basename helper explicitly handles `\\` separators for
+    // Windows-style temp paths. Exercise that branch alongside the
+    // POSIX coverage above so a regression in the `\\` arm of the
+    // `Math.max(lastIndexOf("/"), lastIndexOf("\\"))` lookup is caught.
+    render(
+      <AttachmentListDisplay
+        value={
+          ["C:\\Users\\me\\AppData\\Local\\Temp\\photo.jpg"] as unknown
+        }
+        mode="full"
+      />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.getByText("photo.jpg")).toBeTruthy();
+  });
+
   it("renders full enriched metadata shape with filenames and sizes", () => {
     const enrichedAttachments: AttachmentMeta[] = [
       {
