@@ -14,6 +14,12 @@
  * corner radius (e.g. `rounded-md` on cards). `pointer-events-none`
  * keeps clicks flowing through to the host.
  *
+ * `z-10` lifts the indicator above any sibling content the host renders
+ * — most notably an inner wrapper with its own `border` (e.g. the entity
+ * card's `border border-border`) painting on the same pixel line. Without
+ * the explicit z-index the dashed indicator paints first (JSX order) and
+ * the inner solid border paints on top, hiding the focus signal.
+ *
  * This component is the ONE PLACE the focus visual lives. CSS no longer
  * reads `[data-focused]` to draw a border — focus state flows from Rust
  * → `useFocusClaim` → React state → this component's `focused` prop →
@@ -52,7 +58,7 @@ export const FocusIndicator = memo(function FocusIndicator({
     <span
       data-testid="focus-indicator"
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0 border border-dashed border-primary rounded-[inherit] animate-pulse"
+      className="pointer-events-none absolute inset-0 z-10 border border-dashed border-primary rounded-[inherit] animate-pulse"
     />
   );
 });
