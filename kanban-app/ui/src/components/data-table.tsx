@@ -747,6 +747,30 @@ interface DataBodyCellProps {
 }
 
 /**
+ * Whether `field` renders a "leaf" editor — one where clicking the visible
+ * cell IS the edit gesture and there's no separate inspector view that adds
+ * value over the editor itself.
+ *
+ * Color is the canonical example: the swatch the user sees in display mode
+ * is itself the popover trigger, so a single click should drill straight
+ * into editing (open the picker), and a double-click should also drill in
+ * rather than route to `ui.inspect` (there's nothing to inspect that the
+ * editor doesn't already show).
+ *
+ * The check is a hardcoded editor-name list today because there's only one
+ * leaf editor in the codebase. When a second one lands (e.g.
+ * `icon-palette`, `boolean-toggle`), this should move onto the schema as a
+ * `FieldDef` registry flag (e.g. `editorKind: "leaf"`) so the cell's
+ * behavior is metadata-driven — see JS_TS_REVIEW.md "no hardcoded field
+ * logic in components". Until then, this helper is the single point of
+ * truth that all call sites in this file route through, so the migration
+ * to a schema flag is a one-line change here.
+ */
+function isLeafEditorField(field: FieldDef): boolean {
+  return field.editor === "color-palette";
+}
+
+/**
  * One data cell.
  *
  * Memoized so that when GridView re-renders with identical per-cell state,
@@ -768,6 +792,24 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
   const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
   const isSel = isCellSelected(grid, di, ci);
   const isEditing = isCursor && grid.mode === "edit" && renderEditor;
+  // Leaf editor — a click is itself the edit gesture (no separate display
+  // mode that has to be drilled into). Color is the canonical example: the
+  // visible swatch *is* the popover trigger, and clicking it opens the
+  // picker. For these editors the cell:
+  //   - enters edit mode on a single click (so the picker opens
+  //     immediately instead of needing a double-click first);
+  //   - stops the dblclick gesture from bubbling to `<EntityRow>`'s
+  //     `useInspectOnDoubleClick`, which would otherwise pop the
+  //     inspector for the row entity (color is a leaf — drilling in IS
+  //     the right semantics, not "inspect the parent");
+  //   - skips the inner click-handling wrapper around editing-mode
+  //     children, because that wrapper sits between the `<FocusScope>`
+  //     host and the editor's own popover trigger and breaks Radix's
+  //     click-toggle handling.
+  // See task `01KQZ77F629SHHJD5X470NZGJ0` for the bug report. The
+  // discriminator routes through `isLeafEditorField` so all leaf-editor
+  // checks in this file have a single point of truth.
+  const isLeafEditor = isLeafEditorField(col.field);
   const cellContent = isEditing ? (
     renderEditor!(
       entity,
@@ -844,10 +886,24 @@ const DataBodyCell = memo(function DataBodyCellImpl(props: DataBodyCellProps) {
       tdClassName={tdClassName}
       innerClassName={innerClassName}
       cellCursorAttr={props.cellCursorAttr}
-      onClick={() => props.handleCellClick(di, ci)}
-      onDoubleClick={() => {
+      isEditing={!!isEditing}
+      isLeafEditor={isLeafEditor}
+      onClick={() => {
+        props.handleCellClick(di, ci);
+        // Leaf editors (color-palette) drill into editing on a single
+        // click so the picker opens immediately. The popover starts
+        // `open: true` on mount, so flipping the cell into edit mode
+        // here is what makes the popover visible.
+        if (isLeafEditor) grid.enterEdit();
+      }}
+      onDoubleClick={(e) => {
         onCellClick?.(di, ci);
         grid.enterEdit();
+        // For a leaf editor (color-palette) the dblclick gesture is the
+        // edit gesture, not "inspect parent". Stop the gesture before
+        // it reaches `<EntityRow>`'s `useInspectOnDoubleClick`, which
+        // would otherwise pop the inspector for the row entity.
+        if (isLeafEditor) e.stopPropagation();
       }}
     >
       {cellContent}
@@ -893,8 +949,25 @@ interface GridCellFocusableProps {
   innerClassName?: string;
   /** Value for the `data-cell-cursor` attribute, or `undefined` to omit. */
   cellCursorAttr?: string | undefined;
+  /**
+   * Whether the cell is currently rendering its inline editor (cursor
+   * cell + grid mode is `"edit"`). Combined with `isLeafEditor` this
+   * controls whether the inner click-handling wrapper around editing-
+   * mode children is rendered or skipped — see {@link isLeafEditor}.
+   */
+  isEditing: boolean;
+  /**
+   * The cell's editor is a *leaf* editor — clicking the visible cell
+   * surface IS the edit gesture (e.g. `color-palette`'s swatch is the
+   * popover trigger). When `isEditing` is also true the inner
+   * click-handling `<div onClick onDoubleClick>` wrapper is skipped, so
+   * the editor's own popover trigger sits directly under the
+   * `<FocusScope>` host without an extra `onClick` interfering with
+   * Radix's click-toggle handling.
+   */
+  isLeafEditor: boolean;
   onClick: () => void;
-  onDoubleClick: () => void;
+  onDoubleClick: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }
 
@@ -974,6 +1047,8 @@ function GridCellFocusable({
   tdClassName,
   innerClassName,
   cellCursorAttr,
+  isEditing,
+  isLeafEditor,
   onClick,
   onDoubleClick,
   children,
@@ -996,6 +1071,43 @@ function GridCellFocusable({
   // full stack.
   const inSpatialStack = layerKey !== null && actions !== null;
 
+  // Leaf editors render their own click target (e.g. color-palette's
+  // Radix `<PopoverTrigger>` IS the swatch). When a leaf editor is
+  // mounted in editing mode, we omit the inner click-handling wrapper:
+  // the editor's trigger sits directly under the `<FocusScope>` host,
+  // so a click on the trigger reaches Radix without an intermediate
+  // `onClick` interfering with the popover's open/close toggle. The
+  // wrapper is still rendered in non-leaf editing modes (text editors
+  // expect the cell-level click handlers to manage cursor placement)
+  // and in display mode (the wrapper is the move-cursor click target
+  // for the cell). See task `01KQZ77F629SHHJD5X470NZGJ0`.
+  const skipInnerWrapper = isEditing && isLeafEditor;
+
+  // For leaf editors in display mode, the cell-level dblclick handler
+  // must run BEFORE the descendant `<Field>`'s `<Inspectable>` swallows
+  // the event (Inspectable's `onDoubleClick` calls `e.stopPropagation()`
+  // after dispatching `ui.inspect` for the field, so a bubble-phase
+  // wrapper handler never sees the gesture). Capture-phase handlers run
+  // top-down before the bubble phase reaches the descendant, so they
+  // get first crack at the gesture and can call `e.stopPropagation()`
+  // to prevent the descendant inspector dispatch.
+  //
+  // The same reasoning applies to single-click on a leaf editor cell —
+  // we want a single click to drill into editing, and no descendant
+  // handler should interfere. Routing both gestures through capture
+  // phase keeps the leaf-editor semantics consistent regardless of how
+  // the cell is wrapped further down.
+  //
+  // For non-leaf editors the existing bubble-phase handlers stay — they
+  // are no-ops in production (cell-level click is move-cursor only,
+  // owned by `<FocusScope>`) but the wrapper still exists so the click
+  // region equals the visible cell rect (see
+  // `data-table.cell-click-region.spatial.test.tsx`).
+  const innerOnClick = isLeafEditor ? undefined : onClick;
+  const innerOnDoubleClick = isLeafEditor ? undefined : onDoubleClick;
+  const innerOnClickCapture = isLeafEditor ? onClick : undefined;
+  const innerOnDoubleClickCapture = isLeafEditor ? onDoubleClick : undefined;
+
   if (!inSpatialStack) {
     // Fallback path: there is no inner focusable wrapper, so the `<td>`
     // itself is the click target. Merge the two halves back onto it so
@@ -1003,13 +1115,21 @@ function GridCellFocusable({
     // styling). The `block h-full w-full` from `innerClassName` is a
     // no-op on a `<td>` and is left in for symmetry with the spatial
     // branch.
+    //
+    // For a leaf editor in editing mode, drop the cell-level click
+    // handlers so the editor's own trigger handles clicks without
+    // interference (see `skipInnerWrapper` above).
     return (
       <TableCell
         ref={cursorRef}
         className={cn(tdClassName, innerClassName)}
         data-cell-cursor={cellCursorAttr}
-        onClick={onClick}
-        onDoubleClick={onDoubleClick}
+        onClick={skipInnerWrapper ? undefined : innerOnClick}
+        onDoubleClick={skipInnerWrapper ? undefined : innerOnDoubleClick}
+        onClickCapture={skipInnerWrapper ? undefined : innerOnClickCapture}
+        onDoubleClickCapture={
+          skipInnerWrapper ? undefined : innerOnDoubleClickCapture
+        }
       >
         {children}
       </TableCell>
@@ -1026,6 +1146,10 @@ function GridCellFocusable({
   // click region) fill the `<td>` exactly. The caller's padding lives on
   // the inner wrapper via `innerClassName`, not on the `<td>`, so the
   // focusable's `getBoundingClientRect()` equals the `<td>`'s rect.
+  //
+  // When a leaf editor is in editing mode, the inner click wrapper is
+  // omitted entirely — the editor's own trigger is rendered directly
+  // under the `<FocusScope>`. See `skipInnerWrapper` above.
   return (
     <TableCell
       ref={cursorRef}
@@ -1033,13 +1157,19 @@ function GridCellFocusable({
       data-cell-cursor={cellCursorAttr}
     >
       <FocusScope moniker={moniker} className="block h-full w-full">
-        <div
-          className={innerClassName}
-          onClick={onClick}
-          onDoubleClick={onDoubleClick}
-        >
-          {children}
-        </div>
+        {skipInnerWrapper ? (
+          children
+        ) : (
+          <div
+            className={innerClassName}
+            onClick={innerOnClick}
+            onDoubleClick={innerOnDoubleClick}
+            onClickCapture={innerOnClickCapture}
+            onDoubleClickCapture={innerOnDoubleClickCapture}
+          >
+            {children}
+          </div>
+        )}
       </FocusScope>
     </TableCell>
   );

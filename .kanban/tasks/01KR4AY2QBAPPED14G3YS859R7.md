@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: f380
+position_ordinal: 7d80
 title: 'swissarmyhammer-treesitter::index::tests: HuggingFace network flakes'
 ---
 ## Symptom

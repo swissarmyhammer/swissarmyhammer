@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: f480
+position_ordinal: 7c80
 title: menu.rs resolve_accelerator drops valid named keys (Enter, Escape, ArrowUp, etc.)
 ---
 ## Symptom
