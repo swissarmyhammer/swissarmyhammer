@@ -1,6 +1,9 @@
 ---
 assignees:
 - claude-code
+attachments:
+- 01KR6YRGB6EBY6JG57D31EBP0F-image-LEFRRLR3zJQ6haj77VrwDgQk1WwdxZ.png
+- 01KR6YRV0CQ9DGY1W1QVA566Z8-01KR6YRT0S0RWPG8R7YFNGJT8W-image-j9jBODrxZuGJaiYxWB9gLwDmHggV83.png
 position_column: todo
 position_ordinal: 7c80
 title: menu.rs resolve_accelerator drops valid named keys (Enter, Escape, ArrowUp, etc.)
