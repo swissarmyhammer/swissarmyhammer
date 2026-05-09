@@ -183,6 +183,13 @@ pub struct WindowState {
     pub height: Option<u32>,
     /// Whether the window is maximized.
     pub maximized: bool,
+    /// User-chosen width of inspector panels in this window (CSS pixels).
+    ///
+    /// `None` falls back to the React default (420 px). Persisted so the
+    /// chosen width survives window restarts. A single value applies to
+    /// every panel in the stack — adjacent inspectors share the same
+    /// width so the right-edge tile offsets stay aligned.
+    pub inspector_width: Option<u32>,
 }
 
 impl Default for WindowState {
@@ -200,6 +207,7 @@ impl Default for WindowState {
             width: None,
             height: None,
             maximized: false,
+            inspector_width: None,
         }
     }
 }
@@ -238,6 +246,16 @@ pub enum UIStateChange {
     ScopeChain(Vec<String>),
     /// The application interaction mode changed (e.g. "normal", "command", "search").
     AppMode(String),
+    /// The user-chosen inspector panel width changed for a specific window.
+    ///
+    /// Carries the window label so the React side can ignore echoes for
+    /// other windows, and the new width in CSS pixels.
+    InspectorWidth {
+        /// The window whose inspector_width changed.
+        window_label: String,
+        /// The new width in CSS pixels.
+        width: u32,
+    },
 }
 
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
@@ -820,6 +838,42 @@ impl UIState {
             .unwrap_or_default()
     }
 
+    /// Set the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `Some(InspectorWidth)` describing the change, or `None`
+    /// when the new width matches the existing value (so the bridge can
+    /// skip a redundant `ui-state-changed` emit). Auto-saves if a config
+    /// path is configured.
+    pub fn set_inspector_width(&self, window_label: &str, width: u32) -> Option<UIStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.inspector_width == Some(width) {
+                return None;
+            }
+            ws.inspector_width = Some(width);
+            UIStateChange::InspectorWidth {
+                window_label: window_label.to_string(),
+                width,
+            }
+        };
+        self.try_save();
+        Some(change)
+    }
+
+    /// Get the user-chosen inspector panel width for a specific window.
+    ///
+    /// Returns `None` when no width has been set for the window — the
+    /// React side falls back to a default (currently 420 px).
+    pub fn inspector_width(&self, window_label: &str) -> Option<u32> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .and_then(|ws| ws.inspector_width)
+    }
+
     /// Save window geometry for a specific window.
     ///
     /// Auto-saves if a config path is configured. Use this for deliberate
@@ -1338,6 +1392,60 @@ mod tests {
         let state = UIState::new();
         // A window with no entries returns an empty stack
         assert!(state.inspector_stack("unknown-window").is_empty());
+    }
+
+    #[test]
+    fn inspector_width_defaults_to_none() {
+        let state = UIState::new();
+        // Unknown windows return None — the React side falls back to 420 px.
+        assert!(state.inspector_width("unknown-window").is_none());
+        // A window with no inspector_width set also returns None.
+        state.inspect("main", "task:01XYZ");
+        assert!(state.inspector_width("main").is_none());
+    }
+
+    #[test]
+    fn set_inspector_width_round_trip() {
+        let state = UIState::new();
+        let change = state.set_inspector_width("main", 540);
+        // Mutation returns a payload describing the change.
+        match change {
+            Some(UIStateChange::InspectorWidth {
+                window_label,
+                width,
+            }) => {
+                assert_eq!(window_label, "main");
+                assert_eq!(width, 540);
+            }
+            other => panic!("Expected Some(InspectorWidth), got {other:?}"),
+        }
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_noop_returns_none() {
+        let state = UIState::new();
+        assert!(state.set_inspector_width("main", 540).is_some());
+        // Setting the same width is a no-op — returns None so the bridge
+        // does not emit a redundant ui-state-changed event.
+        assert!(state.set_inspector_width("main", 540).is_none());
+        assert_eq!(state.inspector_width("main"), Some(540));
+    }
+
+    #[test]
+    fn set_inspector_width_persists_through_save_load() {
+        let path = temp_yaml_path("inspector_width_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_inspector_width("main", 540);
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.inspector_width("main"), Some(540));
+        }
+        let _ = fs::remove_file(&path);
     }
 
     // --- Persistence tests ---

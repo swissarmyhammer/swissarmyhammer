@@ -19,6 +19,17 @@
     cua: Mod+Escape
     vim: Q
 
+- id: ui.inspector.set_width
+  name: Set Inspector Width
+  # Dispatched from the React drag-handle's mouseup. No keybinding,
+  # no palette entry — invisible by design (the user "uses" it by
+  # dragging the inspector's left edge).
+  visible: false
+  undoable: false
+  params:
+    - name: width
+      from: args
+
 - id: ui.palette.open
   name: Command Palette
   keys:

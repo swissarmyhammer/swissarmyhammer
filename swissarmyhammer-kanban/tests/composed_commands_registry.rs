@@ -23,7 +23,7 @@ fn composed_registry_matches_manual_composition() {
 
     assert_eq!(
         registry.all_commands().len(),
-        69,
+        70,
         "composed registry must contain the full generic + focus + kanban command set",
     );
 
@@ -117,9 +117,11 @@ fn composed_registry_command_id_set_snapshot() {
     // to 68 when the focus crate landed its 8 `nav.*` YAML stubs (see
     // task `01KQYWM5BHFRPCRD70GF8YRCGY`). Bumped to 69 when
     // `nav.jump` (the AceJump-style overlay) joined the focus crate's
-    // YAML (task `01KQYWV9DC866DGRPBRFR17ZEY`). If you intentionally
-    // add or remove a command, update this list and explain why in
-    // the commit message.
+    // YAML (task `01KQYWV9DC866DGRPBRFR17ZEY`). Bumped to 70 when
+    // `ui.inspector.set_width` joined for the resizable inspector
+    // (task `01KQSE8TT79XC3KJGEHX6DW99G`). If you intentionally add
+    // or remove a command, update this list and explain why in the
+    // commit message.
     let expected: Vec<&str> = vec![
         "app.about",
         "app.command",
@@ -184,6 +186,7 @@ fn composed_registry_command_id_set_snapshot() {
         "ui.inspect",
         "ui.inspector.close",
         "ui.inspector.close_all",
+        "ui.inspector.set_width",
         "ui.mode.set",
         "ui.palette.close",
         "ui.palette.open",
@@ -193,5 +196,5 @@ fn composed_registry_command_id_set_snapshot() {
     ];
 
     assert_eq!(ids, expected, "command id set drifted; ids = {ids:?}",);
-    assert_eq!(ids.len(), 69);
+    assert_eq!(ids.len(), 70);
 }

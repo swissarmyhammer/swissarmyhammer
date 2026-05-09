@@ -15,7 +15,13 @@ import type { Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
 import { asSegment } from "@/types/spatial";
 
-const PANEL_WIDTH = 420;
+/**
+ * Default panel width applied when `WindowState.inspector_width` is
+ * `undefined` (fresh window, never resized). Mirrors the previous
+ * fixed `w-[420px]` Tailwind class used before the resizable inspector
+ * landed in 01KQSE8TT79XC3KJGEHX6DW99G.
+ */
+const DEFAULT_PANEL_WIDTH = 420;
 
 /**
  * Identity-stable `LayerName` for the inspector overlay layer.
@@ -136,6 +142,54 @@ export function InspectorsContainer() {
     setPanelStack(parsePanelStack(inspectorStack));
   }, [inspectorStack]);
 
+  /**
+   * Live panel width applied to every inspector in the stack.
+   *
+   * Reads the persisted `inspector_width` from `WindowState`, falling
+   * back to the historical 420 px default when the user hasn't resized
+   * yet. During a drag, transient updates flow through `liveWidth`
+   * (`onResize` callback) so every panel re-renders at 60 fps without
+   * any backend round-trip; only the final value is dispatched on
+   * `mouseup` via `ui.inspector.set_width`. The dispatch echoes back as
+   * an `inspector_width` `ui-state-changed` event, which updates
+   * `winState.inspector_width` and clears the transient state on the
+   * next render.
+   */
+  const persistedWidth = winState?.inspector_width ?? DEFAULT_PANEL_WIDTH;
+  const [liveWidth, setLiveWidth] = useState<number | null>(null);
+  // Tracks whether a drag is currently in progress. Held in a ref —
+  // not reactive state — because the reset effect below must read the
+  // *current* drag status without re-triggering itself when the flag
+  // flips. `handleResize` sets it on the first move; `handleResizeEnd`
+  // clears it on release.
+  const isDraggingRef = useRef(false);
+  // Reset transient state whenever the persisted value changes (e.g.
+  // after dispatch echoes back through ui-state-changed) — otherwise a
+  // stale `liveWidth` would shadow the new persisted value. Skip the
+  // reset while a drag is in progress so a backend echo arriving
+  // mid-drag (e.g. a future cross-window broadcast) does not clobber
+  // the in-flight drag with a snap-back to the persisted value.
+  useEffect(() => {
+    if (isDraggingRef.current) return;
+    setLiveWidth(null);
+  }, [persistedWidth]);
+  const effectiveWidth = liveWidth ?? persistedWidth;
+
+  const dispatchSetWidth = useDispatchCommand("ui.inspector.set_width");
+  const handleResize = useCallback((next: number) => {
+    isDraggingRef.current = true;
+    setLiveWidth(next);
+  }, []);
+  const handleResizeEnd = useCallback(
+    (final: number) => {
+      isDraggingRef.current = false;
+      dispatchSetWidth({ args: { width: final } }).catch((e) =>
+        console.error("ui.inspector.set_width failed:", e),
+      );
+    },
+    [dispatchSetWidth],
+  );
+
   /** Close the topmost inspector panel via the command architecture. */
   const dispatchInspectorClose = useDispatchCommand("ui.inspector.close");
   const closeTopPanel = useCallback(() => {
@@ -166,7 +220,7 @@ export function InspectorsContainer() {
    * root). See card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`.
    */
   const panelNodes = panelStack.map((entry, index) => {
-    const rightOffset = (panelStack.length - 1 - index) * PANEL_WIDTH;
+    const rightOffset = (panelStack.length - 1 - index) * effectiveWidth;
     return (
       <InspectorPanel
         key={`${entry.entityType}-${entry.entityId}`}
@@ -174,6 +228,9 @@ export function InspectorsContainer() {
         entityStore={entityStore}
         onClose={closeTopPanel}
         style={{ right: rightOffset }}
+        width={effectiveWidth}
+        onResize={handleResize}
+        onResizeEnd={handleResizeEnd}
       />
     );
   });
@@ -216,6 +273,12 @@ interface InspectorPanelProps {
   entityStore: Record<string, Entity[]>;
   onClose: () => void;
   style?: React.CSSProperties;
+  /** Current panel width in CSS pixels. Forwarded to the SlidePanel. */
+  width: number;
+  /** Forwarded to the SlidePanel's left-edge resize handle. */
+  onResize: (next: number) => void;
+  /** Forwarded to the SlidePanel — fires once on mouseup with the final width. */
+  onResizeEnd: (final: number) => void;
 }
 
 /**
@@ -273,6 +336,9 @@ function InspectorPanel({
   entityStore,
   onClose,
   style,
+  width,
+  onResize,
+  onResizeEnd,
 }: InspectorPanelProps) {
   const { getSchema } = useSchema();
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
@@ -324,7 +390,7 @@ function InspectorPanel({
   }, [resolved, fetchKey, entry.entityType, entry.entityId]);
 
   // First-field focus on mount is owned by `<EntityInspector>`'s
-  // `useFirstFieldFocus` hook \u2014 it captures the previously-focused
+  // `useFirstFieldFocus` hook — it captures the previously-focused
   // moniker on first mount and dispatches `setFocus(firstField)` once
   // the schema's first field is resolved, then restores prev focus on
   // unmount. The behavior the deleted `<ClaimPanelFocusOnMount>` was
@@ -335,7 +401,7 @@ function InspectorPanel({
   // The entity-keyed zone segment. The kernel registers this zone
   // under the inspector layer root, and `<EntityInspector>`'s field
   // zones land underneath with `parentZone === <this zone's FQM>`.
-  // The segment is the entity moniker itself \u2014 see card
+  // The segment is the entity moniker itself — see card
   // `01KQFCQ9QMQKCDYVWGTXSVK5PZ` for why we don't use a `panel:`
   // prefix.
   const entityZoneSegment = useMemo(
@@ -354,7 +420,14 @@ function InspectorPanel({
   );
 
   return (
-    <SlidePanel open={true} onClose={onClose} style={style}>
+    <SlidePanel
+      open={true}
+      onClose={onClose}
+      style={style}
+      width={width}
+      onResize={onResize}
+      onResizeEnd={onResizeEnd}
+    >
       <FocusScope moniker={entityZoneSegment}>{body}</FocusScope>
     </SlidePanel>
   );

@@ -174,9 +174,11 @@ fn kanban_yaml_preserves_command_metadata() {
 /// landing the eight directional / drill `nav.*` YAML stubs in
 /// `swissarmyhammer-focus` (01KQYWM5BHFRPCRD70GF8YRCGY); the +1 to 9
 /// came from adding `nav.jump` (AceJump-style overlay) in
-/// 01KQYWV9DC866DGRPBRFR17ZEY.
+/// 01KQYWV9DC866DGRPBRFR17ZEY. The +1 to 70 came from adding
+/// `ui.inspector.set_width` for the resizable inspector
+/// (01KQSE8TT79XC3KJGEHX6DW99G).
 #[test]
-fn composed_builtins_register_all_sixty_nine_commands() {
+fn composed_builtins_register_all_seventy_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
     let focus_sources = swissarmyhammer_focus::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
@@ -191,7 +193,7 @@ fn composed_builtins_register_all_sixty_nine_commands() {
 
     assert_eq!(
         registry.all_commands().len(),
-        69,
+        70,
         "composed registry must match the post-focus command count",
     );
 

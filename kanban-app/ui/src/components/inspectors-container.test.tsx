@@ -137,8 +137,14 @@ import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 /** Identity-stable layer name for the test window root, matches App.tsx. */
 const WINDOW_LAYER_NAME = asSegment("window");
 
-/** Build a UIState snapshot with a given inspector_stack for the "main" window. */
-function uiStateWithStack(stack: string[]) {
+/**
+ * Build a UIState snapshot with a given inspector_stack for the "main"
+ * window, optionally seeding `inspector_width` for the resizable
+ * inspector tests. When `inspectorWidth` is omitted the field is
+ * absent — exactly what `WindowState::default()` returns from the
+ * backend when the user has never resized the inspector.
+ */
+function uiStateWithStack(stack: string[], inspectorWidth?: number) {
   return {
     keymap_mode: "cua",
     scope_chain: [],
@@ -153,6 +159,9 @@ function uiStateWithStack(stack: string[]) {
         active_perspective_id: "",
         palette_open: false,
         palette_mode: "command" as const,
+        ...(inspectorWidth !== undefined
+          ? { inspector_width: inspectorWidth }
+          : {}),
       },
     },
     recent_boards: [],
@@ -261,7 +270,7 @@ describe("InspectorsContainer", () => {
     const backdrop = container.querySelector(".fixed.inset-0");
     expect(backdrop).toBeNull();
     // No slide panels
-    expect(container.querySelectorAll('[class*="w-[420px]"]').length).toBe(0);
+    expect(container.querySelectorAll("[data-slide-panel]").length).toBe(0);
   });
 
   it("renders a panel for each inspector_stack entry", async () => {
@@ -271,7 +280,7 @@ describe("InspectorsContainer", () => {
     await flushSetup();
 
     // Two slide panels should be rendered
-    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    const panels = container.querySelectorAll("[data-slide-panel]");
     expect(panels.length).toBe(2);
   });
 
@@ -306,7 +315,7 @@ describe("InspectorsContainer", () => {
     const { container } = renderInspectors();
     await flushSetup();
 
-    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    const panels = container.querySelectorAll("[data-slide-panel]");
     expect(panels.length).toBe(3);
 
     // First panel (t1) is deepest — right offset = (3-1-0)*420 = 840
@@ -317,12 +326,60 @@ describe("InspectorsContainer", () => {
     expect((panels[2] as HTMLElement).style.right).toBe("0px");
   });
 
+  /**
+   * Regression for the resizable-inspector tile-offset math.
+   *
+   * When `WindowState.inspector_width` is set, every panel must use it
+   * for both its `style.width` AND for the `rightOffset` arithmetic —
+   * otherwise the second panel either overlaps the first (offset
+   * computed with the old 420 default while panels render at 600) or
+   * leaves a gap (vice versa). This test pins the contract: two panels
+   * stacked, persisted width 600 → panel 0 sits 600 px from the right
+   * edge, panel 1 sits at 0.
+   */
+  it("uses persisted inspector_width for both panel width and tile offset", async () => {
+    mockUIState.mockReturnValue(uiStateWithStack(["task:t1", "task:t2"], 600));
+
+    const { container } = renderInspectors();
+    await flushSetup();
+
+    const panels = container.querySelectorAll("[data-slide-panel]");
+    expect(panels.length).toBe(2);
+
+    // Both panels must render at the persisted width.
+    expect((panels[0] as HTMLElement).style.width).toBe("600px");
+    expect((panels[1] as HTMLElement).style.width).toBe("600px");
+
+    // Panel 0 sits behind panel 1 — offset by ONE panel width
+    // (computed with the new 600, not the old 420 default).
+    expect((panels[0] as HTMLElement).style.right).toBe("600px");
+    expect((panels[1] as HTMLElement).style.right).toBe("0px");
+  });
+
+  /**
+   * When `WindowState.inspector_width` is absent (fresh window, never
+   * resized), the panel must fall back to the 420 px default — not
+   * collapse to 0 or some `undefined`-derived value.
+   */
+  it("falls back to 420 px default when inspector_width is unset", async () => {
+    mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
+
+    const { container } = renderInspectors();
+    await flushSetup();
+
+    const panel = container.querySelector(
+      "[data-slide-panel]",
+    ) as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(panel.style.width).toBe("420px");
+  });
+
   it("renders nothing when window state does not exist", async () => {
     // Default mock has no windows entry for "main"
     const { container } = renderInspectors();
     await flushSetup();
 
-    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    const panels = container.querySelectorAll("[data-slide-panel]");
     expect(panels.length).toBe(0);
   });
 
@@ -354,7 +411,7 @@ describe("InspectorsContainer", () => {
     await flushSetup();
 
     // Panel should render (one slide panel)
-    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    const panels = container.querySelectorAll("[data-slide-panel]");
     expect(panels.length).toBe(1);
 
     // If any data-file-drop-zone elements exist (attachment editors),
@@ -381,7 +438,7 @@ describe("InspectorsContainer", () => {
     await flushSetup();
 
     // Panel should render (one slide panel)
-    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    const panels = container.querySelectorAll("[data-slide-panel]");
     expect(panels.length).toBe(1);
   });
 

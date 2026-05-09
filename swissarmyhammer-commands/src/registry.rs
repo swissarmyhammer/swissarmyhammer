@@ -443,16 +443,18 @@ mod tests {
         //             dynamic entity.add:{type} pipeline — see commit
         //             8973cf694.)
         //   ui:       inspect, inspector.close, inspector.close_all,
-        //             palette.open, palette.close,
+        //             inspector.set_width, palette.open, palette.close,
         //             entity.startRename, setFocus, window.new,
-        //             mode.set = 9
+        //             mode.set = 10
         //             (`ui.view.set` and `ui.perspective.set` were relocated
         //             to the kanban crate in 01KPY02X405QTP5ACH67THHSN8 —
         //             "view" and "perspective" are kanban concepts, not
-        //             generic UI primitives.)
+        //             generic UI primitives. `ui.inspector.set_width` was
+        //             added in 01KQSE8TT79XC3KJGEHX6DW99G for the
+        //             resizable inspector.)
         //   settings: keymap.vim, keymap.cua, keymap.emacs = 3
         //   drag:     start, cancel, complete = 3
-        assert_eq!(registry.all_commands().len(), 32);
+        assert_eq!(registry.all_commands().len(), 33);
 
         // Spot checks — only generic commands remain.
         assert!(registry.get("app.quit").is_some());

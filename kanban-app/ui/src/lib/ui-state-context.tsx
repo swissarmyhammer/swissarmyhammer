@@ -28,6 +28,14 @@ export interface WindowStateSnapshot {
   width?: number;
   height?: number;
   maximized?: boolean;
+  /**
+   * User-chosen inspector panel width for this window (CSS pixels).
+   *
+   * Undefined falls back to the React default (420 px). One value per
+   * window applies to every panel in the inspector stack so adjacent
+   * panels keep tiling without overlap.
+   */
+  inspector_width?: number;
 }
 
 /** Shape of the UIState from the Rust backend. */
@@ -74,6 +82,7 @@ export type UIStateChangeKind =
   | "active_view"
   | "active_perspective"
   | "app_mode"
+  | "inspector_width"
   | "board_switch"
   | "board_close";
 

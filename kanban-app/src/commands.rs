@@ -1855,7 +1855,7 @@ fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Va
 /// Returns the `kind` string used on the wire:
 /// - One per `UIStateChange` variant (`scope_chain`, `palette_open`,
 ///   `keymap_mode`, `inspector_stack`, `active_view`,
-///   `active_perspective`, `app_mode`).
+///   `active_perspective`, `app_mode`, `inspector_width`).
 /// - `board_switch` / `board_close` for the two board result shapes,
 ///   which are not typed as `UIStateChange` but still mutate what the
 ///   `UIStateProvider` renders.
@@ -1871,6 +1871,7 @@ fn ui_state_change_kind(result: &Value) -> Option<&'static str> {
             swissarmyhammer_commands::UIStateChange::ActiveView(_) => "active_view",
             swissarmyhammer_commands::UIStateChange::ActivePerspective(_) => "active_perspective",
             swissarmyhammer_commands::UIStateChange::AppMode(_) => "app_mode",
+            swissarmyhammer_commands::UIStateChange::InspectorWidth { .. } => "inspector_width",
         });
     }
     if result.get("BoardSwitch").is_some() {
@@ -2979,6 +2980,19 @@ mod tests {
     fn ui_state_change_kind_app_mode() {
         let value = serde_json::to_value(UIStateChange::AppMode("normal".into())).unwrap();
         assert_eq!(ui_state_change_kind(&value), Some("app_mode"));
+    }
+
+    #[test]
+    fn ui_state_change_kind_inspector_width() {
+        // Pinned for the resizable-inspector pipeline. The frontend
+        // listens for `inspector_width` events to learn the persisted
+        // width set in another window or session.
+        let value = serde_json::to_value(UIStateChange::InspectorWidth {
+            window_label: "main".into(),
+            width: 540,
+        })
+        .unwrap();
+        assert_eq!(ui_state_change_kind(&value), Some("inspector_width"));
     }
 
     #[test]

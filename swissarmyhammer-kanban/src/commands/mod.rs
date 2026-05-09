@@ -126,6 +126,10 @@ fn register_ui(map: &mut CmdMap) {
         Arc::new(ui_commands::InspectorCloseAllCmd),
     );
     map.insert(
+        "ui.inspector.set_width".into(),
+        Arc::new(ui_commands::InspectorSetWidthCmd),
+    );
+    map.insert(
         "ui.palette.open".into(),
         Arc::new(ui_commands::PaletteOpenCmd),
     );
@@ -347,10 +351,11 @@ mod tests {
         // cross-cutting `entity.delete` auto-emit.
         // + 3 clipboard + 5 entity (add, update_field, delete, archive, unarchive)
         // + 1 tag + 1 column
-        // + 8 UI (inspect, inspector.close, inspector.close_all,
-        //         palette.open, palette.close, entity.startRename,
-        //         setFocus, mode.set) — ui.view.set and ui.perspective.set
-        //         relocated to `view.*` and `perspective.*` domains in
+        // + 9 UI (inspect, inspector.close, inspector.close_all,
+        //         inspector.set_width, palette.open, palette.close,
+        //         entity.startRename, setFocus, mode.set) —
+        //         ui.view.set and ui.perspective.set relocated to
+        //         `view.*` and `perspective.*` domains in
         //         01KPY02X405QTP5ACH67THHSN8.
         // + 1 view (view.set — relocated from ui.view.set)
         // + 12 app (quit, about, help, command, palette, search,
@@ -367,9 +372,9 @@ mod tests {
         // + 0 project — project.add retired in favour of dynamic
         // `entity.add:project`; project.delete retired in favour of the
         // cross-cutting `entity.delete` auto-emit.
-        // = 60 (unchanged by the view/perspective rename — no adds or
-        //       removes, just id relocations).
-        assert_eq!(cmds.len(), 60);
+        // = 61 (60 prior, +1 for `ui.inspector.set_width` from
+        //       01KQSE8TT79XC3KJGEHX6DW99G — resizable inspector).
+        assert_eq!(cmds.len(), 61);
     }
 
     // =========================================================================
