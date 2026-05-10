@@ -16,7 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useSchema } from "@/lib/schema-context";
-import { useFocusActions } from "@/lib/entity-focus-context";
+import { useDispatchCommand } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
@@ -206,7 +206,6 @@ interface ColumnBodyProps {
   nameFieldDef: import("@/types/kanban").FieldDef | undefined;
   editingName: boolean;
   setEditingName: (v: boolean) => void;
-  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }
 
 /**
@@ -227,7 +226,6 @@ function ColumnBody({
   nameFieldDef,
   editingName,
   setEditingName,
-  setFocus,
 }: ColumnBodyProps): React.ReactElement {
   const {
     column,
@@ -252,7 +250,6 @@ function ColumnBody({
         setEditingName={setEditingName}
         taskCount={tasks.length}
         onAddTask={onAddTask}
-        setFocus={setFocus}
       />
       <VirtualizedCardList
         tasks={tasks}
@@ -274,7 +271,6 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
-  const { setFocus } = useFocusActions();
   const layout = useColumnLayout(props);
   const dragScroll = useColumnDragScroll(props.containerRef);
 
@@ -322,7 +318,6 @@ export const ColumnView = memo(function ColumnView(props: ColumnViewProps) {
           nameFieldDef={nameFieldDef}
           editingName={editingName}
           setEditingName={setEditingName}
-          setFocus={setFocus}
         />
       </FocusScope>
     </Inspectable>
@@ -341,7 +336,6 @@ interface ColumnHeaderProps {
   setEditingName: (v: boolean) => void;
   taskCount: number;
   onAddTask?: (columnId: string) => void;
-  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }
 
 /** Renders the column header row with name, task count badge, and add button. */
@@ -395,11 +389,12 @@ function ColumnHeader({
   setEditingName,
   taskCount,
   onAddTask,
-  setFocus,
 }: ColumnHeaderProps) {
   // Inside the column's `<FocusZone>` body — `useOptionalFullyQualifiedMoniker`
-  // returns the column's FQM. Compose the column-zone FQM (for the
-  // AddTaskButton's setFocus call) under it.
+  // returns the column's FQM. The AddTaskButton dispatches
+  // `nav.focus({ args: { fq: columnFq } })` (card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J`) so the new task lands inside the
+  // user-targeted column.
   const columnFq = useOptionalFullyQualifiedMoniker();
   // The column-name surface is registered exactly once — by the inner
   // `<Field>` component as a `<FocusZone moniker="field:column:<id>.name">`.
@@ -426,7 +421,6 @@ function ColumnHeader({
           columnName={getStr(column, "name") ?? ""}
           columnFq={columnFq}
           onAddTask={onAddTask}
-          setFocus={setFocus}
         />
       )}
     </div>
@@ -451,14 +445,18 @@ function AddTaskButton({
   columnName,
   columnFq,
   onAddTask,
-  setFocus,
 }: {
   columnId: string;
   columnName: string;
   columnFq: FullyQualifiedMoniker | null;
   onAddTask: (columnId: string) => void;
-  setFocus: (fq: FullyQualifiedMoniker | null) => void;
 }) {
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`, the single auditable command that wraps the
+  // kernel-facing `setFocus` primitive. The "+" button moves focus to
+  // the column zone before delegating to `onAddTask` so the new task
+  // lands inside the user-targeted column.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -467,7 +465,11 @@ function AddTaskButton({
           moniker={asSegment(`ui:column.add-task:${columnId}`)}
           ariaLabel={`Add task to ${columnName}`}
           onPress={() => {
-            if (columnFq) setFocus(columnFq);
+            if (columnFq) {
+              void dispatchNavFocus({ args: { fq: columnFq } }).catch((err) =>
+                console.error("[AddTaskButton] nav.focus dispatch failed", err),
+              );
+            }
             onAddTask(columnId);
           }}
         >

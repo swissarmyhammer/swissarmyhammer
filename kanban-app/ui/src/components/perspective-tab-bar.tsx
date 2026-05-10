@@ -45,7 +45,6 @@ import { Pressable } from "@/components/pressable";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { useFocusActions } from "@/lib/entity-focus-context";
 import { asSegment } from "@/types/spatial";
 import type { FieldDef } from "@/types/kanban";
 
@@ -588,7 +587,12 @@ function FilterFormulaBarFocusable({
  */
 function FilterEditorDrillOutWiring({ children }: { children: ReactNode }) {
   const filterFq = useFullyQualifiedMoniker();
-  const { setFocus } = useFocusActions();
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`, the single auditable command that wraps the
+  // entity-focus `setFocus` primitive. The filter-editor Escape
+  // handler claims focus on the filter-editor scope itself after
+  // blurring the CM6 contenteditable.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   const onEditorEscape = useCallback(() => {
     // Drop DOM focus from the CM6 contenteditable so the cursor stops
     // blinking visually — the kernel's spatial focus update alone
@@ -599,8 +603,13 @@ function FilterEditorDrillOutWiring({ children }: { children: ReactNode }) {
     ) {
       document.activeElement.blur();
     }
-    setFocus(filterFq);
-  }, [filterFq, setFocus]);
+    void dispatchNavFocus({ args: { fq: filterFq } }).catch((err) =>
+      console.error(
+        "[FilterEditorDrillOutWiring] nav.focus dispatch failed",
+        err,
+      ),
+    );
+  }, [filterFq, dispatchNavFocus]);
   return (
     <FilterEditorEscapeContext.Provider value={onEditorEscape}>
       {children}

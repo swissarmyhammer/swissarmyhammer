@@ -31,7 +31,6 @@ import { useOptionalEnclosingLayerFq } from "@/components/layer-fq-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import { useEntityFocus } from "@/lib/entity-focus-context";
 import { COMPACT_ROW_HEIGHT_PX } from "@/components/fields/displays/compact-cell-wrapper";
 import { gridCellMoniker } from "@/lib/moniker";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
@@ -1215,12 +1214,16 @@ function EntityRow({
   children,
 }: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
-  const { setFocus } = useEntityFocus();
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`. Right-click on a row claims focus on the row's FQM
+  // before the context menu opens, so the menu commands resolve
+  // against the row's scope chain.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   // Read the row's FQM from the surrounding `<FocusZone moniker={entityMk}
   // renderContainer={false}>` — that wrapper publishes the row's FQM
   // through `FullyQualifiedMonikerContext.Provider` even though it
   // renders no DOM node, so this hook resolves to the composed row FQM
-  // (the spatial identity setFocus needs to dispatch against).
+  // (the spatial identity nav.focus needs to dispatch against).
   const rowFq = useFullyQualifiedMoniker();
   const onDoubleClick = useInspectOnDoubleClick(asSegment(entityMk));
 
@@ -1233,7 +1236,9 @@ function EntityRow({
         isCursorRow && !isEditing && "bg-accent/30",
       )}
       onContextMenu={(e) => {
-        setFocus(rowFq);
+        void dispatchNavFocus({ args: { fq: rowFq } }).catch((err) =>
+          console.error("[EntityRow] nav.focus dispatch failed", err),
+        );
         contextMenuHandler(e);
       }}
       onDoubleClick={onDoubleClick}

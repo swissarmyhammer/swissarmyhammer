@@ -83,19 +83,16 @@ import {
 import {
   CommandScopeContext,
   EMPTY_COMMANDS,
+  useDispatchCommand,
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
 import {
   useEntityScopeRegistration,
-  useOptionalFocusActions,
   useOptionalIsDirectFocus,
 } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
-import {
-  useFocusClaim,
-  useSpatialFocusActions,
-} from "@/lib/spatial-focus-context";
+import { useFocusClaim } from "@/lib/spatial-focus-context";
 import { useOptionalLayerScopeRegistry } from "@/lib/layer-scope-registry-context";
 import { cn } from "@/lib/utils";
 import { useFocusDebug } from "@/lib/focus-debug-context";
@@ -319,8 +316,12 @@ function SpatialFocusScopeBody({
   ...htmlProps
 }: SpatialFocusScopeBodyProps) {
   const contextMenuHandler = useContextMenu();
-  const focusActions = useOptionalFocusActions();
-  const setFocus = focusActions?.setFocus;
+  // Dispatch focus claims through `nav.focus` — the single auditable
+  // command that wraps the entity-focus `setFocus` primitive. Card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J` consolidates click and right-click
+  // focus claims onto this one command so cross-cutting concerns
+  // (telemetry, animations, scroll-on-focus) hang off one closure.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
 
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -339,8 +340,6 @@ function SpatialFocusScopeBody({
 
   const [focused, setFocused] = useState(false);
   useFocusClaim(fq, setFocused);
-
-  const { focus } = useSpatialFocusActions();
 
   // Register this scope with the per-layer registry provided by
   // `<FocusLayer>`. Snapshots built from this registry read rects fresh
@@ -414,10 +413,12 @@ function SpatialFocusScopeBody({
       if (!handleEvents) return;
       e.preventDefault();
       e.stopPropagation();
-      if (setFocus) setFocus(fq);
+      void dispatchNavFocus({ args: { fq } }).catch((err) =>
+        console.error("[FocusScope] nav.focus dispatch failed", err),
+      );
       contextMenuHandler(e);
     },
-    [fq, setFocus, contextMenuHandler, handleEvents],
+    [fq, dispatchNavFocus, contextMenuHandler, handleEvents],
   );
 
   const handleClick = useCallback(
@@ -427,9 +428,11 @@ function SpatialFocusScopeBody({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (target.closest("[contenteditable]")) return;
       e.stopPropagation();
-      focus(fq).catch((err) => console.error("[FocusScope] focus failed", err));
+      void dispatchNavFocus({ args: { fq } }).catch((err) =>
+        console.error("[FocusScope] nav.focus dispatch failed", err),
+      );
     },
-    [focus, fq],
+    [dispatchNavFocus, fq],
   );
 
   const { className: consumerClassName, ...restWithoutClassName } = htmlProps;

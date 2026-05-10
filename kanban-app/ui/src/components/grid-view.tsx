@@ -7,7 +7,6 @@ import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import {
-  useFocusActions,
   useFocusedMoniker,
   useFocusBySegmentPath,
 } from "@/lib/entity-focus-context";
@@ -324,7 +323,17 @@ interface GridExtremeContext {
   entities: Entity[];
   columns: DataTableColumn[];
   spatial: SpatialFocusActions | null;
-  setFocus: (fq: FullyQualifiedMoniker | null) => void;
+  /**
+   * Dispatcher for the `nav.focus` command — the single auditable
+   * choke point that wraps the kernel-facing `setFocus` primitive.
+   * Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: every focus claim flows through
+   * this command rather than calling `setFocus` directly. Pre-bound
+   * via `useDispatchCommand("nav.focus")` so callers can dispatch with
+   * just `{ args: { fq } }`.
+   */
+  dispatchNavFocus: (
+    opts?: import("@/lib/command-scope").DispatchOptions,
+  ) => Promise<unknown>;
 }
 
 /**
@@ -411,9 +420,15 @@ function focusGridCell(
 
   const destEntityMk = ctx.entities[row].moniker;
   const cellSegment = asSegment(gridCellMoniker(row, colKey));
-  ctx.setFocus(
-    composeFq(composeFq(gridZoneFq, asSegment(destEntityMk)), cellSegment),
+  const destFq = composeFq(
+    composeFq(gridZoneFq, asSegment(destEntityMk)),
+    cellSegment,
   );
+  void ctx
+    .dispatchNavFocus({ args: { fq: destFq } })
+    .catch((err) =>
+      console.error("[focusGridCell] nav.focus dispatch failed", err),
+    );
 }
 
 /**
@@ -612,20 +627,25 @@ function useGridCommands(
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
-  // Read the spatial-focus actions (for `focusedFq()`) and the entity-focus
-  // `setFocus` once and stash them in a context bag for the row-extreme
-  // commands. The bag is held in a ref so the commands minted in `useMemo`
-  // below can read fresh values (cursor row, visible columns) without
-  // re-binding on every keystroke.
+  // Read the spatial-focus actions (for `focusedFq()`) and the
+  // pre-bound `nav.focus` dispatcher once and stash them in a context
+  // bag for the row-extreme commands. The bag is held in a ref so the
+  // commands minted in `useMemo` below can read fresh values (cursor
+  // row, visible columns) without re-binding on every keystroke.
+  //
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus` rather than calling the kernel-facing `setFocus`
+  // primitive directly, so cross-cutting concerns (telemetry,
+  // animations, scroll-on-focus) hang off one closure.
   const spatial = useOptionalSpatialFocusActions();
-  const { setFocus } = useFocusActions();
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   const extremeCtxRef = useRef<GridExtremeContext>({
     entities,
     columns,
     spatial,
-    setFocus,
+    dispatchNavFocus,
   });
-  extremeCtxRef.current = { entities, columns, spatial, setFocus };
+  extremeCtxRef.current = { entities, columns, spatial, dispatchNavFocus };
 
   return useMemo<CommandDef[]>(
     () => [

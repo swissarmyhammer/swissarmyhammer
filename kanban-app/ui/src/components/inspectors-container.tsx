@@ -9,7 +9,6 @@ import { EntityInspector } from "@/components/entity-inspector";
 import { SlidePanel } from "@/components/slide-panel";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { FocusLayer } from "@/components/focus-layer";
-import { FocusScope } from "@/components/focus-scope";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import type { Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
@@ -70,33 +69,29 @@ function parsePanelStack(inspectorStack: string[] | undefined): PanelEntry[] {
  * # Spatial-nav structure
  *
  * When the panel stack is non-empty, the rendered panel list is wrapped
- * in a single `<FocusLayer name="inspector">` whose `parentLayerKey` is
- * the enclosing window-root layer (read here via `useCurrentLayerKey()`
+ * in a single `<FocusLayer name="inspector">` whose `parentLayerFq` is
+ * the enclosing window-root layer (read here via `useFullyQualifiedMoniker()`
  * while the window layer is still a direct React ancestor — the
  * inspector layer is itself a sibling of the board content, so the
  * explicit parent is required to avoid the layer being mistaken for a
  * second window root).
  *
- * Each open `<InspectorPanel>` wraps its body in an entity-keyed
- * `<FocusZone moniker={asSegment(\`${entityType}:${entityId}\`)}>` —
- * see card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`. The zone segment is the
- * entity moniker itself (e.g. `task:T1`); there is no `panel:*`
- * indirection. Field zones inside the inspector register with
- * `parentZone === <entity-zone FQM>`, so:
+ * Card `01KR7CDEFWWVF4WH0BCHE8Y21J` flattened the inspector layer:
+ * panel bodies are NO LONGER wrapped in a per-panel `<FocusScope>` /
+ * `<FocusZone>` / `<FocusLayer>`. Field rows' `<FocusScope>`s register
+ * directly under the inspector layer's `LayerScopeRegistry`. With the
+ * modal-layer model, jump-to enumerates against the topmost layer (the
+ * inspector layer when it's on top), and cardinal nav is confined to
+ * that layer's flat scope list — no per-entity barrier is needed.
  *
- *   - Iter 0 of the kernel's beam-search cascade is confined to peers
- *     within the same entity (ArrowDown at the last field of inspector
- *     A stays put — does NOT enter inspector B).
- *   - Iter 1 escalates to the entity zones themselves (siblings under
- *     the inspector layer root with `parentZone === null`), so
- *     ArrowLeft/Right between adjacent panels still resolves to a
- *     field in the spatially-nearest entity.
- *
- * Predecessor card `01KQCTJY1QZ710A05SE975GHNR` deleted the previous
- * `panel:type:id` zone (along with `<InspectorFocusBridge>` and the
- * `inspector.edit/editEnter/exitEdit` commands); those stay deleted.
- * This card walks back only the structural barrier, with the entity
- * moniker as identity instead of a panel-prefixed wrapper.
+ * Predecessor cards `01KQCTJY1QZ710A05SE975GHNR` and
+ * `01KQFCQ9QMQKCDYVWGTXSVK5PZ` introduced and tweaked per-panel zones;
+ * the iter-1 attempt under this card promoted those to per-panel
+ * layers. Both shapes are now reverted: only the single
+ * `<FocusLayer name="inspector">` boundary remains. The
+ * `<InspectorFocusBridge>` and the
+ * `inspector.edit/editEnter/exitEdit` commands stay deleted (per
+ * `01KQCTJY1QZ710A05SE975GHNR`).
  *
  * # First-field focus on panel mount
  *
@@ -198,26 +193,40 @@ export function InspectorsContainer() {
     );
   }, [dispatchInspectorClose]);
 
-  /** Close all inspector panels via the command architecture. */
-  const dispatchInspectorCloseAll = useDispatchCommand(
-    "ui.inspector.close_all",
-  );
-  const closeAll = useCallback(() => {
-    dispatchInspectorCloseAll().catch((e) =>
-      console.error("ui.inspector.close_all failed:", e),
+  /**
+   * Backdrop click → dispatch `app.dismiss`.
+   *
+   * The backdrop covers the area outside the active panel — clicking
+   * there is the modal-layer equivalent of "click outside, close the
+   * topmost layer". Per the modal-layer model (card
+   * `01KR7CDEFWWVF4WH0BCHE8Y21J`), `app.dismiss` is the single
+   * top-layer-aware command: with the inspector on top it pops the
+   * topmost panel; with another layer above it (palette, jump-to)
+   * the dismiss closes that layer first.
+   *
+   * Replaces the earlier hard-coded `dispatchInspectorCloseAll` —
+   * which assumed the inspector was always the active layer — so the
+   * backend's topmost-layer routing decides the actual close.
+   */
+  const dispatchAppDismiss = useDispatchCommand("app.dismiss");
+  const handleBackdropClick = useCallback(() => {
+    dispatchAppDismiss().catch((e) =>
+      console.error("app.dismiss (inspector backdrop) failed:", e),
     );
-  }, [dispatchInspectorCloseAll]);
+  }, [dispatchAppDismiss]);
 
   const hasPanels = panelStack.length > 0;
 
   /**
-   * The rendered panel list. Each `<InspectorPanel>` wraps its body in
-   * an entity-keyed `<FocusZone moniker={asSegment(\`${type}:${id}\`)}>`
-   * inside the `<SlidePanel>`. Field zones register with
-   * `parentZone === <entity-zone FQM>`, so iter 0 of the cascade is
-   * confined to peers within the same entity and cross-panel nav
-   * escalates to iter 1 (entity-zone peers under the inspector layer
-   * root). See card `01KQFCQ9QMQKCDYVWGTXSVK5PZ`.
+   * The rendered panel list. Each `<InspectorPanel>` renders its body
+   * directly inside a `<SlidePanel>` — no per-panel `<FocusScope>` /
+   * `<FocusZone>` / `<FocusLayer>` wrap. Field rows inside register
+   * their own `<FocusScope>`s directly under the surrounding
+   * `<FocusLayer name="inspector">`'s `LayerScopeRegistry`.
+   *
+   * Cardinal nav, jump-to enumeration, and drill-out all operate on
+   * the inspector layer's flat scope list. See card
+   * `01KR7CDEFWWVF4WH0BCHE8Y21J`.
    */
   const panelNodes = panelStack.map((entry, index) => {
     const rightOffset = (panelStack.length - 1 - index) * effectiveWidth;
@@ -250,7 +259,7 @@ export function InspectorsContainer() {
       {hasPanels && (
         <div
           className="fixed inset-0 z-20 bg-black/20 opacity-100 transition-opacity duration-200"
-          onClick={closeAll}
+          onClick={handleBackdropClick}
         />
       )}
 
@@ -287,29 +296,22 @@ interface InspectorPanelProps {
  *
  * # Spatial-nav participation
  *
- * The panel body is wrapped in a single entity-keyed `<FocusZone>`
- * whose `moniker` segment is the entity moniker itself (e.g.
- * `task:T1`, `tag:bug`, `project:spatial-nav`) — NOT a `panel:`
- * prefix. The zone is a pure structural barrier: no commands, no
- * `navOverride`. Each field zone inside `<EntityInspector>` registers
- * with `parentZone === <this entity zone's FQM>`, which:
+ * The panel body renders directly inside the `<SlidePanel>` — there
+ * is NO per-panel `<FocusScope>` / `<FocusZone>` / `<FocusLayer>`
+ * wrap. Field zones inside `<EntityInspector>` register their
+ * `<FocusScope>`s directly under the surrounding
+ * `<FocusLayer name="inspector">`'s `LayerScopeRegistry`. Cardinal
+ * navigation between fields resolves entirely within that single
+ * registry's flat scope list, jump-to enumeration runs against that
+ * same registry, and drill-out walks straight to the layer root.
  *
- *   - Confines iter 0 of the kernel's beam-search cascade to peers
- *     within the same entity (so ArrowDown at the last field of
- *     inspector A stays put rather than crossing into inspector B's
- *     field zones).
- *   - Lets cross-entity ArrowLeft/Right escalate to iter 1 (entity-zone
- *     peers under the inspector layer root with `parentZone === null`),
- *     where beam search picks the spatially-nearest other entity zone
- *     and descends into its field zones.
- *
- * The `<InspectorFocusBridge>` that previously wrapped the inspector
- * in a `<FocusScope moniker={entityMoniker}>` plus the
+ * Per-panel structural barriers (initially `<FocusScope>`, then
+ * iter-1's `<FocusLayer>` per panel) were removed by card
+ * `01KR7CDEFWWVF4WH0BCHE8Y21J` once the modal-layer model put the
+ * containment promise on the topmost-layer rule rather than per-panel
+ * fences. The `<InspectorFocusBridge>` and the
  * `inspector.edit/editEnter/exitEdit` commands stay deleted (per
- * `01KQCTJY1QZ710A05SE975GHNR`); this wrap is a structural zone only,
- * keyed by the entity moniker rather than a `panel:` prefix.
- * See card `01KQFCQ9QMQKCDYVWGTXSVK5PZ` for the entity-zone barrier
- * design.
+ * `01KQCTJY1QZ710A05SE975GHNR`).
  *
  * # First-field focus claim on mount
  *
@@ -398,17 +400,6 @@ function InspectorPanel({
   // the first Escape dismisses) is now satisfied by that hook with no
   // panel-zone intermediary.
 
-  // The entity-keyed zone segment. The kernel registers this zone
-  // under the inspector layer root, and `<EntityInspector>`'s field
-  // zones land underneath with `parentZone === <this zone's FQM>`.
-  // The segment is the entity moniker itself — see card
-  // `01KQFCQ9QMQKCDYVWGTXSVK5PZ` for why we don't use a `panel:`
-  // prefix.
-  const entityZoneSegment = useMemo(
-    () => asSegment(`${entry.entityType}:${entry.entityId}`),
-    [entry.entityType, entry.entityId],
-  );
-
   const body = !resolved ? (
     <p className="text-sm text-muted-foreground">
       {fetchError ? `Entity not found` : "Loading\u2026"}
@@ -428,7 +419,7 @@ function InspectorPanel({
       onResize={onResize}
       onResizeEnd={onResizeEnd}
     >
-      <FocusScope moniker={entityZoneSegment}>{body}</FocusScope>
+      {body}
     </SlidePanel>
   );
 }

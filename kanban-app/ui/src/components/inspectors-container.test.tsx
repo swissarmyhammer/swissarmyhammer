@@ -54,6 +54,7 @@ vi.mock("@/lib/ui-state-context", () => ({
 
 const mockDispatchClose = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const mockDispatchCloseAll = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const mockDispatchAppDismiss = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
@@ -62,6 +63,7 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
     useDispatchCommand: (cmd: string) => {
       if (cmd === "ui.inspector.close") return mockDispatchClose;
       if (cmd === "ui.inspector.close_all") return mockDispatchCloseAll;
+      if (cmd === "app.dismiss") return mockDispatchAppDismiss;
       return vi.fn(() => Promise.resolve());
     },
   };
@@ -295,7 +297,18 @@ describe("InspectorsContainer", () => {
     expect(backdrop?.className).toContain("opacity-100");
   });
 
-  it("dispatches ui.inspector.close_all when backdrop is clicked", async () => {
+  it("dispatches app.dismiss when backdrop is clicked", async () => {
+    // Per card `01KR7CDEFWWVF4WH0BCHE8Y21J`'s modal-layer model: the
+    // backdrop's "click outside, close the topmost layer" gesture is
+    // routed through `app.dismiss` — the single top-layer-aware
+    // command — rather than the layer-specific
+    // `ui.inspector.close_all`. The backend's `app.dismiss` handler
+    // decides which layer to close based on the topmost-layer rule
+    // (palette → inspector → no-op when only window is mounted).
+    //
+    // Replaces the earlier hard-coded `ui.inspector.close_all`
+    // dispatch, which assumed the inspector was always the active
+    // layer.
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
 
     const { container } = renderInspectors();
@@ -304,7 +317,8 @@ describe("InspectorsContainer", () => {
     const backdrop = container.querySelector(".fixed.inset-0");
     fireEvent.click(backdrop!);
 
-    expect(mockDispatchCloseAll).toHaveBeenCalledTimes(1);
+    expect(mockDispatchAppDismiss).toHaveBeenCalledTimes(1);
+    expect(mockDispatchCloseAll).not.toHaveBeenCalled();
   });
 
   it("stacks panels with correct right offset", async () => {
@@ -367,9 +381,7 @@ describe("InspectorsContainer", () => {
     const { container } = renderInspectors();
     await flushSetup();
 
-    const panel = container.querySelector(
-      "[data-slide-panel]",
-    ) as HTMLElement;
+    const panel = container.querySelector("[data-slide-panel]") as HTMLElement;
     expect(panel).not.toBeNull();
     expect(panel.style.width).toBe("420px");
   });

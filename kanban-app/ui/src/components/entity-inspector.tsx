@@ -21,6 +21,7 @@ import {
   useFocusedMonikerRef,
   useIsFocused,
 } from "@/lib/entity-focus-context";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { fieldMoniker } from "@/lib/moniker";
 import { useFullyQualifiedMoniker } from "@/components/fully-qualified-moniker-context";
 import {
@@ -118,15 +119,34 @@ function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
  * Focus the first field on mount and restore the previously focused element
  * on unmount. Intentionally reruns only when the first-field FQM changes,
  * not when focus state changes under us (see inline eslint-disable).
+ *
+ * # Layer-mount race avoidance (card `01KR7CDEFWWVF4WH0BCHE8Y21J`)
+ *
+ * Effects run child-before-parent. Without deferral, this hook's effect
+ * fires BEFORE the surrounding `<FocusLayer name="inspector">`'s
+ * `useEffect` (which dispatches `pushLayer` to the kernel and publishes
+ * the `LayerScopeRegistry`). A `nav.focus` claim that arrived first
+ * would either land on a registry that hasn't published yet (snapshot
+ * undefined) or hit a kernel that hasn't registered the layer yet (IPC
+ * error). Deferring the auto-claim by one tick via `queueMicrotask`
+ * lets the parent layer's effect complete first, so the focus claim
+ * reaches a fully-pushed layer with a populated registry.
  */
 function useFirstFieldFocus(
   firstFieldFq: FullyQualifiedMoniker | undefined,
 ): void {
+  // Auto-claim dispatches `nav.focus` (the global focus-claim command)
+  // for the new mount target. Restore on unmount falls back to the
+  // entity-focus `setFocus` primitive directly because it can pass
+  // `null` to clear focus — `nav.focus` is non-null only.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   const { setFocus } = useFocusActions();
   // Ref-style read: we capture the previously focused FQM exactly once
   // at mount, so subscribing (and re-rendering this hook's caller on every
   // focus move) would be pure waste. The ref mirrors focus via subscribeAll.
   const focusedMonikerRef = useFocusedMonikerRef();
+  const dispatchNavFocusRef = useRef(dispatchNavFocus);
+  dispatchNavFocusRef.current = dispatchNavFocus;
   const setFocusRef = useRef(setFocus);
   setFocusRef.current = setFocus;
   const prevFocusRef = useRef<FullyQualifiedMoniker | null>(null);
@@ -139,8 +159,26 @@ function useFirstFieldFocus(
       prevFocusRef.current = focusedMonikerRef.current;
       mountedRef.current = true;
     }
-    setFocusRef.current(firstFieldFq);
+    // Defer the auto-focus dispatch by one microtask so the surrounding
+    // `<FocusLayer name="inspector">`'s effect (which pushes the layer
+    // to the kernel and publishes the `LayerScopeRegistry`) runs first.
+    // Without this, the focus claim would race the layer mount and
+    // either fail to find the registry or be rejected by the kernel.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void dispatchNavFocusRef
+        .current({ args: { fq: firstFieldFq } })
+        .catch((err) =>
+          console.error("[useFirstFieldFocus] dispatch failed", err),
+        );
+    });
     return () => {
+      cancelled = true;
+      // Restore prior focus on unmount. Use the entity-focus primitive
+      // directly because it accepts `null` (clears focus when nothing
+      // was focused before the inspector opened); `nav.focus` is the
+      // non-null variant.
       setFocusRef.current(prevFocusRef.current);
       mountedRef.current = false;
     };

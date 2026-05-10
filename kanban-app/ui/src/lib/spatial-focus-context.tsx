@@ -36,6 +36,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   type ReactNode,
 } from "react";
@@ -50,6 +51,8 @@ import type {
   SegmentMoniker,
 } from "@/types/spatial";
 import type { LayerScopeRegistry } from "@/lib/layer-scope-registry-context";
+import type { CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider } from "@/lib/command-scope";
 
 // ---------------------------------------------------------------------------
 // Claim registry — per-FQM callbacks
@@ -228,6 +231,25 @@ export interface SpatialFocusActions {
    * so the first match is the only match.
    */
   layerFqOf: (fq: FullyQualifiedMoniker) => FullyQualifiedMoniker | null;
+  /**
+   * Read the FQM of the **topmost** (most-recently-pushed) layer, or
+   * `null` when no layer is currently mounted.
+   *
+   * The layer stack is maintained as a side effect of `pushLayer` /
+   * `popLayer` invocations. `pushLayer(fq)` appends `fq` to the
+   * top-of-stack list, `popLayer(fq)` removes the matching entry
+   * (whatever its position — pop is keyed by FQM, not by strict LIFO,
+   * to tolerate the pop-not-on-top edge cases the kernel already
+   * absorbs). The top is whichever entry was most recently appended
+   * and not yet removed.
+   *
+   * Used by `nav.jump` (to enumerate scopes in the active layer) and
+   * by `app.dismiss` (to decide which layer to close). When there is
+   * exactly one layer (window) on the stack, `topLayerFq()` returns
+   * the window's FQM; in that case `app.dismiss` is a no-op because
+   * the window is the bottom-most layer and cannot be dismissed.
+   */
+  topLayerFq: () => FullyQualifiedMoniker | null;
 }
 
 const SpatialFocusContext = createContext<SpatialFocusActions | null>(null);
@@ -272,6 +294,15 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
   const layerRegistriesRef = useRef<
     Map<FullyQualifiedMoniker, LayerScopeRegistry>
   >(new Map());
+
+  // Stack of layer FQMs in push order (oldest first, newest last). The
+  // newest (top-of-stack) entry is the active modal layer — what
+  // `nav.jump` enumerates against and what `app.dismiss` closes. Driven
+  // off `pushLayer` / `popLayer` calls so it stays consistent with the
+  // kernel's own stack on the Rust side. `popLayer` removes by FQM
+  // identity (not strict LIFO) so out-of-order pop calls — which the
+  // kernel itself tolerates — don't corrupt the React-side view.
+  const layerStackRef = useRef<FullyQualifiedMoniker[]>([]);
 
   // Subscribe to the global `focus-changed` event exactly once for the
   // provider's lifetime. The cleanup is critical: an unmounted provider
@@ -325,14 +356,81 @@ export function SpatialFocusProvider({ children }: { children: ReactNode }) {
       subscribersRef,
       focusedFqRef,
       layerRegistriesRef,
+      layerStackRef,
     );
   }
 
+  // Register `nav.focus` at this level so any descendant `<FocusScope>`'s
+  // click handler can dispatch it without requiring an
+  // `<EntityFocusProvider>` ancestor. The execute closure calls
+  // `actions.focus(fq)` directly — the kernel-facing primitive that
+  // dispatches `spatial_focus` IPC. When `<EntityFocusProvider>` is
+  // mounted as a descendant, it registers an inner `nav.focus` that
+  // shadows this one (commands are scope-chained, inner wins). That
+  // inner version routes through `setFocus`, which is identity-equal to
+  // calling `spatial.focus(fq)` in production but also covers the
+  // entity-focus test-harness fallback (direct store mutation when no
+  // spatial provider is mounted, which doesn't apply here since this
+  // closure only runs when `<SpatialFocusProvider>` is mounted).
+  //
+  // Per card `01KR7CDEFWWVF4WH0BCHE8Y21J`'s modal-layer model: every
+  // non-null focus claim flows through `nav.focus`. Components do not
+  // call `spatial.focus(fq)` or `setFocus(fq)` directly — they dispatch
+  // `nav.focus({ args: { fq } })`. Cross-cutting concerns (telemetry,
+  // animations, scroll-on-focus) hang off this one closure.
+  const navFocusCommands = useMemo<readonly CommandDef[]>(
+    () => [buildSpatialNavFocusCommand(actionsRef.current!)],
+    [],
+  );
+
   return (
     <SpatialFocusContext.Provider value={actionsRef.current}>
-      {children}
+      <CommandScopeProvider commands={navFocusCommands}>
+        {children}
+      </CommandScopeProvider>
     </SpatialFocusContext.Provider>
   );
+}
+
+/**
+ * Build the `nav.focus` command for the spatial-focus level — the
+ * kernel-facing focus claim path.
+ *
+ * The execute closure reads `args.fq` from the dispatch options and
+ * calls `actions.focus(fq)`, which composes a snapshot from the
+ * per-layer registry and dispatches `spatial_focus` IPC. The kernel
+ * emits `focus-changed` back to React; the registered claim listeners
+ * for `prev_fq` and `next_fq` fire to update each scope's visible
+ * focus indicator.
+ *
+ * When an `<EntityFocusProvider>` descendant registers its own
+ * `nav.focus`, the inner registration shadows this one. The inner
+ * version goes through `useFocusActions().setFocus(fq)`, which has the
+ * same production behavior (calls `spatial.focus`) but also handles
+ * the test-harness no-spatial-provider fallback. This dual
+ * registration means every test setup that mounts at least one of the
+ * two providers gets `nav.focus` resolution without modifying the test
+ * harness.
+ */
+function buildSpatialNavFocusCommand(actions: SpatialFocusActions): CommandDef {
+  return {
+    id: "nav.focus",
+    name: "Focus Scope",
+    execute: (opts) => {
+      const fq = opts?.args?.fq;
+      if (typeof fq !== "string") {
+        // Defensive: a dispatch without `args.fq` is a programming
+        // error, not a user-visible state. Log so dev mode catches the
+        // missing arg, then no-op so the rest of the command pipeline
+        // keeps running.
+        console.error("[nav.focus] missing or non-string args.fq", opts?.args);
+        return;
+      }
+      void actions.focus(fq as FullyQualifiedMoniker).catch((err) => {
+        console.error("[nav.focus] spatial.focus failed", err);
+      });
+    },
+  };
 }
 
 /**
@@ -351,6 +449,7 @@ function buildSpatialFocusActions(
   layerRegistriesRef: React.MutableRefObject<
     Map<FullyQualifiedMoniker, LayerScopeRegistry>
   >,
+  layerStackRef: React.MutableRefObject<FullyQualifiedMoniker[]>,
 ): SpatialFocusActions {
   const registerClaim: SpatialFocusActions["registerClaim"] = (
     fq,
@@ -423,9 +522,7 @@ function buildSpatialFocusActions(
         lostLayerFq: layerFq,
         lostRect,
         snapshot,
-      }).catch((err) =>
-        console.error("[spatial_focus_lost] failed", err),
-      );
+      }).catch((err) => console.error("[spatial_focus_lost] failed", err));
     });
     return () => {
       unsubscribeDeleted();
@@ -442,10 +539,31 @@ function buildSpatialFocusActions(
     name,
     parent,
   ) => {
+    // Append to the React-side layer stack BEFORE the IPC fires. The
+    // kernel push is async; if a sibling caller reads `topLayerFq()`
+    // between IPC dispatch and resolve, they should see the new top.
+    // The kernel does the same — its stack mutates synchronously inside
+    // the command handler before the IPC reply.
+    //
+    // Idempotent: if the same FQM appears twice in a row (which would
+    // already be a kernel-side error), keep only one entry. The kernel
+    // is the authority on duplicates; we just avoid corrupting our own
+    // top-of-stack view.
+    const stack = layerStackRef.current;
+    const existing = stack.indexOf(fq);
+    if (existing !== -1) stack.splice(existing, 1);
+    stack.push(fq);
     await invoke("spatial_push_layer", { fq, segment, name, parent });
   };
 
   const popLayer: SpatialFocusActions["popLayer"] = async (fq) => {
+    // Remove from the React-side stack by FQM identity. Pop is keyed
+    // by FQM (not by strict LIFO) to mirror the kernel, which also
+    // tolerates pop-not-on-top (e.g. when a parent layer's React
+    // subtree unmounts before a descendant's effect cleanup runs).
+    const stack = layerStackRef.current;
+    const idx = stack.indexOf(fq);
+    if (idx !== -1) stack.splice(idx, 1);
     const nextFq = await invoke<FullyQualifiedMoniker | null>(
       "spatial_pop_layer",
       { fq },
@@ -454,6 +572,11 @@ function buildSpatialFocusActions(
       const snapshot = buildSnapshotForFocused(layerRegistriesRef, nextFq);
       await invoke("spatial_focus", { fq: nextFq, snapshot });
     }
+  };
+
+  const topLayerFq: SpatialFocusActions["topLayerFq"] = () => {
+    const stack = layerStackRef.current;
+    return stack.length === 0 ? null : stack[stack.length - 1];
   };
 
   const drillIn: SpatialFocusActions["drillIn"] = async (fq, focusedFq) => {
@@ -521,6 +644,7 @@ function buildSpatialFocusActions(
     subscribeFocusChanged,
     enumerateScopesInLayer,
     layerFqOf,
+    topLayerFq,
   };
 }
 

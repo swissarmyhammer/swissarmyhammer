@@ -44,17 +44,10 @@
  * with the inspector / palette layers.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { type CommandDef } from "@/lib/command-scope";
+import { type CommandDef, useDispatchCommand } from "@/lib/command-scope";
 import { useSpatialFocusActions } from "@/lib/spatial-focus-context";
-import { useFocusActions } from "@/lib/entity-focus-context";
 import { generateSneakCodes } from "@/lib/sneak-codes";
 import { FocusLayer } from "@/components/focus-layer";
 import { FocusScope } from "@/components/focus-scope";
@@ -95,15 +88,41 @@ interface JumpTarget {
 }
 
 /**
+ * A focus-claim dispatcher specialised for the jump-to overlay.
+ *
+ * `nav.focus` is the global command; calling this routes the FQM through
+ * the command-scope dispatcher so every focus claim flows through the
+ * same auditable choke point. The overlay calls this for prior-focus
+ * restore, sentinel auto-claim, and unique-match landing.
+ */
+type NavFocusDispatcher = (fq: FullyQualifiedMoniker) => void;
+
+/**
  * Visual + interactive overlay for Jump-To. Renders nothing when
  * `open === false`.
  */
 export function JumpToOverlay({ open, onClose }: JumpToOverlayProps) {
   const spatial = useSpatialFocusActions();
-  const entity = useFocusActions();
+  // Dispatch focus claims through `nav.focus` — the single auditable
+  // command that wraps the entity-focus `setFocus` primitive. Card
+  // `01KR7CDEFWWVF4WH0BCHE8Y21J` consolidates every focus claim onto
+  // this command so cross-cutting concerns hang off one closure.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
+  const navFocus = useCallback<NavFocusDispatcher>(
+    (fq) => {
+      void dispatchNavFocus({ args: { fq } }).catch((err) => {
+        console.error("[JumpToOverlay] nav.focus dispatch failed", err);
+      });
+    },
+    [dispatchNavFocus],
+  );
   if (!open) return null;
   return (
-    <JumpToOverlayBody spatial={spatial} entity={entity} onClose={onClose} />
+    <JumpToOverlayBody
+      spatial={spatial}
+      navFocus={navFocus}
+      onClose={onClose}
+    />
   );
 }
 
@@ -111,8 +130,8 @@ export function JumpToOverlay({ open, onClose }: JumpToOverlayProps) {
 interface OverlayActions {
   /** Spatial-focus actions — read-only `focusedFq` / enumeration. */
   spatial: ReturnType<typeof useSpatialFocusActions>;
-  /** Entity-focus actions — `setFocus` synchronously updates the bridge. */
-  entity: ReturnType<typeof useFocusActions>;
+  /** Focus-claim dispatcher — `nav.focus` wrapper. */
+  navFocus: NavFocusDispatcher;
 }
 
 /** Props for the mounted overlay body — a stable set after the open gate. */
@@ -128,7 +147,7 @@ interface JumpToOverlayBodyProps extends OverlayActions {
  */
 function JumpToOverlayBody({
   spatial,
-  entity,
+  navFocus,
   onClose,
 }: JumpToOverlayBodyProps) {
   // Read the surrounding layer's FQM BEFORE we push our own jump-to
@@ -147,10 +166,11 @@ function JumpToOverlayBody({
     priorFocusedFqRef.current = spatial.focusedFq();
   }
 
-  // Enumerate scopes in the layer that owns prior focus. When prior focus
-  // is null (app just started, no claim yet), fall back to the window-
-  // root layer (`/window`) — the only layer guaranteed to exist before
-  // any user interaction.
+  // Enumerate scopes in the topmost layer (the active modal layer).
+  // `priorFocusedFq` is no longer the layer-selection input — see
+  // `useJumpTargets` — but we still pass it through for symmetry with
+  // future per-target restoration logic and so the call signature
+  // remains documenting.
   const targets = useJumpTargets(spatial, priorFocusedFqRef.current);
 
   // Dismiss = restore prior focus then onClose. Memoized so the sentinel
@@ -159,10 +179,10 @@ function JumpToOverlayBody({
   const handleDismiss = useCallback(() => {
     const prior = priorFocusedFqRef.current;
     if (prior !== null) {
-      entity.setFocus(prior);
+      navFocus(prior);
     }
     onClose();
-  }, [entity, onClose]);
+  }, [navFocus, onClose]);
 
   // Empty enumeration → close immediately without claiming focus or
   // restoring (no-op restore — never happened). Defensive: covers the
@@ -188,7 +208,7 @@ function JumpToOverlayBody({
   return (
     <JumpToLayerRoot
       parentLayerFq={parentLayerFq}
-      entity={entity}
+      navFocus={navFocus}
       targets={targets}
       handleDismiss={handleDismiss}
       onMatch={onClose}
@@ -200,7 +220,7 @@ function JumpToOverlayBody({
 interface JumpToLayerRootProps {
   /** FQM of the layer that surrounds this overlay (e.g. `/window`). */
   parentLayerFq: FullyQualifiedMoniker | null;
-  entity: ReturnType<typeof useFocusActions>;
+  navFocus: NavFocusDispatcher;
   targets: JumpTarget[];
   handleDismiss: () => void;
   /** Called after a unique-code match has set focus on the matched scope. */
@@ -214,7 +234,7 @@ interface JumpToLayerRootProps {
  */
 function JumpToLayerRoot({
   parentLayerFq,
-  entity,
+  navFocus,
   targets,
   handleDismiss,
   onMatch,
@@ -261,7 +281,7 @@ function JumpToLayerRoot({
           showFocus={false}
         >
           <JumpToOverlayChrome
-            entity={entity}
+            navFocus={navFocus}
             sentinelFq={sentinelFq}
             targets={targets}
             handleDismiss={handleDismiss}
@@ -276,7 +296,7 @@ function JumpToLayerRoot({
 
 /** Props for the visible chrome (backdrop, pills, key handler). */
 interface JumpToOverlayChromeProps {
-  entity: ReturnType<typeof useFocusActions>;
+  navFocus: NavFocusDispatcher;
   sentinelFq: FullyQualifiedMoniker;
   targets: JumpTarget[];
   handleDismiss: () => void;
@@ -291,7 +311,7 @@ interface JumpToOverlayChromeProps {
  * observes events that bubble from the sentinel's host `<div>`.
  */
 function JumpToOverlayChrome({
-  entity,
+  navFocus,
   sentinelFq,
   targets,
   handleDismiss,
@@ -307,14 +327,14 @@ function JumpToOverlayChrome({
   // inside the jump-to layer; drill-out hits the layer-root edge and
   // falls through to `app.dismiss` immediately.
   useEffect(() => {
-    entity.setFocus(sentinelFq);
+    navFocus(sentinelFq);
     // Intentionally fire once — re-running this effect (e.g. on a target
     // re-enumeration) would steal focus back from the user mid-input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sentinelFq]);
 
   const handleKeyDown = useKeyMatcher({
-    entity,
+    navFocus,
     targets,
     codes,
     buffer,
@@ -352,7 +372,12 @@ function JumpToOverlayChrome({
     >
       <div
         data-testid="jump-to-backdrop"
-        className={`fixed inset-0 ${
+        // `z-[80]` so the backdrop paints above every panel z-index in
+        // the app (inspector panel sits at z-30; the chrome that holds
+        // it sits at z-40). Without this, an inspector-active jump
+        // session would have its pills underdraw the panel they are
+        // supposed to label.
+        className={`fixed inset-0 z-[80] ${
           flashing ? "bg-red-500/30" : "bg-black/30"
         }`}
         // Stop wheel / touchmove from scrolling underlying scroll
@@ -378,7 +403,7 @@ function JumpToOverlayChrome({
 
 /** Hook params for {@link useKeyMatcher}. */
 interface UseKeyMatcherParams {
-  entity: ReturnType<typeof useFocusActions>;
+  navFocus: NavFocusDispatcher;
   targets: JumpTarget[];
   codes: string[];
   buffer: string;
@@ -402,7 +427,7 @@ interface UseKeyMatcherParams {
  */
 function useKeyMatcher(params: UseKeyMatcherParams) {
   const {
-    entity,
+    navFocus,
     targets,
     codes,
     buffer,
@@ -449,7 +474,7 @@ function useKeyMatcher(params: UseKeyMatcherParams) {
       const exact = codes.indexOf(next);
       if (exact >= 0) {
         const target = targets[exact];
-        entity.setFocus(target.fq);
+        navFocus(target.fq);
         onMatch();
         return;
       }
@@ -466,7 +491,7 @@ function useKeyMatcher(params: UseKeyMatcherParams) {
       }, FLASH_MS);
     },
     [
-      entity,
+      navFocus,
       targets,
       codes,
       buffer,
@@ -494,7 +519,12 @@ function JumpPill({ target }: JumpPillProps) {
     <div
       data-jump-code={code}
       data-jump-fq={fq}
-      className="fixed bg-primary text-primary-foreground font-mono px-1 rounded shadow text-xs leading-tight"
+      // `z-[80]` so the pill paints above the inspector panel (z-30)
+      // and the panel's surrounding chrome (z-40) when the inspector
+      // is the topmost (active) layer. The backdrop one level below
+      // shares the same z so the pill's relative paint order stays
+      // deterministic.
+      className="fixed z-[80] bg-primary text-primary-foreground font-mono px-1 rounded shadow text-xs leading-tight"
       style={{
         left: rect.left + 4,
         top: rect.top + 4,
@@ -510,30 +540,42 @@ function JumpPill({ target }: JumpPillProps) {
 // ---------------------------------------------------------------------------
 
 /**
- * Enumerate scopes in the layer that owns `priorFocusedFq`, generate one
- * code per scope, and pair them up. Returns `null` while async code
- * generation is in flight, an empty array when the layer has no
- * non-zero-area scopes (the empty-enumeration case the body handles by
- * closing immediately), or a populated `JumpTarget[]` otherwise.
+ * Enumerate scopes in the **topmost** layer (the active modal layer),
+ * generate one code per scope, and pair them up. Returns `null` while
+ * async code generation is in flight, an empty array when the layer
+ * has no non-zero-area scopes (the empty-enumeration case the body
+ * handles by closing immediately), or a populated `JumpTarget[]`
+ * otherwise.
  *
- * The enumeration runs once on mount (the body remounts on each open), so
- * mid-overlay layout changes don't reshuffle pills — that's a deliberate
- * design choice: the user picks a code based on the layout they saw when
- * they opened, not on whatever the layout becomes mid-input.
+ * Per the modal-layer model (card `01KR7CDEFWWVF4WH0BCHE8Y21J`),
+ * jump-to enumerates against the **active layer** — the topmost
+ * pushed layer — not the layer that owned `priorFocusedFq`. With no
+ * inspector / palette mounted, the topmost layer IS the window, so
+ * pills paint on cards / columns / navbar. With the inspector on top,
+ * pills paint on inspector field scopes. The `priorFocusedFq` plumbing
+ * remains for the dismiss-on-no-match restore-prior-focus path.
+ *
+ * The enumeration runs once on mount (the body remounts on each open),
+ * so mid-overlay layout changes don't reshuffle pills — that's a
+ * deliberate design choice: the user picks a code based on the layout
+ * they saw when they opened, not on whatever the layout becomes
+ * mid-input.
  */
 function useJumpTargets(
   spatial: ReturnType<typeof useSpatialFocusActions>,
-  priorFocusedFq: FullyQualifiedMoniker | null,
+  _priorFocusedFq: FullyQualifiedMoniker | null,
 ): JumpTarget[] | null {
   const [targets, setTargets] = useState<JumpTarget[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const layerFq =
-      priorFocusedFq !== null ? spatial.layerFqOf(priorFocusedFq) : null;
-    const fallbackLayerFq = layerFq ?? fqRoot(asSegment("window"));
+    // Read the topmost layer FQM. The window layer is always pushed at
+    // app boot, so under normal conditions this is non-null. Fall back
+    // to `/window` defensively for the early-boot edge case where the
+    // overlay opens before any layer has registered.
+    const topLayerFq = spatial.topLayerFq() ?? fqRoot(asSegment("window"));
     const enumerated = spatial
-      .enumerateScopesInLayer(fallbackLayerFq)
+      .enumerateScopesInLayer(topLayerFq)
       .filter((s) => s.rect.width > 0 && s.rect.height > 0);
     if (enumerated.length === 0) {
       setTargets([]);

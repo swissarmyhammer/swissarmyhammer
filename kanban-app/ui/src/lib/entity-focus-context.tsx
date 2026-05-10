@@ -36,8 +36,16 @@ import {
   type ReactNode,
   type MutableRefObject,
 } from "react";
-import type { CommandScope, DispatchOptions } from "./command-scope";
-import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
+import type {
+  CommandDef,
+  CommandScope,
+  DispatchOptions,
+} from "./command-scope";
+import {
+  CommandScopeProvider,
+  useDispatchCommand,
+  FocusedScopeContext,
+} from "./command-scope";
 import {
   useOptionalSpatialFocusActions,
   type SpatialFocusActions,
@@ -323,15 +331,88 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     ? (registryRef.current.get(focusedMoniker) ?? null)
     : null;
 
+  // Build the `nav.focus` command — the single auditable choke point
+  // through which every non-null focus claim flows. Registered in a
+  // `<CommandScopeProvider>` that wraps the provider's children so the
+  // command sits next to the primitive it wraps (`setFocus`).
+  //
+  // Design rationale: `<FocusScope>` and `useFocusActions` are routinely
+  // mounted in tests that do not include `<AppShell>`. Registering
+  // `nav.focus` only in `<AppShell>` made click dispatches in those
+  // tests fall through to the backend `dispatch_command` IPC, which the
+  // test mocks don't intercept as `spatial_focus`. Colocating the
+  // command with `setFocus` here makes the focus subsystem
+  // self-contained: any tree that mounts `<EntityFocusProvider>` gets
+  // `nav.focus` for free, and `<FocusScope>`'s click handler resolves
+  // the command through the same scope chain in production and tests.
+  //
+  // The inner `<CommandScopeProvider>` chains under whatever outer
+  // scope is mounted (e.g. `<AppShell>`'s global commands in
+  // production), so global commands remain visible to descendants and
+  // `nav.focus` shadows nothing because no outer scope registers it.
+  const navFocusCommands = useMemo<readonly CommandDef[]>(
+    () => [buildNavFocusCommand(actions.setFocus)],
+    [actions.setFocus],
+  );
+
   return (
     <FocusActionsContext.Provider value={actions}>
       <FocusStoreContext.Provider value={store}>
         <FocusedScopeContext.Provider value={focusedScope}>
-          {children}
+          <CommandScopeProvider commands={navFocusCommands}>
+            {children}
+          </CommandScopeProvider>
         </FocusedScopeContext.Provider>
       </FocusStoreContext.Provider>
     </FocusActionsContext.Provider>
   );
+}
+
+/**
+ * Build the `nav.focus` command — the single auditable choke point
+ * through which every non-null focus claim flows.
+ *
+ * Args (via `DispatchOptions.args`):
+ *   - `fq: FullyQualifiedMoniker` — the scope to focus.
+ *
+ * Execute calls the entity-focus `setFocus(fq)` action against the
+ * passed FQM. `setFocus` is the kernel-facing primitive (it composes a
+ * snapshot and dispatches `spatial_focus` IPC); routing every non-null
+ * focus claim through this single command means cross-cutting concerns
+ * (telemetry, animations, scroll-on-focus) can hang off this one
+ * closure rather than off N call sites.
+ *
+ * Per the modal-layer model (card `01KR7CDEFWWVF4WH0BCHE8Y21J`):
+ * components that previously called `setFocus(fq)` directly now
+ * dispatch `nav.focus` with `{ args: { fq } }`. The kernel-facing
+ * `setFocus` itself stays as the primitive; only this execute closure
+ * calls it.
+ *
+ * Registered in a `<CommandScopeProvider>` wrapping
+ * `<EntityFocusProvider>`'s children — colocated with the primitive
+ * the command wraps so any tree that mounts the focus provider gets
+ * `nav.focus` resolution. This keeps test harnesses and production
+ * tree both seeing the same command.
+ */
+function buildNavFocusCommand(
+  setFocus: (fq: FullyQualifiedMoniker | null) => void,
+): CommandDef {
+  return {
+    id: "nav.focus",
+    name: "Focus Scope",
+    execute: (opts) => {
+      const fq = opts?.args?.fq;
+      if (typeof fq !== "string") {
+        // Defensive: a dispatch without `args.fq` is a programming
+        // error, not a user-visible state. Log so dev mode catches the
+        // missing arg, then no-op so the rest of the command pipeline
+        // keeps running.
+        console.error("[nav.focus] missing or non-string args.fq", opts?.args);
+        return;
+      }
+      setFocus(fq as FullyQualifiedMoniker);
+    },
+  };
 }
 
 /** Inputs for `buildFocusActions`. Grouped to keep the helper signature small. */
@@ -682,7 +763,12 @@ export function useFocusBySegmentPath(): (
   ...segments: SegmentMoniker[]
 ) => void {
   const parent = useOptionalFullyQualifiedMoniker();
-  const { setFocus } = useFocusActions();
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`, the single auditable command that wraps the
+  // entity-focus `setFocus` primitive. This helper resolves a
+  // tail-segment path against the current primitive's FQM, then
+  // dispatches the focus claim through that one closure.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   return useCallback(
     (...segments: SegmentMoniker[]) => {
       if (parent === null) {
@@ -695,8 +781,10 @@ export function useFocusBySegmentPath(): (
       for (const seg of segments) {
         fq = composeFq(fq, seg);
       }
-      setFocus(fq);
+      void dispatchNavFocus({ args: { fq } }).catch((err) =>
+        console.error("[useFocusBySegmentPath] nav.focus dispatch failed", err),
+      );
     },
-    [parent, setFocus],
+    [parent, dispatchNavFocus],
   );
 }

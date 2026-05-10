@@ -38,7 +38,7 @@ import {
   type FullyQualifiedMoniker,
   type SegmentMoniker,
 } from "@/types/spatial";
-import { useFocusActions, useFocusedFq } from "@/lib/entity-focus-context";
+import { useFocusedFq } from "@/lib/entity-focus-context";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -819,7 +819,9 @@ function useScrollFocusedIntoView(
 function useInitialBoardFocus(
   initialTarget: InitialFocusTarget | null,
   boardZoneFq: FullyQualifiedMoniker,
-  setFocus: (fq: FullyQualifiedMoniker | null) => void,
+  dispatchNavFocus: (
+    opts?: import("@/lib/command-scope").DispatchOptions,
+  ) => Promise<unknown>,
 ): void {
   const initialFocusDone = useRef(false);
   useEffect(() => {
@@ -831,8 +833,13 @@ function useInitialBoardFocus(
       initialTarget.leafSegment === null
         ? columnFq
         : composeFq(columnFq, initialTarget.leafSegment);
-    setFocus(targetFq);
-  }, [initialTarget, boardZoneFq, setFocus]);
+    // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+    // `nav.focus`. The initial-focus dispatch happens on mount once
+    // the layout has resolved a target moniker.
+    void dispatchNavFocus({ args: { fq: targetFq } }).catch((err) =>
+      console.error("[useInitialBoardFocus] nav.focus dispatch failed", err),
+    );
+  }, [initialTarget, boardZoneFq, dispatchNavFocus]);
 }
 
 /**
@@ -1124,7 +1131,10 @@ function BoardSpatialBody({
   scrollContainerRef,
 }: BoardSpatialBodyProps) {
   const dispatchEntityAddTask = useDispatchCommand("entity.add:task");
-  const { setFocus } = useFocusActions();
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow through
+  // `nav.focus`. Both the initial-focus seeding and the
+  // newly-created-task focus jump dispatch this command.
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
   const focusedFq = useFocusedFq();
   const boardZoneFq = useFullyQualifiedMoniker();
   // The column-extreme commands (`board.firstColumn` /
@@ -1139,9 +1149,11 @@ function BoardSpatialBody({
     (taskId: string, columnSegment: SegmentMoniker) => {
       const columnFq = composeFq(boardZoneFq, columnSegment);
       const cardFq = composeFq(columnFq, asSegment(`task:${taskId}`));
-      setFocus(cardFq);
+      void dispatchNavFocus({ args: { fq: cardFq } }).catch((err) =>
+        console.error("[focusCreatedTask] nav.focus dispatch failed", err),
+      );
     },
-    [boardZoneFq, setFocus],
+    [boardZoneFq, dispatchNavFocus],
   );
 
   const boardActionCommands = useBoardActionCommands(
@@ -1152,7 +1164,11 @@ function BoardSpatialBody({
   );
 
   useScrollFocusedIntoView(scrollContainerRef, focusedFq);
-  useInitialBoardFocus(layout.initialFocusTarget, boardZoneFq, setFocus);
+  useInitialBoardFocus(
+    layout.initialFocusTarget,
+    boardZoneFq,
+    dispatchNavFocus,
+  );
 
   const handleAddTask = useAddTaskHandler(layout.columnMap, focusCreatedTask);
 

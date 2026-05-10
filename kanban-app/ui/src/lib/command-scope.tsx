@@ -203,8 +203,15 @@ export interface CommandDef {
   description?: string;
   /** Optional key bindings per keymap mode. */
   keys?: { vim?: string; cua?: string; emacs?: string };
-  /** The action to run when the command is executed. */
-  execute?: () => void | Promise<void>;
+  /**
+   * The action to run when the command is executed.
+   *
+   * Receives the same `DispatchOptions` the dispatcher was called with,
+   * so commands that take per-call arguments (e.g. `nav.focus`'s
+   * `{ args: { fq } }`) can read them from the closure invocation.
+   * The vast majority of commands are parameterless and ignore the arg.
+   */
+  execute?: (opts?: DispatchOptions) => void | Promise<void>;
   /**
    * Whether the command is currently available. Defaults to true.
    * When false, the command blocks resolution — parent scopes will NOT
@@ -542,7 +549,11 @@ async function runFrontendExecute(
       target: opts.target ?? resolved.target,
     }),
   ).catch(() => {});
-  await resolved.execute!();
+  // Thread `opts` to the execute closure so commands that need per-call
+  // arguments (e.g. `nav.focus`'s `{ args: { fq } }`) can read them.
+  // The vast majority of execute closures are parameterless and ignore
+  // the arg.
+  await resolved.execute!(opts);
 }
 
 /** Dispatch to the Rust backend, wrapping the call in the busy counter. */

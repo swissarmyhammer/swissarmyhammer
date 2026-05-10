@@ -442,6 +442,9 @@ describe("runNavWithScrollOnEdge", () => {
       layerFqOf: todo(
         "layerFqOf",
       ) as unknown as SpatialFocusActions["layerFqOf"],
+      topLayerFq: todo(
+        "topLayerFq",
+      ) as unknown as SpatialFocusActions["topLayerFq"],
     };
   }
 

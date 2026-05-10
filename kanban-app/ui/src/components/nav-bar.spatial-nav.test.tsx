@@ -108,10 +108,17 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
   return {
     ...actual,
-    useDispatchCommand: (cmd: string) => {
+    useDispatchCommand: (cmd?: string) => {
+      // Selectively shadow component-specific commands so the test can
+      // assert against `mockDispatchInspect` / `mockDispatchSearch`.
+      // Every other command (notably `nav.focus`, the focus-claim
+      // choke point that `<FocusScope>`'s click handler dispatches)
+      // falls through to the real `useDispatchCommand` so the
+      // command-scope chain resolves it through the registered
+      // `nav.focus` execute closure.
       if (cmd === "ui.inspect") return mockDispatchInspect;
       if (cmd === "app.search") return mockDispatchSearch;
-      return vi.fn(() => Promise.resolve());
+      return actual.useDispatchCommand(cmd as string);
     },
     useCommandBusy: () => ({ isBusy: mockIsBusy() }),
   };

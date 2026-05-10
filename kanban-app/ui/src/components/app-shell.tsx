@@ -427,6 +427,13 @@ function buildDynamicGlobalCommands(drillRefs: DrillRefs): CommandDef[] {
   ];
 }
 
+// `nav.focus` is registered in `<EntityFocusProvider>` rather than here.
+// The command wraps the entity-focus `setFocus` primitive, and tests
+// commonly mount `<EntityFocusProvider>` without `<AppShell>`. Colocating
+// the registration with the primitive it wraps means every tree that
+// mounts the focus provider gets `nav.focus` resolution — production
+// trees through `<AppShell>` and isolated test harnesses alike.
+
 /**
  * Sync app mode to the palette-open flag in backend UIState.
  *

@@ -59,12 +59,15 @@ import { resolveEditor } from "@/components/fields/editors";
 import type { EditorProps } from "@/components/fields/editors";
 import { FocusScope } from "@/components/focus-scope";
 import { Inspectable } from "@/components/inspectable";
-import { EMPTY_COMMANDS, type CommandDef } from "@/lib/command-scope";
+import {
+  EMPTY_COMMANDS,
+  useDispatchCommand,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { fieldMoniker } from "@/lib/moniker";
 import { asSegment } from "@/types/spatial";
 import { fieldIcon } from "@/components/fields/field-icon";
 import { FieldIconBadge } from "@/components/fields/field-icon-badge";
-import { useOptionalFocusActions } from "@/lib/entity-focus-context";
 import { useOptionalSpatialFocusActions } from "@/lib/spatial-focus-context";
 import { HelpCircle, type LucideIcon } from "lucide-react";
 import type { FieldDef, Entity } from "@/types/kanban";
@@ -490,14 +493,18 @@ export function Field({
   const { handleCommit, handleDisplayCommit, handleCancel, debouncedOnChange } =
     useFieldHandlers(entityType, entityId, fieldDef.name, onDone, onCancel);
 
-  // Spatial + entity focus actions feed the `field.edit` execute closure:
-  // we read the focused field-zone key from the spatial provider, then
-  // dispatch `setFocus` against the entity-focus store on a successful
-  // drill-in. Both providers may be absent in lightweight tests, so we
-  // use the optional variants — the closure short-circuits when either
-  // is missing, falling through to `onEdit?.()` (the legacy behaviour).
-  const focusActions = useOptionalFocusActions();
+  // Spatial actions feed the `field.edit` execute closure: we read the
+  // focused field-zone key from the spatial provider on a successful
+  // drill-in. The provider may be absent in lightweight tests, so we
+  // use the optional variant — the closure short-circuits when it's
+  // missing, falling through to `onEdit?.()` (the legacy behaviour).
+  //
+  // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims after a successful
+  // drill-in flow through `nav.focus`, the single auditable command
+  // that wraps the entity-focus `setFocus` primitive. The dispatcher
+  // is pre-bound here so the closure stays cheap on the keystroke path.
   const spatialActions = useOptionalSpatialFocusActions();
+  const dispatchNavFocus = useDispatchCommand("nav.focus");
 
   // Per-zone Enter binding: when the field is in display mode, register
   // a scope-level `field.edit` command keyed to Enter. The field zone's
@@ -528,9 +535,9 @@ export function Field({
   // holds focus while `editing` is true.
   const editCommands = useMemo<readonly CommandDef[]>(() => {
     if (editing) return EMPTY_COMMANDS;
-    // No `onEdit` AND no provider stack to drill into → nothing the
+    // No `onEdit` AND no spatial provider to drill into → nothing the
     // command could do, leave Enter to global `nav.drillIn`.
-    if (!onEdit && (!spatialActions || !focusActions)) return EMPTY_COMMANDS;
+    if (!onEdit && !spatialActions) return EMPTY_COMMANDS;
     // Drill-in-or-edit closure. `vim:i`, `vim:Enter`, and `cua:Enter`
     // all funnel through the same body — the only difference is the
     // mapped key. We expose three command IDs (mirroring grid-view's
@@ -550,12 +557,17 @@ export function Field({
       // comparing the result to the focused FQM. Equality
       // means the field has no spatial children — fall through to
       // the editor.
-      if (spatialActions && focusActions) {
+      if (spatialActions) {
         const focusedFq = spatialActions.focusedFq();
         if (focusedFq !== null) {
           const result = await spatialActions.drillIn(focusedFq, focusedFq);
           if (result !== focusedFq) {
-            focusActions.setFocus(result);
+            // Card `01KR7CDEFWWVF4WH0BCHE8Y21J`: focus claims flow
+            // through `nav.focus`. The drill-in result is the FQM
+            // of the first spatial child (a pill, badge, etc.).
+            await dispatchNavFocus({ args: { fq: result } }).catch((err) =>
+              console.error("[field.edit] nav.focus dispatch failed", err),
+            );
             return;
           }
         }
@@ -591,7 +603,7 @@ export function Field({
         execute: editClosure,
       },
     ];
-  }, [editing, onEdit, spatialActions, focusActions]);
+  }, [editing, onEdit, spatialActions, dispatchNavFocus]);
 
   const inner = editing ? (
     <FieldEditor
