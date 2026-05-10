@@ -2,7 +2,7 @@
 assignees:
 - wballard
 position_column: todo
-position_ordinal: b380
+position_ordinal: '7e80'
 title: Space reliably inspects (no page scroll) — global binding, not scope-only
 ---
 ## What
