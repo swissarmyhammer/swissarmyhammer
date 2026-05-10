@@ -3,65 +3,71 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: d180
-title: 'Inspector layer fails to contain focus: `s`-jump marks the base layer, Escape leaks, arrow-nav escapes'
+title: Each open inspector panel must be its own `<FocusLayer>` (containment is broken — focus leaks to base)
 ---
 ## What
 
-The inspector overlay is supposed to act as a modal focus layer (`name="inspector"` mounted in `kanban-app/ui/src/components/inspectors-container.tsx:250`), but in practice focus is leaking out to the parent `window` layer while at least one inspector panel is open. Three observable symptoms confirm this:
+The inspector overlay is supposed to act as a modal focus boundary, but in practice focus leaks out to the parent `window` layer while at least one inspector panel is open. Three observable symptoms confirm this:
 
-1. **Jump-To paints pills on the base layer.** Pressing `s` (vim) or `Mod+G` (cua/emacs) opens `<JumpToOverlay>`, which enumerates scopes via `useJumpTargets` in `kanban-app/ui/src/components/jump-to-overlay.tsx:524-566`. That hook takes `priorFocusedFq` and resolves its layer via `spatial.layerFqOf(priorFocusedFq)`. If the inspector were holding focus, the resolved layer would be `/window/inspector` and pills would only land on inspector field zones. Instead, pills land on board / column / card scopes — i.e. `priorFocusedFq` was on `/window`, so the inspector layer never actually owned focus.
+1. **Jump-To paints pills on the base layer.** Pressing `s` (vim) or `Mod+G` (cua/emacs) opens `<JumpToOverlay>`, which enumerates scopes via `useJumpTargets` (`kanban-app/ui/src/components/jump-to-overlay.tsx:524-566`). That hook resolves the layer of `priorFocusedFq` via `spatial.layerFqOf(priorFocusedFq)` and calls `enumerateScopesInLayer(...)`. If the inspector were holding focus, the resolved layer would be `/window/inspector/...` and pills would only land on inspector field scopes. Instead, pills land on board / column / card scopes — i.e. `priorFocusedFq` was on `/window`.
 
-2. **Escape is "problematic" inside the inspector.** Unlike `<JumpToOverlay>` and `<CommandPalette>`, the inspector layer does NOT install a sentinel `<FocusScope>` with an `app.dismiss` shadow command. (Compare `kanban-app/ui/src/components/jump-to-overlay.tsx:242-275` where the jump-to layer wraps its body in a sentinel scope whose `commands` registers `app.dismiss` → `handleDismiss`.) Today, `inspectors-container.tsx:249-253` is just `<FocusLayer name=INSPECTOR_LAYER_NAME>{panelNodes}</FocusLayer>`. With nothing pinning `app.dismiss` at the inspector layer root, Escape's fall-through behavior depends on whether focus is actually inside the layer; with focus leaking to base, the drill-out chain walks the wrong tree.
+2. **Escape is "problematic" inside the inspector.** Drill-out walks the focused scope's parent_zone chain inside the snapshot's layer; if focus is on a card on `/window` (not on a field inside `/window/inspector`), `nav.drillOut` walks the wrong tree.
 
-3. **Arrow-key navigation walks out of the inspector and visibly focuses cards on the base layer.** The kernel's snapshot is layer-scoped (`swissarmyhammer-focus/src/snapshot.rs:86-94`: `pub layer_fq: FullyQualifiedMoniker; pub scopes: Vec<SnapshotScope>`), and `buildSnapshotForFocused` in `kanban-app/ui/src/lib/spatial-focus-context.tsx:536-548` picks whichever layer registry `has` the focused FQM. So the only way arrow keys can move focus from the inspector body to a card on the board is if the focused FQM is already on `/window` — which is exactly what symptom (1) implies.
+3. **Arrow-key navigation walks out of the inspector and visibly focuses cards on the base layer.** The kernel's snapshot is layer-scoped (`swissarmyhammer-focus/src/snapshot.rs:86-94`: `pub layer_fq: FullyQualifiedMoniker; pub scopes: Vec<SnapshotScope>`), and `buildSnapshotForFocused` in `kanban-app/ui/src/lib/spatial-focus-context.tsx:536-548` picks whichever layer registry `has` the focused FQM. Arrow-key nav from the inspector body to a card on the board can only happen if the focused FQM is on `/window` — which is exactly what symptom (1) implies.
 
-### Likely root causes (investigate, don't assume)
+## Root cause
 
-- **The entity wrap is `<FocusScope>`, not `<FocusZone>`.** `inspectors-container.tsx:419` wraps each panel body in `<FocusScope moniker={entityZoneSegment}>`. The doc-comment block in the same file (lines 80-98) says it should be `<FocusZone>`, and `kanban-app/ui/src/components/focus-scope.tsx:50-68` documents a "scope-is-leaf invariant" — registering further scopes/zones underneath logs `scope-not-leaf`. Field rows DO register their own zones inside this wrap, so the kernel may be treating the field tree as leaks under a leaf, which would explain why first-field focus never sticks to the inspector layer.
-- **No sentinel `app.dismiss` shadow at the inspector layer root.** Even if focus were inside the layer, drill-out has no terminal handler at the inspector edge. The jump-to and palette layers both install one and rely on it for clean dismissal; the inspector layer should follow the same pattern (dispatch `ui.inspector.close` on the inspector layer's `app.dismiss`, not on every panel's `<SlidePanel>` close button).
-- **`useFirstFieldFocus` in `kanban-app/ui/src/components/entity-inspector.tsx:122-149` may be losing the race.** It calls `setFocus(firstFieldFq)` on mount, but the field zones it points at have to be registered with `LayerScopeRegistry` before `buildSnapshotForFocused` can find them. If the snapshot is built before any field zone has registered, `spatial_focus` is invoked with `snapshot: undefined` and the kernel rejects the claim (`state.rs:226-236`: `let layer = registry.layer(&snapshot.layer_fq)?;` returns `None`). The store stays at the previous focus (a card on the base layer), and the inspector layer is mounted without focus.
+`<FocusZone>` has been removed from the codebase (no `kanban-app/ui/src/components/focus-zone.*` file, no exported `FocusZone` symbol). With the container primitive gone, the two remaining primitives are:
 
-### Files to read / modify
+- `<FocusLayer>` — modal containment boundary (kernel pushes/pops a layer; navigation never crosses).
+- `<FocusScope>` — leaf in the spatial graph (`kanban-app/ui/src/components/focus-scope.tsx:50-68` documents the "scope-is-leaf invariant" — registering further scopes underneath logs `scope-not-leaf`).
 
-- `kanban-app/ui/src/components/inspectors-container.tsx` — layer mount + entity wrap + close commands.
-- `kanban-app/ui/src/components/entity-inspector.tsx` — `useFirstFieldFocus`.
-- `kanban-app/ui/src/components/jump-to-overlay.tsx` — sentinel pattern to mirror for the inspector.
-- `kanban-app/ui/src/components/focus-scope.tsx` / `focus-zone.tsx` — confirm zone vs scope semantics for an entity-keyed wrap that contains nested zones.
-- `kanban-app/ui/src/lib/spatial-focus-context.tsx` — `buildSnapshotForFocused`, `enumerateScopesInLayer`, `layerFqOf`.
-- `swissarmyhammer-focus/src/snapshot.rs`, `swissarmyhammer-focus/src/state.rs` — layer-scoped snapshot contract.
-- `kanban-app/ui/src/components/inspectors-container.guards.node.test.ts` — current source-level guards (note: the "permits a single FocusScope" guard may need to relax to `FocusZone` once the wrap is corrected).
+Today `kanban-app/ui/src/components/inspectors-container.tsx:419` wraps each open panel body in `<FocusScope moniker={entityZoneSegment}>`. That scope is not a leaf — `<EntityInspector>` registers a field `<FocusScope>` per row underneath it. The kernel can't treat that wrapper as a real containment boundary because it isn't a layer; it's a leaf with rogue descendants. So the per-entity barrier the doc comment in `inspectors-container.tsx:80-98` describes ("Iter 0 of the kernel's beam-search cascade is confined to peers within the same entity") simply does not exist at runtime, and field focus claims regularly miss the inspector layer entirely (the prior board focus stays on `/window`).
 
-### Approach
+**Fix shape.** Each open inspector panel must be its own `<FocusLayer>`, nested inside the existing `<FocusLayer name="inspector">`. That gives each panel a real containment boundary the kernel honors:
 
-1. Reproduce the bug with a Playwright/Vitest browser test that opens an inspector panel, asserts the focused FQM is under `/window/inspector`, then presses ArrowLeft/ArrowDown and asserts focus stays under the inspector layer (no `/window/board/...` FQM).
-2. Confirm via the focus-debug overlay (toggle in dev) which layer actually owns focus immediately after opening a panel — that diagnostic alone tells you whether the bug is "claim never lands" or "claim lands but is later overridden".
-3. Fix root cause(s):
-   - Swap the entity wrap from `<FocusScope>` to `<FocusZone>` (matching the file's own doc comment) so nested field zones don't violate the leaf invariant.
-   - Add a sentinel `<FocusScope>` inside the inspector `<FocusLayer>` registering an `app.dismiss` shadow that dispatches `ui.inspector.close` (mirror jump-to-overlay.tsx:242-275).
-   - Make `useFirstFieldFocus` defer the `setFocus` claim until the first field zone has registered with the layer's registry (e.g. via a microtask / layout-effect that polls `registry.has(firstFieldFq)`, or via a registration-event hook on `LayerScopeRegistry`).
-4. Update the `inspectors-container.guards.node.test.ts` source-level guards to match the corrected wrap shape (and pin a sentinel-scope guard so the dismiss path can't regress silently).
+- The outer `<FocusLayer name="inspector" parentLayerFq={windowLayerFq}>` stays as the inspector tier (z-index, focus-debug overlay tier).
+- Inside, replace `<FocusScope moniker={entityZoneSegment}>{body}</FocusScope>` with `<FocusLayer name={entityZoneSegment} parentLayerFq={inspectorLayerFq}>{body}</FocusLayer>`. The layer's name segment IS the entity moniker (`task:T1`, `tag:bug`, etc.), so the FQM composes to `/window/inspector/task:T1` — same path the current scope produces, but now as a real layer with its own `LayerScopeRegistry`.
+- Field `<FocusScope>` rows inside register against THAT entity-panel layer's registry, so navigation, jump-to enumeration, and drill-out all operate within the panel.
+- `useFirstFieldFocus` in `kanban-app/ui/src/components/entity-inspector.tsx:122-149` claims into a field that lives in the panel-layer's registry, so `buildSnapshotForFocused` finds it and the kernel commits the claim.
+- Stack semantics: opening a second panel pushes a sibling layer; the kernel's per-layer parent chain (inspector → window) plus the new panel-tier means drill-out from a deep field walks panel → inspector → window in that order. Closing the topmost panel pops its layer and emits `last_focused` for the parent, restoring focus correctly without any React-side `useRestoreFocus` hack.
+
+The `FocusLayer` push/pop machinery (`kanban-app/ui/src/components/focus-layer.tsx:176-237`, `swissarmyhammer-focus/src/state.rs`) already supports nested layers under a non-window parent — `parentLayerFq` is the explicit prop for exactly this case (the palette and inspector layers already use it).
+
+## Files to read / modify
+
+- `kanban-app/ui/src/components/inspectors-container.tsx` — replace the per-panel `<FocusScope>` wrap with a nested `<FocusLayer>` keyed by the entity moniker; thread the inspector layer FQM through to set `parentLayerFq`.
+- `kanban-app/ui/src/components/focus-layer.tsx` — confirm the `LAYER_Z_TIERS` table (lines 107-116) handles a panel-tier descendant under `inspector` correctly (it already falls back to `parentTier + 20` for unnamed tiers).
+- `kanban-app/ui/src/components/entity-inspector.tsx` — `useFirstFieldFocus` should "just work" once each panel is its own layer; verify with the new test.
+- `kanban-app/ui/src/components/inspectors-container.guards.node.test.ts` — the existing source-level guard "permits a single FocusScope import" (line 101 onwards) is now stale and must flip to forbidding `<FocusScope>` here and asserting the nested `<FocusLayer>` wrap.
+- `kanban-app/ui/src/components/inspectors-container.test.tsx` and `inspector.close-restores-focus.browser.test.tsx` — assertions that pin the old single-layer-with-scope shape need updating.
+- `swissarmyhammer-focus/src/snapshot.rs`, `swissarmyhammer-focus/src/state.rs` — read-only; confirms layer-scoped snapshot and parent-layer fallback semantics.
 
 ## Acceptance Criteria
 
-- [ ] With at least one inspector panel open, `spatial.focusedFq()` returns an FQM whose path is under `/window/inspector` immediately after the panel mounts (verified by an automated test, NOT by manual inspection).
-- [ ] Pressing the Jump-To key (`s` in vim, `Mod+G` in cua/emacs) while a panel is open opens `<JumpToOverlay>` and the enumerated targets all carry FQMs under `/window/inspector` — NOT under `/window/board/*`. Asserted in a browser test against `data-testid="jump-to-overlay"` and the rendered pill scope FQMs.
-- [ ] Pressing ArrowLeft / ArrowRight / ArrowUp / ArrowDown inside an inspector field never moves focus to a scope under `/window/board` while the inspector is open. Asserted in a browser test that drives the keyboard and reads `spatial.focusedFq()` after each key.
-- [ ] Pressing Escape inside an inspector field dismisses the topmost panel via `ui.inspector.close`, with no intermediate focus moves to base-layer scopes. Asserted in a browser test (extend the existing `inspector.close-restores-focus.browser.test.tsx` patterns).
-- [ ] No `scope-not-leaf` warning is emitted for the inspector entity wrap during a panel-open / panel-close cycle (asserted by a test that captures `console.error`/`console.warn` and grep for the literal token).
+- [ ] No `<FocusScope>` import or element appears in `kanban-app/ui/src/components/inspectors-container.tsx` (the per-panel wrap is a `<FocusLayer>`, not a scope).
+- [ ] Each open inspector panel mounts its own `<FocusLayer>` whose `name` segment is the entity moniker (e.g. `task:T1`) and whose `parentLayerFq` is the inspector layer FQM (`/window/inspector`). Verified by an automated test that inspects the layer registry after opening one and then two panels.
+- [ ] With at least one inspector panel open, `spatial.focusedFq()` returns an FQM whose path starts with `/window/inspector/<entity-moniker>/...` immediately after the panel mounts.
+- [ ] Pressing `s` (vim) / `Mod+G` (cua/emacs) while a panel is open opens `<JumpToOverlay>` and every enumerated target FQM lives under that panel's layer — NOT under `/window/board/*`.
+- [ ] Pressing ArrowLeft / ArrowRight / ArrowUp / ArrowDown inside an inspector field never moves focus to a scope outside the panel layer while the inspector is open.
+- [ ] Pressing Escape inside an inspector field dismisses the topmost panel via `ui.inspector.close` (popping that panel's layer; the kernel restores focus to the parent layer's `last_focused`).
+- [ ] Opening a second panel while the first is still open creates a sibling layer under `/window/inspector` (not nested inside the first panel's layer); arrow-keys cross between the two panels via the inspector layer's iter-1 escalation.
+- [ ] No `scope-not-leaf` warning is emitted during a panel-open / panel-close cycle (asserted by capturing `console.error` / `console.warn` and grepping for the literal token).
 
 ## Tests
 
 - [ ] New browser test `kanban-app/ui/src/components/inspectors-container.layer-containment.browser.test.tsx` that:
   - opens an inspector panel,
-  - asserts the focused FQM starts under `/window/inspector`,
-  - drives Arrow keys and asserts focus stays under `/window/inspector`,
-  - opens Jump-To and asserts every rendered pill's FQM is under `/window/inspector`,
-  - presses Escape and asserts the panel closed and focus restored to the prior board scope.
-- [ ] New unit / source-level guard in `inspectors-container.guards.node.test.ts` pinning that the inspector layer wraps its body in a sentinel `<FocusScope>` whose `commands` array contains an `app.dismiss` entry (so a future refactor can't silently delete the dismiss shadow).
-- [ ] Existing `inspectors-container.test.tsx`, `inspector.close-restores-focus.browser.test.tsx`, and `spatial-nav-jump-to.spatial.test.tsx` continue to pass (regression coverage).
-- [ ] Run `cd kanban-app/ui && npm test -- inspectors-container && npm test -- jump-to` and confirm green.
+  - asserts the layer registry contains a fresh layer at `/window/inspector/<entity-moniker>`,
+  - asserts the focused FQM starts with that layer's FQM,
+  - drives Arrow keys and asserts focus stays under the panel layer,
+  - opens Jump-To and asserts every rendered pill's FQM is under the panel layer,
+  - presses Escape and asserts the panel layer was popped and focus restored to the prior board scope.
+- [ ] Update `inspectors-container.guards.node.test.ts`: replace the "permits a single FocusScope import" guard with a "must NOT import FocusScope" guard, and add a guard pinning the nested `<FocusLayer name=…>` wrap with `parentLayerFq` set to the inspector layer FQM.
+- [ ] Existing `inspectors-container.test.tsx`, `inspector.close-restores-focus.browser.test.tsx`, `spatial-nav-jump-to.spatial.test.tsx`, and `inspector.kernel-focus-advance.browser.test.tsx` continue to pass (regression coverage — update assertions where they pinned the scope shape).
+- [ ] Run `cd kanban-app/ui && npm test -- inspectors-container && npm test -- jump-to && npm test -- entity-inspector` and confirm green.
 
 ## Workflow
 
-- Use `/tdd` — write the failing layer-containment browser test first (it should fail today by showing focus on `/window/board/...`), then implement the fix(es) until it passes.
-- Resist the urge to fix all three symptoms with three independent patches without first verifying which root cause the failing test pins. Investigate via the focus-debug overlay before patching.
+- Use `/tdd` — write the failing layer-containment browser test first (it should fail today by showing focus on `/window/board/...`), then convert the per-panel wrap to a `<FocusLayer>` until the test passes.
+- Don't add a sentinel `app.dismiss` scope as a workaround — the focus-leak symptoms (Escape included) are downstream of the real bug. Make the per-panel layer real and verify the symptoms disappear before reaching for any additional plumbing.
