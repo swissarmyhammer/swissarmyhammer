@@ -36,6 +36,7 @@ import {
   type TextEditorHandle,
 } from "@/components/fields/text-editor";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
+import { useDebouncedTimer } from "@/lib/use-debounced-timer";
 
 /** Handle exposed via forwardRef so parents can programmatically focus the editor. */
 export type FilterEditorHandle = TextEditorHandle;
@@ -141,60 +142,6 @@ function applyFilter(
       });
     });
   return true;
-}
-
-/**
- * Debounced timer with cancel, flush, and unmount flush-cleanup.
- *
- * - `schedule(fn, delayMs)` — (re)start the debounce with a new callback.
- * - `cancel()` — drop any pending callback without invoking it.
- * - `flush()` — if a timer is pending, clear it and invoke the stored callback
- *   synchronously. Used to commit a pending save on Enter, on completion
- *   accept, or on unmount.
- *
- * On unmount, `flush` is called (not `cancel`) so that a pending autosave
- * still fires — otherwise React reconciliation can silently drop a save
- * scheduled just before the component is keyed away (e.g. perspective toggle).
- */
-function useDebouncedTimer() {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingFnRef = useRef<(() => void) | null>(null);
-
-  const cancel = useCallback(() => {
-    console.warn("[filter-diag] debounce CANCEL", {
-      hadPending: pendingFnRef.current !== null,
-    });
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    pendingFnRef.current = null;
-  }, []);
-
-  const flush = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const fn = pendingFnRef.current;
-    pendingFnRef.current = null;
-    if (fn) fn();
-  }, []);
-
-  // Flush (not cancel) on unmount so a pending autosave still fires.
-  useEffect(() => flush, [flush]);
-
-  const schedule = useCallback((fn: () => void, delayMs: number) => {
-    if (timerRef.current !== null) clearTimeout(timerRef.current);
-    pendingFnRef.current = fn;
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      pendingFnRef.current = null;
-      fn();
-    }, delayMs);
-  }, []);
-
-  return { schedule, cancel, flush };
 }
 
 /**
