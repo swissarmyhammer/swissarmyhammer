@@ -96,6 +96,17 @@ export interface LayerRecord {
   segment: SegmentMoniker;
   name: LayerName;
   parent: FullyQualifiedMoniker | null;
+  /**
+   * The most recent FQM focused under this layer (recursive: a `spatial_focus`
+   * call against any scope under this layer walks up the parent chain and
+   * records the focused FQM on every ancestor layer's `last_focused` slot).
+   *
+   * Mirrors `swissarmyhammer-focus/src/registry.rs::record_focus` — the
+   * field is what `spatial_pop_layer` returns to the React side, and what
+   * `resolve_fallback`'s Phase 2 walk uses to route focus to a parent
+   * layer's remembered target.
+   */
+  lastFocused: FullyQualifiedMoniker | null;
 }
 
 /** One zone or scope registration captured from `spatial_register_*`. */
@@ -162,6 +173,29 @@ export type FallbackInvoke = (
 ) => Promise<unknown> | unknown;
 
 /**
+ * Optional configuration for {@link installKernelSimulator}.
+ */
+export interface KernelSimulatorOptions {
+  /**
+   * When true, `spatial_focus` enforces the real kernel's validation:
+   *   - The `snapshot` argument must be defined.
+   *   - The snapshot's `layer_fq` must reference a pushed layer.
+   *   - The target FQM must appear in `snapshot.scopes`.
+   *
+   * Tests that exercise the React-side focus bridge in isolation (no
+   * `<FocusLayer>` mounted, no layer pushed) leave this off so the
+   * simulator's existing permissive behavior is preserved. Tests that
+   * need to faithfully reproduce production close/open/open cycles —
+   * where snapshot validation is what drives the kernel-side
+   * `last_focused` walk — turn this on so the simulator's
+   * `record_focus` mirror only fires for accepted commits.
+   *
+   * Default: `false`.
+   */
+  strictFocusValidation?: boolean;
+}
+
+/**
  * Install a `mockInvoke` implementation that records spatial-nav IPCs
  * into a fresh simulator and routes `spatial_navigate` / `spatial_focus`
  * through the in-test cascade. Every other IPC falls through to
@@ -177,12 +211,16 @@ export type FallbackInvoke = (
  *   the spying `listen` mock.
  * @param fallback - Handler for non-spatial IPCs (schema fetches, UI
  *   state snapshots, etc.). Defaults to returning `undefined`.
+ * @param options - Optional simulator behavior toggles.
+ *   See {@link KernelSimulatorOptions}.
  */
 export function installKernelSimulator(
   mockInvoke: ReturnType<typeof vi.fn>,
   listeners: Map<string, Array<(event: { payload: unknown }) => void>>,
   fallback: FallbackInvoke = async () => undefined,
+  options: KernelSimulatorOptions = {},
 ): KernelSimulator {
+  const strictFocusValidation = options.strictFocusValidation ?? false;
   const layers = new Map<FullyQualifiedMoniker, LayerRecord>();
   const registrations = new Map<FullyQualifiedMoniker, RegistrationRecord>();
   const history: HistoryEntry[] = [];
@@ -219,11 +257,18 @@ export function installKernelSimulator(
     const a = (args ?? {}) as Record<string, unknown>;
 
     if (cmd === "spatial_push_layer") {
+      const fq = a.fq as FullyQualifiedMoniker;
+      // Re-pushing an existing FQM preserves the prior `lastFocused` —
+      // mirrors `swissarmyhammer-focus/src/registry.rs::push_layer`,
+      // which keeps drill-out memory across StrictMode double-mount
+      // and IPC re-batches.
+      const existingLastFocused = layers.get(fq)?.lastFocused ?? null;
       const record: LayerRecord = {
-        fq: a.fq as FullyQualifiedMoniker,
+        fq,
         segment: a.segment as SegmentMoniker,
         name: a.name as LayerName,
         parent: (a.parent ?? null) as FullyQualifiedMoniker | null,
+        lastFocused: existingLastFocused,
       };
       layers.set(record.fq, record);
       history.push({ type: "push_layer", record });
@@ -232,12 +277,12 @@ export function installKernelSimulator(
     if (cmd === "spatial_pop_layer") {
       // Mirrors the real kernel: returns the popped layer's
       // `last_focused` (or `null`) so the React side can issue the
-      // follow-up `spatial_focus(next_fq, snapshot)`. The simulator
-      // tracks layers without a `last_focused` slot, so the return is
-      // `null` — the no-restoration case the round-trip handler
-      // tolerates.
-      layers.delete(a.fq as FullyQualifiedMoniker);
-      return null;
+      // follow-up `spatial_focus(next_fq, snapshot)`.
+      const fq = a.fq as FullyQualifiedMoniker;
+      const popped = layers.get(fq);
+      const nextFq = popped?.lastFocused ?? null;
+      layers.delete(fq);
+      return nextFq;
     }
     if (cmd === "spatial_register_scope") {
       const record: RegistrationRecord = {
@@ -264,6 +309,32 @@ export function installKernelSimulator(
     }
     if (cmd === "spatial_focus") {
       const nextFq = a.fq as FullyQualifiedMoniker;
+      const snapshot = a.snapshot as
+        | { layer_fq?: FullyQualifiedMoniker; scopes?: unknown[] }
+        | undefined
+        | null;
+      // When strict validation is enabled, mirror the real kernel's
+      // validation in `swissarmyhammer-focus/src/state.rs::focus`:
+      //   - snapshot must be provided and resolvable; without one the
+      //     kernel has no `layer_fq` and drops the commit (`None`).
+      //   - the snapshot's `layer_fq` must reference a registered layer.
+      //   - the target FQM must be present in the snapshot's scopes.
+      // Otherwise stay permissive — accept the call regardless of the
+      // snapshot so React-side bridge tests that exercise `setFocus`
+      // without mounting a layer still see the focus-changed projection.
+      if (strictFocusValidation) {
+        if (!snapshot) return undefined;
+        const snapshotLayerFq = snapshot.layer_fq;
+        if (!snapshotLayerFq || !layers.has(snapshotLayerFq)) {
+          return undefined;
+        }
+        const scopeFqs = new Set<FullyQualifiedMoniker>();
+        for (const s of snapshot.scopes ?? []) {
+          const scopeFq = (s as { fq?: FullyQualifiedMoniker }).fq;
+          if (scopeFq) scopeFqs.add(scopeFq);
+        }
+        if (!scopeFqs.has(nextFq)) return undefined;
+      }
       const prev = currentFocus.fq;
       if (prev === nextFq) {
         // Idempotent — no event emitted, just like the real kernel's
@@ -271,6 +342,26 @@ export function installKernelSimulator(
         return undefined;
       }
       currentFocus.fq = nextFq;
+      // Mirror `swissarmyhammer-focus/src/registry.rs::record_focus`:
+      // walk from the snapshot's `layer_fq` up the parent chain and
+      // record `last_focused = nextFq` on every ancestor layer. This is
+      // what drives `resolve_fallback`'s Phase 2 walk on layer pop and
+      // what `spatial_pop_layer` returns to the React side. Skip when
+      // the snapshot is absent — without a `layer_fq` there is no walk
+      // origin, and the permissive-mode tests don't exercise pop-layer
+      // restoration.
+      const snapshotLayerFq = snapshot?.layer_fq;
+      if (snapshotLayerFq && layers.has(snapshotLayerFq)) {
+        let walkFq: FullyQualifiedMoniker | null = snapshotLayerFq;
+        const visitedLayers = new Set<FullyQualifiedMoniker>();
+        while (walkFq && !visitedLayers.has(walkFq)) {
+          visitedLayers.add(walkFq);
+          const layer = layers.get(walkFq);
+          if (!layer) break;
+          layer.lastFocused = nextFq;
+          walkFq = layer.parent;
+        }
+      }
       const entry = registrations.get(nextFq);
       emitFocusChanged(prev, nextFq, entry?.segment ?? null);
       return undefined;
