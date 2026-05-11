@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d080
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffca80
 title: 'Flaky: filter-editor delete-scenario "delete to empty: saved filter clears"'
 ---
 ## What

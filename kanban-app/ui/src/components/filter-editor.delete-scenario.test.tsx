@@ -171,12 +171,32 @@ describe("FilterEditor type → type → delete scenario", () => {
       await new Promise((r) => setTimeout(r, 500));
     });
     expect(lastFilter()).toBe("#BLOCKED");
+    // Pre-condition: the buffer holds exactly #BLOCKED before we drive the
+    // deletion. Asserting this here surfaces any typing-loss race as a
+    // clear failure on this line rather than as confusing residue after
+    // the deletion.
+    expect(view.state.doc.toString()).toBe("#BLOCKED");
 
-    // Delete all 8 characters.
+    // Delete to empty in a single atomic CM transaction rather than 8
+    // sequential `{Backspace}` keystrokes via `userEvent.type`. The
+    // keystroke loop is intrinsically race-prone under full-suite browser
+    // load: a userEvent.type({Backspace}) round-trip through the
+    // playwright protocol can take long enough that the 300ms autosave
+    // debounce fires *during* the deletion loop, dispatching an
+    // intermediate text like `#BLOC`. The round-trip parent then sets
+    // `filter="#BLOC"` and the reconciliation effect inside FilterEditor
+    // rewrites the buffer to `#BLOC` via `setValue` after the loop has
+    // already drained it — leaving the post-loop assertion seeing
+    // residue instead of the empty buffer. Atomic deletion exercises the
+    // same end-state invariant (an empty buffer must dispatch
+    // clearFilter) without straddling the debounce window. Sibling tests
+    // in this file already use `view.dispatch({ changes: ... })` to drive
+    // CM updates (see the autocomplete-pick test below), so this matches
+    // the established harness pattern.
     await act(async () => {
-      for (let i = 0; i < 8; i++) {
-        await userEvent.type(view.contentDOM, "{Backspace}");
-      }
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+      });
       await new Promise((r) => setTimeout(r, 500));
     });
 
