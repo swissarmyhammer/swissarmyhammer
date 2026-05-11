@@ -350,6 +350,12 @@ describe("focus-decoration architecture", () => {
       // each card). The button click is a single-click affordance for
       // users who don't know the dblclick gesture.
       "components/entity-card.tsx",
+      // Root-scope Space → `entity.inspect` fallback. The per-
+      // `<Inspectable>` scope command shadows when an inspectable is
+      // in the focused chain; the root command catches Space at app
+      // open / focused chrome / parked focus so the browser does not
+      // scroll the page (card 01KQJHFX0HADZH74P7KJQRFM4E).
+      "components/app-shell.tsx",
     ]);
 
     const tsxFiles = walkSources(SRC_ROOT, [".ts", ".tsx"]);

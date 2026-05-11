@@ -14,11 +14,18 @@
  *      duplicate Space ownership; this guard catches that without
  *      having to spin up the heavyweight `<BoardView>` provider stack.
  *
- *   2. The replacement binding lives on a single source file:
- *      `inspectable.tsx` registers `id: "entity.inspect"` with
- *      `keys.cua: "Space"`. This guard pins that location too — if the
- *      binding migrates somewhere else later, the test moves with it
- *      and the architecture remains documented.
+ *   2. The replacement binding follows a two-tier architecture:
+ *      `inspectable.tsx` registers a per-Inspectable scope-level
+ *      `id: "entity.inspect"` with `keys.cua: "Space"` (shadows when an
+ *      Inspectable is in the focused scope chain), and
+ *      `app-shell.tsx` registers a root-scope `entity.inspect` fallback
+ *      with the same Space binding (handles the no-focus case so Space
+ *      always resolves and the keybinding handler can `preventDefault`
+ *      the browser's page-scroll). This guard pins only the
+ *      per-Inspectable site; the root-scope fallback in `app-shell.tsx`
+ *      is exercised by `spatial-nav-end-to-end.spatial.test.tsx`
+ *      (Family 4) and the unit tests in
+ *      `inspectable.space.browser.test.tsx`.
  *
  * Node-only because it reads source files from disk; lives under the
  * `*.node.test.ts` suffix recognized by `vite.config.ts`.
@@ -135,12 +142,19 @@ describe("BoardView Space-inspect migration", () => {
   });
 
   it("the per-Inspectable Space binding lives in `inspectable.tsx`", () => {
-    // After the migration, Space → inspect dispatch lives on a single
-    // scope-level `entity.inspect` `CommandDef` registered inside
-    // `<Inspectable>`. Pin the file so the architecture is documented:
-    // if the binding ever moves, the test moves with it, and a reader
-    // searching for "where is Space wired to inspect" finds the
-    // canonical answer here.
+    // After the migration, Space → inspect dispatch is wired in two
+    // tiers: a scope-level `entity.inspect` `CommandDef` registered
+    // inside `<Inspectable>` (this file pins that site), and a
+    // root-scope `entity.inspect` fallback registered in
+    // `components/app-shell.tsx` (`buildRootInspectCommand`) that
+    // catches the no-focus case so Space never falls through to the
+    // browser's page-scroll. This guard is a positive presence
+    // assertion on the per-Inspectable site only — it does NOT enforce
+    // exclusivity. A reader searching for "where is Space wired to
+    // inspect" should expect to find both call sites; the canonical
+    // entity-level wiring lives here in `inspectable.tsx`, while the
+    // root fallback is asserted by the e2e Family 4 and the
+    // `inspectable.space.browser.test.tsx` no-focus scenario.
     const inspectableSrc = readFileSync(
       resolve(SRC_ROOT, "components/inspectable.tsx"),
       "utf-8",

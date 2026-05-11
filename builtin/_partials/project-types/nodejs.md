@@ -7,9 +7,11 @@ partial: true
 ### Node.js Project Guidelines
 
 **Package Manager Detection:**
-- Check for `package-lock.json` → use `npm`
-- Check for `yarn.lock` → use `yarn`
-- Check for `pnpm-lock.yaml` → use `pnpm`
+- If `package.json` has `"packageManager": "npm@..."` OR a `preinstall` script using `only-allow npm` → **always use `npm`**, even if other lockfiles exist. The repo has explicitly enforced npm; running anything else will be rejected.
+- Otherwise, check the lockfile:
+  - `package-lock.json` → use `npm`
+  - `yarn.lock` → use `yarn`
+  - `pnpm-lock.yaml` → use `pnpm`
 
 **Common Commands:**
 - Install dependencies: `npm install` / `yarn install` / `pnpm install`

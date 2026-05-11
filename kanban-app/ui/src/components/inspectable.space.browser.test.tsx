@@ -22,6 +22,23 @@
  *   4. Same exclusion for `[contenteditable]`.
  *   5. Regression guard — dblclick on an `<Inspectable>` still dispatches
  *      `ui.inspect` after the Space owner moves into the wrapper.
+ *   6. Space at app open (no kernel focus) MUST `preventDefault` so the
+ *      browser does not scroll the page, AND must NOT dispatch
+ *      `ui.inspect`. Pinned by the root-scope `entity.inspect` command in
+ *      `app-shell.tsx` — the per-Inspectable scope command does not fire
+ *      because no Inspectable is in the empty scope chain.
+ *   7. Space with kernel focus on a non-Inspectable scope (e.g. a
+ *      perspective tab, filter editor) MUST `preventDefault` and must
+ *      NOT dispatch `ui.inspect` — the root command picks up Space
+ *      because the focused scope chain has no `<Inspectable>` to shadow,
+ *      but its execute closure filters by the inspectable-entity
+ *      prefixes (`task:`, `tag:`, `column:`, `board:`, `field:`,
+ *      `attachment:`).
+ *   8. Space inside an editable surface (`<input>`, `<textarea>`,
+ *      `[contenteditable]`) MUST NOT `preventDefault` — the global
+ *      keybinding handler's `isEditableTarget` gate short-circuits before
+ *      any binding lookup so the editor's own input handler still
+ *      inserts a literal space character.
  *
  * Mock pattern matches `inspectable.spatial.test.tsx` so the two files
  * stay in sync as the Inspectable contract evolves.
@@ -133,70 +150,110 @@ const monikerToKey = new Map<string, string>();
 const currentFocusKey: { key: string | null } = { key: null };
 
 /**
- * Default `invoke` implementation covering the IPCs the provider stack
- * fires on mount. The `get_ui_state` branch keeps `<AppShell>` from
- * tripping on a null-deref of `uiState.windows`.
+ * Build the default `invoke` implementation covering the IPCs the
+ * provider stack fires on mount, parameterized by the keymap mode the
+ * `get_ui_state` branch reports.
+ *
+ * The keymap mode threads through `<AppShell>`'s `useAppShellUIState`
+ * hook into the global keybinding handler created by
+ * `<KeybindingHandler>`. Tests that need vim-mode coverage of the
+ * Space-key contract call this factory with `"vim"` so the same
+ * scenarios run under each mode without duplicating fixture
+ * machinery. The cua / emacs / vim binding-table parity for `Space`
+ * lives in `lib/keybindings.ts`; per-`<Inspectable>` and root-scope
+ * `CommandDef`s also carry all three modes — see the matching
+ * `keys: { vim, cua, emacs }` blocks in `inspectable.tsx` and
+ * `app-shell.tsx`.
+ *
+ * @param keymapMode - The keymap mode to advertise; defaults to `"cua"`.
  */
-async function defaultInvokeImpl(
-  cmd: string,
-  args?: unknown,
-): Promise<unknown> {
-  if (cmd === "get_ui_state") {
-    return {
-      palette_open: false,
-      palette_mode: "command",
-      keymap_mode: "cua",
-      scope_chain: [],
-      open_boards: [],
-      windows: {},
-      recent_boards: [],
-    };
-  }
-  if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
-    const a = (args ?? {}) as { fq?: string; segment?: string };
-    if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
-    return undefined;
-  }
-  if (cmd === "spatial_unregister_scope") {
-    const a = (args ?? {}) as { fq?: string };
-    if (a.fq) {
-      for (const [m, k] of monikerToKey.entries()) {
-        if (k === a.fq) {
-          monikerToKey.delete(m);
+function makeDefaultInvokeImpl(
+  keymapMode: "cua" | "vim" | "emacs" = "cua",
+): (cmd: string, args?: unknown) => Promise<unknown> {
+  return async function defaultInvokeImpl(
+    cmd: string,
+    args?: unknown,
+  ): Promise<unknown> {
+    if (cmd === "get_ui_state") {
+      return {
+        palette_open: false,
+        palette_mode: "command",
+        keymap_mode: keymapMode,
+        scope_chain: [],
+        open_boards: [],
+        windows: {},
+        recent_boards: [],
+      };
+    }
+    if (cmd === "spatial_register_scope" || cmd === "spatial_register_scope") {
+      const a = (args ?? {}) as { fq?: string; segment?: string };
+      if (a.fq && a.segment) monikerToKey.set(a.segment, a.fq);
+      return undefined;
+    }
+    if (cmd === "spatial_unregister_scope") {
+      const a = (args ?? {}) as { fq?: string };
+      if (a.fq) {
+        for (const [m, k] of monikerToKey.entries()) {
+          if (k === a.fq) {
+            monikerToKey.delete(m);
+            break;
+          }
+        }
+      }
+      return undefined;
+    }
+    if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
+      const a = (args ?? {}) as { focusedFq?: string };
+      return a.focusedFq ?? null;
+    }
+    if (cmd === "spatial_focus") {
+      // Synthesize the kernel's focus-changed emit so the entity-focus
+      // bridge writes the React store. Mirrors the real kernel behavior:
+      // resolve moniker → key, advance focus_by_window, emit
+      // focus-changed with both fields. See card
+      // `01KQD0WK54G0FRD7SZVZASA9ST` for the projection invariant.
+      //
+      // Queued via `queueMicrotask` to match the kernel simulator's
+      // timing contract — production events arrive asynchronously, so
+      // emitting synchronously would hide regressions that depend on
+      // the async write semantics.
+      const a = (args ?? {}) as { fq?: string };
+      const fq = a.fq ?? null;
+      let moniker: string | null = null;
+      for (const [s, k] of monikerToKey.entries()) {
+        if (k === fq) {
+          moniker = s;
           break;
         }
       }
-    }
-    return undefined;
-  }
-  if (cmd === "spatial_drill_in" || cmd === "spatial_drill_out") {
-    const a = (args ?? {}) as { focusedFq?: string };
-    return a.focusedFq ?? null;
-  }
-  if (cmd === "spatial_focus") {
-    // Synthesize the kernel's focus-changed emit so the entity-focus
-    // bridge writes the React store. Mirrors the real kernel behavior:
-    // resolve moniker → key, advance focus_by_window, emit
-    // focus-changed with both fields. See card
-    // `01KQD0WK54G0FRD7SZVZASA9ST` for the projection invariant.
-    //
-    // Queued via `queueMicrotask` to match the kernel simulator's
-    // timing contract — production events arrive asynchronously, so
-    // emitting synchronously would hide regressions that depend on
-    // the async write semantics.
-    const a = (args ?? {}) as { fq?: string };
-    const fq = a.fq ?? null;
-    let moniker: string | null = null;
-    for (const [s, k] of monikerToKey.entries()) {
-      if (k === fq) {
-        moniker = s;
-        break;
-      }
-    }
 
-    if (fq) {
+      if (fq) {
+        const prev = currentFocusKey.key;
+        currentFocusKey.key = fq;
+        queueMicrotask(() => {
+          const handlers = listeners.get("focus-changed") ?? [];
+          for (const h of handlers) {
+            h({
+              payload: {
+                window_label: "main",
+                prev_fq: prev,
+                next_fq: fq,
+                next_segment: moniker,
+              },
+            });
+          }
+        });
+      }
+      return undefined;
+    }
+    if (cmd === "spatial_clear_focus") {
+      // Explicit-clear counterpart — kernel emits a
+      // `Some(prev) → None` `focus-changed` event so the React-side
+      // bridge flips the store back to `null`. Idempotent when the
+      // window had no prior focus.
       const prev = currentFocusKey.key;
-      currentFocusKey.key = fq;
+      if (prev === null) return undefined;
+      currentFocusKey.key = null;
       queueMicrotask(() => {
         const handlers = listeners.get("focus-changed") ?? [];
         for (const h of handlers) {
@@ -204,44 +261,29 @@ async function defaultInvokeImpl(
             payload: {
               window_label: "main",
               prev_fq: prev,
-              next_fq: fq,
-              next_segment: moniker,
+              next_fq: null,
+              next_segment: null,
             },
           });
         }
       });
+      return undefined;
     }
+    if (cmd === "list_entity_types") return [];
+    if (cmd === "get_entity_schema") return null;
+    if (cmd === "list_commands_for_scope") return [];
+    if (cmd === "dispatch_command") return undefined;
     return undefined;
-  }
-  if (cmd === "spatial_clear_focus") {
-    // Explicit-clear counterpart — kernel emits a
-    // `Some(prev) → None` `focus-changed` event so the React-side
-    // bridge flips the store back to `null`. Idempotent when the
-    // window had no prior focus.
-    const prev = currentFocusKey.key;
-    if (prev === null) return undefined;
-    currentFocusKey.key = null;
-    queueMicrotask(() => {
-      const handlers = listeners.get("focus-changed") ?? [];
-      for (const h of handlers) {
-        h({
-          payload: {
-            window_label: "main",
-            prev_fq: prev,
-            next_fq: null,
-            next_segment: null,
-          },
-        });
-      }
-    });
-    return undefined;
-  }
-  if (cmd === "list_entity_types") return [];
-  if (cmd === "get_entity_schema") return null;
-  if (cmd === "list_commands_for_scope") return [];
-  if (cmd === "dispatch_command") return undefined;
-  return undefined;
+  };
 }
+
+/**
+ * Backwards-compatible alias used by the existing cua-mode scenarios
+ * below. Equivalent to `makeDefaultInvokeImpl("cua")`; the named
+ * binding keeps every legacy `mockInvoke.mockImplementation(defaultInvokeImpl)`
+ * call site working without churn.
+ */
+const defaultInvokeImpl = makeDefaultInvokeImpl("cua");
 
 /**
  * Render `ui` inside the production-shaped provider stack with
@@ -294,6 +336,25 @@ function FocusButton({ moniker }: { moniker: FullyQualifiedMoniker }) {
       Focus {moniker}
     </button>
   );
+}
+
+/**
+ * Construct a cancelable bubbling Space `keydown` event and dispatch it at
+ * `target`. Returns the event so the caller can assert
+ * `event.defaultPrevented` after the dispatch — the production keybinding
+ * handler calls `preventDefault()` only when it resolves a binding, so the
+ * flag is the load-bearing signal that Space was claimed (no page scroll)
+ * vs left alone (browser default fires).
+ */
+function dispatchSpace(target: EventTarget): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: " ",
+    code: "Space",
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,5 +572,324 @@ describe("Inspectable — Space-key inspect dispatch contract", () => {
     expect(dispatches[0].target).toBe("task:T1");
 
     unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #6: Space at app open with no kernel focus — preventDefault, no inspect.
+  // -------------------------------------------------------------------------
+  //
+  // The user opens the app, kernel focus is null (`<body>` carries DOM
+  // focus). Pressing Space MUST NOT scroll the page; it MUST NOT
+  // dispatch `ui.inspect` either (the recommended (a) variant in the
+  // task plan: no-op + preventDefault is unambiguous).
+  //
+  // The fix is a root-scope `entity.inspect` command in `app-shell.tsx`
+  // bound to Space — the binding lookup succeeds, the keybinding
+  // handler calls `preventDefault()`, and the command's execute
+  // closure no-ops because `focusedFq` is null.
+
+  it("space_at_app_open_with_no_kernel_focus_preventDefaults_and_does_not_dispatch_inspect", async () => {
+    const { unmount } = render(
+      withAppShell(
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
+            <div data-testid="card-body">card</div>
+          </FocusScope>
+        </Inspectable>,
+      ),
+    );
+    await flushSetup();
+
+    mockInvoke.mockClear();
+
+    // No setFocus, no click — kernel focus is null, DOM focus on
+    // `<body>`. The global keydown listener is attached on `document`
+    // by `<KeybindingHandler>`, so dispatching at `document` mirrors
+    // the production code path.
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = dispatchSpace(document);
+    });
+    await flushSetup();
+
+    expect(
+      event.defaultPrevented,
+      "Space at app open must preventDefault so the browser does not scroll",
+    ).toBe(true);
+    expect(
+      inspectDispatches().length,
+      "Space with no kernel focus must NOT dispatch ui.inspect",
+    ).toBe(0);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #7: Space with focus on a non-Inspectable scope — preventDefault, no inspect.
+  // -------------------------------------------------------------------------
+  //
+  // A focused perspective tab / filter editor / other UI chrome is not
+  // an inspectable entity. Pressing Space MUST NOT scroll the page and
+  // MUST NOT dispatch `ui.inspect` — the root command's execute
+  // closure filters by the inspectable-entity prefix set
+  // (`task:`, `tag:`, `column:`, `board:`, `field:`, `attachment:`)
+  // and no-ops on anything else. The keybinding handler still claims
+  // the keystroke (preventDefault) because the binding resolved.
+
+  it("space_with_focus_on_non_inspectable_scope_preventDefaults_and_does_not_dispatch_inspect", async () => {
+    // Use a `perspective_tab:` moniker — chrome, not an entity. The
+    // Inspectable wrapper guard explicitly excludes this prefix
+    // (focus-architecture.guards.node.test.ts), so the FocusScope
+    // below sits outside any Inspectable and the focused scope chain
+    // contains no `entity.inspect` shadow.
+    const { getByText, unmount } = render(
+      withAppShell(
+        <FocusScope moniker={asSegment("perspective_tab:active")}>
+          <FocusButton moniker={asFq("perspective_tab:active")} />
+        </FocusScope>,
+      ),
+    );
+    await flushSetup();
+
+    await act(async () => {
+      fireEvent.click(getByText("Focus perspective_tab:active"));
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = dispatchSpace(document);
+    });
+    await flushSetup();
+
+    expect(
+      event.defaultPrevented,
+      "Space on a non-Inspectable focused scope must preventDefault (no scroll)",
+    ).toBe(true);
+    expect(
+      inspectDispatches().length,
+      "Space on a non-Inspectable focused scope must NOT dispatch ui.inspect",
+    ).toBe(0);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #8: Space inside an editable surface — does NOT preventDefault.
+  // -------------------------------------------------------------------------
+  //
+  // Reinforces criterion 4 from the task plan: when DOM focus is on an
+  // `<input>`, the global handler's `isEditableTarget` short-circuits
+  // before binding resolution, so `preventDefault` is NOT called and
+  // the editor inserts a literal space.
+
+  it("space_inside_input_does_not_preventDefault_so_editor_inserts_a_space", async () => {
+    const { getByTestId, unmount } = render(
+      withAppShell(
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
+            <input data-testid="text-input" type="text" />
+          </FocusScope>
+        </Inspectable>,
+      ),
+    );
+    await flushSetup();
+
+    const input = getByTestId("text-input") as HTMLInputElement;
+    input.focus();
+    await flushSetup();
+
+    mockInvoke.mockClear();
+
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = dispatchSpace(input);
+    });
+    await flushSetup();
+
+    expect(
+      event.defaultPrevented,
+      "Space inside an <input> must NOT preventDefault — the editor owns the gesture",
+    ).toBe(false);
+    expect(
+      inspectDispatches().length,
+      "Space inside an <input> must NOT dispatch ui.inspect",
+    ).toBe(0);
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // #9: Space with kernel focus on a card still dispatches with the
+  //     wrapper moniker AND preventDefaults (positive scenario rolled
+  //     into the new defaultPrevented assertion).
+  // -------------------------------------------------------------------------
+
+  it("space_with_kernel_focus_on_card_dispatches_inspect_and_preventDefaults", async () => {
+    const { getByText, unmount } = render(
+      withAppShell(
+        <Inspectable moniker={asSegment("task:T1")}>
+          <FocusScope moniker={asSegment("task:T1")}>
+            <FocusButton moniker={asFq("task:T1")} />
+          </FocusScope>
+        </Inspectable>,
+      ),
+    );
+    await flushSetup();
+
+    await act(async () => {
+      fireEvent.click(getByText("Focus task:T1"));
+    });
+    await flushSetup();
+
+    mockInvoke.mockClear();
+
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = dispatchSpace(document);
+    });
+    await flushSetup();
+
+    expect(
+      event.defaultPrevented,
+      "Space with kernel focus on an Inspectable must preventDefault",
+    ).toBe(true);
+    const dispatches = inspectDispatches();
+    expect(dispatches.length).toBe(1);
+    expect(dispatches[0].target).toBe("task:T1");
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // Vim-mode parity — pins task `01KQJHFX0HADZH74P7KJQRFM4E` regression.
+  // -------------------------------------------------------------------------
+  //
+  // The first iteration of the Space-binding fix scoped the new binding
+  // to cua + emacs only, on a judgment call about a hypothetical vim
+  // leader key. `SEQUENCE_TABLES.vim` has no `Space` prefix, so leaving
+  // Space unbound there meant the binding-table lookup missed in vim
+  // mode and the keydown handler did not call `preventDefault()` —
+  // production users in vim mode still saw page-scroll on Space.
+  //
+  // The three scenarios below mirror #6, #7, and #9 above with the
+  // `get_ui_state` mock advertising `keymap_mode: "vim"` instead of
+  // `"cua"`. Each was a hard failure before vim was added to the three
+  // `keys` maps (`BINDING_TABLES.vim`, the per-`<Inspectable>` scope
+  // command in `inspectable.tsx`, and the root command in
+  // `app-shell.tsx`).
+
+  describe("Vim-mode parity — Space inspects in all three keymaps", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation(makeDefaultInvokeImpl("vim"));
+    });
+
+    it("vim_space_at_app_open_with_no_kernel_focus_preventDefaults_and_does_not_dispatch_inspect", async () => {
+      const { unmount } = render(
+        withAppShell(
+          <Inspectable moniker={asSegment("task:T1")}>
+            <FocusScope moniker={asSegment("task:T1")}>
+              <div data-testid="card-body">card</div>
+            </FocusScope>
+          </Inspectable>,
+        ),
+      );
+      await flushSetup();
+
+      mockInvoke.mockClear();
+
+      let event!: KeyboardEvent;
+      await act(async () => {
+        event = dispatchSpace(document);
+      });
+      await flushSetup();
+
+      expect(
+        event.defaultPrevented,
+        "Space at app open in vim mode must preventDefault so the browser does not scroll",
+      ).toBe(true);
+      expect(
+        inspectDispatches().length,
+        "Space with no kernel focus in vim mode must NOT dispatch ui.inspect",
+      ).toBe(0);
+
+      unmount();
+    });
+
+    it("vim_space_with_focus_on_non_inspectable_scope_preventDefaults_and_does_not_dispatch_inspect", async () => {
+      const { getByText, unmount } = render(
+        withAppShell(
+          <FocusScope moniker={asSegment("perspective_tab:active")}>
+            <FocusButton moniker={asFq("perspective_tab:active")} />
+          </FocusScope>,
+        ),
+      );
+      await flushSetup();
+
+      await act(async () => {
+        fireEvent.click(getByText("Focus perspective_tab:active"));
+      });
+      await flushSetup();
+
+      mockInvoke.mockClear();
+
+      let event!: KeyboardEvent;
+      await act(async () => {
+        event = dispatchSpace(document);
+      });
+      await flushSetup();
+
+      expect(
+        event.defaultPrevented,
+        "Space on a non-Inspectable focused scope in vim mode must preventDefault (no scroll)",
+      ).toBe(true);
+      expect(
+        inspectDispatches().length,
+        "Space on a non-Inspectable focused scope in vim mode must NOT dispatch ui.inspect",
+      ).toBe(0);
+
+      unmount();
+    });
+
+    it("vim_space_with_kernel_focus_on_card_dispatches_inspect_and_preventDefaults", async () => {
+      const { getByText, unmount } = render(
+        withAppShell(
+          <Inspectable moniker={asSegment("task:T1")}>
+            <FocusScope moniker={asSegment("task:T1")}>
+              <FocusButton moniker={asFq("task:T1")} />
+            </FocusScope>
+          </Inspectable>,
+        ),
+      );
+      await flushSetup();
+
+      await act(async () => {
+        fireEvent.click(getByText("Focus task:T1"));
+      });
+      await flushSetup();
+
+      mockInvoke.mockClear();
+
+      let event!: KeyboardEvent;
+      await act(async () => {
+        event = dispatchSpace(document);
+      });
+      await flushSetup();
+
+      expect(
+        event.defaultPrevented,
+        "Space with kernel focus on an Inspectable in vim mode must preventDefault",
+      ).toBe(true);
+      const dispatches = inspectDispatches();
+      expect(
+        dispatches.length,
+        "Space on a focused card in vim mode must dispatch ui.inspect exactly once",
+      ).toBe(1);
+      expect(dispatches[0].target).toBe("task:T1");
+
+      unmount();
+    });
   });
 });

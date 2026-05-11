@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: 9a80
+position_ordinal: 7e8180
 title: 'FilterEditor: sync CM6 buffer to external perspective.filter changes'
 ---
 ## What

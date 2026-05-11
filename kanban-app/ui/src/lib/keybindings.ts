@@ -40,6 +40,16 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // (see `SEQUENCE_TABLES.vim`) — `s` collides with neither a chord
     // root nor any other single-key vim binding above.
     s: "nav.jump",
+    // Space → `entity.inspect`. Same shadow / root-fallback contract
+    // described on the cua entry below — the per-`<Inspectable>` scope
+    // command shadows when an inspectable entity is in the focused
+    // chain, the root-scope command in `app-shell.tsx` catches the
+    // rest. There is no current vim leader-key registered in
+    // `SEQUENCE_TABLES.vim` (which uses `g`, `d`, `z`), so claiming
+    // Space here is safe; if a future vim leader is wired up, this
+    // entry will need to move along with the per-Inspectable and
+    // root-scope `keys: { vim: "Space" }` bindings.
+    Space: "entity.inspect",
   },
   cua: {
     "Mod+Shift+P": "app.palette",
@@ -64,6 +74,21 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     // to claim Tab / Shift+Tab inside the inspector.)
     Tab: "nav.right",
     "Shift+Tab": "nav.left",
+    // Space → `entity.inspect`. The per-`<Inspectable>` scope command
+    // shadows this entry when an inspectable is in the focused chain
+    // (its `keys[mode]: "Space"` reaches `extractScopeBindings` first
+    // and the inner-scope-wins walk picks it). When the focused chain
+    // has no Inspectable — at app open, on focused chrome (perspective
+    // tabs, filter editors), after the inspector closes off any
+    // entity — this entry routes Space through the root-scope
+    // `entity.inspect` registered in `app-shell.tsx`. The root
+    // command's execute closure no-ops on null / non-inspectable
+    // focus, but the binding-resolution path still calls
+    // `preventDefault()` so Space never falls through to the
+    // browser's page-scroll default. All three keymaps (vim / cua /
+    // emacs) claim Space the same way — the parity is enforced by
+    // `inspectable.space.browser.test.tsx`'s "Vim-mode parity" block.
+    Space: "entity.inspect",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
@@ -83,6 +108,10 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+f": "nav.right",
     "Alt+<": "nav.first",
     "Alt+>": "nav.last",
+    // Space → `entity.inspect`. See the cua entry above for the
+    // shadow / fallback contract — emacs claims Space the same way,
+    // and vim does too (no current vim leader-key conflict).
+    Space: "entity.inspect",
   },
 };
 

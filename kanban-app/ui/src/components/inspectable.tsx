@@ -1,6 +1,6 @@
 /**
  * `<Inspectable>` — entity-aware wrapper that opens the inspector on
- * double-click and on the CUA / emacs `Space` key.
+ * double-click and on the `Space` key (vim / cua / emacs).
  *
  * # Why this is its own component
  *
@@ -80,7 +80,7 @@
  *
  *   - On double-click within the wrapper / on the host element,
  *     dispatches `ui.inspect` against the wrapper's `moniker`.
- *   - On the `Space` key (CUA / emacs) when any descendant is the
+ *   - On the `Space` key (vim / cua / emacs) when any descendant is the
  *     focused scope, dispatches `ui.inspect` against the wrapper's
  *     `moniker`. The binding is contributed via a scope-level
  *     `entity.inspect` `CommandDef` so `extractScopeBindings` finds it
@@ -209,8 +209,9 @@ export interface InspectableProps {
 }
 
 /**
- * Wrap an entity subtree so a double-click OR the CUA / emacs `Space`
- * key dispatches `ui.inspect` against the entity's moniker.
+ * Wrap an entity subtree so a double-click OR the `Space` key
+ * (vim / cua / emacs) dispatches `ui.inspect` against the entity's
+ * moniker.
  *
  * The dispatcher is registered exactly once per mounted `<Inspectable>`
  * via the shared {@link useInspectOnDoubleClick} hook — the per-render
@@ -245,24 +246,28 @@ export function Inspectable({ moniker, children }: InspectableProps) {
 
   const onDoubleClick = useInspectDoubleClickHandler(dispatch, moniker);
 
-  // The scope-level Space command. CUA and emacs claim Space; vim
-  // intentionally has no entry — vim leaves Space for the leader-key
-  // role it traditionally fills. The id `entity.inspect` mirrors the
-  // wrapper's architectural role ("this scope is an inspectable
-  // entity"); the execute closure shares the same `dispatch`
-  // reference, so both the keyboard and dblclick paths converge on
-  // the same backend round-trip per gesture. The execute path needs
-  // no editable-surface guard of its own — the global keybinding
-  // handler's `isEditableTarget` filter (see `keybindings.ts`)
-  // short-circuits before any binding resolution when the keydown
-  // originates from `<input>`, `<textarea>`, `<select>`, or any
-  // `[contenteditable]` host.
+  // The scope-level Space command. All three keymaps (vim / cua /
+  // emacs) claim Space — there is no current vim leader-key
+  // registered in `SEQUENCE_TABLES.vim` (only `g`, `d`, `z`), so vim
+  // can safely claim Space the same way cua and emacs do. If a
+  // future vim leader is wired up, this binding will need to move
+  // (along with the matching root-scope command in `app-shell.tsx`
+  // and the global `BINDING_TABLES.vim` entry in `keybindings.ts`).
+  // The id `entity.inspect` mirrors the wrapper's architectural role
+  // ("this scope is an inspectable entity"); the execute closure
+  // shares the same `dispatch` reference, so both the keyboard and
+  // dblclick paths converge on the same backend round-trip per
+  // gesture. The execute path needs no editable-surface guard of its
+  // own — the global keybinding handler's `isEditableTarget` filter
+  // (see `keybindings.ts`) short-circuits before any binding
+  // resolution when the keydown originates from `<input>`,
+  // `<textarea>`, `<select>`, or any `[contenteditable]` host.
   const inspectCommand = useMemo<CommandDef[]>(
     () => [
       {
         id: "entity.inspect",
         name: "Inspect",
-        keys: { cua: "Space", emacs: "Space" },
+        keys: { vim: "Space", cua: "Space", emacs: "Space" },
         execute: () => {
           dispatch({ target: moniker }).catch(console.error);
         },

@@ -268,55 +268,77 @@ import { asSegment, type FullyQualifiedMoniker } from "@/types/spatial";
 // ---------------------------------------------------------------------------
 
 /**
- * Default Tauri-invoke handler for non-spatial commands. Walks every
- * bootstrap call the production code makes on mount and returns the
- * matching fixture response. Unknown commands return `undefined` (the
- * Tauri default for void-result commands), which lets the App degrade
- * gracefully instead of throwing.
+ * Build the default Tauri-invoke handler for non-spatial commands.
+ * Walks every bootstrap call the production code makes on mount and
+ * returns the matching fixture response. Unknown commands return
+ * `undefined` (the Tauri default for void-result commands), which lets
+ * the App degrade gracefully instead of throwing.
+ *
+ * Parameterized by `keymapMode` so vim-mode pins can drive the
+ * production keybinding handler through the same bootstrap chain —
+ * the keymap mode threads through `useAppShellUIState` into
+ * `createKeyHandler` and decides which `BINDING_TABLES[mode]` the
+ * global handler resolves keystrokes against.
  *
  * This is layered UNDER the shadow-registry installer in
  * `setupSpatialHarness`: spatial commands are intercepted there, and
  * everything else falls through to this handler.
  */
-async function bootstrapInvokeImpl(
-  cmd: string,
-  args?: unknown,
-): Promise<unknown> {
-  // Schema discovery
-  if (cmd === "list_entity_types") return listEntityTypesResponse();
-  if (cmd === "get_entity_schema") {
-    const a = (args ?? {}) as Record<string, unknown>;
-    return getEntitySchemaResponse(String(a.entityType));
-  }
-  // Board lifecycle
-  if (cmd === "get_board_data") return getBoardDataResponse();
-  if (cmd === "list_entities") {
-    const a = (args ?? {}) as Record<string, unknown>;
-    return listEntitiesResponse(String(a.entityType));
-  }
-  if (cmd === "list_open_boards") return listOpenBoardsResponse();
-  if (cmd === "list_views") return listViewsResponse();
-  // UI state
-  if (cmd === "get_ui_state") return getUIStateResponse();
-  if (cmd === "get_undo_state") return getUndoStateResponse();
-  // Command dispatch — perspective.list is the only one that needs a
-  // structured response; everything else returns void.
-  if (cmd === "dispatch_command") {
-    const a = (args ?? {}) as Record<string, unknown>;
-    if (a.cmd === "perspective.list") return perspectiveListDispatchResponse();
-    if (a.cmd === "perspective.set") return { result: null, undoable: false };
-    if (a.cmd === "perspective.save") return { result: null, undoable: false };
-    if (a.cmd === "perspective.rename") return { result: null, undoable: true };
-    if (a.cmd === "view.set") return { result: null, undoable: false };
-    if (a.cmd === "ui.inspect") return { result: null, undoable: false };
-    if (a.cmd === "ui.setFocus") return { result: null, undoable: false };
-    if (a.cmd === "file.switchBoard") return { result: null, undoable: false };
-    return { result: null, undoable: false };
-  }
-  if (cmd === "list_commands_for_scope") return [];
-  // Unknown command — return undefined (Tauri's default for void).
-  return undefined;
+function makeBootstrapInvokeImpl(
+  keymapMode: "cua" | "vim" | "emacs" = "cua",
+): (cmd: string, args?: unknown) => Promise<unknown> {
+  return async function bootstrapInvokeImpl(
+    cmd: string,
+    args?: unknown,
+  ): Promise<unknown> {
+    // Schema discovery
+    if (cmd === "list_entity_types") return listEntityTypesResponse();
+    if (cmd === "get_entity_schema") {
+      const a = (args ?? {}) as Record<string, unknown>;
+      return getEntitySchemaResponse(String(a.entityType));
+    }
+    // Board lifecycle
+    if (cmd === "get_board_data") return getBoardDataResponse();
+    if (cmd === "list_entities") {
+      const a = (args ?? {}) as Record<string, unknown>;
+      return listEntitiesResponse(String(a.entityType));
+    }
+    if (cmd === "list_open_boards") return listOpenBoardsResponse();
+    if (cmd === "list_views") return listViewsResponse();
+    // UI state
+    if (cmd === "get_ui_state") return getUIStateResponse(keymapMode);
+    if (cmd === "get_undo_state") return getUndoStateResponse();
+    // Command dispatch — perspective.list is the only one that needs a
+    // structured response; everything else returns void.
+    if (cmd === "dispatch_command") {
+      const a = (args ?? {}) as Record<string, unknown>;
+      if (a.cmd === "perspective.list")
+        return perspectiveListDispatchResponse();
+      if (a.cmd === "perspective.set") return { result: null, undoable: false };
+      if (a.cmd === "perspective.save")
+        return { result: null, undoable: false };
+      if (a.cmd === "perspective.rename")
+        return { result: null, undoable: true };
+      if (a.cmd === "view.set") return { result: null, undoable: false };
+      if (a.cmd === "ui.inspect") return { result: null, undoable: false };
+      if (a.cmd === "ui.setFocus") return { result: null, undoable: false };
+      if (a.cmd === "file.switchBoard")
+        return { result: null, undoable: false };
+      return { result: null, undoable: false };
+    }
+    if (cmd === "list_commands_for_scope") return [];
+    // Unknown command — return undefined (Tauri's default for void).
+    return undefined;
+  };
 }
+
+/**
+ * Cua-mode bootstrap handler — the historical default used by every
+ * existing test in this file. Vim-parity tests build their own via
+ * `makeBootstrapInvokeImpl("vim")` so the bootstrap chain advertises
+ * the right keymap to the global keybinding handler.
+ */
+const bootstrapInvokeImpl = makeBootstrapInvokeImpl("cua");
 
 // ---------------------------------------------------------------------------
 // Layout substitute — same approach as the cross-column-nav test
@@ -1015,6 +1037,214 @@ describe("End-to-end spatial-nav smoke test — full <App/>", () => {
       ).toBe(0);
 
       unmount();
+    });
+
+    it("Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch ui.inspect", async () => {
+      // E2E pin for card 01KQJHFX0HADZH74P7KJQRFM4E: with the full
+      // board mount (every Inspectable / FocusScope registered) but
+      // no kernel focus claimed, Space MUST be claimed by the
+      // root-scope `entity.inspect` command in `app-shell.tsx` so
+      // `preventDefault()` fires (the browser's page-scroll default
+      // is suppressed). The execute closure no-ops because
+      // `focusedFq()` returns null — which means no `ui.inspect`
+      // dispatch either.
+      //
+      // Companion to the synthetic-event test in
+      // `inspectable.space.browser.test.tsx`. This e2e flavour
+      // exercises the same path through the production board mount,
+      // so a future regression that breaks the root binding under
+      // real provider stacks (rather than the mocked one) surfaces
+      // here too.
+      const { unmount } = renderApp();
+      await flushAppMount();
+
+      // The bootstrap path may auto-claim focus on a registered leaf
+      // (the kernel's restore-last-focus behavior). Drive an explicit
+      // `Some(prev) → None` `focus-changed` event so the entity-focus
+      // bridge clears the focused-scope ref to null — that's the
+      // "no kernel focus" precondition the test pins.
+      await harness.fireFocusChanged({
+        prev_fq: null,
+        next_fq: null,
+        next_segment: null,
+      });
+      await flushAppMount();
+
+      mockInvoke.mockClear();
+
+      // Construct a cancelable bubbling Space event so we can read
+      // `defaultPrevented` after dispatch. `fireEvent.keyDown(...)`
+      // does not return the event reference, so we go through the
+      // raw `dispatchEvent` API (same pattern other browser tests
+      // use to check `preventDefault` behavior).
+      const event = new KeyboardEvent("keydown", {
+        key: " ",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(event);
+      await flushAppMount();
+
+      expect(
+        event.defaultPrevented,
+        "Space at app open must preventDefault so the browser does not scroll",
+      ).toBe(true);
+
+      const inspectCalls = dispatchCallsFor("ui.inspect");
+      expect(
+        inspectCalls.length,
+        "Space with no kernel focus must NOT dispatch ui.inspect",
+      ).toBe(0);
+
+      unmount();
+    });
+
+    // -----------------------------------------------------------------------
+    // Vim-mode parity — pins task `01KQJHFX0HADZH74P7KJQRFM4E` regression.
+    //
+    // The cua / emacs scenarios above run with the historical
+    // `bootstrapInvokeImpl` (which advertises `keymap_mode: "cua"`).
+    // The vim-parity block re-installs the harness with a vim-mode
+    // bootstrap so the production keybinding handler is built with
+    // `BINDING_TABLES.vim` — verifying the three-keymap parity end to
+    // end through the real `<App/>` mount.
+    //
+    // Companion to the synthetic-event vim-parity tests in
+    // `inspectable.space.browser.test.tsx`.
+    // -----------------------------------------------------------------------
+
+    describe("Vim-mode parity — Space inspects in all three keymaps", () => {
+      beforeEach(() => {
+        harness = setupSpatialHarness({
+          defaultInvokeImpl: makeBootstrapInvokeImpl("vim"),
+        });
+      });
+
+      it("vim mode: Space on a focused card dispatches ui.inspect against that task's moniker", async () => {
+        const { unmount } = renderApp();
+        await flushAppMount();
+
+        const t1Key = harness.getRegisteredFqBySegment("task:T1");
+        expect(t1Key).not.toBeNull();
+
+        await harness.fireFocusChanged({
+          next_fq: t1Key!,
+          next_segment: asSegment("task:T1"),
+        });
+        await flushAppMount();
+
+        mockInvoke.mockClear();
+        const event = new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        });
+        document.dispatchEvent(event);
+        await flushAppMount();
+
+        expect(
+          event.defaultPrevented,
+          "Space on a focused card in vim mode must preventDefault",
+        ).toBe(true);
+
+        const inspectCalls = dispatchCallsFor("ui.inspect");
+        expect(
+          inspectCalls.length,
+          "Space on a focused card in vim mode must dispatch ui.inspect",
+        ).toBeGreaterThan(0);
+        const hasTaskTarget = inspectCalls.some((c) => {
+          const inArgs = (c.args as { target?: unknown })?.target === "task:T1";
+          const asTopLevel = c.target === "task:T1";
+          return inArgs || asTopLevel;
+        });
+        expect(
+          hasTaskTarget,
+          "ui.inspect from Space in vim mode must carry task:T1 as the target",
+        ).toBe(true);
+
+        unmount();
+      });
+
+      it("vim mode: Space on a focused perspective tab does NOT dispatch ui.inspect but DOES preventDefault", async () => {
+        const { unmount } = renderApp();
+        await flushAppMount();
+
+        const tabKey = harness.getRegisteredFqBySegment(
+          "perspective_tab:default",
+        );
+        expect(tabKey).not.toBeNull();
+
+        await harness.fireFocusChanged({
+          next_fq: tabKey!,
+          next_segment: asSegment("perspective_tab:default"),
+        });
+        await flushAppMount();
+
+        mockInvoke.mockClear();
+        const event = new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        });
+        document.dispatchEvent(event);
+        await flushAppMount();
+
+        expect(
+          event.defaultPrevented,
+          "Space on a perspective tab in vim mode must preventDefault (no scroll)",
+        ).toBe(true);
+
+        const inspectCalls = dispatchCallsFor("ui.inspect");
+        expect(
+          inspectCalls.length,
+          "Space on a perspective tab in vim mode must NOT dispatch ui.inspect",
+        ).toBe(0);
+
+        unmount();
+      });
+
+      it("vim mode: Space at app open with no kernel focus preventDefaults (no page scroll) and does NOT dispatch ui.inspect", async () => {
+        const { unmount } = renderApp();
+        await flushAppMount();
+
+        // Drive the explicit clear-focus event so the no-focus
+        // precondition is enforced regardless of any kernel
+        // restore-last-focus behavior — mirrors the cua-mode case
+        // above.
+        await harness.fireFocusChanged({
+          prev_fq: null,
+          next_fq: null,
+          next_segment: null,
+        });
+        await flushAppMount();
+
+        mockInvoke.mockClear();
+
+        const event = new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+        });
+        document.dispatchEvent(event);
+        await flushAppMount();
+
+        expect(
+          event.defaultPrevented,
+          "Space at app open in vim mode must preventDefault so the browser does not scroll",
+        ).toBe(true);
+
+        const inspectCalls = dispatchCallsFor("ui.inspect");
+        expect(
+          inspectCalls.length,
+          "Space with no kernel focus in vim mode must NOT dispatch ui.inspect",
+        ).toBe(0);
+
+        unmount();
+      });
     });
   });
 

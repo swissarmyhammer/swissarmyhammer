@@ -284,10 +284,18 @@ export function perspectiveListDispatchResponse() {
  * path, active view, and active perspective so the App skips its
  * "fall through to refresh()" auto-select branch and renders the
  * fixture immediately.
+ *
+ * @param keymapMode - The keymap mode the bootstrap should advertise.
+ *   Defaults to `"cua"` so every existing call site stays on the
+ *   historical fixture. Pass `"vim"` (or `"emacs"`) to drive the
+ *   keybinding handler under that mode — needed by the vim-parity
+ *   pin for task `01KQJHFX0HADZH74P7KJQRFM4E`.
  */
-export function getUIStateResponse() {
+export function getUIStateResponse(
+  keymapMode: "cua" | "vim" | "emacs" = "cua",
+) {
   return {
-    keymap_mode: "cua",
+    keymap_mode: keymapMode,
     scope_chain: [],
     open_boards: [E2E_BOARD_PATH],
     has_clipboard: false,
