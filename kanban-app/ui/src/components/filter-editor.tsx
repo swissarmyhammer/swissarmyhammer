@@ -254,18 +254,25 @@ function useFilterDispatch(perspectiveId: string, onClose: () => void) {
   }, [flush, perspectiveId]);
   const handleCancel = useCallback(() => onClose(), [onClose]);
 
-  /** Clear × button — cancels debounce, clears filter immediately, closes. */
+  /**
+   * Clear × button — cancels any pending debounced apply, dispatches
+   * `perspective.clearFilter`, and calls `onClose`.
+   *
+   * Deliberately does NOT touch the CM6 buffer or stamp `lastDispatchedRef`.
+   * The backend's echoed `perspective.filter` (or refreshed
+   * `activePerspective.filter`) prop update flows through the
+   * reconciliation effect in `FilterEditorBody` just like any other
+   * external mutation, and that effect handles the buffer reset. Keeping
+   * the × button on the same code path as context-menu / palette /
+   * cross-window clears means there is no per-callsite special case.
+   */
   const handleClear = useCallback(() => {
     cancel();
-    // Stamp the ref BEFORE dispatch so the backend's echoed entity-field
-    // event (which re-renders us with filter="") is recognised as our own
-    // and suppressed by the reconciliation effect in FilterEditorBody.
-    lastDispatchedRef.current = "";
     dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
       console.error,
     );
     onClose();
-  }, [perspectiveId, dispatchClearFilter, cancel, onClose, lastDispatchedRef]);
+  }, [perspectiveId, dispatchClearFilter, cancel, onClose]);
 
   return {
     error,
@@ -401,25 +408,31 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
     //
     // But some mutations originate *outside* this editor: context-menu
     // "Clear Filter", command palette, keybindings, undo/redo of
-    // `perspective.clearFilter`, or filter changes pushed from another
-    // window. Those arrive as a `filter` prop change on the active
-    // perspective, with no keystroke to drive the buffer. Without a
-    // reconciliation path the CM6 buffer would continue to display stale
-    // text even though the backend filter was cleared.
+    // `perspective.clearFilter`, filter changes pushed from another window,
+    // or the inline × button which dispatches `perspective.clearFilter`
+    // through the same generic path as every other external clear. Those
+    // arrive as a `filter` prop change on the active perspective, with no
+    // keystroke to drive the buffer. Without a reconciliation path the CM6
+    // buffer would continue to display stale text even though the backend
+    // filter was cleared.
     //
     // The guards below respond ONLY to truly external changes:
     //
-    //   1. `filter !== lastDispatchedRef.current` — our own dispatches
-    //      (autosave, Enter flush, completion flush, × button) stamp the
-    //      ref BEFORE dispatch, so the echoed prop matches and is ignored.
+    //   1. `filter === lastDispatchedRef.current` — our own keystroke-
+    //      driven dispatches (autosave, Enter flush, completion flush)
+    //      stamp the ref inside `applyFilter` BEFORE dispatch, so the
+    //      echoed prop matches and is ignored. This is the self-echo
+    //      suppression that prevents the prop -> state -> prop cycle from
+    //      clobbering in-flight typing.
     //
-    //   2. `filter !== innerRef.current?.getValue()` — if the user has
+    //   2. `filter === innerRef.current?.getValue()` — if the user has
     //      typed ahead of the round-trip, the buffer already holds the
     //      newer text; resetting it here would clobber keystrokes in
     //      flight.
     //
     // When both guards pass we rewrite the buffer via the imperative
-    // `setValue` handle — the same mechanism the inline × button uses.
+    // `setValue` handle on TextEditor (which has its own equality guard,
+    // so no-op renders are cheap).
     //
     // Adversarial edge case — filter flaps back to `lastDispatchedRef`
     // mid-typing: if an external source asserts the filter back to the
@@ -432,21 +445,31 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
     // external assertions) and flows naturally from the two guards.
     useEffect(() => {
       const next = filter ?? "";
-      if (next === lastDispatchedRef.current) return;
-      if (next === innerRef.current?.getValue()) return;
+      if (next === lastDispatchedRef.current) {
+        console.warn("[filter-diag] sync SKIP_SELF", {
+          perspectiveId,
+          filter: next,
+        });
+        return;
+      }
+      if (next === innerRef.current?.getValue()) {
+        console.warn("[filter-diag] sync SKIP_BUFFER_EQUAL", {
+          perspectiveId,
+          filter: next,
+        });
+        return;
+      }
       // Stamp first, then setValue. The setValue triggers onChange which
-      // schedules a debounced applyFilter; that apply path also stamps the
-      // ref to the same value and dispatches an idempotent echo. Stamping
-      // up-front keeps the effect's own guards honest if React re-runs
-      // before the debounce fires.
+      // would otherwise schedule a debounced applyFilter; the stamp lets
+      // `handleChange`'s ref-match guard recognise the resulting onChange
+      // as our own and suppress the redundant dispatch.
+      console.warn("[filter-diag] sync EXTERNAL", {
+        perspectiveId,
+        filter: next,
+      });
       lastDispatchedRef.current = next;
       innerRef.current?.setValue(next);
     }, [filter, lastDispatchedRef, perspectiveId]);
-
-    const handleClearAndReset = useCallback(() => {
-      handleClear();
-      innerRef.current?.setValue("");
-    }, [handleClear]);
 
     return (
       <div
@@ -468,7 +491,7 @@ const FilterEditorBody = forwardRef<FilterEditorHandle, FilterEditorProps>(
             autoFocus={false}
           />
         </div>
-        {filter && <ClearFilterButton onClick={handleClearAndReset} />}
+        {filter && <ClearFilterButton onClick={handleClear} />}
       </div>
     );
   },

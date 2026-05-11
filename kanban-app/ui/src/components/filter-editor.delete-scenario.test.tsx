@@ -88,18 +88,25 @@ function lastFilter(): string | null {
 }
 
 /** Parent that wires async dispatch back to the `filter` prop — same
- *  round-trip shape as the real app. */
+ *  round-trip shape as the real app. Echoes both `perspective.filter`
+ *  (with the dispatched expression) and `perspective.clearFilter` (with
+ *  an empty filter) back into the prop, mirroring how the backend's
+ *  `entity-field-changed` event flows through `usePerspectivesFetch` in
+ *  production. */
 function RoundTripParent() {
   const [filter, setFilter] = useState("");
   mockInvoke.mockImplementation(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (...args: any[]) => {
-      if (
-        args[0] === "dispatch_command" &&
-        args[1]?.cmd === "perspective.filter"
-      ) {
-        await new Promise((r) => setTimeout(r, 20));
-        setFilter(args[1].args.filter);
+      if (args[0] === "dispatch_command") {
+        const cmd = args[1]?.cmd;
+        if (cmd === "perspective.filter") {
+          await new Promise((r) => setTimeout(r, 20));
+          setFilter(args[1].args.filter);
+        } else if (cmd === "perspective.clearFilter") {
+          await new Promise((r) => setTimeout(r, 20));
+          setFilter("");
+        }
       }
       return null;
     },

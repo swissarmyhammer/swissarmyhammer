@@ -254,12 +254,14 @@ describe("FilterEditor — external filter-prop reconciliation", () => {
     expect(abcCalls).toHaveLength(1);
   });
 
-  it("inline × clear still works after reconciliation is in place", async () => {
-    // Regression guard for the existing × clear button path
-    // (handleClearAndReset). With the new reconciliation effect in place, the
-    // backend's echo of filter="" must be recognised as our own dispatch (the
-    // ref is stamped to "" inside handleClear) and NOT cause the effect to
-    // fire a redundant setValue/dispatch.
+  it("inline × clear flows through the generic external-prop path", async () => {
+    // Regression guard for the × clear button path after the reconciliation
+    // effect took over the buffer-reset role. The × button no longer
+    // imperatively resets the CM6 buffer; it just dispatches
+    // `perspective.clearFilter`. The buffer reset rides on the prop update
+    // that the backend echoes back — the same generic path used by the
+    // context menu, the command palette, and cross-window sync. This test
+    // simulates that round-trip explicitly via the controlled parent.
     const controllerRef: React.MutableRefObject<
       ((next: string | undefined) => void) | null
     > = { current: null };
@@ -269,7 +271,6 @@ describe("FilterEditor — external filter-prop reconciliation", () => {
     const view = await getView(container);
     expect(view.state.doc.toString()).toBe("#bug");
 
-    // Click the × button.
     const clearBtn = container.querySelector<HTMLButtonElement>(
       '[aria-label="Clear filter"]',
     );
@@ -277,25 +278,14 @@ describe("FilterEditor — external filter-prop reconciliation", () => {
 
     mockInvoke.mockClear();
 
+    // Click ×. handleClear cancels any pending debounce and dispatches
+    // perspective.clearFilter. The CM6 buffer is NOT touched here — the
+    // reset must arrive via the prop update simulated below.
     await act(async () => {
       clearBtn!.click();
-      // Wait past the 300ms autosave debounce so the setValue-driven
-      // handleChange has fully settled. After this point, lastDispatchedRef
-      // is stamped to "" and the buffer is "".
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 50));
     });
 
-    expect(view.state.doc.toString()).toBe("");
-
-    // EXACTLY one clearFilter dispatch fired — the immediate handleClear
-    // path. The debounce-driven echo from handleClearAndReset's
-    // `setValue("")` must NOT round-trip as a second dispatch: handleClear
-    // stamps `lastDispatchedRef.current = ""` BEFORE setValue runs, so
-    // handleChange's ref-match guard suppresses the redundant schedule.
-    //
-    // This tightening (>=1 to ===1) locks in the fix for the undo-stack
-    // duplication bug — any regression that re-introduces the double
-    // dispatch will flip this assertion.
     const clearCalls = mockInvoke.mock.calls.filter(
       (call) =>
         call[0] === "dispatch_command" &&
@@ -303,15 +293,45 @@ describe("FilterEditor — external filter-prop reconciliation", () => {
     );
     expect(clearCalls.length).toBe(1);
 
-    // Now the backend pushes filter="" back through the controlled parent,
-    // simulating the entity-field-changed refetch. The reconciliation effect
-    // must see lastDispatchedRef === "" (stamped by handleClear + applyFilter)
-    // AND buffer === "" and no-op — no additional dispatch.
-    const beforeEcho = mockInvoke.mock.calls.length;
+    // Simulate the backend's echo: the perspective refetch fires with the
+    // filter cleared, the parent re-renders with filter="". The
+    // reconciliation effect must run and reset the CM6 buffer through the
+    // imperative `setValue` handle.
+    await act(async () => {
+      controllerRef.current?.("");
+      await new Promise((r) => setTimeout(r, 500));
+    });
+
+    expect(view.state.doc.toString()).toBe("");
+
+    // Still exactly one clearFilter dispatch — the prop-driven reset must
+    // NOT round-trip through handleChange into another dispatch. The
+    // reconciliation effect stamps `lastDispatchedRef.current = ""` before
+    // calling setValue, so the resulting onChange("") hits handleChange's
+    // ref-match guard and is suppressed.
+    const clearCallsAfterEcho = mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd: string })?.cmd === "perspective.clearFilter",
+    );
+    expect(clearCallsAfterEcho.length).toBe(1);
+
+    // No `perspective.filter` was dispatched as a side-effect of the prop
+    // round-trip — the buffer is empty, the ref is "", the guards hold.
+    const filterCallsAfterEcho = mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as { cmd: string })?.cmd === "perspective.filter",
+    );
+    expect(filterCallsAfterEcho.length).toBe(0);
+
+    // A second filter="" prop assertion (e.g. another window pushing the
+    // same value) must be a no-op — both guards pass.
+    const beforeRedundant = mockInvoke.mock.calls.length;
     await act(async () => {
       controllerRef.current?.("");
       await new Promise((r) => setTimeout(r, 400));
     });
-    expect(mockInvoke.mock.calls.length).toBe(beforeEcho);
+    expect(mockInvoke.mock.calls.length).toBe(beforeRedundant);
   });
 });

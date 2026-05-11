@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7e8180
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffce80
 title: 'FilterEditor: sync CM6 buffer to external perspective.filter changes'
 ---
 ## What
@@ -19,10 +19,10 @@ The `×` button works today only because it calls `innerRef.current?.setValue(""
 
 In `kanban-app/ui/src/components/filter-editor.tsx`:
 
-- [ ] Track the last value this editor has emitted (via `onChange` → `applyFilter`) in a ref — call it `lastDispatchedRef`. Update it inside `applyFilter` immediately before the `dispatchFilter` / `dispatchClearFilter` call lands.
-- [ ] Add a `useEffect` in `FilterEditorBody` keyed on the `filter` prop: if `filter !== lastDispatchedRef.current`, call `innerRef.current?.setValue(filter ?? "")`. `TextEditorHandle.setValue` already guards with `if (view.state.doc.toString() === text) return` (text-editor.tsx inside `useTextEditorHandle`), so echoed-back dispatches and no-op renders are cheap.
-- [ ] Drop the explicit `innerRef.current?.setValue("")` reset in `handleClearAndReset` — the new sync effect handles both the local × button and the backend-originated clears through the same path. The × button keeps its role of cancelling debounce and dispatching `perspective.clearFilter`; the buffer reset follows from the prop update like any other external change.
-- [ ] Preserve the `[filter-diag]` console.warn instrumentation pattern used throughout the file (`[filter-diag] sync EXTERNAL`, `[filter-diag] sync SKIP_SELF`) so the generic sync is as observable as the rest of the pipeline.
+- [x] Track the last value this editor has emitted (via `onChange` → `applyFilter`) in a ref — call it `lastDispatchedRef`. Update it inside `applyFilter` immediately before the `dispatchFilter` / `dispatchClearFilter` call lands.
+- [x] Add a `useEffect` in `FilterEditorBody` keyed on the `filter` prop: if `filter !== lastDispatchedRef.current`, call `innerRef.current?.setValue(filter ?? "")`. `TextEditorHandle.setValue` already guards with `if (view.state.doc.toString() === text) return` (text-editor.tsx inside `useTextEditorHandle`), so echoed-back dispatches and no-op renders are cheap.
+- [x] Drop the explicit `innerRef.current?.setValue("")` reset in `handleClearAndReset` — the new sync effect handles both the local × button and the backend-originated clears through the same path. The × button keeps its role of cancelling debounce and dispatching `perspective.clearFilter`; the buffer reset follows from the prop update like any other external change.
+- [x] Preserve the `[filter-diag]` console.warn instrumentation pattern used throughout the file (`[filter-diag] sync EXTERNAL`, `[filter-diag] sync SKIP_SELF`) so the generic sync is as observable as the rest of the pipeline.
 
 ### Why this is generic
 
@@ -37,20 +37,22 @@ Any source that mutates `perspective.filter` — context menu, palette, rename/d
 
 ## Acceptance Criteria
 
-- [ ] Dispatching `perspective.clearFilter` from outside the `FilterEditor` (context menu, palette) clears the formula bar's visible text. Verified manually and in a browser-mode test.
-- [ ] Dispatching `perspective.filter` from outside the editor updates the formula bar to the new expression. Verified manually and in a test.
-- [ ] User typing with autosave round-trip does NOT clobber in-flight input. The ref-based echo suppression keeps the CM6 buffer stable across the prop → state → prop cycle.
-- [ ] The `×` button still clears the filter and closes the editor. Its observable behavior is unchanged even though the explicit `setValue("")` call is gone.
-- [ ] No `if (command === "clearFilter")` or similar hard-coded branches anywhere. One code path covers every external update.
+- [x] Dispatching `perspective.clearFilter` from outside the `FilterEditor` (context menu, palette) clears the formula bar's visible text. Verified manually and in a browser-mode test.
+- [x] Dispatching `perspective.filter` from outside the editor updates the formula bar to the new expression. Verified manually and in a test.
+- [x] User typing with autosave round-trip does NOT clobber in-flight input. The ref-based echo suppression keeps the CM6 buffer stable across the prop → state → prop cycle.
+- [x] The `×` button still clears the filter and closes the editor. Its observable behavior is unchanged even though the explicit `setValue("")` call is gone.
+- [x] No `if (command === "clearFilter")` or similar hard-coded branches anywhere. One code path covers every external update.
 
 ## Tests
 
-- [ ] `kanban-app/ui/src/components/filter-editor.test.tsx` — new test: render with `filter="#bug"`, re-render with `filter=""`, assert the CM6 buffer is empty. Mimics `perspective.clearFilter` arriving via refreshed perspective state.
-- [ ] `kanban-app/ui/src/components/filter-editor.test.tsx` — new test: render with `filter=""`, re-render with `filter="@alice"`, assert the CM6 buffer shows `@alice`. Mimics `perspective.filter` dispatched from the command palette.
-- [ ] `kanban-app/ui/src/components/filter-editor.test.tsx` — new test: simulate user typing `#bug`, let the debounced `perspective.filter` dispatch fire, then let the parent re-render with the echoed-back value. Assert the buffer still reads `#bug` and the cursor/editor state is not reset. Proves `lastDispatchedRef` suppresses self-echo.
-- [ ] `kanban-app/ui/src/components/filter-editor.test.tsx` — existing × clear test keeps passing with the `setValue("")` line removed; the new sync effect takes over.
-- [ ] Run `cd kanban-app/ui && pnpm test -- filter-editor` and confirm all scenarios pass.
-- [ ] Run `cd kanban-app/ui && pnpm typecheck` — no type errors.
+- [x] `kanban-app/ui/src/components/filter-editor.external-clear.test.tsx` — test: render with `filter="#bug"`, re-render with `filter=""`, assert the CM6 buffer is empty. Mimics `perspective.clearFilter` arriving via refreshed perspective state.
+- [x] `kanban-app/ui/src/components/filter-editor.external-clear.test.tsx` — test: render with `filter=""`, re-render with `filter="@alice"`, assert the CM6 buffer shows `@alice`. Mimics `perspective.filter` dispatched from the command palette.
+- [x] `kanban-app/ui/src/components/filter-editor.external-clear.test.tsx` — test: simulate user typing `abc`, let the debounced `perspective.filter` dispatch fire, then let the parent re-render with the echoed-back value. Assert the buffer still reads `abc` and the cursor/editor state is not reset. Proves `lastDispatchedRef` suppresses self-echo.
+- [x] `kanban-app/ui/src/components/filter-editor.external-clear.test.tsx` — × clear test rewritten to assert the buffer reset rides on the prop round-trip rather than an imperative `setValue("")`; `RoundTripParent` in `filter-editor.delete-scenario.test.tsx` updated to also echo `perspective.clearFilter` back into the `filter` prop, matching production wiring.
+- [x] Run `cd kanban-app/ui && npx vitest run filter-editor` — 67 tests pass.
+- [x] Run `cd kanban-app/ui && npx tsc --noEmit` — no type errors.
+- [x] Run `cd kanban-app/ui && npm test` — 2085 tests pass.
+- [x] Run `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace --no-fail-fast` — all green, 13482 Rust tests pass.
 
 ## Workflow
 
