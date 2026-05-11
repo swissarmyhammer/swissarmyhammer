@@ -1654,17 +1654,45 @@ fn close_or_retitle_window(app: &AppHandle, requesting_label: &str) {
 }
 
 /// Apply UI-triggering command results: file dialogs, new-window creation,
-/// and app quit. These are fire-and-forget hooks into the Tauri app.
+/// and app quit. Each result variant is dispatched to a dedicated handler so
+/// the side-effect for each shape lives in one place and can be tested or
+/// changed in isolation.
 async fn handle_ui_trigger_results(app: &AppHandle, state: &AppState, result: &Value) {
+    handle_new_board_dialog(app, result);
+    handle_open_board_dialog(app, result);
+    handle_create_window(app, state, result).await;
+    handle_quit(app, result);
+}
+
+/// Trigger the native "new board" file dialog when the command emitted a
+/// `NewBoardDialog` result envelope. Fire-and-forget — the dialog drives any
+/// follow-up command on completion.
+fn handle_new_board_dialog(app: &AppHandle, result: &Value) {
     if result.get("NewBoardDialog").is_some() {
         menu::trigger_new_board(app);
     }
+}
+
+/// Trigger the native "open board" file dialog when the command emitted an
+/// `OpenBoardDialog` result envelope. Fire-and-forget — the dialog drives any
+/// follow-up command on completion.
+fn handle_open_board_dialog(app: &AppHandle, result: &Value) {
     if result.get("OpenBoardDialog").is_some() {
         menu::trigger_open_board(app);
     }
+}
+
+/// Spawn a new Tauri window when the command emitted a `CreateWindow` result.
+/// Delegates to `create_window_internal`, which resolves the board path and
+/// applies any persisted geometry.
+async fn handle_create_window(app: &AppHandle, state: &AppState, result: &Value) {
     if result.get("CreateWindow").is_some() {
         create_window_internal(app, state).await;
     }
+}
+
+/// Exit the Tauri app when the command emitted a `quit` result envelope.
+fn handle_quit(app: &AppHandle, result: &Value) {
     if result.get("quit").is_some() {
         app.exit(0);
     }
@@ -1679,15 +1707,28 @@ async fn handle_drag_events(
     active_handle: Option<&Arc<BoardHandle>>,
     result: &Value,
 ) {
-    if let Some(drag_start) = result.get("DragStart") {
-        let payload = drag_start.clone();
-        let _ = app.emit("drag-session-active", &payload);
-    }
-    if let Some(drag_cancel) = result.get("DragCancel") {
-        let _ = app.emit("drag-session-cancelled", &drag_cancel);
-    }
+    handle_drag_start(app, result);
+    handle_drag_cancel(app, result);
     if let Some(drag_complete) = result.get("DragComplete") {
         handle_drag_complete(app, state, active_handle, drag_complete).await;
+    }
+}
+
+/// Forward the `DragStart` payload to the frontend on the
+/// `drag-session-active` channel. No-op when the result does not carry a
+/// `DragStart` envelope.
+fn handle_drag_start(app: &AppHandle, result: &Value) {
+    if let Some(drag_start) = result.get("DragStart") {
+        let _ = app.emit("drag-session-active", drag_start);
+    }
+}
+
+/// Forward the `DragCancel` payload to the frontend on the
+/// `drag-session-cancelled` channel. No-op when the result does not carry a
+/// `DragCancel` envelope.
+fn handle_drag_cancel(app: &AppHandle, result: &Value) {
+    if let Some(drag_cancel) = result.get("DragCancel") {
+        let _ = app.emit("drag-session-cancelled", drag_cancel);
     }
 }
 
