@@ -2,8 +2,8 @@
 name: code-context
 description: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use this skill before modifying code to understand structure, dependencies, and impact. Provides indexed, structural code intelligence that is faster and more precise than raw text search.
 metadata:
-  version: 0.12.11
   author: swissarmyhammer
+  version: 0.12.11
 ---
 
 # Code Context
