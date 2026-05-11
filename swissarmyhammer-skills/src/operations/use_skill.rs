@@ -39,19 +39,14 @@ impl Execute<SkillContext, SkillError> for UseSkill {
                     "source": skill.source.to_string(),
                 });
 
-                ExecutionResult::Unlogged { value: result }
+                ExecutionResult::Success { value: result }
             }
             None => ExecutionResult::Failed {
                 error: SkillError::NotFound {
                     name: self.name.clone(),
                 },
-                log_entry: None,
             },
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -105,12 +100,11 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Failed { error, log_entry } => {
+            ExecutionResult::Failed { error } => {
                 assert!(
                     format!("{}", error).contains("not found"),
                     "error should mention 'not found'"
                 );
-                assert!(log_entry.is_none(), "NotFound should have no log entry");
             }
             _ => panic!("UseSkill should fail for nonexistent skill"),
         }
@@ -149,20 +143,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_use_skill_returns_unlogged_on_success() {
+    async fn test_use_skill_returns_success() {
         let ctx = test_context_with_defaults();
         let op = UseSkill::new("plan");
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { .. } => {} // expected
-            _ => panic!("UseSkill should return Unlogged on success"),
+            ExecutionResult::Success { .. } => {} // expected
+            _ => panic!("UseSkill should return Success on success"),
         }
-    }
-
-    #[test]
-    fn test_use_skill_affected_resource_ids_empty() {
-        let op = UseSkill::new("test");
-        assert!(op.affected_resource_ids(&json!({})).is_empty());
     }
 }

@@ -308,6 +308,38 @@ pub async fn restore_entity_files(path: &Path, trash_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Parse raw entity text into an [`Entity`], honoring the entity definition.
+///
+/// Selects between frontmatter+body and plain-YAML parsing based on
+/// `entity_def.body_field`. Used by the changelog replay engine to materialise
+/// before/after snapshots from text patches without touching the filesystem.
+///
+/// The `path` argument is forwarded into error messages only — callers parsing
+/// in-memory text should pass a synthetic path that identifies the source
+/// (typically the live changelog path or `"<replay>"`).
+///
+/// Returns an [`EntityError`] if the text fails to parse as the expected
+/// format. An empty `text` yields an empty entity (no fields, just type/id),
+/// which is the correct "before" state for replaying a `Create` patch.
+pub fn parse_entity_text(
+    text: &str,
+    entity_type: impl AsRef<str>,
+    id: impl AsRef<str>,
+    entity_def: &EntityDef,
+    path: &Path,
+) -> Result<Entity> {
+    let entity_type = entity_type.as_ref();
+    let id = id.as_ref();
+    if text.is_empty() {
+        return Ok(Entity::new(entity_type, id));
+    }
+    if let Some(ref body_field) = entity_def.body_field {
+        parse_frontmatter_body(text, entity_type, id, body_field, path)
+    } else {
+        parse_plain_yaml(text, entity_type, id, path)
+    }
+}
+
 // --- Internal helpers ---
 
 /// Parse a frontmatter+body file into an Entity.

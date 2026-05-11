@@ -8,9 +8,7 @@ use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_entity::Entity;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Update an existing task.
 ///
@@ -194,9 +192,6 @@ fn apply_optional_date(
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
             let mut entity = ectx
@@ -211,35 +206,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
-    }
-
-    fn affected_resource_ids(&self, result: &Value) -> Vec<String> {
-        result
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|id| vec![id.to_string()])
-            .unwrap_or_default()
     }
 }
 
@@ -342,26 +312,6 @@ mod tests {
         let assignees = result["assignees"].as_array().unwrap();
         assert_eq!(assignees.len(), 1);
         assert_eq!(assignees[0], "bob");
-    }
-
-    #[tokio::test]
-    async fn test_update_task_affected_resource_ids() {
-        let (_temp, ctx) = setup().await;
-
-        let add_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        let op = UpdateTask::new(task_id).with_title("Updated");
-        let exec_result = op.execute(&ctx).await;
-        let value = exec_result.into_result().unwrap();
-
-        let ids = op.affected_resource_ids(&value);
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], task_id);
     }
 
     #[tokio::test]

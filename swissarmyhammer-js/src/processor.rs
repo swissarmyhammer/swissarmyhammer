@@ -7,7 +7,7 @@ use crate::error::{JsError, Result};
 use crate::JsContext;
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
+use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Processor for JS operations
 ///
@@ -34,19 +34,7 @@ impl OperationProcessor<JsContext, JsError> for JsOperationProcessor {
     where
         T: Execute<JsContext, JsError> + Send + Sync,
     {
-        let exec_result = operation.execute(ctx).await;
-        let (result, _log_entry) = exec_result.split();
-        result
-    }
-
-    async fn write_log(
-        &self,
-        _ctx: &JsContext,
-        _log_entry: &LogEntry,
-        _affected_resources: &[String],
-    ) -> Result<()> {
-        // No logging for in-memory JS state operations
-        Ok(())
+        operation.execute(ctx).await.into_result()
     }
 }
 
@@ -114,22 +102,5 @@ mod tests {
 
         let result = processor.process(&op, &ctx).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_write_log_is_noop() {
-        let processor = JsOperationProcessor::new();
-        let ctx = JsContext::new();
-
-        let log_entry = LogEntry::new(
-            "set expression",
-            serde_json::json!({"name": "x"}),
-            serde_json::json!(42),
-            None,
-            0,
-        );
-
-        let result = processor.write_log(&ctx, &log_entry, &[]).await;
-        assert!(result.is_ok());
     }
 }

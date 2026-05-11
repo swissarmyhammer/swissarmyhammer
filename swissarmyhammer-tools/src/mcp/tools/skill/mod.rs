@@ -100,13 +100,10 @@ fn convert_result(
     result: ExecutionResult<serde_json::Value, SkillError>,
 ) -> Result<CallToolResult, McpError> {
     match result {
-        ExecutionResult::Unlogged { value } => Ok(BaseToolImpl::create_success_response(
+        ExecutionResult::Success { value } => Ok(BaseToolImpl::create_success_response(
             serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
         )),
-        ExecutionResult::Logged { value, .. } => Ok(BaseToolImpl::create_success_response(
-            serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
-        )),
-        ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
+        ExecutionResult::Failed { error } => Err(McpError::internal_error(
             format!("skill operation failed: {}", error),
             None,
         )),

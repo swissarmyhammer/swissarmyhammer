@@ -20,18 +20,6 @@ pub enum ViewsError {
     #[error("duplicate view id: {id}")]
     DuplicateViewId { id: String },
 
-    /// Changelog entry not found
-    #[error("changelog entry not found: {id}")]
-    ChangelogEntryNotFound { id: String },
-
-    /// Nothing to undo
-    #[error("nothing to undo")]
-    NothingToUndo,
-
-    /// Nothing to redo
-    #[error("nothing to redo")]
-    NothingToRedo,
-
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -43,6 +31,10 @@ pub enum ViewsError {
     /// JSON serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Store layer error (from StoreHandle write/delete)
+    #[error("Store error: {0}")]
+    Store(#[from] swissarmyhammer_store::StoreError),
 }
 
 #[cfg(test)]
@@ -65,17 +57,6 @@ mod tests {
 
         let err = ViewsError::DuplicateViewId { id: "01DUP".into() };
         assert_eq!(err.to_string(), "duplicate view id: 01DUP");
-
-        let err = ViewsError::ChangelogEntryNotFound {
-            id: "01ENTRY".into(),
-        };
-        assert_eq!(err.to_string(), "changelog entry not found: 01ENTRY");
-
-        let err = ViewsError::NothingToUndo;
-        assert_eq!(err.to_string(), "nothing to undo");
-
-        let err = ViewsError::NothingToRedo;
-        assert_eq!(err.to_string(), "nothing to redo");
     }
 
     /// Cover From<std::io::Error> conversion.

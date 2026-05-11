@@ -5,9 +5,7 @@ use crate::error::{KanbanError, Result};
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Remove an actor from a task's assignee list
 #[operation(
@@ -36,9 +34,6 @@ impl UnassignTask {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UnassignTask {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
             let mut entity = ectx.read("task", self.id.as_str()).await?;
@@ -61,35 +56,10 @@ impl Execute<KanbanContext, KanbanError> for UnassignTask {
         }
         .await;
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
         match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        serde_json::json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
-    }
-
-    fn affected_resource_ids(&self, result: &Value) -> Vec<String> {
-        result
-            .get("task_id")
-            .and_then(|v| v.as_str())
-            .map(|id| vec![id.to_string()])
-            .unwrap_or_default()
     }
 }
 
@@ -186,38 +156,6 @@ mod tests {
             .into_result();
 
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_unassign_task_affected_resource_ids() {
-        let (_temp, ctx) = setup().await;
-
-        AddActor::new("assistant", "Assistant")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Test task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        AssignTask::new(task_id, "assistant")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let op = UnassignTask::new(task_id, "assistant");
-        let exec_result = op.execute(&ctx).await;
-        let value = exec_result.into_result().unwrap();
-
-        let ids = op.affected_resource_ids(&value);
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], task_id);
     }
 
     #[tokio::test]

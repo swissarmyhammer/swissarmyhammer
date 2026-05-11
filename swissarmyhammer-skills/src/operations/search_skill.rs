@@ -48,13 +48,9 @@ impl Execute<SkillContext, SkillError> for SearchSkill {
             })
             .collect();
 
-        ExecutionResult::Unlogged {
+        ExecutionResult::Success {
             value: json!(results),
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -166,14 +162,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_returns_unlogged() {
+    async fn test_search_returns_success() {
         let ctx = test_context_empty();
         let op = SearchSkill::new("test");
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { .. } => {} // expected
-            _ => panic!("SearchSkill should return Unlogged variant"),
+            ExecutionResult::Success { .. } => {} // expected
+            _ => panic!("SearchSkill should return Success variant"),
         }
     }
 
@@ -194,11 +190,5 @@ mod tests {
             );
             assert!(entry.get("source").is_some(), "entry missing 'source'");
         }
-    }
-
-    #[test]
-    fn test_search_affected_resource_ids_empty() {
-        let op = SearchSkill::new("test");
-        assert!(op.affected_resource_ids(&json!([])).is_empty());
     }
 }

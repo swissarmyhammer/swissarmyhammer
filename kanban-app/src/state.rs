@@ -170,6 +170,32 @@ async fn register_perspective_store(
     }
 }
 
+/// Register the view store for undo/redo and wire it into `ViewsContext` so
+/// writes delegate to it and push onto the undo stack.
+///
+/// Mirrors [`register_perspective_store`]: creates a `ViewStore` rooted at the
+/// `views/` directory, wraps it in a `StoreHandle`, registers the handle with
+/// the shared `StoreContext`, and attaches both to the `ViewsContext` that
+/// `KanbanContext::open` already constructed.
+async fn register_view_store(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+    kanban_path: &Path,
+) {
+    let views_dir = kanban_path.join("views");
+    let view_store = swissarmyhammer_views::ViewStore::new(&views_dir);
+    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
+        view_store,
+    )));
+    store_context.register(handle.clone()).await;
+
+    if let Some(views_lock) = ctx.views() {
+        let mut views = views_lock.write().await;
+        views.set_store_handle(handle);
+        views.set_store_context(Arc::clone(store_context));
+    }
+}
+
 /// Load every searchable entity (task, tag, column, actor, board) into a
 /// fresh `EntitySearchIndex`.
 async fn load_search_index(ctx: &KanbanContext) -> EntitySearchIndex {
@@ -256,6 +282,7 @@ impl BoardHandle {
         ));
         register_entity_stores(&ctx, &store_context).await;
         register_perspective_store(&ctx, &store_context, &kanban_path).await;
+        register_view_store(&ctx, &store_context, &kanban_path).await;
 
         // Ensure the entity context is initialized — this also constructs
         // and attaches the `EntityCache`. After this call,
@@ -362,9 +389,17 @@ impl BoardHandle {
             .perspective_context_if_ready()
             .and_then(|pctx| pctx.try_read().ok().map(|guard| guard.subscribe()));
 
+        // Same idea for views — `views()` is the non-initializing accessor
+        // (the ViewsContext is eagerly constructed in `KanbanContext::open`),
+        // so a `try_read` here is safe at startup.
+        let view_rx = ctx
+            .views()
+            .and_then(|views_lock| views_lock.try_read().ok().map(|guard| guard.subscribe()));
+
         tracing::info!(
             path = %kanban_root.display(),
             has_perspective_rx = perspective_rx.is_some(),
+            has_view_rx = view_rx.is_some(),
             "entity-cache bridge starting for board"
         );
         let handle = tokio::spawn(watcher::run_bridge(
@@ -374,6 +409,7 @@ impl BoardHandle {
             board_path_str,
             search_index,
             perspective_rx,
+            view_rx,
         ));
         self.bridge_task = Some(handle);
     }

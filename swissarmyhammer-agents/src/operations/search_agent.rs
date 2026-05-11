@@ -48,13 +48,9 @@ impl Execute<AgentContext, AgentError> for SearchAgent {
             })
             .collect();
 
-        ExecutionResult::Unlogged {
+        ExecutionResult::Success {
             value: json!(results),
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -80,7 +76,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(
                     !arr.is_empty(),
@@ -96,7 +92,7 @@ mod tests {
                     names
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -107,14 +103,14 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(
                     arr.is_empty(),
                     "non-matching query should return empty array"
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -126,14 +122,14 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(
                     !arr.is_empty(),
                     "case-insensitive search for 'DEFAULT' should match 'default'"
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -145,7 +141,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 // "tester" agent should be in results
                 let names: Vec<&str> = arr
@@ -158,7 +154,7 @@ mod tests {
                     names
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -169,7 +165,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 for entry in arr {
                     assert!(entry.get("name").is_some(), "each result must have 'name'");
@@ -183,14 +179,7 @@ mod tests {
                     );
                 }
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
-    }
-
-    #[tokio::test]
-    async fn test_search_affected_resource_ids_is_empty() {
-        let op = SearchAgent::new("anything");
-        let ids = op.affected_resource_ids(&json!([]));
-        assert!(ids.is_empty());
     }
 }

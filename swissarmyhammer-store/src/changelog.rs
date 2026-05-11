@@ -53,6 +53,35 @@ pub struct ChangelogEntry {
     pub transaction_id: Option<String>,
 }
 
+impl ChangelogEntry {
+    /// Construct a new changelog entry.
+    ///
+    /// `transaction_id` defaults to `None`; callers that need transactional
+    /// grouping can set it on the returned value before passing it to
+    /// [`Changelog::append`].
+    ///
+    /// Provided primarily for external crates (the type is `#[non_exhaustive]`,
+    /// so the struct literal form is only available within this crate).
+    pub fn new(
+        id: UndoEntryId,
+        timestamp: DateTime<Utc>,
+        op: ChangeOp,
+        item_id: StoredItemId,
+        forward_patch: String,
+        reverse_patch: String,
+    ) -> Self {
+        Self {
+            id,
+            timestamp,
+            op,
+            item_id,
+            forward_patch,
+            reverse_patch,
+            transaction_id: None,
+        }
+    }
+}
+
 /// Handle for an append-only JSONL changelog file.
 ///
 /// The changelog file is created on first append. Reading a nonexistent

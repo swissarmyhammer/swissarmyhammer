@@ -1,6 +1,6 @@
 //! Operation types: Verb, Noun, and Operation
 
-use super::ids::{ActorId, LogEntryId};
+use super::ids::{ActorId, OperationId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -165,7 +165,7 @@ impl fmt::Display for Noun {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Operation {
     /// Unique identifier for this operation instance
-    pub id: LogEntryId,
+    pub id: OperationId,
 
     /// The canonical verb
     pub verb: Verb,
@@ -189,7 +189,7 @@ impl Operation {
     /// Create a new operation
     pub fn new(verb: Verb, noun: Noun, params: Map<String, Value>) -> Self {
         Self {
-            id: LogEntryId::new(),
+            id: OperationId::new(),
             verb,
             noun,
             params,

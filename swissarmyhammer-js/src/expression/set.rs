@@ -72,7 +72,6 @@ impl Execute<JsContext, JsError> for SetExpression {
             Err(e) => {
                 return ExecutionResult::Failed {
                     error: JsError::evaluation(e),
-                    log_entry: None,
                 }
             }
         };
@@ -82,7 +81,6 @@ impl Execute<JsContext, JsError> for SetExpression {
             Err(e) => {
                 return ExecutionResult::Failed {
                     error: JsError::evaluation(e),
-                    log_entry: None,
                 }
             }
         };
@@ -92,11 +90,10 @@ impl Execute<JsContext, JsError> for SetExpression {
         match ctx.state().set(&name, &expression).await {
             Ok(json_result) => {
                 tracing::info!("JS set '{}' = {:?}", name, json_result);
-                ExecutionResult::Unlogged { value: json_result }
+                ExecutionResult::Success { value: json_result }
             }
             Err(e) => ExecutionResult::Failed {
                 error: JsError::evaluation(e),
-                log_entry: None,
             },
         }
     }

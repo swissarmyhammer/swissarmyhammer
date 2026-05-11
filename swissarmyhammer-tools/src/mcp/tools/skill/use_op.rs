@@ -30,21 +30,14 @@ pub async fn execute_use(
     let op = UseSkill::new(name);
 
     match op.execute(&ctx).await {
-        ExecutionResult::Unlogged { value } => {
+        ExecutionResult::Success { value } => {
             let value =
                 render_skill_instructions(value, prompt_library, skill_arguments.as_deref()).await;
             Ok(BaseToolImpl::create_success_response(
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
             ))
         }
-        ExecutionResult::Logged { value, .. } => {
-            let value =
-                render_skill_instructions(value, prompt_library, skill_arguments.as_deref()).await;
-            Ok(BaseToolImpl::create_success_response(
-                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()),
-            ))
-        }
-        ExecutionResult::Failed { error, .. } => Err(McpError::internal_error(
+        ExecutionResult::Failed { error } => Err(McpError::internal_error(
             format!("skill operation failed: {}", error),
             None,
         )),

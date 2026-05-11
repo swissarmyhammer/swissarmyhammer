@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffd080
 project: single-changelog
 title: 'single-changelog: project field-level entity history by replaying store-layer text patches (lands first)'
 ---
@@ -79,3 +79,12 @@ The skip branch `if is_store_changelog_line(line) { continue; }` and the `is_sto
 
 - depends_on: nothing.
 - Blocks: the writer-off card (`01KQ5FJ0VXEQZVKHZBN49Q5GFS`) — it depends on this card landing first so new edits remain readable.
+
+## Review Findings (2026-05-11 15:30)
+
+Reviewed against parent branch `kanban`. Acceptance criteria met (with the documented dual-writer caveat). All four required changelog.rs tests and the context.rs integration test are present. `cargo nextest -p swissarmyhammer-entity -p swissarmyhammer-kanban -p kanban-app` is green (308 + 1422 tests). `cargo clippy -p swissarmyhammer-entity` is clean. Discrimination between entity-format and store-format JSON via strongly-typed deserialisers is sound — the mandatory `changes` field on `ChangeEntry` and the mandatory `item_id`/`forward_patch` on `StoreChangelogEntry` prevent cross-format false positives. Cursor advance is correct: store records share one running text cursor across the whole log; entity-format records are emitted in place without disturbing it. Stable sort preserves on-disk order for timestamp ties.
+
+### Nits
+- [x] `swissarmyhammer-entity/src/changelog.rs` (`replay_one_store_entry`, the `Create` branch) — `cargo fmt --check` fails on the `diff_entities(&Entity::new(...), &after)` call: rustfmt wants the args wrapped onto separate lines. Run `cargo fmt -p swissarmyhammer-entity`. **Fixed 2026-05-11**: ran `cargo fmt -p swissarmyhammer-entity`; whole crate now passes `cargo fmt -- --check`.
+- [x] `swissarmyhammer-entity/src/changelog.rs` (`replay_store_log`) — exposed as `pub` but has no callers anywhere in the workspace. Either wire it up (e.g., refactor `read_changelog_for`'s store-format branch to delegate through it, so the homogeneous and interleaved paths share one implementation) or drop the `pub` and let it stay an internal helper. **Fixed 2026-05-11**: wired it up. `read_changelog_for` now partitions lines into entity-format and store-format slices in one pass, then delegates the store slice to `replay_store_log`. The patch chain now has exactly one implementation. Dropped `pub` to `fn` since the only caller is in-module. Updated doc-comments on both functions to reflect the new structure.
+- [x] `swissarmyhammer-entity/src/changelog.rs` (`tests::task_text`) — the synthetic fixture writes `body: |-\n  {body}` into the frontmatter, but the real `format_frontmatter_body` excludes the body field from the frontmatter. Tests still pass because `parse_frontmatter_body` always overrides the frontmatter body with the post-`---` body section. Tightening the fixture to mirror the real writer output (frontmatter contains only non-body fields) would make the test a stronger regression guard against future format drift. **Fixed 2026-05-11**: `task_text` now emits `---\ntitle: {title}\n---\n{body}` — frontmatter contains only `title`, body lives solely in the post-`---` section. Mirrors `io.rs::format_frontmatter_body` exactly.

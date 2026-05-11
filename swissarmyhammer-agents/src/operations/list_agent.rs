@@ -44,13 +44,9 @@ impl Execute<AgentContext, AgentError> for ListAgents {
             })
             .collect();
 
-        ExecutionResult::Unlogged {
+        ExecutionResult::Success {
             value: json!(result),
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -76,14 +72,14 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(
                     !arr.is_empty(),
                     "should have at least one agent in the library"
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -94,7 +90,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 let names: Vec<&str> = arr
                     .iter()
@@ -106,7 +102,7 @@ mod tests {
                     names
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -117,7 +113,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 for entry in arr {
                     assert!(
@@ -134,7 +130,7 @@ mod tests {
                     );
                 }
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -147,18 +143,11 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let arr = value.as_array().expect("result should be an array");
                 assert!(arr.is_empty(), "empty library should return empty array");
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
-    }
-
-    #[tokio::test]
-    async fn test_list_agents_affected_resource_ids_is_empty() {
-        let op = ListAgents::new();
-        let ids = op.affected_resource_ids(&json!([]));
-        assert!(ids.is_empty());
     }
 }

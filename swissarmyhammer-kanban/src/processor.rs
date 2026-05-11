@@ -4,14 +4,15 @@ use crate::types::default_column_entities;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
+use swissarmyhammer_operations::{Execute, OperationProcessor};
 
 /// Kanban-specific operation processor
 ///
-/// Handles execution and actor attribution for all kanban operations.
-/// Per-entity logging is handled by EntityContext/StoreHandle.
+/// Handles execution and actor attribution tracing for all kanban operations.
+/// Per-entity changelogs are handled by `EntityContext` / `StoreHandle`;
+/// this processor does not write a global activity log.
 pub struct KanbanOperationProcessor {
-    /// Optional actor performing operations (for log attribution)
+    /// Optional actor performing operations (for tracing attribution)
     pub actor: Option<String>,
 }
 
@@ -54,8 +55,8 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // (e.g. tag rename that touches multiple tasks) can be undone as a
         // single unit. For now, each write/delete is an independent undo entry.
 
-        // Log every operation flowing through the processor so we can trace
-        // activity from any entry point (Tauri, MCP, CLI, tests).
+        // Trace every operation flowing through the processor so we can
+        // observe activity from any entry point (Tauri, MCP, CLI, tests).
         let op_name = operation.op_string();
         tracing::info!(
             op = %op_name,
@@ -63,32 +64,8 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             "[op] {}", op_name,
         );
 
-        // Execute the operation
-        let exec_result = operation.execute(ctx).await;
-
-        // Split into result and log entry
-        let (result, mut log_entry) = exec_result.split();
-
-        // Add actor attribution to log entry (per-entity logging is handled
-        // by EntityContext; there is no global activity log).
-        if let Some(ref mut entry) = log_entry {
-            if let Some(ref actor) = self.actor {
-                entry.actor = Some(actor.clone());
-            }
-        }
-
-        result
-    }
-
-    async fn write_log(
-        &self,
-        _ctx: &KanbanContext,
-        _log_entry: &LogEntry,
-        _affected_resources: &[String],
-    ) -> Result<()> {
-        // Per-entity logging is handled by EntityContext/StoreHandle;
-        // there is no global activity log, so this is intentionally a no-op.
-        Ok(())
+        // Execute the operation and lift its result into the domain Result.
+        operation.execute(ctx).await.into_result()
     }
 }
 

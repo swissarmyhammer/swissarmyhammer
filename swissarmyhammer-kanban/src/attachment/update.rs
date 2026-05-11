@@ -6,9 +6,7 @@ use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use swissarmyhammer_operations::{
-    async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
-};
+use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
 /// Update attachment metadata (name, mime type, size)
 #[operation(
@@ -102,35 +100,10 @@ impl UpdateAttachment {
 #[async_trait]
 impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
-        let start = std::time::Instant::now();
-        let input = serde_json::to_value(self).unwrap();
-        let result = self.apply(ctx).await;
-
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        match result {
-            Ok(value) => ExecutionResult::Logged {
-                value: value.clone(),
-                log_entry: LogEntry::new(self.op_string(), input, value, None, duration_ms),
-            },
-            Err(error) => {
-                let error_msg = error.to_string();
-                ExecutionResult::Failed {
-                    error,
-                    log_entry: Some(LogEntry::new(
-                        self.op_string(),
-                        input,
-                        json!({"error": error_msg}),
-                        None,
-                        duration_ms,
-                    )),
-                }
-            }
+        match self.apply(ctx).await {
+            Ok(value) => ExecutionResult::Success { value },
+            Err(error) => ExecutionResult::Failed { error },
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![self.task_id.to_string()]
     }
 }
 

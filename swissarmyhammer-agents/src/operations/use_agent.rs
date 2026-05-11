@@ -44,19 +44,14 @@ impl Execute<AgentContext, AgentError> for UseAgent {
                     "source": agent.source.to_string(),
                 });
 
-                ExecutionResult::Unlogged { value: result }
+                ExecutionResult::Success { value: result }
             }
             None => ExecutionResult::Failed {
                 error: AgentError::NotFound {
                     name: self.name.clone(),
                 },
-                log_entry: None,
             },
         }
-    }
-
-    fn affected_resource_ids(&self, _result: &Value) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -83,7 +78,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 assert_eq!(
                     value.get("name").and_then(|v| v.as_str()),
                     Some("tester"),
@@ -102,7 +97,7 @@ mod tests {
                     "returned agent should have 'source'"
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -130,7 +125,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let required_fields = [
                     "name",
                     "description",
@@ -151,7 +146,7 @@ mod tests {
                     );
                 }
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
     }
 
@@ -162,7 +157,7 @@ mod tests {
         let result = op.execute(&ctx).await;
 
         match result {
-            ExecutionResult::Unlogged { value } => {
+            ExecutionResult::Success { value } => {
                 let instructions = value
                     .get("instructions")
                     .and_then(|v| v.as_str())
@@ -172,14 +167,7 @@ mod tests {
                     "tester agent should have non-empty instructions"
                 );
             }
-            other => panic!("expected Unlogged result, got: {:?}", other),
+            other => panic!("expected Success result, got: {:?}", other),
         }
-    }
-
-    #[tokio::test]
-    async fn test_use_agent_affected_resource_ids_is_empty() {
-        let op = UseAgent::new("anything");
-        let ids = op.affected_resource_ids(&json!({}));
-        assert!(ids.is_empty());
     }
 }

@@ -1496,14 +1496,38 @@ mod tests {
     // Compute-input cache tests (_changelog and _file_created memoization)
     // =========================================================================
     //
-    // These tests drive the changelog through direct `append_changelog`
-    // calls because `EntityContext::write_internal` only appends a
-    // changelog entry when a `StoreHandle` is registered for the entity
-    // type, and the test fields context does not register one. The
-    // invalidation contract we are verifying is independent of the
-    // changelog producer — any change to the .jsonl file between two
+    // These tests drive the changelog by writing legacy entity-format
+    // `ChangeEntry` lines directly to disk because
+    // `EntityContext::write_internal` only appends a changelog entry
+    // when a `StoreHandle` is registered for the entity type, and the
+    // test fields context does not register one. The invalidation
+    // contract we are verifying is independent of the changelog
+    // producer — any change to the .jsonl file between two
     // `get_or_load_changelog` calls must go unobserved unless an
     // invalidation event fired.
+
+    /// Append a legacy entity-format `ChangeEntry` line to the given
+    /// `.jsonl` path. Used by tests to seed on-disk fixtures that the
+    /// projecting reader will translate back into field-level diffs.
+    async fn write_legacy_changelog_line(
+        path: &std::path::Path,
+        entry: &crate::changelog::ChangeEntry,
+    ) {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        let mut line = serde_json::to_string(entry).unwrap();
+        line.push('\n');
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut file, line.as_bytes())
+            .await
+            .unwrap();
+    }
 
     /// Append a one-off changelog entry to the `.jsonl` file backing an
     /// entity. Used by compute-input cache tests to simulate external
@@ -1522,9 +1546,7 @@ mod tests {
                 crate::changelog::FieldChange::Set { value: json!(op) },
             )],
         );
-        crate::changelog::append_changelog(&path, &entry)
-            .await
-            .expect("append_changelog");
+        write_legacy_changelog_line(&path, &entry).await;
     }
 
     /// `get_or_load_changelog` returns the serialized JSONL entries as a
@@ -2088,6 +2110,9 @@ mod tests {
 
     /// Helper: write a task and append one changelog entry so the
     /// derived-output cache has something to memoize.
+    ///
+    /// Seeds a legacy entity-format record on disk so the projecting
+    /// reader observes a one-entry changelog.
     async fn seed_task(cache: &EntityCache, id: &str) {
         let mut t = Entity::new("task", id);
         t.set("title", json!("seed"));
@@ -2104,9 +2129,7 @@ mod tests {
                 },
             )],
         );
-        crate::changelog::append_changelog(&path, &entry)
-            .await
-            .unwrap();
+        write_legacy_changelog_line(&path, &entry).await;
     }
 
     /// Repeat `list("task")` must not re-run the simple-derivation
@@ -2171,9 +2194,7 @@ mod tests {
                 crate::changelog::FieldChange::Set { value: json!("v2") },
             )],
         );
-        crate::changelog::append_changelog(&path, &entry)
-            .await
-            .unwrap();
+        write_legacy_changelog_line(&path, &entry).await;
 
         let mut t = Entity::new("task", "01DERIVED02");
         t.set("title", json!("v2"));
@@ -2333,9 +2354,7 @@ mod tests {
                 },
             )],
         );
-        crate::changelog::append_changelog(&path, &entry)
-            .await
-            .unwrap();
+        write_legacy_changelog_line(&path, &entry).await;
 
         let changed = cache
             .refresh_from_disk("task", "01DERIVED07")

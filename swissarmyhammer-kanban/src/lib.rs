@@ -9,7 +9,8 @@
 //! - **One repo = one board** - The `.kanban` directory lives at the repo root
 //! - **File-per-entity** - Tasks, tags, columns, actors, projects are individual files
 //! - **Git-friendly** - Human-readable YAML/Markdown, no binary formats
-//! - **Agent-aware** - Per-entity JSONL logs track which agent/user modified what and why
+//! - **Agent-aware** - Every mutation goes through `StoreHandle`, which records a
+//!   store-format `ChangelogEntry` against the entity for diff/undo replay
 //!
 //! ## Basic Usage
 //!
@@ -36,26 +37,27 @@
 //! ```text
 //! repo/
 //! └── .kanban/
-//!     ├── board.yaml          # Board metadata (YAML)
-//!     ├── board.jsonl          # Board operation log
+//!     ├── boards/
+//!     │   └── board.yaml      # Board metadata (YAML)
 //!     ├── tasks/
-//!     │   ├── {id}.md          # Task (YAML frontmatter + markdown body)
-//!     │   ├── {id}.jsonl       # Per-task operation log
+//!     │   ├── {id}.md         # Task (YAML frontmatter + markdown body)
+//!     │   └── {id}.jsonl      # Per-task store-format changelog
 //!     ├── tags/
-//!     │   ├── {id}.yaml        # Tag state
-//!     │   ├── {id}.jsonl       # Per-tag operation log
+//!     │   ├── {id}.yaml       # Tag state
+//!     │   └── {id}.jsonl      # Per-tag store-format changelog
 //!     ├── columns/
-//!     │   ├── {id}.yaml        # Column state
-//!     │   ├── {id}.jsonl       # Per-column operation log
+//!     │   └── {id}.yaml       # Column state
 //!     ├── actors/
-//!     │   ├── {id}.yaml        # Actor state
-//!     │   ├── {id}.jsonl       # Per-actor operation log
+//!     │   └── {id}.yaml       # Actor state
+//!     ├── projects/
+//!     │   └── {id}.yaml       # Project state
 //!     └── perspectives/
-//!         ├── {id}.yaml        # Perspective (saved view config)
+//!         └── {id}.yaml       # Perspective (saved view config)
 //! ```
 //!
 //! Entity state files use YAML (or YAML frontmatter + markdown for tasks).
-//! Operation logs use JSONL (one JSON object per line, newest first).
+//! Changelog files are JSONL (one JSON object per line) recording store-format
+//! patches that the projecting reader replays into field-level diffs.
 //! JSON API responses remain unchanged — serde_json is used for all output.
 
 pub mod auto_color;
@@ -94,9 +96,7 @@ pub mod task;
 pub mod virtual_tags;
 
 // Re-export Execute trait and types from operations crate
-pub use swissarmyhammer_operations::{
-    async_trait, Execute, ExecutionResult, Operation, OperationProcessor,
-};
+pub use swissarmyhammer_operations::{async_trait, Execute, ExecutionResult, OperationProcessor};
 
 pub use context::{KanbanContext, KanbanLock};
 pub use defaults::{
@@ -202,8 +202,8 @@ pub fn default_ui_state(app_subdir: &str) -> swissarmyhammer_commands::UIState {
 
 // Re-export commonly used types
 pub use types::{
-    default_column_entities, ActorId, ColumnId, LogEntry, Noun, Operation as KanbanOperation,
-    OperationResult, Ordinal, Position, ProjectId, TagId, TaskId, Verb,
+    default_column_entities, ActorId, ColumnId, Noun, Operation as KanbanOperation, Ordinal,
+    Position, ProjectId, TagId, TaskId, Verb,
 };
 
 /// Test-only helpers shared between this crate's unit tests and integration

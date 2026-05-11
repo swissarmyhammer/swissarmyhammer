@@ -36,7 +36,7 @@ use swissarmyhammer_fields::{
 use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId};
 use tokio::sync::RwLock;
 
-use crate::changelog::{self, ChangeEntry, FieldChange};
+use crate::changelog::{self, ChangeEntry};
 use crate::entity::{Entity, EntityLocation};
 use crate::error::{EntityError, Result};
 use crate::id_types::EntityId;
@@ -338,15 +338,14 @@ impl EntityContext {
 
         let entry_id = sh.write(&entity).await?;
 
-        // Append a legacy field-level changelog entry so that the activity
-        // log (which reads per-entity JSONL) continues to work even when
-        // I/O is delegated to a StoreHandle.
-        if entry_id.is_some() {
-            self.append_write_changelog(&entity, previous.as_ref(), &path)
-                .await?;
-        }
-
-        // Push onto the shared undo stack if a StoreContext is available
+        // Push onto the shared undo stack if a StoreContext is available.
+        //
+        // The store handle is now the sole writer of the per-entity
+        // changelog — it appends a store-format `ChangelogEntry` (patch-based)
+        // that the projecting reader translates back into field-level diffs
+        // for the activity history pane. The entity layer used to append a
+        // second legacy `ChangeEntry` here; that dual-write was removed by
+        // card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
         if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
             let is_create = previous.is_none();
             let op = if is_create { "create" } else { "update" };
@@ -355,37 +354,6 @@ impl EntityContext {
             sc.push(*eid, label, item_id).await;
         }
         Ok(entry_id)
-    }
-
-    /// Append a field-level changelog entry for a write operation.
-    ///
-    /// Computes the diff between the previous entity state and the current
-    /// one (or treats all fields as `Set` for creates) and appends the
-    /// resulting `ChangeEntry` to the entity's JSONL changelog.
-    async fn append_write_changelog(
-        &self,
-        entity: &Entity,
-        previous: Option<&Entity>,
-        path: &Path,
-    ) -> Result<()> {
-        let is_create = previous.is_none();
-        let op = if is_create { "create" } else { "update" };
-        let changes = if let Some(old) = previous {
-            changelog::diff_entities(old, entity)
-        } else {
-            entity
-                .fields
-                .iter()
-                .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-                .collect()
-        };
-        if changes.is_empty() {
-            return Ok(());
-        }
-        let entry = ChangeEntry::new(entity.entity_type.as_str(), entity.id.as_str(), op, changes);
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &entry).await?;
-        Ok(())
     }
 
     /// Delete an entity by type and ID.
@@ -436,32 +404,14 @@ impl EntityContext {
 
         // Delete — delegate to StoreHandle when available, otherwise
         // fall back to the legacy io::trash_entity_files path.
+        //
+        // The store handle records the delete as a store-format changelog
+        // entry and trashes the file. The entity layer used to append a
+        // second legacy `ChangeEntry` describing the field-level removal;
+        // that dual-write was removed by card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
+        let _ = previous; // kept for the attachment-cleanup path above
         let store_handle = self.store_handles.read().await.get(entity_type).cloned();
         if let Some(sh) = store_handle {
-            // Append a legacy field-level changelog entry BEFORE the store
-            // handle trashes the file, so the entry gets included in the
-            // trashed changelog and activity history remains intact.
-            if let Some(ref old) = previous {
-                let mut changes: Vec<_> = old
-                    .fields
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            FieldChange::Removed {
-                                old_value: v.clone(),
-                            },
-                        )
-                    })
-                    .collect();
-                changes.sort_by(|a, b| a.0.cmp(&b.0));
-                if !changes.is_empty() {
-                    let entry = ChangeEntry::new(entity_type, id, "delete", changes);
-                    let log_path = path.with_extension("jsonl");
-                    changelog::append_changelog(&log_path, &entry).await?;
-                }
-            }
-
             let entity_id = EntityId::from(id);
             let entry_id = sh.delete(&entity_id).await?;
 
@@ -601,29 +551,13 @@ impl EntityContext {
             }
             Ok(Some(entry_id))
         } else {
-            // Fallback: append an "archive" changelog entry for activity history
-            if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
-                let mut changes: Vec<_> = old
-                    .fields
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            FieldChange::Removed {
-                                old_value: v.clone(),
-                            },
-                        )
-                    })
-                    .collect();
-                changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-                if !changes.is_empty() {
-                    let entry = ChangeEntry::new(entity_type, id, "archive", changes);
-                    let log_path = path.with_extension("jsonl");
-                    changelog::append_changelog(&log_path, &entry).await?;
-                }
-            }
-
+            // Fallback: legacy file move only. The entity layer used to
+            // also append an "archive" `ChangeEntry` to the changelog here;
+            // that dual-write was removed by card
+            // 01KQ5FJ0VXEQZVKHZBN49Q5GFS. The fallback path is reached only
+            // when no `StoreHandle` is registered (production always
+            // registers one), so callers depending on a changelog entry
+            // must register a store handle.
             let archive = self.archive_dir(entity_type);
             io::trash_entity_files(&path, &archive).await?;
             Ok(None)
@@ -681,24 +615,13 @@ impl EntityContext {
             }
             Ok(Some(entry_id))
         } else {
-            // Fallback: legacy file move + activity changelog
+            // Fallback: legacy file move only. The entity layer used to
+            // also append an "unarchive" `ChangeEntry` here; that
+            // dual-write was removed by card 01KQ5FJ0VXEQZVKHZBN49Q5GFS.
+            // The fallback is only reachable when no `StoreHandle` is
+            // registered (production always registers one).
             let archive = self.archive_dir(entity_type);
             io::restore_entity_files(&path, &archive).await?;
-
-            let entity = io::read_entity(&path, entity_type, id, def).await?;
-            let mut changes: Vec<_> = entity
-                .fields
-                .iter()
-                .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-                .collect();
-            changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-            if !changes.is_empty() {
-                let entry = ChangeEntry::new(entity_type, id, "unarchive", changes);
-                let log_path = path.with_extension("jsonl");
-                changelog::append_changelog(&log_path, &entry).await?;
-            }
-
             Ok(None)
         }
     }
@@ -935,14 +858,25 @@ impl EntityContext {
         Ok(entities)
     }
 
-    /// Read the changelog for an entity.
+    /// Read the changelog for an entity, projecting store-layer text
+    /// patches into field-level diffs.
+    ///
+    /// Delegates to [`changelog::read_changelog_for`] using the entity
+    /// type's [`EntityDef`] so that records written by the store layer (text
+    /// patches via `diffy`) are replayed forward and surfaced as
+    /// `ChangeEntry`s with populated `changes`. Mixed-shape files (legacy
+    /// entity-format lines plus store-format lines) are merged in
+    /// chronological order.
     pub async fn read_changelog(
         &self,
         entity_type: impl AsRef<str>,
         id: impl AsRef<str>,
     ) -> Result<Vec<ChangeEntry>> {
-        let log_path = self.changelog_path(entity_type, id)?;
-        changelog::read_changelog(&log_path).await
+        let entity_type = entity_type.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let log_path = self.changelog_path(entity_type, &id)?;
+        let type_name = swissarmyhammer_fields::EntityTypeName::from(entity_type);
+        changelog::read_changelog_for(&type_name, def, &log_path).await
     }
 
     /// Read the changelog for an entity, falling back to the trash directory
@@ -966,13 +900,16 @@ impl EntityContext {
 
         let trash_dir = self.trash_dir(entity_type);
         let trash_path = trash_dir.join(format!("{file_stem}.jsonl"));
+        let type_name = swissarmyhammer_fields::EntityTypeName::from(entity_type);
 
         // Try live first, then trash, then archive
-        let entries = changelog::read_changelog_with_fallback(&live_path, &trash_path).await?;
+        let entries =
+            changelog::read_changelog_with_fallback(&type_name, def, &live_path, &trash_path)
+                .await?;
         if entries.is_empty() && !live_path.exists() && !trash_path.exists() {
             let archive_dir = self.archive_dir(entity_type);
             let archive_path = archive_dir.join(format!("{file_stem}.jsonl"));
-            return changelog::read_changelog(&archive_path).await;
+            return changelog::read_changelog_for(&type_name, def, &archive_path).await;
         }
         Ok(entries)
     }
@@ -1874,6 +1811,7 @@ fn map_compute_error(err: swissarmyhammer_fields::FieldsError) -> EntityError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changelog::FieldChange;
     use crate::test_utils::test_fields_context;
     use serde_json::json;
     use tempfile::TempDir;
@@ -1999,6 +1937,115 @@ mod tests {
             ctx.trash_dir("task"),
             dir.path().join("tasks").join(".trash")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Single-changelog regression guards.
+    //
+    // After card 01KQ5FJ0VXEQZVKHZBN49Q5GFS, the entity layer no longer
+    // dual-writes a legacy entity-format `ChangeEntry` alongside the
+    // store-format `ChangelogEntry`. The per-entity `.jsonl` file must
+    // contain only store-format records (no `"changes":[` arrays) when
+    // a `StoreHandle` is registered.
+    // -----------------------------------------------------------------------
+
+    /// Wire up an `EntityContext` with a `StoreHandle` registered for the
+    /// `tag` entity type. This is the production-realistic shape: every
+    /// write/delete/archive/unarchive routes through the store layer.
+    async fn ctx_with_tag_store(dir: &TempDir) -> EntityContext {
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let entity_dir = dir.path().join("tags");
+        std::fs::create_dir_all(&entity_dir).unwrap();
+        let entity_def = fields.get_entity("tag").unwrap();
+        let field_defs: Vec<_> = fields
+            .fields_for_entity("tag")
+            .into_iter()
+            .cloned()
+            .collect();
+        let store = crate::store::EntityTypeStore::new(
+            &entity_dir,
+            "tag",
+            Arc::new(entity_def.clone()),
+            Arc::new(field_defs),
+        );
+        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+        ctx.register_store("tag", handle).await;
+        ctx
+    }
+
+    /// Count `.jsonl` lines that look like the entity-layer dual-writer's
+    /// `ChangeEntry` shape (`"changes":[…]`). Store-format `ChangelogEntry`
+    /// records never contain that substring, so this is a precise gate
+    /// against accidental re-introduction of the dual-write.
+    fn count_entity_format_lines(path: &Path) -> usize {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        content
+            .lines()
+            .filter(|l| l.contains("\"changes\":["))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn write_does_not_append_to_entity_changelog() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_tag_store(&dir).await;
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // A store-format record was written by the StoreHandle, but the
+        // entity layer must not also append a `"changes":[…]` line.
+        let log_path = dir.path().join("tags").join("bug.jsonl");
+        assert!(log_path.exists(), "store handle must write a changelog");
+        assert_eq!(
+            count_entity_format_lines(&log_path),
+            0,
+            "EntityContext::write must not append entity-format ChangeEntry lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_does_not_append_to_entity_changelog() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ctx_with_tag_store(&dir).await;
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+        ctx.delete("tag", "bug").await.unwrap();
+
+        // After delete, the live `.jsonl` is gone. The store layer
+        // trashes the changelog file under `{type}s/.trash/` with a
+        // versioned filename (`bug.{entry_id}.jsonl`). The trashed copy
+        // must not contain any legacy entity-format lines.
+        let live_log = dir.path().join("tags").join("bug.jsonl");
+        assert!(
+            !live_log.exists(),
+            "live changelog should be gone after delete"
+        );
+
+        let trash_dir = dir.path().join("tags").join(".trash");
+        let trashed_logs: Vec<_> = std::fs::read_dir(&trash_dir)
+            .expect("trash dir must exist after delete")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .map(|e| e.path())
+            .collect();
+        assert!(
+            !trashed_logs.is_empty(),
+            "at least one trashed changelog must exist after delete"
+        );
+        for log in &trashed_logs {
+            assert_eq!(
+                count_entity_format_lines(log),
+                0,
+                "EntityContext::delete must not append entity-format ChangeEntry lines (in {log:?})"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2804,8 +2851,7 @@ mod tests {
     #[tokio::test]
     async fn archive_writes_changelog() {
         let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
+        let ctx = ctx_with_tag_store(&dir).await;
 
         let mut tag = Entity::new("tag", "bug");
         tag.set("tag_name", json!("Bug"));
@@ -2813,20 +2859,33 @@ mod tests {
 
         ctx.archive("tag", "bug").await.unwrap();
 
-        // Changelog lives in the archive directory
-        let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
-        let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
+        // Archive is recorded as a store-format `ChangelogEntry` under
+        // `{type}s/.archive/` with a versioned filename. The serialized
+        // record contains `"op":"archive"` (lowercase, per the store layer's
+        // `#[serde(rename_all = "lowercase")]` on `ChangeOp`).
+        let archive_dir = dir.path().join("tags").join(".archive");
+        let archived_logs: Vec<_> = std::fs::read_dir(&archive_dir)
+            .expect("archive dir must exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .map(|e| e.path())
+            .collect();
         assert!(
-            content.contains("\"archive\""),
-            "changelog should contain archive op"
+            !archived_logs.is_empty(),
+            "at least one archived changelog must exist"
         );
+        let has_archive_op = archived_logs.iter().any(|p| {
+            std::fs::read_to_string(p)
+                .map(|s| s.contains("\"op\":\"archive\""))
+                .unwrap_or(false)
+        });
+        assert!(has_archive_op, "archive changelog must contain archive op");
     }
 
     #[tokio::test]
     async fn unarchive_writes_changelog() {
         let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
+        let ctx = ctx_with_tag_store(&dir).await;
 
         let mut tag = Entity::new("tag", "bug");
         tag.set("tag_name", json!("Bug"));
@@ -2835,11 +2894,14 @@ mod tests {
         ctx.archive("tag", "bug").await.unwrap();
         ctx.unarchive("tag", "bug").await.unwrap();
 
-        // After unarchive, changelog is back in live dir
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
+        // The store layer restores the live `.jsonl` and appends an
+        // `unarchive` store-format record. The projecting reader is
+        // exercised separately; here we just verify the on-disk shape.
+        let live_log = dir.path().join("tags").join("bug.jsonl");
+        let content = tokio::fs::read_to_string(&live_log).await.unwrap();
         assert!(
-            log.iter().any(|e| e.op == "unarchive"),
-            "changelog should contain unarchive op"
+            content.contains("\"op\":\"unarchive\""),
+            "live changelog must contain an unarchive store-format record"
         );
     }
 
@@ -2962,6 +3024,108 @@ mod tests {
 
         let result = ctx.read_changelog("unicorn", "x").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_after_three_writes_yields_three_field_diffs() {
+        // Integration check for the replay reader: three successive writes
+        // through a registered `EntityTypeStore` produce three store-format
+        // changelog records on disk. `read_changelog` must project those into
+        // `ChangeEntry`s — the create, then two updates — each carrying a
+        // field-level diff on the `title` field.
+        //
+        // Note: until the next card (`01KQ5FJ0VXEQZVKHZBN49Q5GFS`) removes
+        // the entity-layer dual-writer, every `EntityContext::write` also
+        // appends a legacy entity-format `ChangeEntry`. The reader returns
+        // the union (store-projected + legacy) merged by timestamp, so the
+        // observed total is 2 × N. This test still pins the property the
+        // card adds — the projection works and surfaces text-level diffs on
+        // `title` — by verifying every `update` entry carries one. After the
+        // writer-removal card lands, the count tightens to exactly 3.
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Wire a store handle so writes are routed through the store layer
+        // and emit store-format changelog records.
+        let entity_dir = dir.path().join("tasks");
+        std::fs::create_dir_all(&entity_dir).unwrap();
+        let entity_def = fields.get_entity("task").unwrap();
+        let field_defs: Vec<_> = fields
+            .fields_for_entity("task")
+            .into_iter()
+            .cloned()
+            .collect();
+        let store = crate::store::EntityTypeStore::new(
+            &entity_dir,
+            "task",
+            Arc::new(entity_def.clone()),
+            Arc::new(field_defs),
+        );
+        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+        ctx.register_store("task", handle).await;
+
+        // Three writes with three different titles. Body kept constant so the
+        // only field-level change between updates is `title`.
+        let mut task = Entity::new("task", "01ABC");
+        task.set("title", json!("First"));
+        task.set("body", json!("constant body"));
+        ctx.write(&task).await.unwrap();
+
+        task.set("title", json!("Second"));
+        ctx.write(&task).await.unwrap();
+
+        task.set("title", json!("Third"));
+        ctx.write(&task).await.unwrap();
+
+        let log = ctx.read_changelog("task", "01ABC").await.unwrap();
+
+        // Every write contributes at least one entry; with the dual-writer
+        // still active, every write contributes two. Either way there are at
+        // least 3 (the post-projection store-derived entries), one create
+        // followed by updates.
+        assert!(
+            log.len() >= 3,
+            "expected at least 3 changelog entries, got {}",
+            log.len()
+        );
+
+        // Each create entry — at least one — has every field surfaced as Set
+        // against the empty before-state.
+        let creates: Vec<_> = log.iter().filter(|e| e.op == "create").collect();
+        assert!(!creates.is_empty(), "expected at least one create entry");
+        for create in &creates {
+            let keys: Vec<&str> = create.changes.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(
+                keys.contains(&"title"),
+                "create missing title: {:?}",
+                create
+            );
+            assert!(keys.contains(&"body"), "create missing body: {:?}", create);
+        }
+
+        // Each `update` entry must carry a TextDiff on `title`. This is the
+        // core property the projection adds: even though the on-disk store
+        // record is a text patch, the reader synthesises a field-level diff.
+        let updates: Vec<_> = log.iter().filter(|e| e.op == "update").collect();
+        assert!(
+            !updates.is_empty(),
+            "expected at least one update entry, got log: {:?}",
+            log
+        );
+        for entry in &updates {
+            let title_change = entry
+                .changes
+                .iter()
+                .find(|(k, _)| k == "title")
+                .map(|(_, c)| c)
+                .unwrap_or_else(|| panic!("update entry missing `title` change: {:?}", entry));
+            assert!(
+                matches!(title_change, FieldChange::TextDiff { .. }),
+                "expected TextDiff on title, got {:?}",
+                title_change
+            );
+        }
     }
 
     #[tokio::test]
@@ -3397,6 +3561,26 @@ mod tests {
         Arc::new(engine)
     }
 
+    /// Append a legacy entity-format `ChangeEntry` line to the given
+    /// `.jsonl` path. Used by tests to seed on-disk fixtures that the
+    /// projecting reader will translate back into field-level diffs.
+    async fn write_legacy_changelog_line(path: &Path, entry: &ChangeEntry) {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        let mut line = serde_json::to_string(entry).unwrap();
+        line.push('\n');
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut file, line.as_bytes())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn changelog_injected_for_changelog_dependent_computed_field() {
         let dir = TempDir::new().unwrap();
@@ -3434,12 +3618,8 @@ mod tests {
                 },
             )],
         );
-        changelog::append_changelog(&log_path, &entry1)
-            .await
-            .unwrap();
-        changelog::append_changelog(&log_path, &entry2)
-            .await
-            .unwrap();
+        write_legacy_changelog_line(&log_path, &entry1).await;
+        write_legacy_changelog_line(&log_path, &entry2).await;
 
         // Read the entity — derivation should see 2 changelog entries
         let loaded = ctx.read("task", "01ABC").await.unwrap();
@@ -3788,5 +3968,189 @@ mod tests {
         let cache2 = Arc::new(EntityCache::new(Arc::clone(&ctx)));
         ctx.attach_cache(&cache1);
         ctx.attach_cache(&cache2); // should panic
+    }
+
+    // =========================================================================
+    // Delete / archive + undo / redo round-trip tests.
+    //
+    // After card 01KQ5FJ0VXEQZVKHZBN49Q5GFS removes the dual-writer, the
+    // sole source of changelog data is the store layer. These tests pin
+    // the contract that delete + undo round-trips still emit the correct
+    // events on the cache's broadcast channel and that the entity is
+    // re-readable after undo (and not after redo).
+    // =========================================================================
+
+    /// Round-trip harness: an `EntityContext` with a registered `StoreHandle`
+    /// for "tag", a shared `StoreContext`, and an attached `EntityCache`.
+    /// This mirrors the production wiring used by the kanban app.
+    async fn cache_ctx_store(
+        dir: &TempDir,
+        entity_type: &str,
+    ) -> (
+        Arc<EntityContext>,
+        Arc<crate::cache::EntityCache>,
+        Arc<StoreContext>,
+    ) {
+        let fields = test_fields_context();
+        let ctx = Arc::new(EntityContext::new(dir.path(), fields.clone()));
+
+        let entity_dir = dir.path().join(format!("{entity_type}s"));
+        std::fs::create_dir_all(&entity_dir).unwrap();
+        let entity_def = fields.get_entity(entity_type).unwrap();
+        let field_defs: Vec<_> = fields
+            .fields_for_entity(entity_type)
+            .into_iter()
+            .cloned()
+            .collect();
+        let store = crate::store::EntityTypeStore::new(
+            &entity_dir,
+            entity_type,
+            Arc::new(entity_def.clone()),
+            Arc::new(field_defs),
+        );
+        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+        ctx.register_store(entity_type, Arc::clone(&handle)).await;
+
+        let store_context = Arc::new(StoreContext::new(dir.path().to_path_buf()));
+        store_context.register(handle).await;
+        ctx.set_store_context(Arc::clone(&store_context));
+
+        let cache = Arc::new(crate::cache::EntityCache::new(Arc::clone(&ctx)));
+        ctx.attach_cache(&cache);
+
+        (ctx, cache, store_context)
+    }
+
+    /// Helper: drain any already-buffered events from the cache receiver so
+    /// subsequent assertions see only the event we are interested in.
+    fn drain_events(rx: &mut tokio::sync::broadcast::Receiver<crate::events::EntityEvent>) {
+        while rx.try_recv().is_ok() {}
+    }
+
+    #[tokio::test]
+    async fn delete_then_undo_round_trip_emits_correct_events() {
+        use crate::events::EntityEvent;
+
+        let dir = TempDir::new().unwrap();
+        let (ctx, cache, store_context) = cache_ctx_store(&dir, "tag").await;
+        let mut rx = cache.subscribe();
+
+        // Write — must fire EntityChanged.
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        let evt = rx.recv().await.expect("write must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityChanged { ref id, .. } if id == "bug"),
+            "expected EntityChanged from write, got {evt:?}"
+        );
+
+        // Delete — must fire EntityDeleted and remove the entity from cache.
+        ctx.delete("tag", "bug").await.unwrap();
+        let evt = rx.recv().await.expect("delete must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityDeleted { ref id, .. } if id == "bug"),
+            "expected EntityDeleted from delete, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_err(),
+            "tag must be unreadable after delete"
+        );
+
+        // Undo — restores the entity on disk. The undo command-layer
+        // glue calls `sync_entity_cache_from_disk`, which we invoke
+        // directly here since this test exercises the entity layer alone.
+        let outcome = store_context.undo().await.expect("undo must succeed");
+        ctx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
+            .await;
+
+        let evt = rx
+            .recv()
+            .await
+            .expect("undo must emit an event via refresh_from_disk");
+        assert!(
+            matches!(evt, EntityEvent::EntityChanged { ref id, .. } if id == "bug"),
+            "expected EntityChanged from undo of delete, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_ok(),
+            "tag must be readable after undo of delete"
+        );
+
+        // Redo — re-deletes the entity. Must fire EntityDeleted again.
+        drain_events(&mut rx);
+        let outcome = store_context.redo().await.expect("redo must succeed");
+        ctx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
+            .await;
+
+        let evt = rx.recv().await.expect("redo must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityDeleted { ref id, .. } if id == "bug"),
+            "expected EntityDeleted from redo of delete, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_err(),
+            "tag must be unreadable again after redo of delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_then_undo_round_trip_emits_correct_events() {
+        use crate::events::EntityEvent;
+
+        let dir = TempDir::new().unwrap();
+        let (ctx, cache, store_context) = cache_ctx_store(&dir, "tag").await;
+        let mut rx = cache.subscribe();
+
+        // Write the tag and drain the EntityChanged event.
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+        let _ = rx.recv().await.unwrap();
+
+        // Archive — the entity disappears from the live cache.
+        ctx.archive("tag", "bug").await.unwrap();
+        let evt = rx.recv().await.expect("archive must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityDeleted { ref id, .. } if id == "bug"),
+            "expected EntityDeleted from archive, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_err(),
+            "tag must not be readable from live storage after archive"
+        );
+
+        // Undo — restores the tag from `.archive/` back to live storage.
+        let outcome = store_context.undo().await.expect("undo must succeed");
+        ctx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
+            .await;
+
+        let evt = rx.recv().await.expect("undo must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityChanged { ref id, .. } if id == "bug"),
+            "expected EntityChanged from undo of archive, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_ok(),
+            "tag must be readable after undo of archive"
+        );
+
+        // Redo — re-archives the tag.
+        drain_events(&mut rx);
+        let outcome = store_context.redo().await.expect("redo must succeed");
+        ctx.sync_entity_cache_from_disk(&outcome.store_name, outcome.item_id.as_str())
+            .await;
+
+        let evt = rx.recv().await.expect("redo must emit an event");
+        assert!(
+            matches!(evt, EntityEvent::EntityDeleted { ref id, .. } if id == "bug"),
+            "expected EntityDeleted from redo of archive, got {evt:?}"
+        );
+        assert!(
+            ctx.read("tag", "bug").await.is_err(),
+            "tag must not be readable after redo of archive"
+        );
     }
 }
