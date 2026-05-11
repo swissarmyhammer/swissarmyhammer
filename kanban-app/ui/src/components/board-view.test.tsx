@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -91,8 +92,11 @@ const tasks: Entity[] = [
   makeTask("t3", "col-doing", "a0"),
 ];
 
-function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
-  const result = render(
+async function renderBoard(overrides?: {
+  board?: BoardData;
+  tasks?: Entity[];
+}) {
+  return await renderInAct(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
@@ -114,7 +118,6 @@ function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
       </FocusLayer>
     </SpatialFocusProvider>,
   );
-  return result;
 }
 
 describe("BoardView navigation commands", () => {
@@ -123,13 +126,13 @@ describe("BoardView navigation commands", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("renders without crashing", () => {
-    const { container } = renderBoard();
+  it("renders without crashing", async () => {
+    const { container } = await renderBoard();
     expect(container).toBeTruthy();
   });
 
-  it("renders all columns", () => {
-    const { container } = renderBoard();
+  it("renders all columns", async () => {
+    const { container } = await renderBoard();
     // The board should render column views
     expect(container.textContent).toContain("Todo");
     expect(container.textContent).toContain("Doing");
@@ -137,7 +140,7 @@ describe("BoardView navigation commands", () => {
   });
 
   it("board nav commands are registered in scope", async () => {
-    const { container } = renderBoard();
+    const { container } = await renderBoard();
 
     // BoardView wraps itself in a FocusScope with moniker="board:{id}".
     // Verify the scope is rendered by checking that the board's data-moniker
@@ -160,8 +163,8 @@ describe("BoardView scrollContainer layout", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("scroll container has the min-w-0 and overflow-x-auto classes", () => {
-    const { container } = renderBoard();
+  it("scroll container has the min-w-0 and overflow-x-auto classes", async () => {
+    const { container } = await renderBoard();
     // scrollContainerRef is the direct parent of the SortableContext wrapper.
     // It must have min-w-0 (so it shrinks to its flex share) plus the
     // overflow-x-auto that drives horizontal scrolling. Without min-w-0 the
@@ -176,7 +179,7 @@ describe("BoardView scrollContainer layout", () => {
     expect(scrollContainer.className).toContain("flex-1");
   });
 
-  it("scrollWidth exceeds clientWidth when the column strip is wider than the viewport", () => {
+  it("scrollWidth exceeds clientWidth when the column strip is wider than the viewport", async () => {
     // Render with many columns so the tree has multiple column children, then
     // force the scroll container wider than its parent via an inline-width
     // probe injected alongside the columns. This sidesteps the fact that
@@ -202,7 +205,7 @@ describe("BoardView scrollContainer layout", () => {
     document.body.appendChild(host);
 
     try {
-      const { container } = render(
+      const { container } = await renderInAct(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
@@ -272,8 +275,8 @@ describe("BoardView add task", () => {
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
-  it("shows the add-task button only on the first column", () => {
-    renderBoard();
+  it("shows the add-task button only on the first column", async () => {
+    await renderBoard();
     // Only the first column (Todo) should have the add button
     const buttons = screen.getAllByRole("button", { name: /add task/i });
     expect(buttons.length).toBe(1);
@@ -288,7 +291,7 @@ describe("BoardView add task", () => {
       return Promise.resolve(undefined);
     });
 
-    renderBoard();
+    await renderBoard();
     const btn = screen.getByRole("button", { name: /add task/i });
     fireEvent.click(btn);
 
@@ -307,7 +310,7 @@ describe("BoardView add task", () => {
     // (AddEntity on the Rust side) across every UI entry point.
     const invokeMock = invoke as ReturnType<typeof vi.fn>;
     invokeMock.mockClear();
-    renderBoard();
+    await renderBoard();
 
     const btn = screen.getByRole("button", { name: /add task/i });
     fireEvent.click(btn);

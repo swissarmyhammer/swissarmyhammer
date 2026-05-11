@@ -25,8 +25,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
-import { userEvent } from "vitest/browser";
+import { act } from "@testing-library/react";
+import { renderInAct, hoverInAct } from "@/test/act-render";
 import { Profiler, useRef, type ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // The test was previously paired (zone + scope variants) when the
     // legacy split primitives produced two distinct `data-debug`
     // values.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -289,7 +289,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   });
 
   it("scope_renders_debug_overlay_when_debug_on", async () => {
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -318,7 +318,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   });
 
   it("layer_renders_debug_overlay_when_debug_on", async () => {
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -345,7 +345,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   });
 
   it("no_overlay_when_debug_off", async () => {
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled={false}>
           <SpatialFocusProvider>
@@ -369,7 +369,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   });
 
   it("no_overlay_when_no_provider", async () => {
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
@@ -397,7 +397,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // `<FocusScope>` already merges `relative` into the className, but
     // the inline `position: fixed` style overrides that for layout
     // (the merged class ends up unused; that's acceptable for a test).
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -441,7 +441,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // `<FocusLayer>`) and `"scope"` (from `<FocusScope>`). The
     // distinction between them must remain colour-coded so nested
     // primitives are visually distinguishable.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -491,7 +491,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // affordance for opening the tooltip, NOT for activating the host.
     // If the handle's `stopPropagation` is removed, this sub-assertion
     // catches the regression.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled>
           <SpatialFocusProvider>
@@ -516,7 +516,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     expect(target).toBeTruthy();
 
     mockInvoke.mockClear();
-    target.click();
+    await act(async () => {
+      target.click();
+    });
     await flushSetup();
 
     const focusCallsFromHost = mockInvoke.mock.calls.filter(
@@ -532,7 +534,9 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     expect(handle).toBeTruthy();
 
     mockInvoke.mockClear();
-    handle!.click();
+    await act(async () => {
+      handle!.click();
+    });
     await flushSetup();
 
     const focusCallsFromHandle = mockInvoke.mock.calls.filter(
@@ -547,7 +551,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // Regression guard: when debug is off, `<FocusLayer>` must not
     // introduce a wrapper div around its children. Production layout
     // depends on the layer being a pure context provider.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       withTooltipProvider(
         <FocusDebugProvider enabled={false}>
           <SpatialFocusProvider>
@@ -579,7 +583,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // height suffix. The original ask for the overlay was a tiny x/y read-
     // out for placement verification; the dimensions had crept in as
     // visual noise.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="zone"
         label="ui:test"
@@ -606,7 +610,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
   it("scope_label_has_no_dimensions_suffix", async () => {
     // Same shape as the zone test, but with `kind="scope"` to pin that the
     // dimension-suffix removal applies to scopes too.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="scope"
         label="ui:test"
@@ -633,7 +637,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // Regression guard: layers omit coordinates entirely, so the label is
     // exactly `layer:<name>` with no rect at all. Removing the dimension
     // suffix from zones/scopes must not perturb the layer format.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="layer"
         label="window"
@@ -661,7 +665,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // `aria-label` mirrors). Uses `userEvent.hover()` from
     // vitest/browser so the real Chromium pointer plumbing fires the
     // `pointerenter` event Radix listens for.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="zone"
         label="ui:test"
@@ -682,7 +686,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const handle = getHandle(container, "zone");
     expect(handle).toBeTruthy();
 
-    await userEvent.hover(handle!);
+    await hoverInAct(handle!);
     // Allow Radix's open-state effect + portal mount to flush.
     await flushSetup();
 
@@ -696,7 +700,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
 
   it("tooltip_for_layer_kind_shows_kind_and_label", async () => {
     // Layer overlays omit (x,y) — the tooltip text is `layer:<name>`.
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="layer"
         label="window"
@@ -714,7 +718,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     const handle = getHandle(container, "layer");
     expect(handle).toBeTruthy();
 
-    await userEvent.hover(handle!);
+    await hoverInAct(handle!);
     await flushSetup();
 
     expect(readOpenTooltipText()).toBe("layer:window");
@@ -729,7 +733,7 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
     // a new render. Pin that here with a `<Profiler>` probe.
     const renderPhases: string[] = [];
 
-    const { container, unmount } = render(
+    const { container, unmount } = await renderInAct(
       <OverlayHarness
         kind="zone"
         label="ui:test"
@@ -760,8 +764,10 @@ describe("<FocusDebugOverlay> — debug-on rendering", () => {
       '[data-testid="overlay-host"]',
     ) as HTMLElement;
     expect(hostEl).toBeTruthy();
-    hostEl.style.width = "250px";
-    hostEl.style.height = "175px";
+    await act(async () => {
+      hostEl.style.width = "250px";
+      hostEl.style.height = "175px";
+    });
 
     // A few frames to give the rAF poll opportunity to observe the new
     // dimensions and (incorrectly) trigger a commit if the short-circuit

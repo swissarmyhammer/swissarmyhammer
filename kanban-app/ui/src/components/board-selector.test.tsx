@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 const mockInvoke = vi.fn((..._args: unknown[]) => Promise.resolve("ok"));
 
@@ -59,8 +60,8 @@ describe("pathStem", () => {
 });
 
 describe("BoardSelector", () => {
-  it("renders the trigger with the selected board stem", () => {
-    render(
+  it("renders the trigger with the selected board stem", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -72,8 +73,8 @@ describe("BoardSelector", () => {
     expect(screen.getByText("project-b")).toBeTruthy();
   });
 
-  it("renders nothing when boards is empty", () => {
-    const { container } = render(
+  it("renders nothing when boards is empty", async () => {
+    const { container } = await renderInAct(
       <Wrapper>
         <BoardSelector boards={[]} selectedPath={null} onSelect={() => {}} />
       </Wrapper>,
@@ -82,7 +83,7 @@ describe("BoardSelector", () => {
   });
 
   it("renders SelectContent with position=popper", async () => {
-    const { container } = render(
+    const { container } = await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -105,7 +106,7 @@ describe("BoardSelector", () => {
     const onSelect = vi.fn();
     mockInvoke.mockClear();
 
-    render(
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -127,8 +128,8 @@ describe("BoardSelector", () => {
     expect(switchBoardCalls).toHaveLength(0);
   });
 
-  it("renders tear-off button with aria-label when showTearOff is true", () => {
-    render(
+  it("renders tear-off button with aria-label when showTearOff is true", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}
@@ -142,8 +143,8 @@ describe("BoardSelector", () => {
     expect(btn).toBeTruthy();
   });
 
-  it("does not render tear-off button when showTearOff is false", () => {
-    render(
+  it("does not render tear-off button when showTearOff is false", async () => {
+    await renderInAct(
       <Wrapper>
         <BoardSelector
           boards={twoBoards}

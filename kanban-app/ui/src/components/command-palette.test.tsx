@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
@@ -133,8 +134,8 @@ beforeEach(() => {
   getCMMock.mockReturnValue({ state: { vim: {} } } as any);
 });
 
-function renderPalette(open: boolean, onClose = vi.fn()) {
-  return render(
+async function renderPalette(open: boolean, onClose = vi.fn()) {
+  return await renderInAct(
     <EntityFocusProvider>
       <UIStateProvider>
         <CommandScopeProvider commands={TEST_COMMANDS}>
@@ -146,54 +147,48 @@ function renderPalette(open: boolean, onClose = vi.fn()) {
 }
 
 describe("CommandPalette", () => {
-  it("renders nothing when closed", () => {
-    renderPalette(false);
+  it("renders nothing when closed", async () => {
+    await renderPalette(false);
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("renders the palette when open", () => {
-    renderPalette(true);
+  it("renders the palette when open", async () => {
+    await renderPalette(true);
     expect(screen.getByTestId("command-palette")).toBeTruthy();
   });
 
   it("shows all commands when no filter is applied", async () => {
-    await act(async () => {
-      renderPalette(true);
-    });
+    await renderPalette(true);
     expect(screen.getByText("Open File")).toBeTruthy();
     expect(screen.getByText("Save File")).toBeTruthy();
     expect(screen.getByText("Close Tab")).toBeTruthy();
   });
 
   it("shows keybinding hints for the current mode", async () => {
-    await act(async () => {
-      renderPalette(true);
-    });
+    await renderPalette(true);
     // Default mode is CUA (mocked invoke returns "cua")
     expect(screen.getByText("Ctrl+O")).toBeTruthy();
     expect(screen.getByText("Ctrl+S")).toBeTruthy();
     expect(screen.getByText("Ctrl+W")).toBeTruthy();
   });
 
-  it("calls onClose when backdrop is clicked", () => {
+  it("calls onClose when backdrop is clicked", async () => {
     const onClose = vi.fn();
-    renderPalette(true, onClose);
+    await renderPalette(true, onClose);
     fireEvent.click(screen.getByTestId("command-palette-backdrop"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not close when clicking inside the palette card", () => {
+  it("does not close when clicking inside the palette card", async () => {
     const onClose = vi.fn();
-    renderPalette(true, onClose);
+    await renderPalette(true, onClose);
     fireEvent.click(screen.getByTestId("command-palette"));
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it("executes a command when its item is clicked", async () => {
     const onClose = vi.fn();
-    await act(async () => {
-      renderPalette(true, onClose);
-    });
+    await renderPalette(true, onClose);
     fireEvent.click(screen.getByText("Save File"));
     // The command resolves through the scope chain. Since TEST_COMMANDS
     // register "save-file" with an execute handler, it runs client-side.
@@ -204,8 +199,8 @@ describe("CommandPalette", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("renders the command list with correct role", () => {
-    renderPalette(true);
+  it("renders the command list with correct role", async () => {
+    await renderPalette(true);
     const list = screen.getByTestId("command-palette-list");
     expect(list.getAttribute("role")).toBe("listbox");
   });
@@ -216,17 +211,15 @@ describe("CommandPalette", () => {
     // Render with NO commands in scope — palette commands come from backend
     // mock (list_commands_for_scope) and have no execute handlers.
     const onClose = vi.fn();
-    await act(async () => {
-      render(
-        <EntityFocusProvider>
-          <UIStateProvider>
-            <CommandScopeProvider commands={[]}>
-              <CommandPalette open={true} onClose={onClose} />
-            </CommandScopeProvider>
-          </UIStateProvider>
-        </EntityFocusProvider>,
-      );
-    });
+    await renderInAct(
+      <EntityFocusProvider>
+        <UIStateProvider>
+          <CommandScopeProvider commands={[]}>
+            <CommandPalette open={true} onClose={onClose} />
+          </CommandScopeProvider>
+        </UIStateProvider>
+      </EntityFocusProvider>,
+    );
     invokeMock.mockClear();
     fireEvent.click(screen.getByText("Open File"));
 
@@ -276,9 +269,7 @@ describe("CommandPalette vim insert mode", () => {
       return Promise.resolve(null);
     });
 
-    await act(async () => {
-      renderPalette(true);
-    });
+    await renderPalette(true);
 
     // Flush rAF retries so the effect can find the CM view
     await act(async () => {
@@ -310,9 +301,7 @@ describe("CommandPalette vim insert mode", () => {
       return Promise.resolve(null);
     });
 
-    await act(async () => {
-      renderPalette(true);
-    });
+    await renderPalette(true);
 
     await act(async () => {
       flushRAF(25);
@@ -346,9 +335,7 @@ describe("CommandPalette vim insert mode", () => {
       return { state: { vim: {} } } as any;
     });
 
-    await act(async () => {
-      renderPalette(true);
-    });
+    await renderPalette(true);
 
     // Flush enough frames to get past the null returns
     await act(async () => {
@@ -383,9 +370,7 @@ describe("CommandPalette vim insert mode", () => {
     getCMMock.mockReturnValue({ state: { vim: {} } } as any);
 
     const onClose = vi.fn();
-    await act(async () => {
-      renderPalette(true, onClose);
-    });
+    await renderPalette(true, onClose);
     await act(async () => {
       flushRAF(25);
     });
@@ -428,9 +413,7 @@ describe("CommandPalette vim insert mode", () => {
     getCMMock.mockReturnValue({ state: { vim: { insertMode: true } } } as any);
 
     const onClose = vi.fn();
-    await act(async () => {
-      renderPalette(true, onClose);
-    });
+    await renderPalette(true, onClose);
     await act(async () => {
       flushRAF(25);
     });
@@ -467,14 +450,11 @@ describe("CommandPalette vim insert mode", () => {
     // getCM always returns null — simulates slow init
     getCMMock.mockReturnValue(null);
 
-    let result: ReturnType<typeof render>;
-    await act(async () => {
-      result = renderPalette(true);
-    });
+    const result = await renderPalette(true);
 
     // Unmount (closes palette) — should cancel the retry loop
     await act(async () => {
-      result!.unmount();
+      result.unmount();
     });
 
     await act(async () => {
@@ -491,8 +471,8 @@ describe("CommandPalette vim insert mode", () => {
 // Search mode tests
 // ---------------------------------------------------------------------------
 
-function renderSearchPalette(open: boolean, onClose = vi.fn()) {
-  return render(
+async function renderSearchPalette(open: boolean, onClose = vi.fn()) {
+  return await renderInAct(
     <EntityFocusProvider>
       <UIStateProvider>
         <CommandScopeProvider commands={[]}>
@@ -518,8 +498,8 @@ function getCMView(container: HTMLElement): any | null {
 }
 
 describe("CommandPalette search mode", () => {
-  it("shows hint text when no query is entered", () => {
-    renderSearchPalette(true);
+  it("shows hint text when no query is entered", async () => {
+    await renderSearchPalette(true);
     // The hint text appears both in the CM6 placeholder and in the result list hint div
     const matches = screen.getAllByText("Type to search...");
     // At minimum the hint div in the list should be present
@@ -531,7 +511,7 @@ describe("CommandPalette search mode", () => {
 
   it("shows no matching entities message when query has no results", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -565,7 +545,7 @@ describe("CommandPalette search mode", () => {
     const invokeMock = vi.mocked(invoke);
     invokeMock.mockClear();
 
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -590,7 +570,7 @@ describe("CommandPalette search mode", () => {
 
   it("renders search results after calling backend", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -623,7 +603,7 @@ describe("CommandPalette search mode", () => {
 
   it("shows multiple results when query matches several entities", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -647,28 +627,28 @@ describe("CommandPalette search mode", () => {
     unmount();
   });
 
-  it("renders the palette with listbox role in search mode", () => {
-    renderSearchPalette(true);
+  it("renders the palette with listbox role in search mode", async () => {
+    await renderSearchPalette(true);
     const list = screen.getByTestId("command-palette-list");
     expect(list.getAttribute("role")).toBe("listbox");
   });
 
-  it("uses search placeholder text in search mode", () => {
-    renderSearchPalette(true);
+  it("uses search placeholder text in search mode", async () => {
+    await renderSearchPalette(true);
     // The CodeMirror placeholder is rendered as a span in the DOM
     // We verify the palette is open and in search mode by checking it renders
     expect(screen.getByTestId("command-palette")).toBeTruthy();
   });
 
-  it("calls onClose when backdrop is clicked in search mode", () => {
+  it("calls onClose when backdrop is clicked in search mode", async () => {
     const onClose = vi.fn();
-    renderSearchPalette(true, onClose);
+    await renderSearchPalette(true, onClose);
     fireEvent.click(screen.getByTestId("command-palette-backdrop"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not render when closed in search mode", () => {
-    renderSearchPalette(false);
+  it("does not render when closed in search mode", async () => {
+    await renderSearchPalette(false);
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
@@ -677,7 +657,7 @@ describe("CommandPalette search mode", () => {
     const onInspect = vi.fn();
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true, onClose);
+    const { container, unmount } = await renderSearchPalette(true, onClose);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -715,7 +695,7 @@ describe("CommandPalette search mode", () => {
 
   it("shows the entity type label alongside the entity title in results", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -741,7 +721,7 @@ describe("CommandPalette search mode", () => {
 
   it("resets to hint state when query is cleared after a search", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true);
+    const { container, unmount } = await renderSearchPalette(true);
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -777,7 +757,7 @@ describe("CommandPalette search mode", () => {
     const invokeMock = vi.mocked(invoke);
     invokeMock.mockClear();
 
-    const { unmount } = renderSearchPalette(true);
+    const { unmount } = await renderSearchPalette(true);
 
     // Advance time without typing anything
     await act(async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { screen, fireEvent, act } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 /**
  * Shared default `invoke` stub for tests in this file.
@@ -200,8 +201,8 @@ function CommandInspector() {
  * focus actions bag, and a `<FocusLayer name="window">` that mounts the
  * window-root layer in the Rust-side stack.
  */
-function renderShell(children?: React.ReactNode) {
-  return render(
+async function renderShell(children?: React.ReactNode) {
+  return await renderInAct(
     <SpatialFocusProvider>
       <FocusLayer name={WINDOW_LAYER_NAME}>
         <EntityFocusProvider>
@@ -233,14 +234,14 @@ describe("AppShell", () => {
     }
   });
 
-  it("renders children", () => {
-    renderShell(<div data-testid="child">Hello</div>);
+  it("renders children", async () => {
+    await renderShell(<div data-testid="child">Hello</div>);
     expect(screen.getByTestId("child")).toBeTruthy();
     expect(screen.getByText("Hello")).toBeTruthy();
   });
 
-  it("provides global commands via CommandScope", () => {
-    renderShell();
+  it("provides global commands via CommandScope", async () => {
+    await renderShell();
     // Check that well-known global commands are available
     expect(screen.getByTestId("cmd-app.command")).toBeTruthy();
     expect(screen.getByTestId("cmd-app.dismiss")).toBeTruthy();
@@ -253,14 +254,14 @@ describe("AppShell", () => {
     expect(screen.getByTestId("cmd-file.openBoard")).toBeTruthy();
   });
 
-  it("does not render command palette by default", () => {
-    renderShell();
+  it("does not render command palette by default", async () => {
+    await renderShell();
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
   it("dispatches app.command to backend on Mod+Shift+P in CUA mode", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
     mockInvoke.mockClear();
 
     // CUA mode is the default (mocked invoke returns "cua")
@@ -286,7 +287,7 @@ describe("AppShell", () => {
 
   it("dispatches app.dismiss to backend on Escape", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
     mockInvoke.mockClear();
 
     // Press Escape to dismiss
@@ -317,7 +318,7 @@ describe("AppShell", () => {
       );
     }
 
-    renderShell(<FocusedCard />);
+    await renderShell(<FocusedCard />);
     mockInvoke.mockClear();
 
     // Focus the card scope
@@ -376,7 +377,7 @@ describe("AppShell", () => {
       );
     }
 
-    renderShell(<FocusedChild />);
+    await renderShell(<FocusedChild />);
 
     // Focus the scope by clicking the button
     await act(async () => {
@@ -398,7 +399,7 @@ describe("AppShell", () => {
   it("file.closeBoard dispatches to backend via dispatch_command", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
-    renderShell();
+    await renderShell();
 
     mockInvoke.mockClear();
 
@@ -425,23 +426,7 @@ describe("AppShell", () => {
   });
 
   it("shows mode indicator as COMMAND when palette opens", async () => {
-    render(
-      <SpatialFocusProvider>
-        <FocusLayer name={WINDOW_LAYER_NAME}>
-          <EntityFocusProvider>
-            <UIStateProvider>
-              <AppModeProvider>
-                <UndoProvider>
-                  <AppShell>
-                    <CommandInspector />
-                  </AppShell>
-                </UndoProvider>
-              </AppModeProvider>
-            </UIStateProvider>
-          </EntityFocusProvider>
-        </FocusLayer>
-      </SpatialFocusProvider>,
-    );
+    await renderShell();
 
     // The mode label can be checked via the commands being available.
     // The palette should open and the app.command execute sets mode to "command".
@@ -451,7 +436,7 @@ describe("AppShell", () => {
 
   it("blocks app.undo dispatch when activeElement is inside .cm-editor", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     // Create a .cm-editor element with a focusable child
     const cmEditor = document.createElement("div");
@@ -486,7 +471,7 @@ describe("AppShell", () => {
 
   it("dispatches app.undo when activeElement is NOT inside .cm-editor", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     // Focus a regular button outside any .cm-editor
     const button = document.createElement("button");
@@ -518,7 +503,7 @@ describe("AppShell", () => {
 
   it("context-menu-command event dispatches through useDispatchCommand with scope chain", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
     mockInvoke.mockClear();
 
     // Simulate a context-menu-command event from the Rust backend carrying the
@@ -613,7 +598,7 @@ describe("AppShell", () => {
 
   it("nav.drillIn invokes spatial_drill_in for the focused FullyQualifiedMoniker on Enter", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     // Seed the provider's focusedKeyRef before the keystroke.
     await act(async () => {
@@ -645,7 +630,7 @@ describe("AppShell", () => {
 
   it("nav.drillIn dispatches ui.setFocus when the kernel returns a SegmentMoniker", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     await act(async () => {
       emitFocusChanged("k:zone");
@@ -683,7 +668,7 @@ describe("AppShell", () => {
     // through the entity-focus store. The user-visible behavior
     // matches the legacy "null → no-op" path exactly.
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     await act(async () => {
       emitFocusChanged("k:leaf", "ui:leaf");
@@ -715,7 +700,7 @@ describe("AppShell", () => {
 
   it("nav.drillOut invokes spatial_drill_out for the focused FullyQualifiedMoniker on Escape", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     await act(async () => {
       emitFocusChanged("k:leaf");
@@ -755,7 +740,7 @@ describe("AppShell", () => {
     // the focused moniker and dispatches `app.dismiss` on equality —
     // the user-visible Escape chain is unchanged.
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     await act(async () => {
       emitFocusChanged("k:rootLeaf", "ui:rootLeaf");
@@ -793,7 +778,7 @@ describe("AppShell", () => {
 
   it("nav.drillOut falls through to app.dismiss when no spatial focus is set", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    renderShell();
+    await renderShell();
 
     // Explicitly clear any prior focus state.
     await act(async () => {
@@ -854,7 +839,7 @@ describe("AppShell", () => {
       );
     }
 
-    renderShell(<FocusedCard />);
+    await renderShell(<FocusedCard />);
 
     await act(async () => {
       fireEvent.click(screen.getByText("Focus"));
@@ -916,7 +901,7 @@ describe("AppShell", () => {
       );
     }
 
-    renderShell(<FocusedCard />);
+    await renderShell(<FocusedCard />);
 
     // Drive focus through the spatial-nav kernel only. Under the FQM
     // model the scope registers at `/window/task:t-bridge`, so the

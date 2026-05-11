@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 
 // --- Mocks ---
 const mockInvoke = vi.fn(
@@ -65,8 +66,8 @@ function makeTask(id: string, column = "col-1"): Entity {
  * mounts `<FocusScope>`-using descendants and the no-spatial-context
  * fallback was removed in card `01KQPVA127YMJ8D7NB6M824595`.
  */
-function renderColumn(ui: React.ReactElement) {
-  return render(
+async function renderColumn(ui: React.ReactElement) {
+  return await renderInAct(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
@@ -86,9 +87,9 @@ function renderColumn(ui: React.ReactElement) {
 }
 
 describe("ColumnView drop zones", () => {
-  it("renders N+1 drop zones for N tasks", () => {
+  it("renders N+1 drop zones for N tasks", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -96,9 +97,9 @@ describe("ColumnView drop zones", () => {
     expect(zones.length).toBe(4);
   });
 
-  it("drop zones carry correct before/after attributes", () => {
+  it("drop zones carry correct before/after attributes", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -111,8 +112,8 @@ describe("ColumnView drop zones", () => {
     expect(zones[3].getAttribute("data-drop-after")).toBe("t3");
   });
 
-  it("empty column renders 1 drop zone with data-drop-empty", () => {
-    const { container } = renderColumn(
+  it("empty column renders 1 drop zone with data-drop-empty", async () => {
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
     );
 
@@ -121,9 +122,9 @@ describe("ColumnView drop zones", () => {
     expect(zones[0].hasAttribute("data-drop-empty")).toBe(true);
   });
 
-  it("renders inert spacers for zones adjacent to the dragged task", () => {
+  it("renders inert spacers for zones adjacent to the dragged task", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView
         column={makeColumn()}
         tasks={tasks}
@@ -138,9 +139,9 @@ describe("ColumnView drop zones", () => {
     expect(zones.length).toBe(4);
   });
 
-  it("shows correct badge count", () => {
+  it("shows correct badge count", async () => {
     const tasks = [makeTask("t1"), makeTask("t2")];
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -149,8 +150,8 @@ describe("ColumnView drop zones", () => {
 });
 
 describe("ColumnView add-task button", () => {
-  it("has aria-label with column name and no title attribute", () => {
-    renderColumn(
+  it("has aria-label with column name and no title attribute", async () => {
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -164,9 +165,9 @@ describe("ColumnView add-task button", () => {
     expect(btn.getAttribute("title")).toBeNull();
   });
 
-  it("calls onAddTask with column id when clicked", () => {
+  it("calls onAddTask with column id when clicked", async () => {
     const onAddTask = vi.fn();
-    renderColumn(
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -180,8 +181,8 @@ describe("ColumnView add-task button", () => {
     expect(onAddTask).toHaveBeenCalledWith("col-1");
   });
 
-  it("does not render add button when onAddTask is not provided", () => {
-    renderColumn(
+  it("does not render add button when onAddTask is not provided", async () => {
+    await renderColumn(
       <ColumnView
         column={makeColumn("col-1", "To Do")}
         tasks={[]}
@@ -278,7 +279,7 @@ describe("ColumnView — Do This Next command", () => {
     );
 
     const task = makeTask("t1");
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
     );
 
@@ -332,7 +333,7 @@ describe("ColumnView — Do This Next command", () => {
     );
 
     const task = makeTask("t2");
-    renderColumn(
+    await renderColumn(
       <ColumnView column={makeColumn()} tasks={[task]} onDrop={vi.fn()} />,
     );
 
@@ -358,7 +359,7 @@ describe("ColumnView — Do This Next command", () => {
     });
   });
 
-  it("DraggableTaskCard receives no extraCommands from column (re-render stability)", () => {
+  it("DraggableTaskCard receives no extraCommands from column (re-render stability)", async () => {
     // After deleting the buildDoThisNextCommand workaround, the column no
     // longer passes extraCommands to DraggableTaskCard. The prop is always
     // undefined, so React.memo on DraggableTaskCard never sees a changed
@@ -370,7 +371,7 @@ describe("ColumnView — Do This Next command", () => {
       makeTask("t4"),
       makeTask("t5"),
     ];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -412,9 +413,9 @@ describe("ColumnView — Do This Next command", () => {
  * virtualization behaviour again.
  */
 describe("ColumnView layout (scroll + virtualization)", () => {
-  it("scroll container carries overflow-y-auto so columns scroll vertically", () => {
+  it("scroll container carries overflow-y-auto so columns scroll vertically", async () => {
     const tasks = [makeTask("t1"), makeTask("t2"), makeTask("t3")];
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -436,7 +437,7 @@ describe("ColumnView layout (scroll + virtualization)", () => {
     expect(foundScroll).toBe(true);
   });
 
-  it("FocusScope element carries the flex column chain (no inner wrapper)", () => {
+  it("FocusScope element carries the flex column chain (no inner wrapper)", async () => {
     // FocusScope's `className` lands on the spatial primitive's root and
     // its children render as direct layout children. The column relies on
     // that contract: the same element that registers as the column's zone
@@ -444,7 +445,7 @@ describe("ColumnView layout (scroll + virtualization)", () => {
     // whose `flex-1` child (VirtualizedCardList) becomes the scrollable
     // viewport. Pin both halves of that contract here so a future refactor
     // cannot silently re-introduce a layout-breaking inner wrapper.
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={[]} onDrop={vi.fn()} />,
     );
     const columnNode = container.querySelector("[data-segment='column:col-1']");
@@ -478,7 +479,7 @@ describe("ColumnView layout (scroll + virtualization)", () => {
     const N = 60;
     const tasks: Entity[] = [];
     for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 
@@ -505,14 +506,14 @@ describe("ColumnView layout (scroll + virtualization)", () => {
     });
   });
 
-  it("renders all cards directly when below the virtualization threshold", () => {
+  it("renders all cards directly when below the virtualization threshold", async () => {
     // Below the threshold (25), the column uses SmallCardList which
     // mounts every card. This pins the contract that virtualization
     // engages only above the threshold.
     const N = 5;
     const tasks: Entity[] = [];
     for (let i = 0; i < N; i++) tasks.push(makeTask(`t${i}`));
-    const { container } = renderColumn(
+    const { container } = await renderColumn(
       <ColumnView column={makeColumn()} tasks={tasks} onDrop={vi.fn()} />,
     );
 

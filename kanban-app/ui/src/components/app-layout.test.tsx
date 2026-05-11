@@ -29,7 +29,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+import { renderInAct } from "@/test/act-render";
 import { invoke } from "@tauri-apps/api/core";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
@@ -246,7 +247,7 @@ function WideContentProbe() {
  * The App root wrapper is also sized to `height: 600px` via inline style so
  * the inner `flex-1 min-h-0` descendants get a finite height to lay out in.
  */
-function renderAppLayout() {
+async function renderAppLayout() {
   // Install the Tailwind utility shim so classes like `min-w-0` and
   // `overflow-hidden` actually translate to CSS during the test.
   installTailwindShim();
@@ -304,7 +305,7 @@ function renderAppLayout() {
     </SpatialFocusProvider>
   );
 
-  const result = render(ui, { container: mount });
+  const result = await renderInAct(ui, { container: mount });
   return { ...result, mount };
 }
 
@@ -325,8 +326,8 @@ describe("App layout — horizontal overflow containment", () => {
     document.body.scrollLeft = 0;
   });
 
-  it("ViewsContainer's flex row has min-w-0 so content can shrink below intrinsic width", () => {
-    const { mount } = renderAppLayout();
+  it("ViewsContainer's flex row has min-w-0 so content can shrink below intrinsic width", async () => {
+    const { mount } = await renderAppLayout();
     const leftNav = screen.getByTestId("left-nav");
     // The row is LeftNav's parent — the
     // <div className="flex-1 flex min-h-0 ..."> in views-container.tsx.
@@ -338,8 +339,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("PerspectivesContainer's column has min-w-0 so it cannot be pushed wider", () => {
-    const { mount } = renderAppLayout();
+  it("PerspectivesContainer's column has min-w-0 so it cannot be pushed wider", async () => {
+    const { mount } = await renderAppLayout();
     const tabBar = screen.getByTestId("perspective-tab-bar");
     // The column is PerspectiveTabBar's parent — the
     // <div className="flex flex-col flex-1 min-h-0 ..."> in
@@ -353,8 +354,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("document.body has no horizontal scroll when a 2000px content block is inside the app layout", () => {
-    const { mount } = renderAppLayout();
+  it("document.body has no horizontal scroll when a 2000px content block is inside the app layout", async () => {
+    const { mount } = await renderAppLayout();
     // If any ancestor in the chain lacks min-w-0 or overflow-hidden, the
     // 2000px-wide content propagates up and body scrolls horizontally.
     // With the fix applied, the `overflow-x-auto` scroll container owns
@@ -363,8 +364,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("the board scroll container (overflow-x-auto) has scrollWidth > clientWidth when content overflows", () => {
-    const { mount } = renderAppLayout();
+  it("the board scroll container (overflow-x-auto) has scrollWidth > clientWidth when content overflows", async () => {
+    const { mount } = await renderAppLayout();
     const scrollContainer = screen.getByTestId("board-scroll");
     // The 2000px WideContentProbe must overflow the scroll container
     // horizontally — that's the whole point of the scroll container.
@@ -374,8 +375,8 @@ describe("App layout — horizontal overflow containment", () => {
     mount.remove();
   });
 
-  it("chrome elements (NavBar/TabBar/LeftNav/ModeIndicator) stay at stable viewport positions when scrolling the board horizontally", () => {
-    const { mount } = renderAppLayout();
+  it("chrome elements (NavBar/TabBar/LeftNav/ModeIndicator) stay at stable viewport positions when scrolling the board horizontally", async () => {
+    const { mount } = await renderAppLayout();
     const navBar = screen.getByRole("banner");
     const tabBar = screen.getByTestId("perspective-tab-bar");
     const leftNav = screen.getByTestId("left-nav");
@@ -445,7 +446,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     document.body.scrollLeft = 0;
   });
 
-  it("with 6 columns in an 800px viewport, every column is ≥24em wide and the board strip scrolls horizontally", () => {
+  it("with 6 columns in an 800px viewport, every column is ≥24em wide and the board strip scrolls horizontally", async () => {
     installTailwindShim();
 
     // 800px ≪ 6 × 24em (≈ 2304px at 16px/em). With shrink-0 on each column
@@ -485,7 +486,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     };
 
     try {
-      render(
+      await renderInAct(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
@@ -557,7 +558,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     }
   });
 
-  it("each column FocusScope carries shrink-0 plus min-w-[24em]/max-w-[48em]", () => {
+  it("each column FocusScope carries shrink-0 plus min-w-[24em]/max-w-[48em]", async () => {
     installTailwindShim();
 
     const host = document.createElement("div");
@@ -593,7 +594,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     };
 
     try {
-      render(
+      await renderInAct(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>
@@ -628,7 +629,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     }
   });
 
-  it("each SortableColumn outer wrapper carries shrink-0 plus min-w-[24em]/max-w-[60em]", () => {
+  it("each SortableColumn outer wrapper carries shrink-0 plus min-w-[24em]/max-w-[60em]", async () => {
     // Regression for the narrow-viewport overlap bug: the SortableColumn flex
     // item is the slot that the column scroll strip lays out. Without
     // `shrink-0` it compresses under the strip's pressure and the inner
@@ -671,7 +672,7 @@ describe("Board column widths — min 24em bound holds, overflow stays in scroll
     };
 
     try {
-      render(
+      await renderInAct(
         <SpatialFocusProvider>
           <FocusLayer name={asSegment("window")}>
             <EntityFocusProvider>

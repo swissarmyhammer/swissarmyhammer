@@ -242,7 +242,9 @@ describe("Pressable", () => {
     await flushSetup();
 
     const button = screen.getByRole("button", { name: "Click target" });
-    fireEvent.click(button);
+    await act(async () => {
+      fireEvent.click(button);
+    });
 
     expect(onPress).toHaveBeenCalledTimes(1);
   });

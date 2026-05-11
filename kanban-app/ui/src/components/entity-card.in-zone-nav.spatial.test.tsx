@@ -29,8 +29,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
-import { userEvent } from "vitest/browser";
+import { act } from "@testing-library/react";
+import { renderInAct, pressKeyInAct } from "@/test/act-render";
 import type { Entity, EntitySchema } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -253,9 +253,9 @@ function findRegisterRecord(moniker: string): Record<string, unknown> | null {
  * width the card collapses to a single column and the cardinal-nav
  * candidates have no horizontal offsets to pick between.
  */
-function renderCardWithShell() {
+async function renderCardWithShell() {
   ensureTestCardCss();
-  return render(
+  return await renderInAct(
     <div
       style={{
         width: "1000px",
@@ -332,7 +332,7 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
    * on the title field zone after the kernel emits `focus-changed`.
    */
   it("ArrowLeft from card.inspect:{id} lands on the title field zone", async () => {
-    const { container, unmount } = renderCardWithShell();
+    const { container, unmount } = await renderCardWithShell();
     await flushSetup();
 
     // Capture the registered FQMs so the focus-changed event we seed
@@ -363,7 +363,7 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
     // routes it to `spatial_navigate(focused, "left")`. The shadow
     // navigator runs the kernel logic and emits `focus-changed` with
     // the resulting FQM.
-    await userEvent.keyboard("{ArrowLeft}");
+    await pressKeyInAct("{ArrowLeft}");
     await flushSetup();
 
     // The title field zone's DOM node must carry `data-focused` — the
@@ -413,7 +413,7 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
    * the card, never escalating to a peer of the card itself.
    */
   it("ArrowDown from card.inspect:{id} stays inside the same card", async () => {
-    const { container, unmount } = renderCardWithShell();
+    const { container, unmount } = await renderCardWithShell();
     await flushSetup();
 
     const inspectLeaf = findRegisterRecord("card.inspect:task-1");
@@ -432,7 +432,7 @@ describe("EntityCard — in-zone any-kind sibling navigation", () => {
     });
     await flushSetup();
 
-    await userEvent.keyboard("{ArrowDown}");
+    await pressKeyInAct("{ArrowDown}");
     await flushSetup();
 
     // The post-nav focused element's FQM (read via `data-fq` if

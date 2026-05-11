@@ -52,10 +52,7 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 if (typeof window !== "undefined") {
   window.addEventListener("unhandledrejection", (event) => {
     const reason = event.reason as { message?: string } | null;
-    if (
-      reason?.message ===
-      `[birpc] function "toJSON" not found`
-    ) {
+    if (reason?.message === `[birpc] function "toJSON" not found`) {
       event.preventDefault();
     }
   });

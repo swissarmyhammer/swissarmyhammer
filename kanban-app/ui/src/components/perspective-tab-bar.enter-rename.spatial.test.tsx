@@ -61,8 +61,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
-import { userEvent } from "vitest/browser";
+import { act, waitFor } from "@testing-library/react";
+import { renderInAct, pressKeyInAct } from "@/test/act-render";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -312,8 +312,8 @@ async function fireFocusChanged({
  * keystroke → rename / drill-in need that wiring to fire on
  * `userEvent.keyboard()`.
  */
-function renderInAppShell(extraChildren?: ReactElement) {
-  return render(
+async function renderInAppShell(extraChildren?: ReactElement) {
+  return await renderInAct(
     <SpatialFocusProvider>
       <FocusLayer name={asSegment("window")}>
         <EntityFocusProvider>
@@ -422,7 +422,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // -------------------------------------------------------------------------
 
   it("Enter on the focused active perspective tab mounts the inline rename editor", async () => {
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     // The rename editor is NOT mounted before Enter. The active perspective
@@ -453,7 +453,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // Press Enter at the document level — the global keymap handler picks
     // it up and dispatches `ui.entity.startRename`, which the AppShell's
     // execute closure forwards to `triggerStartRename()`.
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     // The active tab now hosts the inline CM6 rename editor.
@@ -472,7 +472,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // -------------------------------------------------------------------------
 
   it("Enter on a focused inactive perspective tab activates that tab AND mounts the rename editor", async () => {
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     // Active perspective is `p1`; spatially focus the inactive `p2` tab.
@@ -495,7 +495,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     // The scope-pinned `ui.entity.startRename` on the inactive tab fires
@@ -538,7 +538,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     // leaf is focused MUST hit the global `nav.drillIn` binding — proving
     // the new `ui.entity.startRename: Enter` binding is scope-local and
     // does not leak to other focus contexts.
-    const { container, unmount } = renderInAppShell(
+    const { container, unmount } = await renderInAppShell(
       <FocusScope moniker={asSegment("task:01ABC")} commands={[]}>
         <div data-testid="non-perspective-leaf">leaf</div>
       </FocusScope>,
@@ -563,7 +563,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     mockInvoke.mockClear();
     mockInvoke.mockImplementation(defaultInvokeImpl);
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     // Enter dispatched to the kernel as a drill-in for the focused leaf.
@@ -586,7 +586,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
   it("vim: Enter on the focused active perspective tab mounts the inline rename editor", async () => {
     mockKeymapMode = "vim";
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -603,7 +603,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     await waitFor(() => {
@@ -622,7 +622,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
   it("emacs: Enter on the focused active perspective tab mounts the inline rename editor", async () => {
     mockKeymapMode = "emacs";
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -639,7 +639,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     await waitFor(() => {
@@ -657,7 +657,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // -------------------------------------------------------------------------
 
   it("commit path: typing in the rename editor and pressing Enter dispatches perspective.rename", async () => {
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -675,7 +675,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
     });
 
     // Outer Enter mounts the rename editor.
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -736,7 +736,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
   // -------------------------------------------------------------------------
 
   it("cua: Escape inside the rename editor cancels (no perspective.rename dispatch)", async () => {
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -753,7 +753,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -797,7 +797,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
   it("vim: Escape inside the rename editor commits (matches existing useInlineRenamePolicy)", async () => {
     mockKeymapMode = "vim";
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -814,7 +814,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -865,7 +865,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
   it("emacs: Escape inside the rename editor cancels (no perspective.rename dispatch)", async () => {
     mockKeymapMode = "emacs";
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -882,7 +882,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     const renameEditor = await waitFor(() => {
@@ -938,7 +938,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
 
   it("regression: scope-pinned ui.entity.startRename: vim Enter still fires after Enter-drill-in card", async () => {
     mockKeymapMode = "vim";
-    const { container, unmount } = renderInAppShell();
+    const { container, unmount } = await renderInAppShell();
     await flushSetup();
 
     const p1Key = findScopeKey("perspective_tab:p1");
@@ -955,7 +955,7 @@ describe("PerspectiveTabBar — Enter on focused tab triggers inline rename", ()
       expect(focusedTab?.getAttribute("data-focused")).toBe("true");
     });
 
-    await userEvent.keyboard("{Enter}");
+    await pressKeyInAct("{Enter}");
     await flushSetup();
 
     // The active perspective tab's scope still carries the

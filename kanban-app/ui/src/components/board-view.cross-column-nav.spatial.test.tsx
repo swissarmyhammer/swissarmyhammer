@@ -112,8 +112,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
-import { userEvent } from "vitest/browser";
+import { act } from "@testing-library/react";
+import { renderInAct, pressKeyInAct } from "@/test/act-render";
 import type { BoardData, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -455,9 +455,9 @@ function ensureTestLayoutCss(): void {
  * navigation path against the production zone graph, not the board-zone
  * registration shape.
  */
-function renderBoardWithShell() {
+async function renderBoardWithShell() {
   ensureTestLayoutCss();
-  return render(
+  return await renderInAct(
     <div
       style={{
         width: `${TEST_VIEWPORT_WIDTH_PX}px`,
@@ -591,7 +591,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("registers tasks as scope-with-children with parent_zone matching their column scope (test #5)", async () => {
-    const { unmount } = renderBoardWithShell();
+    const { unmount } = await renderBoardWithShell();
     await flushSetup();
 
     // Each task registers via `spatial_register_scope`. After parent
@@ -684,7 +684,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("no spatial_register_* call carries a non-empty overrides payload (test #6)", async () => {
-    const { unmount } = renderBoardWithShell();
+    const { unmount } = await renderBoardWithShell();
     await flushSetup();
 
     for (const a of registerScopeArgs()) {
@@ -733,7 +733,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("right from task:1A does not land on board:<id> (test #8)", async () => {
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A");
@@ -753,8 +753,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     // shadow navigator runs the kernel logic locally and emits a
     // `focus-changed` event with the result; `flushSetup` lets that
     // event propagate through the React tree.
-    await userEvent.keyboard("{ArrowRight}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowRight}", 80);
 
     // The post-nav focused element's `data-moniker` reveals where the
     // cascade landed. A bug where `board:<id>` won the scoring would
@@ -785,7 +784,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("ArrowRight (cua) from task:1A lands in column B (test #1.cua)", async () => {
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
@@ -796,8 +795,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       next_segment: asSegment("task:1A"),
     });
 
-    await userEvent.keyboard("{ArrowRight}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowRight}", 80);
 
     const focused = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -833,7 +831,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       return baseImpl?.(cmd, args);
     });
 
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
@@ -842,8 +840,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       next_segment: asSegment("task:1A"),
     });
 
-    await userEvent.keyboard("l");
-    await flushSetup();
+    await pressKeyInAct("l", 80);
 
     const focused = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -861,7 +858,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("ArrowLeft from task:1B lands in column A (test #2)", async () => {
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1B = findRegisterRecord("task:1B")!;
@@ -870,8 +867,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       next_segment: asSegment("task:1B"),
     });
 
-    await userEvent.keyboard("{ArrowLeft}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowLeft}", 80);
 
     const focused = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -894,7 +890,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("repeated ArrowRight from column A advances A → B → C (test #3)", async () => {
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
@@ -903,8 +899,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       next_segment: asSegment("task:1A"),
     });
 
-    await userEvent.keyboard("{ArrowRight}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowRight}", 80);
 
     const afterFirst = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -913,8 +908,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     const firstMoniker = afterFirst!.getAttribute("data-segment") ?? "";
     expect(columnOfMoniker(firstMoniker)).toBe("colB");
 
-    await userEvent.keyboard("{ArrowRight}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowRight}", 80);
 
     const afterSecond = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -941,7 +935,7 @@ describe("BoardView — cross-column spatial navigation", () => {
   // -------------------------------------------------------------------------
 
   it("ArrowDown from task:1A advances within column A (test #4)", async () => {
-    const { container, unmount } = renderBoardWithShell();
+    const { container, unmount } = await renderBoardWithShell();
     await flushSetup();
 
     const task1A = findRegisterRecord("task:1A")!;
@@ -952,8 +946,7 @@ describe("BoardView — cross-column spatial navigation", () => {
       next_segment: asSegment("task:1A"),
     });
 
-    await userEvent.keyboard("{ArrowDown}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowDown}", 80);
 
     let focused = container.querySelector(
       "[data-focused='true'][data-segment]",
@@ -961,8 +954,7 @@ describe("BoardView — cross-column spatial navigation", () => {
     expect(focused).not.toBeNull();
     expect(focused!.getAttribute("data-segment")).toBe("task:2A");
 
-    await userEvent.keyboard("{ArrowDown}");
-    await flushSetup();
+    await pressKeyInAct("{ArrowDown}", 80);
 
     focused = container.querySelector("[data-focused='true'][data-segment]");
     expect(focused).not.toBeNull();
