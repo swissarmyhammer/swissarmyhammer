@@ -1404,4 +1404,116 @@ mod tests {
         let tauri_fc: FieldChange = entity_fc;
         assert_eq!(tauri_fc.field, "title");
     }
+
+    // ------------------------------------------------------------------------
+    // Inspector-edit propagation tests — regression guards for the bug where
+    // editing a non-hardcoded field in the inspector failed to refresh the
+    // card view. The fix lives downstream of the cache/bridge but these
+    // tests confirm the bridge always carries the raw field change through
+    // to `WatchEvent::EntityFieldChanged.changes` so the frontend never has
+    // to refetch.
+    // ------------------------------------------------------------------------
+
+    /// Editing a task field via `UpdateEntityField` must emit a
+    /// `WatchEvent::EntityFieldChanged` whose `changes` vector contains the
+    /// raw field that was edited. Bisects whether the bug is upstream of the
+    /// frontend store: if this test fails, the bridge layer is dropping the
+    /// raw change.
+    #[tokio::test]
+    async fn update_field_emits_raw_change_for_task_title() {
+        use swissarmyhammer_kanban::entity::UpdateEntityField;
+
+        let (_temp, ctx, cache) = setup_kanban_with_board().await;
+        let add = AddTask::new("Original")
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add["id"].as_str().unwrap().to_string();
+
+        // Prime bridge state and drain any pre-existing events.
+        let seen = pre_populate_seen(&cache).await;
+        let mut rx = cache.subscribe();
+        let mut state = BridgeState::new(seen);
+        while let Ok(evt) = rx.try_recv() {
+            resolve_event(evt, ctx.as_ref(), &mut state).await;
+        }
+
+        // Dispatch the same command the inspector uses to commit a field edit.
+        UpdateEntityField::new("task", &task_id, "title", json!("Renamed"))
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let evt = rx.recv().await.unwrap();
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+
+        let primary = resolved
+            .iter()
+            .find(|e| matches!(e, WatchEvent::EntityFieldChanged { id, .. } if id == &task_id))
+            .expect("expected EntityFieldChanged for the edited task");
+        let WatchEvent::EntityFieldChanged { changes, .. } = primary else {
+            unreachable!()
+        };
+        let title_change = changes.iter().find(|c| c.field == "title");
+        assert!(
+            title_change.is_some(),
+            "EntityFieldChanged.changes must include the edited `title` field; got: {changes:#?}"
+        );
+        assert_eq!(title_change.unwrap().value, json!("Renamed"));
+    }
+
+    /// Editing a non-task entity field via `UpdateEntityField` must also
+    /// emit the raw change. Confirms the propagation works for tag-type
+    /// entities (no task fan-out, no enrichment).
+    #[tokio::test]
+    async fn update_field_emits_raw_change_for_tag_color() {
+        use swissarmyhammer_kanban::entity::UpdateEntityField;
+        use swissarmyhammer_kanban::tag::AddTag;
+
+        let (_temp, ctx, cache) = setup_kanban_with_board().await;
+
+        // Seed the tag via the real `AddTag` command path — same fidelity
+        // as the task variant which uses `AddTask`. AddTag generates a ULID
+        // for the tag's stable id; capture it for the field-update step.
+        let add = AddTag::new("bug")
+            .with_color("ff0000")
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = add["id"].as_str().unwrap().to_string();
+
+        // Prime bridge state and drain any pre-existing events.
+        let seen = pre_populate_seen(&cache).await;
+        let mut rx = cache.subscribe();
+        let mut state = BridgeState::new(seen);
+        while let Ok(evt) = rx.try_recv() {
+            resolve_event(evt, ctx.as_ref(), &mut state).await;
+        }
+
+        UpdateEntityField::new("tag", &tag_id, "color", json!("#00ff00"))
+            .execute(ctx.as_ref())
+            .await
+            .into_result()
+            .unwrap();
+
+        let evt = rx.recv().await.unwrap();
+        let resolved = resolve_event(evt, ctx.as_ref(), &mut state).await;
+
+        let primary = resolved
+            .iter()
+            .find(|e| matches!(e, WatchEvent::EntityFieldChanged { id, .. } if id == &tag_id))
+            .expect("expected EntityFieldChanged for the edited tag");
+        let WatchEvent::EntityFieldChanged { changes, .. } = primary else {
+            unreachable!()
+        };
+        let color_change = changes.iter().find(|c| c.field == "color");
+        assert!(
+            color_change.is_some(),
+            "EntityFieldChanged.changes must include the edited `color` field; got: {changes:#?}"
+        );
+        assert_eq!(color_change.unwrap().value, json!("#00ff00"));
+    }
 }

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '8480'
+position_ordinal: '7e80'
 title: Refactor dispatch_command_internal result handlers into smaller functions
 ---
 ## What

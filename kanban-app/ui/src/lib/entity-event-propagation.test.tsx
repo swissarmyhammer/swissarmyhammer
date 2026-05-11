@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useFieldValue } from "./entity-store-context";
 
 // ── Mocks must be declared before any imports that trigger module evaluation ──
 
@@ -91,6 +92,15 @@ async function fireEvent(eventName: string, payload: Record<string, any>) {
  *
  * This is a test-only hook; production code uses the same pattern in
  * RustEngineContainer. Keeping it here avoids rendering the full component tree.
+ *
+ * TODO: Keep this hook in sync with `RustEngineContainer.handleEntityFieldChanged`
+ * (kanban-app/ui/src/components/rust-engine-container.tsx). If the production
+ * listener changes shape (e.g., new event fields, different patch semantics,
+ * extra IPC calls), this hook MUST be updated to match — otherwise the tests
+ * here verify a divergent contract. The production-stack probes in
+ * rust-engine-container.test.tsx exercise the real listener and should remain
+ * the source of truth for behaviour; tests here are documentation of the
+ * contract at the listener level.
  */
 function useEntityEventListeners() {
   const [entitiesByType, setEntitiesByType] = useState<
@@ -478,6 +488,175 @@ describe("entity event propagation", () => {
     const after = result.current.getEntity("task", "task-1");
     expect(after?.fields.body).toBe("Fix #bug #urgent");
     expect(after?.fields.tags).toEqual(["bug", "urgent"]);
+  });
+
+  // ------------------------------------------------------------------------
+  // Inspector-edit propagation tests — verify that `useFieldValue`
+  // subscribers (the hook used by cards, inspector rows, and grid cells)
+  // re-render when `entity-field-changed` patches a custom-defined field.
+  // Regression guard for the bug where editing a non-hardcoded field in the
+  // EntityInspector failed to refresh the board/card view without a page
+  // refresh.
+  // ------------------------------------------------------------------------
+
+  it("entity-field-changed event: useFieldValue subscriber sees the new value for a custom tag field", async () => {
+    // Seed via entity-created so we have a tag in the store.
+    mockInvoke.mockImplementation(
+      (cmd: string, args: Record<string, string>) => {
+        if (cmd === "get_entity" && args.id === "tag-custom") {
+          return Promise.resolve({
+            entity_type: "tag",
+            id: "tag-custom",
+            tag_name: "custom",
+            color: "#ff0000",
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    // Render both the wrapper (to install the listener) AND a
+    // useFieldValue subscriber for the custom "color" field on the tag.
+    // The subscriber MUST re-render with the new value when the event
+    // patches the field — that is the contract every card and inspector
+    // row depends on.
+    const { result } = renderHook(
+      () => useFieldValue("tag", "tag-custom", "color"),
+      { wrapper: EntityEventWrapper },
+    );
+
+    await act(async () => {});
+
+    // Seed the entity with an initial value via entity-created.
+    await fireEvent("entity-created", {
+      kind: "entity-created",
+      entity_type: "tag",
+      id: "tag-custom",
+      fields: { tag_name: "custom", color: "#ff0000" },
+    });
+    await act(async () => {});
+
+    expect(result.current).toBe("#ff0000");
+
+    // Clear invoke history so we can assert no get_entity round-trip.
+    mockInvoke.mockClear();
+
+    // Patch the color via entity-field-changed.
+    await fireEvent("entity-field-changed", {
+      kind: "entity-field-changed",
+      entity_type: "tag",
+      id: "tag-custom",
+      changes: [{ field: "color", value: "#00ff00" }],
+    });
+    await act(async () => {});
+
+    // No get_entity refetch must have been issued.
+    const refetchCalls = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "get_entity",
+    );
+    expect(refetchCalls).toHaveLength(0);
+
+    // The subscriber MUST see the new value — this is the bug.
+    expect(result.current).toBe("#00ff00");
+  });
+
+  it("entity-field-changed event: useFieldValue subscriber sees the new value for a custom project field", async () => {
+    // Same contract but on a non-task, non-tag entity type. Confirms the
+    // fix is general across entity types, not a task-only patch.
+    mockInvoke.mockImplementation(
+      (cmd: string, args: Record<string, string>) => {
+        if (cmd === "get_entity" && args.id === "proj-1") {
+          return Promise.resolve({
+            entity_type: "project",
+            id: "proj-1",
+            name: "Initial",
+            description: "Initial description",
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    const { result } = renderHook(
+      () => useFieldValue("project", "proj-1", "description"),
+      { wrapper: EntityEventWrapper },
+    );
+
+    await act(async () => {});
+
+    await fireEvent("entity-created", {
+      kind: "entity-created",
+      entity_type: "project",
+      id: "proj-1",
+      fields: { name: "Initial", description: "Initial description" },
+    });
+    await act(async () => {});
+
+    expect(result.current).toBe("Initial description");
+
+    mockInvoke.mockClear();
+
+    await fireEvent("entity-field-changed", {
+      kind: "entity-field-changed",
+      entity_type: "project",
+      id: "proj-1",
+      changes: [{ field: "description", value: "Updated description" }],
+    });
+    await act(async () => {});
+
+    expect(
+      mockInvoke.mock.calls.filter((c) => c[0] === "get_entity"),
+    ).toHaveLength(0);
+    expect(result.current).toBe("Updated description");
+  });
+
+  it("entity-field-changed event: useFieldValue notifies even when the field was previously absent", async () => {
+    // A custom field added for the first time (the entity was created
+    // without it). The subscriber's prior snapshot is `undefined`; the new
+    // value must propagate. This is the exact edge case the bug
+    // description calls out for "non-hardcoded" fields that may be absent
+    // on entities created before the schema was extended.
+    mockInvoke.mockImplementation(
+      (cmd: string, args: Record<string, string>) => {
+        if (cmd === "get_entity" && args.id === "tag-new") {
+          return Promise.resolve({
+            entity_type: "tag",
+            id: "tag-new",
+            tag_name: "new",
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    const { result } = renderHook(
+      () => useFieldValue("tag", "tag-new", "description"),
+      { wrapper: EntityEventWrapper },
+    );
+
+    await act(async () => {});
+
+    // Seed without the description field.
+    await fireEvent("entity-created", {
+      kind: "entity-created",
+      entity_type: "tag",
+      id: "tag-new",
+      fields: { tag_name: "new" },
+    });
+    await act(async () => {});
+
+    expect(result.current).toBeUndefined();
+
+    // Add the description field for the first time.
+    await fireEvent("entity-field-changed", {
+      kind: "entity-field-changed",
+      entity_type: "tag",
+      id: "tag-new",
+      changes: [{ field: "description", value: "Just added" }],
+    });
+    await act(async () => {});
+
+    expect(result.current).toBe("Just added");
   });
 
   it("verify listen is called for all three event names", async () => {
