@@ -45,6 +45,7 @@ use swissarmyhammer_commands::{
     OptionsRegistry, ParamDef, ParamSource, TabButtonDef, UIState, WindowInfo,
 };
 use swissarmyhammer_fields::FieldsContext;
+use swissarmyhammer_perspectives::PerspectiveFieldInfo;
 use swissarmyhammer_views::ViewInfo;
 
 /// Lightweight open-board descriptor for dynamic command generation.
@@ -60,20 +61,6 @@ pub struct BoardInfo {
     pub entity_name: String,
     /// Context display name (from `KanbanContext::name()`, the path stem).
     pub context_name: String,
-}
-
-/// Denormalised field descriptor carried alongside a [`PerspectiveInfo`].
-///
-/// Joins a perspective's `fields[].field` (field ULID) against the active
-/// board's `FieldsContext` at `gather_perspectives` time so the
-/// [`crate::commands::options_resolvers::PerspectiveFieldsResolver`] can
-/// answer at resolve-time without re-borrowing `FieldsContext`.
-#[derive(Debug, Clone)]
-pub struct PerspectiveFieldInfo {
-    /// Field identifier (ULID) — matches the wire `value` the picker emits.
-    pub id: String,
-    /// Human-readable display name resolved from `FieldsContext`.
-    pub display_name: String,
 }
 
 /// Lightweight perspective descriptor for dynamic command generation.

@@ -59,7 +59,7 @@ fn dynamic_from<'a>(ctx: &OptionsContext<'a>) -> Option<&'a DynamicSources> {
 /// the first `perspective:{id}` it encounters — that is the
 /// perspective the user has open. We look that perspective up in
 /// [`DynamicSources::perspectives`] and project its denormalised
-/// [`crate::scope_commands::PerspectiveFieldInfo`] list onto one
+/// [`swissarmyhammer_perspectives::PerspectiveFieldInfo`] list onto one
 /// [`ParamOption`] per field.
 ///
 /// Returns an empty `Vec` when:
@@ -201,7 +201,8 @@ impl OptionsResolver for SortDirectionsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scope_commands::{PerspectiveFieldInfo, PerspectiveInfo};
+    use crate::scope_commands::PerspectiveInfo;
+    use swissarmyhammer_perspectives::PerspectiveFieldInfo;
 
     /// Build a [`DynamicSources`] carrying one perspective with three
     /// fields. The three field ids are stable test ULIDs so the

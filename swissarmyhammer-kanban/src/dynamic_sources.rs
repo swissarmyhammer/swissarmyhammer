@@ -31,13 +31,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use swissarmyhammer_commands::{UIState, WindowInfo};
+use swissarmyhammer_perspectives::PerspectiveFieldInfo;
 use swissarmyhammer_views::ViewInfo;
 
 use crate::commands::perspective_commands::perspective_belongs_to_active_view;
 use crate::context::KanbanContext;
-use crate::scope_commands::{
-    BoardInfo, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo,
-};
+use crate::scope_commands::{BoardInfo, DynamicSources, PerspectiveInfo};
 
 /// Raw inputs [`build_dynamic_sources`] consumes. See the module docs for
 /// how each field is produced in the live app vs. a headless test.

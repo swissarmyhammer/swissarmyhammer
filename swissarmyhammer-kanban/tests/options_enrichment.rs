@@ -25,8 +25,9 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{Command, CommandsRegistry, UIState};
 use swissarmyhammer_kanban::commands::options_resolvers::default_options_registry;
 use swissarmyhammer_kanban::scope_commands::{
-    commands_for_scope, DynamicSources, PerspectiveFieldInfo, PerspectiveInfo, ResolvedCommand,
+    commands_for_scope, DynamicSources, PerspectiveInfo, ResolvedCommand,
 };
+use swissarmyhammer_perspectives::PerspectiveFieldInfo;
 use swissarmyhammer_views::ViewInfo;
 
 /// Build a [`CommandsRegistry`] with a single synthetic command
